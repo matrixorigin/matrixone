@@ -28,23 +28,23 @@ type CatalogSchemaAttribute struct {
 	Comment       string
 }
 
-func (mcsa *CatalogSchemaAttribute) GetName() string {
-	return mcsa.AttributeName
+func (sca *CatalogSchemaAttribute) GetName() string {
+	return sca.AttributeName
 }
 
-func (mcsa *CatalogSchemaAttribute) GetType() types.Type {
-	return mcsa.AttributeType
+func (sca *CatalogSchemaAttribute) GetType() types.Type {
+	return sca.AttributeType
 }
 
-func (mcsa *CatalogSchemaAttribute) GetIsPrimaryKey() bool {
-	return mcsa.IsPrimaryKey
+func (sca *CatalogSchemaAttribute) GetIsPrimaryKey() bool {
+	return sca.IsPrimaryKey
 }
 
-func (mcsa *CatalogSchemaAttribute) GetComment() string {
-	return mcsa.Comment
+func (sca *CatalogSchemaAttribute) GetComment() string {
+	return sca.Comment
 }
 
-// CatalogSchema defines the schema for the mo catalog
+// CatalogSchema defines the schema for the catalog
 type CatalogSchema struct {
 	Name       string
 	Attributes []*CatalogSchemaAttribute
