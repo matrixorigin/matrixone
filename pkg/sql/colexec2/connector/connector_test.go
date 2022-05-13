@@ -71,12 +71,31 @@ func TestPrepare(t *testing.T) {
 func TestConnector(t *testing.T) {
 	for _, tc := range tcs {
 		Prepare(tc.proc, tc.arg)
-		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
+		bat := newBatch(t, tc.types, tc.proc, Rows)
+		tc.proc.Reg.InputBatch = bat
+		{
+			for _, vec := range bat.Vecs {
+				if vec.Or {
+					mheap.Free(tc.proc.Mp, vec.Data)
+				}
+			}
+		}
 		Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
 		Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		Call(tc.proc, tc.arg)
+		for {
+			bat := <-tc.arg.Reg.Ch
+			if bat == nil {
+				break
+			}
+			if len(bat.Zs) == 0 {
+				continue
+			}
+			batch.Clean(bat, tc.proc.Mp)
+		}
+		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
