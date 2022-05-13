@@ -62,22 +62,8 @@ func (b *BlockFile) GetEntryNum() int {
 }
 
 func (b *BlockFile) Append(offset uint64, data []byte) error {
-	var sbuffer bytes.Buffer
-	binary.Write(&sbuffer, binary.BigEndian, data)
-	cbufLen := uint32(p2roundup(uint64(sbuffer.Len()), uint64(b.segment.super.blockSize)))
-	//if cbufLen > uint32(sbuffer.Len()) {
-	//zero := make([]byte, cbufLen-uint32(sbuffer.Len()))
-	//binary.Write(&sbuffer, binary.BigEndian, zero)
-	//}
-	/*_, err := b.segment.segFile.Seek(int64(offset), io.SeekStart)
-	if err != nil {
-		return err
-	}
-	_, err = b.segment.segFile.Write(sbuffer.Bytes())
-	if err != nil {
-		return err
-	}*/
-	_, err := b.segment.segFile.WriteAt(sbuffer.Bytes(), int64(offset))
+	cbufLen := uint32(p2roundup(uint64(len(data)), uint64(b.segment.super.blockSize)))
+	_, err := b.segment.segFile.WriteAt(data, int64(offset))
 	if err != nil {
 		return err
 	}
