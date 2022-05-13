@@ -51,6 +51,8 @@ type Block interface {
 	WriteBatch(bat *gbat.Batch, ts uint64) error
 	LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error)
 	WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) error
+
+	Destroy() error
 }
 
 type ColumnBlock interface {

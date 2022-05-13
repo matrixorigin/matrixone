@@ -22,5 +22,6 @@ type Segment interface {
 	WriteTS(ts uint64) error
 	ReadTS() uint64
 	String() string
+	RemoveBlock(id uint64)
 	// IsAppendable() bool
 }

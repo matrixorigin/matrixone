@@ -333,9 +333,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 	var cn int64
 	switch cmd.GetType() {
 	case CmdLogBlock:
-		cmd.Block = &BlockEntry{
-			BaseEntry: new(BaseEntry),
-		}
+		cmd.Block = NewReplayBlockEntry()
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
 		}
@@ -350,9 +348,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		n += cn + 24
 		return
 	case CmdLogSegment:
-		cmd.Segment = &SegmentEntry{
-			BaseEntry: new(BaseEntry),
-		}
+		cmd.Segment = NewReplaySegmentEntry()
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
 		}
@@ -363,9 +359,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		n += cn + 16
 		return
 	case CmdLogTable:
-		cmd.Table = &TableEntry{
-			BaseEntry: new(BaseEntry),
-		}
+		cmd.Table = NewReplayTableEntry()
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
 		}
@@ -373,9 +367,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		n += cn + 8
 		return
 	case CmdLogDatabase:
-		cmd.DB = &DBEntry{
-			BaseEntry: new(BaseEntry),
-		}
+		cmd.DB = NewReplayDBEntry()
 		cn, err = cmd.DB.ReadFrom(r)
 		n += cn
 		return

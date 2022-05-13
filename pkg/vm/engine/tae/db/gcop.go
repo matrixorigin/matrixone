@@ -57,6 +57,7 @@ func gcSegmentClosure(entry *catalog.SegmentEntry) tasks.FuncT {
 			gcBlockClosure(blk)()
 			it.Next()
 		}
+		entry.DestroyData()
 		err := table.RemoveEntry(entry)
 		logutil.Infof("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
 		if err != nil {

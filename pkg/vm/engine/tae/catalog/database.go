@@ -58,6 +58,16 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	return e
 }
 
+func NewReplayDBEntry() *DBEntry {
+	entry := &DBEntry{
+		BaseEntry: new(BaseEntry),
+		entries:   make(map[uint64]*common.DLNode),
+		nameNodes: make(map[string]*nodeList),
+		link:      new(common.Link),
+	}
+	return entry
+}
+
 func (e *DBEntry) Compare(o common.NodePayload) int {
 	oe := o.(*DBEntry).BaseEntry
 	return e.DoCompre(oe)

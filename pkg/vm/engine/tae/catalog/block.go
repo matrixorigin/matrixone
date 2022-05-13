@@ -34,7 +34,7 @@ type BlockEntry struct {
 	blkData data.Block
 }
 
-func NewEmptyBlockEntry() *BlockEntry {
+func NewReplayBlockEntry() *BlockEntry {
 	return &BlockEntry{
 		BaseEntry: new(BaseEntry),
 	}

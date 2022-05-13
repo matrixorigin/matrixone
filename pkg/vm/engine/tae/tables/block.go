@@ -137,13 +137,14 @@ func (blk *dataBlock) Destroy() (err error) {
 		file.Unref()
 	}
 	blk.colFiles = make(map[int]common.IRWFile)
-	if blk.file != nil {
-		blk.file.Close()
-	}
 	if blk.indexHolder != nil {
 		if err = blk.indexHolder.Destroy(); err != nil {
 			return err
 		}
+	}
+	if blk.file != nil {
+		blk.file.Close()
+		blk.file.Destroy()
 	}
 	return
 }
