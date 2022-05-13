@@ -132,16 +132,27 @@ func (bf *blockFile) Close() error {
 	return nil
 }
 
-func (bf *blockFile) Destroy() error {
-	if bf.seg != nil {
-		bf.seg.RemoveBlock(bf.id)
+func (bf *blockFile) removeData(data *dataFile) {
+	if data.file != nil {
+		for _, file := range data.file {
+			bf.seg.GetSegmentFile().ReleaseFile(file)
+		}
 	}
+}
+
+func (bf *blockFile) Destroy() error {
 	for _, cb := range bf.columns {
 		cb.Unref()
+		bf.removeData(cb.data)
 	}
+	bf.removeData(bf.deletes.dataFile)
+	bf.removeData(bf.indexMeta)
 	bf.columns = nil
 	bf.deletes = nil
 	bf.indexMeta = nil
+	if bf.seg != nil {
+		bf.seg.RemoveBlock(bf.id)
+	}
 	return nil
 }
 

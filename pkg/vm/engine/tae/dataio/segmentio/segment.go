@@ -37,14 +37,6 @@ type segmentFile struct {
 	seg    *segment.Segment
 }
 
-func (sf *segmentFile) removeData(data *dataFile) {
-	if data.file != nil {
-		for _, file := range data.file {
-			sf.seg.ReleaseFile(file)
-		}
-	}
-}
-
 func (sf *segmentFile) RemoveBlock(id uint64) {
 	sf.Lock()
 	defer sf.Unlock()
@@ -52,11 +44,6 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	if block == nil {
 		return
 	}
-	for _, column := range block.columns {
-		sf.removeData(column.data)
-	}
-	sf.removeData(block.deletes.dataFile)
-	sf.removeData(block.indexMeta)
 	delete(sf.blocks, id)
 }
 
