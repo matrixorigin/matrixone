@@ -193,7 +193,7 @@ func TestStrVector(t *testing.T) {
 		_, err = vec.IsNull(10000)
 		assert.NotNil(t, err)
 		isn, err := vec.IsNull(0)
-		assert.Nil(t, err)
+		assert.NotNil(t, err)
 		assert.False(t, isn)
 		rov, err := MockVector(colType, 1000).CopyToVector()
 		assert.Nil(t, err)

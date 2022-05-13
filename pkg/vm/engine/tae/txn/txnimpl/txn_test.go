@@ -632,7 +632,7 @@ func TestTransaction1(t *testing.T) {
 	err = txn2.Commit()
 	assert.Nil(t, err)
 	err = txn3.Commit()
-	assert.Nil(t, err)
+	assert.NotNil(t, err)
 	assert.Equal(t, txnif.TxnStateRollbacked, txn3.GetTxnState(true))
 	t.Log(txn3.String())
 	// assert.NotNil(t, err)

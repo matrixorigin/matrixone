@@ -68,7 +68,7 @@ func TestTables1(t *testing.T) {
 	t.Log(toAppend)
 
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
-	assert.NotNil(t, err)
+	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
 	appender.Close()
 
@@ -80,7 +80,7 @@ func TestTables1(t *testing.T) {
 	appender = handle.SetAppender(id)
 
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
-	assert.NotNil(t, err)
+	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	appender.Close()
 
@@ -93,7 +93,7 @@ func TestTables1(t *testing.T) {
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 	toAppend, err = appender.PrepareAppend(rows - 2*toAppend)
-	assert.NotNil(t, err)
+	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	txn.Rollback()
