@@ -27,16 +27,16 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `DELETE FROM NATION WHERE N_NATIONKEY2 > 10`
+	sql := `commit and no chain`
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
 	mock := NewMockOptimizer()
-	query, err := runOneStmt(mock, t, sql)
+	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutQuery(query, true, t)
+	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
@@ -294,7 +294,8 @@ func TestNodeTree(t *testing.T) {
 	//run test and check node tree
 	for sql, check := range nodeTreeCheckList {
 		mock := NewMockOptimizer()
-		query, err := runOneStmt(mock, t, sql)
+		logicPlan, err := runOneStmt(mock, t, sql)
+		query := logicPlan.GetQuery()
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)
 		}
@@ -547,8 +548,14 @@ func getJson(v any, t *testing.T) []byte {
 	return out.Bytes()
 }
 
-func outPutQuery(query *plan.Query, toFile bool, t *testing.T) {
-	json := getJson(query, t)
+func outPutPlan(logicPlan *plan.Plan, toFile bool, t *testing.T) {
+	var json []byte
+	switch logicPlan.Plan.(type) {
+	case *plan.Plan_Query:
+		json = getJson(logicPlan.GetQuery(), t)
+	case *plan.Plan_Tcl:
+		json = getJson(logicPlan.GetTcl(), t)
+	}
 	if toFile {
 		err := ioutil.WriteFile("/tmp/mo_plan2_test.json", json, 0777)
 		if err != nil {
@@ -559,23 +566,24 @@ func outPutQuery(query *plan.Query, toFile bool, t *testing.T) {
 	}
 }
 
-func runOneStmt(opt Optimizer, t *testing.T, sql string) (*plan.Query, error) {
+func runOneStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 	//this sql always return one stmt
-	return opt.Optimize(stmts[0])
+	ctx := opt.CurrentContext()
+	return BuildPlan(ctx, stmts[0])
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJson bool, toFile bool) {
 	for _, sql := range sqls {
-		query, err := runOneStmt(opt, t, sql)
+		logicPlan, err := runOneStmt(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
 		if printJson {
-			outPutQuery(query, toFile, t)
+			outPutPlan(logicPlan, toFile, t)
 		}
 	}
 }
