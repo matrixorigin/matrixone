@@ -203,7 +203,7 @@ func (node *appendableNode) OnUnload() {
 	if err := node.flushData(ts, node.data); err != nil {
 		needCkp = false
 		if err == data.ErrStaleRequest {
-			err = nil
+			// err = nil
 		} else {
 			logutil.Warnf("%s: %v", node.block.meta.String(), err)
 			node.exception.Store(err)

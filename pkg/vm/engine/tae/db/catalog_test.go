@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -154,7 +155,7 @@ func TestLogBlock(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -185,7 +186,7 @@ func TestLogSegment(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -216,7 +217,7 @@ func TestLogTable(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -249,7 +250,7 @@ func TestLogDatabase(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)

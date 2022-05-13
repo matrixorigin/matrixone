@@ -74,6 +74,9 @@ func main() {
 		tblInfo.Columns[0].PrimaryKey = true
 		_, _, _, _, defs, _ := helper.UnTransfer(*tblInfo)
 		err = db.Create(0, tblInfo.Name, defs)
+		if err != nil {
+			panic(err)
+		}
 		{
 			db, _ := txn.GetDatabase(dbName)
 			rel, _ := db.GetRelationByName(tblInfo.Name)

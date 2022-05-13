@@ -52,6 +52,7 @@ func (checker *warChecker) Read(id *common.ID) {
 	buf = txnbase.KeyEncoder.EncodeSegment(checker.db.ID, id.TableID, id.SegmentID)
 	checker.readSymbol(string(buf))
 	buf = txnbase.KeyEncoder.EncodeBlock(checker.db.ID, id.TableID, id.SegmentID, id.BlockID)
+	checker.readSymbol(string(buf))
 }
 
 func (checker *warChecker) ReadDB(id uint64) {

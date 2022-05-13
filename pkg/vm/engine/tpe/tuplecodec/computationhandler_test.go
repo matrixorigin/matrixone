@@ -168,7 +168,7 @@ func TestComputationHandlerImpl_ListTables(t *testing.T) {
 			}
 		}
 
-		wantTables, err = chi.ListTables(dbID)
+		_, err = chi.ListTables(dbID)
 		convey.So(err, convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {

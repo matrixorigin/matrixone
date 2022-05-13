@@ -107,7 +107,7 @@ func TestTpeCubeKVEngine_Create(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(tpe, convey.ShouldBeNil)
-		convey.So(tpe, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		tpe, err = NewTpeEngine(&TpeConfig{
 			KvType:                    tuplecodec.KV_MEMORY,
