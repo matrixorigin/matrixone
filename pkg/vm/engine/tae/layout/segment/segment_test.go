@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/stretchr/testify/assert"
 	"testing"
 )
 
@@ -35,29 +36,39 @@ func TestSegment_Init(t *testing.T) {
 	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 518)))*/
 	for i := 0; i < 3; i++ {
 		var sbuffer bytes.Buffer
-		binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", 515)))
+		err := binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", 515)))
+		assert.Nil(t, err)
 		var size uint32 = 262144
 		ibufLen := (size - (uint32(sbuffer.Len()) % size)) + uint32(sbuffer.Len())
 		if ibufLen > uint32(sbuffer.Len()) {
 			zero := make([]byte, ibufLen-uint32(sbuffer.Len()))
-			binary.Write(&sbuffer, binary.BigEndian, zero)
+			err = binary.Write(&sbuffer, binary.BigEndian, zero)
+			assert.Nil(t, err)
 		}
-		seg.Append(file, sbuffer.Bytes())
-		seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 514)))
-		seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 515)))
-		seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 516)))
+		err = seg.Append(file, sbuffer.Bytes())
+		assert.Nil(t, err)
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 514)))
+		assert.Nil(t, err)
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 515)))
+		assert.Nil(t, err)
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 516)))
+		assert.Nil(t, err)
 	}
 	var sbuffer bytes.Buffer
-	binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", 515)))
+	err := binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", 515)))
+	assert.Nil(t, err)
 	var size uint32 = 262144
 	ibufLen := (size - (uint32(sbuffer.Len()) % size)) + uint32(sbuffer.Len())
 	if ibufLen > uint32(sbuffer.Len()) {
 		zero := make([]byte, ibufLen-uint32(sbuffer.Len()))
-		binary.Write(&sbuffer, binary.BigEndian, zero)
+		err = binary.Write(&sbuffer, binary.BigEndian, zero)
+		assert.Nil(t, err)
 	}
-	seg.Update(file, sbuffer.Bytes(), 16384)
+	err = seg.Update(file, sbuffer.Bytes(), 16384)
+	assert.Nil(t, err)
 	b := bytes.NewBuffer(make([]byte, 1<<20))
-	file.Read(0, uint32(file.snode.size), b.Bytes())
+	_, err = file.Read(0, uint32(file.snode.size), b.Bytes())
+	assert.Nil(t, err)
 	buf := b.Bytes()
 	buf = buf[16384 : 16384+17]
 	logutil.Infof("%v", string(buf))
