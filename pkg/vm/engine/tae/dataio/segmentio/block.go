@@ -69,7 +69,10 @@ func (bf *blockFile) Fingerprint() *common.ID {
 
 func (bf *blockFile) close() {
 	bf.Close()
-	bf.Destroy()
+	err := bf.Destroy()
+	if err != nil {
+		panic(any("Destroy error"))
+	}
 }
 
 func (bf *blockFile) WriteRows(rows uint32) (err error) {
@@ -218,7 +221,7 @@ func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) (er
 		return err
 	}
 	defer cb.Close()
-	cb.WriteTS(ts)
+	err = cb.WriteTS(ts)
 	buf, err := vec.Show()
 	if err != nil {
 		return err

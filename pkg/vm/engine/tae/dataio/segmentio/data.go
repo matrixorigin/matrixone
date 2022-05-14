@@ -86,7 +86,7 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 	df.colBlk.mutex.Lock()
 	file := df.file[len(df.file)-1]
 	df.colBlk.mutex.Unlock()
-	file.GetSegement().Append(file, buf)
+	err = file.GetSegement().Append(file, buf)
 	df.stat.size = file.GetFileSize()
 	return
 }

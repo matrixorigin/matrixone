@@ -60,7 +60,6 @@ func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 		defer cb.mutex.Unlock()
 		cb.data.file = append(cb.data.file,
 			cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
-		logutil.Infof("WriteTs:%v", fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts))
 	}
 	return
 }
@@ -144,9 +143,9 @@ func (cb *columnBlock) Close() error {
 }
 
 func (cb *columnBlock) close() {
-	cb.Destory()
+	cb.Destroy()
 }
 
-func (cb *columnBlock) Destory() {
-	logutil.Infof("Destoring Block %d Col @ TS %d", cb.block.id, cb.ts)
+func (cb *columnBlock) Destroy() {
+	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
 }

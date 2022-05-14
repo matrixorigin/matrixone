@@ -25,7 +25,8 @@ import (
 
 func TestSegment_Init(t *testing.T) {
 	seg := Segment{}
-	seg.Init("1.seg")
+	err := seg.Init("1.seg")
+	assert.Nil(t, err)
 	seg.Mount()
 	file := seg.NewBlockFile("test")
 	/*seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 513)))
@@ -55,7 +56,7 @@ func TestSegment_Init(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	var sbuffer bytes.Buffer
-	err := binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", 515)))
+	err = binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", 515)))
 	assert.Nil(t, err)
 	var size uint32 = 262144
 	ibufLen := (size - (uint32(sbuffer.Len()) % size)) + uint32(sbuffer.Len())

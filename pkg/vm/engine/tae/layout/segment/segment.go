@@ -35,7 +35,7 @@ type SuperBlock struct {
 	version   uint64
 	blockSize uint32
 	colCnt    uint32
-	lognode   Inode
+	lognode   *Inode
 }
 
 type Segment struct {
@@ -58,7 +58,7 @@ func (s *Segment) Init(name string) error {
 		version:   1,
 		blockSize: BLOCK_SIZE,
 	}
-	log := Inode{
+	log := &Inode{
 		inode: 1,
 		size:  0,
 	}
@@ -111,7 +111,7 @@ func (s *Segment) Mount() {
 	var seq uint64
 	seq = 0
 	s.nodes = make(map[string]*BlockFile, INODE_NUM)
-	ino := Inode{inode: s.super.lognode.inode}
+	ino := &Inode{inode: s.super.lognode.inode}
 	logFile := &BlockFile{
 		snode:   ino,
 		name:    "logfile",
@@ -141,9 +141,9 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	file := s.nodes[fname]
-	var ino Inode
+	var ino *Inode
 	if file == nil {
-		ino = Inode{
+		ino = &Inode{
 			inode:      s.lastInode + 1,
 			size:       0,
 			extents:    make([]Extent, 0),
@@ -190,7 +190,10 @@ func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 	}
 	logutil.Debugf("updagte level1: %x, level0: %x, offset: %d, allocated: %d",
 		s.allocator.level1[0], s.allocator.level0[0], s.allocator.lastPos, allocated)
-	s.log.Append(fd)
+	err = s.log.Append(fd)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

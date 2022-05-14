@@ -22,7 +22,7 @@ import (
 )
 
 type BlockFile struct {
-	snode   Inode
+	snode   *Inode
 	name    string
 	segment *Segment
 }
