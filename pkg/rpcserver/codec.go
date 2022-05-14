@@ -53,6 +53,8 @@ func (c *rpcCodec) Encode(data interface{}, out *buf.ByteBuf) error {
 	index := out.GetWriteIndex()
 	out.Expansion(size)
 	protoc.MustMarshalTo(v, out.RawBuf()[index:index+size])
-	out.SetWriterIndex(index + size)
+	if err := out.SetWriterIndex(index + size); err != nil {
+		return err
+	}
 	return nil
 }

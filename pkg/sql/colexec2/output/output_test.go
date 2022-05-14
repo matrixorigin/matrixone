@@ -79,7 +79,7 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestLimit(t *testing.T) {
+func TestOutput(t *testing.T) {
 	for _, tc := range tcs {
 		Prepare(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
@@ -90,6 +90,7 @@ func TestLimit(t *testing.T) {
 		Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		Call(tc.proc, tc.arg)
+		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 

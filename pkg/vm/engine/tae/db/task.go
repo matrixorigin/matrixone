@@ -48,14 +48,23 @@ func (task *ScheduledTxnTask) Execute() (err error) {
 	txn := task.db.StartTxn(nil)
 	txnTask, err := task.factory(nil, txn)
 	if err != nil {
-		txn.Rollback()
+		err2 := txn.Rollback()
+		if err2 != nil {
+			panic(err2)
+		}
 		return
 	}
 	err = txnTask.OnExec()
 	if err != nil {
-		txn.Rollback()
+		err2 := txn.Rollback()
+		if err2 != nil {
+			panic(err)
+		}
 	} else {
-		txn.Commit()
+		err = txn.Commit()
+		if err != nil {
+			return
+		}
 		err = txn.GetError()
 	}
 	return
