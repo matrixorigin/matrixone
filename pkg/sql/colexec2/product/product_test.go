@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mergegroup
+package product
 
 import (
 	"bytes"
@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -39,7 +38,7 @@ const (
 )
 
 // add unit tests for cases
-type groupTestCase struct {
+type productTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
@@ -48,52 +47,15 @@ type groupTestCase struct {
 }
 
 var (
-	tcs []groupTestCase
+	tcs []productTestCase
 )
 
 func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
-	tcs = []groupTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, false, []types.Type{{Oid: types.T_int8}}),
-		newTestCase(mheap.New(gm), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-		newTestCase(mheap.New(gm), []bool{false, true}, false, []types.Type{
-			{Oid: types.T_int8},
-			{Oid: types.T_int16},
-		}),
-		newTestCase(mheap.New(gm), []bool{false, true}, true, []types.Type{
-			{Oid: types.T_int16},
-			{Oid: types.T_int64},
-		}),
-		newTestCase(mheap.New(gm), []bool{false, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
-		}),
-		newTestCase(mheap.New(gm), []bool{true, false, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_int64},
-			{Oid: types.T_decimal128},
-		}),
-		newTestCase(mheap.New(gm), []bool{true, false, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar, Width: 2},
-			{Oid: types.T_decimal128},
-		}),
-		newTestCase(mheap.New(gm), []bool{true, true, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar, Width: 2},
-			{Oid: types.T_decimal128},
-		}),
-		newTestCase(mheap.New(gm), []bool{true, true, true}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar},
-			{Oid: types.T_decimal128},
-		}),
-		newTestCase(mheap.New(gm), []bool{false, false, false}, false, []types.Type{
-			{Oid: types.T_int64},
-			{Oid: types.T_varchar},
-			{Oid: types.T_decimal128},
-		}),
+	tcs = []productTestCase{
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
+		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
 	}
 }
 
@@ -110,90 +72,79 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestGroup(t *testing.T) {
+func TestProduct(t *testing.T) {
 	for _, tc := range tcs {
 		Prepare(tc.proc, tc.arg)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
-				if tc.proc.Reg.InputBatch != nil {
-					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
-				}
 				break
 			}
-		}
-		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-				if bat != nil {
-					batch.Clean(bat, tc.proc.Mp)
-				}
-			}
+			batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
 		}
 		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
-func BenchmarkGroup(b *testing.B) {
+func BenchmarkProduct(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
-		tcs = []groupTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
-			newTestCase(mheap.New(gm), []bool{false}, true, []types.Type{{Oid: types.T_int8}}),
+		tcs = []productTestCase{
+			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
+			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
 			Prepare(tc.proc, tc.arg)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
-					if tc.proc.Reg.InputBatch != nil {
-						batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
-					}
 					break
 				}
-			}
-			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
-				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
-					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
-					if bat != nil {
-						batch.Clean(bat, tc.proc.Mp)
-					}
-				}
+				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
 			}
 		}
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, needEval bool, ts []types.Type) groupTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos) productTestCase {
 	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *batch.Batch, 10),
 	}
 	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 3),
+		Ch:  make(chan *batch.Batch, 4),
 	}
-	return groupTestCase{
+	return productTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
 		cancel: cancel,
-		arg:    &Argument{NeedEval: needEval},
+		arg: &Argument{
+			Result: rp,
+		},
 	}
 }
 
@@ -304,14 +255,6 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 			vec.Data = data
 		}
 		bat.Vecs[i] = vec
-	}
-	{
-		r, _ := aggregate.New(aggregate.Max, ts[0])
-		r.Grows(int(rows), proc.Mp)
-		for i := int64(0); i < rows; i++ {
-			r.Fill(i, i, 1, bat.Vecs[0])
-		}
-		bat.Rs = append(bat.Rs, r)
 	}
 	return bat
 }

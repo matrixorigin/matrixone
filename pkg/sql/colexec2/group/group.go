@@ -423,6 +423,9 @@ func (ctr *Container) processHStr(bat *batch.Batch, ap *Argument, proc *process.
 		if err := ctr.batchFill(i, n, bat, ap, proc); err != nil {
 			return err
 		}
+		for k := 0; k < n; k++ {
+			ctr.hstr.keys[k] = ctr.hstr.keys[k][:0]
+		}
 	}
 	return nil
 }
@@ -505,13 +508,13 @@ func fillStringGroup[T any](ctr *Container, vec *vector.Vector, keys []T, n int,
 	}
 }
 
-func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz uint32, start int) {
-	vs := vector.DecodeFixedCol[T](vec, int(sz))
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
+func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, start int) {
+	vs := vector.DecodeFixedCol[T](vec, sz)
+	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {
 			ctr.hstr.keys[i] = append(ctr.hstr.keys[i], byte(0))
-			ctr.hstr.keys[i] = append(ctr.hstr.keys[i], data[(i+start)*1:(i+start+1)*1]...)
+			ctr.hstr.keys[i] = append(ctr.hstr.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
 		}
 	} else {
 		for i := 0; i < n; i++ {
@@ -519,7 +522,7 @@ func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz uint32, s
 				ctr.hstr.keys[i] = append(ctr.hstr.keys[i], byte(1))
 			} else {
 				ctr.hstr.keys[i] = append(ctr.hstr.keys[i], byte(0))
-				ctr.hstr.keys[i] = append(ctr.hstr.keys[i], data[(i+start)*1:(i+start+1)*1]...)
+				ctr.hstr.keys[i] = append(ctr.hstr.keys[i], data[(i+start)*sz:(i+start+1)*sz]...)
 			}
 		}
 	}

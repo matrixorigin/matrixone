@@ -101,12 +101,19 @@ func TestLimit(t *testing.T) {
 		Prepare(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		Call(tc.proc, tc.arg)
+		if tc.proc.Reg.InputBatch != nil {
+			batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+		}
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		Call(tc.proc, tc.arg)
+		if tc.proc.Reg.InputBatch != nil {
+			batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+		}
 		tc.proc.Reg.InputBatch = &batch.Batch{}
 		Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		Call(tc.proc, tc.arg)
+		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
@@ -132,6 +139,9 @@ func BenchmarkLimit(b *testing.B) {
 			Prepare(tc.proc, tc.arg)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
 			Call(tc.proc, tc.arg)
+			if tc.proc.Reg.InputBatch != nil {
+				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+			}
 			tc.proc.Reg.InputBatch = &batch.Batch{}
 			Call(tc.proc, tc.arg)
 			tc.proc.Reg.InputBatch = nil
