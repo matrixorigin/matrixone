@@ -20,7 +20,7 @@ import "testing"
 func TestTableFunction(t *testing.T) {
 	testCases := []testCase{
 		{sql: "create table ddlt1 (a int, b int);"},
-		{sql: "create table ddlt2 (orderId varchar(100), uid int, price float);"},
+		{sql: "create table ddlt2 (orderid varchar(100), uid int, price float);"},
 		{sql: "create table ddlt3 (a int, primary key(a));"},
 		{sql: "show tables;", res: executeResult{
 			attr: []string{"Tables"},
@@ -34,7 +34,7 @@ func TestTableFunction(t *testing.T) {
 		{sql: "show columns from ddlt2;", res: executeResult{
 			attr: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},
 			data: [][]string{
-				{"orderId", "varchar(100)", "", "", "NULL", ""},
+				{"orderid", "varchar(100)", "", "", "NULL", ""},
 				{"uid", "int(32)", "", "", "NULL", ""},
 				{"price", "float(32)", "", "", "NULL", ""},
 			},
@@ -48,7 +48,7 @@ func TestTableFunction(t *testing.T) {
 		{sql: "show create table ddlt2", res: executeResult{
 			attr: []string{"Table", "Create Table"},
 			data: [][]string{
-				{"ddlt2", "CREATE TABLE `ddlt2` (\n `orderId` VARCHAR(100) DEFAULT NULL,\n `uid` INT(32) DEFAULT NULL,\n `price` FLOAT(32) DEFAULT NULL\n)"},
+				{"ddlt2", "CREATE TABLE `ddlt2` (\n `orderid` VARCHAR(100) DEFAULT NULL,\n `uid` INT(32) DEFAULT NULL,\n `price` FLOAT(32) DEFAULT NULL\n)"},
 			},
 		}},
 		{sql: "drop table ddlt1;"},

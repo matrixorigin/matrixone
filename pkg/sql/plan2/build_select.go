@@ -167,7 +167,7 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, selectCtx 
 		}
 
 		//set cte table to selectCtx
-		selectCtx.cteTables[strings.ToUpper(alias)] = tableDef
+		selectCtx.cteTables[strings.ToLower(alias)] = tableDef
 		//append node
 		appendQueryNode(query, node, false)
 
