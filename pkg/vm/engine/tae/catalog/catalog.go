@@ -95,10 +95,19 @@ func (catalog *Catalog) InitSystemDB() {
 	dbTables := NewSystemTableEntry(sysDB, SystemTable_DB_ID, SystemDBSchema)
 	tableTables := NewSystemTableEntry(sysDB, SystemTable_Table_ID, SystemTableSchema)
 	columnTables := NewSystemTableEntry(sysDB, SystemTable_Columns_ID, SystemColumnSchema)
-	sysDB.addEntryLocked(dbTables)
-	sysDB.addEntryLocked(tableTables)
-	sysDB.addEntryLocked(columnTables)
-	catalog.addEntryLocked(sysDB)
+	err := sysDB.addEntryLocked(dbTables)
+	if err != nil {
+		panic(err)
+	}
+	if err = sysDB.addEntryLocked(tableTables); err != nil {
+		panic(err)
+	}
+	if err = sysDB.addEntryLocked(columnTables); err != nil {
+		panic(err)
+	}
+	if err = catalog.addEntryLocked(sysDB); err != nil {
+		panic(err)
+	}
 }
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
