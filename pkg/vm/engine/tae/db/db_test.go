@@ -1405,18 +1405,20 @@ func TestCrossDBTxn(t *testing.T) {
 func TestSystemDB1(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
+	schema := catalog.MockSchema(2)
 	txn := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase(catalog.SystemDBName)
 	assert.NotNil(t, err)
 	_, err = txn.DropDatabase(catalog.SystemDBName)
 	assert.NotNil(t, err)
 
-	_, err = txn.CreateDatabase("db1")
+	db1, err := txn.CreateDatabase("db1")
 	assert.Nil(t, err)
+	db1.CreateRelation(schema)
+
 	_, err = txn.CreateDatabase("db2")
 	assert.Nil(t, err)
 
-	schema := catalog.MockSchema(2)
 	db, _ := txn.GetDatabase(catalog.SystemDBName)
 	_, err = db.CreateRelation(schema)
 	assert.NotNil(t, err)
@@ -1447,9 +1449,12 @@ func TestSystemDB1(t *testing.T) {
 	for it.Valid() {
 		blk := it.GetBlock()
 		rows += blk.Rows()
+		view, err := blk.GetColumnDataByName(catalog.SystemRelAttr_Name, nil, nil)
+		assert.Nil(t, err)
+		assert.Equal(t, 4, vector.Length(view.GetColumnData()))
 		it.Next()
 	}
-	assert.Equal(t, 3, rows)
+	assert.Equal(t, 4, rows)
 
 	table, err = db.GetRelationByName(catalog.SystemTable_Columns_Name)
 	assert.Nil(t, err)
@@ -1458,6 +1463,21 @@ func TestSystemDB1(t *testing.T) {
 	for it.Valid() {
 		blk := it.GetBlock()
 		rows += blk.Rows()
+		view, err := blk.GetColumnDataByName(catalog.SystemColAttr_Name, nil, nil)
+		assert.Nil(t, err)
+		t.Log(view.GetColumnData().String())
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_ConstraintType, nil, nil)
+		assert.Nil(t, err)
+		t.Log(view.GetColumnData().String())
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Type, nil, nil)
+		assert.Nil(t, err)
+		t.Log(view.GetColumnData().String())
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_RelName, nil, nil)
+		assert.Nil(t, err)
+		t.Log(view.GetColumnData().String())
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Num, nil, nil)
+		assert.Nil(t, err)
+		t.Log(view.GetColumnData().String())
 		it.Next()
 	}
 	t.Log(rows)

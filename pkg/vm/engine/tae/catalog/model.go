@@ -42,6 +42,19 @@ const (
 	SystemBlock_DB_ID        = uint64(201)
 	SystemBlock_Table_ID     = uint64(202)
 	SystemBlock_Columns_ID   = uint64(203)
+
+	SystemCatalogName  = "def"
+	SystemPersistRel   = "p"
+	SystemTransientRel = "t"
+
+	SystemOrdinaryRel     = "r"
+	SystemIndexRel        = "i"
+	SystemSequenceRel     = "S"
+	SystemViewRel         = "v"
+	SystemMaterializedRel = "m"
+
+	SystemColPKConstraint = "p"
+	SystemColNoConstraint = "n"
 )
 
 const (
@@ -62,7 +75,7 @@ const (
 	SystemColAttr_Type            = "atttyp"
 	SystemColAttr_Num             = "attnum"
 	SystemColAttr_Length          = "att_length"
-	SystemColAttr_Nullable        = "attnotnull"
+	SystemColAttr_NullAbility     = "attnotnull"
 	SystemColAttr_HasExpr         = "atthasdef"
 	SystemColAttr_DefaultExpr     = "att_default"
 	SystemColAttr_IsDropped       = "attisdropped"
@@ -193,7 +206,7 @@ func init() {
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol(SystemColAttr_Nullable, t)
+	SystemColumnSchema.AppendCol(SystemColAttr_NullAbility, t)
 	t = types.Type{
 		Oid:   types.T_int8,
 		Size:  1,

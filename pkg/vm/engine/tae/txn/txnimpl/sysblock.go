@@ -3,6 +3,7 @@ package txnimpl
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -39,18 +40,10 @@ func (blk *txnSysBlock) dbRows() int {
 
 func (blk *txnSysBlock) tableRows() int {
 	rows := 0
-	dbIt := blk.catalog.MakeDBIt(true)
-	canRead := false
-	for dbIt.Valid() {
-		db := dbIt.Get().GetPayload().(*catalog.DBEntry)
-		db.RLock()
-		canRead = db.TxnCanRead(blk.Txn, db.RWMutex)
-		db.RUnlock()
-		if canRead {
-			rows += db.CoarseTableCnt()
-		}
-		dbIt.Next()
+	fn := func(db *catalog.DBEntry) {
+		rows += db.CoarseTableCnt()
 	}
+	blk.processDB(fn)
 	return rows
 }
 
@@ -89,18 +82,10 @@ func (blk *txnSysBlock) columnRows() int {
 	fn := func(table *catalog.TableEntry) {
 		rows += len(table.GetSchema().ColDefs)
 	}
-	dbIt := blk.catalog.MakeDBIt(true)
-	canRead := false
-	for dbIt.Valid() {
-		db := dbIt.Get().GetPayload().(*catalog.DBEntry)
-		db.RLock()
-		canRead = db.TxnCanRead(blk.Txn, db.RWMutex)
-		db.RUnlock()
-		if canRead {
-			blk.processTable(db, fn)
-		}
-		dbIt.Next()
+	dbFn := func(db *catalog.DBEntry) {
+		blk.processTable(db, fn)
 	}
+	blk.processDB(dbFn)
 	return rows
 }
 
@@ -116,7 +101,94 @@ func (blk *txnSysBlock) Rows() int {
 	}
 }
 
-// func (blk *txnSysBlock) buildDBTableColumnData(colIdx)
+func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	col := catalog.SystemColumnSchema.ColDefs[colIdx]
+	colData := movec.New(col.Type)
+	tableFn := func(table *catalog.TableEntry) {
+		for i, colDef := range table.GetSchema().ColDefs {
+			switch col.Name {
+			case catalog.SystemColAttr_Name:
+				compute.AppendValue(colData, []byte(colDef.Name))
+			case catalog.SystemColAttr_Num:
+				compute.AppendValue(colData, uint32(i+1))
+			case catalog.SystemColAttr_Type:
+				compute.AppendValue(colData, uint32(colDef.Type.Oid))
+			case catalog.SystemColAttr_DBName:
+				compute.AppendValue(colData, []byte(table.GetDB().GetName()))
+			case catalog.SystemColAttr_RelName:
+				compute.AppendValue(colData, []byte(table.GetSchema().Name))
+			case catalog.SystemColAttr_ConstraintType:
+				if int(table.GetSchema().PrimaryKey) == colIdx {
+					compute.AppendValue(colData, []byte(catalog.SystemColPKConstraint))
+				} else {
+					compute.AppendValue(colData, []byte(catalog.SystemColNoConstraint))
+				}
+			case catalog.SystemColAttr_Length:
+				compute.AppendValue(colData, uint32(colDef.Type.Size))
+			case catalog.SystemColAttr_NullAbility:
+				compute.AppendValue(colData, int8(1)) // TODO
+			case catalog.SystemColAttr_HasExpr:
+				compute.AppendValue(colData, int8(0)) // TODO
+			case catalog.SystemColAttr_DefaultExpr:
+				compute.AppendValue(colData, []byte("")) // TODO
+			case catalog.SystemColAttr_IsDropped:
+				compute.AppendValue(colData, int8(0)) // TODO
+			case catalog.SystemColAttr_IsHidden:
+				compute.AppendValue(colData, int8(0)) // TODO
+			case catalog.SystemColAttr_IsUnsigned:
+				v := int8(0)
+				switch colDef.Type.Oid {
+				case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+					v = int8(1)
+				}
+				compute.AppendValue(colData, v) // TODO
+			case catalog.SystemColAttr_IsAutoIncrement:
+				compute.AppendValue(colData, int8(0)) // TODO
+			case catalog.SystemColAttr_Comment:
+				compute.AppendValue(colData, []byte("todocomment")) // TODO
+			default:
+				panic("unexpected")
+			}
+		}
+	}
+	dbFn := func(db *catalog.DBEntry) {
+		blk.processTable(db, tableFn)
+	}
+	blk.processDB(dbFn)
+	view.AppliedVec = colData
+	return
+}
+
+func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
+	colData := movec.New(colDef.Type)
+	tableFn := func(table *catalog.TableEntry) {
+		switch colDef.Name {
+		case catalog.SystemRelAttr_Name:
+			compute.AppendValue(colData, []byte(table.GetSchema().Name))
+		case catalog.SystemRelAttr_DBName:
+			compute.AppendValue(colData, []byte(table.GetDB().GetName()))
+		case catalog.SystemRelAttr_Comment:
+			compute.AppendValue(colData, []byte("todocomment"))
+		case catalog.SystemRelAttr_Persistence:
+			compute.AppendValue(colData, catalog.SystemPersistRel)
+		case catalog.SystemRelAttr_Kind:
+			compute.AppendValue(colData, catalog.SystemOrdinaryRel)
+		case catalog.SystemRelAttr_CreateSQL:
+			compute.AppendValue(colData, []byte("todosql"))
+		default:
+			panic("unexpected")
+		}
+	}
+	dbFn := func(db *catalog.DBEntry) {
+		blk.processTable(db, tableFn)
+	}
+	blk.processDB(dbFn)
+	view.AppliedVec = colData
+	return
+}
 
 func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
@@ -127,9 +199,9 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 		case catalog.SystemDBAttr_Name:
 			compute.AppendValue(colData, []byte(db.GetName()))
 		case catalog.SystemDBAttr_CatalogName:
-			compute.AppendValue(colData, []byte("cname"))
+			compute.AppendValue(colData, []byte(catalog.SystemCatalogName))
 		case catalog.SystemDBAttr_CreateSQL:
-			compute.AppendValue(colData, []byte("sql"))
+			compute.AppendValue(colData, []byte("todosql"))
 		default:
 			panic("unexpected")
 		}
@@ -143,9 +215,9 @@ func (blk *txnSysBlock) GetColumnDataById(colIdx int, compressed, decompressed *
 	if blk.table.GetID() == catalog.SystemTable_DB_ID {
 		return blk.getDBTableData(colIdx)
 	} else if blk.table.GetID() == catalog.SystemTable_Table_ID {
-		panic("not supported")
+		return blk.getRelTableData(colIdx)
 	} else if blk.table.GetID() == catalog.SystemTable_Columns_ID {
-		panic("not supported")
+		return blk.getColumnTableData(colIdx)
 	} else {
 		panic("not supported")
 	}
