@@ -1590,7 +1590,8 @@ func TestSystemDB1(t *testing.T) {
 
 	db1, err := txn.CreateDatabase("db1")
 	assert.Nil(t, err)
-	db1.CreateRelation(schema)
+	_, err = db1.CreateRelation(schema)
+	assert.Nil(t, err)
 
 	_, err = txn.CreateDatabase("db2")
 	assert.Nil(t, err)
@@ -1658,6 +1659,7 @@ func TestSystemDB1(t *testing.T) {
 	}
 	t.Log(rows)
 
-	txn.Rollback()
+	err = txn.Rollback()
+	assert.Nil(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
