@@ -137,6 +137,18 @@ func (s *Segment) Unmount() {
 	logutil.Infof("Unmount Segment: %v", s.name)
 }
 
+func (s *Segment) Destroy() {
+	err := s.segFile.Close()
+	if err != nil {
+		panic(any(err.Error()))
+	}
+	logutil.Infof(" %s | SegmentFile | Destroying", s.name)
+	err = os.Remove(s.name)
+	if err != nil {
+		panic(any(err.Error()))
+	}
+}
+
 func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

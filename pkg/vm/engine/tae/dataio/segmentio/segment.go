@@ -75,6 +75,7 @@ func (sf *segmentFile) close() {
 func (sf *segmentFile) Destroy() {
 	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
 	sf.seg.Unmount()
+	sf.seg.Destroy()
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
