@@ -91,6 +91,11 @@ func NewReplayDBEntry() *DBEntry {
 }
 
 func (e *DBEntry) IsSystemDB() bool { return e.isSys }
+func (e *DBEntry) CoarseTableCnt() int {
+	e.RLock()
+	defer e.RUnlock()
+	return len(e.entries)
+}
 
 func (e *DBEntry) Compare(o common.NodePayload) int {
 	oe := o.(*DBEntry).BaseEntry

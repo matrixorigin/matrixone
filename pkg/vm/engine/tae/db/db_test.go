@@ -1415,9 +1415,38 @@ func TestSystemDB1(t *testing.T) {
 	db, _ := txn.GetDatabase(catalog.SystemDBName)
 	_, err = db.CreateRelation(schema)
 	assert.NotNil(t, err)
-	dbTable, err := db.GetRelationByName(catalog.SystemTable_DB_Name)
+	table, err := db.GetRelationByName(catalog.SystemTable_DB_Name)
 	assert.Nil(t, err)
-	assert.NotNil(t, dbTable)
+	it := table.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		rows += blk.Rows()
+		it.Next()
+	}
+	assert.Equal(t, 1, rows)
+
+	table, err = db.GetRelationByName(catalog.SystemTable_Table_Name)
+	assert.Nil(t, err)
+	it = table.MakeBlockIt()
+	rows = 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		rows += blk.Rows()
+		it.Next()
+	}
+	assert.Equal(t, 3, rows)
+
+	table, err = db.GetRelationByName(catalog.SystemTable_Columns_Name)
+	assert.Nil(t, err)
+	it = table.MakeBlockIt()
+	rows = 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		rows += blk.Rows()
+		it.Next()
+	}
+	t.Log(rows)
 
 	txn.Rollback()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

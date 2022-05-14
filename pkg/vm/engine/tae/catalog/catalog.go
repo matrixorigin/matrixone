@@ -231,6 +231,12 @@ func (catalog *Catalog) Close() error {
 	return nil
 }
 
+func (catalog *Catalog) CoarseDBCnt() int {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	return len(catalog.entries)
+}
+
 func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
