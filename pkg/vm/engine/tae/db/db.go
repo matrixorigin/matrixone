@@ -87,7 +87,10 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	db.stopWorkers()
+	err := db.stopWorkers()
+	if err != nil {
+		return err
+	}
 	db.Closed.Store(ErrClosed)
 	close(db.ClosedC)
 	db.Scheduler.Stop()
