@@ -127,7 +127,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_Length:
 				compute.AppendValue(colData, uint32(colDef.Type.Size))
 			case catalog.SystemColAttr_NullAbility:
-				compute.AppendValue(colData, int8(1)) // TODO
+				compute.AppendValue(colData, colDef.NullAbility) // TODO
 			case catalog.SystemColAttr_HasExpr:
 				compute.AppendValue(colData, int8(0)) // TODO
 			case catalog.SystemColAttr_DefaultExpr:
@@ -135,7 +135,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_IsDropped:
 				compute.AppendValue(colData, int8(0)) // TODO
 			case catalog.SystemColAttr_IsHidden:
-				compute.AppendValue(colData, int8(0)) // TODO
+				compute.AppendValue(colData, colDef.Hidden) // TODO
 			case catalog.SystemColAttr_IsUnsigned:
 				v := int8(0)
 				switch colDef.Type.Oid {
@@ -144,9 +144,9 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 				}
 				compute.AppendValue(colData, v) // TODO
 			case catalog.SystemColAttr_IsAutoIncrement:
-				compute.AppendValue(colData, int8(0)) // TODO
+				compute.AppendValue(colData, colDef.AutoIncrement) // TODO
 			case catalog.SystemColAttr_Comment:
-				compute.AppendValue(colData, []byte("todocomment")) // TODO
+				compute.AppendValue(colData, []byte(colDef.Comment)) // TODO
 			default:
 				panic("unexpected")
 			}
@@ -171,7 +171,7 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 		case catalog.SystemRelAttr_DBName:
 			compute.AppendValue(colData, []byte(table.GetDB().GetName()))
 		case catalog.SystemRelAttr_Comment:
-			compute.AppendValue(colData, []byte("todocomment"))
+			compute.AppendValue(colData, []byte(table.GetSchema().Comment))
 		case catalog.SystemRelAttr_Persistence:
 			compute.AppendValue(colData, catalog.SystemPersistRel)
 		case catalog.SystemRelAttr_Kind:
