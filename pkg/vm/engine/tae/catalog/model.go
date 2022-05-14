@@ -44,6 +44,35 @@ const (
 	SystemBlock_Columns_ID   = uint64(203)
 )
 
+const (
+	SystemDBAttr_Name        = "datName"
+	SystemDBAttr_CatalogName = "dat_catalog_name"
+	SystemDBAttr_CreateSQL   = "dat_createsql"
+
+	SystemRelAttr_Name        = "relname"
+	SystemRelAttr_DBName      = "reldatabase"
+	SystemRelAttr_Persistence = "relpersistence"
+	SystemRelAttr_Kind        = "relkind"
+	SystemRelAttr_Comment     = "rel_comment"
+	SystemRelAttr_CreateSQL   = "rel_createsql"
+
+	SystemColAttr_Name            = "att_name"
+	SystemColAttr_DBName          = "att_database"
+	SystemColAttr_RelName         = "att_relname"
+	SystemColAttr_Type            = "atttyp"
+	SystemColAttr_Num             = "attnum"
+	SystemColAttr_Length          = "att_length"
+	SystemColAttr_Nullable        = "attnotnull"
+	SystemColAttr_HasExpr         = "atthasdef"
+	SystemColAttr_DefaultExpr     = "att_default"
+	SystemColAttr_IsDropped       = "attisdropped"
+	SystemColAttr_ConstraintType  = "att_constraint_type"
+	SystemColAttr_IsUnsigned      = "att_is_unsigned"
+	SystemColAttr_IsAutoIncrement = "att_is_auto_increment"
+	SystemColAttr_IsHidden        = "att_is_hidden"
+	SystemColAttr_Comment         = "att_comment"
+)
+
 // UINT8 UINT64  VARCHAR UINT64  INT8   CHAR    VARCHAR    UINT64
 //  ET  |  ID  |  NAME  |  TS  | OPT | LOGIDX |  INFO   | PARENTID |
 var ModelSchema *Schema
@@ -70,19 +99,19 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemDBSchema.AppendCol("datName", t)
+	SystemDBSchema.AppendCol(SystemDBAttr_Name, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemDBSchema.AppendCol("dat_catalog_name", t)
+	SystemDBSchema.AppendCol(SystemDBAttr_CatalogName, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemDBSchema.AppendCol("dat_createsql", t)
+	SystemDBSchema.AppendCol(SystemDBAttr_CreateSQL, t)
 
 	SystemTableSchema = NewEmptySchema(SystemTable_Table_Name)
 	t = types.Type{
@@ -90,37 +119,37 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemTableSchema.AppendCol("relname", t)
+	SystemTableSchema.AppendCol(SystemRelAttr_Name, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemTableSchema.AppendCol("reldatabase", t)
+	SystemTableSchema.AppendCol(SystemRelAttr_DBName, t)
 	t = types.Type{
 		Oid:   types.T_char,
 		Size:  1,
 		Width: 8,
 	}
-	SystemTableSchema.AppendCol("relpersistence", t)
+	SystemTableSchema.AppendCol(SystemRelAttr_Persistence, t)
 	t = types.Type{
 		Oid:   types.T_char,
 		Size:  1,
 		Width: 8,
 	}
-	SystemTableSchema.AppendCol("relkind", t)
+	SystemTableSchema.AppendCol(SystemRelAttr_Kind, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemTableSchema.AppendCol("rel_comment", t)
+	SystemTableSchema.AppendCol(SystemRelAttr_Comment, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemTableSchema.AppendCol("rel_createsql", t)
+	SystemTableSchema.AppendCol(SystemDBAttr_CreateSQL, t)
 
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
 	t = types.Type{
@@ -128,91 +157,91 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemColumnSchema.AppendCol("att_database", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_DBName, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemColumnSchema.AppendCol("att_relname", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_RelName, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemColumnSchema.AppendCol("att_name", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_Name, t)
 	t = types.Type{
 		Oid:   types.T_uint32,
 		Size:  4,
 		Width: 32,
 	}
-	SystemColumnSchema.AppendCol("attyp", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_Type, t)
 	t = types.Type{
 		Oid:   types.T_uint32,
 		Size:  4,
 		Width: 32,
 	}
-	SystemColumnSchema.AppendCol("attrnum", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_Num, t)
 	t = types.Type{
 		Oid:   types.T_uint32,
 		Size:  4,
 		Width: 32,
 	}
-	SystemColumnSchema.AppendCol("att_length", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_Length, t)
 	t = types.Type{
 		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol("attnotnull", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_Nullable, t)
 	t = types.Type{
 		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol("atthasdef", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_HasExpr, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemColumnSchema.AppendCol("att_default", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_DefaultExpr, t)
 	t = types.Type{
 		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol("attisdropped", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_IsDropped, t)
 	t = types.Type{
 		Oid:   types.T_char,
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol("att_constraint_type", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_ConstraintType, t)
 	t = types.Type{
 		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol("att_is_unsigned", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_IsUnsigned, t)
 	t = types.Type{
 		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol("att_is_auto_increment", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_IsAutoIncrement, t)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
 		Width: 100,
 	}
-	SystemColumnSchema.AppendCol("att_comment", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_Comment, t)
 	t = types.Type{
 		Oid:   types.T_int8,
 		Size:  1,
 		Width: 8,
 	}
-	SystemColumnSchema.AppendCol("att_is_hidden", t)
+	SystemColumnSchema.AppendCol(SystemColAttr_IsHidden, t)
 
 	ModelSchema = NewEmptySchema(ModelSchemaName)
 	t = types.Type{

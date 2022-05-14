@@ -3,9 +3,10 @@ package txnimpl
 import (
 	"bytes"
 
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -26,7 +27,7 @@ func newSysBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnSysBlock {
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int                      { panic("not supported") }
-func (blk *txnSysBlock) BatchDedup(pks *gvec.Vector) (err error)   { panic("not supported") }
+func (blk *txnSysBlock) BatchDedup(pks *movec.Vector) (err error)  { panic("not supported") }
 func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) { panic("not supported") }
 func (blk *txnSysBlock) Update(row uint32, col uint16, v interface{}) (err error) {
 	panic("not supported")
@@ -53,7 +54,22 @@ func (blk *txnSysBlock) tableRows() int {
 	return rows
 }
 
-func (blk *txnSysBlock) processDB(entry *catalog.DBEntry, fn func(*catalog.TableEntry)) {
+func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry)) {
+	canRead := false
+	dbIt := blk.catalog.MakeDBIt(true)
+	for dbIt.Valid() {
+		db := dbIt.Get().GetPayload().(*catalog.DBEntry)
+		db.RLock()
+		canRead = db.TxnCanRead(blk.Txn, db.RWMutex)
+		db.RUnlock()
+		if canRead {
+			fn(db)
+		}
+		dbIt.Next()
+	}
+}
+
+func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.TableEntry)) {
 	canRead := false
 	tableIt := entry.MakeTableIt(true)
 	for tableIt.Valid() {
@@ -81,7 +97,7 @@ func (blk *txnSysBlock) columnRows() int {
 		canRead = db.TxnCanRead(blk.Txn, db.RWMutex)
 		db.RUnlock()
 		if canRead {
-			blk.processDB(db, fn)
+			blk.processTable(db, fn)
 		}
 		dbIt.Next()
 	}
@@ -100,8 +116,39 @@ func (blk *txnSysBlock) Rows() int {
 	}
 }
 
-func (blk *txnSysBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+// func (blk *txnSysBlock) buildDBTableColumnData(colIdx)
+
+func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
+	colDef := catalog.SystemDBSchema.ColDefs[colIdx]
+	colData := movec.New(colDef.Type)
+	fn := func(db *catalog.DBEntry) {
+		switch colDef.Name {
+		case catalog.SystemDBAttr_Name:
+			compute.AppendValue(colData, []byte(db.GetName()))
+		case catalog.SystemDBAttr_CatalogName:
+			compute.AppendValue(colData, []byte("cname"))
+		case catalog.SystemDBAttr_CreateSQL:
+			compute.AppendValue(colData, []byte("sql"))
+		default:
+			panic("unexpected")
+		}
+	}
+	blk.processDB(fn)
+	view.AppliedVec = colData
 	return
+}
+
+func (blk *txnSysBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+	if blk.table.GetID() == catalog.SystemTable_DB_ID {
+		return blk.getDBTableData(colIdx)
+	} else if blk.table.GetID() == catalog.SystemTable_Table_ID {
+		panic("not supported")
+	} else if blk.table.GetID() == catalog.SystemTable_Columns_ID {
+		panic("not supported")
+	} else {
+		panic("not supported")
+	}
 }
 
 func (blk *txnSysBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {

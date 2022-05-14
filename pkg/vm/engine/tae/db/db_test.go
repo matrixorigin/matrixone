@@ -1411,6 +1411,11 @@ func TestSystemDB1(t *testing.T) {
 	_, err = txn.DropDatabase(catalog.SystemDBName)
 	assert.NotNil(t, err)
 
+	_, err = txn.CreateDatabase("db1")
+	assert.Nil(t, err)
+	_, err = txn.CreateDatabase("db2")
+	assert.Nil(t, err)
+
 	schema := catalog.MockSchema(2)
 	db, _ := txn.GetDatabase(catalog.SystemDBName)
 	_, err = db.CreateRelation(schema)
@@ -1422,9 +1427,18 @@ func TestSystemDB1(t *testing.T) {
 	for it.Valid() {
 		blk := it.GetBlock()
 		rows += blk.Rows()
+		view, err := blk.GetColumnDataByName(catalog.SystemDBAttr_Name, nil, nil)
+		assert.Nil(t, err)
+		assert.Equal(t, 3, vector.Length(view.GetColumnData()))
+		view, err = blk.GetColumnDataByName(catalog.SystemDBAttr_CatalogName, nil, nil)
+		assert.Nil(t, err)
+		assert.Equal(t, 3, vector.Length(view.GetColumnData()))
+		view, err = blk.GetColumnDataByName(catalog.SystemDBAttr_CreateSQL, nil, nil)
+		assert.Nil(t, err)
+		assert.Equal(t, 3, vector.Length(view.GetColumnData()))
 		it.Next()
 	}
-	assert.Equal(t, 1, rows)
+	assert.Equal(t, 3, rows)
 
 	table, err = db.GetRelationByName(catalog.SystemTable_Table_Name)
 	assert.Nil(t, err)
