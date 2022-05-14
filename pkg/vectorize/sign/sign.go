@@ -15,7 +15,6 @@
 package sign
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
 
@@ -54,11 +53,6 @@ func sign[T constraints.Integer | constraints.Float](xs []T, rs []int8) []int8 {
 			rs[i] = 0
 		} else {
 			rs[i] = -1
-		}
-		if rs[i] > 1 || rs[i] < -1 {
-			if rs[i] < 0 {
-				panic(moerr.NewError(moerr.OUT_OF_RANGE, "sign int value out of range"))
-			}
 		}
 	}
 	return rs
