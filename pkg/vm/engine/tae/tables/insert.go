@@ -59,8 +59,8 @@ func newInsertInfo(rwlocker *sync.RWMutex, maxTs uint64, capacity uint32) *inser
 
 func (info *insertInfo) RecordTxnLocked(offset uint32, txn txnif.TxnReader) {
 	pos := uint32(info.offsets.Length())
-	info.offsets.Append(1, []uint32{offset})
-	info.ts.Append(1, []uint64{txn.GetCommitTS()})
+	_ = info.offsets.Append(1, []uint32{offset})
+	_ = info.ts.Append(1, []uint64{txn.GetCommitTS()})
 	info.txnMap[txn.GetID()] = pos
 	info.offsetTxns[pos] = txn
 	info.maxTs = txn.GetCommitTS()
