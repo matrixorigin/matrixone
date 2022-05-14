@@ -144,7 +144,10 @@ func (vf *vFile) Commit() {
 	// fmt.Printf("Committing %s\n", vf.Name())
 	vf.wg.Wait()
 	// vf.WriteMeta()
-	vf.Sync()
+	err := vf.Sync()
+	if err != nil {
+		panic(err)
+	}
 	vf.Lock()
 	vf.buf = nil
 	vf.Unlock()
@@ -165,8 +168,8 @@ func (vf *vFile) Sync() error {
 		vf.bsInfo.syncTimes++
 	}
 	if vf.buf == nil {
-		vf.File.Sync()
-		return nil
+		err := vf.File.Sync()
+		return err
 	}
 	targetSize := vf.size //TODO race size, bufpos
 	targetpos := vf.bufpos
@@ -192,7 +195,10 @@ func (vf *vFile) Sync() error {
 	vf.bufpos = 0
 	// fmt.Printf("199bufpos is %v\n",vf.bufpos)
 	t0 = time.Now()
-	vf.File.Sync()
+	err = vf.File.Sync()
+	if err != nil {
+		return err
+	}
 
 	if vf.bsInfo != nil {
 		vf.bsInfo.syncDuration += time.Since(t0)
@@ -304,13 +310,22 @@ func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
 
 func (vf *vFile) OnNewEntry(int) {}
 func (vf *vFile) OnNewCommit(info *entry.Info) {
-	vf.Log(info)
+	err := vf.Log(info)
+	if err != nil {
+		panic(err)
+	}
 }
 func (vf *vFile) OnNewCheckpoint(info *entry.Info) {
-	vf.Log(info)
+	err := vf.Log(info)
+	if err != nil {
+		panic(err)
+	}
 }
 func (vf *vFile) OnNewTxn(info *entry.Info) {
-	vf.Log(info)
+	err := vf.Log(info)
+	if err != nil {
+		panic(err)
+	}
 }
 func (vf *vFile) OnNewUncommit(addrs []*VFileAddress) {}
 
@@ -339,12 +354,18 @@ func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 
 func (vf *vFile) readMeta() error {
 	buf := make([]byte, Metasize)
-	vf.ReadAt(buf, int64(vf.size)-int64(Metasize))
+	_, err := vf.ReadAt(buf, int64(vf.size)-int64(Metasize))
+	if err != nil {
+		return err
+	}
 	size := binary.BigEndian.Uint16(buf)
 	buf = make([]byte, int(size))
-	vf.ReadAt(buf, int64(vf.size)-int64(Metasize)-int64(size))
-	json.Unmarshal(buf, vf.vInfo)
-	if vf.vInfo == nil {
+	_, err = vf.ReadAt(buf, int64(vf.size)-int64(Metasize)-int64(size))
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(buf, vf.vInfo)
+	if err != nil {
 		return errors.New("read vfile meta failed")
 	}
 	return nil

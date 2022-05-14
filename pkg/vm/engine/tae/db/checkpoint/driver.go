@@ -56,7 +56,10 @@ func (f *ckpDriver) onCheckpoint(items ...interface{}) {
 	start := time.Now()
 	for _, item := range items {
 		ckpEntry := item.(wal.LogEntry)
-		ckpEntry.WaitDone()
+		err:=ckpEntry.WaitDone()
+		if err !=nil{
+			panic(err)
+		}
 		ckpEntry.Free()
 	}
 	logutil.Infof("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))

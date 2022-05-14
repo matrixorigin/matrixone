@@ -96,7 +96,8 @@ func TestTables1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	txn.Rollback()
+	err = txn.Rollback()
+	assert.Nil(t, err)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -114,9 +115,11 @@ func TestTxn1(t *testing.T) {
 	bats := compute.SplitBatch(bat, 20)
 	{
 		txn := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db")
-		database.CreateRelation(schema)
-		err := txn.Commit()
+		database, err := txn.CreateDatabase("db")
+		assert.Nil(t,err)
+		_,err=database.CreateRelation(schema)
+		assert.Nil(t,err)
+		err = txn.Commit()
 		assert.Nil(t, err)
 	}
 	var wg sync.WaitGroup
@@ -134,10 +137,12 @@ func TestTxn1(t *testing.T) {
 			assert.Nil(t, err)
 		}
 	}
-	p, _ := ants.NewPool(4)
+	p, err := ants.NewPool(4)
+	assert.Nil(t, err)
 	for _, toAppend := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(toAppend))
+		err := p.Submit(doAppend(toAppend))
+		assert.Nil(t, err)
 	}
 
 	wg.Wait()
@@ -279,7 +284,8 @@ func TestTxn3(t *testing.T) {
 			// err = blk.Update(0, colIdx, int32(200))
 			assert.NotNil(t, err)
 
-			txn.Rollback()
+			err = txn.Rollback()
+			assert.Nil(t, err)
 		}
 		err = txn.Commit()
 		assert.Nil(t, err)
@@ -371,7 +377,8 @@ func TestTxn5(t *testing.T) {
 	{
 		txn := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
-		database.CreateRelation(schema)
+		_,err:=database.CreateRelation(schema)
+		assert.Nil(t,err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -493,7 +500,8 @@ func TestTxn6(t *testing.T) {
 			assert.NotNil(t, err)
 			_, err = rel.GetValue(id, row+1, uint16(3))
 			assert.Nil(t, err)
-			txn.Rollback()
+			err = txn.Rollback()
+			assert.Nil(t, err)
 		}
 		err = rel.Update(id, row+2, uint16(3), int64(99))
 		assert.Nil(t, err)

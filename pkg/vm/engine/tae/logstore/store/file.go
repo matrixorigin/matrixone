@@ -163,9 +163,15 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 }
 
 func (rf *rotateFile) Replay(r *replayer, o ReplayObserver) error {
-	rf.history.Replay(r, o)
+	err := rf.history.Replay(r, o)
+	if err != nil {
+		return err
+	}
 	for _, vf := range rf.uncommitted {
-		vf.Replay(r, vf)
+		err = vf.Replay(r, vf)
+		if err != nil {
+			return nil
+		}
 	}
 	return nil
 }
@@ -283,7 +289,10 @@ func (rf *rotateFile) commitFile() {
 		panic("logic error")
 	}
 	rf.uncommitted = rf.uncommitted[1:]
-	f.Archive()
+	err := f.Archive()
+	if err != nil {
+		panic(err)
+	}
 	rf.Unlock()
 	fmt.Printf("Committed %s\n", f.Name())
 }

@@ -86,7 +86,8 @@ func TestGCBlock1(t *testing.T) {
 	assert.Nil(t, err)
 	blkData := meta.GetBlockData()
 	assert.Equal(t, 1, tae.MTBufMgr.Count())
-	blkData.Destroy()
+	err = blkData.Destroy()
+	assert.Nil(t, err)
 	assert.Equal(t, 0, tae.MTBufMgr.Count())
 
 	assert.Equal(t, 2, idxCommon.MockIndexBufferManager.Count())
@@ -117,13 +118,15 @@ func TestAutoGC1(t *testing.T) {
 	{
 		txn := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
-		database.CreateRelation(schema)
+		_,err:=database.CreateRelation(schema)
+		assert.Nil(t,err)
 		assert.Nil(t, txn.Commit())
 	}
 	var wg sync.WaitGroup
 	for _, data := range bats {
 		wg.Add(1)
-		pool.Submit(appendClosure(t, data, schema.Name, tae, &wg))
+		err := pool.Submit(appendClosure(t, data, schema.Name, tae, &wg))
+		assert.Nil(t, err)
 	}
 	cnt := 0
 	processor := new(catalog.LoopProcessor)
@@ -134,7 +137,8 @@ func TestAutoGC1(t *testing.T) {
 
 	testutils.WaitExpect(2000, func() bool {
 		cnt = 0
-		tae.Catalog.RecurLoop(processor)
+		err := tae.Catalog.RecurLoop(processor)
+		assert.Nil(t, err)
 		return tae.Scheduler.GetPenddingLSNCnt() == 0 && cnt == 12
 	})
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

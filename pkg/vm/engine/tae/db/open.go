@@ -93,7 +93,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TimedScanner = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
 
 	// Start workers
-	db.startWorkers()
+	err = db.startWorkers()
 
 	return
 }
