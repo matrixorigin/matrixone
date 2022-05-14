@@ -61,6 +61,7 @@ func (s *Segment) Init(name string) error {
 	log := &Inode{
 		inode: 1,
 		size:  0,
+		state: RESIDENT,
 	}
 	s.name = name
 	s.super.lognode = log
@@ -111,9 +112,8 @@ func (s *Segment) Mount() {
 	var seq uint64
 	seq = 0
 	s.nodes = make(map[string]*BlockFile, INODE_NUM)
-	ino := &Inode{inode: s.super.lognode.inode}
 	logFile := &BlockFile{
-		snode:   ino,
+		snode:   s.super.lognode,
 		name:    "logfile",
 		segment: s,
 	}
@@ -131,6 +131,8 @@ func (s *Segment) Unmount() {
 }
 
 func (s *Segment) Destroy() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	err := s.segFile.Close()
 	if err != nil {
 		panic(any(err.Error()))
@@ -140,6 +142,7 @@ func (s *Segment) Destroy() {
 	if err != nil {
 		panic(any(err.Error()))
 	}
+	s.segFile = nil
 }
 
 func (s *Segment) NewBlockFile(fname string) *BlockFile {
@@ -153,6 +156,7 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 			size:       0,
 			extents:    make([]Extent, 0),
 			logExtents: Extent{},
+			state:      RESIDENT,
 		}
 	}
 	file = &BlockFile{
@@ -201,14 +205,23 @@ func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 func (s *Segment) ReleaseFile(fd *BlockFile) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.segFile == nil {
+		return
+	}
+	err := s.log.RemoveInode(fd)
+	if err != nil {
+		panic(any(err.Error()))
+	}
 	delete(s.nodes, fd.name)
+	s.Free(fd)
+	fd = nil
 }
 
-func (s *Segment) Free(fd *BlockFile, n uint32) {
-	for i, ext := range fd.snode.extents {
-		if i == int(n-1) {
-			s.allocator.Free(ext.offset-DATA_START, ext.length)
-		}
+func (s *Segment) Free(fd *BlockFile) {
+	fd.snode.mutex.Lock()
+	defer fd.snode.mutex.Unlock()
+	for _, ext := range fd.snode.extents {
+		s.allocator.Free(ext.offset-DATA_START, ext.length)
 	}
 }
 

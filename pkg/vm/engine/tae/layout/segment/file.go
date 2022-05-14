@@ -93,8 +93,7 @@ func (b *BlockFile) Append(offset uint64, data []byte) error {
 func extentsInsert(extents *[]Extent, idx int, vals []Extent) {
 	rear := make([]Extent, 0)
 	rear = append(rear, (*extents)[idx:]...)
-	front := make([]Extent, 0)
-	front = append((*extents)[:idx], vals...)
+	front := append((*extents)[:idx], vals...)
 	*extents = append(front, rear...)
 }
 func extentsRemove(extents *[]Extent, vals []Extent) {

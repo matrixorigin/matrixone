@@ -16,10 +16,18 @@ package segment
 
 import "sync"
 
+type StateType uint8
+
+const (
+	RESIDENT StateType = iota
+	REMOVE
+)
+
 type Inode struct {
 	inode      uint64
 	size       uint64
 	mutex      sync.Mutex
 	extents    []Extent
 	logExtents Extent
+	state      StateType
 }

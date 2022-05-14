@@ -30,13 +30,28 @@ func (ex Extent) Replay() {
 
 }
 
+func (l Log) RemoveInode(file *BlockFile) error {
+	file.snode.state = REMOVE
+	err := l.Append(file)
+	if err != nil {
+		return err
+	}
+	l.allocator.Free(file.snode.logExtents.offset, file.snode.logExtents.length)
+	return nil
+}
+
 func (l Log) Append(file *BlockFile) error {
+	file.snode.mutex.Lock()
+	defer file.snode.mutex.Unlock()
 	var (
 		err     error
 		ibuffer bytes.Buffer
 	)
 	segment := l.logFile.segment
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.inode); err != nil {
+		return err
+	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.state); err != nil {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.size); err != nil {

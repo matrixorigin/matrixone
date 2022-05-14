@@ -262,7 +262,10 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 			return err
 		}
 		defer cb.Close()
-		cb.WriteTS(ts)
+		err = cb.WriteTS(ts)
+		if err != nil {
+			return err
+		}
 		vec, err := bat.GetVectorByAttr(colIdx)
 		if err != nil {
 			return err
