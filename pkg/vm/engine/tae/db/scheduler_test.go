@@ -128,7 +128,7 @@ func TestCheckpoint1(t *testing.T) {
 		processor := new(catalog.LoopProcessor)
 		processor.BlockFn = blockFn
 		db.Opts.Catalog.RecurLoop(processor)
-		assert.Equal(t, 2, blockCnt)
+		assert.Equal(t, 2+3, blockCnt)
 	}
 }
 

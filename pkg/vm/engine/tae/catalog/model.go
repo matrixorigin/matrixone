@@ -34,8 +34,14 @@ const (
 	SystemTable_Table_Name   = "mo_tables"
 	SystemTable_Columns_Name = "mo_columns"
 	SystemTable_DB_ID        = uint64(1)
-	SystemTable_Table_ID     = uint64(1)
-	SystemTable_Columns_ID   = uint64(1)
+	SystemTable_Table_ID     = uint64(2)
+	SystemTable_Columns_ID   = uint64(3)
+	SystemSegment_DB_ID      = uint64(101)
+	SystemSegment_Table_ID   = uint64(102)
+	SystemSegment_Columns_ID = uint64(103)
+	SystemBlock_DB_ID        = uint64(201)
+	SystemBlock_Table_ID     = uint64(202)
+	SystemBlock_Columns_ID   = uint64(203)
 )
 
 // UINT8 UINT64  VARCHAR UINT64  INT8   CHAR    VARCHAR    UINT64

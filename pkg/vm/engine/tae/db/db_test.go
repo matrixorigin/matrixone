@@ -341,7 +341,7 @@ func TestCreateSegment(t *testing.T) {
 		return nil
 	}
 	tae.Opts.Catalog.RecurLoop(processor)
-	assert.Equal(t, 2, segCnt)
+	assert.Equal(t, 2+3, segCnt)
 	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -1399,5 +1399,26 @@ func TestCrossDBTxn(t *testing.T) {
 	assert.Equal(t, int(rows1), r1)
 	assert.Equal(t, int(rows2), r2)
 
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+}
+
+func TestSystemDB1(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	txn := tae.StartTxn(nil)
+	_, err := txn.CreateDatabase(catalog.SystemDBName)
+	assert.NotNil(t, err)
+	_, err = txn.DropDatabase(catalog.SystemDBName)
+	assert.NotNil(t, err)
+
+	schema := catalog.MockSchema(2)
+	db, _ := txn.GetDatabase(catalog.SystemDBName)
+	_, err = db.CreateRelation(schema)
+	assert.NotNil(t, err)
+	dbTable, err := db.GetRelationByName(catalog.SystemTable_DB_Name)
+	assert.Nil(t, err)
+	assert.NotNil(t, dbTable)
+
+	txn.Rollback()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }

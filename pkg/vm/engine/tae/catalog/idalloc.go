@@ -27,8 +27,8 @@ func NewIDAllocator() *IDAlloctor {
 	return &IDAlloctor{
 		dbAlloc:  common.NewIdAlloctor(1000),
 		tblAlloc: common.NewIdAlloctor(1000),
-		segAlloc: common.NewIdAlloctor(1),
-		blkAlloc: common.NewIdAlloctor(1),
+		segAlloc: common.NewIdAlloctor(1000),
+		blkAlloc: common.NewIdAlloctor(1000),
 	}
 }
 

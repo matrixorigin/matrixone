@@ -67,6 +67,14 @@ func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit()
 }
 
+func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
+	txn = db.TxnMgr.GetTxn(id)
+	if txn == nil {
+		err = txnbase.ErrNotFound
+	}
+	return
+}
+
 func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback()
 }

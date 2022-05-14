@@ -68,6 +68,36 @@ func NewReplaySegmentEntry() *SegmentEntry {
 	return e
 }
 
+func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
+	e := &SegmentEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		table:   table,
+		link:    new(common.Link),
+		entries: make(map[uint64]*common.DLNode),
+		state:   ES_Appendable,
+	}
+	var bid uint64
+	if table.schema.Name == SystemTableSchema.Name {
+		bid = SystemBlock_Table_ID
+	} else if table.schema.Name == SystemDBSchema.Name {
+		bid = SystemBlock_DB_ID
+	} else if table.schema.Name == SystemColumnSchema.Name {
+		bid = SystemBlock_Columns_ID
+	} else {
+		panic("not supported")
+	}
+	block := NewSysBlockEntry(e, bid)
+	e.addEntryLocked(block)
+	return e
+}
+
 func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
