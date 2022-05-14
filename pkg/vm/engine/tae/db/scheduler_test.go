@@ -60,13 +60,13 @@ func TestIOSchedule1(t *testing.T) {
 		ctx := tasks.Context{Waitable: true}
 		scope := &common.ID{TableID: 1}
 		task := newMockIOTask(&ctx, scope, time.Millisecond*5)
-		err:=db.Scheduler.Schedule(task)
-		assert.Nil(t,err)
+		err := db.Scheduler.Schedule(task)
+		assert.Nil(t, err)
 		pendings = append(pendings, task)
 	}
 	for _, task := range pendings {
-		err:=task.WaitDone()
-		assert.Nil(t,err)
+		err := task.WaitDone()
+		assert.Nil(t, err)
 	}
 	duration := time.Since(now)
 	assert.True(t, duration > time.Millisecond*5*5)
@@ -77,13 +77,13 @@ func TestIOSchedule1(t *testing.T) {
 		ctx := tasks.Context{Waitable: true}
 		scope := &common.ID{TableID: uint64(i)}
 		task := newMockIOTask(&ctx, scope, time.Millisecond*5)
-		err:=db.Scheduler.Schedule(task)
-		assert.Nil(t,err)
+		err := db.Scheduler.Schedule(task)
+		assert.Nil(t, err)
 		pendings = append(pendings, task)
 	}
 	for _, task := range pendings {
-		err:=task.WaitDone()
-		assert.Nil(t,err)
+		err := task.WaitDone()
+		assert.Nil(t, err)
 	}
 	duration = time.Since(now)
 	assert.True(t, duration < time.Millisecond*5*2)
@@ -131,8 +131,8 @@ func TestCheckpoint1(t *testing.T) {
 		}
 		processor := new(catalog.LoopProcessor)
 		processor.BlockFn = blockFn
-		err:=db.Opts.Catalog.RecurLoop(processor)
-		assert.Nil(t,err)
+		err := db.Opts.Catalog.RecurLoop(processor)
+		assert.Nil(t, err)
 		assert.Equal(t, 2, blockCnt)
 	}
 }
@@ -202,17 +202,17 @@ func TestCheckpoint2(t *testing.T) {
 	{
 		txn := tae.StartTxn(nil)
 		db, err := txn.GetDatabase("db")
-		assert.Nil(t,err)
+		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema1.Name)
-		assert.Nil(t,err)
+		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta = blk.GetMeta().(*catalog.BlockEntry)
 		assert.Equal(t, 10, blk.Rows())
 		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, meta, tae.Scheduler)
 		assert.Nil(t, err)
-		err=tae.Scheduler.Schedule(task)
-		assert.Nil(t,err)
+		err = tae.Scheduler.Schedule(task)
+		assert.Nil(t, err)
 		err = task.WaitDone()
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
@@ -221,8 +221,8 @@ func TestCheckpoint2(t *testing.T) {
 	// 	return tae.Wal.GetPenddingCnt() == 1
 	// })
 	t.Log(tae.Wal.GetPenddingCnt())
-	err:=meta.GetBlockData().Destroy()
-	assert.Nil(t,err)
+	err := meta.GetBlockData().Destroy()
+	assert.Nil(t, err)
 	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Scheduler.GetSafeTS()))
 	assert.Nil(t, err)
 	err = task.WaitDone()

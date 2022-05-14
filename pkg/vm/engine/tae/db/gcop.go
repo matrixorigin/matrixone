@@ -30,8 +30,8 @@ func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
 		segDropped := segment.IsDroppedCommitted()
 		segment.RUnlock()
 
-		err:=entry.DestroyData()
-		if err !=nil{
+		err := entry.DestroyData()
+		if err != nil {
 			return err
 		}
 		if !segDropped && entry.IsAppendable() {
@@ -57,14 +57,14 @@ func gcSegmentClosure(entry *catalog.SegmentEntry) tasks.FuncT {
 		for it.Valid() {
 			blk := it.Get().GetPayload().(*catalog.BlockEntry)
 			scopes = append(scopes, *blk.AsCommonID())
-			err:=gcBlockClosure(blk)()
-			if err !=nil{
+			err := gcBlockClosure(blk)()
+			if err != nil {
 				return err
 			}
 			it.Next()
 		}
-		err:=entry.DestroyData()
-		if err !=nil{
+		err := entry.DestroyData()
+		if err != nil {
 			return err
 		}
 		err = table.RemoveEntry(entry)

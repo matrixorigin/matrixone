@@ -56,8 +56,8 @@ func (f *ckpDriver) onCheckpoint(items ...interface{}) {
 	start := time.Now()
 	for _, item := range items {
 		ckpEntry := item.(wal.LogEntry)
-		err:=ckpEntry.WaitDone()
-		if err !=nil{
+		err := ckpEntry.WaitDone()
+		if err != nil {
 			panic(err)
 		}
 		ckpEntry.Free()

@@ -118,8 +118,8 @@ func TestAutoGC1(t *testing.T) {
 	{
 		txn := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
-		_,err:=database.CreateRelation(schema)
-		assert.Nil(t,err)
+		_, err := database.CreateRelation(schema)
+		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	var wg sync.WaitGroup

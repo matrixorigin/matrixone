@@ -319,8 +319,8 @@ func TestCheckpointCatalog2(t *testing.T) {
 	ts := tae.Scheduler.GetSafeTS()
 	entry := tae.Catalog.PrepareCheckpoint(0, ts)
 	maxIndex := entry.GetMaxIndex()
-	err=tae.Catalog.Checkpoint(ts)
-	assert.Nil(t,err)
+	err = tae.Catalog.Checkpoint(ts)
+	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
 		ckp := tae.Scheduler.GetCheckpointedLSN()
 		return ckp == maxIndex.LSN
@@ -373,8 +373,8 @@ func TestCheckpointCatalog(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		err:=pool.Submit(mockRes)
-		assert.Nil(t,err)
+		err := pool.Submit(mockRes)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

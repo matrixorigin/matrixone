@@ -116,9 +116,9 @@ func TestTxn1(t *testing.T) {
 	{
 		txn := db.StartTxn(nil)
 		database, err := txn.CreateDatabase("db")
-		assert.Nil(t,err)
-		_,err=database.CreateRelation(schema)
-		assert.Nil(t,err)
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema)
+		assert.Nil(t, err)
 		err = txn.Commit()
 		assert.Nil(t, err)
 	}
@@ -377,8 +377,8 @@ func TestTxn5(t *testing.T) {
 	{
 		txn := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
-		_,err:=database.CreateRelation(schema)
-		assert.Nil(t,err)
+		_, err := database.CreateRelation(schema)
+		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
