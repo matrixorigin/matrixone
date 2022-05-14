@@ -26,8 +26,8 @@ const (
 	StartsWith
 	Lpad
 	Rpad
- 	Empty
-	LengthUTF8 
+	Empty
+	LengthUTF8
 	Round
 	Floor
 	Abs
@@ -36,6 +36,7 @@ const (
 	Ceil
 	Exp
 	Power
+	Sqrt
 	Pi
 	Sin
 	Sinh
