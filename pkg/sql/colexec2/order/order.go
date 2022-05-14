@@ -69,7 +69,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	sort.Sort(ctr.ds[0], sels, ovec)
 	if len(ctr.poses) == 1 {
 		if err := batch.Shuffle(bat, sels, proc.Mp); err != nil {
-			return false, err
+			panic(err)
 		}
 		return false, nil
 	}
@@ -89,7 +89,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 		ovec = vec
 	}
 	if err := batch.Shuffle(bat, sels, proc.Mp); err != nil {
-		return false, err
+		panic(err)
 	}
 	return false, nil
 }

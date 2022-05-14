@@ -81,7 +81,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 		bat.Sels = sels
 		bat.SelsData = data
 		if err := batch.Shuffle(bat, proc.Mp); err != nil {
-			return false, err
+			panic(err)
 		}
 		return false, nil
 	}
@@ -103,7 +103,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	bat.Sels = sels
 	bat.SelsData = data
 	if err := batch.Shuffle(bat, proc.Mp); err != nil {
-		return false, err
+		panic(err)
 	}
 	return false, nil
 }
