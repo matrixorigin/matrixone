@@ -45,7 +45,7 @@ type Segment struct {
 	super     SuperBlock
 	nodes     map[string]*BlockFile
 	log       *Log
-	allocator *BitmapAllocator
+	allocator Allocator
 	name      string
 }
 
@@ -122,15 +122,8 @@ func (s *Segment) Mount() {
 	s.log.offset = LOG_START + s.log.logFile.snode.size
 	s.log.seq = seq + 1
 	s.nodes[logFile.name] = s.log.logFile
-	s.allocator = &BitmapAllocator{
-		pageSize: s.GetPageSize(),
-	}
-	s.log.allocator = &BitmapAllocator{
-		pageSize: s.GetPageSize(),
-	}
-
-	s.allocator.Init(DATA_SIZE, s.GetPageSize())
-	s.log.allocator.Init(LOG_SIZE, s.GetPageSize())
+	s.allocator = NewBitmapAllocator(DATA_SIZE, s.GetPageSize())
+	s.log.allocator = NewBitmapAllocator(LOG_SIZE, s.GetPageSize())
 }
 
 func (s *Segment) Unmount() {
@@ -174,8 +167,6 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 
 func (s *Segment) Append(fd *BlockFile, pl []byte) error {
 	offset, allocated := s.allocator.Allocate(uint64(len(pl)))
-	logutil.Debugf("file: %v, level1: %x, level0: %x, offset: %d, allocated: %d",
-		s.name, s.allocator.level1[0], s.allocator.level0[0], offset, allocated)
 	if allocated == 0 {
 		//panic(any("no space"))
 		panic(any("no space"))
@@ -192,7 +183,7 @@ func (s *Segment) Append(fd *BlockFile, pl []byte) error {
 }
 
 func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
-	offset, allocated := s.allocator.Allocate(uint64(len(pl)))
+	offset, _ := s.allocator.Allocate(uint64(len(pl)))
 	free, err := fd.Update(DATA_START+offset, pl, uint32(fOffset))
 	if err != nil {
 		return err
@@ -200,8 +191,6 @@ func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 	for _, ext := range free {
 		s.allocator.Free(ext.offset-DATA_START, ext.length)
 	}
-	logutil.Debugf("updagte level1: %x, level0: %x, offset: %d, allocated: %d",
-		s.allocator.level1[0], s.allocator.level0[0], s.allocator.lastPos, allocated)
 	err = s.log.Append(fd)
 	if err != nil {
 		return err

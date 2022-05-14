@@ -14,6 +14,7 @@
 
 package segment
 
-type Allocator struct {
-	Create func(int32) error
+type Allocator interface {
+	Allocate(len uint64) (uint64, uint64)
+	Free(start uint32, len uint32)
 }

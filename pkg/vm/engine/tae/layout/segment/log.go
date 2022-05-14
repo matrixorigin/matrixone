@@ -23,7 +23,7 @@ type Log struct {
 	logFile   *BlockFile
 	seq       uint64
 	offset    uint64
-	allocator *BitmapAllocator
+	allocator Allocator
 }
 
 func (ex Extent) Replay() {

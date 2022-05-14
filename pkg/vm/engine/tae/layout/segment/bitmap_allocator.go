@@ -14,7 +14,9 @@
 
 package segment
 
-import "sync"
+import (
+	"sync"
+)
 
 const UNIT_BYTES = 8 // Length of uint64 bytes
 const UNITS_PER_UNITSET = 8
@@ -31,6 +33,14 @@ type BitmapAllocator struct {
 	available uint64
 	lastPos   uint64
 	mutex     sync.RWMutex
+}
+
+func NewBitmapAllocator(capacity uint64, pageSize uint32) Allocator {
+	bitmap := &BitmapAllocator{
+		pageSize: pageSize,
+	}
+	bitmap.Init(capacity, pageSize)
+	return bitmap
 }
 
 func p2align(x uint64, align uint64) uint64 {
