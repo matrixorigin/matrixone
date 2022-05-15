@@ -269,7 +269,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	if err != nil {
 		return
 	}
-	blk = newBlock(tbl.store.txn, meta)
+	blk = buildBlock(tbl.store.txn, meta)
 	return
 }
 
@@ -301,7 +301,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 	}
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
-	return newBlock(tbl.store.txn, meta), err
+	return buildBlock(tbl.store.txn, meta), err
 }
 
 func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {

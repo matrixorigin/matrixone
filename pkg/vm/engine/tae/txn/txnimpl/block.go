@@ -91,7 +91,14 @@ func (it *blockIt) Next() {
 }
 
 func (it *blockIt) GetBlock() handle.Block {
-	return newBlock(it.txn, it.curr)
+	return buildBlock(it.txn, it.curr)
+}
+
+func buildBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) handle.Block {
+	if meta.GetSegment().GetTable().GetDB().IsSystemDB() {
+		return newSysBlock(txn, meta)
+	}
+	return newBlock(txn, meta)
 }
 
 func newBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnBlock {

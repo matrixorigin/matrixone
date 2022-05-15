@@ -131,6 +131,10 @@ func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
 }
 
 func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
+	if entry.IsSystemDB() {
+		err = catalog.ErrStopCurrRecur
+		return
+	}
 	for _, op := range scanner.ops {
 		err = op.OnDatabase(entry)
 		if err = scanner.errHandler.OnDatabaseErr(entry, err); err != nil {

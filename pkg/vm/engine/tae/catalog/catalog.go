@@ -45,7 +45,6 @@ type Catalog struct {
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
 	link      *common.Link
-	sysDB     *DBEntry
 
 	nodesMu sync.RWMutex
 }
@@ -92,13 +91,23 @@ func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 }
 
 func (catalog *Catalog) InitSystemDB() {
-	catalog.sysDB = NewSystemDBEntry(catalog)
-	dbTables := NewSystemTableEntry(catalog.sysDB, SystemTable_DB_ID, SystemDBSchema)
-	tableTables := NewSystemTableEntry(catalog.sysDB, SystemTable_Table_ID, SystemTableSchema)
-	columnTables := NewSystemTableEntry(catalog.sysDB, SystemTable_Columns_ID, SystemColumnSchema)
-	catalog.sysDB.addEntryLocked(dbTables)
-	catalog.sysDB.addEntryLocked(tableTables)
-	catalog.sysDB.addEntryLocked(columnTables)
+	sysDB := NewSystemDBEntry(catalog)
+	dbTables := NewSystemTableEntry(sysDB, SystemTable_DB_ID, SystemDBSchema)
+	tableTables := NewSystemTableEntry(sysDB, SystemTable_Table_ID, SystemTableSchema)
+	columnTables := NewSystemTableEntry(sysDB, SystemTable_Columns_ID, SystemColumnSchema)
+	err := sysDB.addEntryLocked(dbTables)
+	if err != nil {
+		panic(err)
+	}
+	if err = sysDB.addEntryLocked(tableTables); err != nil {
+		panic(err)
+	}
+	if err = sysDB.addEntryLocked(columnTables); err != nil {
+		panic(err)
+	}
+	if err = catalog.addEntryLocked(sysDB); err != nil {
+		panic(err)
+	}
 }
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
@@ -231,6 +240,12 @@ func (catalog *Catalog) Close() error {
 	return nil
 }
 
+func (catalog *Catalog) CoarseDBCnt() int {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	return len(catalog.entries)
+}
+
 func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
@@ -270,7 +285,6 @@ func (catalog *Catalog) addEntryLocked(database *DBEntry) error {
 			}
 		} else if !record.HasDropped() {
 			record.RUnlock()
-			logutil.Info(record.String())
 			return ErrDuplicate
 		}
 
@@ -323,6 +337,10 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 }
 
 func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
+	if database.IsSystemDB() {
+		logutil.Warnf("system db cannot be removed")
+		return ErrNotPermitted
+	}
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {
@@ -331,6 +349,9 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 		nn := catalog.nameNodes[database.name]
 		nn.DeleteNode(database.GetID())
 		catalog.link.Delete(n)
+		if nn.Length() == 0 {
+			delete(catalog.nameNodes, database.name)
+		}
 	}
 	return nil
 }
@@ -354,6 +375,10 @@ func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry
 }
 
 func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted *DBEntry, err error) {
+	if name == SystemDBName {
+		err = ErrNotPermitted
+		return
+	}
 	catalog.Lock()
 	defer catalog.Unlock()
 	dn := catalog.txnGetNodeByNameLocked(name, txnCtx)
@@ -385,9 +410,11 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	dbIt := catalog.MakeDBIt(true)
 	for dbIt.Valid() {
 		dbEntry := dbIt.Get().GetPayload().(*DBEntry)
+		err = processor.OnDatabase(dbEntry)
 		if err = processor.OnDatabase(dbEntry); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil
+				dbIt.Next()
 				continue
 			}
 			break
@@ -422,6 +449,10 @@ func (catalog *Catalog) PrepareCheckpoint(startTs, endTs uint64) *CheckpointEntr
 		return
 	}
 	processor.DatabaseFn = func(database *DBEntry) (err error) {
+		if database.IsSystemDB() {
+			err = ErrStopCurrRecur
+			return
+		}
 		entry := database.BaseEntry
 		CheckpointOp(ckpEntry, entry, database, startTs, endTs)
 		return
@@ -484,9 +515,9 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 		panic(err)
 	}
 	logutil.Infof("SaveCheckpointed: %s", time.Since(now))
-	for _, index := range entry.LogIndexes {
-		logutil.Infof("Ckp0Index %s", index.String())
-	}
+	// for _, index := range entry.LogIndexes {
+	// 	logutil.Infof("Ckp0Index %s", index.String())
+	// }
 	now = time.Now()
 	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {
 		logutil.Warnf("Schedule checkpoint log indexes: %v", err)

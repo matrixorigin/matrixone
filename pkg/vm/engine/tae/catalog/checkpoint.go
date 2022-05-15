@@ -167,6 +167,9 @@ func (e *CheckpointEntry) AddCommand(cmd *EntryCommand) {
 }
 
 func (e *CheckpointEntry) AddIndex(index *wal.Index) {
+	if index == nil {
+		return
+	}
 	if e.MaxIndex.Compare(index) < 0 {
 		e.MaxIndex = *index
 	}
