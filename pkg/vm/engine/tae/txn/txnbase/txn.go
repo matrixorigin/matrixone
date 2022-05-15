@@ -113,9 +113,13 @@ func (txn *Txn) Rollback() error {
 func (txn *Txn) Done() {
 	txn.DoneCond.L.Lock()
 	if txn.State == txnif.TxnStateCommitting {
-		txn.ToCommittedLocked()
+		if err := txn.ToCommittedLocked(); err != nil {
+			panic(err)
+		}
 	} else {
-		txn.ToRollbackedLocked()
+		if err := txn.ToRollbackedLocked(); err != nil {
+			panic(err)
+		}
 	}
 	txn.WaitGroup.Done()
 	txn.DoneCond.Broadcast()

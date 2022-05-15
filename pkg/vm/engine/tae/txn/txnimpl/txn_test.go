@@ -108,12 +108,12 @@ func TestInsertNode(t *testing.T) {
 				h := tbl.store.nodesMgr.Pin(n)
 				var err error
 				if err = n.Expand(common.K*1, func() error {
-					n.Append(bat, 0)
-					return nil
+					_, err := n.Append(bat, 0)
+					return err
 				}); err != nil {
 					err = n.Expand(common.K*1, func() error {
-						n.Append(bat, 0)
-						return nil
+						_, err := n.Append(bat, 0)
+						return err
 					})
 				}
 				if err != nil {
@@ -135,7 +135,7 @@ func TestInsertNode(t *testing.T) {
 			break
 		}
 		wg.Add(1)
-		p.Submit(worker(id))
+		_ = p.Submit(worker(id))
 	}
 	wg.Wait()
 	t.Log(all)
@@ -167,8 +167,8 @@ func TestTable(t *testing.T) {
 		}
 		tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
 		tbl, _ := tDB.getOrSetTable(rel.ID())
-		tbl.RangeDeleteLocalRows(1024+20, 1024+30)
-		tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
+		_ = tbl.RangeDeleteLocalRows(1024+20, 1024+30)
+		_ = tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
 		assert.True(t, tbl.IsLocalDeleted(1024+20))
 		assert.True(t, tbl.IsLocalDeleted(1024+30))
 		assert.False(t, tbl.IsLocalDeleted(1024+19))
@@ -379,7 +379,7 @@ func TestNodeCommand(t *testing.T) {
 			assert.Equal(t, 1, len(cmd.(*AppendCmd).Cmds))
 		}
 		if entry != nil {
-			entry.WaitDone()
+			_ = entry.WaitDone()
 			entry.Free()
 		}
 		t.Log(cmd.String())
@@ -420,7 +420,7 @@ func TestBuildCommand(t *testing.T) {
 	assert.Equal(t, 0, tbl.store.nodesMgr.Count())
 	t.Log(cmd.String())
 	for _, e := range entries {
-		e.WaitDone()
+		_ = e.WaitDone()
 		e.Free()
 	}
 	t.Log(tbl.store.nodesMgr.String())
@@ -433,7 +433,7 @@ func TestApplyToColumn1(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(3, []byte("update"))
+	_ = node.UpdateLocked(3, []byte("update"))
 	deletes.AddRange(3, 4)
 
 	vec := &gvec.Vector{}
@@ -471,7 +471,7 @@ func TestApplyToColumn2(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(0, int32(8))
+	_ = node.UpdateLocked(0, int32(8))
 	deletes.AddRange(2, 4)
 
 	vec := &gvec.Vector{}
@@ -495,7 +495,7 @@ func TestApplyToColumn3(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(3, []byte("update"))
+	_ = node.UpdateLocked(3, []byte("update"))
 
 	vec := &gvec.Vector{}
 	vec.Typ.Oid = types.T_varchar
@@ -524,7 +524,7 @@ func TestApplyToColumn4(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(3, int32(8))
+	_ = node.UpdateLocked(3, int32(8))
 
 	vec := &gvec.Vector{}
 	vec.Typ.Oid = types.T_int32
@@ -571,7 +571,7 @@ func TestTxnManager1(t *testing.T) {
 		lock.Lock()
 		seqs = append(seqs, 3)
 		lock.Unlock()
-		txn2.Commit()
+		_ = txn2.Commit()
 	}
 
 	for i := 0; i < 1; i++ {
@@ -579,7 +579,7 @@ func TestTxnManager1(t *testing.T) {
 		go short()
 	}
 
-	txn.Commit()
+	_ = txn.Commit()
 	wg.Wait()
 	defer mgr.Stop()
 	expected := []int{1, 2, 3, 4}
@@ -726,7 +726,7 @@ func TestTransaction3(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
-		pool.Submit(flow(i))
+		_ = pool.Submit(flow(i))
 	}
 	wg.Wait()
 }
@@ -899,7 +899,7 @@ func TestDedup1(t *testing.T) {
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
-		db.CreateRelation(schema)
+		_, _ = db.CreateRelation(schema)
 		assert.Nil(t, txn.Commit())
 	}
 	{

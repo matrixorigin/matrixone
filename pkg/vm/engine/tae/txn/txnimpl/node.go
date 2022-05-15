@@ -238,7 +238,9 @@ func (n *insertNode) makeLogEntry() wal.LogEntry {
 	if err != nil {
 		panic(err)
 	}
-	e.Unmarshal(buf)
+	if err = e.Unmarshal(buf); err != nil {
+		panic(err)
+	}
 	return e
 }
 
@@ -288,7 +290,7 @@ func (n *insertNode) Close() error {
 func (n *insertNode) OnUnload() {
 	entry := n.execUnload()
 	if entry != nil {
-		entry.WaitDone()
+		_ = entry.WaitDone()
 		entry.Free()
 	}
 }

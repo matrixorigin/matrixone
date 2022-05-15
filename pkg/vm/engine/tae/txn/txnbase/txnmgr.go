@@ -109,7 +109,7 @@ func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {
 }
 
 func (mgr *TxnManager) OnOpTxn(op *OpTxn) {
-	mgr.EnqueueRecevied(op)
+	_, _ = mgr.EnqueueRecevied(op)
 }
 
 func (mgr *TxnManager) onPreCommit(txn txnif.AsyncTxn) {
@@ -123,7 +123,7 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
-	txn.PrepareRollback()
+	_ = txn.PrepareRollback()
 }
 
 // TODO
@@ -141,9 +141,9 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 			op.Op = OpRollback
 		}
 		if op.Op == OpCommit {
-			op.Txn.ToCommittingLocked(ts)
+			_ = op.Txn.ToCommittingLocked(ts)
 		} else if op.Op == OpRollback {
-			op.Txn.ToRollbackingLocked(ts)
+			_ = op.Txn.ToRollbackingLocked(ts)
 		}
 		op.Txn.Unlock()
 		mgr.Unlock()
@@ -153,14 +153,14 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 				op.Op = OpRollback
 				op.Txn.SetError(txnif.TxnRollbacked)
 				op.Txn.Lock()
-				op.Txn.ToRollbackingLocked(ts)
+				_ = op.Txn.ToRollbackingLocked(ts)
 				op.Txn.Unlock()
 				mgr.onPreparRollback(op.Txn)
 			}
 		} else {
 			mgr.onPreparRollback(op.Txn)
 		}
-		mgr.EnqueueCheckpoint(op)
+		_, _ = mgr.EnqueueCheckpoint(op)
 	}
 	logutil.Infof("PrepareCommit %d Txns Takes: %s", len(items), time.Since(now))
 }
@@ -180,7 +180,7 @@ func (mgr *TxnManager) onCommit(items ...interface{}) {
 				panic(err)
 			}
 		}
-		op.Txn.WaitDone()
+		_ = op.Txn.WaitDone()
 		logutil.Debugf("%s Done", op.Repr())
 	}
 	logutil.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
