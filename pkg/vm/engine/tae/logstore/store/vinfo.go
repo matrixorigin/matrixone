@@ -139,12 +139,12 @@ func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 	toDelete = true
 	for _, g := range info.groups {
 		if g.IsCheckpointGroup() {
-			// fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n",c.tidCidMap,c.gIntervals,g)
+			fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n", c.tidCidMap, c.gIntervals, g)
 			toDelete = false
 		}
 		if g.IsCommitGroup() {
 			if !g.IsCovered(c) {
-				// fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n",c.tidCidMap,c.gIntervals,g)
+				fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n", c.tidCidMap, c.gIntervals, g)
 				toDelete = false
 			}
 		}
