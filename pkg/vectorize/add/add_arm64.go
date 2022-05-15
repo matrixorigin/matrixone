@@ -277,49 +277,49 @@ func uint64AddArm(x, y, r[]uint64)[]uint64{
 
 func int8AddScalarArm(x int8, y, r[]int8)[]int8{ 
 	C.int8AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func int16AddScalarArm(x int16, y, r[]int16)[]int16{ 
 	C.int16AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func int32AddScalarArm(x int32, y, r[]int32)[]int32{ 
 	C.int32AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func int64AddScalarArm(x int64, y, r[]int64)[]int64{ 
 	C.int64AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func uint8AddScalarArm(x uint8, y, r[]uint8)[]uint8{ 
 	C.uint8AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func uint16AddScalarArm(x uint16, y, r[]uint16)[]uint16{ 
 	C.uint16AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func uint32AddScalarArm(x uint32, y, r[]uint32)[]uint32{ 
 	C.uint32AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func uint64AddScalarArm(x uint64, y, r[]uint64)[]uint64{
 	C.uint64AddScalarArm(&y[0], &x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func float32AddArm(x, y, r []float32)[]float32{
 	C.float32AddArm(&x[0],&y[0], &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func float64AddArm(x, y, r []float64)[]float64{
 	C.float64AddArm(&x[0],&y[0], &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func float32AddScalarArm(x float32, y, r []float32)[]float32{
 	C.float32AddScalarArm(&y[0],&x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
 func float64AddScalarArm(x float64, y, r []float64)[]float64{
 	C.float64AddScalarArm(&y[0],&x, &r[0], C.int(len(r))) 
-	return rs 
+	return r
 }
