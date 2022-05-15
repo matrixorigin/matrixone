@@ -229,7 +229,7 @@ func (b *BlockFile) GetExtents() *[]Extent {
 	return extents
 }
 
-func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error){
+func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error) {
 	bufLen := len(data)
 	if bufLen == 0 {
 		return 0, nil
