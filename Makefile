@@ -113,7 +113,7 @@ endif
 
 .PHONY: fmt
 fmt:
-	gofmt -l -s .
+	gofmt -l -s -w .
 
 
 .PHONY: install-static-check-tools

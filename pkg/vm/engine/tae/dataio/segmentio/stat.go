@@ -12,19 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package segmentio
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
-
-type SegmentFileFactory = func(dir string, id uint64) Segment
-
-type Segment interface {
-	Base
-	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
-	WriteTS(ts uint64) error
-	ReadTS() uint64
-	String() string
-	RemoveBlock(id uint64)
-	GetSegmentFile() *segment.Segment
-	// IsAppendable() bool
+type fileStat struct {
+	name string
+	size int64
 }
+
+func (stat *fileStat) Name() string      { return stat.name }
+func (stat *fileStat) Size() int64       { return stat.size }
+func (stat *fileStat) OriginSize() int64 { return stat.size }
+func (stat *fileStat) CompressAlgo() int { return 0 }
