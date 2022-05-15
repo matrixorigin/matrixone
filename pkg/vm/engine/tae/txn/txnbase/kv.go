@@ -36,6 +36,7 @@ type keyEncoder struct{}
 
 func (s *keyEncoder) EncodeDB(db uint64) []byte {
 	var w bytes.Buffer
+	// Should not fail. No need to check err
 	w.WriteByte(KeyT_DBEntry)
 	_ = binary.Write(&w, binary.BigEndian, db)
 	return w.Bytes()
@@ -43,6 +44,7 @@ func (s *keyEncoder) EncodeDB(db uint64) []byte {
 
 func (s *keyEncoder) EncodeTable(db uint64, tb uint64) []byte {
 	var w bytes.Buffer
+	// Should not fail. No need to check err
 	w.WriteByte(KeyT_TableEntry)
 	_ = binary.Write(&w, binary.BigEndian, db)
 	_ = binary.Write(&w, binary.BigEndian, tb)
@@ -51,6 +53,7 @@ func (s *keyEncoder) EncodeTable(db uint64, tb uint64) []byte {
 
 func (s *keyEncoder) EncodeSegment(db, tb, seg uint64) []byte {
 	var w bytes.Buffer
+	// Should not fail. No need to check err
 	_ = w.WriteByte(KeyT_SegmentEntry)
 	_ = binary.Write(&w, binary.BigEndian, db)
 	_ = binary.Write(&w, binary.BigEndian, tb)
@@ -60,6 +63,7 @@ func (s *keyEncoder) EncodeSegment(db, tb, seg uint64) []byte {
 
 func (s *keyEncoder) EncodeBlock(db, tb, seg, blk uint64) []byte {
 	var w bytes.Buffer
+	// Should not fail. No need to check err
 	_ = w.WriteByte(KeyT_BlockEntry)
 	_ = binary.Write(&w, binary.BigEndian, db)
 	_ = binary.Write(&w, binary.BigEndian, tb)
@@ -69,29 +73,53 @@ func (s *keyEncoder) EncodeBlock(db, tb, seg, blk uint64) []byte {
 }
 
 func (s *keyEncoder) Decode(buf []byte) (kt KeyT, db, tb, seg, blk uint64) {
+	var err error
 	r := bytes.NewBuffer(buf)
-	kt, _ = r.ReadByte()
+	if kt, err = r.ReadByte(); err != nil {
+		panic(err)
+	}
 	switch kt {
 	case KeyT_DBEntry:
-		_ = binary.Read(r, binary.BigEndian, &db)
+		if err = binary.Read(r, binary.BigEndian, &db); err != nil {
+			panic(err)
+		}
 	case KeyT_TableEntry:
-		_ = binary.Read(r, binary.BigEndian, &db)
-		_ = binary.Read(r, binary.BigEndian, &tb)
+		if err = binary.Read(r, binary.BigEndian, &db); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(r, binary.BigEndian, &tb); err != nil {
+			panic(err)
+		}
 	case KeyT_SegmentEntry:
-		_ = binary.Read(r, binary.BigEndian, &db)
-		_ = binary.Read(r, binary.BigEndian, &tb)
-		_ = binary.Read(r, binary.BigEndian, &seg)
+		if err = binary.Read(r, binary.BigEndian, &db); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(r, binary.BigEndian, &tb); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(r, binary.BigEndian, &seg); err != nil {
+			panic(err)
+		}
 	case KeyT_BlockEntry:
-		_ = binary.Read(r, binary.BigEndian, &db)
-		_ = binary.Read(r, binary.BigEndian, &tb)
-		_ = binary.Read(r, binary.BigEndian, &seg)
-		_ = binary.Read(r, binary.BigEndian, &blk)
+		if err = binary.Read(r, binary.BigEndian, &db); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(r, binary.BigEndian, &tb); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(r, binary.BigEndian, &seg); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(r, binary.BigEndian, &blk); err != nil {
+			panic(err)
+		}
 	}
 	return
 }
 
 func (s *keyEncoder) EncodeRow(db, tb, seg, blk uint64, offset uint32) []byte {
 	var w bytes.Buffer
+	// Should not fail. No need to check err
 	_ = w.WriteByte(KeyT_DataRow)
 	_ = binary.Write(&w, binary.BigEndian, db)
 	_ = binary.Write(&w, binary.BigEndian, tb)
@@ -102,12 +130,25 @@ func (s *keyEncoder) EncodeRow(db, tb, seg, blk uint64, offset uint32) []byte {
 }
 
 func (s *keyEncoder) DecodeRow(buf []byte) (db, tb, seg, blk uint64, offset uint32) {
+	var err error
 	r := bytes.NewBuffer(buf)
-	_, _ = r.ReadByte()
-	_ = binary.Read(r, binary.BigEndian, &db)
-	_ = binary.Read(r, binary.BigEndian, &tb)
-	_ = binary.Read(r, binary.BigEndian, &seg)
-	_ = binary.Read(r, binary.BigEndian, &blk)
-	_ = binary.Read(r, binary.BigEndian, &offset)
+	if _, err = r.ReadByte(); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &db); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &tb); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &seg); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &blk); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &offset); err != nil {
+		panic(err)
+	}
 	return
 }

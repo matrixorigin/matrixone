@@ -152,7 +152,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 		if n.IsMerged() && merged == nil {
 			return false
 		} else if n.IsMerged() && merged != nil {
-			_ = merged.MergeLocked(n, true)
+			merged.MergeLocked(n, true)
 			return false
 		}
 		n.RLock()
@@ -164,7 +164,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 		if merged == nil {
 			merged = NewMergedNode(n.commitTs)
 		}
-		_ = merged.MergeLocked(n, true)
+		merged.MergeLocked(n, true)
 		return true
 	}, false)
 	if merged != nil {
@@ -204,7 +204,7 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) txn
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			_ = merged.MergeLocked(n, collectIndex)
+			merged.MergeLocked(n, collectIndex)
 			return false
 		}
 		n.RLock()
@@ -214,7 +214,7 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) txn
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			_ = merged.MergeLocked(n, collectIndex)
+			merged.MergeLocked(n, collectIndex)
 		} else if txn != nil && n.GetCommitTSLocked() > ts {
 			// Skip txn deletes committed after ts
 			n.RUnlock()
@@ -231,12 +231,12 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) txn
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			_ = merged.MergeLocked(n, collectIndex)
+			merged.MergeLocked(n, collectIndex)
 		} else if n.GetCommitTSLocked() <= ts {
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			_ = merged.MergeLocked(n, collectIndex)
+			merged.MergeLocked(n, collectIndex)
 		}
 		n.RUnlock()
 		return true

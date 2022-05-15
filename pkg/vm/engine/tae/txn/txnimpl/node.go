@@ -290,7 +290,9 @@ func (n *insertNode) Close() error {
 func (n *insertNode) OnUnload() {
 	entry := n.execUnload()
 	if entry != nil {
-		_ = entry.WaitDone()
+		if err := entry.WaitDone(); err != nil {
+			panic(err)
+		}
 		entry.Free()
 	}
 }

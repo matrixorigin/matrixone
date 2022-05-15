@@ -141,8 +141,10 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 			op.Op = OpRollback
 		}
 		if op.Op == OpCommit {
+			// Should not fail here
 			_ = op.Txn.ToCommittingLocked(ts)
 		} else if op.Op == OpRollback {
+			// Should not fail here
 			_ = op.Txn.ToRollbackingLocked(ts)
 		}
 		op.Txn.Unlock()
@@ -153,6 +155,7 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 				op.Op = OpRollback
 				op.Txn.SetError(txnif.TxnRollbacked)
 				op.Txn.Lock()
+				// Should not fail here
 				_ = op.Txn.ToRollbackingLocked(ts)
 				op.Txn.Unlock()
 				mgr.onPreparRollback(op.Txn)
@@ -160,7 +163,9 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 		} else {
 			mgr.onPreparRollback(op.Txn)
 		}
-		_, _ = mgr.EnqueueCheckpoint(op)
+		if _, err := mgr.EnqueueCheckpoint(op); err != nil {
+			panic(err)
+		}
 	}
 	logutil.Infof("PrepareCommit %d Txns Takes: %s", len(items), time.Since(now))
 }
@@ -180,6 +185,7 @@ func (mgr *TxnManager) onCommit(items ...interface{}) {
 				panic(err)
 			}
 		}
+		// Here only wait the txn to be done. The err returned can be access via op.Txn.GetError()
 		_ = op.Txn.WaitDone()
 		logutil.Debugf("%s Done", op.Repr())
 	}

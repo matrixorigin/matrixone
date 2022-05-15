@@ -197,7 +197,7 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			merged = NewSimpleColumnNode()
 		}
 		indexes = append(indexes, n.logIndex)
-		_ = merged.MergeLocked(n)
+		merged.MergeLocked(n)
 		n.RUnlock()
 		return true
 	}, false)

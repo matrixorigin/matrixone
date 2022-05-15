@@ -31,25 +31,51 @@ const (
 )
 
 func MarshalID(id *common.ID) []byte {
+	var err error
 	var w bytes.Buffer
-	_ = binary.Write(&w, binary.BigEndian, id.TableID)
-	_ = binary.Write(&w, binary.BigEndian, id.SegmentID)
-	_ = binary.Write(&w, binary.BigEndian, id.BlockID)
-	_ = binary.Write(&w, binary.BigEndian, id.PartID)
-	_ = binary.Write(&w, binary.BigEndian, id.Idx)
-	_ = binary.Write(&w, binary.BigEndian, id.Iter)
+	if err = binary.Write(&w, binary.BigEndian, id.TableID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.SegmentID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.BlockID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.PartID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.Idx); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.Iter); err != nil {
+		panic(err)
+	}
 	return w.Bytes()
 }
 
 func UnmarshalID(buf []byte) *common.ID {
+	var err error
 	r := bytes.NewBuffer(buf)
 	id := common.ID{}
-	_ = binary.Read(r, binary.BigEndian, &id.TableID)
-	_ = binary.Read(r, binary.BigEndian, &id.SegmentID)
-	_ = binary.Read(r, binary.BigEndian, &id.BlockID)
-	_ = binary.Read(r, binary.BigEndian, &id.PartID)
-	_ = binary.Read(r, binary.BigEndian, &id.Idx)
-	_ = binary.Read(r, binary.BigEndian, &id.Iter)
+	if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.BlockID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.PartID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.Idx); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.Iter); err != nil {
+		panic(err)
+	}
 	return &id
 }
 
