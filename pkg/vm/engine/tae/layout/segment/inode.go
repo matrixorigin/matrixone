@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package segment
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+import "sync"
 
-type SegmentFileFactory = func(dir string, id uint64) Segment
+type StateType uint8
 
-type Segment interface {
-	Base
-	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
-	WriteTS(ts uint64) error
-	ReadTS() uint64
-	String() string
-	RemoveBlock(id uint64)
-	GetSegmentFile() *segment.Segment
-	// IsAppendable() bool
+const (
+	RESIDENT StateType = iota
+	REMOVE
+)
+
+type Inode struct {
+	inode      uint64
+	size       uint64
+	mutex      sync.Mutex
+	extents    []Extent
+	logExtents Extent
+	state      StateType
 }
