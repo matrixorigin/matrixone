@@ -125,7 +125,7 @@ func TestCheckpoint1(t *testing.T) {
 		err = driver.Compact()
 		assert.Nil(t, err)
 		_, err = driver.LoadEntry(GroupC, lsn)
-		if err == nil{
+		if err == nil {
 			logutil.Infof("retry compact")
 		}
 		return err != nil
