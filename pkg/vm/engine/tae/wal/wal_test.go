@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -124,6 +125,9 @@ func TestCheckpoint1(t *testing.T) {
 		err = driver.Compact()
 		assert.Nil(t, err)
 		_, err = driver.LoadEntry(GroupC, lsn)
+		if err == nil{
+			logutil.Infof("retry compact")
+		}
 		return err != nil
 	})
 	_, err = driver.LoadEntry(GroupC, lsn)
