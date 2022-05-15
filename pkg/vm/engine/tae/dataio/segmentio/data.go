@@ -105,31 +105,8 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	df.colBlk.mutex.Lock()
 	file := df.file[len(df.file)-1]
 	df.colBlk.mutex.Unlock()
-	extents := file.GetExtents()
 	cache := make([]byte, 1<<20)
-	var offset uint32 = 0
-	for _, ext := range *extents {
-		if bufLen == 0 {
-			break
-		}
-		c := cache[offset : offset+ext.Length()]
-		_, err := file.Read(offset, ext.Length(), c)
-		if err != nil {
-			return 0, err
-		}
-		entries := ext.GetData()
-		for _, entry := range entries {
-			if bufLen < int(entry.GetLength()) {
-				copy(buf, c[entry.GetOffset():entry.GetOffset()+uint32(bufLen)])
-				bufLen = 0
-				break
-			}
-			bufLen -= int(entry.GetLength())
-			copy(buf[n:], c[entry.GetOffset():entry.GetOffset()+entry.GetLength()])
-			n += int(entry.GetLength())
-		}
-		offset += ext.Length()
-	}
+	n, err = file.Read(buf, cache)
 	return n, nil
 }
 

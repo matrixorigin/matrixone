@@ -68,7 +68,7 @@ func TestSegment_Init(t *testing.T) {
 	err = seg.Update(file, sbuffer.Bytes(), 16384)
 	assert.Nil(t, err)
 	b := bytes.NewBuffer(make([]byte, 1<<20))
-	_, err = file.Read(0, uint32(file.snode.size), b.Bytes())
+	_, err = file.ReadExtent(0, uint32(file.snode.size), b.Bytes())
 	assert.Nil(t, err)
 	buf := b.Bytes()
 	buf = buf[16384 : 16384+17]

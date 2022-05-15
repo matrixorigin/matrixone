@@ -225,17 +225,48 @@ func (b *BlockFile) Update(offset uint64, data []byte, fOffset uint32) ([]Extent
 }
 
 func (b *BlockFile) GetExtents() *[]Extent {
-	b.snode.mutex.Lock()
 	extents := &b.snode.extents
-	b.snode.mutex.Unlock()
 	return extents
 }
 
-func (b *BlockFile) Read(offset, length uint32, data []byte) (uint32, error) {
+func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error){
+	bufLen := len(data)
+	if bufLen == 0 {
+		return 0, nil
+	}
+	b.snode.mutex.Lock()
+	defer b.snode.mutex.Unlock()
+	n = 0
+	var offset uint32 = 0
+	for _, ext := range b.snode.extents {
+		if bufLen == 0 {
+			break
+		}
+		c := cache[offset : offset+ext.Length()]
+		_, err := b.ReadExtent(offset, ext.Length(), c)
+		if err != nil {
+			return 0, err
+		}
+		entries := ext.GetData()
+		for _, entry := range entries {
+			if bufLen < int(entry.GetLength()) {
+				copy(data, c[entry.GetOffset():entry.GetOffset()+uint32(bufLen)])
+				bufLen = 0
+				break
+			}
+			bufLen -= int(entry.GetLength())
+			copy(data[n:], c[entry.GetOffset():entry.GetOffset()+entry.GetLength()])
+			n += int(entry.GetLength())
+		}
+		offset += ext.Length()
+	}
+	return n, nil
+}
+
+func (b *BlockFile) ReadExtent(offset, length uint32, data []byte) (uint32, error) {
 	remain := uint32(b.snode.size) - offset - length
 	num := 0
-	extents := *b.GetExtents()
-	for _, extent := range extents {
+	for _, extent := range b.snode.extents {
 		if offset >= extent.length {
 			offset -= extent.length
 		} else {
@@ -249,14 +280,14 @@ func (b *BlockFile) Read(offset, length uint32, data []byte) (uint32, error) {
 		readOne := length
 		if offset > 0 {
 			if b.snode.extents[num].length-offset < length {
-				readOne = extents[num].length - offset
+				readOne = b.snode.extents[num].length - offset
 			}
 			offset = 0
-		} else if extents[num].length < length {
-			readOne = extents[num].length
+		} else if b.snode.extents[num].length < length {
+			readOne = b.snode.extents[num].length
 		}
 		buf = buf[read : read+readOne]
-		_, err := b.segment.segFile.ReadAt(buf, int64(extents[num].offset)+int64(offset))
+		_, err := b.segment.segFile.ReadAt(buf, int64(b.snode.extents[num].offset)+int64(offset))
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
