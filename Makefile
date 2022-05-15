@@ -133,4 +133,6 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconv
 static-check: generate
 	@go vet -vettool=$(which molint) ./...
 	@go-licenses check ./...
-
+	@for p in $(DIRS); do \
+    golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \
+  done;
