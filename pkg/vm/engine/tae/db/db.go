@@ -76,9 +76,9 @@ func (db *DB) Close() error {
 	}
 	db.Closed.Store(ErrClosed)
 	db.TimedScanner.Stop()
-	db.TxnMgr.Stop()
 	db.CKPDriver.Stop()
 	db.Scheduler.Stop()
+	db.TxnMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	return db.DBLocker.Close()
