@@ -153,7 +153,6 @@ func (bf *blockFile) Destroy() error {
 	}
 	for _, cb := range bf.columns {
 		cb.Unref()
-		bf.removeData(cb.data)
 	}
 	bf.removeData(bf.deletes.dataFile)
 	bf.removeData(bf.indexMeta)
