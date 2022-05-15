@@ -212,7 +212,7 @@ func (node *appendableNode) OnUnload() {
 	node.data.Close()
 	node.data = nil
 	if needCkp {
-		node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, node.block.meta.AsCommonID(), node.block.CheckpointWALClosure(ts))
+		_, _ = node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, node.block.meta.AsCommonID(), node.block.CheckpointWALClosure(ts))
 	}
 }
 

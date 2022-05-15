@@ -17,6 +17,7 @@ package txnentries
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -61,15 +62,27 @@ func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
 }
 func (entry *mergeBlocksEntry) ApplyRollback() (err error) { return }
 func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
-	entry.scheduler.Checkpoint([]*wal.Index{index})
-	entry.PostCommit()
-	return
+	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
+		// TODO:
+		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
+		// We'll ensure the schduler can only be stopped after txn manager being stopped.
+		logutil.Warnf("Schedule checkpoint task failed: %v", err)
+		err = nil
+	}
+	return entry.PostCommit()
 }
 
-func (entry *mergeBlocksEntry) PostCommit() {
+func (entry *mergeBlocksEntry) PostCommit() (err error) {
 	for _, blk := range entry.droppedBlks {
-		entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.AsCommonID(), blk.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+		if _, _ = entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.AsCommonID(), blk.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS())); err != nil {
+			// TODO:
+			// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
+			// We'll ensure the schduler can only be stopped after txn manager being stopped.
+			logutil.Warnf("Schedule checkpoint task failed: %v", err)
+			err = nil
+		}
 	}
+	return
 }
 
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
