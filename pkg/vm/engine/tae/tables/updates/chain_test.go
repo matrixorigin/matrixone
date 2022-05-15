@@ -66,8 +66,8 @@ func TestColumnChain1(t *testing.T) {
 		n := chain.AddNode(txn)
 		if (i >= cnt1 && i < cnt1+cnt2) || (i >= cnt1+cnt2+cnt3) {
 			txn.CommitTS = common.NextGlobalSeqNum()
-			n.PrepareCommit()
-			n.ApplyCommit(nil)
+			_ = n.PrepareCommit()
+			_ = n.ApplyCommit(nil)
 		}
 	}
 	t.Log(chain.StringLocked())
@@ -112,8 +112,8 @@ func TestColumnChain2(t *testing.T) {
 	assert.Equal(t, 4, chain.view.RowCnt())
 
 	txn1.CommitTS = common.NextGlobalSeqNum()
-	n1.PrepareCommit()
-	n1.ApplyCommit(nil)
+	_ = n1.PrepareCommit()
+	_ = n1.ApplyCommit(nil)
 
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
 	assert.Equal(t, txnbase.ErrDuplicated, err)
@@ -150,7 +150,7 @@ func TestColumnChain2(t *testing.T) {
 	now := time.Now()
 	for i := 1; i < 30; i++ {
 		wg.Add(1)
-		p.Submit(doUpdate(i))
+		_ = p.Submit(doUpdate(i))
 	}
 	wg.Wait()
 	t.Log(time.Since(now))
@@ -210,11 +210,11 @@ func TestColumnChain3(t *testing.T) {
 		txn := mockTxn()
 		node := chain.AddNode(txn)
 		for j := i * ecnt; j < i*ecnt+ecnt; j++ {
-			chain.TryUpdateNodeLocked(uint32(j), int32(j), node)
+			_ = chain.TryUpdateNodeLocked(uint32(j), int32(j), node)
 		}
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 	}
 	t.Log(time.Since(start))
 	start = time.Now()
@@ -263,38 +263,38 @@ func TestColumnChain4(t *testing.T) {
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(5), int32(5), node)
+		_ = chain.TryUpdateNodeLocked(uint32(5), int32(5), node)
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(10), int32(10), node)
+		_ = chain.TryUpdateNodeLocked(uint32(10), int32(10), node)
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 		ts1 = txn.GetCommitTS()
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(20), int32(20), node)
+		_ = chain.TryUpdateNodeLocked(uint32(20), int32(20), node)
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 		ts2 = txn.GetCommitTS()
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(30), int32(30), node)
+		_ = chain.TryUpdateNodeLocked(uint32(30), int32(30), node)
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(40), int32(40), node)
+		_ = chain.TryUpdateNodeLocked(uint32(40), int32(40), node)
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 		ts3 = txn.GetCommitTS()
 	}
 	mask, vals, _ := chain.CollectCommittedInRangeLocked(0, common.NextGlobalSeqNum())
@@ -439,26 +439,26 @@ func TestDeleteChain2(t *testing.T) {
 
 	txn1 := mockTxn()
 	n1 := chain.AddNodeLocked(txn1).(*DeleteNode)
-	chain.PrepareRangeDelete(1, 4, txn1.GetStartTS())
+	_ = chain.PrepareRangeDelete(1, 4, txn1.GetStartTS())
 	n1.RangeDeleteLocked(1, 4)
 	commitTxn(txn1)
-	n1.PrepareCommit()
-	n1.ApplyCommit(nil)
+	_ = n1.PrepareCommit()
+	_ = n1.ApplyCommit(nil)
 	t.Log(chain.StringLocked())
 
 	txn2 := mockTxn()
 	n2 := chain.AddNodeLocked(txn2).(*DeleteNode)
-	chain.PrepareRangeDelete(5, 8, txn2.GetStartTS())
+	_ = chain.PrepareRangeDelete(5, 8, txn2.GetStartTS())
 	n2.RangeDeleteLocked(5, 8)
 	t.Log(chain.StringLocked())
 
 	txn3 := mockTxn()
 	n3 := chain.AddNodeLocked(txn3).(*DeleteNode)
-	chain.PrepareRangeDelete(9, 12, txn3.GetStartTS())
+	_ = chain.PrepareRangeDelete(9, 12, txn3.GetStartTS())
 	n3.RangeDeleteLocked(9, 12)
 	commitTxn(txn3)
-	n3.PrepareCommit()
-	n3.ApplyCommit(nil)
+	_ = n3.PrepareCommit()
+	_ = n3.ApplyCommit(nil)
 	t.Log(chain.StringLocked())
 
 	m := chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)

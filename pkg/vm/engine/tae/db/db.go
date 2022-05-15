@@ -55,8 +55,7 @@ type DB struct {
 
 	DBLocker io.Closer
 
-	Closed  *atomic.Value
-	ClosedC chan struct{}
+	Closed *atomic.Value
 }
 
 func (db *DB) StartTxn(info []byte) txnif.AsyncTxn {
@@ -71,30 +70,15 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback()
 }
 
-func (db *DB) startWorkers() (err error) {
-	db.CKPDriver.Start()
-	db.TimedScanner.Start()
-	return
-}
-
-func (db *DB) stopWorkers() (err error) {
-	db.TimedScanner.Stop()
-	db.CKPDriver.Stop()
-	return
-}
-
 func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	err := db.stopWorkers()
-	if err != nil {
-		return err
-	}
 	db.Closed.Store(ErrClosed)
-	close(db.ClosedC)
-	db.Scheduler.Stop()
+	db.TimedScanner.Stop()
 	db.TxnMgr.Stop()
+	db.Scheduler.Stop()
+	db.CKPDriver.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	return db.DBLocker.Close()

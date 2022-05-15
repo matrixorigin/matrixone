@@ -49,13 +49,13 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 }
 func (entry *compactBlockEntry) ApplyRollback() (err error) { return }
 func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
-	entry.scheduler.Checkpoint([]*wal.Index{index})
-	entry.PostCommit()
-	return
+	_ = entry.scheduler.Checkpoint([]*wal.Index{index})
+	return entry.PostCommit()
 }
-func (entry *compactBlockEntry) PostCommit() {
+func (entry *compactBlockEntry) PostCommit() (err error) {
 	meta := entry.from.GetMeta().(*catalog.BlockEntry)
-	entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+	_, _ = entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+	return
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()), (*common.ID)(entry.to.Fingerprint()))

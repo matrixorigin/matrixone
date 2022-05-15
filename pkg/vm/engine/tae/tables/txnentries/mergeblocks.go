@@ -61,15 +61,15 @@ func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
 }
 func (entry *mergeBlocksEntry) ApplyRollback() (err error) { return }
 func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
-	entry.scheduler.Checkpoint([]*wal.Index{index})
-	entry.PostCommit()
-	return
+	_ = entry.scheduler.Checkpoint([]*wal.Index{index})
+	return entry.PostCommit()
 }
 
-func (entry *mergeBlocksEntry) PostCommit() {
+func (entry *mergeBlocksEntry) PostCommit() (err error) {
 	for _, blk := range entry.droppedBlks {
-		entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.AsCommonID(), blk.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+		_, _ = entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.AsCommonID(), blk.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
 	}
+	return
 }
 
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
