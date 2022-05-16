@@ -148,7 +148,6 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		// case when expresion has threee part (case exprssion, when exprssion, else exprssion)
 		if len(funcExpr.F.Args) != 3 {
 			return result, errors.New(errno.SyntaxErrororAccessRuleViolation, "case expression parameter number error")
-			panic("case expression parameter number error")
 		}
 		// case exprssion can be null
 		if funcExpr.F.Args[0] != nil {
