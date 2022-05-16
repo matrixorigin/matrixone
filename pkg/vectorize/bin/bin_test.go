@@ -28,36 +28,94 @@ import (
 func TestCountBitLenForInt(t *testing.T) {
 	// count bits for unsigned int
 	// eg: 0(0), 1(1), 2(10), 3(11)
-	require.Equal(t, int64(1+1+2+2), Uint8BitLen([]uint8{0, 1, 2, 3}))
-	require.Equal(t, int64(3+3), Uint16BitLen([]uint16{4, 5}))
-	require.Equal(t, int64(3+3), Uint32BitLen([]uint32{6, 7}))
-	require.Equal(t, int64(4+4), Uint64BitLen([]uint64{8, 9}))
+	ttUint64 := []struct {
+		num  uint64
+		want int64
+	}{
+		{0, 1},
+		{1, 1},
+		{2, 2},
+		{3, 2},
+		{4, 3},
+		{8, 4},
+		{127, 7},
+		{128, 8},
+		{math.MaxUint64, 64},
+	}
+
+	for _, tc := range ttUint64 {
+		require.Equal(t, tc.want, Uint64BitLen([]uint64{tc.num}), tc.num)
+	}
 
 	// count bits for signed int
 	// eg: -1(0xffffffffffffffff, 64bits)
 	// 127(1111111)
 	// -128(1111111111111111111111111111111111111111111111111111111110000000, 64bits)
-	require.Equal(t, int64(64+7+64), Int8BitLen([]int8{-1, 127, -128}))
-	require.Equal(t, int64(5+5), Int16BitLen([]int16{17, 18}))
-	require.Equal(t, int64(7+8), Int32BitLen([]int32{100, 200}))
-	require.Equal(t, int64(64+64+24+30), Int64BitLen([]int64{-1e7, -1e9, 1e7, 1e9}))
+	ttInt64 := []struct {
+		num  int64
+		want int64
+	}{
+		{-1, 64},
+		{127, 7},
+		{-128, 64},
+		{17, 5},
+		{200, 8},
+		{-1e7, 64},
+		{-1e9, 64},
+		{1e7, 24},
+		{1e9, 30},
+	}
+	for _, tc := range ttInt64 {
+		require.Equal(t, tc.want, Int64BitLen([]int64{tc.num}), tc.num)
+	}
 }
 
 // due to differences between x86/arm, this TestCountBitLenForFloat function has some compatibility issues and therefore commented out
-/*
 func TestCountBitLenForFloat(t *testing.T) {
 	// count bits for float
 	// eg: 0.2(0), 1.8(1), 2.99(10), 3.14(11)
-	require.Equal(t, int64(1+1+2+2), Float32BitLen([]float32{.2, 1.8, 2.99, 3.14}))
-	require.Equal(t, int64(64+7+64), Float32BitLen([]float32{-1.99, 127.99, -128.89}))
-	require.Equal(t, int64(7+8), Float32BitLen([]float32{100.99, 200.99}))
+	ttF32 := []struct {
+		num  float32
+		want int64
+	}{
+		{.2, 1},
+		{1.8, 1},
+		{2.99, 2},
+		{3.14, 2},
+		{-1.99, 64},
+		{127.99, 7},
+		{-128.99, 64},
+		{100.99, 7},
+		{200.99, 8},
+	}
 
-	require.Equal(t, int64(64+64+24+30), Float64BitLen([]float64{-1e7, -1e9, 1e7, 1e9}))
-	// Phi=1.61...(1), E=2.7(10), Pi=3.14(11)
-	require.Equal(t, int64(1+2+2), Float64BitLen([]float64{float64(math.Phi), float64(math.E), float64(math.Pi)}))
+	for _, tc := range ttF32 {
+		require.Equal(t, tc.want, Float32BitLen([]float32{tc.num}), tc.num)
+	}
+
+	ttF64 := []struct {
+		num  float64
+		want int64
+	}{
+		{-1e7, 64},
+		{-1e9, 64},
+		{1e7, 24},
+		{1e9, 30},
+		// Phi=1.61...(1), E=2.7(10), Pi=3.14(11)
+		{math.Phi, 1},
+		{math.E, 2},
+		{math.Pi, 2},
+		// max length of bits should be 64 to follow the behavior of mysql 8.0
+		{math.MaxFloat64, 64},
+		{-math.MaxFloat64, 64},
+		{-math.MaxUint64 - 1, 64},
+		{math.MaxUint64 + 1, 64},
+	}
+
+	for _, tc := range ttF64 {
+		require.Equal(t, tc.want, Float64BitLen([]float64{tc.num}), strconv.FormatFloat(tc.num, 'f', -1, 64))
+	}
 }
-
-*/
 
 func TestUnsignedIntToBinary(t *testing.T) {
 	cases := []uint64{0, 1, 2, 3, 127, 128}
@@ -146,7 +204,7 @@ func TestFloatToBinary(t *testing.T) {
 }
 
 func TestFormatUintToBinary(t *testing.T) {
-	tt := []struct {
+	ttUint := []struct {
 		num  uint64
 		want string
 	}{
@@ -159,9 +217,7 @@ func TestFormatUintToBinary(t *testing.T) {
 		{1e9, "111011100110101100101000000000"},
 	}
 
-	for _, tc := range tt {
-		if got := uintToBinary(tc.num); got != tc.want {
-			t.Fatalf("uintToBinary(%d) = %s, want %s", tc.num, got, tc.want)
-		}
+	for _, tc := range ttUint {
+		require.Equal(t, uintToBinStr(tc.num), tc.want, tc.num)
 	}
 }
