@@ -164,9 +164,9 @@ func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *AppendCmd) {
 	for i, subcmd1 := range cmd1.Cmds {
 		assert.Equal(t, subcmd1.GetType(), cmd2.Cmds[i].GetType())
 	}
-	assert.Equal(t, len(cmd1.infos), len(cmd2.infos))
-	for i, info1 := range cmd1.infos {
-		checkAppendInfoIsEqual(t, info1, cmd2.infos[i])
+	assert.Equal(t, len(cmd1.Infos), len(cmd2.Infos))
+	for i, info1 := range cmd1.Infos {
+		checkAppendInfoIsEqual(t, info1, cmd2.Infos[i])
 	}
 }
 

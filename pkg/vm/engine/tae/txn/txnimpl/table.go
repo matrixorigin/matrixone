@@ -819,7 +819,7 @@ func (tbl *txnTable) ApplyAppend() {
 		}
 		ctx.driver.Close()
 		id := ctx.driver.GetID()
-		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, id)
+		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, tbl.entry.GetDB().ID, id)
 		logutil.Debugf(info.String())
 		if err = appendNode.PrepareCommit(); err != nil {
 			panic(err)
