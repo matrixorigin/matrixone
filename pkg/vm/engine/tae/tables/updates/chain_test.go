@@ -341,7 +341,17 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
-	controller := NewMVCCHandle(nil)
+	schema := catalog.MockSchema(1)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c := catalog.MockCatalog(dir, "mock", nil, nil)
+	defer c.Close()
+
+	db, _ := c.CreateDBEntry("db", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
+	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
+
+	controller := NewMVCCHandle(blk)
 	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
 	txn1.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)

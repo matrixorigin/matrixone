@@ -105,8 +105,7 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	df.colBlk.mutex.Lock()
 	file := df.file[len(df.file)-1]
 	df.colBlk.mutex.Unlock()
-	cache := make([]byte, 1<<20)
-	n, err = file.Read(buf, cache)
+	n, err = file.Read(buf)
 	return n, nil
 }
 

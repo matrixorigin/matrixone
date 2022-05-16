@@ -12,47 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package decimal128s
 
-type ExtentType uint8
-
-const (
-	APPEND ExtentType = iota
-	UPDATE ExtentType = iota
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-type entry struct {
-	offset uint32
-	length uint32
-}
-
-type Extent struct {
-	typ    ExtentType
-	offset uint32
-	length uint32
-	data   entry
-}
-
-func (ex *Extent) End() uint32 {
-	return ex.offset + ex.length
-}
-
-func (ex *Extent) Offset() uint32 {
-	return ex.offset
-}
-
-func (ex *Extent) Length() uint32 {
-	return ex.length
-}
-
-func (ex *Extent) GetData() *entry {
-	return &ex.data
-}
-
-func (en *entry) GetOffset() uint32 {
-	return en.offset
-}
-
-func (en *entry) GetLength() uint32 {
-	return en.length
+type compare struct {
+	xs [][]types.Decimal128
+	ns []*nulls.Nulls
+	vs []*vector.Vector
 }

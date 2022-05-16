@@ -17,6 +17,8 @@ package compare
 import (
 	adates "github.com/matrixorigin/matrixone/pkg/compare2/asc/dates"
 	adatetimes "github.com/matrixorigin/matrixone/pkg/compare2/asc/datetimes"
+	adecimal128s "github.com/matrixorigin/matrixone/pkg/compare2/asc/decimal128s"
+	adecimal64s "github.com/matrixorigin/matrixone/pkg/compare2/asc/decimal64s"
 	afloat32s "github.com/matrixorigin/matrixone/pkg/compare2/asc/float32s"
 	afloat64s "github.com/matrixorigin/matrixone/pkg/compare2/asc/float64s"
 	aint16s "github.com/matrixorigin/matrixone/pkg/compare2/asc/int16s"
@@ -30,6 +32,8 @@ import (
 	avarchar "github.com/matrixorigin/matrixone/pkg/compare2/asc/varchar"
 	ddates "github.com/matrixorigin/matrixone/pkg/compare2/desc/dates"
 	ddatetimes "github.com/matrixorigin/matrixone/pkg/compare2/desc/datetimes"
+	ddecimal128s "github.com/matrixorigin/matrixone/pkg/compare2/desc/decimal128s"
+	ddecimal64s "github.com/matrixorigin/matrixone/pkg/compare2/desc/decimal64s"
 	dfloat32s "github.com/matrixorigin/matrixone/pkg/compare2/desc/float32s"
 	dfloat64s "github.com/matrixorigin/matrixone/pkg/compare2/desc/float64s"
 	dint16s "github.com/matrixorigin/matrixone/pkg/compare2/desc/int16s"
@@ -111,6 +115,16 @@ func New(typ types.T, desc bool) Compare {
 			return ddatetimes.New()
 		}
 		return adatetimes.New()
+	case types.T_decimal64:
+		if desc {
+			return ddecimal64s.New()
+		}
+		return adecimal64s.New()
+	case types.T_decimal128:
+		if desc {
+			return ddecimal128s.New()
+		}
+		return adecimal128s.New()
 	}
 	return nil
 }

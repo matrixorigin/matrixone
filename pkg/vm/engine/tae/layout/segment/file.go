@@ -39,9 +39,7 @@ func (b *BlockFile) GetFileSize() int64 {
 	b.snode.mutex.Lock()
 	var size int64 = 0
 	for _, ext := range b.snode.extents {
-		for _, entry := range ext.GetData() {
-			size += int64(entry.GetLength())
-		}
+		size += int64(ext.GetData().GetLength())
 	}
 	b.snode.mutex.Unlock()
 	return size
@@ -51,16 +49,6 @@ func (b *BlockFile) GetName() string {
 	return b.name
 }
 
-func (b *BlockFile) GetEntryNum() int {
-	b.snode.mutex.Lock()
-	var size int = 0
-	for _, ext := range b.snode.extents {
-		size += len(ext.GetData())
-	}
-	b.snode.mutex.Unlock()
-	return size
-}
-
 func (b *BlockFile) Append(offset uint64, data []byte) error {
 	cbufLen := uint32(p2roundup(uint64(len(data)), uint64(b.segment.super.blockSize)))
 	_, err := b.segment.segFile.WriteAt(data, int64(offset))
@@ -68,7 +56,13 @@ func (b *BlockFile) Append(offset uint64, data []byte) error {
 		return err
 	}
 	b.snode.mutex.Lock()
-	if len(b.snode.extents) > 0 &&
+	b.snode.extents = append(b.snode.extents, Extent{
+		typ:    APPEND,
+		offset: uint32(offset),
+		length: cbufLen,
+		data:   entry{offset: 0, length: uint32(len(data))},
+	})
+	/*if len(b.snode.extents) > 0 &&
 		b.snode.extents[len(b.snode.extents)-1].End() == uint32(offset) {
 		b.snode.extents[len(b.snode.extents)-1].data = append(b.snode.extents[len(b.snode.extents)-1].data, entry{
 			offset: b.snode.extents[len(b.snode.extents)-1].length,
@@ -84,7 +78,7 @@ func (b *BlockFile) Append(offset uint64, data []byte) error {
 			length: cbufLen,
 			data:   rel,
 		})
-	}
+	}*/
 	b.snode.mutex.Unlock()
 	b.snode.size += uint64(cbufLen)
 	return nil
@@ -229,7 +223,7 @@ func (b *BlockFile) GetExtents() *[]Extent {
 	return extents
 }
 
-func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error) {
+func (b *BlockFile) Read(data []byte) (n int, err error) {
 	bufLen := len(data)
 	if bufLen == 0 {
 		return 0, nil
@@ -237,18 +231,20 @@ func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error) {
 	b.snode.mutex.Lock()
 	defer b.snode.mutex.Unlock()
 	n = 0
-	var offset uint32 = 0
+	var boff uint32 = 0
+	var roff uint32 = 0
 	for _, ext := range b.snode.extents {
 		if bufLen == 0 {
 			break
 		}
-		c := cache[offset : offset+ext.Length()]
-		_, err := b.ReadExtent(offset, ext.Length(), c)
-		if err != nil {
-			return 0, err
+		c := data[boff : boff+ext.GetData().GetLength()]
+		dataLen, err := b.ReadExtent(roff, ext.GetData().GetLength(), c)
+		if err != nil && dataLen != ext.GetData().GetLength() {
+			return int(dataLen), err
 		}
-		entries := ext.GetData()
-		for _, entry := range entries {
+		n += int(dataLen)
+		//entries := ext.GetData()
+		/*for _, entry := range entries {
 			if bufLen < int(entry.GetLength()) {
 				copy(data, c[entry.GetOffset():entry.GetOffset()+uint32(bufLen)])
 				bufLen = 0
@@ -257,8 +253,9 @@ func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error) {
 			bufLen -= int(entry.GetLength())
 			copy(data[n:], c[entry.GetOffset():entry.GetOffset()+entry.GetLength()])
 			n += int(entry.GetLength())
-		}
-		offset += ext.Length()
+		}*/
+		boff += ext.GetData().GetLength()
+		roff += ext.Length()
 	}
 	return n, nil
 }
