@@ -19,10 +19,8 @@ import (
 	"io"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -91,6 +89,5 @@ func (db *DB) Close() error {
 	db.TxnMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()
-	logutil.Info(db.Catalog.SimplePPString(common.PPL1))
 	return db.DBLocker.Close()
 }
