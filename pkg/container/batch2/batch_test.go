@@ -40,7 +40,9 @@ func TestBatch(t *testing.T) {
 	SetLength(bat0, 10)
 	sels := []int64{1, 2, 3}
 	Shrink(bat0, sels)
-	Shuffle(bat1, sels, mp)
+	if err := Shuffle(bat1, sels, mp); err != nil {
+		panic(err)
+	}
 	{
 		vecs := make([]*vector.Vector, 1)
 		Prefetch(bat0, []int32{0}, vecs)
