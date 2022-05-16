@@ -245,7 +245,7 @@ func (b *BlockFile) Read(data []byte) (n int, err error) {
 		}
 		c := data[boff : boff+ext.GetData()[0].GetLength()]
 		dataLen, err := b.ReadExtent(roff, ext.GetData()[0].GetLength(), c)
-		if err != nil && dataLen != ext.GetData()[0].GetLength(){
+		if err != nil && dataLen != ext.GetData()[0].GetLength() {
 			return int(dataLen), err
 		}
 		n += int(dataLen)
