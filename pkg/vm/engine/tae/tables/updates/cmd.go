@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -37,6 +38,8 @@ func init() {
 
 type UpdateCmd struct {
 	*txnbase.BaseCustomizedCmd
+	dbid    uint64
+	dest    *common.ID
 	update  *ColumnNode
 	delete  *DeleteNode
 	append  *AppendNode
@@ -60,6 +63,8 @@ func NewAppendCmd(id uint32, app *AppendNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		append:  app,
 		cmdType: txnbase.CmdAppend,
+		dest:    app.controller.meta.AsCommonID(),
+		dbid:    app.controller.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -69,6 +74,8 @@ func NewDeleteCmd(id uint32, del *DeleteNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		delete:  del,
 		cmdType: txnbase.CmdDelete,
+		dest:    del.chain.controller.meta.AsCommonID(),
+		dbid:    del.chain.controller.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -78,9 +85,29 @@ func NewUpdateCmd(id uint32, update *ColumnNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		update:  update,
 		cmdType: txnbase.CmdUpdate,
+		dest:    update.chain.controller.meta.AsCommonID(),
+		dbid:    update.chain.controller.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
+}
+
+func (c *UpdateCmd) GetUpdateNode() *ColumnNode{
+	return c.update
+}
+
+func (c *UpdateCmd) GetAppendNode() *AppendNode{
+	return c.append
+}
+func (c *UpdateCmd) GetDeleteNode() *DeleteNode{
+	return c.delete
+}
+func (c *UpdateCmd) GetDBID() uint64 {
+	return c.dbid
+}
+
+func (c *UpdateCmd) GetDest() *common.ID {
+	return c.dest
 }
 
 // TODO
@@ -98,6 +125,18 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.ID); err != nil {
 		return
 	}
+	if err = binary.Write(w, binary.BigEndian, c.dbid); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, c.dest.TableID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, c.dest.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, c.dest.BlockID); err != nil {
+		return
+	}
 	switch c.GetType() {
 	case txnbase.CmdUpdate:
 		sn, err = c.update.WriteTo(w)
@@ -112,6 +151,19 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
 
 func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &c.dbid); err != nil {
+		return
+	}
+	c.dest = &common.ID{}
+	if err = binary.Read(r, binary.BigEndian, &c.dest.TableID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &c.dest.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &c.dest.BlockID); err != nil {
 		return
 	}
 	switch c.GetType() {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -46,6 +47,7 @@ type DeleteNode struct {
 	startTs    uint64
 	commitTs   uint64
 	nt         NodeType
+	id         *common.ID
 }
 
 func NewMergedNode(commitTs uint64) *DeleteNode {
@@ -73,7 +75,9 @@ func NewDeleteNode(txn txnif.AsyncTxn) *DeleteNode {
 	}
 	return n
 }
-
+func (node *DeleteNode) GetID()*common.ID{
+	return node.id
+}
 func (node *DeleteNode) AddLogIndexesLocked(indexes []*wal.Index) {
 	node.logIndexes = append(node.logIndexes, indexes...)
 }
@@ -195,6 +199,11 @@ func (node *DeleteNode) StringLocked() string {
 }
 
 func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
+	cn, err := w.Write(txnbase.MarshalID(node.chain.controller.GetID()))
+	if err != nil {
+		return
+	}
+	n += int64(cn)
 	buf, err := node.mask.ToBytes()
 	if err != nil {
 		return
@@ -211,6 +220,13 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int
+	buf := make([]byte, txnbase.IDSize)
+	if sn, err = r.Read(buf); err != nil {
+		return
+	}
+	n = int64(sn)
+	node.id = txnbase.UnmarshalID(buf)
 	cnt := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
 		return
@@ -219,7 +235,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if cnt == 0 {
 		return
 	}
-	buf := make([]byte, cnt)
+	buf = make([]byte, cnt)
 	if _, err = r.Read(buf); err != nil {
 		return
 	}

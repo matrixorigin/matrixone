@@ -20,7 +20,9 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -31,6 +33,7 @@ type AppendNode struct {
 	logIndex   *wal.Index
 	maxRow     uint32
 	controller *MVCCHandle
+	id         *common.ID
 }
 
 func MockAppendNode(ts uint64, maxRow uint32, controller *MVCCHandle) *AppendNode {
@@ -54,7 +57,9 @@ func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, controller *MVCCHandle) *A
 	}
 	return n
 }
-
+func (n *AppendNode) GetID() *common.ID{
+	return n.id
+}
 func (n *AppendNode) GetCommitTS() uint64 { return n.commitTs }
 func (n *AppendNode) GetMaxRow() uint32   { return n.maxRow }
 
@@ -79,6 +84,11 @@ func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 }
 
 func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
+	cn, err := w.Write(txnbase.MarshalID(node.controller.GetID()))
+	if err != nil {
+		return
+	}
+	n += int64(cn)
 	if err = binary.Write(w, binary.BigEndian, node.maxRow); err != nil {
 		return
 	}
@@ -87,6 +97,13 @@ func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int
+	buf := make([]byte, txnbase.IDSize)
+	if sn, err = r.Read(buf); err != nil {
+		return
+	}
+	n = int64(sn)
+	node.id = txnbase.UnmarshalID(buf)
 	if err = binary.Read(r, binary.BigEndian, &node.maxRow); err != nil {
 		return
 	}

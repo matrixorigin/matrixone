@@ -69,7 +69,25 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 	appender.placeholder += n
 	return
 }
+func (appender *blockAppender) OnReplayAppendNode(maxrow uint32){
+	appender.node.block.mvcc.AddAppendNodeLocked(nil, appender.node.rows)
+}
+func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
+	err = appender.node.Expand(0, func() error {
+		var err error
+		from, err = appender.node.ApplyAppend(bat, offset, length, txn)
+		return err
+	})
 
+	pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
+	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
+	err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
+	if err != nil {
+		panic(err)
+	}
+
+	return
+}
 func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
 	h := appender.node.mgr.Pin(appender.node)
 	if h == nil {

@@ -24,7 +24,7 @@ func (db *DB) replayHandle(group uint32, commitId uint64, payload []byte, typ ui
 	if err != nil {
 		return err
 	}
-	switch cmd:=txnCmd.(type) {
+	switch cmd := txnCmd.(type) {
 	case *catalog.EntryCommand:
 		err = db.Catalog.ReplayCmd(txnCmd)
 	case *txnimpl.AppendCmd:
@@ -39,7 +39,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) (err error) {
 	var data batch.IBatch
 	var deletes *roaring.Bitmap
 	for _, subTxnCmd := range cmd.Cmds {
-		switch subCmd:=subTxnCmd.(type) {
+		switch subCmd := subTxnCmd.(type) {
 		case *txnbase.BatchCmd:
 			data = subCmd.Bat
 		case *txnbase.DeleteBitmapCmd:
@@ -93,7 +93,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) (err error) {
 		if err != nil {
 			return err
 		}
-		_, _, err = appender.ApplyAppend(bat, 0, len, nil)
+		_, _, err = appender.OnReplayInsertNode(bat, 0, len, nil)
 		if err != nil {
 			return err
 		}
@@ -117,5 +117,100 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 }
 
 func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd) (err error) {
+	switch cmd.GetType() {
+	case txnbase.CmdAppend:
+		db.onReplayAppend(cmd)
+	case txnbase.CmdUpdate:
+		db.onReplayUpdate(cmd)
+	case txnbase.CmdDelete:
+		db.onReplayDelete(cmd)
+	}
+	return
+}
+
+func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) (err error){
+	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
+	if err != nil {
+		return err
+	}
+	deleteNode := cmd.GetDeleteNode()
+	id := deleteNode.GetID()
+	tb, err := database.GetTableEntryByID(id.TableID)
+	if err != nil {
+		return err
+	}
+	seg, err := tb.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		return err
+	}
+	blk, err := seg.GetBlockEntryByID(id.BlockID)
+	if err != nil {
+		return err
+	}
+	datablk := blk.GetBlockData()
+	iterator:=deleteNode.GetDeleteMaskLocked().Iterator()
+	for iterator.HasNext(){
+		row:=iterator.Next()
+		datablk.OnReplayDelete(row,row)
+	}
+	return
+}
+
+func (db *DB) onReplayAppend(cmd *updates.UpdateCmd) (err error) {
+	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
+	if err != nil {
+		return err
+	}
+	appendNode := cmd.GetAppendNode()
+	id := appendNode.GetID()
+	tb, err := database.GetTableEntryByID(id.TableID)
+	if err != nil {
+		return err
+	}
+	seg, err := tb.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		return err
+	}
+	blk, err := seg.GetBlockEntryByID(id.BlockID)
+	if err != nil {
+		return err
+	}
+	datablk := blk.GetBlockData()
+	appender, err := datablk.MakeAppender()
+	if err != nil {
+		return err
+	}
+	appender.OnReplayAppendNode(cmd.GetAppendNode().GetMaxRow())
+	return
+}
+func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd) (err error) {
+	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
+	if err != nil {
+		return err
+	}
+	updateNode := cmd.GetUpdateNode()
+	id := updateNode.GetID()
+	tb, err := database.GetTableEntryByID(id.TableID)
+	if err != nil {
+		return err
+	}
+	seg, err := tb.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		return err
+	}
+	blk, err := seg.GetBlockEntryByID(id.BlockID)
+	if err != nil {
+		return err
+	}
+	blkdata := blk.GetBlockData()
+	iterator := updateNode.GetMask().Iterator()
+	vals := updateNode.GetValues()
+	for iterator.HasNext() {
+		row := iterator.Next()
+		err = blkdata.OnReplayUpdate(row, id.Idx, vals[row])
+		if err != nil {
+			return
+		}
+	}
 	return
 }
