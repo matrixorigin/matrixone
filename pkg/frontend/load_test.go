@@ -116,7 +116,7 @@ func Test_load(t *testing.T) {
 		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
 		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).DoAndReturn(
-			func(a, b interface{}) error {
+			func(a, b, c interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return nil
@@ -266,7 +266,7 @@ func Test_load(t *testing.T) {
 		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
 		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).DoAndReturn(
-			func(a, b interface{}) error {
+			func(a, b, c interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return fmt.Errorf("fake error")
