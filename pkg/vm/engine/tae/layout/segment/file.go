@@ -229,7 +229,7 @@ func (b *BlockFile) GetExtents() *[]Extent {
 	return extents
 }
 
-func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error) {
+func (b *BlockFile) Read(data []byte) (n int, err error) {
 	bufLen := len(data)
 	if bufLen == 0 {
 		return 0, nil
@@ -237,18 +237,20 @@ func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error) {
 	b.snode.mutex.Lock()
 	defer b.snode.mutex.Unlock()
 	n = 0
-	var offset uint32 = 0
+	var boff uint32 = 0
+	var roff uint32 = 0
 	for _, ext := range b.snode.extents {
 		if bufLen == 0 {
 			break
 		}
-		c := cache[offset : offset+ext.Length()]
-		_, err := b.ReadExtent(offset, ext.Length(), c)
-		if err != nil {
-			return 0, err
+		c := data[boff : boff+ext.GetData()[0].GetLength()]
+		dataLen, err := b.ReadExtent(roff, ext.GetData()[0].GetLength(), c)
+		if err != nil && dataLen != ext.GetData()[0].GetLength(){
+			return int(dataLen), err
 		}
-		entries := ext.GetData()
-		for _, entry := range entries {
+		n += int(dataLen)
+		//entries := ext.GetData()
+		/*for _, entry := range entries {
 			if bufLen < int(entry.GetLength()) {
 				copy(data, c[entry.GetOffset():entry.GetOffset()+uint32(bufLen)])
 				bufLen = 0
@@ -257,8 +259,9 @@ func (b *BlockFile) Read(data []byte, cache []byte) (n int, err error) {
 			bufLen -= int(entry.GetLength())
 			copy(data[n:], c[entry.GetOffset():entry.GetOffset()+entry.GetLength()])
 			n += int(entry.GetLength())
-		}
-		offset += ext.Length()
+		}*/
+		boff += ext.GetData()[0].GetLength()
+		roff += ext.Length()
 	}
 	return n, nil
 }
