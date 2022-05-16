@@ -18,6 +18,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"golang.org/x/exp/constraints"
 )
 
 var (
@@ -34,16 +35,16 @@ var (
 )
 
 func init() {
-	SqrtUint8 = sqrtUint8
-	SqrtUint16 = sqrtUint16
-	SqrtUint32 = sqrtUint32
-	SqrtUint64 = sqrtUint64
-	SqrtInt8 = sqrtInt8
-	SqrtInt16 = sqrtInt16
-	SqrtInt32 = sqrtInt32
-	SqrtInt64 = sqrtInt64
-	SqrtFloat32 = sqrtFloat32
-	SqrtFloat64 = sqrtFloat64
+	SqrtUint8 = sqrt[uint8]
+	SqrtUint16 = sqrt[uint16]
+	SqrtUint32 = sqrt[uint32]
+	SqrtUint64 = sqrt[uint64]
+	SqrtInt8 = sqrt[int8]
+	SqrtInt16 = sqrt[int16]
+	SqrtInt32 = sqrt[int32]
+	SqrtInt64 = sqrt[int64]
+	SqrtFloat32 = sqrt[float32]
+	SqrtFloat64 = sqrt[float64]
 }
 
 type SqrtResult struct {
@@ -51,106 +52,10 @@ type SqrtResult struct {
 	Nsp    *nulls.Nulls
 }
 
-func sqrtUint8(xs []uint8, rs []float64) SqrtResult {
+func sqrt[T constraints.Integer | constraints.Float](xs []T, rs []float64) SqrtResult {
 	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		result.Result[i] = math.Sqrt(float64(n))
-	}
-	return result
-}
-
-func sqrtUint16(xs []uint16, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		result.Result[i] = math.Sqrt(float64(n))
-	}
-	return result
-}
-
-func sqrtUint32(xs []uint32, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		result.Result[i] = math.Sqrt(float64(n))
-	}
-	return result
-}
-
-func sqrtUint64(xs []uint64, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		result.Result[i] = math.Sqrt(float64(n))
-	}
-	return result
-}
-
-func sqrtInt8(xs []int8, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		if n < 0 {
-			nulls.Add(result.Nsp, uint64(i))
-		} else {
-			result.Result[i] = math.Sqrt(float64(n))
-		}
-	}
-	return result
-}
-
-func sqrtInt16(xs []int16, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		if n < 0 {
-			nulls.Add(result.Nsp, uint64(i))
-		} else {
-			result.Result[i] = math.Sqrt(float64(n))
-		}
-	}
-	return result
-}
-
-func sqrtInt32(xs []int32, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		if n < 0 {
-			nulls.Add(result.Nsp, uint64(i))
-		} else {
-			result.Result[i] = math.Sqrt(float64(n))
-		}
-	}
-	return result
-}
-
-func sqrtInt64(xs []int64, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		if n < 0 {
-			nulls.Add(result.Nsp, uint64(i))
-		} else {
-			result.Result[i] = math.Sqrt(float64(n))
-		}
-	}
-	return result
-}
-
-func sqrtFloat32(xs []float32, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		if n < 0 {
-			nulls.Add(result.Nsp, uint64(i))
-		} else {
-			result.Result[i] = math.Sqrt(float64(n))
-		}
-	}
-	return result
-}
-
-func sqrtFloat64(xs []float64, rs []float64) SqrtResult {
-	result := SqrtResult{Result: rs, Nsp: new(nulls.Nulls)}
-	for i, n := range xs {
-		if n < 0 {
-			nulls.Add(result.Nsp, uint64(i))
-		} else {
-			result.Result[i] = math.Sqrt(n)
-		}
 	}
 	return result
 }
