@@ -146,7 +146,7 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, selectCtx 
 		exprs := make([]*plan.Expr, columnLength)
 		if cte.Name.Cols != nil {
 			if len(preNode.ProjectList) != len(cte.Name.Cols) {
-				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("CTE table column length not match"))
+				return errors.New(errno.InvalidColumnReference, "CTE table column length not match")
 			}
 			for idx, col := range cte.Name.Cols {
 				exprs[idx] = &plan.Expr{

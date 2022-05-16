@@ -228,7 +228,7 @@ func (b *build) buildFunc(flg bool, e *tree.FuncExpr, qry *Query, fn func(tree.E
 	funcName := strings.ToLower(name.Parts[0])
 	if !flg {
 		if _, ok := transformer.TransformerNamesMap[funcName]; ok {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Invalid use of group function"))
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "Invalid use of group function")
 		}
 		args := make([]extend.Extend, len(e.Exprs))
 		{
@@ -247,7 +247,7 @@ func (b *build) buildFunc(flg bool, e *tree.FuncExpr, qry *Query, fn func(tree.E
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Illegal function call '%s'", e))
 		}
 		if e.Type == tree.FUNC_TYPE_DISTINCT || e.Type == tree.FUNC_TYPE_ALL {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function type not support now"))
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "function type not support now")
 		}
 		return b.buildAggregation(op, funcName, e.Exprs[0], qry, fn)
 	}

@@ -16,7 +16,6 @@ package dedup
 
 import (
 	"bytes"
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +28,7 @@ import (
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(fmt.Sprintf("δ"))
+	buf.WriteString("δ")
 }
 
 func Prepare(_ *process.Process, _ interface{}) error {

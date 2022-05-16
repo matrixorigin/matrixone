@@ -47,7 +47,7 @@ func newHistory(mu *sync.RWMutex) *history {
 }
 
 func (h *history) String() string {
-	s := fmt.Sprintf("{")
+	s := "{"
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, entry := range h.entries {

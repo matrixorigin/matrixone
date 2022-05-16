@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -486,7 +487,7 @@ func (s ShowTables) ResultColumns() []*Attribute {
 	return []*Attribute{
 		{
 			Ref:  1,
-			Name: fmt.Sprintf("Tables"),
+			Name: "Tables",
 			Type: types.Type{
 				Oid:  types.T_varchar,
 				Size: 24,
@@ -555,7 +556,7 @@ func (e ExplainQuery) ResultColumns() []*Attribute {
 	return []*Attribute{
 		{
 			Ref:  1,
-			Name: fmt.Sprintf("QUERY PLAN"),
+			Name: "QUERY PLAN",
 			Type: types.Type{
 				Oid:  types.T_varchar,
 				Size: 24,

@@ -276,10 +276,10 @@ func (b *build) initVertexSet(es []*Edge, ss []*Scope, ess []*EdgeSet) *VertexSe
 
 func (b *build) checkHyperGraph(gp *Graph, ss *ScopeSet) error {
 	if existIndependentEdge(gp) {
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("isolated relation not support now"))
+		return errors.New(errno.SQLStatementNotYetComplete, "isolated relation not support now")
 	}
 	if !isEmptyGraph(pruneGraph(cloneGraph(gp))) { // check whether is a cyclic graph
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("cyclic join not support now"))
+		return errors.New(errno.SQLStatementNotYetComplete, "cyclic join not support now")
 	}
 	return nil
 }

@@ -15,8 +15,6 @@
 package plan2
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -51,7 +49,7 @@ func appendDeleteNode(query *Query) (*plan.Plan, error) {
 	//get tableDef
 	objRef, tableDef := getLastTableDef(query)
 	if tableDef == nil {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find delete table"))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find delete table")
 	}
 
 	//append delete node

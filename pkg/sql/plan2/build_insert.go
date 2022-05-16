@@ -180,7 +180,7 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 					return err
 				}
 			default:
-				return errors.New(errno.InvalidSchemaName, fmt.Sprintf("insert value must be constant"))
+				return errors.New(errno.InvalidSchemaName, "insert value must be constant")
 			}
 		}
 	}

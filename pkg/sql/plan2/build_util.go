@@ -240,7 +240,7 @@ func getExprFromUnresolvedName(query *Query, name string, table string, selectCt
 		for _, parentId := range selectCtx.subQueryParentId {
 			preNode = getNode(parentId)
 			if preNode == nil {
-				return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("parent node id not found in subquery"))
+				return nil, errors.New(errno.InvalidColumnReference, "parent node id not found in subquery")
 			}
 			for {
 				if preNode.ProjectList != nil {
@@ -306,7 +306,7 @@ func setDerivedTableAlias(query *Query, ctx CompilerContext, selectCtx *SelectCo
 	prefix := alias + "."
 	if cols != nil {
 		if len(preNode.ProjectList) != len(cols) {
-			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Derived table column length not match"))
+			return errors.New(errno.InvalidColumnReference, "Derived table column length not match")
 		}
 		for idx, col := range cols {
 			exprs = append(exprs, &plan.Expr{
