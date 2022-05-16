@@ -15,7 +15,6 @@
 package explain
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 )
@@ -62,11 +61,6 @@ func NewExplainDataBuffer() *ExplainDataBuffer {
 		NodeSize:    0,
 		Lines:       make([]string, 0),
 	}
-}
-
-// Generates a string describing a ExplainDataBuffer.
-func (buf *ExplainDataBuffer) ToString() string {
-	return fmt.Sprintf("ExplainDataBuffer{start: %d, end: %d, lines: %s, NodeSize: %d}", buf.Start, buf.End, buf.Lines, buf.NodeSize)
 }
 
 func (buf *ExplainDataBuffer) AppendCurrentLine(temp string) {
@@ -131,12 +125,4 @@ func NewExplainDefaultOptions() *ExplainOptions {
 		Anzlyze: false,
 		Format:  EXPLAIN_FORMAT_TEXT,
 	}
-}
-
-type QueryPlanSetting struct {
-	Name             string
-	Optimize         bool
-	JSON             bool
-	DOT              bool
-	QueryPlanOptions ExplainOptions
 }
