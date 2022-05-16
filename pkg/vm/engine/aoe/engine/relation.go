@@ -144,7 +144,7 @@ func (r *relation) update() error {
 	if err != nil {
 		return err
 	}
-	if tablets == nil || len(tablets) == 0 {
+	if len(tablets) == 0 {
 		return catalog.ErrTableNotExists
 	}
 

@@ -634,7 +634,7 @@ func (vec *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (vec *StdVector) Unmarshal(data []byte) error {
-	if data == nil || len(data) == 0 {
+	if len(data) == 0 {
 		return nil
 	}
 	buf := data

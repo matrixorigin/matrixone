@@ -86,7 +86,7 @@ func (db *database) Relation(name string, _ engine.Snapshot) (engine.Relation, e
 	if err != nil {
 		return nil, err
 	}
-	if tablets == nil || len(tablets) == 0 {
+	if len(tablets) == 0 {
 		return nil, catalog.ErrTableNotExists
 	}
 
