@@ -476,19 +476,25 @@ func TestExtend(t *testing.T) {
 
 func NewStrVector(v []byte) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24})
-	vector.Append(vec, [][]byte{v, v, v})
+	if err := vector.Append(vec, [][]byte{v, v, v}); err != nil {
+		panic(err)
+	}
 	return vec
 }
 
 func NewFloatVector(v float64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_float64), Size: 8})
-	vector.Append(vec, []float64{v, v, v})
+	if err := vector.Append(vec, []float64{v, v, v}); err != nil {
+		panic(err)
+	}
 	return vec
 }
 
 func NewInt8Vector(v int8) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int8), Size: 8})
-	vector.Append(vec, []int8{v, v, v})
+	if err := vector.Append(vec, []int8{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -497,7 +503,9 @@ func NewInt8Vector(v int8) *vector.Vector {
 
 func NewInt16Vector(v int16) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int16), Size: 8})
-	vector.Append(vec, []int16{v, v, v})
+	if err := vector.Append(vec, []int16{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -506,7 +514,9 @@ func NewInt16Vector(v int16) *vector.Vector {
 
 func NewInt32Vector(v int32) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 8})
-	vector.Append(vec, []int32{v, v, v})
+	if err := vector.Append(vec, []int32{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -515,7 +525,9 @@ func NewInt32Vector(v int32) *vector.Vector {
 
 func NewInt64Vector(v int64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int64), Size: 8})
-	vector.Append(vec, []int64{v, v, v})
+	if err := vector.Append(vec, []int64{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -524,7 +536,9 @@ func NewInt64Vector(v int64) *vector.Vector {
 
 func NewUInt8Vector(v uint8) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint8), Size: 8})
-	vector.Append(vec, []uint8{v, v, v})
+	if err := vector.Append(vec, []uint8{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -533,7 +547,9 @@ func NewUInt8Vector(v uint8) *vector.Vector {
 
 func NewUInt16Vector(v uint16) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint16), Size: 8})
-	vector.Append(vec, []uint16{v, v, v})
+	if err := vector.Append(vec, []uint16{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -542,7 +558,9 @@ func NewUInt16Vector(v uint16) *vector.Vector {
 
 func NewUInt32Vector(v uint32) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint32), Size: 8})
-	vector.Append(vec, []uint32{v, v, v})
+	if err := vector.Append(vec, []uint32{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -551,7 +569,9 @@ func NewUInt32Vector(v uint32) *vector.Vector {
 
 func NewUInt64Vector(v uint64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint64), Size: 8})
-	vector.Append(vec, []uint64{v, v, v})
+	if err := vector.Append(vec, []uint64{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -560,7 +580,9 @@ func NewUInt64Vector(v uint64) *vector.Vector {
 
 func NewFloat32Vector(v float32) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_float32), Size: 8})
-	vector.Append(vec, []float32{v, v, v})
+	if err := vector.Append(vec, []float32{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -569,7 +591,9 @@ func NewFloat32Vector(v float32) *vector.Vector {
 
 func NewFloat64Vector(v float64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_float64), Size: 8})
-	vector.Append(vec, []float64{v, v, v})
+	if err := vector.Append(vec, []float64{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -578,7 +602,9 @@ func NewFloat64Vector(v float64) *vector.Vector {
 
 func NewCharVector(v []byte) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24})
-	vector.Append(vec, [][]byte{v, v, v})
+	if err := vector.Append(vec, [][]byte{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
