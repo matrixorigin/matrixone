@@ -360,7 +360,9 @@ func (store *txnStore) ApplyRollback() (err error) {
 
 func (store *txnStore) ApplyCommit() (err error) {
 	for _, e := range store.logs {
-		e.WaitDone()
+		if err = e.WaitDone(); err != nil {
+			return
+		}
 		e.Free()
 	}
 	for _, db := range store.dbs {
@@ -393,7 +395,9 @@ func (store *txnStore) PrepareCommit() (err error) {
 		}
 	}
 
-	store.CollectCmd()
+	if err = store.CollectCmd(); err != nil {
+		return
+	}
 
 	logEntry, err := store.cmdMgr.ApplyTxnRecord()
 	if err != nil {

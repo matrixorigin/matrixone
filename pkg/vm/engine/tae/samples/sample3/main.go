@@ -53,7 +53,7 @@ func stopProfile() {
 	pprof.StopCPUProfile()
 	memf, _ := os.Create(memprofile)
 	defer memf.Close()
-	pprof.Lookup("heap").WriteTo(memf, 0)
+	_ = pprof.Lookup("heap").WriteTo(memf, 0)
 }
 
 func main() {
@@ -124,7 +124,7 @@ func main() {
 	startProfile()
 	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(b))
+		_ = p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	stopProfile()

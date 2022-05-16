@@ -61,7 +61,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 			}
 		} else {
 			proc.Reg.InputBatch = nil
-			vm.Run(p.instructions, proc)
+			_, err = vm.Run(p.instructions, proc)
 		}
 	}()
 	if err = vm.Prepare(p.instructions, proc); err != nil {
@@ -95,7 +95,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 			}
 		} else {
 			proc.Reg.InputBatch = nil
-			vm.Run(p.instructions, proc)
+			_, err = vm.Run(p.instructions, proc)
 		}
 		proc.Cancel()
 	}()

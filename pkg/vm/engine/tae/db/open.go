@@ -59,7 +59,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		ClosedC:     make(chan struct{}),
 		Closed:      new(atomic.Value),
 	}
 
@@ -94,7 +93,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TimedScanner = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
 
 	// Start workers
-	err = db.startWorkers()
+	db.CKPDriver.Start()
+	db.TimedScanner.Start()
 
 	return
 }

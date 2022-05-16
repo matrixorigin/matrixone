@@ -128,7 +128,7 @@ func (node *DeleteNode) HasOverlapLocked(start, end uint32) bool {
 	return yes
 }
 
-func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) error {
+func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) {
 	if node.mask == nil {
 		node.mask = roaring.New()
 	}
@@ -141,7 +141,6 @@ func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) error {
 			node.AddLogIndexesLocked(o.logIndexes)
 		}
 	}
-	return nil
 }
 func (node *DeleteNode) GetCommitTSLocked() uint64 { return node.commitTs }
 func (node *DeleteNode) GetStartTS() uint64        { return node.startTs }

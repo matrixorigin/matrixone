@@ -17,6 +17,7 @@ package batch
 import (
 	"bytes"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -89,6 +90,9 @@ func GetVector(bat *Batch, pos int32) *vector.Vector {
 }
 
 func Clean(bat *Batch, m *mheap.Mheap) {
+	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
+		return
+	}
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vector.Clean(vec, m)

@@ -17,6 +17,8 @@ package sort
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sort/asc/decimal128s"
+	"github.com/matrixorigin/matrixone/pkg/sort/asc/decimal64s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/float32s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/float64s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/int16s"
@@ -28,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/uint64s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/uint8s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/varchar"
+	ddecimal128s "github.com/matrixorigin/matrixone/pkg/sort/desc/decimal128s"
+	ddecimal64s "github.com/matrixorigin/matrixone/pkg/sort/desc/decimal64s"
 	dfloat32s "github.com/matrixorigin/matrixone/pkg/sort/desc/float32s"
 	dfloat64s "github.com/matrixorigin/matrixone/pkg/sort/desc/float64s"
 	dint16s "github.com/matrixorigin/matrixone/pkg/sort/desc/int16s"
@@ -123,6 +127,18 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 			dvarchar.Sort(vec.Col.(*types.Bytes), os)
 		} else {
 			varchar.Sort(vec.Col.(*types.Bytes), os)
+		}
+	case types.T_decimal64:
+		if desc {
+			ddecimal64s.Sort(vec.Col.([]types.Decimal64), os)
+		} else {
+			decimal64s.Sort(vec.Col.([]types.Decimal64), os)
+		}
+	case types.T_decimal128:
+		if desc {
+			ddecimal128s.Sort(vec.Col.([]types.Decimal128), os)
+		} else {
+			decimal128s.Sort(vec.Col.([]types.Decimal128), os)
 		}
 	}
 }

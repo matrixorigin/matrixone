@@ -30,7 +30,7 @@ type Extent struct {
 	typ    ExtentType
 	offset uint32
 	length uint32
-	data   []entry
+	data   entry
 }
 
 func (ex *Extent) End() uint32 {
@@ -45,8 +45,8 @@ func (ex *Extent) Length() uint32 {
 	return ex.length
 }
 
-func (ex *Extent) GetData() []entry {
-	return ex.data
+func (ex *Extent) GetData() *entry {
+	return &ex.data
 }
 
 func (en *entry) GetOffset() uint32 {

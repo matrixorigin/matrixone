@@ -113,9 +113,13 @@ func (txn *Txn) Rollback() error {
 func (txn *Txn) Done() {
 	txn.DoneCond.L.Lock()
 	if txn.State == txnif.TxnStateCommitting {
-		txn.ToCommittedLocked()
+		if err := txn.ToCommittedLocked(); err != nil {
+			txn.SetError(err)
+		}
 	} else {
-		txn.ToRollbackedLocked()
+		if err := txn.ToRollbackedLocked(); err != nil {
+			txn.SetError(err)
+		}
 	}
 	txn.WaitGroup.Done()
 	txn.DoneCond.Broadcast()
@@ -164,18 +168,28 @@ func (txn *Txn) PrepareCommit() error {
 	return err
 }
 
-func (txn *Txn) ApplyCommit() error {
-	if err := txn.Store.ApplyCommit(); err != nil && err != txnif.TxnRollbacked {
-		panic(err)
-	}
-	return txn.Store.Close()
+func (txn *Txn) ApplyCommit() (err error) {
+	defer func() {
+		if err == nil || err == txnif.TxnRollbacked {
+			err = txn.Store.Close()
+		} else {
+			txn.Store.Close()
+		}
+	}()
+	err = txn.Store.ApplyCommit()
+	return
 }
 
-func (txn *Txn) ApplyRollback() error {
-	if err := txn.Store.ApplyRollback(); err != nil {
-		panic(err)
-	}
-	return txn.Store.Close()
+func (txn *Txn) ApplyRollback() (err error) {
+	defer func() {
+		if err == nil {
+			err = txn.Store.Close()
+		} else {
+			txn.Store.Close()
+		}
+	}()
+	err = txn.Store.ApplyRollback()
+	return
 }
 
 func (txn *Txn) PreCommit() error {

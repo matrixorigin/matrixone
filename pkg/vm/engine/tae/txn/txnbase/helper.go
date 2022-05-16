@@ -31,32 +31,57 @@ const (
 )
 
 func MarshalID(id *common.ID) []byte {
+	var err error
 	var w bytes.Buffer
-	binary.Write(&w, binary.BigEndian, id.TableID)
-	binary.Write(&w, binary.BigEndian, id.SegmentID)
-	binary.Write(&w, binary.BigEndian, id.BlockID)
-	binary.Write(&w, binary.BigEndian, id.PartID)
-	binary.Write(&w, binary.BigEndian, id.Idx)
-	binary.Write(&w, binary.BigEndian, id.Iter)
+	if err = binary.Write(&w, binary.BigEndian, id.TableID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.SegmentID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.BlockID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.PartID); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.Idx); err != nil {
+		panic(err)
+	}
+	if err = binary.Write(&w, binary.BigEndian, id.Iter); err != nil {
+		panic(err)
+	}
 	return w.Bytes()
 }
 
 func UnmarshalID(buf []byte) *common.ID {
+	var err error
 	r := bytes.NewBuffer(buf)
 	id := common.ID{}
-	binary.Read(r, binary.BigEndian, &id.TableID)
-	binary.Read(r, binary.BigEndian, &id.SegmentID)
-	binary.Read(r, binary.BigEndian, &id.BlockID)
-	binary.Read(r, binary.BigEndian, &id.PartID)
-	binary.Read(r, binary.BigEndian, &id.Idx)
-	binary.Read(r, binary.BigEndian, &id.Iter)
+	if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.BlockID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.PartID); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.Idx); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.Iter); err != nil {
+		panic(err)
+	}
 	return &id
 }
 
-func MarshalBatch(types []types.Type, data batch.IBatch) ([]byte, error) {
-	var buf []byte
+func MarshalBatch(types []types.Type, data batch.IBatch) (buf []byte, err error) {
 	if data == nil {
-		return buf, nil
+		return
 	}
 	var bbuf bytes.Buffer
 	vecs := make([]vector.IVectorNode, 0)
@@ -68,9 +93,15 @@ func MarshalBatch(types []types.Type, data batch.IBatch) ([]byte, error) {
 		v := vec.(vector.IVectorNode)
 		vecs = append(vecs, v)
 	}
-	binary.Write(&bbuf, binary.BigEndian, uint32(0))
-	binary.Write(&bbuf, binary.BigEndian, uint16(len(vecs)))
-	binary.Write(&bbuf, binary.BigEndian, uint32(data.Length()))
+	if err = binary.Write(&bbuf, binary.BigEndian, uint32(0)); err != nil {
+		return
+	}
+	if err = binary.Write(&bbuf, binary.BigEndian, uint16(len(vecs))); err != nil {
+		return
+	}
+	if err = binary.Write(&bbuf, binary.BigEndian, uint32(data.Length())); err != nil {
+		return
+	}
 	bufs := make([][]byte, len(vecs))
 	for i, vec := range vecs {
 		vecBuf, _ := vec.Marshal()
@@ -80,7 +111,9 @@ func MarshalBatch(types []types.Type, data batch.IBatch) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		binary.Write(&bbuf, binary.BigEndian, uint32(len(vecBuf)))
+		if err = binary.Write(&bbuf, binary.BigEndian, uint32(len(vecBuf))); err != nil {
+			return nil, err
+		}
 	}
 	for _, colBuf := range bufs {
 		bbuf.Write(colBuf)

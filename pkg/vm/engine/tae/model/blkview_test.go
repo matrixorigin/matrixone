@@ -97,7 +97,8 @@ func TestMarshal(t *testing.T) {
 	buf, err := view.Marshal()
 	assert.Nil(t, err)
 	view2 := NewBlockView(0)
-	view2.Unmarshal(buf)
+	err = view2.Unmarshal(buf)
+	assert.Nil(t, err)
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
@@ -124,7 +125,8 @@ func TestMarshal2(t *testing.T) {
 	buf, err := view.Marshal()
 	assert.Nil(t, err)
 	view2 := NewBlockView(0)
-	view2.Unmarshal(buf)
+	err = view2.Unmarshal(buf)
+	assert.Nil(t, err)
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
@@ -158,7 +160,8 @@ func TestMarshal3(t *testing.T) {
 	buf, err := view.Marshal()
 	assert.Nil(t, err)
 	view2 := NewBlockView(0)
-	view2.Unmarshal(buf)
+	err = view2.Unmarshal(buf)
+	assert.Nil(t, err)
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
