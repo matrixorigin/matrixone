@@ -16,6 +16,7 @@ package add
 /*
 #ifdef __ARM_NEON
 
+
 #include "arm_neon.h"
 typedef signed char GoInt8;
 typedef unsigned char GoUint8;
@@ -32,34 +33,42 @@ typedef double GoFloat64;
 
 void int8AddArm(GoInt8* x, GoInt8* y, GoInt8* r, int len) {
 	int i = 0;
+	int8x16_t re;
 	for (; i <= len - 16; i += 16)
 	{
-		*(int8x16_t*)(r + i) = vaddq_s8(*(int8x16_t*)(x + i), *(int8x16_t*)(y + i));
+		re = vaddq_s8(*(int8x16_t*)(x + i), *(int8x16_t*)(y + i));
+		vst1q_s8((int8_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *(y + i);
 }
 
 void int16AddArm(GoInt16* x, GoInt16* y, GoInt16* r, int len) {
 	int i = 0;
+	int16x8_t re;
 	for (; i <= len - 8; i += 8) {
-		*(int16x8_t*)(r + i) = vaddq_s16(*(int16x8_t*)(x + i), *(int16x8_t*)(y + i));
+		re = vaddq_s16(*(int16x8_t*)(x + i), *(int16x8_t*)(y + i));
+		vst1q_s16((int16_t*)(r + i), re);
 	}
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *(y + i);
 }
 
 void int32AddArm(GoInt32* x, GoInt32* y, GoInt32* r, int len) {
 	int i = 0;
+	int32x4_t re;
 	for (; i <= len - 4; i += 4)
 	{
-		*(int32x4_t*)(r + i) = vaddq_s32(*(int32x4_t*)(x + i), *(int32x4_t*)(y + i));
+		re = vaddq_s32(*(int32x4_t*)(x + i), *(int32x4_t*)(y + i));
+		vst1q_s32((int32_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *(y + i);
 }
 
 void int64AddArm(GoInt64* x, GoInt64* y, GoInt64* r, int len) {
 	int i = 0;
+	int64x2_t re;
 	for (; i <= len - 2; i += 2) {
-		*(int64x2_t*)(r + i) = vaddq_s64(*(int64x2_t*)(x + i), *(int64x2_t*)(y + i));
+		re = vaddq_s64(*(int64x2_t*)(x + i), *(int64x2_t*)(y + i));
+		vst1q_s64((int64_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *(y + i);
 }
@@ -67,24 +76,30 @@ void int64AddArm(GoInt64* x, GoInt64* y, GoInt64* r, int len) {
 void uint8AddArm(GoUint8* x, GoUint8* y, GoUint8* r, int len)
 {
 	int i = 0;
+	uint8x16_t re;
 	for (; i <= len - 16; i += 16) {
-		*(uint8x16_t*)(r + i) = vaddq_u8(*(uint8x16_t*)(x + i), *(uint8x16_t*)(y + i));
+		re = vaddq_u8(*(uint8x16_t*)(x + i), *(uint8x16_t*)(y + i));
+		vst1q_u8((uint8_t*)(r + i), re);
 	}
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *(y + i);
 }
 
 void uint16AddArm(GoUint16* x, GoUint16* y, GoUint16* r, int len) {
 	int i = 0;
+	uint16x8_t re;
 	for (; i <= len - 8; i += 8) {
-		*(uint16x8_t*)(r + i) = vaddq_u16(*(uint16x8_t*)(x + i), *(uint16x8_t*)(y + i));
+		re = vaddq_u16(*(uint16x8_t*)(x + i), *(uint16x8_t*)(y + i));
+		vst1q_u16((uint16_t*)(r + i), re);
 	}
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *(y + i);
 }
 
 void uint32AddArm(GoUint32* x, GoUint32* y, GoUint32* r, int len) {
 	int i = 0;
+	uint32x4_t re;
 	for (; i <= len - 4; i += 4) {
-		*(uint32x4_t*)(r + i) = vaddq_u32(*(uint32x4_t*)(x + i), *(uint32x4_t*)(y + i));
+		re = vaddq_u32(*(uint32x4_t*)(x + i), *(uint32x4_t*)(y + i));
+		vst1q_u32((uint32_t*)(r + i), re);
 	}
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *(y + i);
 
@@ -92,16 +107,20 @@ void uint32AddArm(GoUint32* x, GoUint32* y, GoUint32* r, int len) {
 
 void uint64AddArm(GoUint64* x, GoUint64* y, GoUint64* r, int len) {
 	int i = 0;
+	uint64x2_t re;
 	for (; i <= len - 2; i += 2) {
-		*(uint64x2_t*)(r + i) = vaddq_u64(*(uint64x2_t*)(x + i), *(uint64x2_t*)(y + i));
+		re = vaddq_u64(*(uint64x2_t*)(x + i), *(uint64x2_t*)(y + i));
+		vst1q_u64((uint64_t*)(r + i), re);
 	}
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *(y + i);
 }
 
 void float32AddArm(GoFloat32* x, GoFloat32* y, GoFloat32* r, int len) {
 	int i = 0;
+	float32x4_t re;
 	for (; i <= len - 4; i += 4) {
-		*(float32x4_t*)(r + i) = vaddq_f32(*(float32x4_t*)(x + i), *(float32x4_t*)(y + i));
+		re = vaddq_f32(*(float32x4_t*)(x + i), *(float32x4_t*)(y + i));
+		vst1q_f32((float32_t*)(r + i), re);
 	}
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *(y + i);
 }
@@ -113,80 +132,90 @@ void float64AddArm(GoFloat64* x, GoFloat64* y, GoFloat64* r, int len) {
 
 void int8AddScalarArm(GoInt8* x, GoInt8* y, GoInt8* r, int len) {
 	int i = 0;
-	int8x16_t dup = vdupq_n_s8(*(int8_t*)y);
+	int8x16_t dup = vdupq_n_s8(*(int8_t*)y),re;
 	for (; i <= len - 16; i += 16) {
-		*(int8x16_t*)(r + i) = vaddq_s8(*(int8x16_t*)(x + i), dup);
+		re = vaddq_s8(*(int8x16_t*)(x + i), dup);
+		vst1q_s8((int8_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void int16AddScalarArm(GoInt16* x, GoInt16* y, GoInt16* r, int len) {
-	int i = 0; int16x8_t dup = vdupq_n_s16(*(int16_t*)y);
+	int i = 0; 
+	int16x8_t dup = vdupq_n_s16(*(int16_t*)y),re;
 	for (; i <= len - 8; i += 8) {
-		*(int16x8_t*)(r + i) = vaddq_s16(*(int16x8_t*)(x + i), dup);
+		re = vaddq_s16(*(int16x8_t*)(x + i), dup);
+		vst1q_s16((int16_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void int32AddScalarArm(GoInt32* x, GoInt32* y, GoInt32* r, int len) {
 	int i = 0;
-	int32x4_t dup = vdupq_n_s32(*(int32_t*)y);
+	int32x4_t dup = vdupq_n_s32(*(int32_t*)y),re;
 	for (; i <= len - 4; i += 4) {
-		*(int32x4_t*)(r + i) = vaddq_s32(*(int32x4_t*)(x + i), dup);
+		re = vaddq_s32(*(int32x4_t*)(x + i), dup);
+		vst1q_s32((int32_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void int64AddScalarArm(GoInt64* x, GoInt64* y, GoInt64* r, int len) {
 	int i = 0;
-	int64x2_t dup = vdupq_n_s64(*(int64_t*)y);
+	int64x2_t dup = vdupq_n_s64(*(int64_t*)y),re;
 	for (; i <= len - 2; i += 2) {
-		*(int64x2_t*)(r + i) = vaddq_s64(*(int64x2_t*)(x + i), dup);
+		re = vaddq_s64(*(int64x2_t*)(x + i), dup);
+		vst1q_s64((int64_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void uint8AddScalarArm(GoUint8* x, GoUint8* y, GoUint8* r, int len) {
 	int i = 0;
-	uint8x16_t dup = vdupq_n_u8(*(uint8_t*)y);
+	uint8x16_t dup = vdupq_n_u8(*(uint8_t*)y),re;
 	for (; i <= len - 16; i += 16) {
-		*(uint8x16_t*)(r + i) = vaddq_u8(*(uint8x16_t*)(x + i), dup);
+		re = vaddq_u8(*(uint8x16_t*)(x + i), dup);
+		vst1q_u8((uint8_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void uint16AddScalarArm(GoUint16* x, GoUint16* y, GoUint16* r, int len) {
 	int i = 0;
-	uint16x8_t dup = vdupq_n_u16(*(uint16_t*)y);
+	uint16x8_t dup = vdupq_n_u16(*(uint16_t*)y),re;
 	for (; i <= len - 8; i += 8) {
-		*(uint16x8_t*)(r + i) = vaddq_u16(*(uint16x8_t*)(x + i), dup);
+		re = vaddq_u16(*(uint16x8_t*)(x + i), dup);
+		vst1q_u16((uint16_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void uint32AddScalarArm(GoUint32* x, GoUint32* y, GoUint32* r, int len) {
 	int i = 0;
-	uint32x4_t dup = vdupq_n_u32(*(uint32_t*)y);
+	uint32x4_t dup = vdupq_n_u32(*(uint32_t*)y),re;
 	for (; i <= len - 4; i += 4) {
-		*(uint32x4_t*)(r + i) = vaddq_u32(*(uint32x4_t*)(x + i), dup);
+		re = vaddq_u32(*(uint32x4_t*)(x + i), dup);
+		vst1q_u32((uint32_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void uint64AddScalarArm(GoUint64* x, GoUint64* y, GoUint64* r, int len) {
 	int i = 0;
-	uint64x2_t dup = vdupq_n_u64(*(uint64_t*)y);
+	uint64x2_t dup = vdupq_n_u64(*(uint64_t*)y),re;
 	for (; i <= len - 2; i += 2) {
-		*(uint64x2_t*)(r + i) = vaddq_u64(*(uint64x2_t*)(x + i), dup);
+		re = vaddq_u64(*(uint64x2_t*)(x + i), dup);
+		vst1q_u64((uint64_t*)(r + i), re);
 	}
 	for (; i < len; ++i) *(r + i) = *(x + i) + *y;
 }
 
 void float32AddScalarArm(GoFloat32* x, GoFloat32* y, GoFloat32* r, int len) {
 	int i = 0;
-	float32x4_t dup = vdupq_n_f32(*(float32_t*)y);
+	float32x4_t dup = vdupq_n_f32(*(float32_t*)y),re;
 	for (; i <= len - 4; i += 4) {
-		*(float32x4_t*)(r + i) = vaddq_f32(*(float32x4_t*)(x + i), dup);
+		re= vaddq_f32(*(float32x4_t*)(x + i), dup);
+		vst1q_f32((float32_t*)(r + i), re);
 	}
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *y;
 }
