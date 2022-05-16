@@ -253,7 +253,7 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 
 	{
 		for _, attr := range column.Attributes {
-			if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is == false {
+			if nullAttr, ok := attr.(*tree.AttributeNull); ok && !nullAttr.Is {
 				allowNull = false
 				break
 			}

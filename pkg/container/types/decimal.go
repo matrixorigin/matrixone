@@ -480,7 +480,7 @@ func (a Decimal128) Decimal128ToString(scale int32) []byte {
 	result := ""
 	neg := Decimal128IsNegative(a)
 	notZero := Decimal128IsNotZero(a)
-	if notZero == false {
+	if !notZero {
 		return []byte("0")
 	}
 	tmp := a
