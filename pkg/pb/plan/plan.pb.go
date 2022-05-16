@@ -20,61 +20,52 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type StatementType int32
+type TransationCompletionType int32
 
 const (
-	StatementType_UNKNOW StatementType = 0
-	StatementType_SELECT StatementType = 1
-	StatementType_INSERT StatementType = 2
-	StatementType_DELETE StatementType = 3
-	StatementType_UPDATE StatementType = 4
-	StatementType_MERGE  StatementType = 5
+	TransationCompletionType_CHAIN    TransationCompletionType = 0
+	TransationCompletionType_NO_CHAIN TransationCompletionType = 1
+	TransationCompletionType_RELEASE  TransationCompletionType = 2
 )
 
-// Enum value maps for StatementType.
+// Enum value maps for TransationCompletionType.
 var (
-	StatementType_name = map[int32]string{
-		0: "UNKNOW",
-		1: "SELECT",
-		2: "INSERT",
-		3: "DELETE",
-		4: "UPDATE",
-		5: "MERGE",
+	TransationCompletionType_name = map[int32]string{
+		0: "CHAIN",
+		1: "NO_CHAIN",
+		2: "RELEASE",
 	}
-	StatementType_value = map[string]int32{
-		"UNKNOW": 0,
-		"SELECT": 1,
-		"INSERT": 2,
-		"DELETE": 3,
-		"UPDATE": 4,
-		"MERGE":  5,
+	TransationCompletionType_value = map[string]int32{
+		"CHAIN":    0,
+		"NO_CHAIN": 1,
+		"RELEASE":  2,
 	}
 )
 
-func (x StatementType) Enum() *StatementType {
-	p := new(StatementType)
+func (x TransationCompletionType) Enum() *TransationCompletionType {
+	p := new(TransationCompletionType)
 	*p = x
 	return p
 }
 
-func (x StatementType) String() string {
+func (x TransationCompletionType) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (StatementType) Descriptor() protoreflect.EnumDescriptor {
+func (TransationCompletionType) Descriptor() protoreflect.EnumDescriptor {
 	return file_plan_proto_enumTypes[0].Descriptor()
 }
 
-func (StatementType) Type() protoreflect.EnumType {
+func (TransationCompletionType) Type() protoreflect.EnumType {
 	return &file_plan_proto_enumTypes[0]
 }
 
-func (x StatementType) Number() protoreflect.EnumNumber {
+func (x TransationCompletionType) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use StatementType.Descriptor instead.
-func (StatementType) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use TransationCompletionType.Descriptor instead.
+func (TransationCompletionType) EnumDescriptor() ([]byte, []int) {
 	return file_plan_proto_rawDescGZIP(), []int{0}
 }
 
@@ -691,6 +682,104 @@ func (x Query_StatementType) Number() protoreflect.EnumNumber {
 // Deprecated: Use Query_StatementType.Descriptor instead.
 func (Query_StatementType) EnumDescriptor() ([]byte, []int) {
 	return file_plan_proto_rawDescGZIP(), []int{20, 0}
+}
+
+type TransationControl_TclType int32
+
+const (
+	TransationControl_BEGIN    TransationControl_TclType = 0
+	TransationControl_COMMIT   TransationControl_TclType = 1
+	TransationControl_ROLLBACK TransationControl_TclType = 2
+)
+
+// Enum value maps for TransationControl_TclType.
+var (
+	TransationControl_TclType_name = map[int32]string{
+		0: "BEGIN",
+		1: "COMMIT",
+		2: "ROLLBACK",
+	}
+	TransationControl_TclType_value = map[string]int32{
+		"BEGIN":    0,
+		"COMMIT":   1,
+		"ROLLBACK": 2,
+	}
+)
+
+func (x TransationControl_TclType) Enum() *TransationControl_TclType {
+	p := new(TransationControl_TclType)
+	*p = x
+	return p
+}
+
+func (x TransationControl_TclType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransationControl_TclType) Descriptor() protoreflect.EnumDescriptor {
+	return file_plan_proto_enumTypes[8].Descriptor()
+}
+
+func (TransationControl_TclType) Type() protoreflect.EnumType {
+	return &file_plan_proto_enumTypes[8]
+}
+
+func (x TransationControl_TclType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransationControl_TclType.Descriptor instead.
+func (TransationControl_TclType) EnumDescriptor() ([]byte, []int) {
+	return file_plan_proto_rawDescGZIP(), []int{21, 0}
+}
+
+type TransationBegin_TransationMode int32
+
+const (
+	TransationBegin_NONE       TransationBegin_TransationMode = 0
+	TransationBegin_READ_ONLY  TransationBegin_TransationMode = 1
+	TransationBegin_READ_WRITE TransationBegin_TransationMode = 2
+)
+
+// Enum value maps for TransationBegin_TransationMode.
+var (
+	TransationBegin_TransationMode_name = map[int32]string{
+		0: "NONE",
+		1: "READ_ONLY",
+		2: "READ_WRITE",
+	}
+	TransationBegin_TransationMode_value = map[string]int32{
+		"NONE":       0,
+		"READ_ONLY":  1,
+		"READ_WRITE": 2,
+	}
+)
+
+func (x TransationBegin_TransationMode) Enum() *TransationBegin_TransationMode {
+	p := new(TransationBegin_TransationMode)
+	*p = x
+	return p
+}
+
+func (x TransationBegin_TransationMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TransationBegin_TransationMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_plan_proto_enumTypes[9].Descriptor()
+}
+
+func (TransationBegin_TransationMode) Type() protoreflect.EnumType {
+	return &file_plan_proto_enumTypes[9]
+}
+
+func (x TransationBegin_TransationMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TransationBegin_TransationMode.Descriptor instead.
+func (TransationBegin_TransationMode) EnumDescriptor() ([]byte, []int) {
+	return file_plan_proto_rawDescGZIP(), []int{22, 0}
 }
 
 type Type struct {
@@ -2362,6 +2451,330 @@ func (x *Query) GetParams() []*Expr {
 	return nil
 }
 
+type TransationControl struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	//TransationControl type
+	TclType TransationControl_TclType `protobuf:"varint,1,opt,name=tcl_type,json=tclType,proto3,enum=TransationControl_TclType" json:"tcl_type,omitempty"`
+	// Types that are assignable to Action:
+	//	*TransationControl_Begin
+	//	*TransationControl_Commit
+	//	*TransationControl_Rollback
+	Action isTransationControl_Action `protobuf_oneof:"action"`
+}
+
+func (x *TransationControl) Reset() {
+	*x = TransationControl{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_plan_proto_msgTypes[21]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *TransationControl) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransationControl) ProtoMessage() {}
+
+func (x *TransationControl) ProtoReflect() protoreflect.Message {
+	mi := &file_plan_proto_msgTypes[21]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransationControl.ProtoReflect.Descriptor instead.
+func (*TransationControl) Descriptor() ([]byte, []int) {
+	return file_plan_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *TransationControl) GetTclType() TransationControl_TclType {
+	if x != nil {
+		return x.TclType
+	}
+	return TransationControl_BEGIN
+}
+
+func (m *TransationControl) GetAction() isTransationControl_Action {
+	if m != nil {
+		return m.Action
+	}
+	return nil
+}
+
+func (x *TransationControl) GetBegin() *TransationBegin {
+	if x, ok := x.GetAction().(*TransationControl_Begin); ok {
+		return x.Begin
+	}
+	return nil
+}
+
+func (x *TransationControl) GetCommit() *TransationCommit {
+	if x, ok := x.GetAction().(*TransationControl_Commit); ok {
+		return x.Commit
+	}
+	return nil
+}
+
+func (x *TransationControl) GetRollback() *TransationRollback {
+	if x, ok := x.GetAction().(*TransationControl_Rollback); ok {
+		return x.Rollback
+	}
+	return nil
+}
+
+type isTransationControl_Action interface {
+	isTransationControl_Action()
+}
+
+type TransationControl_Begin struct {
+	Begin *TransationBegin `protobuf:"bytes,2,opt,name=begin,proto3,oneof"`
+}
+
+type TransationControl_Commit struct {
+	Commit *TransationCommit `protobuf:"bytes,3,opt,name=commit,proto3,oneof"`
+}
+
+type TransationControl_Rollback struct {
+	Rollback *TransationRollback `protobuf:"bytes,4,opt,name=rollback,proto3,oneof"`
+}
+
+func (*TransationControl_Begin) isTransationControl_Action() {}
+
+func (*TransationControl_Commit) isTransationControl_Action() {}
+
+func (*TransationControl_Rollback) isTransationControl_Action() {}
+
+type TransationBegin struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Mode TransationBegin_TransationMode `protobuf:"varint,1,opt,name=mode,proto3,enum=TransationBegin_TransationMode" json:"mode,omitempty"`
+}
+
+func (x *TransationBegin) Reset() {
+	*x = TransationBegin{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_plan_proto_msgTypes[22]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *TransationBegin) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransationBegin) ProtoMessage() {}
+
+func (x *TransationBegin) ProtoReflect() protoreflect.Message {
+	mi := &file_plan_proto_msgTypes[22]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransationBegin.ProtoReflect.Descriptor instead.
+func (*TransationBegin) Descriptor() ([]byte, []int) {
+	return file_plan_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *TransationBegin) GetMode() TransationBegin_TransationMode {
+	if x != nil {
+		return x.Mode
+	}
+	return TransationBegin_NONE
+}
+
+type TransationCommit struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	CompletionType TransationCompletionType `protobuf:"varint,1,opt,name=completion_type,json=completionType,proto3,enum=TransationCompletionType" json:"completion_type,omitempty"`
+}
+
+func (x *TransationCommit) Reset() {
+	*x = TransationCommit{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_plan_proto_msgTypes[23]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *TransationCommit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransationCommit) ProtoMessage() {}
+
+func (x *TransationCommit) ProtoReflect() protoreflect.Message {
+	mi := &file_plan_proto_msgTypes[23]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransationCommit.ProtoReflect.Descriptor instead.
+func (*TransationCommit) Descriptor() ([]byte, []int) {
+	return file_plan_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *TransationCommit) GetCompletionType() TransationCompletionType {
+	if x != nil {
+		return x.CompletionType
+	}
+	return TransationCompletionType_CHAIN
+}
+
+type TransationRollback struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	CompletionType TransationCompletionType `protobuf:"varint,1,opt,name=completion_type,json=completionType,proto3,enum=TransationCompletionType" json:"completion_type,omitempty"`
+}
+
+func (x *TransationRollback) Reset() {
+	*x = TransationRollback{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_plan_proto_msgTypes[24]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *TransationRollback) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TransationRollback) ProtoMessage() {}
+
+func (x *TransationRollback) ProtoReflect() protoreflect.Message {
+	mi := &file_plan_proto_msgTypes[24]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TransationRollback.ProtoReflect.Descriptor instead.
+func (*TransationRollback) Descriptor() ([]byte, []int) {
+	return file_plan_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *TransationRollback) GetCompletionType() TransationCompletionType {
+	if x != nil {
+		return x.CompletionType
+	}
+	return TransationCompletionType_CHAIN
+}
+
+type Plan struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// Types that are assignable to Plan:
+	//	*Plan_Query
+	//	*Plan_Tcl
+	Plan isPlan_Plan `protobuf_oneof:"plan"`
+}
+
+func (x *Plan) Reset() {
+	*x = Plan{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_plan_proto_msgTypes[25]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *Plan) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Plan) ProtoMessage() {}
+
+func (x *Plan) ProtoReflect() protoreflect.Message {
+	mi := &file_plan_proto_msgTypes[25]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Plan.ProtoReflect.Descriptor instead.
+func (*Plan) Descriptor() ([]byte, []int) {
+	return file_plan_proto_rawDescGZIP(), []int{25}
+}
+
+func (m *Plan) GetPlan() isPlan_Plan {
+	if m != nil {
+		return m.Plan
+	}
+	return nil
+}
+
+func (x *Plan) GetQuery() *Query {
+	if x, ok := x.GetPlan().(*Plan_Query); ok {
+		return x.Query
+	}
+	return nil
+}
+
+func (x *Plan) GetTcl() *TransationControl {
+	if x, ok := x.GetPlan().(*Plan_Tcl); ok {
+		return x.Tcl
+	}
+	return nil
+}
+
+type isPlan_Plan interface {
+	isPlan_Plan()
+}
+
+type Plan_Query struct {
+	Query *Query `protobuf:"bytes,1,opt,name=query,proto3,oneof"`
+}
+
+type Plan_Tcl struct {
+	Tcl *TransationControl `protobuf:"bytes,2,opt,name=tcl,proto3,oneof"`
+}
+
+func (*Plan_Query) isPlan_Plan() {}
+
+func (*Plan_Tcl) isPlan_Plan() {}
+
 var File_plan_proto protoreflect.FileDescriptor
 
 var file_plan_proto_rawDesc = []byte{
@@ -2637,13 +3050,54 @@ var file_plan_proto_rawDesc = []byte{
 	0x01, 0x12, 0x0a, 0x0a, 0x06, 0x49, 0x4e, 0x53, 0x45, 0x52, 0x54, 0x10, 0x02, 0x12, 0x0a, 0x0a,
 	0x06, 0x44, 0x45, 0x4c, 0x45, 0x54, 0x45, 0x10, 0x03, 0x12, 0x0a, 0x0a, 0x06, 0x55, 0x50, 0x44,
 	0x41, 0x54, 0x45, 0x10, 0x04, 0x12, 0x09, 0x0a, 0x05, 0x4d, 0x45, 0x52, 0x47, 0x45, 0x10, 0x05,
-	0x2a, 0x56, 0x0a, 0x0d, 0x53, 0x74, 0x61, 0x74, 0x65, 0x6d, 0x65, 0x6e, 0x74, 0x54, 0x79, 0x70,
-	0x65, 0x12, 0x0a, 0x0a, 0x06, 0x55, 0x4e, 0x4b, 0x4e, 0x4f, 0x57, 0x10, 0x00, 0x12, 0x0a, 0x0a,
-	0x06, 0x53, 0x45, 0x4c, 0x45, 0x43, 0x54, 0x10, 0x01, 0x12, 0x0a, 0x0a, 0x06, 0x49, 0x4e, 0x53,
-	0x45, 0x52, 0x54, 0x10, 0x02, 0x12, 0x0a, 0x0a, 0x06, 0x44, 0x45, 0x4c, 0x45, 0x54, 0x45, 0x10,
-	0x03, 0x12, 0x0a, 0x0a, 0x06, 0x55, 0x50, 0x44, 0x41, 0x54, 0x45, 0x10, 0x04, 0x12, 0x09, 0x0a,
-	0x05, 0x4d, 0x45, 0x52, 0x47, 0x45, 0x10, 0x05, 0x42, 0x07, 0x5a, 0x05, 0x2f, 0x70, 0x6c, 0x61,
-	0x6e, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x22, 0x8e, 0x02, 0x0a, 0x11, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43,
+	0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x12, 0x35, 0x0a, 0x08, 0x74, 0x63, 0x6c, 0x5f, 0x74, 0x79,
+	0x70, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x1a, 0x2e, 0x54, 0x72, 0x61, 0x6e, 0x73,
+	0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c, 0x2e, 0x54, 0x63, 0x6c,
+	0x54, 0x79, 0x70, 0x65, 0x52, 0x07, 0x74, 0x63, 0x6c, 0x54, 0x79, 0x70, 0x65, 0x12, 0x28, 0x0a,
+	0x05, 0x62, 0x65, 0x67, 0x69, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x10, 0x2e, 0x54,
+	0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x42, 0x65, 0x67, 0x69, 0x6e, 0x48, 0x00,
+	0x52, 0x05, 0x62, 0x65, 0x67, 0x69, 0x6e, 0x12, 0x2b, 0x0a, 0x06, 0x63, 0x6f, 0x6d, 0x6d, 0x69,
+	0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x11, 0x2e, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61,
+	0x74, 0x69, 0x6f, 0x6e, 0x43, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x48, 0x00, 0x52, 0x06, 0x63, 0x6f,
+	0x6d, 0x6d, 0x69, 0x74, 0x12, 0x31, 0x0a, 0x08, 0x72, 0x6f, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b,
+	0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x13, 0x2e, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74,
+	0x69, 0x6f, 0x6e, 0x52, 0x6f, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x48, 0x00, 0x52, 0x08, 0x72,
+	0x6f, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x22, 0x2e, 0x0a, 0x07, 0x54, 0x63, 0x6c, 0x54, 0x79,
+	0x70, 0x65, 0x12, 0x09, 0x0a, 0x05, 0x42, 0x45, 0x47, 0x49, 0x4e, 0x10, 0x00, 0x12, 0x0a, 0x0a,
+	0x06, 0x43, 0x4f, 0x4d, 0x4d, 0x49, 0x54, 0x10, 0x01, 0x12, 0x0c, 0x0a, 0x08, 0x52, 0x4f, 0x4c,
+	0x4c, 0x42, 0x41, 0x43, 0x4b, 0x10, 0x02, 0x42, 0x08, 0x0a, 0x06, 0x61, 0x63, 0x74, 0x69, 0x6f,
+	0x6e, 0x22, 0x81, 0x01, 0x0a, 0x0f, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e,
+	0x42, 0x65, 0x67, 0x69, 0x6e, 0x12, 0x33, 0x0a, 0x04, 0x6d, 0x6f, 0x64, 0x65, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x0e, 0x32, 0x1f, 0x2e, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e,
+	0x42, 0x65, 0x67, 0x69, 0x6e, 0x2e, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e,
+	0x4d, 0x6f, 0x64, 0x65, 0x52, 0x04, 0x6d, 0x6f, 0x64, 0x65, 0x22, 0x39, 0x0a, 0x0e, 0x54, 0x72,
+	0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x4d, 0x6f, 0x64, 0x65, 0x12, 0x08, 0x0a, 0x04,
+	0x4e, 0x4f, 0x4e, 0x45, 0x10, 0x00, 0x12, 0x0d, 0x0a, 0x09, 0x52, 0x45, 0x41, 0x44, 0x5f, 0x4f,
+	0x4e, 0x4c, 0x59, 0x10, 0x01, 0x12, 0x0e, 0x0a, 0x0a, 0x52, 0x45, 0x41, 0x44, 0x5f, 0x57, 0x52,
+	0x49, 0x54, 0x45, 0x10, 0x02, 0x22, 0x56, 0x0a, 0x10, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74,
+	0x69, 0x6f, 0x6e, 0x43, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x12, 0x42, 0x0a, 0x0f, 0x63, 0x6f, 0x6d,
+	0x70, 0x6c, 0x65, 0x74, 0x69, 0x6f, 0x6e, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x0e, 0x32, 0x19, 0x2e, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43,
+	0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x69, 0x6f, 0x6e, 0x54, 0x79, 0x70, 0x65, 0x52, 0x0e, 0x63,
+	0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x69, 0x6f, 0x6e, 0x54, 0x79, 0x70, 0x65, 0x22, 0x58, 0x0a,
+	0x12, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x52, 0x6f, 0x6c, 0x6c, 0x62,
+	0x61, 0x63, 0x6b, 0x12, 0x42, 0x0a, 0x0f, 0x63, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x69, 0x6f,
+	0x6e, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x19, 0x2e, 0x54,
+	0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74,
+	0x69, 0x6f, 0x6e, 0x54, 0x79, 0x70, 0x65, 0x52, 0x0e, 0x63, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74,
+	0x69, 0x6f, 0x6e, 0x54, 0x79, 0x70, 0x65, 0x22, 0x56, 0x0a, 0x04, 0x50, 0x6c, 0x61, 0x6e, 0x12,
+	0x1e, 0x0a, 0x05, 0x71, 0x75, 0x65, 0x72, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x06,
+	0x2e, 0x51, 0x75, 0x65, 0x72, 0x79, 0x48, 0x00, 0x52, 0x05, 0x71, 0x75, 0x65, 0x72, 0x79, 0x12,
+	0x26, 0x0a, 0x03, 0x74, 0x63, 0x6c, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x12, 0x2e, 0x54,
+	0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43, 0x6f, 0x6e, 0x74, 0x72, 0x6f, 0x6c,
+	0x48, 0x00, 0x52, 0x03, 0x74, 0x63, 0x6c, 0x42, 0x06, 0x0a, 0x04, 0x70, 0x6c, 0x61, 0x6e, 0x2a,
+	0x40, 0x0a, 0x18, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43, 0x6f, 0x6d,
+	0x70, 0x6c, 0x65, 0x74, 0x69, 0x6f, 0x6e, 0x54, 0x79, 0x70, 0x65, 0x12, 0x09, 0x0a, 0x05, 0x43,
+	0x48, 0x41, 0x49, 0x4e, 0x10, 0x00, 0x12, 0x0c, 0x0a, 0x08, 0x4e, 0x4f, 0x5f, 0x43, 0x48, 0x41,
+	0x49, 0x4e, 0x10, 0x01, 0x12, 0x0b, 0x0a, 0x07, 0x52, 0x45, 0x4c, 0x45, 0x41, 0x53, 0x45, 0x10,
+	0x02, 0x42, 0x07, 0x5a, 0x05, 0x2f, 0x70, 0x6c, 0x61, 0x6e, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74,
+	0x6f, 0x33,
 }
 
 var (
@@ -2658,87 +3112,103 @@ func file_plan_proto_rawDescGZIP() []byte {
 	return file_plan_proto_rawDescData
 }
 
-var file_plan_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_plan_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_plan_proto_enumTypes = make([]protoimpl.EnumInfo, 10)
+var file_plan_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_plan_proto_goTypes = []interface{}{
-	(StatementType)(0),           // 0: StatementType
-	(Type_TypeId)(0),             // 1: Type.TypeId
-	(Function_FuncFlag)(0),       // 2: Function.FuncFlag
-	(OrderBySpec_OrderByFlag)(0), // 3: OrderBySpec.OrderByFlag
-	(Node_NodeType)(0),           // 4: Node.NodeType
-	(Node_JoinFlag)(0),           // 5: Node.JoinFlag
-	(Node_AggMode)(0),            // 6: Node.AggMode
-	(Query_StatementType)(0),     // 7: Query.StatementType
-	(*Type)(nil),                 // 8: Type
-	(*Const)(nil),                // 9: Const
-	(*ParamRef)(nil),             // 10: ParamRef
-	(*VarRef)(nil),               // 11: VarRef
-	(*ColRef)(nil),               // 12: ColRef
-	(*CorrColRef)(nil),           // 13: CorrColRef
-	(*ExprList)(nil),             // 14: ExprList
-	(*SubQuery)(nil),             // 15: SubQuery
-	(*ObjectRef)(nil),            // 16: ObjectRef
-	(*Function)(nil),             // 17: Function
-	(*Expr)(nil),                 // 18: Expr
-	(*ColDef)(nil),               // 19: ColDef
-	(*TableDef)(nil),             // 20: TableDef
-	(*Cost)(nil),                 // 21: Cost
-	(*ColData)(nil),              // 22: ColData
-	(*RowsetData)(nil),           // 23: RowsetData
-	(*OrderBySpec)(nil),          // 24: OrderBySpec
-	(*WindowSpec)(nil),           // 25: WindowSpec
-	(*UpdateList)(nil),           // 26: UpdateList
-	(*Node)(nil),                 // 27: Node
-	(*Query)(nil),                // 28: Query
+	(TransationCompletionType)(0),       // 0: TransationCompletionType
+	(Type_TypeId)(0),                    // 1: Type.TypeId
+	(Function_FuncFlag)(0),              // 2: Function.FuncFlag
+	(OrderBySpec_OrderByFlag)(0),        // 3: OrderBySpec.OrderByFlag
+	(Node_NodeType)(0),                  // 4: Node.NodeType
+	(Node_JoinFlag)(0),                  // 5: Node.JoinFlag
+	(Node_AggMode)(0),                   // 6: Node.AggMode
+	(Query_StatementType)(0),            // 7: Query.StatementType
+	(TransationControl_TclType)(0),      // 8: TransationControl.TclType
+	(TransationBegin_TransationMode)(0), // 9: TransationBegin.TransationMode
+	(*Type)(nil),                        // 10: Type
+	(*Const)(nil),                       // 11: Const
+	(*ParamRef)(nil),                    // 12: ParamRef
+	(*VarRef)(nil),                      // 13: VarRef
+	(*ColRef)(nil),                      // 14: ColRef
+	(*CorrColRef)(nil),                  // 15: CorrColRef
+	(*ExprList)(nil),                    // 16: ExprList
+	(*SubQuery)(nil),                    // 17: SubQuery
+	(*ObjectRef)(nil),                   // 18: ObjectRef
+	(*Function)(nil),                    // 19: Function
+	(*Expr)(nil),                        // 20: Expr
+	(*ColDef)(nil),                      // 21: ColDef
+	(*TableDef)(nil),                    // 22: TableDef
+	(*Cost)(nil),                        // 23: Cost
+	(*ColData)(nil),                     // 24: ColData
+	(*RowsetData)(nil),                  // 25: RowsetData
+	(*OrderBySpec)(nil),                 // 26: OrderBySpec
+	(*WindowSpec)(nil),                  // 27: WindowSpec
+	(*UpdateList)(nil),                  // 28: UpdateList
+	(*Node)(nil),                        // 29: Node
+	(*Query)(nil),                       // 30: Query
+	(*TransationControl)(nil),           // 31: TransationControl
+	(*TransationBegin)(nil),             // 32: TransationBegin
+	(*TransationCommit)(nil),            // 33: TransationCommit
+	(*TransationRollback)(nil),          // 34: TransationRollback
+	(*Plan)(nil),                        // 35: Plan
 }
 var file_plan_proto_depIdxs = []int32{
 	1,  // 0: Type.id:type_name -> Type.TypeId
-	18, // 1: ExprList.list:type_name -> Expr
-	16, // 2: Function.func:type_name -> ObjectRef
-	18, // 3: Function.args:type_name -> Expr
-	8,  // 4: Expr.typ:type_name -> Type
-	9,  // 5: Expr.c:type_name -> Const
-	10, // 6: Expr.p:type_name -> ParamRef
-	11, // 7: Expr.v:type_name -> VarRef
-	12, // 8: Expr.col:type_name -> ColRef
-	17, // 9: Expr.f:type_name -> Function
-	14, // 10: Expr.list:type_name -> ExprList
-	15, // 11: Expr.sub:type_name -> SubQuery
-	13, // 12: Expr.corr:type_name -> CorrColRef
-	8,  // 13: ColDef.typ:type_name -> Type
-	19, // 14: TableDef.cols:type_name -> ColDef
-	20, // 15: RowsetData.schema:type_name -> TableDef
-	22, // 16: RowsetData.cols:type_name -> ColData
-	18, // 17: OrderBySpec.order_by:type_name -> Expr
+	20, // 1: ExprList.list:type_name -> Expr
+	18, // 2: Function.func:type_name -> ObjectRef
+	20, // 3: Function.args:type_name -> Expr
+	10, // 4: Expr.typ:type_name -> Type
+	11, // 5: Expr.c:type_name -> Const
+	12, // 6: Expr.p:type_name -> ParamRef
+	13, // 7: Expr.v:type_name -> VarRef
+	14, // 8: Expr.col:type_name -> ColRef
+	19, // 9: Expr.f:type_name -> Function
+	16, // 10: Expr.list:type_name -> ExprList
+	17, // 11: Expr.sub:type_name -> SubQuery
+	15, // 12: Expr.corr:type_name -> CorrColRef
+	10, // 13: ColDef.typ:type_name -> Type
+	21, // 14: TableDef.cols:type_name -> ColDef
+	22, // 15: RowsetData.schema:type_name -> TableDef
+	24, // 16: RowsetData.cols:type_name -> ColData
+	20, // 17: OrderBySpec.order_by:type_name -> Expr
 	3,  // 18: OrderBySpec.order_by_flags:type_name -> OrderBySpec.OrderByFlag
-	18, // 19: WindowSpec.partition_by:type_name -> Expr
-	24, // 20: WindowSpec.odery_by:type_name -> OrderBySpec
-	18, // 21: UpdateList.columns:type_name -> Expr
-	18, // 22: UpdateList.values:type_name -> Expr
+	20, // 19: WindowSpec.partition_by:type_name -> Expr
+	26, // 20: WindowSpec.odery_by:type_name -> OrderBySpec
+	20, // 21: UpdateList.columns:type_name -> Expr
+	20, // 22: UpdateList.values:type_name -> Expr
 	4,  // 23: Node.node_type:type_name -> Node.NodeType
-	21, // 24: Node.cost:type_name -> Cost
-	18, // 25: Node.project_list:type_name -> Expr
+	23, // 24: Node.cost:type_name -> Cost
+	20, // 25: Node.project_list:type_name -> Expr
 	5,  // 26: Node.join_type:type_name -> Node.JoinFlag
-	18, // 27: Node.on_list:type_name -> Expr
-	18, // 28: Node.where_list:type_name -> Expr
-	18, // 29: Node.group_by:type_name -> Expr
-	18, // 30: Node.grouping_set:type_name -> Expr
-	24, // 31: Node.order_by:type_name -> OrderBySpec
-	26, // 32: Node.update_list:type_name -> UpdateList
-	25, // 33: Node.win_spec:type_name -> WindowSpec
-	18, // 34: Node.limit:type_name -> Expr
-	18, // 35: Node.offset:type_name -> Expr
-	20, // 36: Node.table_def:type_name -> TableDef
-	16, // 37: Node.obj_ref:type_name -> ObjectRef
-	23, // 38: Node.rowset_data:type_name -> RowsetData
+	20, // 27: Node.on_list:type_name -> Expr
+	20, // 28: Node.where_list:type_name -> Expr
+	20, // 29: Node.group_by:type_name -> Expr
+	20, // 30: Node.grouping_set:type_name -> Expr
+	26, // 31: Node.order_by:type_name -> OrderBySpec
+	28, // 32: Node.update_list:type_name -> UpdateList
+	27, // 33: Node.win_spec:type_name -> WindowSpec
+	20, // 34: Node.limit:type_name -> Expr
+	20, // 35: Node.offset:type_name -> Expr
+	22, // 36: Node.table_def:type_name -> TableDef
+	18, // 37: Node.obj_ref:type_name -> ObjectRef
+	25, // 38: Node.rowset_data:type_name -> RowsetData
 	7,  // 39: Query.stmt_type:type_name -> Query.StatementType
-	27, // 40: Query.nodes:type_name -> Node
-	18, // 41: Query.params:type_name -> Expr
-	42, // [42:42] is the sub-list for method output_type
-	42, // [42:42] is the sub-list for method input_type
-	42, // [42:42] is the sub-list for extension type_name
-	42, // [42:42] is the sub-list for extension extendee
-	0,  // [0:42] is the sub-list for field type_name
+	29, // 40: Query.nodes:type_name -> Node
+	20, // 41: Query.params:type_name -> Expr
+	8,  // 42: TransationControl.tcl_type:type_name -> TransationControl.TclType
+	32, // 43: TransationControl.begin:type_name -> TransationBegin
+	33, // 44: TransationControl.commit:type_name -> TransationCommit
+	34, // 45: TransationControl.rollback:type_name -> TransationRollback
+	9,  // 46: TransationBegin.mode:type_name -> TransationBegin.TransationMode
+	0,  // 47: TransationCommit.completion_type:type_name -> TransationCompletionType
+	0,  // 48: TransationRollback.completion_type:type_name -> TransationCompletionType
+	30, // 49: Plan.query:type_name -> Query
+	31, // 50: Plan.tcl:type_name -> TransationControl
+	51, // [51:51] is the sub-list for method output_type
+	51, // [51:51] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_plan_proto_init() }
@@ -2999,6 +3469,66 @@ func file_plan_proto_init() {
 				return nil
 			}
 		}
+		file_plan_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*TransationControl); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_plan_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*TransationBegin); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_plan_proto_msgTypes[23].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*TransationCommit); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_plan_proto_msgTypes[24].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*TransationRollback); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_plan_proto_msgTypes[25].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*Plan); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	file_plan_proto_msgTypes[1].OneofWrappers = []interface{}{
 		(*Const_Ival)(nil),
@@ -3015,13 +3545,22 @@ func file_plan_proto_init() {
 		(*Expr_Sub)(nil),
 		(*Expr_Corr)(nil),
 	}
+	file_plan_proto_msgTypes[21].OneofWrappers = []interface{}{
+		(*TransationControl_Begin)(nil),
+		(*TransationControl_Commit)(nil),
+		(*TransationControl_Rollback)(nil),
+	}
+	file_plan_proto_msgTypes[25].OneofWrappers = []interface{}{
+		(*Plan_Query)(nil),
+		(*Plan_Tcl)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_plan_proto_rawDesc,
-			NumEnums:      8,
-			NumMessages:   21,
+			NumEnums:      10,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
