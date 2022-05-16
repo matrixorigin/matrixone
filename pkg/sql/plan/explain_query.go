@@ -15,8 +15,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -30,7 +28,7 @@ func BuildExplainResultColumns() []*Attribute {
 	return []*Attribute{
 		{
 			Ref:  1,
-			Name: fmt.Sprintf("QUERY PLAN"),
+			Name: "QUERY PLAN",
 			Type: types.Type{
 				Oid:  types.T_varchar,
 				Size: 24,

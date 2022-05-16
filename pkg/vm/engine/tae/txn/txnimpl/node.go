@@ -458,7 +458,7 @@ func (n *insertNode) IsRowDeleted(row uint32) bool {
 
 func (n *insertNode) PrintDeletes() string {
 	if n.deletes == nil {
-		return fmt.Sprintf("NoDeletes")
+		return "NoDeletes"
 	}
 	return n.deletes.String()
 }

@@ -146,7 +146,7 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, selectCtx 
 		exprs := make([]*plan.Expr, columnLength)
 		if cte.Name.Cols != nil {
 			if len(preNode.ProjectList) != len(cte.Name.Cols) {
-				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("CTE table column length not match"))
+				return errors.New(errno.InvalidColumnReference, "CTE table column length not match")
 			}
 			for idx, col := range cte.Name.Cols {
 				exprs[idx] = &plan.Expr{
@@ -217,9 +217,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		switch listExpr := expr.Expr.(type) {
 		case *plan.Expr_List:
 			//select a.* from tbl a or select * from tbl,   buildExpr() will return ExprList
-			for _, col := range listExpr.List.List {
-				projectionList = append(projectionList, col)
-			}
+			projectionList = append(projectionList, listExpr.List.List...)
 		default:
 			alias := string(selectExpr.As)
 			if alias == "" {

@@ -16,7 +16,6 @@ package order
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -35,7 +34,7 @@ func String(arg interface{}, buf *bytes.Buffer) {
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("])"))
+	buf.WriteString("])")
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {

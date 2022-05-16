@@ -329,8 +329,7 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 			}
 			return io.EOF
 		} else {
-			return errors.New(fmt.Sprintf(
-				"payload mismatch: %d != %d", n, entry.GetPayloadSize()))
+			return fmt.Errorf("payload mismatch: %d != %d", n, entry.GetPayloadSize())
 		}
 	}
 	if err = r.onReplayEntry(entry, o); err != nil {

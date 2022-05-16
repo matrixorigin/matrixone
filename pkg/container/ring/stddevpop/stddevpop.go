@@ -82,7 +82,6 @@ func (v *StdDevPopRing) Free(m *mheap.Mheap) {
 		v.SumX2 = nil
 		v.NullCounts = nil
 	}
-	return
 }
 
 func (v *StdDevPopRing) Grow(m *mheap.Mheap) error {

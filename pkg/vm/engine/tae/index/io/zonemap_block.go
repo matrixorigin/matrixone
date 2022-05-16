@@ -68,7 +68,6 @@ func (n *blockZoneMapIndexNode) OnLoad() {
 	if err != nil {
 		panic(err)
 	}
-	return
 }
 
 func (n *blockZoneMapIndexNode) OnUnload() {

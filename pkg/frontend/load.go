@@ -906,7 +906,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			//wait_b := time.Now()
 			//the row does not have field
 			for k := 0; k < len(columnFLags); k++ {
-				if 0 == columnFLags[k] {
+				if columnFLags[k] == 0 {
 					vec := batchData.Vecs[k]
 					switch vec.Typ.Oid {
 					case types.T_char, types.T_varchar:
@@ -1240,7 +1240,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 		wait_b := time.Now()
 		//the row does not have field
 		for k := 0; k < len(columnFLags); k++ {
-			if 0 == columnFLags[k] {
+			if columnFLags[k] == 0 {
 				vec := batchData.Vecs[k]
 				//row
 				for i := 0; i < countOfLineArray; i++ {

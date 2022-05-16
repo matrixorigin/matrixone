@@ -19,9 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/rand"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"time"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,22 +27,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	log "github.com/sirupsen/logrus"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
 
 var FilterTypeMap = map[int]int32{
@@ -144,7 +140,7 @@ func (r *relation) update() error {
 	if err != nil {
 		return err
 	}
-	if tablets == nil || len(tablets) == 0 {
+	if len(tablets) == 0 {
 		return catalog.ErrTableNotExists
 	}
 
@@ -168,7 +164,7 @@ func (r *relation) update() error {
 			storeId := r.catalog.Driver.RaftStore().
 				GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(
-				aoedbName.IDToNameFactory.Encode(
+				adb.IDToNameFactory.Encode(
 					tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}

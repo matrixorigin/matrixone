@@ -42,7 +42,7 @@ func splitExprToAND(expr tree.Expr) []*tree.Expr {
 
 func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
 	for idx, col := range tableDef.Cols {
-		if strings.ToLower(col.Name) == strings.ToLower(name) {
+		if strings.EqualFold(col.Name, name) {
 			return int32(idx)
 		}
 	}
@@ -177,12 +177,12 @@ func getExprFromUnresolvedName(query *Query, name string, table string, selectCt
 		if table == "" {
 			arr := strings.SplitN(alias, ".", 2)
 			if len(arr) > 1 {
-				return strings.ToLower(arr[1]) == strings.ToLower(name)
+				return strings.EqualFold(arr[1], name)
 			} else {
-				return strings.ToLower(arr[0]) == strings.ToLower(name)
+				return strings.EqualFold(arr[0], name)
 			}
 		}
-		return strings.ToLower(alias) == strings.ToLower(aliasName)
+		return strings.EqualFold(alias, aliasName)
 	}
 
 	//get name from select
@@ -240,7 +240,7 @@ func getExprFromUnresolvedName(query *Query, name string, table string, selectCt
 		for _, parentId := range selectCtx.subQueryParentId {
 			preNode = getNode(parentId)
 			if preNode == nil {
-				return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("parent node id not found in subquery"))
+				return nil, errors.New(errno.InvalidColumnReference, "parent node id not found in subquery")
 			}
 			for {
 				if preNode.ProjectList != nil {
@@ -306,7 +306,7 @@ func setDerivedTableAlias(query *Query, ctx CompilerContext, selectCtx *SelectCo
 	prefix := alias + "."
 	if cols != nil {
 		if len(preNode.ProjectList) != len(cols) {
-			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Derived table column length not match"))
+			return errors.New(errno.InvalidColumnReference, "Derived table column length not match")
 		}
 		for idx, col := range cols {
 			exprs = append(exprs, &plan.Expr{
