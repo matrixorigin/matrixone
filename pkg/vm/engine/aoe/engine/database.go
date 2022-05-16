@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	log "github.com/sirupsen/logrus"
 
 	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -110,7 +109,7 @@ func (db *database) Relation(name string, _ engine.Snapshot) (engine.Relation, e
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddress
 			storeId := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ID
-			if lRelation, err := ldb.Relation(aoedbName.IDToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
+			if lRelation, err := ldb.Relation(adb.IDToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
 			logutil.Debugf("ClientAddr: %v, shardId: %d, storeId: %d", addr, tbl.ShardId, storeId)

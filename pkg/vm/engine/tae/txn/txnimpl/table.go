@@ -20,9 +20,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -53,9 +51,9 @@ type Table interface {
 	Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) error
 	RangeDelete(inode uint32, segmentId, blockId uint64, start, end uint32) error
 	Rows() uint32
-	BatchDedupLocal(data *gbat.Batch) error
-	BatchDedupLocalByCol(col *gvec.Vector) error
-	BatchDedup(col *gvec.Vector) error
+	BatchDedupLocal(data *batch.Batch) error
+	BatchDedupLocalByCol(col *vector.Vector) error
+	BatchDedup(col *vector.Vector) error
 	AddUpdateNode(txnif.UpdateNode) error
 	IsDeleted() bool
 	PreCommit() error
@@ -746,7 +744,7 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 	return
 }
 
-func (tbl *txnTable) BatchDedup(pks *gvec.Vector) (err error) {
+func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 	if err = tbl.BatchDedupLocalByCol(pks); err != nil {
 		return err
 	}
@@ -776,13 +774,13 @@ func (tbl *txnTable) BatchDedup(pks *gvec.Vector) (err error) {
 	return
 }
 
-func (tbl *txnTable) BatchDedupLocal(bat *gbat.Batch) error {
+func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) error {
 	return tbl.BatchDedupLocalByCol(bat.Vecs[tbl.GetSchema().PrimaryKey])
 }
 
-func (tbl *txnTable) BatchDedupLocalByCol(col *gvec.Vector) error {
+func (tbl *txnTable) BatchDedupLocalByCol(col *vector.Vector) error {
 	index := NewSimpleTableIndex()
-	err := index.BatchInsert(col, 0, gvec.Length(col), 0, true)
+	err := index.BatchInsert(col, 0, vector.Length(col), 0, true)
 	if err != nil {
 		return err
 	}

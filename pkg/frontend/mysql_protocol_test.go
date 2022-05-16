@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/smartystreets/goconvey/convey"
-	cvey "github.com/smartystreets/goconvey/convey"
 )
 
 type TestRoutineManager struct {
@@ -1421,7 +1420,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 }
 
 func Test_writePackets(t *testing.T) {
-	cvey.Convey("writepackets 16MB succ", t, func() {
+	convey.Convey("writepackets 16MB succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1434,9 +1433,9 @@ func Test_writePackets(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		err = proto.writePackets(make([]byte, MaxPayloadSize))
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
-	cvey.Convey("writepackets 16MB failed", t, func() {
+	convey.Convey("writepackets 16MB failed", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1459,10 +1458,10 @@ func Test_writePackets(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		err = proto.writePackets(make([]byte, MaxPayloadSize))
-		cvey.So(err, cvey.ShouldBeError)
+		convey.So(err, convey.ShouldBeError)
 	})
 
-	cvey.Convey("writepackets 16MB failed 2", t, func() {
+	convey.Convey("writepackets 16MB failed 2", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1478,12 +1477,12 @@ func Test_writePackets(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		err = proto.writePackets(make([]byte, MaxPayloadSize))
-		cvey.So(err, cvey.ShouldBeError)
+		convey.So(err, convey.ShouldBeError)
 	})
 }
 
 func Test_openpacket(t *testing.T) {
-	cvey.Convey("openpacket succ", t, func() {
+	convey.Convey("openpacket succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1498,12 +1497,12 @@ func Test_openpacket(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		err = proto.openPacket()
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 		headLen := proto.tcpConn.OutBuf().GetWriteIndex() - proto.beginWriteIndex
-		cvey.So(headLen, cvey.ShouldEqual, HeaderLengthOfTheProtocol)
+		convey.So(headLen, convey.ShouldEqual, HeaderLengthOfTheProtocol)
 	})
 
-	cvey.Convey("fillpacket succ", t, func() {
+	convey.Convey("fillpacket succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1519,15 +1518,15 @@ func Test_openpacket(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		err = proto.fillPacket(make([]byte, MaxPayloadSize, MaxPayloadSize)...)
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.closePacket(true)
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		proto.append(nil, make([]byte, 1024)...)
 	})
 
-	cvey.Convey("closepacket falied.", t, func() {
+	convey.Convey("closepacket falied.", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1542,14 +1541,14 @@ func Test_openpacket(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		err = proto.openPacket()
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		proto.beginWriteIndex = proto.tcpConn.OutBuf().GetWriteIndex()
 		err = proto.closePacket(true)
-		cvey.So(err, cvey.ShouldBeError)
+		convey.So(err, convey.ShouldBeError)
 	})
 
-	cvey.Convey("append -- data checks", t, func() {
+	convey.Convey("append -- data checks", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1631,29 +1630,29 @@ func Test_openpacket(t *testing.T) {
 			proto.setSequenceID(0)
 
 			err = proto.openRow(nil)
-			cvey.So(err, cvey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 			beginIdx := proto.beginWriteIndex
 
 			rawBuf := proto.append(nil, c.data...)
 
 			err = proto.closeRow(nil)
-			cvey.So(err, cvey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			want := mysqlPack(c.data)
 
-			cvey.So(c.len, cvey.ShouldEqual, len(want))
+			convey.So(c.len, convey.ShouldEqual, len(want))
 
 			buf := proto.tcpConn.OutBuf()
 			widx := buf.GetWriteIndex()
 			res := rawBuf[beginIdx:widx]
 
-			cvey.So(bytes.Equal(res, want), cvey.ShouldBeTrue)
+			convey.So(bytes.Equal(res, want), convey.ShouldBeTrue)
 		}
 	})
 }
 
 func Test_resultset(t *testing.T) {
-	cvey.Convey("send result set batch row succ", t, func() {
+	convey.Convey("send result set batch row succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1671,10 +1670,10 @@ func Test_resultset(t *testing.T) {
 		res := make8ColumnsResultSet()
 
 		err = proto.SendResultSetTextBatchRow(res, uint64(len(res.Data)))
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 
-	cvey.Convey("send result set batch row speedup succ", t, func() {
+	convey.Convey("send result set batch row speedup succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1692,10 +1691,10 @@ func Test_resultset(t *testing.T) {
 		res := make8ColumnsResultSet()
 
 		err = proto.SendResultSetTextBatchRowSpeedup(res, uint64(len(res.Data)))
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 
-	cvey.Convey("send result set succ", t, func() {
+	convey.Convey("send result set succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1714,15 +1713,15 @@ func Test_resultset(t *testing.T) {
 		res := make8ColumnsResultSet()
 
 		err = proto.sendResultSet(res, int(COM_QUERY), 0, 0)
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.SendResultSetTextRow(res, 0)
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
 func Test_send_packet(t *testing.T) {
-	cvey.Convey("send err packet", t, func() {
+	convey.Convey("send err packet", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1739,9 +1738,9 @@ func Test_send_packet(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		err = proto.sendErrPacket(1, "fake state", "fake error")
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
-	cvey.Convey("send eof packet", t, func() {
+	convey.Convey("send eof packet", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1758,18 +1757,18 @@ func Test_send_packet(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		err = proto.sendEOFPacket(1, 0)
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.SendEOFPacketIf(1, 0)
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.sendEOFOrOkPacket(1, 0)
-		cvey.So(err, cvey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
 func Test_analyse320resp(t *testing.T) {
-	cvey.Convey("analyse 320 resp succ", t, func() {
+	convey.Convey("analyse 320 resp succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1804,15 +1803,15 @@ func Test_analyse320resp(t *testing.T) {
 		data = append(data, 0x0)
 
 		ok, resp320, err := proto.analyseHandshakeResponse320(data)
-		cvey.So(err, cvey.ShouldBeNil)
-		cvey.So(ok, cvey.ShouldBeTrue)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
 
-		cvey.So(resp320.username, cvey.ShouldEqual, username)
-		cvey.So(bytes.Equal(resp320.authResponse, authResp), cvey.ShouldBeTrue)
-		cvey.So(resp320.database, cvey.ShouldEqual, dbName)
+		convey.So(resp320.username, convey.ShouldEqual, username)
+		convey.So(bytes.Equal(resp320.authResponse, authResp), convey.ShouldBeTrue)
+		convey.So(resp320.database, convey.ShouldEqual, dbName)
 	})
 
-	cvey.Convey("analyse 320 resp failed", t, func() {
+	convey.Convey("analyse 320 resp failed", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1844,13 +1843,13 @@ func Test_analyse320resp(t *testing.T) {
 
 		for _, c := range kases {
 			ok, _, _ := proto.analyseHandshakeResponse320(c.data)
-			cvey.So(ok, cvey.ShouldEqual, c.res)
+			convey.So(ok, convey.ShouldEqual, c.res)
 		}
 	})
 }
 
 func Test_analyse41resp(t *testing.T) {
-	cvey.Convey("analyse 41 resp succ", t, func() {
+	convey.Convey("analyse 41 resp succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1889,15 +1888,15 @@ func Test_analyse41resp(t *testing.T) {
 		data = append(data, 0x0)
 
 		ok, resp41, err := proto.analyseHandshakeResponse41(data)
-		cvey.So(err, cvey.ShouldBeNil)
-		cvey.So(ok, cvey.ShouldBeTrue)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
 
-		cvey.So(resp41.username, cvey.ShouldEqual, username)
-		cvey.So(bytes.Equal(resp41.authResponse, authResp), cvey.ShouldBeTrue)
-		cvey.So(resp41.database, cvey.ShouldEqual, dbName)
+		convey.So(resp41.username, convey.ShouldEqual, username)
+		convey.So(bytes.Equal(resp41.authResponse, authResp), convey.ShouldBeTrue)
+		convey.So(resp41.database, convey.ShouldEqual, dbName)
 	})
 
-	cvey.Convey("analyse 41 resp failed", t, func() {
+	convey.Convey("analyse 41 resp failed", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -1991,13 +1990,13 @@ func Test_analyse41resp(t *testing.T) {
 
 		for _, c := range kases {
 			ok, _, _ := proto.analyseHandshakeResponse41(c.data)
-			cvey.So(ok, cvey.ShouldEqual, c.res)
+			convey.So(ok, convey.ShouldEqual, c.res)
 		}
 	})
 }
 
 func Test_handleHandshake(t *testing.T) {
-	cvey.Convey("handleHandshake succ", t, func() {
+	convey.Convey("handleHandshake succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
@@ -2032,7 +2031,7 @@ func Test_handleHandshake_Recover(t *testing.T) {
 	ioses := mock_frontend.NewMockIOSession(ctrl)
 	ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
 
-	cvey.Convey("handleHandshake succ", t, func() {
+	convey.Convey("handleHandshake succ", t, func() {
 		var IO IOPackageImpl
 		var SV *config.SystemVariables = &config.SystemVariables{}
 		mp := &MysqlProtocolImpl{SV: SV}
