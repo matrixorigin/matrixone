@@ -113,7 +113,7 @@ endif
 
 .PHONY: fmt
 fmt:
-	gofmt -l -s .
+	gofmt -l -s -w .
 
 
 .PHONY: install-static-check-tools
@@ -131,7 +131,7 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconv
 
 .PHONY: static-check
 static-check: generate
-	@go vet -vettool=$(shell which molint) ./...
+	@go vet -vettool=$(which molint) ./...
 	@go-licenses check ./...
 	@for p in $(DIRS); do \
     golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \

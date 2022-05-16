@@ -30,6 +30,7 @@ type DBEntry struct {
 	*BaseEntry
 	catalog *Catalog
 	name    string
+	isSys   bool
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
@@ -58,6 +59,27 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	return e
 }
 
+func NewSystemDBEntry(catalog *Catalog) *DBEntry {
+	id := SystemDBID
+	entry := &DBEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		catalog:   catalog,
+		name:      SystemDBName,
+		entries:   make(map[uint64]*common.DLNode),
+		nameNodes: make(map[string]*nodeList),
+		link:      new(common.Link),
+		isSys:     true,
+	}
+	return entry
+}
+
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
 		BaseEntry: new(BaseEntry),
@@ -66,6 +88,13 @@ func NewReplayDBEntry() *DBEntry {
 		link:      new(common.Link),
 	}
 	return entry
+}
+
+func (e *DBEntry) IsSystemDB() bool { return e.isSys }
+func (e *DBEntry) CoarseTableCnt() int {
+	e.RLock()
+	defer e.RUnlock()
+	return len(e.entries)
 }
 
 func (e *DBEntry) Compare(o common.NodePayload) int {
@@ -163,6 +192,11 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 }
 
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
+	if e.IsSystemDB() {
+		err = ErrNotPermitted
+		logutil.Warnf("cannot create table into system db")
+		return
+	}
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
 	err = e.addEntryLocked(created)
@@ -171,7 +205,12 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 	return created, err
 }
 
-func (e *DBEntry) RemoveEntry(table *TableEntry) error {
+func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
+	if e.IsSystemDB() {
+		err = ErrNotPermitted
+		logutil.Warnf("cannot drop table from system db")
+		return err
+	}
 	logutil.Infof("Removing: %s", table.String())
 	e.Lock()
 	defer e.Unlock()
@@ -181,8 +220,11 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) error {
 		nn := e.nameNodes[table.GetSchema().Name]
 		nn.DeleteNode(table.GetID())
 		e.link.Delete(n)
+		if nn.Length() == 0 {
+			delete(e.nameNodes, table.GetSchema().Name)
+		}
 	}
-	return nil
+	return
 }
 
 func (e *DBEntry) addEntryLocked(table *TableEntry) error {
@@ -240,6 +282,7 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 		if err = processor.OnTable(table); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil
+				tableIt.Next()
 				continue
 			}
 			break

@@ -235,7 +235,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	n := vector.Length(bat.Vecs[0])
 
 	if enableProfile {
-		pprof.StartCPUProfile(cpuf)
+		if err := pprof.StartCPUProfile(cpuf); err != nil {
+			return err
+		}
 	}
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {

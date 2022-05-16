@@ -214,10 +214,12 @@ func TestStdVector(t *testing.T) {
 	assert.True(t, tmpv.Type.Eq(colTypes[2]))
 
 	f, err := os.Create("/tmp/teststdvec")
+	assert.Nil(t, err)
 	_, err = vecs[1].WriteTo(f)
 	assert.Nil(t, err)
 	assert.Nil(t, f.Close())
 	f, err = os.Open("/tmp/teststdvec")
+	assert.Nil(t, err)
 	tmpv = NewEmptyStdVector()
 	_, err = tmpv.ReadFrom(f)
 	assert.Nil(t, f.Close())

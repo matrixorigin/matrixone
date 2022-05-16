@@ -54,9 +54,13 @@ func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
 }
 
 type ColDef struct {
-	Name string
-	Idx  int
-	Type types.Type
+	Name          string
+	Idx           int
+	Type          types.Type
+	Hidden        int8
+	NullAbility   int8
+	AutoIncrement int8
+	Comment       string
 }
 
 type Schema struct {
@@ -66,6 +70,7 @@ type Schema struct {
 	BlockMaxRows     uint32         `json:"blkrows"`
 	PrimaryKey       int32          `json:"primarykey"`
 	SegmentMaxBlocks uint16         `json:"segblocks"`
+	Comment          string         `json:"comment"`
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -90,11 +95,15 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if s.Name, sn, err = common.ReadString(r); err != nil {
 		return
 	}
+	n = sn + 4 + 4 + 4 + 2
+	if s.Comment, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
 	colCnt := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
 		return
 	}
-	n = sn + 4 + 4 + 4 + 2
 	colBuf := make([]byte, encoding.TypeSize)
 	for i := uint16(0); i < colCnt; i++ {
 		if _, err = r.Read(colBuf); err != nil {
@@ -107,6 +116,22 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
+		if colDef.Comment, sn, err = common.ReadString(r); err != nil {
+			return
+		}
+		n += sn
+		if err = binary.Read(r, binary.BigEndian, &colDef.NullAbility); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &colDef.Hidden); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &colDef.AutoIncrement); err != nil {
+			return
+		}
+		n += 1
 		s.ColDefs = append(s.ColDefs, colDef)
 		colDef.Idx = int(i)
 	}
@@ -127,6 +152,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if _, err = common.WriteString(s.Name, &w); err != nil {
 		return
 	}
+	if _, err = common.WriteString(s.Comment, &w); err != nil {
+		return
+	}
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {
 		return
 	}
@@ -135,6 +163,18 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 			return
 		}
 		if _, err = common.WriteString(colDef.Name, &w); err != nil {
+			return
+		}
+		if _, err = common.WriteString(colDef.Comment, &w); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, colDef.NullAbility); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, colDef.Hidden); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, colDef.AutoIncrement); err != nil {
 			return
 		}
 	}

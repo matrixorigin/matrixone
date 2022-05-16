@@ -35,7 +35,10 @@ func startCPUProfile() func() {
 	if err != nil {
 		panic(err)
 	}
-	pprof.StartCPUProfile(f)
+	err = pprof.StartCPUProfile(f)
+	if err != nil {
+		panic(err)
+	}
 	logutil.Infof("CPU profiling enabled, writing to %s", cpuProfilePath)
 	return func() {
 		pprof.StopCPUProfile()

@@ -16,6 +16,7 @@ package rpcserver
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 	"go.uber.org/zap"
 

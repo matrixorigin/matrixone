@@ -30,11 +30,14 @@ func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
 		segDropped := segment.IsDroppedCommitted()
 		segment.RUnlock()
 
-		entry.DestroyData()
+		err := entry.DestroyData()
+		if err != nil {
+			return err
+		}
 		if !segDropped && entry.IsAppendable() {
 			return nil
 		}
-		err := segment.RemoveEntry(entry)
+		err = segment.RemoveEntry(entry)
 		logutil.Infof("[GCBLK] | %s | Removed", entry.Repr())
 		if err != nil {
 			logutil.Warnf("Cannot remove block %s, maybe removed before", entry.String())
@@ -54,11 +57,17 @@ func gcSegmentClosure(entry *catalog.SegmentEntry) tasks.FuncT {
 		for it.Valid() {
 			blk := it.Get().GetPayload().(*catalog.BlockEntry)
 			scopes = append(scopes, *blk.AsCommonID())
-			gcBlockClosure(blk)()
+			err := gcBlockClosure(blk)()
+			if err != nil {
+				return err
+			}
 			it.Next()
 		}
-		entry.DestroyData()
-		err := table.RemoveEntry(entry)
+		err := entry.DestroyData()
+		if err != nil {
+			return err
+		}
+		err = table.RemoveEntry(entry)
 		logutil.Infof("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
 		if err != nil {
 			logutil.Warnf("Cannot remove segment %s, maybe removed before", entry.String())

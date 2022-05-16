@@ -17,6 +17,7 @@ package db
 import (
 	"io/ioutil"
 	"os"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -80,6 +81,8 @@ func (splitter *Splitter) prepareData() error {
 	if splitter.tempDir, err = ioutil.TempDir(splitter.dbImpl.GetTempDir(), "aoesplit"); err != nil {
 		return err
 	}
+	// TODO: Temp workaround
+	time.Sleep(time.Millisecond * 10)
 	for _, t := range splitter.tables {
 		if err = CopyTableFn(t, splitter.tempDir); err != nil {
 			return err

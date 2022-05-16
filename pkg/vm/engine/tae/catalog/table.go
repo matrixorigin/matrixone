@@ -57,6 +57,36 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	return e
 }
 
+func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
+	e := &TableEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		db:      db,
+		schema:  schema,
+		link:    new(common.Link),
+		entries: make(map[uint64]*common.DLNode),
+	}
+	var sid uint64
+	if schema.Name == SystemTableSchema.Name {
+		sid = SystemSegment_Table_ID
+	} else if schema.Name == SystemDBSchema.Name {
+		sid = SystemSegment_DB_ID
+	} else if schema.Name == SystemColumnSchema.Name {
+		sid = SystemSegment_Columns_ID
+	} else {
+		panic("not supported")
+	}
+	segment := NewSysSegmentEntry(e, sid)
+	e.addEntryLocked(segment)
+	return e
+}
+
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
 		BaseEntry: new(BaseEntry),

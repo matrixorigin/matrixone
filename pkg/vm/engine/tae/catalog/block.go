@@ -60,6 +60,22 @@ func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, 
 	return e
 }
 
+func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
+	e := &BlockEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		segment: segment,
+		state:   ES_Appendable,
+	}
+	return e
+}
+
 func (entry *BlockEntry) GetCatalog() *Catalog { return entry.segment.table.db.catalog }
 
 func (entry *BlockEntry) IsAppendable() bool {
