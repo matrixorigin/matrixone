@@ -16,11 +16,12 @@ package function
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func mockFunctionRegister() [][]Function {
@@ -43,19 +44,13 @@ func mockFunctionRegister() [][]Function {
 		{
 			Index: 0,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) bool {
-				if len(inputTypes) < 3 {
-					return true
-				}
-				return false
+				return len(inputTypes) < 3
 			},
 		},
 		{
 			Index: 1,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) bool {
-				if len(inputTypes) == 1 {
-					return true
-				}
-				return false
+				return len(inputTypes) == 1
 			},
 		},
 	}
