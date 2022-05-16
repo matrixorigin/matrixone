@@ -217,9 +217,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		switch listExpr := expr.Expr.(type) {
 		case *plan.Expr_List:
 			//select a.* from tbl a or select * from tbl,   buildExpr() will return ExprList
-			for _, col := range listExpr.List.List {
-				projectionList = append(projectionList, col)
-			}
+			projectionList = append(projectionList, listExpr.List.List...)
 		default:
 			alias := string(selectExpr.As)
 			if alias == "" {
