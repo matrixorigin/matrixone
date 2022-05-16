@@ -15,6 +15,7 @@
 package segmentio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
@@ -81,12 +82,16 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 		df.buf = make([]byte, len(buf))
 		copy(df.buf, buf)
 		df.stat.size = int64(len(df.buf))
+		df.stat.algo = 0
+		df.stat.originSize = int64(len(df.buf))
 		return
 	}
 	df.colBlk.mutex.Lock()
 	file := df.file[len(df.file)-1]
 	df.colBlk.mutex.Unlock()
 	err = file.GetSegement().Append(file, buf)
+	df.stat.algo = compress.Lz4
+	df.stat.originSize = file.GetOriginSize()
 	df.stat.size = file.GetFileSize()
 	return
 }
@@ -101,7 +106,6 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	if bufLen == 0 {
 		return 0, nil
 	}
-	n = 0
 	df.colBlk.mutex.Lock()
 	file := df.file[len(df.file)-1]
 	df.colBlk.mutex.Unlock()

@@ -51,6 +51,9 @@ func (l Log) Append(file *BlockFile) error {
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.inode); err != nil {
 		return err
 	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.algo); err != nil {
+		return err
+	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.state); err != nil {
 		return err
 	}

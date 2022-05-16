@@ -15,11 +15,13 @@
 package segmentio
 
 type fileStat struct {
-	name string
-	size int64
+	name       string
+	size       int64
+	originSize int64
+	algo       uint8
 }
 
 func (stat *fileStat) Name() string      { return stat.name }
 func (stat *fileStat) Size() int64       { return stat.size }
-func (stat *fileStat) OriginSize() int64 { return stat.size }
-func (stat *fileStat) CompressAlgo() int { return 0 }
+func (stat *fileStat) OriginSize() int64 { return stat.originSize }
+func (stat *fileStat) CompressAlgo() int { return int(stat.algo) }
