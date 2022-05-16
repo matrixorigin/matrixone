@@ -176,15 +176,61 @@ message Expr {
 	}
 }
 
+enum CompressType {
+	None 	= 0;
+	Lz4 	= 1;
+}
+
+message DefaultExpr {
+	bool exist 		= 1;
+	Expr value 		= 2;
+	bool is_null 	= 3;
+}
+
 message ColDef {
-	Type typ	= 1;
-	string name = 2;
-	int32 pkidx = 3;
+	string name 		= 1;
+	CompressType alg 	= 2;
+	Type typ			= 3;
+	DefaultExpr default = 4;
+	bool primary        = 5;
+	int32 pkidx 		= 6;
+}
+
+message IndexDef {
+	enum IndexType {
+		INVAILD		= 0;
+		ZONEMAP 	= 1;
+		BSI 		= 2;
+	}
+	IndexType typ				= 1;
+	string name 				= 2;
+	repeated string col_names 	= 3;
+}
+
+message PrimaryKeyDef {
+	repeated string names = 1;
+}
+
+message Property {
+	string key 		= 1;
+	string value 	= 2;
+}
+
+message PropertiesDef {
+	repeated Property properties 	= 1;
 }
 
 message TableDef {
-	string name				= 1;
-	repeated ColDef cols	= 2;
+	message DefType {
+		oneof def {
+			PrimaryKeyDef pk 			= 1;
+			IndexDef idx 				= 2;
+			PropertiesDef  properties	= 3;
+		}
+	}
+	string name						= 1;
+	repeated ColDef cols			= 2;
+	repeated DefType defs 			= 3;
 }
 
 message Cost {
@@ -355,32 +401,32 @@ message Query {
 
 message TransationControl {
 	enum TclType {
-		BEGIN = 0;
-		COMMIT = 1;
-		ROLLBACK = 2;
+		BEGIN 		= 0;
+		COMMIT 		= 1;
+		ROLLBACK 	= 2;
 	}
 	//TransationControl type
 	TclType tcl_type = 1;
 	oneof action {
-		TransationBegin begin = 2;
-		TransationCommit commit = 3;
+		TransationBegin begin 		= 2;
+		TransationCommit commit 	= 3;
 		TransationRollback rollback = 4;
 	}
 }
 
 message TransationBegin {
 	enum TransationMode {
-		NONE = 0;
-		READ_ONLY = 1;
-		READ_WRITE = 2;
+		NONE 		= 0;
+		READ_ONLY 	= 1;
+		READ_WRITE 	= 2;
 	}
 	TransationMode mode = 1;
 }
 
 enum TransationCompletionType {
-	CHAIN = 0;
-	NO_CHAIN = 1;
-	RELEASE = 2;
+	CHAIN 		= 0;
+	NO_CHAIN 	= 1;
+	RELEASE 	= 2;
 }
 message TransationCommit {
 	TransationCompletionType completion_type = 1;
@@ -391,24 +437,88 @@ message TransationRollback {
 
 message Plan {
 	oneof plan {
-		Query query = 1;
-		TransationControl tcl =2;
+		Query query 			= 1;
+		TransationControl tcl 	= 2;
+		DataDefinition ddl 		= 3;
 	}
 }
 
+message DataDefinition {
+	enum DdlType {
+		CREATE_DATABASE = 0;
+		ALTER_DATABASE 	= 1;
+		DROP_DATABASE	= 2;
+		CREATE_TABLE 	= 3;
+		ALTER_TABLE		= 4;
+		DROP_TABLE		= 5;
+		CREATE_INDEX	= 6;
+		ALTER_INDEX		= 7;
+		DROP_INDEX		= 8;
+		TRUNCATE_TABLE	= 9;
+	}
+	//DataDefinition type
+	DdlType ddl_type = 1;
+	oneof definition {
+		CreateDatabase create_database 	= 2;
+		AlterDatabase alter_database 	= 3;
+		DropDatabase drop_database		= 4;
+		CreateTable create_table		= 5;
+		AlterTable alter_table 			= 6;
+		DropTable drop_table			= 7;
+		CreateIndex create_index 		= 8;
+		AlterIndex alter_index 			= 9;
+		DropIndex drop_index 			= 10;
+		TruncateTable truncate_table	= 11;
+	}
+}
 
+message CreateDatabase {
+	bool if_not_exists 	= 1;
+	string database 	= 2;
+}
 
+message AlterDatabase {
+	bool if_exists 		= 1;
+	string database 	= 2;
+}
 
+message DropDatabase {
+	bool if_exists 		= 1;
+	string database 	= 2;
+}
 
+message CreateTable {
+	bool if_not_exists 	= 1;
+	bool temporary 		= 2;
+	string database 	= 3;
+	TableDef table_def 	= 4;
+}
 
+message AlterTable {
+	string table 		= 1;
+	TableDef table_def 	= 2;
+}
 
+message DropTable {
+	bool if_exists 	= 1;
+	string table 	= 2;
+}
 
+message CreateIndex {
+	bool if_not_exists 	= 1;
+	string index 		= 2;
+}
 
+message AlterIndex {
+	string index = 1;
+}
 
+message DropIndex {
+	bool if_exists 	= 1;
+	string index 	= 2;
+}
 
-
-
-
-
-	
+message TruncateTable {
+	string table = 1;
+}
 

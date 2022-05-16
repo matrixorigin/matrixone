@@ -29,6 +29,8 @@ type RowsetData = plan.RowsetData
 type Query = plan.Query
 
 type CompilerContext interface {
+	DefaultDatabase() string
+	DatabaseExists(name string) bool
 	Resolve(name string) (*ObjectRef, *TableDef)
 	Cost(obj *ObjectRef, e *Expr) *Cost
 }
