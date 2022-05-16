@@ -16,6 +16,7 @@ package explain
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
 )
 
@@ -105,8 +106,7 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
-	//logutil.Infof(buf.Lines[buf.CurrentLine])
-	fmt.Println(buf.Lines[buf.CurrentLine])
+	logutil.Infof(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 

@@ -15,7 +15,6 @@
 package explain
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -50,6 +49,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Function Scan"
 	case plan.Node_EXTERNAL_SCAN:
 		pname = "External Scan"
+	case plan.Node_MATERIAL_SCAN:
+		pname = "Material Scan"
 	case plan.Node_PROJECT:
 		pname = "Project"
 	case plan.Node_EXTERNAL_FUNCTION:
@@ -90,10 +91,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Insert"
 	case plan.Node_UPDATE:
 		pname = "Update"
-	//case plan.Node_DELETE:
-	//	pname = "Delete"
+	case plan.Node_DELETE:
+		pname = "Delete"
 	default:
-		pname = "???"
+		panic("error node type")
 	}
 
 	// Get Node's operator object info ,such as table, view
@@ -108,47 +109,19 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 			fallthrough
 		case plan.Node_EXTERNAL_SCAN:
 			fallthrough
+		case plan.Node_MATERIAL_SCAN:
+			fallthrough
 		case plan.Node_INSERT:
+			fallthrough
+		case plan.Node_UPDATE:
+			fallthrough
+		case plan.Node_DELETE:
 			result += " on "
 			if ndesc.Node.ObjRef != nil {
 				result += ndesc.Node.ObjRef.GetDbName() + "." + ndesc.Node.ObjRef.GetObjName()
 			} else if ndesc.Node.TableDef != nil {
 				result += ndesc.Node.TableDef.GetName()
 			}
-		case plan.Node_UPDATE:
-			result += " on columns("
-			if ndesc.Node.UpdateList != nil {
-				updateListDesc := &UpdateListDescribeImpl{
-					UpdateList: ndesc.Node.UpdateList,
-				}
-				updatedesc, err := updateListDesc.GetDescription(options)
-				if err != nil {
-					return result, err
-				}
-				result += updatedesc
-			}
-			result += ")"
-			/*
-				OuYuanning will add table definition information:
-				result += " on "
-					if ndesc.Node.ObjRef != nil {
-						objRefImpl := NewObjRefDescribeImpl(ndesc.Node.ObjRef)
-						result += objRefImpl.GetDescription(options)
-					} else if ndesc.Node.TableDef != nil {
-						tableDefImpl := NewTableDefDescribeImpl(ndesc.Node.TableDef)
-						result += tableDefImpl.GetDescription(options)
-					}
-
-			*/
-		//case plan.Node_DELETE:
-		//	result += " on "
-		//	if ndesc.Node.ObjRef != nil {
-		//		objRefImpl := NewObjRefDescribeImpl(ndesc.Node.ObjRef)
-		//		result += objRefImpl.GetDescription(options)
-		//	} else if ndesc.Node.TableDef != nil {
-		//		tableDefImpl := NewTableDefDescribeImpl(ndesc.Node.TableDef)
-		//		result += tableDefImpl.GetDescription(options)
-		//	}
 		case plan.Node_PROJECT:
 			fallthrough
 		case plan.Node_EXTERNAL_FUNCTION:
@@ -244,19 +217,30 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
 		var temp string
-		limitInfo, err := DescribeExpr(ndesc.Node.Limit)
+		limitInfo, err := describeExpr(ndesc.Node.Limit, options)
 		if err != nil {
 			return nil, err
 		}
 		temp += "Limit: " + limitInfo
 		if ndesc.Node.Offset != nil {
-			offsetInfo, err := DescribeExpr(ndesc.Node.Offset)
+			offsetInfo, err := describeExpr(ndesc.Node.Offset, options)
 			if err != nil {
 				return nil, err
 			}
 			temp += ", Offset: " + offsetInfo
 		}
 		lines = append(lines, temp)
+	}
+
+	if ndesc.Node.UpdateList != nil {
+		updateListDesc := &UpdateListDescribeImpl{
+			UpdateList: ndesc.Node.UpdateList,
+		}
+		updatedesc, err := updateListDesc.GetDescription(options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, "Set columns with("+updatedesc+")")
 	}
 	return lines, nil
 }
@@ -292,7 +276,7 @@ func (ndesc *NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) (s
 				result += " AND "
 			}
 			first = false
-			descV, err := DescribeExpr(v)
+			descV, err := describeExpr(v, options)
 			if err != nil {
 				return result, err
 			}
@@ -315,7 +299,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 				result += ", "
 			}
 			first = false
-			descV, err := DescribeExpr(v)
+			descV, err := describeExpr(v, options)
 			if err != nil {
 				return result, err
 			}
@@ -366,10 +350,12 @@ type CostDescribeImpl struct {
 
 func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	//(cost=11.75..13.15 rows=140 width=4)
-	var result string = "(cost=" + fmt.Sprintf("%.2f", c.Cost.Start) +
-		".." + fmt.Sprintf("%.2f", c.Cost.Total) +
-		" card=" + fmt.Sprintf("%.0f", c.Cost.Card) +
-		" rowsize=" + fmt.Sprintf("%f", c.Cost.Rowsize)
+	var result string = "(cost=" +
+		strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
+		".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
+		" rows=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
+		" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
+		" width=" + strconv.FormatFloat(c.Cost.Rowsize, 'd', 0, 64)
 	return result, nil
 }
 
@@ -392,7 +378,7 @@ func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, 
 				result += ", "
 			}
 			first = false
-			descV, err := DescribeExpr(v)
+			descV, err := describeExpr(v, options)
 			if err != nil {
 				return result, err
 			}
@@ -418,7 +404,7 @@ func NewOrderByDescribeImpl(OrderBy *plan.OrderBySpec) *OrderByDescribeImpl {
 
 func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	var result string = " "
-	descExpr, err := DescribeExpr(o.OrderBy.GetOrderBy())
+	descExpr, err := describeExpr(o.OrderBy.GetOrderBy(), options)
 	if err != nil {
 		return result, err
 	}
@@ -467,15 +453,15 @@ func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) (string
 	if len(u.UpdateList.Columns) != len(u.UpdateList.Columns) {
 		panic("update node number of columns and values is not equal")
 	}
-	for i, column := range u.UpdateList.Columns {
+	for i, columnExpr := range u.UpdateList.Columns {
 		if !first {
 			result += ", "
 		}
-		colstr, err := DescribeExpr(column)
+		colstr, err := describeExpr(columnExpr, options)
 		if err != nil {
 			return result, err
 		}
-		valstr, err := DescribeExpr(u.UpdateList.Values[i])
+		valstr, err := describeExpr(u.UpdateList.Values[i], options)
 		if err != nil {
 			return result, err
 		}

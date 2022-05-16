@@ -60,6 +60,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 
 	//test simple sql
 	qf, err := os.ReadFile(dir + "/tpch/simple.sql")
+	t.Logf("# tpch file: /tpch/simple.sql")
 	if err != nil {
 		t.Errorf("Cannot open queries file, error %v", err)
 	}
@@ -69,29 +70,28 @@ func Test_TPCH_Plan2(t *testing.T) {
 	}
 	for _, ast := range qs {
 		out := tree.String(ast, dialect.MYSQL)
-		fmt.Printf("@ SQL: %v\n", out)
+		t.Logf("SQL: %v\n", out)
 		query, err := mock.Optimize(ast)
 		if err != nil {
 			t.Errorf("Optimizer failed, NYI")
 		}
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(query)
-		explainQuery.ExplainPlan(buffer, es)
-		//if err != nil {
-		//	t.Errorf("explain failed, WXL")
-		//}
-		fmt.Println()
+		err = explainQuery.ExplainPlan(buffer, es)
+		if err != nil {
+			t.Errorf("explain failed, WXL")
+		}
 	}
 
 	//test tpch query
 	for qn := 1; qn <= 22; qn += 1 {
-		//qn := 22
+		//qn := 15
 		qnf, err := os.ReadFile(fmt.Sprintf("%s/tpch/q%d.sql", dir, qn))
 		if err != nil {
 			t.Errorf("Cannot open file of query %d, error %v", qn, err)
 		}
-		fmt.Printf("# build plan for %s/tpch/q%d.sql\n", dir, qn)
-		fmt.Printf("@ SQL:%v \n", string(qnf))
+		t.Logf("--<%d> tpch file: %s/tpch/q%d.sql\n", qn, dir, qn)
+		t.Logf("SQL : %v \n", string(qnf))
 
 		qns, err := parsers.Parse(dialect.MYSQL, string(qnf))
 		if qns == nil || err != nil {
@@ -104,10 +104,10 @@ func Test_TPCH_Plan2(t *testing.T) {
 			}
 			buffer := NewExplainDataBuffer()
 			explainQuery := NewExplainQueryImpl(query)
-			explainQuery.ExplainPlan(buffer, es)
-			//if err != nil {
-			//	t.Errorf("explain failed, WXL")
-			//}
+			err = explainQuery.ExplainPlan(buffer, es)
+			if err != nil {
+				t.Errorf("explain failed, WXL")
+			}
 		}
 	}
 }

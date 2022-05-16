@@ -60,13 +60,14 @@ const (
 	CAST_EXPRESSION            FuncExplainLayout = 6 // cast expression
 	CASE_WHEN_EXPRESSION       FuncExplainLayout = 7 // case when expression
 	BETWEEN_AND_EXPRESSION     FuncExplainLayout = 8
-	NESTED_QUERY_PREDICATE     FuncExplainLayout = 9  //Nested query predicate,such as in,exist,all,any
-	IS_NULL_EXPRESSION         FuncExplainLayout = 10 // is null expression
-	NOPARAMETER_FUNCTION       FuncExplainLayout = 11 // noparameter function
-	DATE_INTERVAL_EXPRESSION   FuncExplainLayout = 12 // date expression,interval expression
-	EXTRACT_FUNCTION           FuncExplainLayout = 13 // extract function,such as extract(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
-	POSITION_FUNCTION          FuncExplainLayout = 14 // position function, such as POSITION(substr IN str)
-	UNKNOW_KIND_FUNCTION       FuncExplainLayout = 15
+	IN_PREDICATE               FuncExplainLayout = 9  //query 'in' predicate
+	EXISTS_ANY_PREDICATE       FuncExplainLayout = 10 //query predicate,such as exist,all,any
+	IS_NULL_EXPRESSION         FuncExplainLayout = 11 // is null expression
+	NOPARAMETER_FUNCTION       FuncExplainLayout = 12 // noparameter function
+	DATE_INTERVAL_EXPRESSION   FuncExplainLayout = 13 // date expression,interval expression
+	EXTRACT_FUNCTION           FuncExplainLayout = 14 // extract function,such as extract(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
+	POSITION_FUNCTION          FuncExplainLayout = 15 // position function, such as POSITION(substr IN str)
+	UNKNOW_KIND_FUNCTION       FuncExplainLayout = 16
 )
 
 // Functions shipped by system.
@@ -166,7 +167,7 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"ILIKE", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_VARCHAR}, []int8{1, 1}},
 	{"ILIKE_ALL", plan.Function_STRICT | plan.Function_VARARG, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
 	{"ILIKE_ANY", plan.Function_STRICT | plan.Function_VARARG, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
-	{"IN", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ANY, plan.Type_ARRAY}, []int8{1, 2}},
+	{"IN", plan.Function_STRICT, IN_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ANY, plan.Type_ARRAY}, []int8{1, 2}},
 
 	{"LAG", plan.Function_WIN, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANY, plan.Type_INT32, plan.Type_ANY}, []int8{1, 2}},
 	{"LAST_VALUE", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
@@ -232,9 +233,9 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"VAR_SAMPLE", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
 
 	//add for subquery
-	{"EXISTS", plan.Function_STRICT, NESTED_QUERY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
-	{"ALL", plan.Function_STRICT, NESTED_QUERY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
-	{"ANY", plan.Function_STRICT, NESTED_QUERY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
+	{"EXISTS", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
+	{"ALL", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
+	{"ANY", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 
 	//add for tpch
 	{"DATE", plan.Function_STRICT, DATE_INTERVAL_EXPRESSION, []plan.Type_TypeId{plan.Type_DATE, plan.Type_VARCHAR}, []int8{1}},

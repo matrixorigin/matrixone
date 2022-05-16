@@ -15,8 +15,8 @@
 package explain
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
@@ -36,8 +36,7 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error {
 	var Nodes []*plan.Node = e.QueryPlan.Nodes
 	for index, rootNodeId := range e.QueryPlan.Steps {
-		//logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
-		fmt.Printf("------------------------------------Query Plan-%v ---------------------------------------------\n", index)
+		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
 			offset: 0,
@@ -69,11 +68,7 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 
 		// Process verbose optioan information , "Output:"
 		if options.Verbose {
-			if nodedescImpl.Node.NodeType == plan.Node_TABLE_SCAN ||
-				nodedescImpl.Node.NodeType == plan.Node_AGG ||
-				nodedescImpl.Node.NodeType == plan.Node_JOIN ||
-				nodedescImpl.Node.NodeType == plan.Node_SORT ||
-				nodedescImpl.Node.NodeType == plan.Node_PROJECT {
+			if nodedescImpl.Node.GetProjectList() != nil {
 				projecrtInfo, err := nodedescImpl.GetProjectListInfo(options)
 				if err != nil {
 					return err
