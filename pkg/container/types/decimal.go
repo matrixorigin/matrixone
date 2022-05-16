@@ -337,7 +337,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 			}
 		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123.45" is invalid for Decimal(5, 3)
-			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+			return result, carry, neg, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
 		}
 		if len(part1Bytes) > int(scale) {
 			for i := int(scale); i < len(part1Bytes); i++ {
@@ -367,7 +367,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 			part0Bytes = part0Bytes[1:]
 		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123" is invalid for Decimal(5, 3)
-			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+			return result, carry, neg, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
 		}
 		for i := 0; i < int(scale); i++ {
 			part0Bytes = append(part0Bytes, '0')
