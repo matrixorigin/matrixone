@@ -318,15 +318,15 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 	case uint64:
 		switch typ.Oid {
 		case types.T_uint8:
-			if v <= math.MaxUint8 && v >= 0 {
+			if v <= math.MaxUint8 {
 				return uint8(v), nil
 			}
 		case types.T_uint16:
-			if v <= math.MaxUint16 && v >= 0 {
+			if v <= math.MaxUint16 {
 				return uint16(v), nil
 			}
 		case types.T_uint32:
-			if v <= math.MaxUint32 && v >= 0 {
+			if v <= math.MaxUint32 {
 				return uint32(v), nil
 			}
 		case types.T_uint64:

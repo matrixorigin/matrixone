@@ -602,9 +602,6 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 				return nil, ErrZeroModulus
 			}
 			tempResult := int(lf / rf)
-			if tempResult > math.MaxInt64 || tempResult < math.MinInt64 {
-				return nil, errBinaryOutRange
-			}
 			floatResult = lf - float64(tempResult)*rf
 		default:
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
@@ -769,9 +766,6 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			v, err := strconv.ParseUint(parts[0], 10, 64)
 			if err != nil || len(parts) == 1 {
 				return v, errConstantOutRange
-			}
-			if v < 0 {
-				return nil, errConstantOutRange
 			}
 			if len(parts[1]) > 0 && parts[1][0] >= '5' {
 				if v+1 < v {
