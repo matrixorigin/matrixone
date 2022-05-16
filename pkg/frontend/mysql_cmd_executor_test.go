@@ -543,7 +543,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		cnt := 0
 		eng.EXPECT().Database(gomock.Any(), nil).DoAndReturn(
-			func(db string) (engine.Database, error) {
+			func(db string, dump interface{}) (engine.Database, error) {
 				cnt++
 				if cnt == 1 {
 					return nil, nil
