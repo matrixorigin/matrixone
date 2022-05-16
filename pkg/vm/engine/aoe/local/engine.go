@@ -29,22 +29,22 @@ func NewLocalRoEngine(dbimpl *aoedb.DB) *localRoEngine {
 	}
 }
 
-func (e *localRoEngine) Node(_ string) *engine.NodeInfo {
+func (e *localRoEngine) Node(_ string, _ engine.Snapshot) *engine.NodeInfo {
 	panic("not supported")
 }
 
-func (e *localRoEngine) Delete(name string) error {
+func (e *localRoEngine) Delete(name string, _ engine.Snapshot) error {
 	panic("not supported")
 }
 
-func (e *localRoEngine) Create(_ string, _ int) error {
+func (e *localRoEngine) Create(_ string, _ int, _ engine.Snapshot) error {
 	panic("not supported")
 }
 
-func (e *localRoEngine) Databases() []string {
+func (e *localRoEngine) Databases(_ engine.Snapshot) []string {
 	panic("not supported")
 }
 
-func (e *localRoEngine) Database(_ string) (engine.Database, error) {
+func (e *localRoEngine) Database(_ string, _ engine.Snapshot) (engine.Database, error) {
 	return NewLocalRoDatabase(e.dbimpl), nil
 }

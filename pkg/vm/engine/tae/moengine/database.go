@@ -31,7 +31,7 @@ func newDatabase(h handle.Database) *txnDatabase {
 	}
 }
 
-func (db *txnDatabase) Relations() (names []string) {
+func (db *txnDatabase) Relations(_ engine.Snapshot) (names []string) {
 	it := db.handle.MakeRelationIt()
 	for it.Valid() {
 		names = append(names, it.GetRelation().GetMeta().(*catalog.TableEntry).GetSchema().Name)
@@ -40,7 +40,7 @@ func (db *txnDatabase) Relations() (names []string) {
 	return
 }
 
-func (db *txnDatabase) Relation(name string) (rel engine.Relation, err error) {
+func (db *txnDatabase) Relation(name string, _ engine.Snapshot) (rel engine.Relation, err error) {
 	h, err := db.handle.GetRelationByName(name)
 	if err != nil {
 		return
@@ -49,7 +49,7 @@ func (db *txnDatabase) Relation(name string) (rel engine.Relation, err error) {
 	return
 }
 
-func (db *txnDatabase) Create(_ uint64, name string, defs []engine.TableDef) error {
+func (db *txnDatabase) Create(_ uint64, name string, defs []engine.TableDef, _ engine.Snapshot) error {
 	info, err := helper.Transfer(db.handle.GetID(), 0, 0, name, defs)
 	if err != nil {
 		return err
@@ -61,7 +61,7 @@ func (db *txnDatabase) Create(_ uint64, name string, defs []engine.TableDef) err
 	return err
 }
 
-func (db *txnDatabase) Delete(_ uint64, name string) error {
+func (db *txnDatabase) Delete(_ uint64, name string, _ engine.Snapshot) error {
 	_, err := db.handle.DropRelationByName(name)
 	return err
 }

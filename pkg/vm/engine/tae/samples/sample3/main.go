@@ -64,18 +64,18 @@ func main() {
 	{
 		txn := tae.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
-		err := eng.Create(0, dbName, 0)
+		err := eng.Create(0, dbName, 0, nil)
 		if err != nil {
 			panic(err)
 		}
-		db, err := eng.Database(dbName)
+		db, err := eng.Database(dbName, nil)
 		if err != nil {
 			panic(err)
 		}
 		tblInfo := moengine.MockTableInfo(4)
 		tblInfo.Columns[0].PrimaryKey = true
 		_, _, _, _, defs, _ := helper.UnTransfer(*tblInfo)
-		err = db.Create(0, tblInfo.Name, defs)
+		err = db.Create(0, tblInfo.Name, defs, nil)
 		if err != nil {
 			panic(err)
 		}
@@ -103,15 +103,15 @@ func main() {
 			// 	rel, _ := db.GetRelationByName(schema.Name)
 			// }
 			eng := moengine.NewEngine(txn)
-			db, err := eng.Database(dbName)
+			db, err := eng.Database(dbName, nil)
 			if err != nil {
 				panic(err)
 			}
-			rel, err := db.Relation(schema.Name)
+			rel, err := db.Relation(schema.Name, nil)
 			if err != nil {
 				panic(err)
 			}
-			if err := rel.Write(0, b); err != nil {
+			if err := rel.Write(0, b, nil); err != nil {
 				panic(err)
 			}
 			if err := txn.Commit(); err != nil {
@@ -132,11 +132,11 @@ func main() {
 	{
 		txn := tae.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
-		db, err := eng.Database(dbName)
+		db, err := eng.Database(dbName, nil)
 		if err != nil {
 			panic(err)
 		}
-		rel, err := db.Relation(schema.Name)
+		rel, err := db.Relation(schema.Name, nil)
 		if err != nil {
 			panic(err)
 		}
@@ -155,7 +155,7 @@ func main() {
 		}
 
 		parallel := 10
-		readers := rel.NewReader(parallel, nil, nil)
+		readers := rel.NewReader(parallel, nil, nil, nil)
 		for _, reader := range readers {
 			wg.Add(1)
 			go readProc(reader)
