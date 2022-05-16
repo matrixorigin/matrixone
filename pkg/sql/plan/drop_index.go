@@ -33,7 +33,7 @@ func (b *build) BuildDropIndex(stmt *tree.DropIndex, plan *DropIndex) error {
 	if err != nil {
 		return err
 	}
-	for _, def := range r.TableDefs() {
+	for _, def := range r.TableDefs(nil) {
 		if indexDef, ok := def.(*engine.IndexTableDef); ok {
 			if indexDef.Name == indexName {
 				notExisted = false

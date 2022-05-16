@@ -59,14 +59,14 @@ var FilterTypeMap = map[int]int32{
 const defaultRetryTimes = 5
 
 //Close closes the relation. It closes all relations of the tablet in the aoe store.
-func (r *relation) Close() {
+func (r *relation) Close(_ engine.Snapshot) {
 	for _, v := range r.mp {
 		v.Close()
 	}
 }
 
 //ID returns the name of the table.
-func (r *relation) ID() string {
+func (r *relation) ID(_ engine.Snapshot) string {
 	return r.tbl.Name
 }
 
@@ -95,7 +95,7 @@ func (r *relation) Attribute() []engine.Attribute {
 }
 
 //Attribute writes the batch into the table.
-func (r *relation) Write(_ uint64, bat *batch.Batch) error {
+func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -221,11 +221,11 @@ func (r *relation) DropIndex(epoch uint64, name string) error {
 	return r.catalog.DropIndex(epoch, r.tbl.Id, r.tbl.SchemaId, name)
 }
 
-func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
+func (r *relation) AddAttribute(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
+func (r *relation) DelAttribute(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
@@ -249,28 +249,28 @@ func (r *relation) Cardinality(_ string) int64 {
 	return 0
 }
 
-func (r *relation) Nodes() engine.Nodes {
+func (r *relation) Nodes(_ engine.Snapshot) engine.Nodes {
 	return r.nodes
 }
 
-func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+func (r *relation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	return nil, false
 }
 
-func (r *relation) TableDefs() []engine.TableDef {
+func (r *relation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	_, _, _, _, defs, _ := helper.UnTransfer(*r.tbl)
 	return defs
 }
 
-func (r *relation) AddTableDef(u uint64, def engine.TableDef) error {
+func (r *relation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
+func (r *relation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) NewReader(num int, e extend.Extend, _ []byte) []engine.Reader {
+func (r *relation) NewReader(num int, e extend.Extend, _ []byte, _ engine.Snapshot) []engine.Reader {
 	fcs := getFilterContext(e)
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {

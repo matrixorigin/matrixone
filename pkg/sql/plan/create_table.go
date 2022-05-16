@@ -37,7 +37,7 @@ func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) erro
 	if err != nil {
 		return err
 	}
-	db, err := b.e.Database(dbName)
+	db, err := b.e.Database(dbName, nil)
 	if err != nil {
 		return err
 	}

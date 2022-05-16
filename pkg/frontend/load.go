@@ -410,7 +410,7 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	load := handler.load
 
 	var cols []*engine.AttributeDef = nil
-	defs := relation.TableDefs()
+	defs := relation.TableDefs(nil)
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if ok {
@@ -1330,7 +1330,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
 		if !handler.skipWriteBatch {
-			err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+			err = handler.tableHandler.Write(handler.timestamp, handler.batchData, nil)
 		}
 		handler.ThreadInfo.SetCnt(0)
 		if err == nil {
@@ -1430,7 +1430,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
 				if !handler.skipWriteBatch {
-					err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+					err = handler.tableHandler.Write(handler.timestamp, handler.batchData, nil)
 				}
 				handler.ThreadInfo.SetCnt(0)
 				if err == nil {

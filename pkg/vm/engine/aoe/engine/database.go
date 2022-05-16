@@ -36,7 +36,7 @@ func (db *database) Type() int {
 }
 
 //Delete deletes the table.
-func (db *database) Delete(epoch uint64, name string) error {
+func (db *database) Delete(epoch uint64, name string, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -46,7 +46,7 @@ func (db *database) Delete(epoch uint64, name string) error {
 }
 
 //Create creates the table
-func (db *database) Create(epoch uint64, name string, defs []engine.TableDef) error {
+func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -60,7 +60,7 @@ func (db *database) Create(epoch uint64, name string, defs []engine.TableDef) er
 }
 
 //Relations returns names of all the tables in the database.
-func (db *database) Relations() []string {
+func (db *database) Relations(_ engine.Snapshot) []string {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -77,7 +77,7 @@ func (db *database) Relations() []string {
 }
 
 //Relation returns an instance with the given name.
-func (db *database) Relation(name string) (engine.Relation, error) {
+func (db *database) Relation(name string, _ engine.Snapshot) (engine.Relation, error) {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())

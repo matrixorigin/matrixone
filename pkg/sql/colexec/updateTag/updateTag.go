@@ -101,7 +101,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, err
 	}
 	// write batch to the storage
-	if err := p.Relation.Write(p.Ts, unionBat); err != nil {
+	if err := p.Relation.Write(p.Ts, unionBat, nil); err != nil {
 		batch.Clean(unionBat, proc.Mp)
 		batch.Clean(updateBatch, proc.Mp)
 		proc.Reg.InputBatch = &batch.Batch{}

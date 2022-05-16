@@ -530,7 +530,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	ses := mce.GetSession()
 	//TODO: check meta data
-	if _, err := ses.Pu.StorageEngine.Database(db); err != nil {
+	if _, err := ses.Pu.StorageEngine.Database(db, nil); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
@@ -726,7 +726,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 		loadDb = ses.protocol.GetDatabaseName()
 	}
 
-	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb)
+	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, nil)
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
@@ -742,7 +742,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(loadTable)
+	tableHandler, err := dbHandler.Relation(loadTable, nil)
 	if err != nil {
 		//echo client. no such table
 		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
