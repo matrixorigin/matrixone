@@ -1517,7 +1517,7 @@ func Test_openpacket(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
-		err = proto.fillPacket(make([]byte, MaxPayloadSize, MaxPayloadSize)...)
+		err = proto.fillPacket(make([]byte, MaxPayloadSize)...)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.closePacket(true)
