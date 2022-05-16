@@ -42,7 +42,7 @@ func splitExprToAND(expr tree.Expr) []*tree.Expr {
 
 func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
 	for idx, col := range tableDef.Cols {
-		if strings.ToLower(col.Name) == strings.ToLower(name) {
+		if strings.EqualFold(col.Name, name) {
 			return int32(idx)
 		}
 	}
@@ -177,12 +177,12 @@ func getExprFromUnresolvedName(query *Query, name string, table string, selectCt
 		if table == "" {
 			arr := strings.SplitN(alias, ".", 2)
 			if len(arr) > 1 {
-				return strings.ToLower(arr[1]) == strings.ToLower(name)
+				return strings.EqualFold(arr[1], name)
 			} else {
-				return strings.ToLower(arr[0]) == strings.ToLower(name)
+				return strings.EqualFold(arr[0], name)
 			}
 		}
-		return strings.ToLower(alias) == strings.ToLower(aliasName)
+		return strings.EqualFold(alias, aliasName)
 	}
 
 	//get name from select
