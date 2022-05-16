@@ -16,9 +16,10 @@ package segmentio
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"path"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/compress"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -74,6 +75,7 @@ func TestBlock1(t *testing.T) {
 	_, err = dataFile.Read(buf)
 	assert.Nil(t, err)
 	dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
+	assert.Nil(t, err)
 	assert.Equal(t, dataStr, string(dbuf))
 	t.Log(string(dbuf))
 
