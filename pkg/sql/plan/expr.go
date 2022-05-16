@@ -643,7 +643,7 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, e.Op))
 		}
 	case *tree.UnresolvedName:
-		floatResult, err := strconv.ParseFloat(e.Parts[0], 10)
+		floatResult, err := strconv.ParseFloat(e.Parts[0], 64)
 		if err != nil {
 			return nil, err
 		}
