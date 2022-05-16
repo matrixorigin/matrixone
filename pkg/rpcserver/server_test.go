@@ -15,10 +15,12 @@
 package rpcserver
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/logger"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
@@ -39,7 +41,8 @@ func TestServer(t *testing.T) {
 	}
 	h := new(hello)
 	h.cmd = srv.Register(h.process)
-	srv.Run()
+	err = srv.Run()
+	require.NoError(t, err)
 	time.Sleep(10 * time.Second)
 }
 

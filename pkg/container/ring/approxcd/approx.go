@@ -159,7 +159,9 @@ func (r *ApproxCountDistinctRing) BulkFill(i int64, zs []int64, vec *vector.Vect
 
 func (r *ApproxCountDistinctRing) Add(a interface{}, x, y int64) {
 	ar := a.(*ApproxCountDistinctRing)
-	r.Sk[x].Merge(ar.Sk[y])
+	if err := r.Sk[x].Merge(ar.Sk[y]); err != nil {
+		panic(err)
+	}
 }
 
 func (r *ApproxCountDistinctRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
@@ -167,14 +169,17 @@ func (r *ApproxCountDistinctRing) BatchAdd(a interface{}, start int64, os []uint
 	for i := range os {
 		dest := vps[i] - 1
 		src := int64(i) + start
-		r.Sk[dest].Merge(ar.Sk[src])
+		if err := r.Sk[dest].Merge(ar.Sk[src]); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (r *ApproxCountDistinctRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*ApproxCountDistinctRing)
-	r.Sk[x].Merge(ar.Sk[y])
-
+	if err := r.Sk[x].Merge(ar.Sk[y]); err != nil {
+		panic(err)
+	}
 }
 
 func (r *ApproxCountDistinctRing) Eval(_ []int64) *vector.Vector {

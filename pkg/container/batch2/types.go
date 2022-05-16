@@ -22,6 +22,7 @@ import (
 // Batch represents a part of a relationship
 type Batch struct {
 	Ht   any              // anything
+	Cnt  int64            // reference count, default is 1
 	Zs   []int64          // ring
 	Rs   []ring.Ring      // aggregation list
 	Vecs []*vector.Vector // columns

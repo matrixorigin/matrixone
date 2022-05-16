@@ -36,7 +36,9 @@ func New(addr string, maxsize int, log *zap.Logger) (Server, error) {
 }
 
 func (s *server) Stop() {
-	s.app.Stop()
+	if err := s.app.Stop(); err != nil {
+		panic(err)
+	}
 }
 
 func (s *server) Run() error {

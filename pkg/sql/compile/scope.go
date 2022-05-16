@@ -351,12 +351,24 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 		emptyVector[i] = []byte("")
 	}
 
-	vector.Append(bat.Vecs[0], nameVector)         // field
-	vector.Append(bat.Vecs[1], typeVector)         // type
-	vector.Append(bat.Vecs[2], emptyVector)        // null todo: not implement
-	vector.Append(bat.Vecs[3], keyVector)          // key
-	vector.Append(bat.Vecs[4], defaultValueVector) // default
-	vector.Append(bat.Vecs[5], emptyVector)        // extra todo: not implement
+	if err := vector.Append(bat.Vecs[0], nameVector); err != nil { // field
+		return err
+	}
+	if err := vector.Append(bat.Vecs[1], typeVector); err != nil { // type
+		return err
+	}
+	if err := vector.Append(bat.Vecs[2], emptyVector); err != nil { // null todo: not implement
+		return err
+	}
+	if err := vector.Append(bat.Vecs[3], keyVector); err != nil { // key
+		return err
+	}
+	if err := vector.Append(bat.Vecs[4], defaultValueVector); err != nil { // default
+		return err
+	}
+	if err := vector.Append(bat.Vecs[5], emptyVector); err != nil { // extra todo: not implement
+		return err
+	}
 
 	bat.InitZsOne(count)
 	return fill(u, bat)
@@ -420,8 +432,12 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 	tableName[0] = []byte(tn)
 	createTable[0] = buf.Bytes()
 
-	vector.Append(bat.Vecs[0], tableName)
-	vector.Append(bat.Vecs[1], createTable)
+	if err := vector.Append(bat.Vecs[0], tableName); err != nil {
+		return err
+	}
+	if err := vector.Append(bat.Vecs[1], createTable); err != nil {
+		return err
+	}
 
 	bat.InitZsOne(1)
 	return fill(u, bat)
@@ -458,8 +474,12 @@ func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.
 	dbName[0] = []byte(p.Id)
 	createDatabase[0] = buf.Bytes()
 
-	vector.Append(bat.Vecs[0], dbName)
-	vector.Append(bat.Vecs[1], createDatabase)
+	if err := vector.Append(bat.Vecs[0], dbName); err != nil {
+		return err
+	}
+	if err := vector.Append(bat.Vecs[1], createDatabase); err != nil {
+		return err
+	}
 
 	bat.InitZsOne(1)
 	return fill(u, bat)
