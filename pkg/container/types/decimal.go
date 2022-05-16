@@ -244,7 +244,6 @@ func CompareDecimal128Decimal128(a, b Decimal128, aScale, bScale int32) (result 
 func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, scaleDiff int32) {
 	length := int64(len(src))
 	C.align_int128_using_scale_diff(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), unsafe.Pointer(&length), unsafe.Pointer(&scaleDiff))
-	return
 }
 
 func ScaleDecimal128By10(a Decimal128) (result Decimal128) {
