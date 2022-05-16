@@ -18,12 +18,24 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCompactBlockCmd(t *testing.T) {
-	node := MockAppendNode(341, 2515, nil)
+func TestCompactBlockCmd(t *testing.T) {	schema := catalog.MockSchema(1)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c := catalog.MockCatalog(dir, "mock", nil, nil)
+	defer c.Close()
+
+	db, _ := c.CreateDBEntry("db", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
+	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
+
+	controller := NewMVCCHandle(blk)
+	node := MockAppendNode(341, 2515, controller)
 	cmd := NewAppendCmd(1, node)
 
 	var w bytes.Buffer

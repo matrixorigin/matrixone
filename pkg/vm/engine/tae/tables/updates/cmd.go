@@ -47,7 +47,8 @@ type UpdateCmd struct {
 }
 
 func NewEmptyCmd(cmdType int16) *UpdateCmd {
-	cmd := NewUpdateCmd(0, nil)
+	cmd := &UpdateCmd{}
+	cmd.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, cmd)
 	cmd.cmdType = cmdType
 	if cmdType == txnbase.CmdUpdate {
 		cmd.update = NewColumnNode(nil, nil, nil)
