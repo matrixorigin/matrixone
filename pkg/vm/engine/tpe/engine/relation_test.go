@@ -16,13 +16,15 @@ package engine
 
 import (
 	"encoding/json"
+	"reflect"
+	"testing"
+
 	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+
 	"github.com/smartystreets/goconvey/convey"
-	"reflect"
-	"testing"
 )
 
 func TestTpeRelation_Write(t *testing.T) {
@@ -123,6 +125,7 @@ func TestTpeRelation_Write(t *testing.T) {
 			},
 		}
 		payload, err := json.Marshal(dumpShards)
+		convey.So(err, convey.ShouldBeNil)
 
 		readers := tableDesc.NewReader(10, nil, payload)
 		dumpReaderCnt := 0

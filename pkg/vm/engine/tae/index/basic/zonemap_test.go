@@ -90,6 +90,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.True(t, res)
 
 	buf, err := zm.Marshal()
+	require.NoError(t, err)
 	zm1 := ZoneMap{}
 	err = zm1.Unmarshal(buf)
 	require.NoError(t, err)
@@ -176,6 +177,7 @@ func TestZoneMapString(t *testing.T) {
 	require.False(t, res)
 
 	buf, err := zm.Marshal()
+	require.NoError(t, err)
 	zm1 := ZoneMap{}
 	err = zm1.Unmarshal(buf)
 	require.NoError(t, err)

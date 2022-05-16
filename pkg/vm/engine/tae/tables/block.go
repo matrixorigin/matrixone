@@ -106,7 +106,7 @@ func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
 		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
 		defer common.GPool.Free(w.MNode)
-		blk.indexHolder.(acif.IAppendableBlockIndexHolder).BatchInsert(&w.Vector, 0, gvec.Length(&w.Vector), 0, false)
+		err = blk.indexHolder.(acif.IAppendableBlockIndexHolder).BatchInsert(&w.Vector, 0, gvec.Length(&w.Vector), 0, false)
 		return
 	}
 	return blk.indexHolder.(acif.INonAppendableBlockIndexHolder).InitFromHost(blk, blk.meta.GetSchema(), idxCommon.MockIndexBufferManager /* TODO: use dedicated index buffer manager */)
@@ -143,8 +143,12 @@ func (blk *dataBlock) Destroy() (err error) {
 		}
 	}
 	if blk.file != nil {
-		blk.file.Close()
-		blk.file.Destroy()
+		if err = blk.file.Close(); err != nil {
+			return
+		}
+		if err = blk.file.Destroy(); err != nil {
+			return
+		}
 	}
 	return
 }
@@ -316,7 +320,7 @@ func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView) {
 	}
 }
 
-func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err error) {
+func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) {
 	chain := blk.mvcc.GetColumnChain(colIdx)
 	chain.RLock()
 	updateMask, updateVals := chain.CollectUpdatesLocked(view.Ts)
@@ -325,7 +329,6 @@ func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err e
 		view.UpdateMasks[colIdx] = updateMask
 		view.UpdateVals[colIdx] = updateVals
 	}
-	return
 }
 
 func (blk *dataBlock) MakeBlockView() (view *model.BlockView, err error) {
@@ -402,7 +405,7 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 	blk.FillColumnUpdates(view)
 	blk.FillColumnDeletes(view)
 	blk.mvcc.RUnlock()
-	view.Eval(true)
+	err = view.Eval(true)
 	return
 }
 
@@ -414,9 +417,8 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 	defer h.Close()
 
 	maxRow := uint32(0)
-	visible := true
 	blk.mvcc.RLock()
-	maxRow, visible = blk.mvcc.GetMaxVisibleRowLocked(ts)
+	maxRow, visible := blk.mvcc.GetMaxVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
 	if !visible {
 		return
@@ -451,7 +453,7 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 	blk.FillColumnDeletes(view)
 	blk.mvcc.RUnlock()
 
-	view.Eval(true)
+	err = view.Eval(true)
 
 	return
 }

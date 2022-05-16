@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -81,58 +82,63 @@ func TestShowDatabaseNames(t *testing.T) {
 
 	{
 		txn := tae.StartTxn(nil)
-		txn.CreateDatabase("db1")
+		_, err := txn.CreateDatabase("db1")
+		assert.Nil(t, err)
 		names := txn.DatabaseNames()
-		assert.Equal(t, 1, len(names))
-		assert.Equal(t, "db1", names[0])
+		assert.Equal(t, 2, len(names))
+		assert.Equal(t, "db1", names[1])
 		assert.Nil(t, txn.Commit())
 	}
 	{
 		txn := tae.StartTxn(nil)
 		names := txn.DatabaseNames()
-		assert.Equal(t, 1, len(names))
-		assert.Equal(t, "db1", names[0])
-		txn.CreateDatabase("db2")
+		assert.Equal(t, 2, len(names))
+		assert.Equal(t, "db1", names[1])
+		_, err := txn.CreateDatabase("db2")
+		assert.Nil(t, err)
 		names = txn.DatabaseNames()
 		t.Log(tae.Catalog.SimplePPString(common.PPL1))
-		assert.Equal(t, 2, len(names))
-		assert.Equal(t, "db1", names[0])
-		assert.Equal(t, "db2", names[1])
-		{
-			txn := tae.StartTxn(nil)
-			names := txn.DatabaseNames()
-			assert.Equal(t, 1, len(names))
-			assert.Equal(t, "db1", names[0])
-			_, err := txn.CreateDatabase("db2")
-			assert.NotNil(t, err)
-			txn.Rollback()
-		}
-		{
-			txn := tae.StartTxn(nil)
-			txn.CreateDatabase("db3")
-			names := txn.DatabaseNames()
-			assert.Equal(t, "db1", names[0])
-			assert.Equal(t, "db3", names[1])
-			assert.Nil(t, txn.Commit())
-		}
+		assert.Equal(t, 3, len(names))
+		assert.Equal(t, "db1", names[1])
+		assert.Equal(t, "db2", names[2])
 		{
 			txn := tae.StartTxn(nil)
 			names := txn.DatabaseNames()
 			assert.Equal(t, 2, len(names))
-			assert.Equal(t, "db1", names[0])
-			assert.Equal(t, "db3", names[1])
+			assert.Equal(t, "db1", names[1])
+			_, err := txn.CreateDatabase("db2")
+			assert.NotNil(t, err)
+			err = txn.Rollback()
+			assert.Nil(t, err)
+		}
+		{
+			txn := tae.StartTxn(nil)
+			_, err := txn.CreateDatabase("db3")
+			assert.Nil(t, err)
+			names := txn.DatabaseNames()
+			assert.Equal(t, "db1", names[1])
+			assert.Equal(t, "db3", names[2])
+			assert.Nil(t, txn.Commit())
+		}
+		{
+			txn := tae.StartTxn(nil)
+			names := txn.DatabaseNames()
+			assert.Equal(t, 3, len(names))
+			assert.Equal(t, "db1", names[1])
+			assert.Equal(t, "db3", names[2])
 			_, err := txn.DropDatabase("db1")
 			assert.Nil(t, err)
 			names = txn.DatabaseNames()
 			t.Log(tae.Catalog.SimplePPString(common.PPL1))
-			assert.Equal(t, 1, len(names))
-			assert.Equal(t, "db3", names[0])
+			t.Log(names)
+			assert.Equal(t, 2, len(names))
+			assert.Equal(t, "db3", names[1])
 			assert.Nil(t, txn.Commit())
 		}
 		names = txn.DatabaseNames()
-		assert.Equal(t, 2, len(names))
-		assert.Equal(t, "db1", names[0])
-		assert.Equal(t, "db2", names[1])
+		assert.Equal(t, 3, len(names))
+		assert.Equal(t, "db1", names[1])
+		assert.Equal(t, "db2", names[2])
 		assert.Nil(t, txn.Commit())
 	}
 }
@@ -154,7 +160,7 @@ func TestLogBlock(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -185,7 +191,7 @@ func TestLogSegment(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -216,7 +222,7 @@ func TestLogTable(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -249,7 +255,7 @@ func TestLogDatabase(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -270,9 +276,12 @@ func TestCheckpointCatalog2(t *testing.T) {
 	defer tae.Close()
 	txn := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(13)
-	db, _ := txn.CreateDatabase("db")
-	db.CreateRelation(schema)
-	txn.Commit()
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.Nil(t, err)
+	err = txn.Commit()
+	assert.Nil(t, err)
 
 	pool, _ := ants.NewPool(20)
 	var wg sync.WaitGroup
@@ -304,13 +313,15 @@ func TestCheckpointCatalog2(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		pool.Submit(mockRes)
+		err := pool.Submit(mockRes)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	ts := tae.Scheduler.GetSafeTS()
 	entry := tae.Catalog.PrepareCheckpoint(0, ts)
 	maxIndex := entry.GetMaxIndex()
-	tae.Catalog.Checkpoint(ts)
+	err = tae.Catalog.Checkpoint(ts)
+	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
 		ckp := tae.Scheduler.GetCheckpointedLSN()
 		return ckp == maxIndex.LSN
@@ -323,9 +334,12 @@ func TestCheckpointCatalog(t *testing.T) {
 	defer tae.Close()
 	txn := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(2)
-	db, _ := txn.CreateDatabase("db")
-	db.CreateRelation(schema)
-	txn.Commit()
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.Nil(t, err)
+	err = txn.Commit()
+	assert.Nil(t, err)
 
 	pool, _ := ants.NewPool(1)
 	var wg sync.WaitGroup
@@ -348,16 +362,20 @@ func TestCheckpointCatalog(t *testing.T) {
 		assert.Nil(t, err)
 
 		txn = tae.StartTxn(nil)
-		db, _ = txn.GetDatabase("db")
-		rel, _ = db.GetRelationByName(schema.Name)
-		seg, _ = rel.GetSegment(id.SegmentID)
+		db, err = txn.GetDatabase("db")
+		assert.Nil(t, err)
+		rel, err = db.GetRelationByName(schema.Name)
+		assert.Nil(t, err)
+		seg, err = rel.GetSegment(id.SegmentID)
+		assert.Nil(t, err)
 		err = seg.SoftDeleteBlock(id.BlockID)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		pool.Submit(mockRes)
+		err := pool.Submit(mockRes)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

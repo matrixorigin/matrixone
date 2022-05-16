@@ -116,12 +116,16 @@ func TestGroup(t *testing.T) {
 		Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		Call(tc.proc, tc.arg)
+		if tc.proc.Reg.InputBatch != nil {
+			batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+		}
 		tc.proc.Reg.InputBatch = nil
 		Call(tc.proc, tc.arg)
+		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
-func BenchmarkTop(b *testing.B) {
+func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
@@ -140,6 +144,9 @@ func BenchmarkTop(b *testing.B) {
 			Call(tc.proc, tc.arg)
 			tc.proc.Reg.InputBatch = nil
 			Call(tc.proc, tc.arg)
+			if tc.proc.Reg.InputBatch != nil {
+				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+			}
 		}
 	}
 }

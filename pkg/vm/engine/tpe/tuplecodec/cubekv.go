@@ -220,7 +220,7 @@ func (ck *CubeKV) SetBatch(keys []TupleKey, values []TupleValue) error {
 		return errorNoKeysToSet
 	}
 
-	var retErr error = nil
+	var retErr error
 	var checkErr int32
 
 	atomic.StoreInt32(&checkErr, 0)

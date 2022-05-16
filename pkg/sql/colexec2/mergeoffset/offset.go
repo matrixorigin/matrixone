@@ -36,8 +36,8 @@ func Prepare(_ *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		rec := proc.Reg.MergeReceivers[i]
-		bat := <-rec.Ch
+		reg := proc.Reg.MergeReceivers[i]
+		bat := <-reg.Ch
 		// deal special case for bat
 		{
 			// 1. the last batch at this receiver
@@ -54,6 +54,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 
 		if n.ctr.seen > n.Offset {
+			batch.Clean(bat, proc.Mp)
 			return false, nil
 		}
 		length := len(bat.Zs)

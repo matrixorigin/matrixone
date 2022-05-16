@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
 
 var SegmentFileMockFactory = func(name string, id uint64) file.Segment {
@@ -34,6 +35,10 @@ type segmentFile struct {
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
+}
+
+func (sf *segmentFile) GetSegmentFile() *segment.Segment {
+	panic(any("implement me"))
 }
 
 func newSegmentFile(name string, id uint64) *segmentFile {

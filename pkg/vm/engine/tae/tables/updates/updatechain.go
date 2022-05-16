@@ -82,7 +82,7 @@ func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v interface{}, n txnif
 	if err = chain.PrepareUpdate(row, n); err != nil {
 		return
 	}
-	n.UpdateLocked(row, v)
+	err = n.UpdateLocked(row, v)
 	return
 }
 
@@ -101,7 +101,7 @@ func (chain *ColumnChain) DeleteNode(node *common.DLNode) {
 func (chain *ColumnChain) DeleteNodeLocked(node *common.DLNode) {
 	n := node.GetPayload().(*ColumnNode)
 	for row := range n.txnVals {
-		chain.view.Delete(row, n)
+		_ = chain.view.Delete(row, n)
 	}
 	chain.Delete(node)
 	chain.SetUpdateCnt(uint32(chain.view.mask.GetCardinality()))

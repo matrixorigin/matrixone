@@ -42,14 +42,16 @@ func init() {
 
 func startProfile() {
 	f, _ := os.Create(cpuprofile)
-	pprof.StartCPUProfile(f)
+	if err := pprof.StartCPUProfile(f); err != nil {
+		panic(err)
+	}
 }
 
 func stopProfile() {
 	pprof.StopCPUProfile()
 	memf, _ := os.Create(memprofile)
 	defer memf.Close()
-	pprof.Lookup("heap").WriteTo(memf, 0)
+	_ = pprof.Lookup("heap").WriteTo(memf, 0)
 }
 
 func main() {
@@ -65,7 +67,7 @@ func main() {
 	{
 		txn := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
-		db.CreateRelation(schema)
+		_, _ = db.CreateRelation(schema)
 		if err := txn.Commit(); err != nil {
 			panic(err)
 		}
@@ -98,7 +100,7 @@ func main() {
 	startProfile()
 	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(b))
+		_ = p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	stopProfile()

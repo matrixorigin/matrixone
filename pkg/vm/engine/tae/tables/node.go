@@ -203,7 +203,7 @@ func (node *appendableNode) OnUnload() {
 	if err := node.flushData(ts, node.data); err != nil {
 		needCkp = false
 		if err == data.ErrStaleRequest {
-			err = nil
+			// err = nil
 		} else {
 			logutil.Warnf("%s: %v", node.block.meta.String(), err)
 			node.exception.Store(err)
@@ -212,7 +212,7 @@ func (node *appendableNode) OnUnload() {
 	node.data.Close()
 	node.data = nil
 	if needCkp {
-		node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, node.block.meta.AsCommonID(), node.block.CheckpointWALClosure(ts))
+		_, _ = node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, node.block.meta.AsCommonID(), node.block.CheckpointWALClosure(ts))
 	}
 }
 

@@ -41,7 +41,10 @@ func init() {
 	FlushEntry = entry.GetBase()
 	FlushEntry.SetType(entry.ETFlush)
 	payload := make([]byte, 0)
-	FlushEntry.Unmarshal(payload)
+	err := FlushEntry.Unmarshal(payload)
+	if err != nil {
+		panic(err)
+	}
 }
 
 type storeInfo struct {
@@ -279,7 +282,10 @@ func (bs *baseStore) postCommitLoop() {
 func (bs *baseStore) onPostCommits(batches []*batch) {
 	for _, bat := range batches {
 		for _, info := range bat.infos {
-			bs.syncBase.OnEntryReceived(info)
+			err := bs.syncBase.OnEntryReceived(info)
+			if err != nil {
+				panic(err)
+			}
 		}
 		bs.syncBase.OnCommit()
 	}

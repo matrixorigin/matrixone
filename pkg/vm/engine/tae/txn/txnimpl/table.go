@@ -142,7 +142,9 @@ func (tbl *txnTable) LogBlockID(bid uint64) {
 
 func (tbl *txnTable) WaitSynced() {
 	for _, e := range tbl.logs {
-		e.WaitDone()
+		if err := e.WaitDone(); err != nil {
+			panic(err)
+		}
 		e.Free()
 	}
 }
@@ -204,7 +206,7 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 		return
 	}
 	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
-	tbl.store.warChecker.ReadTable(tbl.entry.AsCommonID())
+	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
 
@@ -219,7 +221,7 @@ func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error
 	}
 	seg = newSegment(tbl.store.txn, meta)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadTable(meta.GetTable().AsCommonID())
+	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
 }
 
@@ -234,7 +236,7 @@ func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 	}
 	seg = newSegment(tbl.store.txn, meta)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadTable(meta.GetTable().AsCommonID())
+	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
 }
 
@@ -248,14 +250,14 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadSegment(seg.AsCommonID())
+	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }
 
 func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	tbl.txnEntries = append(tbl.txnEntries, entry)
 	for _, id := range readed {
-		tbl.store.warChecker.Read(id)
+		tbl.store.warChecker.Read(tbl.entry.GetDB().ID, id)
 	}
 	return
 }
@@ -269,7 +271,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	if err != nil {
 		return
 	}
-	blk = newBlock(tbl.store.txn, meta)
+	blk = buildBlock(tbl.store.txn, meta)
 	return
 }
 
@@ -300,8 +302,8 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 		return
 	}
 	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadSegment(seg.AsCommonID())
-	return newBlock(tbl.store.txn, meta), err
+	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
+	return buildBlock(tbl.store.txn, meta), err
 }
 
 func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
@@ -538,7 +540,7 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 		if err != nil {
 			seg, _ := tbl.entry.GetSegmentByID(segmentId)
 			blk, _ := seg.GetBlockEntryByID(blockId)
-			tbl.store.warChecker.ReadBlock(blk.AsCommonID())
+			tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
 		}
 		return
 	}
@@ -554,8 +556,10 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 	node2, err := blkData.RangeDelete(tbl.store.txn, start, end)
 	if err == nil {
 		id := blk.AsCommonID()
-		tbl.AddDeleteNode(id, node2)
-		tbl.store.warChecker.ReadBlock(id)
+		if err = tbl.AddDeleteNode(id, node2); err != nil {
+			return
+		}
+		tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, id)
 	}
 	return
 }
@@ -627,7 +631,7 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 		if err != nil {
 			seg, _ := tbl.entry.GetSegmentByID(segmentId)
 			blk, _ := seg.GetBlockEntryByID(blockId)
-			tbl.store.warChecker.ReadBlock(blk.AsCommonID())
+			tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
 		}
 		return
 	}
@@ -642,8 +646,10 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 	blkData := blk.GetBlockData()
 	node2, err := blkData.Update(tbl.store.txn, row, col, v)
 	if err == nil {
-		tbl.AddUpdateNode(node2)
-		tbl.store.warChecker.ReadBlock(blk.AsCommonID())
+		if err = tbl.AddUpdateNode(node2); err != nil {
+			return
+		}
+		tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
 	}
 	return
 }
@@ -815,7 +821,9 @@ func (tbl *txnTable) ApplyAppend() {
 		id := ctx.driver.GetID()
 		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, id)
 		logutil.Debugf(info.String())
-		appendNode.PrepareCommit()
+		if err = appendNode.PrepareCommit(); err != nil {
+			panic(err)
+		}
 		tbl.txnEntries = append(tbl.txnEntries, appendNode)
 	}
 	if tbl.tableHandle != nil {
@@ -858,7 +866,7 @@ func (tbl *txnTable) prepareAppend(node InsertNode) (err error) {
 			count:  toAppendWithDeletes,
 		}
 		id := appender.GetID()
-		tbl.store.warChecker.ReadBlock(id)
+		tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, id)
 		tbl.appends = append(tbl.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(tbl.appends))
 		appended += toAppend

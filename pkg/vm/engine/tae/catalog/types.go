@@ -36,6 +36,23 @@ func (es EntryState) Repr() string {
 	panic("not supported")
 }
 
+type PersistentType int8
+
+const (
+	PT_Permanent PersistentType = iota
+	PT_Temporary
+)
+
+type TableType int8
+
+const (
+	TT_Ordinary TableType = iota
+	TT_Index
+	TT_Sequence
+	TT_View
+	TT_MaterializedView
+)
+
 func EstimateColumnBlockSize(colIdx int, rows uint32, meta *BlockEntry) uint32 {
 	switch meta.GetSegment().GetTable().GetSchema().ColDefs[colIdx].Type.Oid {
 	case types.T_json, types.T_char, types.T_varchar:
