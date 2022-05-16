@@ -498,6 +498,26 @@ values = ["compact","default"]
 comment = "default is 'compact'. default : attributes in value without offset array. compact: attributes in value with offset array"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "storageEngine"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["aoe","tae","tpe"]
+comment = "default engine is 'aoe'."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "portOfRpcServerInComputationEngine"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["20000", "20000", "65535"]
+comment = "port defines which port the rpc server listens on"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
