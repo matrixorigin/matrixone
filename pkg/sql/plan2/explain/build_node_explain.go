@@ -432,7 +432,7 @@ type RowsetDataDescribeImpl struct {
 func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	var result string
 	var first bool = true
-	for index, _ := range r.RowsetData.Cols {
+	for index := range r.RowsetData.Cols {
 		if !first {
 			result += ", "
 		}
