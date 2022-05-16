@@ -75,7 +75,7 @@ func NewDeleteNode(txn txnif.AsyncTxn) *DeleteNode {
 	}
 	return n
 }
-func (node *DeleteNode) GetID()*common.ID{
+func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
 func (node *DeleteNode) AddLogIndexesLocked(indexes []*wal.Index) {

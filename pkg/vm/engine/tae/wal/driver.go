@@ -47,7 +47,7 @@ func (driver *walDriver) GetCheckpointed() uint64 {
 	return driver.impl.GetCheckpointed(GroupC)
 }
 
-func (driver *walDriver) Replay(handle store.ApplyHandle)(err error){
+func (driver *walDriver) Replay(handle store.ApplyHandle) (err error) {
 	return driver.impl.Replay(handle)
 }
 

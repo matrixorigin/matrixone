@@ -69,7 +69,7 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 	appender.placeholder += n
 	return
 }
-func (appender *blockAppender) OnReplayAppendNode(maxrow uint32){
+func (appender *blockAppender) OnReplayAppendNode(maxrow uint32) {
 	appender.node.block.mvcc.AddAppendNodeLocked(nil, appender.node.rows)
 }
 func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {

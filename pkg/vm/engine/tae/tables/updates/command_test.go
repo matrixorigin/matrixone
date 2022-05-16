@@ -24,7 +24,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCompactBlockCmd(t *testing.T) {	schema := catalog.MockSchema(1)
+func TestCompactBlockCmd(t *testing.T) {
+	schema := catalog.MockSchema(1)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()

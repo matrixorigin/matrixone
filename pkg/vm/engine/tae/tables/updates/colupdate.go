@@ -105,10 +105,10 @@ func (node *ColumnNode) GetDLNode() *common.DLNode {
 	return node.DLNode
 }
 
-func (node *ColumnNode) GetMask() *roaring.Bitmap{
+func (node *ColumnNode) GetMask() *roaring.Bitmap {
 	return node.txnMask
 }
-func (node *ColumnNode) GetValues() map[uint32]interface{}{
+func (node *ColumnNode) GetValues() map[uint32]interface{} {
 	return node.txnVals
 }
 func (node *ColumnNode) Compare(o common.NodePayload) int {

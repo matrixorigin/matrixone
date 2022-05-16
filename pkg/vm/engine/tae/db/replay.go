@@ -128,7 +128,7 @@ func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd) (err error) {
 	return
 }
 
-func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) (err error){
+func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) (err error) {
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		return err
@@ -148,10 +148,10 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) (err error){
 		return err
 	}
 	datablk := blk.GetBlockData()
-	iterator:=deleteNode.GetDeleteMaskLocked().Iterator()
-	for iterator.HasNext(){
-		row:=iterator.Next()
-		datablk.OnReplayDelete(row,row)
+	iterator := deleteNode.GetDeleteMaskLocked().Iterator()
+	for iterator.HasNext() {
+		row := iterator.Next()
+		datablk.OnReplayDelete(row, row)
 	}
 	return
 }

@@ -93,14 +93,14 @@ func NewUpdateCmd(id uint32, update *ColumnNode) *UpdateCmd {
 	return impl
 }
 
-func (c *UpdateCmd) GetUpdateNode() *ColumnNode{
+func (c *UpdateCmd) GetUpdateNode() *ColumnNode {
 	return c.update
 }
 
-func (c *UpdateCmd) GetAppendNode() *AppendNode{
+func (c *UpdateCmd) GetAppendNode() *AppendNode {
 	return c.append
 }
-func (c *UpdateCmd) GetDeleteNode() *DeleteNode{
+func (c *UpdateCmd) GetDeleteNode() *DeleteNode {
 	return c.delete
 }
 func (c *UpdateCmd) GetDBID() uint64 {

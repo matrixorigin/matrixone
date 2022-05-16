@@ -43,7 +43,7 @@ type Driver interface {
 	GetCurrSeqNum() uint64
 	GetPenddingCnt() uint64
 	Compact() error
-	Replay(handle store.ApplyHandle)(err error)
+	Replay(handle store.ApplyHandle) (err error)
 	Close() error
 }
 

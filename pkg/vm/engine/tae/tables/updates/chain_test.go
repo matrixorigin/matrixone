@@ -340,7 +340,8 @@ func TestColumnChain4(t *testing.T) {
 	t.Log(chain.StringLocked())
 }
 
-func TestDeleteChain1(t *testing.T) {	schema := catalog.MockSchema(1)
+func TestDeleteChain1(t *testing.T) {
+	schema := catalog.MockSchema(1)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()

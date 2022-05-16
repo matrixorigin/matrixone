@@ -57,7 +57,7 @@ func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, controller *MVCCHandle) *A
 	}
 	return n
 }
-func (n *AppendNode) GetID() *common.ID{
+func (n *AppendNode) GetID() *common.ID {
 	return n.id
 }
 func (n *AppendNode) GetCommitTS() uint64 { return n.commitTs }
