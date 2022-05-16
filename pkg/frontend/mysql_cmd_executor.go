@@ -903,11 +903,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 }
 
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
-	es := &explain.ExplainOptions{
-		Verbose: false,
-		Anzlyze: false,
-		Format:  explain.EXPLAIN_FORMAT_TEXT,
-	}
+	es := explain.NewExplainDefaultOptions()
 
 	for _, v := range stmt.Options {
 		if strings.EqualFold(v.Name, "VERBOSE") {
@@ -941,19 +937,24 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		}
 	}
 
-	//get CompilerContext
-	ctx := plan2.NewMockCompilerContext()
-	qry, err := plan2.BuildPlan(ctx, stmt.Statement)
+	//get query optimizer and execute Optimize
+	mockOptimizer := plan2.NewMockOptimizer()
+	qry, err := mockOptimizer.Optimize(stmt.Statement)
+
 	if err != nil {
-		//fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
+		logutil.Errorf("build query plan and optimize failed, error: %v", err)
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("build query plan and optimize failed:'%v'", err))
 	}
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(qry.GetQuery())
-	explainQuery.ExplainPlan(buffer, es)
+	explainQuery := explain.NewExplainQueryImpl(qry)
+	err = explainQuery.ExplainPlan(buffer, es)
+	if err != nil {
+		logutil.Errorf("explain Query statement error: %v", err)
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("explain Query statement error:%v", err))
+	}
 
 	session := mce.GetSession()
 	protocol := session.GetMysqlProtocol()
@@ -1280,7 +1281,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		case *tree.ExplainAnalyze:
 			selfHandle = true
-			return errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
+			return errors.New(errno.FeatureNotSupported, "not support explain analyze statment now")
 		}
 
 		if selfHandle {

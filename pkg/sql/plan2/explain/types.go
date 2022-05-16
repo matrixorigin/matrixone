@@ -15,41 +15,27 @@
 package explain
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-//type TableDef plan.TableDef
-//type ObjectRef plan.ObjectRef
-type Cost plan.Cost
-type Const plan.Const
-
-//type Expr plan.Expr
-
-//type Node plan.Node
-type RowsetData plan.RowsetData
-
-//type Query plan.Query
-
 type ExplainQuery interface {
-	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions)
-	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions)
+	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error
+	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error
 }
 
 type NodeDescribe interface {
-	GetNodeBasicInfo(options *ExplainOptions) string
-	GetExtraInfo(options *ExplainOptions) []string
-	GetProjectListInfo(options *ExplainOptions) string
-	GetJoinConditionInfo(options *ExplainOptions) string
-	GetWhereConditionInfo(options *ExplainOptions) string
-	GetOrderByInfo(options *ExplainOptions) string
-	GetGroupByInfo(options *ExplainOptions) string
+	GetNodeBasicInfo(options *ExplainOptions) (string, error)
+	GetExtraInfo(options *ExplainOptions) ([]string, error)
+	GetProjectListInfo(options *ExplainOptions) (string, error)
+	GetJoinConditionInfo(options *ExplainOptions) (string, error)
+	GetWhereConditionInfo(options *ExplainOptions) (string, error)
+	GetOrderByInfo(options *ExplainOptions) (string, error)
+	GetGroupByInfo(options *ExplainOptions) (string, error)
 }
 
 type NodeElemDescribe interface {
-	GetDescription(options *ExplainOptions) string
+	GetDescription(options *ExplainOptions) (string, error)
 }
 
 type FormatSettings struct {
@@ -60,12 +46,11 @@ type FormatSettings struct {
 }
 
 type ExplainDataBuffer struct {
-	Start          int
-	End            int
-	CurrentLine    int
-	NodeSize       int
-	LineWidthLimit int
-	Lines          []string
+	Start       int
+	End         int
+	CurrentLine int
+	NodeSize    int
+	Lines       []string
 }
 
 func NewExplainDataBuffer() *ExplainDataBuffer {
@@ -76,11 +61,6 @@ func NewExplainDataBuffer() *ExplainDataBuffer {
 		NodeSize:    0,
 		Lines:       make([]string, 0),
 	}
-}
-
-// Generates a string describing a ExplainDataBuffer.
-func (buf *ExplainDataBuffer) ToString() string {
-	return fmt.Sprintf("ExplainDataBuffer{start: %d, end: %d, lines: %s, NodeSize: %d}", buf.Start, buf.End, buf.Lines, buf.NodeSize)
 }
 
 func (buf *ExplainDataBuffer) AppendCurrentLine(temp string) {
@@ -120,18 +100,8 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
-	// logutil.Infof(buf.Lines[buf.CurrentLine])
+	logutil.Infof(buf.Lines[buf.CurrentLine])
 	buf.End++
-}
-
-func (buf *ExplainDataBuffer) IsFull() bool {
-	return false
-	//TODO
-}
-
-func (buf *ExplainDataBuffer) Empty() bool {
-	return false
-	//TODO
 }
 
 type ExplainFormat int32
@@ -149,14 +119,10 @@ type ExplainOptions struct {
 	Format  ExplainFormat
 }
 
-func NewExplainPlanOptions() *ExplainOptions {
-	return nil
-}
-
-type QueryPlanSetting struct {
-	Name             string
-	Optimize         bool
-	JSON             bool
-	DOT              bool
-	QueryPlanOptions ExplainOptions
+func NewExplainDefaultOptions() *ExplainOptions {
+	return &ExplainOptions{
+		Verbose: false,
+		Anzlyze: false,
+		Format:  EXPLAIN_FORMAT_TEXT,
+	}
 }
