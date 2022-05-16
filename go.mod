@@ -35,7 +35,12 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-require github.com/golang/protobuf v1.5.2 // indirect
+require (
+	github.com/golang/protobuf v1.5.2 // indirect
+	golang.org/x/mod v0.6.0-dev.0.20211013180041-c96bc1413d57 // indirect
+	golang.org/x/tools v0.1.8-0.20211029000441-d6a9af8af023 // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+)
 
 require (
 	cloud.google.com/go v0.99.0 // indirect
