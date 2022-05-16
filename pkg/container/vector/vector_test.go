@@ -396,9 +396,8 @@ func TestAppend(t *testing.T) {
 	v0.Data = encoding.EncodeInt8Slice(int8Slice)
 	v0.Col = encoding.DecodeInt8Slice(v0.Data)
 	appendInt8Slice := []int8{21, 22, 23}
-	if err := Append(v0, appendInt8Slice); err != nil {
-		panic(err)
-	}
+	err := Append(v0, appendInt8Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(int8Slice, appendInt8Slice...), v0.Col.([]int8))
 
 	v1 := New(types.Type{Oid: types.T(types.T_int16)})
@@ -406,9 +405,8 @@ func TestAppend(t *testing.T) {
 	v1.Data = encoding.EncodeInt16Slice(int16Slice)
 	v1.Col = encoding.DecodeInt16Slice(v1.Data)
 	appendInt16Slice := []int16{21, 22, 23}
-	if err := Append(v1, appendInt16Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v1, appendInt16Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(int16Slice, appendInt16Slice...), v1.Col.([]int16))
 
 	v2 := New(types.Type{Oid: types.T(types.T_int32)})
@@ -416,9 +414,8 @@ func TestAppend(t *testing.T) {
 	v2.Data = encoding.EncodeInt32Slice(int32Slice)
 	v2.Col = encoding.DecodeInt32Slice(v2.Data)
 	appendInt32Slice := []int32{21, 22, 23}
-	if err := Append(v2, appendInt32Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v2, appendInt32Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(int32Slice, appendInt32Slice...), v2.Col.([]int32))
 
 	v3 := New(types.Type{Oid: types.T(types.T_int64)})
@@ -426,9 +423,8 @@ func TestAppend(t *testing.T) {
 	v3.Data = encoding.EncodeInt64Slice(int64Slice)
 	v3.Col = encoding.DecodeInt64Slice(v3.Data)
 	appendInt64Slice := []int64{21, 22, 23}
-	if err := Append(v3, appendInt64Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v3, appendInt64Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(int64Slice, appendInt64Slice...), v3.Col.([]int64))
 
 	v4 := New(types.Type{Oid: types.T(types.T_uint8)})
@@ -436,9 +432,8 @@ func TestAppend(t *testing.T) {
 	v4.Data = encoding.EncodeUint8Slice(uint8Slice)
 	v4.Col = encoding.DecodeUint8Slice(v4.Data)
 	appendUint8Slice := []uint8{21, 22, 23}
-	if err := Append(v4, appendUint8Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v4, appendUint8Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(uint8Slice, appendUint8Slice...), v4.Col.([]uint8))
 
 	v5 := New(types.Type{Oid: types.T(types.T_uint16)})
@@ -446,9 +441,8 @@ func TestAppend(t *testing.T) {
 	v5.Data = encoding.EncodeUint16Slice(uint16Slice)
 	v5.Col = encoding.DecodeUint16Slice(v5.Data)
 	appendUint16Slice := []uint16{21, 22, 23}
-	if err := Append(v5, appendUint16Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v5, appendUint16Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(uint16Slice, appendUint16Slice...), v5.Col.([]uint16))
 
 	v6 := New(types.Type{Oid: types.T(types.T_uint32)})
@@ -456,9 +450,8 @@ func TestAppend(t *testing.T) {
 	v6.Data = encoding.EncodeUint32Slice(uint32Slice)
 	v6.Col = encoding.DecodeUint32Slice(v6.Data)
 	appendUint32Slice := []uint32{21, 22, 23}
-	if err := Append(v6, appendUint32Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v6, appendUint32Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(uint32Slice, appendUint32Slice...), v6.Col.([]uint32))
 
 	v7 := New(types.Type{Oid: types.T(types.T_uint64)})
@@ -466,9 +459,8 @@ func TestAppend(t *testing.T) {
 	v7.Data = encoding.EncodeUint64Slice(uint64Slice)
 	v7.Col = encoding.DecodeUint64Slice(v7.Data)
 	appendUint64Slice := []uint64{21, 22, 23}
-	if err := Append(v7, appendUint64Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v7, appendUint64Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(uint64Slice, appendUint64Slice...), v7.Col.([]uint64))
 
 	v8 := New(types.Type{Oid: types.T(types.T_float32)})
@@ -476,9 +468,8 @@ func TestAppend(t *testing.T) {
 	v8.Data = encoding.EncodeFloat32Slice(float32Slice)
 	v8.Col = encoding.DecodeFloat32Slice(v8.Data)
 	appendFloat32Slice := []float32{21, 22, 23}
-	if err := Append(v8, appendFloat32Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v8, appendFloat32Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(float32Slice, appendFloat32Slice...), v8.Col.([]float32))
 
 	v9 := New(types.Type{Oid: types.T(types.T_float64)})
@@ -486,9 +477,8 @@ func TestAppend(t *testing.T) {
 	v9.Data = encoding.EncodeFloat64Slice(float64Slice)
 	v9.Col = encoding.DecodeFloat64Slice(v9.Data)
 	appendFloat64Slice := []float64{21, 22, 23}
-	if err := Append(v9, appendFloat64Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v9, appendFloat64Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(float64Slice, appendFloat64Slice...), v9.Col.([]float64))
 
 	v10 := New(types.Type{Oid: types.T(types.T_date)})
@@ -496,9 +486,8 @@ func TestAppend(t *testing.T) {
 	v10.Data = encoding.EncodeDateSlice(dateSlice)
 	v10.Col = encoding.DecodeDateSlice(v10.Data)
 	appendDateSlice := []types.Date{21, 22, 23}
-	if err := Append(v10, appendDateSlice); err != nil {
-		panic(err)
-	}
+	err = Append(v10, appendDateSlice)
+	require.NoError(t, err)
 	require.Equal(t, append(dateSlice, appendDateSlice...), v10.Col.([]types.Date))
 
 	v11 := New(types.Type{Oid: types.T(types.T_datetime)})
@@ -506,9 +495,8 @@ func TestAppend(t *testing.T) {
 	v11.Data = encoding.EncodeDatetimeSlice(datetimeSlice)
 	v11.Col = encoding.DecodeDatetimeSlice(v11.Data)
 	appendDatetimeSlice := []types.Datetime{21, 22, 23}
-	if err := Append(v11, appendDatetimeSlice); err != nil {
-		panic(err)
-	}
+	err = Append(v11, appendDatetimeSlice)
+	require.NoError(t, err)
 	require.Equal(t, append(datetimeSlice, appendDatetimeSlice...), v11.Col.([]types.Datetime))
 
 	v12 := New(types.Type{Oid: types.T(types.T_sel)})
@@ -516,9 +504,8 @@ func TestAppend(t *testing.T) {
 	v12.Data = encoding.EncodeInt64Slice(selSlice)
 	v12.Col = encoding.DecodeInt64Slice(v12.Data)
 	appendInt64Slice = []int64{21, 22, 23}
-	if err := Append(v12, appendInt64Slice); err != nil {
-		panic(err)
-	}
+	err = Append(v12, appendInt64Slice)
+	require.NoError(t, err)
 	require.Equal(t, append(selSlice, appendInt64Slice...), v12.Col.([]int64))
 }
 
@@ -611,105 +598,92 @@ func TestShuffle(t *testing.T) {
 	gm := guest.New(1<<20, hm)
 	mp := mheap.New(gm)
 	sels := []int64{1, 3, 5}
-	if err := Shuffle(v0, sels, mp); err != nil {
-		panic(err)
-	}
+	err := Shuffle(v0, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int8{1, 3, 5}, v0.Col.([]int8))
 
 	v1 := New(types.Type{Oid: types.T(types.T_int16)})
 	v1.Data = encoding.EncodeInt16Slice([]int16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v1.Col = encoding.DecodeInt16Slice(v1.Data)
-	if err := Shuffle(v1, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v1, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int16{1, 3, 5}, v1.Col.([]int16))
 
 	v2 := New(types.Type{Oid: types.T(types.T_int32)})
 	v2.Data = encoding.EncodeInt32Slice([]int32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v2.Col = encoding.DecodeInt32Slice(v2.Data)
-	if err := Shuffle(v2, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v2, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int32{1, 3, 5}, v2.Col.([]int32))
 
 	v3 := New(types.Type{Oid: types.T(types.T_int64)})
 	v3.Data = encoding.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v3.Col = encoding.DecodeInt64Slice(v3.Data)
-	if err := Shuffle(v3, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v3, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int64{1, 3, 5}, v3.Col.([]int64))
 
 	v4 := New(types.Type{Oid: types.T(types.T_uint8)})
 	v4.Data = encoding.EncodeUint8Slice([]uint8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v4.Col = encoding.DecodeUint8Slice(v4.Data)
-	if err := Shuffle(v4, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v4, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint8{1, 3, 5}, v4.Col.([]uint8))
 
 	v5 := New(types.Type{Oid: types.T(types.T_uint16)})
 	v5.Data = encoding.EncodeUint16Slice([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v5.Col = encoding.DecodeUint16Slice(v5.Data)
-	if err := Shuffle(v5, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v5, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint16{1, 3, 5}, v5.Col.([]uint16))
 
 	v6 := New(types.Type{Oid: types.T(types.T_uint32)})
 	v6.Data = encoding.EncodeUint32Slice([]uint32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v6.Col = encoding.DecodeUint32Slice(v6.Data)
-	if err := Shuffle(v6, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v6, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint32{1, 3, 5}, v6.Col.([]uint32))
 
 	v7 := New(types.Type{Oid: types.T(types.T_uint64)})
 	v7.Data = encoding.EncodeUint64Slice([]uint64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v7.Col = encoding.DecodeUint64Slice(v7.Data)
-	if err := Shuffle(v7, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v7, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint64{1, 3, 5}, v7.Col.([]uint64))
 
 	v8 := New(types.Type{Oid: types.T(types.T_float32)})
 	v8.Data = encoding.EncodeFloat32Slice([]float32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v8.Col = encoding.DecodeFloat32Slice(v8.Data)
-	if err := Shuffle(v8, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v8, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float32{1, 3, 5}, v8.Col.([]float32))
 
 	v9 := New(types.Type{Oid: types.T(types.T_float64)})
 	v9.Data = encoding.EncodeFloat64Slice([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v9.Col = encoding.DecodeFloat64Slice(v9.Data)
-	if err := Shuffle(v9, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v9, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float64{1, 3, 5}, v9.Col.([]float64))
 
 	v10 := New(types.Type{Oid: types.T(types.T_sel)})
 	v10.Data = encoding.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v10.Col = encoding.DecodeInt64Slice(v10.Data)
-	if err := Shuffle(v10, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v10, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int64{1, 3, 5}, v10.Col.([]int64))
 
 	v11 := New(types.Type{Oid: types.T(types.T_date)})
 	v11.Data = encoding.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v11.Col = encoding.DecodeDateSlice(v11.Data)
-	if err := Shuffle(v11, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v11, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Date{1, 3, 5}, v11.Col.([]types.Date))
 
 	v12 := New(types.Type{Oid: types.T(types.T_datetime)})
 	v12.Data = encoding.EncodeDatetimeSlice([]types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v12.Col = encoding.DecodeDatetimeSlice(v12.Data)
-	if err := Shuffle(v12, sels, mp); err != nil {
-		panic(err)
-	}
+	err = Shuffle(v12, sels, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Datetime{1, 3, 5}, v12.Col.([]types.Datetime))
 }
 
@@ -731,18 +705,16 @@ func TestCopy(t *testing.T) {
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
 	mp := mheap.New(gm)
-	if err := Copy(v0, w0, 2, 0, mp); err != nil {
-		panic(err)
-	}
+	err := Copy(v0, w0, 2, 0, mp)
+	require.NoError(t, err)
 	require.Equal(t, []byte("hellohellonihaohello"), v0.Data)
 	v0.Col = &types.Bytes{
 		Data:    []byte("hihihihi"),
 		Offsets: []uint32{0, 2, 4, 6},
 		Lengths: []uint32{2, 2, 2, 2},
 	}
-	if err := Copy(v0, w0, 2, 0, mp); err != nil {
-		panic(err)
-	}
+	err = Copy(v0, w0, 2, 0, mp)
+	require.NoError(t, err)
 	require.Equal(t, []byte("hihinihaohi"), v0.Data)
 }
 
@@ -754,150 +726,130 @@ func TestUnionOne(t *testing.T) {
 	w0.Data = encoding.EncodeInt8Slice([]int8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w0.Col = encoding.DecodeInt8Slice(w0.Data)
 	v0 := New(types.Type{Oid: types.T(types.T_int8)})
-	if err := UnionOne(v0, w0, 3, mp); err != nil {
-		panic(err)
-	}
+	err := UnionOne(v0, w0, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int8{3}, v0.Col.([]int8))
 	v0.Data = encoding.EncodeInt8Slice([]int8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v0.Col = encoding.DecodeInt8Slice(v0.Data)
-	if err := UnionOne(v0, w0, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v0, w0, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int8{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v0.Col.([]int8))
 
 	w1 := New(types.Type{Oid: types.T(types.T_int16)})
 	w1.Data = encoding.EncodeInt16Slice([]int16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w1.Col = encoding.DecodeInt16Slice(w1.Data)
 	v1 := New(types.Type{Oid: types.T(types.T_int16)})
-	if err := UnionOne(v1, w1, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v1, w1, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int16{3}, v1.Col.([]int16))
 	v1.Data = encoding.EncodeInt16Slice([]int16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v1.Col = encoding.DecodeInt16Slice(v1.Data)
-	if err := UnionOne(v1, w1, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v1, w1, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int16{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v1.Col.([]int16))
 
 	w2 := New(types.Type{Oid: types.T(types.T_int32)})
 	w2.Data = encoding.EncodeInt32Slice([]int32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w2.Col = encoding.DecodeInt32Slice(w2.Data)
 	v2 := New(types.Type{Oid: types.T(types.T_int32)})
-	if err := UnionOne(v2, w2, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v2, w2, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int32{3}, v2.Col.([]int32))
 	v2.Data = encoding.EncodeInt32Slice([]int32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v2.Col = encoding.DecodeInt32Slice(v2.Data)
-	if err := UnionOne(v2, w2, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v2, w2, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v2.Col.([]int32))
 
 	w3 := New(types.Type{Oid: types.T(types.T_int64)})
 	w3.Data = encoding.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w3.Col = encoding.DecodeInt64Slice(w3.Data)
 	v3 := New(types.Type{Oid: types.T(types.T_int64)})
-	if err := UnionOne(v3, w3, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v3, w3, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int64{3}, v3.Col.([]int64))
 	v3.Data = encoding.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v3.Col = encoding.DecodeInt64Slice(v3.Data)
-	if err := UnionOne(v3, w3, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v3, w3, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v3.Col.([]int64))
 
 	w4 := New(types.Type{Oid: types.T(types.T_uint8)})
 	w4.Data = encoding.EncodeUint8Slice([]uint8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w4.Col = encoding.DecodeUint8Slice(w4.Data)
 	v4 := New(types.Type{Oid: types.T(types.T_uint8)})
-	if err := UnionOne(v4, w4, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v4, w4, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint8{3}, v4.Col.([]uint8))
 	v4.Data = encoding.EncodeUint8Slice([]uint8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v4.Col = encoding.DecodeUint8Slice(v4.Data)
-	if err := UnionOne(v4, w4, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v4, w4, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint8{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v4.Col.([]uint8))
 
 	w5 := New(types.Type{Oid: types.T(types.T_uint16)})
 	w5.Data = encoding.EncodeUint16Slice([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w5.Col = encoding.DecodeUint16Slice(w5.Data)
 	v5 := New(types.Type{Oid: types.T(types.T_uint16)})
-	if err := UnionOne(v5, w5, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v5, w5, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint16{3}, v5.Col.([]uint16))
 	v5.Data = encoding.EncodeUint16Slice([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v5.Col = encoding.DecodeUint16Slice(v5.Data)
-	if err := UnionOne(v5, w5, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v5, w5, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v5.Col.([]uint16))
 
 	w6 := New(types.Type{Oid: types.T(types.T_uint32)})
 	w6.Data = encoding.EncodeUint32Slice([]uint32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w6.Col = encoding.DecodeUint32Slice(w6.Data)
 	v6 := New(types.Type{Oid: types.T(types.T_uint32)})
-	if err := UnionOne(v6, w6, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v6, w6, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint32{3}, v6.Col.([]uint32))
 	v6.Data = encoding.EncodeUint32Slice([]uint32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v6.Col = encoding.DecodeUint32Slice(v6.Data)
-	if err := UnionOne(v6, w6, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v6, w6, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v6.Col.([]uint32))
 
 	w7 := New(types.Type{Oid: types.T(types.T_uint64)})
 	w7.Data = encoding.EncodeUint64Slice([]uint64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w7.Col = encoding.DecodeUint64Slice(w7.Data)
 	v7 := New(types.Type{Oid: types.T(types.T_uint64)})
-	if err := UnionOne(v7, w7, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v7, w7, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint64{3}, v7.Col.([]uint64))
 	v7.Data = encoding.EncodeUint64Slice([]uint64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v7.Col = encoding.DecodeUint64Slice(v7.Data)
-	if err := UnionOne(v7, w7, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v7, w7, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v7.Col.([]uint64))
 
 	w8 := New(types.Type{Oid: types.T(types.T_float32)})
 	w8.Data = encoding.EncodeFloat32Slice([]float32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w8.Col = encoding.DecodeFloat32Slice(w8.Data)
 	v8 := New(types.Type{Oid: types.T(types.T_float32)})
-	if err := UnionOne(v8, w8, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v8, w8, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float32{3}, v8.Col.([]float32))
 	v8.Data = encoding.EncodeFloat32Slice([]float32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v8.Col = encoding.DecodeFloat32Slice(v8.Data)
-	if err := UnionOne(v8, w8, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v8, w8, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float32{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v8.Col.([]float32))
 
 	w9 := New(types.Type{Oid: types.T(types.T_float64)})
 	w9.Data = encoding.EncodeFloat64Slice([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w9.Col = encoding.DecodeFloat64Slice(w9.Data)
 	v9 := New(types.Type{Oid: types.T(types.T_float64)})
-	if err := UnionOne(v9, w9, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v9, w9, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float64{3}, v9.Col.([]float64))
 	v9.Data = encoding.EncodeFloat64Slice([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v9.Col = encoding.DecodeFloat64Slice(v9.Data)
-	if err := UnionOne(v9, w9, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v9, w9, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v9.Col.([]float64))
 
 	w10 := New(types.Type{Oid: types.T(types.T_char)})
@@ -908,9 +860,8 @@ func TestUnionOne(t *testing.T) {
 	}
 	w10.Data = w10.Col.(*types.Bytes).Data
 	v10 := New(types.Type{Oid: types.T(types.T_char)})
-	if err := UnionOne(v10, w10, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v10, w10, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []byte("nihao"), v10.Col.(*types.Bytes).Data)
 	v10.Col = &types.Bytes{
 		Data:    []byte("hellohellohellohello"),
@@ -918,39 +869,34 @@ func TestUnionOne(t *testing.T) {
 		Lengths: []uint32{5, 5, 5, 5},
 	}
 	v10.Data = v10.Col.(*types.Bytes).Data
-	if err := UnionOne(v10, w10, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v10, w10, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []byte("hellohellohellohellonihao"), v10.Col.(*types.Bytes).Data)
 
 	w11 := New(types.Type{Oid: types.T(types.T_date)})
 	w11.Data = encoding.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w11.Col = encoding.DecodeDateSlice(w11.Data)
 	v11 := New(types.Type{Oid: types.T(types.T_date)})
-	if err := UnionOne(v11, w11, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v11, w11, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Date{3}, v11.Col.([]types.Date))
 	v11.Data = encoding.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v11.Col = encoding.DecodeDateSlice(v11.Data)
-	if err := UnionOne(v11, w11, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v11, w11, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v11.Col.([]types.Date))
 
 	w12 := New(types.Type{Oid: types.T(types.T_datetime)})
 	w12.Data = encoding.EncodeDatetimeSlice([]types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w12.Col = encoding.DecodeDatetimeSlice(w12.Data)
 	v12 := New(types.Type{Oid: types.T(types.T_datetime)})
-	if err := UnionOne(v12, w12, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v12, w12, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Datetime{3}, v12.Col.([]types.Datetime))
 	v12.Data = encoding.EncodeDatetimeSlice([]types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v12.Col = encoding.DecodeDatetimeSlice(v12.Data)
-	if err := UnionOne(v12, w12, 3, mp); err != nil {
-		panic(err)
-	}
+	err = UnionOne(v12, w12, 3, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v12.Col.([]types.Datetime))
 }
 
@@ -962,150 +908,130 @@ func TestUnionBatch(t *testing.T) {
 	w0.Data = encoding.EncodeInt8Slice([]int8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w0.Col = encoding.DecodeInt8Slice(w0.Data)
 	v0 := New(types.Type{Oid: types.T(types.T_int8)})
-	if err := UnionBatch(v0, w0, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err := UnionBatch(v0, w0, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int8{3, 4}, v0.Col.([]int8))
 	v0.Data = encoding.EncodeInt8Slice([]int8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v0.Col = encoding.DecodeInt8Slice(v0.Data)
-	if err := UnionBatch(v0, w0, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v0, w0, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int8{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v0.Col.([]int8))
 
 	w1 := New(types.Type{Oid: types.T(types.T_int16)})
 	w1.Data = encoding.EncodeInt16Slice([]int16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w1.Col = encoding.DecodeInt16Slice(w1.Data)
 	v1 := New(types.Type{Oid: types.T(types.T_int16)})
-	if err := UnionBatch(v1, w1, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v1, w1, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int16{3, 4}, v1.Col.([]int16))
 	v1.Data = encoding.EncodeInt16Slice([]int16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v1.Col = encoding.DecodeInt16Slice(v1.Data)
-	if err := UnionBatch(v1, w1, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v1, w1, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int16{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v1.Col.([]int16))
 
 	w2 := New(types.Type{Oid: types.T(types.T_int32)})
 	w2.Data = encoding.EncodeInt32Slice([]int32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w2.Col = encoding.DecodeInt32Slice(w2.Data)
 	v2 := New(types.Type{Oid: types.T(types.T_int32)})
-	if err := UnionBatch(v2, w2, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v2, w2, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int32{3, 4}, v2.Col.([]int32))
 	v2.Data = encoding.EncodeInt32Slice([]int32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v2.Col = encoding.DecodeInt32Slice(v2.Data)
-	if err := UnionBatch(v2, w2, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v2, w2, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v2.Col.([]int32))
 
 	w3 := New(types.Type{Oid: types.T(types.T_int64)})
 	w3.Data = encoding.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w3.Col = encoding.DecodeInt64Slice(w3.Data)
 	v3 := New(types.Type{Oid: types.T(types.T_int64)})
-	if err := UnionBatch(v3, w3, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v3, w3, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int64{3, 4}, v3.Col.([]int64))
 	v3.Data = encoding.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v3.Col = encoding.DecodeInt64Slice(v3.Data)
-	if err := UnionBatch(v3, w3, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v3, w3, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v3.Col.([]int64))
 
 	w4 := New(types.Type{Oid: types.T(types.T_uint8)})
 	w4.Data = encoding.EncodeUint8Slice([]uint8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w4.Col = encoding.DecodeUint8Slice(w4.Data)
 	v4 := New(types.Type{Oid: types.T(types.T_uint8)})
-	if err := UnionBatch(v4, w4, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v4, w4, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint8{3, 4}, v4.Col.([]uint8))
 	v4.Data = encoding.EncodeUint8Slice([]uint8{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v4.Col = encoding.DecodeUint8Slice(v4.Data)
-	if err := UnionBatch(v4, w4, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v4, w4, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint8{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v4.Col.([]uint8))
 
 	w5 := New(types.Type{Oid: types.T(types.T_uint16)})
 	w5.Data = encoding.EncodeUint16Slice([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w5.Col = encoding.DecodeUint16Slice(w5.Data)
 	v5 := New(types.Type{Oid: types.T(types.T_uint16)})
-	if err := UnionBatch(v5, w5, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v5, w5, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint16{3, 4}, v5.Col.([]uint16))
 	v5.Data = encoding.EncodeUint16Slice([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v5.Col = encoding.DecodeUint16Slice(v5.Data)
-	if err := UnionBatch(v5, w5, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v5, w5, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v5.Col.([]uint16))
 
 	w6 := New(types.Type{Oid: types.T(types.T_uint32)})
 	w6.Data = encoding.EncodeUint32Slice([]uint32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w6.Col = encoding.DecodeUint32Slice(w6.Data)
 	v6 := New(types.Type{Oid: types.T(types.T_uint32)})
-	if err := UnionBatch(v6, w6, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v6, w6, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint32{3, 4}, v6.Col.([]uint32))
 	v6.Data = encoding.EncodeUint32Slice([]uint32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v6.Col = encoding.DecodeUint32Slice(v6.Data)
-	if err := UnionBatch(v6, w6, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v6, w6, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v6.Col.([]uint32))
 
 	w7 := New(types.Type{Oid: types.T(types.T_uint64)})
 	w7.Data = encoding.EncodeUint64Slice([]uint64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w7.Col = encoding.DecodeUint64Slice(w7.Data)
 	v7 := New(types.Type{Oid: types.T(types.T_uint64)})
-	if err := UnionBatch(v7, w7, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v7, w7, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint64{3, 4}, v7.Col.([]uint64))
 	v7.Data = encoding.EncodeUint64Slice([]uint64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v7.Col = encoding.DecodeUint64Slice(v7.Data)
-	if err := UnionBatch(v7, w7, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v7, w7, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v7.Col.([]uint64))
 
 	w8 := New(types.Type{Oid: types.T(types.T_float32)})
 	w8.Data = encoding.EncodeFloat32Slice([]float32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w8.Col = encoding.DecodeFloat32Slice(w8.Data)
 	v8 := New(types.Type{Oid: types.T(types.T_float32)})
-	if err := UnionBatch(v8, w8, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v8, w8, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float32{3, 4}, v8.Col.([]float32))
 	v8.Data = encoding.EncodeFloat32Slice([]float32{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v8.Col = encoding.DecodeFloat32Slice(v8.Data)
-	if err := UnionBatch(v8, w8, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v8, w8, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float32{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v8.Col.([]float32))
 
 	w9 := New(types.Type{Oid: types.T(types.T_float64)})
 	w9.Data = encoding.EncodeFloat64Slice([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w9.Col = encoding.DecodeFloat64Slice(w9.Data)
 	v9 := New(types.Type{Oid: types.T(types.T_float64)})
-	if err := UnionBatch(v9, w9, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v9, w9, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float64{3, 4}, v9.Col.([]float64))
 	v9.Data = encoding.EncodeFloat64Slice([]float64{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v9.Col = encoding.DecodeFloat64Slice(v9.Data)
-	if err := UnionBatch(v9, w9, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v9, w9, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v9.Col.([]float64))
 
 	w10 := New(types.Type{Oid: types.T(types.T_char)})
@@ -1116,9 +1042,8 @@ func TestUnionBatch(t *testing.T) {
 	}
 	w10.Data = w10.Col.(*types.Bytes).Data
 	v10 := New(types.Type{Oid: types.T(types.T_char)})
-	if err := UnionBatch(v10, w10, 1, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v10, w10, 1, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []byte("nihaonihao"), v10.Col.(*types.Bytes).Data)
 	v10.Col = &types.Bytes{
 		Data:    []byte("hellohellohellohello"),
@@ -1126,39 +1051,34 @@ func TestUnionBatch(t *testing.T) {
 		Lengths: []uint32{5, 5, 5, 5},
 	}
 	v10.Data = v10.Col.(*types.Bytes).Data
-	if err := UnionBatch(v10, w10, 1, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v10, w10, 1, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []byte("hellohellohellohellonihaonihao"), v10.Col.(*types.Bytes).Data)
 
 	w11 := New(types.Type{Oid: types.T(types.T_date)})
 	w11.Data = encoding.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w11.Col = encoding.DecodeDateSlice(w11.Data)
 	v11 := New(types.Type{Oid: types.T(types.T_date)})
-	if err := UnionBatch(v11, w11, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v11, w11, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Date{3, 4}, v11.Col.([]types.Date))
 	v11.Data = encoding.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v11.Col = encoding.DecodeDateSlice(v11.Data)
-	if err := UnionBatch(v11, w11, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v11, w11, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v11.Col.([]types.Date))
 
 	w12 := New(types.Type{Oid: types.T(types.T_datetime)})
 	w12.Data = encoding.EncodeDatetimeSlice([]types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	w12.Col = encoding.DecodeDatetimeSlice(w12.Data)
 	v12 := New(types.Type{Oid: types.T(types.T_datetime)})
-	if err := UnionBatch(v12, w12, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v12, w12, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Datetime{3, 4}, v12.Col.([]types.Datetime))
 	v12.Data = encoding.EncodeDatetimeSlice([]types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v12.Col = encoding.DecodeDatetimeSlice(v12.Data)
-	if err := UnionBatch(v12, w12, 3, 2, []uint8{1, 1}, mp); err != nil {
-		panic(err)
-	}
+	err = UnionBatch(v12, w12, 3, 2, []uint8{1, 1}, mp)
+	require.NoError(t, err)
 	require.Equal(t, []types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v12.Col.([]types.Datetime))
 }
 

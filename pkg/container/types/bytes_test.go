@@ -34,9 +34,8 @@ func TestBytes_Window(t *testing.T) {
 func TestBytes_Append(t *testing.T) {
 	myBytes := Bytes{Data: []byte("nihaohellogutentagkonichiwa"), Offsets: []uint32{0, 5, 10, 18}, Lengths: []uint32{5, 5, 8, 9}}
 	appendBytes := [][]byte{[]byte("festina"), []byte("lente")}
-	if err := myBytes.Append(appendBytes); err != nil {
-		panic(err)
-	}
+	err := myBytes.Append(appendBytes)
+	require.NoError(t, err)
 	require.Equal(t, Bytes{Data: []byte("nihaohellogutentagkonichiwafestinalente"),
 		Offsets: []uint32{0, 5, 10, 18, 27, 34}, Lengths: []uint32{5, 5, 8, 9, 7, 5}}, myBytes)
 }

@@ -40,15 +40,14 @@ func TestBatch(t *testing.T) {
 	SetLength(bat0, 10)
 	sels := []int64{1, 2, 3}
 	Shrink(bat0, sels)
-	if err := Shuffle(bat1, sels, mp); err != nil {
-		panic(err)
-	}
+	err := Shuffle(bat1, sels, mp)
+	require.NoError(t, err)
 	{
 		vecs := make([]*vector.Vector, 1)
 		Prefetch(bat0, []int32{0}, vecs)
 	}
 	fmt.Printf("%v\n", bat0.String())
-	_, err := bat0.Append(mp, bat1)
+	_, err = bat0.Append(mp, bat1)
 	require.NoError(t, err)
 	bat0.InitZsOne(Length(bat0))
 	Clean(bat0, mp)
