@@ -36,7 +36,7 @@ func CreateR(db engine.Database) {
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
 					Alg:  compress.Lz4,
-					Name: "orderId",
+					Name: "orderid",
 					Type: types.Type{
 						Size:  24,
 						Width: 10,
@@ -62,16 +62,16 @@ func CreateR(db engine.Database) {
 					},
 				}})
 		}
-		if err := db.Create(0, "R", attrs); err != nil {
+		if err := db.Create(0, "r", attrs); err != nil {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation("R")
+	r, err := db.Relation("r")
 	if err != nil {
 		log.Fatal(err)
 	}
 	{
-		bat := batch.New(true, []string{"orderId", "uid", "price"})
+		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			{
 				vec := vector.New(types.Type{
@@ -121,7 +121,7 @@ func CreateR(db engine.Database) {
 		}
 	}
 	{
-		bat := batch.New(true, []string{"orderId", "uid", "price"})
+		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			vec := vector.New(types.Type{
 				Size: 24,
@@ -178,7 +178,7 @@ func CreateS(db engine.Database) {
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
 					Alg:  compress.Lz4,
-					Name: "orderId",
+					Name: "orderid",
 					Type: types.Type{
 						Size:  24,
 						Width: 10,
@@ -204,16 +204,16 @@ func CreateS(db engine.Database) {
 					},
 				}})
 		}
-		if err := db.Create(0, "S", attrs); err != nil {
+		if err := db.Create(0, "s", attrs); err != nil {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation("S")
+	r, err := db.Relation("s")
 	if err != nil {
 		log.Fatal(err)
 	}
 	{
-		bat := batch.New(true, []string{"orderId", "uid", "price"})
+		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			{
 				vec := vector.New(types.Type{
@@ -263,7 +263,7 @@ func CreateS(db engine.Database) {
 		}
 	}
 	{
-		bat := batch.New(true, []string{"orderId", "uid", "price"})
+		bat := batch.New(true, []string{"orderid", "uid", "price"})
 		{
 			vec := vector.New(types.Type{
 				Size: 24,
@@ -330,7 +330,7 @@ func CreateT(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_float64), Size: 8, Width: 8, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "T", attrs); err != nil {
+		if err := db.Create(0, "t", attrs); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -345,13 +345,13 @@ func CreateT1(db engine.Database) {
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
 					Alg:  compress.Lz4,
-					Name: "spID",
+					Name: "spid",
 					Type: types.Type{Oid: types.T(types.T_int32), Size: 8, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
 					Alg:  compress.Lz4,
-					Name: "userID",
+					Name: "userid",
 					Type: types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 0, Precision: 0},
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
@@ -370,7 +370,7 @@ func CreateT1(db engine.Database) {
 		log.Fatal(err)
 	}
 	{
-		bat := batch.New(true, []string{"spID", "userID", "score"})
+		bat := batch.New(true, []string{"spid", "userid", "score"})
 		{
 			vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 5)
@@ -415,7 +415,7 @@ func CreateT1(db engine.Database) {
 		}
 	}
 	{
-		bat := batch.New(true, []string{"spID", "userID", "score"})
+		bat := batch.New(true, []string{"spid", "userid", "score"})
 		{
 			vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 4, Width: 4, Precision: 0})
 			vs := make([]int32, 2)

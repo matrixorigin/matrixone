@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildDelete(stmt *tree.Delete, ctx CompilerContext, query *Query) error {
+func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*plan.Plan, error) {
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
 			//todo confirm how to set row_id
@@ -38,22 +38,20 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, query *Query) error {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	selectCtx := &SelectContext{
-		columnAlias: make(map[string]*plan.Expr),
-	}
+	query, selectCtx := newQueryAndSelectCtx(plan.Query_DELETE)
 	err := buildSelect(selectStmt, ctx, query, selectCtx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	return appendDeleteNode(query)
 }
 
-func appendDeleteNode(query *Query) error {
+func appendDeleteNode(query *Query) (*plan.Plan, error) {
 	//get tableDef
 	objRef, tableDef := getLastTableDef(query)
 	if tableDef == nil {
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find delete table"))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find delete table"))
 	}
 
 	//append delete node
@@ -68,5 +66,9 @@ func appendDeleteNode(query *Query) error {
 	preNode := query.Nodes[len(query.Nodes)-1]
 	query.Steps[len(query.Steps)-1] = preNode.NodeId
 
-	return nil
+	return &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, nil
 }

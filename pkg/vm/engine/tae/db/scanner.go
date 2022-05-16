@@ -52,13 +52,19 @@ func (scanner *dbScanner) OnStopped() {
 
 func (scanner *dbScanner) OnExec() {
 	for _, op := range scanner.ops {
-		op.PreExecute()
+		err := op.PreExecute()
+		if err != nil {
+			panic(err)
+		}
 	}
 	if err := scanner.db.Catalog.RecurLoop(scanner); err != nil {
 		logutil.Errorf("DBScanner Execute: %v", err)
 	}
 	for _, op := range scanner.ops {
-		op.PostExecute()
+		err := op.PostExecute()
+		if err != nil {
+			panic(err)
+		}
 	}
 }
 
@@ -125,6 +131,10 @@ func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
 }
 
 func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
+	if entry.IsSystemDB() {
+		err = catalog.ErrStopCurrRecur
+		return
+	}
 	for _, op := range scanner.ops {
 		err = op.OnDatabase(entry)
 		if err = scanner.errHandler.OnDatabaseErr(entry, err); err != nil {

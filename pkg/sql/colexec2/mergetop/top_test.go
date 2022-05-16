@@ -86,9 +86,21 @@ func TestTop(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+				if tc.proc.Reg.InputBatch != nil {
+					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				}
 				break
 			}
 		}
+		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+				if bat != nil {
+					batch.Clean(bat, tc.proc.Mp)
+				}
+			}
+		}
+		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
@@ -111,7 +123,18 @@ func BenchmarkTop(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+					if tc.proc.Reg.InputBatch != nil {
+						batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+					}
 					break
+				}
+			}
+			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+					if bat != nil {
+						batch.Clean(bat, tc.proc.Mp)
+					}
 				}
 			}
 		}
@@ -145,6 +168,7 @@ func newTestCase(m *mheap.Mheap, ds []bool, ts []types.Type, limit int64, fs []t
 // create a new block based on the type information, ds[i] == true: in descending order
 func newBatch(t *testing.T, ds []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	bat := batch.New(len(ts))
+	bat.Cnt = 1
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		flg := ds[i]

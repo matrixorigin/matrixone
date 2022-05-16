@@ -15,7 +15,6 @@ import (
 )
 
 var (
-	versionFlag              = flag.String("version", "", "if the argument passed in is '--version', mo-server will print MatrixOne build information and exits")
 	cpuProfilePathFlag       = flag.String("cpu-profile", "", "write cpu profile to the specified file")
 	allocsProfilePathFlag    = flag.String("allocs-profile", "", "write allocs profile to the specified file")
 	heapProfilePathFlag      = flag.String("heap-profile", "", "write heap profile to the specified file")
@@ -36,7 +35,10 @@ func startCPUProfile() func() {
 	if err != nil {
 		panic(err)
 	}
-	pprof.StartCPUProfile(f)
+	err = pprof.StartCPUProfile(f)
+	if err != nil {
+		panic(err)
+	}
 	logutil.Infof("CPU profiling enabled, writing to %s", cpuProfilePath)
 	return func() {
 		pprof.StopCPUProfile()

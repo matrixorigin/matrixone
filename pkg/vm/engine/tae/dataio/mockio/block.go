@@ -21,7 +21,6 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -69,7 +68,7 @@ func (bf *blockFile) Fingerprint() *common.ID {
 
 func (bf *blockFile) close() {
 	bf.Close()
-	bf.Destory()
+	bf.Destroy()
 }
 
 func (bf *blockFile) WriteRows(rows uint32) (err error) {
@@ -134,14 +133,18 @@ func (bf *blockFile) Close() error {
 	return nil
 }
 
-func (bf *blockFile) Destory() {
-	logutil.Infof("Destoring Blk %d @ TS %d", bf.id, bf.ts)
+func (bf *blockFile) Destroy() error {
+	// logutil.Infof("Destroying Blk %d @ TS %d", bf.id, bf.ts)
 	for _, cb := range bf.columns {
 		cb.Unref()
 	}
 	bf.columns = nil
 	bf.deletes = nil
 	bf.indexMeta = nil
+	if bf.seg != nil {
+		bf.seg.RemoveBlock(bf.id)
+	}
+	return nil
 }
 
 func (bf *blockFile) Sync() error { return nil }

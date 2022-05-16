@@ -18,17 +18,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"sort"
 	"strings"
 	"testing"
 
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -82,6 +83,7 @@ func TestTpeReader_Read(t *testing.T) {
 			if i == 0 {
 				for {
 					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
+					convey.So(err, convey.ShouldBeNil)
 					if get == nil {
 						break
 					}
@@ -157,8 +159,8 @@ func TestTpeReader_Read(t *testing.T) {
 		for i, reader := range readers {
 			if i == 0 {
 				for {
-					get, err = reader.Read([]uint64{1, 1},
-						[]string{"a", "c"})
+					get, err = reader.Read([]uint64{1, 1}, []string{"a", "c"})
+					convey.So(err, convey.ShouldBeNil)
 					if get == nil {
 						break
 					}
@@ -357,6 +359,7 @@ func Test_printBatch(t *testing.T) {
 		var get *batch.Batch
 		readers := tableDesc.NewReader(1, nil, payload)
 		get, err = readers[0].Read(make([]uint64, 14), attrNames)
+		convey.So(err, convey.ShouldBeNil)
 		printBatch(readers[0].(*TpeReader), get, attrNames)
 
 		for i := 0; i < len(bat.Vecs); i++ {

@@ -82,9 +82,24 @@ func TestLimit(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+				if tc.proc.Reg.InputBatch != nil {
+					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				}
 				break
 			}
+			if tc.proc.Reg.InputBatch != nil {
+				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+			}
 		}
+		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+				if bat != nil {
+					batch.Clean(bat, tc.proc.Mp)
+				}
+			}
+		}
+		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
@@ -109,7 +124,21 @@ func BenchmarkLimit(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+					if tc.proc.Reg.InputBatch != nil {
+						batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+					}
 					break
+				}
+				if tc.proc.Reg.InputBatch != nil {
+					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				}
+			}
+			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+					if bat != nil {
+						batch.Clean(bat, tc.proc.Mp)
+					}
 				}
 			}
 		}
@@ -143,6 +172,7 @@ func newTestCase(m *mheap.Mheap, limit uint64) limitTestCase {
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	bat := batch.New(len(ts))
+	bat.Cnt = 1
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])

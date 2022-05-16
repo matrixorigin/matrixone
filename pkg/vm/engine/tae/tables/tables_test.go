@@ -56,7 +56,8 @@ func TestInsertInfo(t *testing.T) {
 	// t.Log(tsCol.String())
 	now = time.Now()
 	for _, txn := range txns {
-		info.ApplyCommitLocked(txn)
+		err := info.ApplyCommitLocked(txn)
+		assert.Nil(t, err)
 	}
 
 	t.Logf("Commit takes %s", time.Since(now))

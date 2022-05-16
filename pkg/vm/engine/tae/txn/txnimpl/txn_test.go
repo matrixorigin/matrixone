@@ -108,12 +108,12 @@ func TestInsertNode(t *testing.T) {
 				h := tbl.store.nodesMgr.Pin(n)
 				var err error
 				if err = n.Expand(common.K*1, func() error {
-					n.Append(bat, 0)
-					return nil
+					_, err := n.Append(bat, 0)
+					return err
 				}); err != nil {
 					err = n.Expand(common.K*1, func() error {
-						n.Append(bat, 0)
-						return nil
+						_, err := n.Append(bat, 0)
+						return err
 					})
 				}
 				if err != nil {
@@ -135,7 +135,8 @@ func TestInsertNode(t *testing.T) {
 			break
 		}
 		wg.Add(1)
-		p.Submit(worker(id))
+		err := p.Submit(worker(id))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Log(all)
@@ -156,7 +157,8 @@ func TestTable(t *testing.T) {
 	schema.PrimaryKey = 2
 	{
 		txn := mgr.StartTxn(nil)
-		db, _ := txn.CreateDatabase("db")
+		db, err := txn.CreateDatabase("db")
+		assert.Nil(t, err)
 		rel, _ := db.CreateRelation(schema)
 		bat := compute.MockBatch(schema.Types(), common.K*100, int(schema.PrimaryKey), nil)
 		bats := compute.SplitBatch(bat, 100)
@@ -164,14 +166,17 @@ func TestTable(t *testing.T) {
 			err := rel.Append(data)
 			assert.Nil(t, err)
 		}
-		tbl, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
-		tbl.RangeDeleteLocalRows(1024+20, 1024+30)
-		tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
+		tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+		tbl, _ := tDB.getOrSetTable(rel.ID())
+		err = tbl.RangeDeleteLocalRows(1024+20, 1024+30)
+		assert.Nil(t, err)
+		err = tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
+		assert.Nil(t, err)
 		assert.True(t, tbl.IsLocalDeleted(1024+20))
 		assert.True(t, tbl.IsLocalDeleted(1024+30))
 		assert.False(t, tbl.IsLocalDeleted(1024+19))
 		assert.False(t, tbl.IsLocalDeleted(1024+31))
-		err := txn.Commit()
+		err = txn.Commit()
 		assert.Nil(t, err)
 	}
 }
@@ -199,7 +204,8 @@ func TestUpdateUncommitted(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	tbl, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	tbl, _ := tDB.getOrSetTable(rel.ID())
 	row := uint32(9)
 	assert.False(t, tbl.IsLocalDeleted(row))
 	rows := tbl.Rows()
@@ -224,7 +230,8 @@ func TestAppend(t *testing.T) {
 	txn := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
 	brows := rows / 3
@@ -325,7 +332,8 @@ func TestLoad(t *testing.T) {
 	txn := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 
 	err := tbl.Append(bats[0])
@@ -356,7 +364,8 @@ func TestNodeCommand(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 	err := tbl.Append(bat)
 	assert.Nil(t, err)
@@ -373,7 +382,7 @@ func TestNodeCommand(t *testing.T) {
 			assert.Equal(t, 1, len(cmd.(*AppendCmd).Cmds))
 		}
 		if entry != nil {
-			entry.WaitDone()
+			_ = entry.WaitDone()
 			entry.Free()
 		}
 		t.Log(cmd.String())
@@ -397,7 +406,8 @@ func TestBuildCommand(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 	err := tbl.Append(bat)
 	assert.Nil(t, err)
@@ -413,7 +423,8 @@ func TestBuildCommand(t *testing.T) {
 	assert.Equal(t, 0, tbl.store.nodesMgr.Count())
 	t.Log(cmd.String())
 	for _, e := range entries {
-		e.WaitDone()
+		err := e.WaitDone()
+		assert.Nil(t, err)
 		e.Free()
 	}
 	t.Log(tbl.store.nodesMgr.String())
@@ -426,7 +437,8 @@ func TestApplyToColumn1(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(3, []byte("update"))
+	err := node.UpdateLocked(3, []byte("update"))
+	assert.Nil(t, err)
 	deletes.AddRange(3, 4)
 
 	vec := &gvec.Vector{}
@@ -464,7 +476,8 @@ func TestApplyToColumn2(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(0, int32(8))
+	err := node.UpdateLocked(0, int32(8))
+	assert.Nil(t, err)
 	deletes.AddRange(2, 4)
 
 	vec := &gvec.Vector{}
@@ -488,7 +501,8 @@ func TestApplyToColumn3(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(3, []byte("update"))
+	err := node.UpdateLocked(3, []byte("update"))
+	assert.Nil(t, err)
 
 	vec := &gvec.Vector{}
 	vec.Typ.Oid = types.T_varchar
@@ -517,7 +531,8 @@ func TestApplyToColumn4(t *testing.T) {
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
-	node.UpdateLocked(3, int32(8))
+	err := node.UpdateLocked(3, int32(8))
+	assert.Nil(t, err)
 
 	vec := &gvec.Vector{}
 	vec.Typ.Oid = types.T_int32
@@ -564,7 +579,8 @@ func TestTxnManager1(t *testing.T) {
 		lock.Lock()
 		seqs = append(seqs, 3)
 		lock.Unlock()
-		txn2.Commit()
+		err := txn2.Commit()
+		assert.Nil(t, err)
 	}
 
 	for i := 0; i < 1; i++ {
@@ -572,7 +588,8 @@ func TestTxnManager1(t *testing.T) {
 		go short()
 	}
 
-	txn.Commit()
+	err := txn.Commit()
+	assert.Nil(t, err)
 	wg.Wait()
 	defer mgr.Stop()
 	expected := []int{1, 2, 3, 4}
@@ -580,11 +597,12 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
+	mockio.ResetFS()
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	driver := wal.NewDriver(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
-	factory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, nil)
+	factory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, nil, dir)
 	// factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
 	mgr.Start()
@@ -613,6 +631,7 @@ func TestTransaction1(t *testing.T) {
 	assert.Nil(t, err)
 	err = txn1.Commit()
 	assert.Nil(t, err)
+	t.Log(c.SimplePPString(common.PPL1))
 
 	txn2 := mgr.StartTxn(nil)
 	db2, err := txn2.DropDatabase(name)
@@ -631,6 +650,7 @@ func TestTransaction1(t *testing.T) {
 	err = txn2.Commit()
 	assert.Nil(t, err)
 	err = txn3.Commit()
+	assert.NotNil(t, err)
 	assert.Equal(t, txnif.TxnStateRollbacked, txn3.GetTxnState(true))
 	t.Log(txn3.String())
 	// assert.NotNil(t, err)
@@ -680,11 +700,6 @@ func TestTransaction2(t *testing.T) {
 
 	txn3 := mgr.StartTxn(nil)
 
-	err = txn3.UseDatabase(name)
-	assert.Nil(t, err)
-	err = txn3.UseDatabase("xx")
-	assert.NotNil(t, err)
-
 	db3, err := txn3.GetDatabase(name)
 	assert.Nil(t, err)
 
@@ -721,7 +736,8 @@ func TestTransaction3(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
-		pool.Submit(flow(i))
+		err := pool.Submit(flow(i))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 }
@@ -894,7 +910,8 @@ func TestDedup1(t *testing.T) {
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
-		db.CreateRelation(schema)
+		_, err := db.CreateRelation(schema)
+		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{

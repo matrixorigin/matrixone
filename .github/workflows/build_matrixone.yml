@@ -58,25 +58,18 @@ jobs:
           cd $GITHUB_WORKSPACE && make clean && make config && make build
 
       - name: Static Code Analysis
-        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
           make install-static-check-tools
-          make static-check &>lint.out
+          make static-check
 
       - name: Unit Testing
-        timeout-minutes: 60
         run: |
-          make ut SKIP_TEST="race"
+          make ut
 
       - name: Build Verification Testing
         run: |
           make bvt
-
-      - name: Archive Files
-        run: |
-          cd ${{ github.workspace }}
-          tar zcvf code_quality_reports.tar.gz coverage.html lint.out
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
@@ -84,5 +77,5 @@ jobs:
         with:
           name: test_reports
           path: |
-            ${{ github.workspace }}/code_quality_reports.tar.gz
+            ${{ github.workspace }}
           retention-days: 7 

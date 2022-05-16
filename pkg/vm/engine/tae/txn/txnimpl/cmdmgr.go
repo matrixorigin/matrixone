@@ -63,8 +63,9 @@ func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {
 	}
 	logEntry = entry.GetBase()
 	logEntry.SetType(ETTxnRecord)
-	logEntry.Unmarshal(buf)
-
+	if err = logEntry.Unmarshal(buf); err != nil {
+		return
+	}
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupC, logEntry)
 	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
 	return

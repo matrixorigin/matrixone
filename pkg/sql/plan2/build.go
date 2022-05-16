@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -23,48 +24,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Query, error) {
-	query := &Query{}
-	err := buildStatement(stmt, ctx, query)
-	if err != nil {
-		return nil, err
+func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
+	runBuildSelect := func(stmt *tree.Select) (*plan.Plan, error) {
+		query, selectCtx := newQueryAndSelectCtx(plan.Query_SELECT)
+		err := buildSelect(stmt, ctx, query, selectCtx)
+		return &plan.Plan{
+			Plan: &plan.Plan_Query{
+				Query: query,
+			},
+		}, err
 	}
-	return (*plan.Query)(query), nil
-}
 
-func BuildPlan2(ctx CompilerContext, stmt tree.Statement) (*plan.Query, error) {
-	query := &Query{
-		Steps: []int32{0},
-	}
-	err := buildStatement(stmt, ctx, query)
-	if err != nil {
-		return nil, err
-	}
-	queryplan := (*plan.Query)(query)
-	return queryplan, nil
-}
-
-func buildStatement(stmt tree.Statement, ctx CompilerContext, query *Query) error {
-	selectCtx := &SelectContext{
-		columnAlias: make(map[string]*plan.Expr),
-		cteTables:   make(map[string]*plan.TableDef),
-	}
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		query.StmtType = plan.Query_SELECT
-		return buildSelect(stmt, ctx, query, selectCtx)
+		return runBuildSelect(stmt)
 	case *tree.ParenSelect:
-		query.StmtType = plan.Query_SELECT
-		return buildSelect(stmt.Select, ctx, query, selectCtx)
+		return runBuildSelect(stmt.Select)
 	case *tree.Insert:
-		query.StmtType = plan.Query_INSERT
-		return buildInsert(stmt, ctx, query)
+		return buildInsert(stmt, ctx)
 	case *tree.Update:
-		query.StmtType = plan.Query_UPDATE
-		return buildUpdate(stmt, ctx, query)
+		return buildUpdate(stmt, ctx)
 	case *tree.Delete:
-		query.StmtType = plan.Query_DELETE
-		return buildDelete(stmt, ctx, query)
+		return buildDelete(stmt, ctx)
+	case *tree.BeginTransaction:
+		return buildBeginTransaction(stmt, ctx)
+	case *tree.CommitTransaction:
+		return buildCommitTransaction(stmt, ctx)
+	case *tree.RollbackTransaction:
+		return buildRollbackTransaction(stmt, ctx)
+	default:
+		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
-	return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }

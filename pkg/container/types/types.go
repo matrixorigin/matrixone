@@ -359,15 +359,15 @@ func (t T) FixedLength() int {
 	case T_int64, T_uint64, T_datetime, T_float64, T_timestamp:
 		return 8
 	case T_decimal64:
-		return 8
+		return -8
 	case T_decimal128:
-		return 16
+		return -16
 	case T_char:
 		return -24
 	case T_varchar:
 		return -24
 	case T_sel:
-		return -8
+		return 8
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }

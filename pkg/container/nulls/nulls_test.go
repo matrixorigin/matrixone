@@ -15,8 +15,9 @@
 package nulls
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -188,8 +189,7 @@ func TestRange(t *testing.T) {
 
 func TestFilter(t *testing.T) {
 	t.Run("set test", func(t *testing.T) {
-		n := Nulls{}
-		n = Nulls{Np: roaring.New()}
+		n := Nulls{Np: roaring.New()}
 		for i := 0; i < 16; i++ {
 			n.Np.AddInt(i)
 		}

@@ -17,10 +17,10 @@ package engine
 import (
 	"encoding/json"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
@@ -28,7 +28,6 @@ import (
 
 var (
 	errorBatchAttributeDoNotExistInTheRelation = errors.New("batch attribute do not exist in the relation")
-	errorNotHiddenPrimaryKey                   = errors.New("it is not hidden primary key")
 	errorDuplicateAttributeNameInBatch         = errors.New("duplicate attribute name in the batch")
 	errorDoNotGetValidValueForTheAttribute     = errors.New("can not get the value for the attribute")
 )

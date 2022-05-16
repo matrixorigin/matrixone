@@ -31,7 +31,7 @@ func ScopeConflictCheck(oldScope, newScope *common.ID) (err error) {
 		}
 		return tasks.ErrScheduleScopeConflict
 	}
-	if oldScope.BlockID != oldScope.BlockID && oldScope.BlockID != 0 && newScope.BlockID != 0 {
+	if oldScope.BlockID != newScope.BlockID && oldScope.BlockID != 0 && newScope.BlockID != 0 {
 		return
 	}
 	return tasks.ErrScheduleScopeConflict
@@ -54,7 +54,7 @@ func (dispatcher *asyncJobDispatcher) checkConflictLocked(scopes []common.ID) (e
 	for active := range dispatcher.actives {
 		for _, scope := range scopes {
 			if err = ScopeConflictCheck(&active, &scope); err != nil {
-				break
+				return
 			}
 		}
 	}
@@ -64,12 +64,17 @@ func (dispatcher *asyncJobDispatcher) checkConflictLocked(scopes []common.ID) (e
 func (dispatcher *asyncJobDispatcher) TryDispatch(task tasks.Task) (err error) {
 	mscoped := task.(tasks.MScopedTask)
 	scopes := mscoped.Scopes()
-	if scopes == nil || len(scopes) == 0 {
+	if len(scopes) == 0 {
 		dispatcher.Dispatch(task)
-		return nil
+		return
 	}
 	dispatcher.Lock()
 	if err = dispatcher.checkConflictLocked(scopes); err != nil {
+		// str := ""
+		// for scope := range dispatcher.actives {
+		// 	str = fmt.Sprintf("%s%s,", str, scope.String())
+		// }
+		// logutil.Warnf("ActiveScopes: %s, Incomming: %s", str, common.IDArraryString(scopes))
 		dispatcher.Unlock()
 		return
 	}

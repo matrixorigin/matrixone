@@ -128,9 +128,9 @@ func (cb *columnBlock) Close() error {
 }
 
 func (cb *columnBlock) close() {
-	cb.Destory()
+	cb.Destroy()
 }
 
-func (cb *columnBlock) Destory() {
-	logutil.Infof("Destoring Block %d Col @ TS %d", cb.block.id, cb.ts)
+func (cb *columnBlock) Destroy() {
+	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
 }

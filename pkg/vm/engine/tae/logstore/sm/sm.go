@@ -57,11 +57,11 @@ func (sm *stateMachine) Stop() {
 	if !sm.closed.TryClose() {
 		return
 	}
-	if sm.checkpointQueue != nil {
-		sm.checkpointQueue.Stop()
-	}
 	if sm.receiveQueue != nil {
 		sm.receiveQueue.Stop()
+	}
+	if sm.checkpointQueue != nil {
+		sm.checkpointQueue.Stop()
 	}
 	sm.wg.Wait()
 }

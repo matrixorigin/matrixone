@@ -34,7 +34,8 @@ func TestVFile(t *testing.T) {
 	dir := "/tmp/testvfile"
 	os.RemoveAll(dir)
 	name := "mock"
-	os.MkdirAll(dir, 0755)
+	err := os.MkdirAll(dir, 0755)
+	assert.Nil(t, err)
 	v0, err := newVFile(nil, MakeVersionFile(dir, name, 0), 0, nil, nil)
 	assert.Nil(t, err)
 	var wg sync.WaitGroup
@@ -149,14 +150,17 @@ func TestAppender(t *testing.T) {
 				assert.Nil(t, err)
 				truncate := func() {
 					defer wg.Done()
-					rf.history.TryTruncate()
+					err := rf.history.TryTruncate()
+					assert.Nil(t, err)
 				}
 				wg.Add(1)
-				worker.Submit(truncate)
+				err = worker.Submit(truncate)
+				assert.Nil(t, err)
 			}
 		}
 		wg.Add(1)
-		pool.Submit(f(appender, i))
+		err := pool.Submit(f(appender, i))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Logf("1. %s", time.Since(now))
@@ -227,31 +231,38 @@ func TestReadVInfo(t *testing.T) {
 						}),
 				}},
 			}
-			appender.Prepare(len(toWrite), checkpointInfo)
+			err := appender.Prepare(len(toWrite), checkpointInfo)
+			assert.Nil(t, err)
 		} else {
 			commitInfo := &entry.Info{
 				Group:    entry.GTCustomizedStart,
 				GroupLSN: common.NextGlobalSeqNum(),
 			}
-			appender.Prepare(len(toWrite), commitInfo)
+			err := appender.Prepare(len(toWrite), commitInfo)
+			assert.Nil(t, err)
 		}
 
 		f := func(app FileAppender, idx int) func() {
 			return func() {
 				defer wg.Done()
-				app.Write(toWrite)
-				app.Commit()
+				_, err := app.Write(toWrite)
+				assert.Nil(t, err)
+				err = app.Commit()
+				assert.Nil(t, err)
 				// app.Sync()
 				truncate := func() {
 					defer wg.Done()
-					rf.history.TryTruncate()
+					err := rf.history.TryTruncate()
+					assert.Nil(t, err)
 				}
 				wg.Add(1)
-				worker.Submit(truncate)
+				err = worker.Submit(truncate)
+				assert.Nil(t, err)
 			}
 		}
 		wg.Add(1)
-		pool.Submit(f(appender, i))
+		err := pool.Submit(f(appender, i))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 

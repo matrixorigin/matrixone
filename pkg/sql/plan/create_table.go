@@ -16,6 +16,9 @@ package plan
 
 import (
 	"fmt"
+	"go/constant"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -23,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go/constant"
-	"math"
 )
 
 // BuildCreateTable do semantic analyze and get table definition from tree.CreateTable to make create table plan.
@@ -381,9 +382,4 @@ func isDefaultExpr(expr tree.Expr) bool {
 func isNullExpr(expr tree.Expr) bool {
 	v, ok := expr.(*tree.NumVal)
 	return ok && v.Value.Kind() == constant.Unknown
-}
-
-func isParenExpr(expr tree.Expr) bool {
-	_, ok := expr.(*tree.ParenExpr)
-	return ok
 }

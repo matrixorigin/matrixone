@@ -37,8 +37,8 @@ type TableIndex interface {
 	KeyToVector(types.Type) *gvec.Vector
 }
 
-// TODO
-type artTableIndex struct{}
+//TODO: commented due to static check
+//type artTableIndex struct{}
 
 type simpleTableIndex struct {
 	sync.RWMutex
