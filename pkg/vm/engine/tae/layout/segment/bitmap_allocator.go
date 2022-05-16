@@ -209,8 +209,8 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 		// get level1 free start bit
 		l1freePos := b.getBitPos(l1bit, 0)
 		for {
-			l0pos := l1freePos*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET)
-			l0end := (l1freePos+1)*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET)
+			l0pos := l1freePos*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT)
+			l0end := (l1freePos+1)*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT)
 			for idx := l0pos / BITS_PER_UNIT; idx < l0end/BITS_PER_UNIT &&
 				length > allocated; idx++ {
 				val := &(b.level0[idx])
@@ -255,7 +255,7 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 				return offset, allocated
 			}
 			l1freePos++
-			if l1freePos >= BITS_PER_UNIT {
+			if l1freePos >= BITS_PER_UNIT*BITS_PER_UNIT {
 				break
 			}
 		}
