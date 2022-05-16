@@ -33,13 +33,13 @@ func newRelation(h handle.Relation) *txnRelation {
 	}
 }
 
-func (rel *txnRelation) ID() string {
+func (rel *txnRelation) ID(_ engine.Snapshot) string {
 	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
 }
 
-func (rel *txnRelation) Close() {}
+func (rel *txnRelation) Close(_ engine.Snapshot) {}
 
-func (rel *txnRelation) Nodes() (nodes engine.Nodes) {
+func (rel *txnRelation) Nodes(_ engine.Snapshot) (nodes engine.Nodes) {
 	return
 }
 
@@ -59,15 +59,15 @@ func (_ *txnRelation) DropIndex(_ uint64, _ string) error {
 	panic("implement me")
 }
 
-func (_ *txnRelation) AddTableDef(u uint64, def engine.TableDef) error {
+func (_ *txnRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic("implement me")
 }
 
-func (_ *txnRelation) DelTableDef(u uint64, def engine.TableDef) error {
+func (_ *txnRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic("implement me")
 }
 
-func (rel *txnRelation) TableDefs() []engine.TableDef {
+func (rel *txnRelation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	info := SchemaToTableInfo(schema)
 	_, _, _, _, defs, _ := helper.UnTransfer(info)
@@ -82,7 +82,7 @@ func (_ *txnRelation) Index() []*engine.IndexTableDef {
 	panic("implement me")
 }
 
-func (rel *txnRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+func (rel *txnRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	attrs := make([]engine.Attribute, 1)
 	attrs[0].Name = schema.ColDefs[schema.PrimaryKey].Name
@@ -101,11 +101,11 @@ func (rel *txnRelation) Attribute() []engine.Attribute {
 	return attrs
 }
 
-func (rel *txnRelation) Write(_ uint64, bat *batch.Batch) error {
+func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	return rel.handle.Append(bat)
 }
 
-func (rel *txnRelation) NewReader(num int, _ extend.Extend, _ []byte) (rds []engine.Reader) {
+func (rel *txnRelation) NewReader(num int, _ extend.Extend, _ []byte, _ engine.Snapshot) (rds []engine.Reader) {
 	it := rel.handle.MakeBlockIt()
 	for i := 0; i < num; i++ {
 		reader := newReader(rel.handle, it)

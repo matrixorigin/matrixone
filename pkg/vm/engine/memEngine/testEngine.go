@@ -2,18 +2,19 @@ package memEngine
 
 import (
 	"fmt"
+	"log"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
-	"log"
 )
 
 func NewTestEngine() engine.Engine {
 	e := New(kv.New(), engine.Node{Id: "0", Addr: "127.0.0.1"})
-	db, _ := e.Database("test")
+	db, _ := e.Database("test", nil)
 	CreateR(db)
 	CreateS(db)
 	CreateT(db)
@@ -62,11 +63,11 @@ func CreateR(db engine.Database) {
 					},
 				}})
 		}
-		if err := db.Create(0, "r", attrs); err != nil {
+		if err := db.Create(0, "r", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation("r")
+	r, err := db.Relation("r", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -116,7 +117,7 @@ func CreateR(db engine.Database) {
 				bat.Vecs[2] = vec
 			}
 		}
-		if err := r.Write(0, bat); err != nil {
+		if err := r.Write(0, bat, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -164,7 +165,7 @@ func CreateR(db engine.Database) {
 			}
 			bat.Vecs[2] = vec
 		}
-		if err := r.Write(0, bat); err != nil {
+		if err := r.Write(0, bat, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -204,11 +205,11 @@ func CreateS(db engine.Database) {
 					},
 				}})
 		}
-		if err := db.Create(0, "s", attrs); err != nil {
+		if err := db.Create(0, "s", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation("s")
+	r, err := db.Relation("s", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -258,7 +259,7 @@ func CreateS(db engine.Database) {
 				bat.Vecs[2] = vec
 			}
 		}
-		if err := r.Write(0, bat); err != nil {
+		if err := r.Write(0, bat, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -306,7 +307,7 @@ func CreateS(db engine.Database) {
 			}
 			bat.Vecs[2] = vec
 		}
-		if err := r.Write(0, bat); err != nil {
+		if err := r.Write(0, bat, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -330,7 +331,7 @@ func CreateT(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_float64), Size: 8, Width: 8, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "t", attrs); err != nil {
+		if err := db.Create(0, "t", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -361,11 +362,11 @@ func CreateT1(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_int8), Size: 1, Width: 8, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "t1", attrs); err != nil {
+		if err := db.Create(0, "t1", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
-	r, err := db.Relation("t1")
+	r, err := db.Relation("t1", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -410,7 +411,7 @@ func CreateT1(db engine.Database) {
 			}
 			bat.Vecs[2] = vec
 		}
-		if err := r.Write(0, bat); err != nil {
+		if err := r.Write(0, bat, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -446,7 +447,7 @@ func CreateT1(db engine.Database) {
 			}
 			bat.Vecs[2] = vec
 		}
-		if err := r.Write(0, bat); err != nil {
+		if err := r.Write(0, bat, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -507,7 +508,7 @@ func CreateCustomer(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "customer", attrs); err != nil {
+		if err := db.Create(0, "customer", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -621,7 +622,7 @@ func CreateLineorder(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "lineorder", attrs); err != nil {
+		if err := db.Create(0, "lineorder", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -687,7 +688,7 @@ func CreatePart(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "part", attrs); err != nil {
+		if err := db.Create(0, "part", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -741,7 +742,7 @@ func CreateSupplier(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "supplier", attrs); err != nil {
+		if err := db.Create(0, "supplier", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -807,7 +808,7 @@ func CreateDate(db engine.Database) {
 					Type: types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0},
 				}})
 		}
-		if err := db.Create(0, "dates", attrs); err != nil {
+		if err := db.Create(0, "dates", attrs, nil); err != nil {
 			log.Fatal(err)
 		}
 	}

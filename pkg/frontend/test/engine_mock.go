@@ -210,7 +210,7 @@ func (mr *MockRelationMockRecorder) ID() *gomock.Call {
 }
 
 // NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 int, _ extend.Extend, _ []byte) []engine.Reader {
+func (m *MockRelation) NewReader(arg0 int, _ extend.Extend, _ []byte, _ engine.Snapshot) []engine.Reader {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewReader", arg0)
 	ret0, _ := ret[0].([]engine.Reader)

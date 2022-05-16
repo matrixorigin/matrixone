@@ -31,23 +31,23 @@ type localRoRelation struct {
 	impl *aoedb.Relation
 }
 
-func (r *localRoRelation) Nodes() engine.Nodes {
+func (r *localRoRelation) Nodes(_ engine.Snapshot) engine.Nodes {
 	panic("implement me")
 }
 
-func (r *localRoRelation) TableDefs() []engine.TableDef {
+func (r *localRoRelation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	panic("implement me")
 }
 
-func (r *localRoRelation) AddTableDef(u uint64, def engine.TableDef) error {
+func (r *localRoRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic("implement me")
 }
 
-func (r *localRoRelation) DelTableDef(u uint64, def engine.TableDef) error {
+func (r *localRoRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic("implement me")
 }
 
-func (r *localRoRelation) NewReader(i int, _ extend.Extend, _ []byte) []engine.Reader {
+func (r *localRoRelation) NewReader(i int, _ extend.Extend, _ []byte, _ engine.Snapshot) []engine.Reader {
 	panic("implement me")
 }
 
@@ -61,7 +61,7 @@ func (r *localRoRelation) Segments() []aoe.Segment {
 	panic("not supported")
 }
 
-func (r *localRoRelation) ID() string {
+func (r *localRoRelation) ID(_ engine.Snapshot) string {
 	return r.impl.ID()
 }
 
@@ -73,11 +73,11 @@ func (r *localRoRelation) Size(attr string) int64 {
 	return r.impl.Size(attr)
 }
 
-func (r *localRoRelation) Close() {
+func (r *localRoRelation) Close(_ engine.Snapshot) {
 	r.impl.Close()
 }
 
-func (r *localRoRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+func (r *localRoRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	return nil, false
 }
 
@@ -102,7 +102,7 @@ func (r *localRoRelation) Attribute() []engine.Attribute {
 	return r.impl.Attribute()
 }
 
-func (r *localRoRelation) Write(_ uint64, _ *batch.Batch) error {
+func (r *localRoRelation) Write(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
 	panic("not supported")
 }
 
