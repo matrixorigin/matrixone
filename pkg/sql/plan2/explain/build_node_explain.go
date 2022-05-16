@@ -355,7 +355,7 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 		".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
 		" rows=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
 		" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
-		" width=" + strconv.FormatFloat(c.Cost.Rowsize, 'd', 0, 64)
+		" width=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64)
 	return result, nil
 }
 
@@ -450,7 +450,7 @@ func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) (string
 	//u.UpdateList.Columns
 	var result string
 	var first bool = true
-	if len(u.UpdateList.Columns) != len(u.UpdateList.Columns) {
+	if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {
 		panic("update node number of columns and values is not equal")
 	}
 	for i, columnExpr := range u.UpdateList.Columns {

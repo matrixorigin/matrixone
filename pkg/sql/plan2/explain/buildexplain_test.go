@@ -279,7 +279,11 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 		}
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(logicPlan.GetQuery())
-		explainQuery.ExplainPlan(buffer, es)
+		err = explainQuery.ExplainPlan(buffer, es)
+		if err != nil {
+			fmt.Printf("expalin Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
+			return err
+		}
 	}
 	return nil
 }
