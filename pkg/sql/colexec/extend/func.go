@@ -76,7 +76,7 @@ func (a *FuncExtend) String() string {
 	for i, arg := range a.Args {
 		switch i {
 		case 0:
-			r += fmt.Sprintf("%s", arg)
+			r += arg.String()
 		default:
 			r += fmt.Sprintf(", %s", arg)
 		}

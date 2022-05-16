@@ -3517,12 +3517,12 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 				index = int(selectIndexs[i])
 			}
 			if allData {
-				rs[i] = fmt.Sprintf("%s", vs[index].String())
+				rs[i] = vs[index].String()
 			} else {
 				if nulls.Contains(v.Nsp, uint64(index)) {
 					rs[i] = nullStr
 				} else {
-					rs[i] = fmt.Sprintf("%s", vs[index].String())
+					rs[i] = vs[index].String()
 				}
 			}
 			for count > 1 {
@@ -3544,12 +3544,12 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 				index = int(selectIndexs[i])
 			}
 			if allData {
-				rs[i] = fmt.Sprintf("%s", vs[index].String())
+				rs[i] = vs[index].String()
 			} else {
 				if nulls.Contains(v.Nsp, uint64(index)) {
 					rs[i] = nullStr
 				} else {
-					rs[i] = fmt.Sprintf("%s", vs[index].String())
+					rs[i] = vs[index].String()
 				}
 			}
 			for count > 1 {
@@ -3571,12 +3571,12 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 				index = int(selectIndexs[i])
 			}
 			if allData {
-				rs[i] = fmt.Sprintf("%s", vs[index].String())
+				rs[i] = vs[index].String()
 			} else {
 				if nulls.Contains(v.Nsp, uint64(index)) {
 					rs[i] = nullStr
 				} else {
-					rs[i] = fmt.Sprintf("%s", vs[index].String())
+					rs[i] = vs[index].String()
 				}
 			}
 			for count > 1 {

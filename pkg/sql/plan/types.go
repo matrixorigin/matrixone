@@ -354,7 +354,7 @@ func (c CreateDatabase) String() string {
 	if c.IfNotExistFlag {
 		buf.WriteString("if not exists ")
 	}
-	buf.WriteString(fmt.Sprintf("%s", c.Id))
+	buf.WriteString(c.Id)
 	return buf.String()
 }
 
@@ -397,7 +397,7 @@ func (c CreateIndex) String() string {
 		buf.WriteString("if not exists ")
 	}
 	for _, def := range c.Defs {
-		buf.WriteString(fmt.Sprintf("%s", def.(*engine.AttributeDef).Attr.Name))
+		buf.WriteString(def.(*engine.AttributeDef).Attr.Name)
 	}
 	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
 	return buf.String()
