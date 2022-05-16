@@ -67,13 +67,15 @@ func TestString(t *testing.T) {
 
 func TestPrepare(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 	}
 }
 
 func TestOffset(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -82,9 +84,24 @@ func TestOffset(t *testing.T) {
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
 			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+				if tc.proc.Reg.InputBatch != nil {
+					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				}
 				break
 			}
+			if tc.proc.Reg.InputBatch != nil {
+				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+			}
 		}
+		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+				if bat != nil {
+					batch.Clean(bat, tc.proc.Mp)
+				}
+			}
+		}
+		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
@@ -100,7 +117,8 @@ func BenchmarkOffset(b *testing.B) {
 
 		t := new(testing.T)
 		for _, tc := range tcs {
-			Prepare(tc.proc, tc.arg)
+			err := Prepare(tc.proc, tc.arg)
+			require.NoError(t, err)
 			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, BenchmarkRows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -109,9 +127,24 @@ func BenchmarkOffset(b *testing.B) {
 			tc.proc.Reg.MergeReceivers[1].Ch <- nil
 			for {
 				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+					if tc.proc.Reg.InputBatch != nil {
+						batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+					}
 					break
 				}
+				if tc.proc.Reg.InputBatch != nil {
+					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				}
 			}
+			for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+					if bat != nil {
+						batch.Clean(bat, tc.proc.Mp)
+					}
+				}
+			}
+
 		}
 	}
 }

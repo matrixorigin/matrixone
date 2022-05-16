@@ -19,8 +19,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/google/btree"
 	"sync"
+
+	"github.com/google/btree"
 )
 
 var _ KVHandler = &MemoryKV{}
@@ -280,7 +281,7 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 		iter)
 
 	complete := false
-	nextScanKey := []byte{}
+	var nextScanKey []byte
 	if len(keys) != 0 {
 		more := 0
 		checkMoreDataIter := func(i btree.Item) bool {
@@ -351,7 +352,7 @@ func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefi
 	m.container.AscendGreaterOrEqual(NewMemoryItem(prefixOrStartkey, nil), iter)
 
 	complete := false
-	nextScanKey := []byte{}
+	var nextScanKey []byte
 	if len(keys) != 0 {
 		more := 0
 		checkMoreDataIter := func(i btree.Item) bool {

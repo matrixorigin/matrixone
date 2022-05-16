@@ -23,6 +23,7 @@ const (
 	Substring
 	Ltrim
 	Rtrim
+	Oct
 	StartsWith
 	Lpad
 	Rpad
@@ -51,4 +52,5 @@ const (
 	Weekday
 	EndsWith
 	Date
+	Bin
 )

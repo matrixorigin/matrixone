@@ -235,7 +235,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	n := vector.Length(bat.Vecs[0])
 
 	if enableProfile {
-		pprof.StartCPUProfile(cpuf)
+		if err := pprof.StartCPUProfile(cpuf); err != nil {
+			return err
+		}
 	}
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
@@ -950,7 +952,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(qry)
+	explainQuery := explain.NewExplainQueryImpl(qry.GetQuery())
 	explainQuery.ExplainPlan(buffer, es)
 
 	session := mce.GetSession()
@@ -1278,7 +1280,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		case *tree.ExplainAnalyze:
 			selfHandle = true
-			return errors.New(errno.FeatureNotSupported, "not support explain analyze statment now")
+			return errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 		}
 
 		if selfHandle {

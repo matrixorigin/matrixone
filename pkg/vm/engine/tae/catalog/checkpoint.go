@@ -167,6 +167,9 @@ func (e *CheckpointEntry) AddCommand(cmd *EntryCommand) {
 }
 
 func (e *CheckpointEntry) AddIndex(index *wal.Index) {
+	if index == nil {
+		return
+	}
 	if e.MaxIndex.Compare(index) < 0 {
 		e.MaxIndex = *index
 	}
@@ -219,6 +222,28 @@ func (e *CheckpointEntry) Marshal() (buf []byte, err error) {
 	}
 
 	buf = w.Bytes()
+	return
+}
+
+func (e *CheckpointEntry) Unarshal(buf []byte) (err error) {
+	r := bytes.NewBuffer(buf)
+	if err = binary.Read(r, binary.BigEndian, &e.MinTS); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &e.MaxTS); err != nil {
+		return
+	}
+	length := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	for i := 0; i < int(length); i++ {
+		txnEntry, _, err := txnbase.BuildCommandFrom(r)
+		if err != nil {
+			return err
+		}
+		e.Entries = append(e.Entries, txnEntry.(*EntryCommand))
+	}
 	return
 }
 

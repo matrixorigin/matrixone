@@ -98,18 +98,19 @@ func newSegment(txn txnif.AsyncTxn, meta *catalog.SegmentEntry) *txnSegment {
 func (seg *txnSegment) GetMeta() interface{} { return seg.entry }
 func (seg *txnSegment) String() string       { return seg.entry.String() }
 func (seg *txnSegment) GetID() uint64        { return seg.entry.GetID() }
+func (seg *txnSegment) getDBID() uint64      { return seg.entry.GetTable().GetDB().ID }
 func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.Txn, seg.entry)
 }
 
 func (seg *txnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.entry.AsCommonID())
+	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID())
 }
 
 func (seg *txnSegment) SoftDeleteBlock(id uint64) (err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
-	return seg.Txn.GetStore().SoftDeleteBlock(fp)
+	return seg.Txn.GetStore().SoftDeleteBlock(seg.getDBID(), fp)
 }
 
 func (seg *txnSegment) GetRelation() (rel handle.Relation) {
@@ -119,15 +120,15 @@ func (seg *txnSegment) GetRelation() (rel handle.Relation) {
 func (seg *txnSegment) GetBlock(id uint64) (blk handle.Block, err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
-	return seg.Txn.GetStore().GetBlock(fp)
+	return seg.Txn.GetStore().GetBlock(seg.getDBID(), fp)
 }
 
 func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateBlock(seg.entry.GetTable().GetID(), seg.entry.GetID())
+	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())
 }
 
 func (seg *txnSegment) BatchDedup(pks *vector.Vector) (err error) {
 	segData := seg.entry.GetSegmentData()
-	seg.Txn.GetStore().LogSegmentID(seg.entry.GetTable().GetID(), seg.entry.GetID())
+	seg.Txn.GetStore().LogSegmentID(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())
 	return segData.BatchDedup(seg.Txn, pks)
 }

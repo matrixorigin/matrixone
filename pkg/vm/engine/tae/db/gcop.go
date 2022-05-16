@@ -17,24 +17,28 @@ package db
 import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-// Destory is not thread-safe
+// Destroy is not thread-safe
 func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
 	return func() error {
-		// logutil.Infof("[GC] | Block | %s", entry.String())
-		// return nil
+		logutil.Debugf("[GCBLK] | %s | Started", entry.Repr())
 		segment := entry.GetSegment()
 		segment.RLock()
 		segDropped := segment.IsDroppedCommitted()
 		segment.RUnlock()
 
-		entry.DestroyData()
+		err := entry.DestroyData()
+		if err != nil {
+			return err
+		}
 		if !segDropped && entry.IsAppendable() {
 			return nil
 		}
-		err := segment.RemoveEntry(entry)
+		err = segment.RemoveEntry(entry)
+		logutil.Infof("[GCBLK] | %s | Removed", entry.Repr())
 		if err != nil {
 			logutil.Warnf("Cannot remove block %s, maybe removed before", entry.String())
 			return err
@@ -43,18 +47,28 @@ func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
 	}
 }
 
-// Destory is not thread-safe
+// Destroy is not thread-safe
 func gcSegmentClosure(entry *catalog.SegmentEntry) tasks.FuncT {
 	return func() error {
-		logutil.Infof("[GC] | Segment | %s", entry.String())
+		logutil.Debugf("[GCSEG] | %s | Started", entry.Repr())
 		table := entry.GetTable()
-		it := entry.MakeBlockIt(true)
-		if it.Valid() {
+		scopes := make([]common.ID, 0)
+		it := entry.MakeBlockIt(false)
+		for it.Valid() {
 			blk := it.Get().GetPayload().(*catalog.BlockEntry)
-			gcBlockClosure(blk)()
+			scopes = append(scopes, *blk.AsCommonID())
+			err := gcBlockClosure(blk)()
+			if err != nil {
+				return err
+			}
 			it.Next()
 		}
-		err := table.RemoveEntry(entry)
+		err := entry.DestroyData()
+		if err != nil {
+			return err
+		}
+		err = table.RemoveEntry(entry)
+		logutil.Infof("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
 		if err != nil {
 			logutil.Warnf("Cannot remove segment %s, maybe removed before", entry.String())
 			return err

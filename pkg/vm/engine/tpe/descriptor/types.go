@@ -233,7 +233,7 @@ func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) map[uint32]int {
 }
 
 func ExtractIndexAttributeDescIDs(attrs []*AttributeDesc) []int {
-	var ids []int
+	ids := make([]int, 0, len(attrs))
 	for _, attr := range attrs {
 		ids = append(ids, int(attr.ID))
 	}

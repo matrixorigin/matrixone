@@ -15,15 +15,14 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 // Batch represents a part of a relationship
 type Batch struct {
-	// ring
-	Zs []int64
-	// columns
-	Vecs []*vector.Vector
-	// anything
-	Ht interface{}
+	Ht   any              // anything
+	Zs   []int64          // ring
+	Rs   []ring.Ring      // aggregation list
+	Vecs []*vector.Vector // columns
 }

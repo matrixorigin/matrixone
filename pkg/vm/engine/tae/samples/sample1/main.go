@@ -23,15 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/panjf2000/ants/v2"
 )
 
 var sampleDir = "/tmp/sample1"
-var txnBufSize = common.G
-var mutBufSize = common.G
 var dbName = "db"
 var cpuprofile = "/tmp/sample1/cpuprofile"
 var memprofile = "/tmp/sample1/memprofile"
@@ -42,14 +39,14 @@ func init() {
 
 func startProfile() {
 	f, _ := os.Create(cpuprofile)
-	pprof.StartCPUProfile(f)
+	_ = pprof.StartCPUProfile(f)
 }
 
 func stopProfile() {
 	pprof.StopCPUProfile()
 	memf, _ := os.Create(memprofile)
 	defer memf.Close()
-	pprof.Lookup("heap").WriteTo(memf, 0)
+	_ = pprof.Lookup("heap").WriteTo(memf, 0)
 }
 
 func main() {
@@ -65,7 +62,7 @@ func main() {
 	{
 		txn := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
-		db.CreateRelation(schema)
+		_, _ = db.CreateRelation(schema)
 		if err := txn.Commit(); err != nil {
 			panic(err)
 		}
@@ -98,7 +95,7 @@ func main() {
 	startProfile()
 	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(b))
+		_ = p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	// {

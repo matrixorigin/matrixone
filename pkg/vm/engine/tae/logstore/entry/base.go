@@ -209,7 +209,6 @@ func Unmarshal(buf []byte) *Info {
 		info.Uncommits = append(info.Uncommits, tidInfo)
 	}
 	info.GroupLSN = binary.BigEndian.Uint64(buf[pos : pos+8])
-	pos += 8
 	return info
 }
 

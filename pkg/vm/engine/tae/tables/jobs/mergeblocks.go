@@ -139,8 +139,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	vecs := make([]*vector.Vector, 0)
 	rows := make([]uint32, len(task.compacted))
 	length := 0
-	var fromAddr []uint32
-	var toAddr []uint32
+	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
 	for i, block := range task.compacted {
 		if view, err = block.GetColumnDataById(int(schema.PrimaryKey), nil, nil); err != nil {
@@ -177,6 +176,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	var flushTask tasks.Task
 	length = 0
 	var blk handle.Block
+	toAddr := make([]uint32, 0, len(vecs))
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += gvec.Length(vec)
@@ -253,6 +253,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
+	table := task.toSegEntry.GetTable()
 	txnEntry := txnentries.NewMergeBlocksEntry(
 		task.txn,
 		task.rel,
@@ -264,7 +265,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		fromAddr,
 		toAddr,
 		task.scheduler)
-	if err = task.txn.LogTxnEntry(task.toSegEntry.GetTable().GetID(), txnEntry, ids); err != nil {
+	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return
 	}
 

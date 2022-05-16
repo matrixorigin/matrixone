@@ -63,12 +63,16 @@ func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
 	cnt := 0
 	for _, idxes := range view.ColLogIndexes {
 		cnt += len(idxes)
-		blk.scheduler.Checkpoint(idxes)
+		if err = blk.scheduler.Checkpoint(idxes); err != nil {
+			return
+		}
 		// for _, index := range idxes {
 		// 	logutil.Infof("Ckp2Index  %s", index.String())
 		// }
 	}
-	blk.scheduler.Checkpoint(view.DeleteLogIndexes)
+	if err = blk.scheduler.Checkpoint(view.DeleteLogIndexes); err != nil {
+		return
+	}
 	// logutil.Infof("BLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, cnt, blk.meta.String())
 	blk.SetMaxCheckpointTS(endTs)
 	return
@@ -82,10 +86,16 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	indexes := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
 	view := blk.CollectChangesInRange(ckpTs+1, endTs)
 	for _, idxes := range view.ColLogIndexes {
-		blk.scheduler.Checkpoint(idxes)
+		if err = blk.scheduler.Checkpoint(idxes); err != nil {
+			return
+		}
 	}
-	blk.scheduler.Checkpoint(indexes)
-	blk.scheduler.Checkpoint(view.DeleteLogIndexes)
+	if err = blk.scheduler.Checkpoint(indexes); err != nil {
+		return
+	}
+	if err = blk.scheduler.Checkpoint(view.DeleteLogIndexes); err != nil {
+		return
+	}
 	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, len(indexes), blk.meta.String())
 	// for _, index := range indexes {
 	// 	logutil.Infof("Ckp1Index  %s", index.String())
@@ -145,7 +155,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 		}
 	}
 	if needCkp {
-		blk.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.meta.AsCommonID(), blk.CheckpointWALClosure(ts))
+		_, err = blk.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.meta.AsCommonID(), blk.CheckpointWALClosure(ts))
 	}
 	return
 }

@@ -57,7 +57,6 @@ import (
 )
 
 const (
-	NormalExit              = 0
 	InitialValuesExit       = 1
 	LoadConfigExit          = 2
 	RecreateDirExit         = 3
@@ -71,6 +70,8 @@ const (
 	WaitCubeStartExit       = 11
 	StartMOExit             = 12
 	CreateTpeExit           = 13
+	RunRPCExit              = 14
+	ShutdownExit            = 15
 )
 
 var (
@@ -98,12 +99,8 @@ func runMOServer() error {
 	return mo.Start()
 }
 
-func serverShutdown(isgraceful bool) {
-	mo.Stop()
-}
-
-func registerSignalHandlers() {
-	//	signal.SetupSignalHandler(serverShutdown)
+func serverShutdown(isgraceful bool) error {
+	return mo.Stop()
 }
 
 func waitSignal() {
@@ -325,7 +322,12 @@ func main() {
 		os.Exit(WaitCubeStartExit)
 	}
 
-	go srv.Run()
+	go func() {
+		if err := srv.Run(); err != nil {
+			logutil.Infof("Start rpcserver failed, %v", err)
+			os.Exit(RunRPCExit)
+		}
+	}()
 	//test storage aoe_storage
 	config.StorageEngine = eng
 
@@ -343,11 +345,13 @@ func main() {
 		logutil.Infof("Start MOServer failed, %v", err)
 		os.Exit(StartMOExit)
 	}
-	//registerSignalHandlers()
 
 	waitSignal()
 	//srv.Stop()
-	serverShutdown(true)
+	if err := serverShutdown(true); err != nil {
+		logutil.Infof("Server shutdown failed, %v", err)
+		os.Exit(ShutdownExit)
+	}
 
 	cleanup()
 }

@@ -34,8 +34,6 @@ import (
 )
 
 var sampleDir = "/tmp/sample3"
-var txnBufSize = common.G
-var mutBufSize = common.G
 var dbName = "db"
 var cpuprofile = "/tmp/sample3/cpuprofile"
 var memprofile = "/tmp/sample3/memprofile"
@@ -46,14 +44,16 @@ func init() {
 
 func startProfile() {
 	f, _ := os.Create(cpuprofile)
-	pprof.StartCPUProfile(f)
+	if err := pprof.StartCPUProfile(f); err != nil {
+		panic(err)
+	}
 }
 
 func stopProfile() {
 	pprof.StopCPUProfile()
 	memf, _ := os.Create(memprofile)
 	defer memf.Close()
-	pprof.Lookup("heap").WriteTo(memf, 0)
+	_ = pprof.Lookup("heap").WriteTo(memf, 0)
 }
 
 func main() {
@@ -76,6 +76,9 @@ func main() {
 		tblInfo.Columns[0].PrimaryKey = true
 		_, _, _, _, defs, _ := helper.UnTransfer(*tblInfo)
 		err = db.Create(0, tblInfo.Name, defs)
+		if err != nil {
+			panic(err)
+		}
 		{
 			db, _ := txn.GetDatabase(dbName)
 			rel, _ := db.GetRelationByName(tblInfo.Name)
@@ -121,7 +124,7 @@ func main() {
 	startProfile()
 	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(b))
+		_ = p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	stopProfile()

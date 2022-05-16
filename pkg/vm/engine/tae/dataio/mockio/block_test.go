@@ -44,10 +44,10 @@ func TestBlock1(t *testing.T) {
 	err := block.WriteDeletes(deletesBuf)
 	assert.Nil(t, err)
 
-	colBlk0, err := block.OpenColumn(colCnt)
+	_, err = block.OpenColumn(colCnt)
 	assert.NotNil(t, err)
 
-	colBlk0, err = block.OpenColumn(0)
+	colBlk0, err := block.OpenColumn(0)
 	assert.Nil(t, err)
 	assert.NotNil(t, colBlk0)
 	var w bytes.Buffer
@@ -69,5 +69,6 @@ func TestBlock1(t *testing.T) {
 	dataFile.Unref()
 	colBlk0.Close()
 
+	t.Log(block.RefCount())
 	block.Unref()
 }

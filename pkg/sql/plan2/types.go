@@ -30,11 +30,11 @@ type Query = plan.Query
 
 type CompilerContext interface {
 	Resolve(name string) (*ObjectRef, *TableDef)
-	Cost(obj *ObjectRef, e *Expr) *Cost //change Cost to *Cost to fixed "return copies lock value" warning in new proto code generated
+	Cost(obj *ObjectRef, e *Expr) *Cost
 }
 
 type Optimizer interface {
-	Optimize(stmt tree.Statement) (*Query, error) //todo confirm interface change
+	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
 }
 
