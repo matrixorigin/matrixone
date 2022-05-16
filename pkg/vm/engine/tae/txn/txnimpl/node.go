@@ -62,7 +62,7 @@ type InsertNode interface {
 	GetValue(col int, row uint32) (interface{}, error)
 	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
 	ToTransient()
-	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
+	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
 	GetAppends() []*appendInfo
@@ -71,6 +71,7 @@ type InsertNode interface {
 type appendInfo struct {
 	seq              uint32
 	srcOff, srcLen   uint32
+	dbid             uint64
 	dest             *common.ID
 	destOff, destLen uint32
 }
@@ -89,6 +90,24 @@ func mockAppendInfo() *appendInfo {
 		destLen: 9876,
 	}
 }
+func (info *appendInfo) GetDest() *common.ID {
+	return info.dest
+}
+func (info *appendInfo) GetDBID() uint64 {
+	return info.dbid
+}
+func (info *appendInfo) GetSrcOff() uint32 {
+	return info.srcOff
+}
+func (info *appendInfo) GetSrcLen() uint32 {
+	return info.srcLen
+}
+func (info *appendInfo) GetDestOff() uint32 {
+	return info.destOff
+}
+func (info *appendInfo) GetDestLen() uint32 {
+	return info.destLen
+}
 func (info *appendInfo) String() string {
 	s := fmt.Sprintf("[%d]: Append from [%d:%d] to blk %s[%d:%d]",
 		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.ToBlockFileName(), info.destOff, info.destLen+info.destOff)
@@ -102,6 +121,9 @@ func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, info.srcLen); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, info.dbid); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, info.dest.TableID); err != nil {
@@ -130,6 +152,9 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	if err = binary.Read(r, binary.BigEndian, &info.srcLen); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &info.dbid); err != nil {
 		return
 	}
 	info.dest = &common.ID{}
@@ -190,12 +215,13 @@ func mockInsertNodeWithAppendInfo(infos []*appendInfo) *insertNode {
 func (n *insertNode) GetAppends() []*appendInfo {
 	return n.appends
 }
-func (n *insertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo {
+func (n *insertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
 	seq := len(n.appends)
 	info := &appendInfo{
 		dest:    dest,
 		destOff: destOff,
 		destLen: destLen,
+		dbid:    dbid,
 		srcOff:  srcOff,
 		srcLen:  srcLen,
 		seq:     uint32(seq),
