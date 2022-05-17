@@ -71,6 +71,7 @@ const (
 	SumIntRing
 	SumUIntRing
 	SumFloatRing
+	SumDecimal64Ring
 	// Variance
 	VarianceRing
 	// BitAnd
