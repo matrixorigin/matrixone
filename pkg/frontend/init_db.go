@@ -212,7 +212,7 @@ func PrepareInitialDataForMoTables() [][]string {
 		hard code tables:
 		mo_database,mo_tables,mo_columns
 
-		tabled created in the initdb step:
+		tables created in the initdb step:
 		mo_global_variables,mo_user
 	*/
 	data := [][]string{
@@ -473,7 +473,7 @@ func FillInitialDataForMoColumns() *batch.Batch {
 	return PrepareInitialDataForSchema(schema, data)
 }
 
-// DefineSchemaForMoColumns decides the schema of the mo_global_variables
+// DefineSchemaForMoGlobalVariables decides the schema of the mo_global_variables
 func DefineSchemaForMoGlobalVariables() *CatalogSchema {
 	/*
 		mo_global_variables schema
@@ -521,5 +521,61 @@ func PrepareInitialDataForMoGlobalVariables() [][]string {
 func FillInitialDataForMoGlobalVariables() *batch.Batch {
 	schema := DefineSchemaForMoGlobalVariables()
 	data := PrepareInitialDataForMoGlobalVariables()
+	return PrepareInitialDataForSchema(schema, data)
+}
+
+// DefineSchemaForMoUser decides the schema of the mo_table
+func DefineSchemaForMoUser() *CatalogSchema {
+	/*
+		mo_user schema
+		| Attribute        | Type         | Primary Key | Note        |
+		| --------- | ------------ | ---- | --------- |
+		| user_host | varchar(256) | PK   | user host |
+		| user_name | varchar(256) | PK   | user name |
+		| authentication_string | varchar(4096) |     | password |
+	*/
+	userHostAttr := &CatalogSchemaAttribute{
+		AttributeName: "user_host",
+		AttributeType: types.T_varchar.ToType(),
+		IsPrimaryKey:  true,
+		Comment:       "user host",
+	}
+	userHostAttr.AttributeType.Width = 256
+
+	userNameAttr := &CatalogSchemaAttribute{
+		AttributeName: "user_name",
+		AttributeType: types.T_varchar.ToType(),
+		IsPrimaryKey:  true,
+		Comment:       "user name",
+	}
+	userNameAttr.AttributeType.Width = 256
+
+	passwordAttr := &CatalogSchemaAttribute{
+		AttributeName: "authentication_string",
+		AttributeType: types.T_varchar.ToType(),
+		IsPrimaryKey:  true,
+		Comment:       "password",
+	}
+	passwordAttr.AttributeType.Width = 256
+
+	attrs := []*CatalogSchemaAttribute{
+		userHostAttr,
+		userNameAttr,
+		passwordAttr,
+	}
+	return &CatalogSchema{Name: "mo_user", Attributes: attrs}
+}
+
+func PrepareInitialDataForMoUser() [][]string {
+	data := [][]string{
+		{"localhost", "root", "''"},
+		{"localhost", "dump", "111"},
+	}
+	return data
+}
+
+func FillInitialDataForMoUser() *batch.Batch {
+	schema := DefineSchemaForMoUser()
+	data := PrepareInitialDataForMoUser()
 	return PrepareInitialDataForSchema(schema, data)
 }
