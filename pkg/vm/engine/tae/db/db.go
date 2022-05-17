@@ -80,15 +80,13 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 }
 
 func (db *DB) Replay(dataFactory *tables.DataFactory) {
+	maxTs := db.Catalog.GetCheckpointed().MaxTS
 	replayer := newReplayer(dataFactory, db)
+	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 
-	maxTs := db.Catalog.GetCheckpointed().MaxTS
-	if maxTs < replayer.maxTs {
-		maxTs = replayer.maxTs
-	}
 	// TODO: init txn id
-	db.TxnMgr.Init(0, maxTs)
+	db.TxnMgr.Init(0, replayer.GetMaxTS())
 }
 
 func (db *DB) Close() error {

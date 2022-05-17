@@ -48,6 +48,10 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	return
 }
 
+func (replayer *Replayer) GetMaxTS() uint64 {
+	return replayer.maxTs
+}
+
 func (replayer *Replayer) OnTimeStamp(ts uint64) {
 	if ts > replayer.maxTs {
 		replayer.maxTs = ts
