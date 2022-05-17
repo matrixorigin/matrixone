@@ -217,10 +217,13 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 				if *val == ALL_UNIT_CLEAR {
 					continue
 				}
-				if idx == l0pos/BITS_PER_UNIT {
+				//TODO:Need to allocate huge pages to debug
+				l0freePos = b.getBitPos(*val, 0)
+				nextPos = l0freePos + 1
+				/*if idx == l0pos/BITS_PER_UNIT {
 					l0freePos = b.getBitPos(*val, 0)
 					nextPos = l0freePos + 1
-				}
+				}*/
 
 				for {
 					if nextPos >= BITS_PER_UNIT ||
@@ -244,7 +247,8 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 				}
 				allocated += uint64(needPage * b.pageSize)
 				l0start := uint64(idx)*BITS_PER_UNIT + uint64(l0freePos)
-				//b.lastPos = l0start * uint64(b.pageSize)
+				b.lastPos = l0start*uint64(b.pageSize) +
+					uint64(l1freePos*BITS_PER_UNITSET+uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT))
 				l0end := l0start + uint64(needPage)
 				b.markAllocFree0(l0start, l0end, false)
 				l0start = p2align(l0start, BITS_PER_UNITSET)
