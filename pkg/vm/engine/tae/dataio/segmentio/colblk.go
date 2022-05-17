@@ -24,7 +24,7 @@ import (
 )
 
 type columnBlock struct {
-	mutex sync.Mutex
+	mutex sync.RWMutex
 	common.RefHelper
 	block   *blockFile
 	ts      uint64

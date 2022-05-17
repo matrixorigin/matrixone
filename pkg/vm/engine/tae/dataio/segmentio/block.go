@@ -179,7 +179,9 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 		}
 		defer f.Unref()
 		size := f.Stat().Size()
-		buf := make([]byte, size)
+		node := common.GPool.Alloc(uint64(size))
+		defer common.GPool.Free(node)
+		buf := node.Buf[:size]
 		if _, err = f.Read(buf); err != nil {
 			return
 		}

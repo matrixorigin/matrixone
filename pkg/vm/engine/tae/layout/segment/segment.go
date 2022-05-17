@@ -218,11 +218,12 @@ func (s *Segment) ReleaseFile(fd *BlockFile) {
 }
 
 func (s *Segment) Free(fd *BlockFile) {
-	/*fd.snode.mutex.Lock()
+	fd.snode.mutex.Lock()
 	defer fd.snode.mutex.Unlock()
 	for _, ext := range fd.snode.extents {
 		s.allocator.Free(ext.offset-DATA_START, ext.length)
-	}*/
+	}
+	fd.snode.extents = []Extent{}
 }
 
 func (s *Segment) GetPageSize() uint32 {

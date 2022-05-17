@@ -86,9 +86,9 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 		df.stat.originSize = int64(len(df.buf))
 		return
 	}
-	df.colBlk.mutex.Lock()
+	df.colBlk.mutex.RLock()
 	file := df.file[len(df.file)-1]
-	df.colBlk.mutex.Unlock()
+	df.colBlk.mutex.RUnlock()
 	err = file.GetSegement().Append(file, buf)
 	df.stat.algo = compress.Lz4
 	df.stat.originSize = file.GetOriginSize()
@@ -106,9 +106,9 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	if bufLen == 0 {
 		return 0, nil
 	}
-	df.colBlk.mutex.Lock()
+	df.colBlk.mutex.RLock()
 	file := df.file[len(df.file)-1]
-	df.colBlk.mutex.Unlock()
+	df.colBlk.mutex.RUnlock()
 	n, err = file.Read(buf)
 	return n, nil
 }
