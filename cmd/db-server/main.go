@@ -48,8 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	tpeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -129,13 +127,14 @@ func removeEpoch(epoch uint64) {
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
-	if tpe, ok := config.StorageEngine.(*tpeEngine.TpeEngine); ok {
-		err = tpe.RemoveDeletedTable(epoch)
-		if err != nil {
-			fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
+	/*
+		if tpe, ok := config.StorageEngine.(*tpeEngine.TpeEngine); ok {
+			err = tpe.RemoveDeletedTable(epoch)
+			if err != nil {
+				fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
+			}
 		}
-	}
-
+	*/
 }
 
 func main() {
@@ -203,7 +202,8 @@ func main() {
 
 	cfg := parseConfig(configFilePath, targetDir)
 
-	kvs, kvStorage := getKVDataStorage(targetDir, cfg)
+	//kvs, kvStorage := getKVDataStorage(targetDir, cfg)
+	_, kvStorage := getKVDataStorage(targetDir, cfg)
 	defer kvStorage.Close()
 
 	catalogListener := catalog.NewCatalogListener()
@@ -243,53 +243,56 @@ func main() {
 		os.Exit(DecodeCubeConfigExit)
 	}
 	var eng engine.Engine
-	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
-	if enableTpe {
-		tpeConf := &tpeEngine.TpeConfig{}
-		tpeConf.PBKV = kvs
-		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
-		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
-		tpeConf.MultiNode = config.GlobalSystemVariables.GetTpeMultiNode()
-		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
-		tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
-		tpeConf.TpeScanTimeout = time.Duration(config.GlobalSystemVariables.GetTpeScanTimeout())
-		tpeConf.TpeScanTryCount = int(config.GlobalSystemVariables.GetTpeScanTryCount())
-		tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
-		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
-		if configKvTyp == "memorykv" {
-			tpeConf.KvType = tuplecodec.KV_MEMORY
-		} else if configKvTyp == "cubekv" {
-			tpeConf.KvType = tuplecodec.KV_CUBE
-			tpeConf.Cube = a
+	//	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
+	/*
+		if enableTpe {
+			tpeConf := &tpeEngine.TpeConfig{}
+			tpeConf.PBKV = kvs
+			tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
+			tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
+			tpeConf.MultiNode = config.GlobalSystemVariables.GetTpeMultiNode()
+			tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
+			tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
+			tpeConf.TpeScanTimeout = time.Duration(config.GlobalSystemVariables.GetTpeScanTimeout())
+			tpeConf.TpeScanTryCount = int(config.GlobalSystemVariables.GetTpeScanTryCount())
+			tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
+			configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
+			if configKvTyp == "memorykv" {
+				tpeConf.KvType = tuplecodec.KV_MEMORY
+			} else if configKvTyp == "cubekv" {
+				tpeConf.KvType = tuplecodec.KV_CUBE
+				tpeConf.Cube = a
+			} else {
+				logutil.Infof("there is no such kvType %s \n", configKvTyp)
+				os.Exit(CreateTpeExit)
+			}
+			configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
+			if configSerializeTyp == "concise" {
+				tpeConf.SerialType = tuplecodec.ST_CONCISE
+			} else if configSerializeTyp == "json" {
+				tpeConf.SerialType = tuplecodec.ST_JSON
+			} else if configSerializeTyp == "flat" {
+				tpeConf.SerialType = tuplecodec.ST_FLAT
+			} else {
+				logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
+				os.Exit(CreateTpeExit)
+			}
+			te, err := tpeEngine.NewTpeEngine(tpeConf)
+			if err != nil {
+				logutil.Infof("create tpe error:%v\n", err)
+				os.Exit(CreateTpeExit)
+			}
+			err = te.Open()
+			if err != nil {
+				logutil.Infof("open tpe error:%v\n", err)
+				os.Exit(CreateTpeExit)
+			}
+			eng = te
 		} else {
-			logutil.Infof("there is no such kvType %s \n", configKvTyp)
-			os.Exit(CreateTpeExit)
+			eng = aoeEngine.New(c, &cngineConfig)
 		}
-		configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
-		if configSerializeTyp == "concise" {
-			tpeConf.SerialType = tuplecodec.ST_CONCISE
-		} else if configSerializeTyp == "json" {
-			tpeConf.SerialType = tuplecodec.ST_JSON
-		} else if configSerializeTyp == "flat" {
-			tpeConf.SerialType = tuplecodec.ST_FLAT
-		} else {
-			logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
-			os.Exit(CreateTpeExit)
-		}
-		te, err := tpeEngine.NewTpeEngine(tpeConf)
-		if err != nil {
-			logutil.Infof("create tpe error:%v\n", err)
-			os.Exit(CreateTpeExit)
-		}
-		err = te.Open()
-		if err != nil {
-			logutil.Infof("open tpe error:%v\n", err)
-			os.Exit(CreateTpeExit)
-		}
-		eng = te
-	} else {
-		eng = aoeEngine.New(c, &cngineConfig)
-	}
+	*/
+	eng = aoeEngine.New(c, &cngineConfig)
 
 	pci.SetRemoveEpoch(removeEpoch)
 
@@ -333,10 +336,12 @@ func main() {
 
 	//test cluster nodes
 	config.ClusterNodes = engine.Nodes{}
-	err = tpeEngine.DumpDatabaseInfo(eng, args)
-	if err != nil {
-		logutil.Errorf("%s", err)
-	}
+	/*
+		err = tpeEngine.DumpDatabaseInfo(eng, args)
+		if err != nil {
+			logutil.Errorf("%s", err)
+		}
+	*/
 
 	createMOServer(pci)
 

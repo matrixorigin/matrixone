@@ -31,21 +31,21 @@ func NewEngine(txn txnif.AsyncTxn) *txnEngine {
 	}
 }
 
-func (e *txnEngine) Delete(_ uint64, name string) (err error) {
+func (e *txnEngine) Delete(_ uint64, name string, _ engine.Snapshot) (err error) {
 	_, err = e.txn.DropDatabase(name)
 	return
 }
 
-func (e *txnEngine) Create(_ uint64, name string, _ int) (err error) {
+func (e *txnEngine) Create(_ uint64, name string, _ int, _ engine.Snapshot) (err error) {
 	_, err = e.txn.CreateDatabase(name)
 	return
 }
 
-func (e *txnEngine) Databases() (dbs []string) {
+func (e *txnEngine) Databases(_ engine.Snapshot) (dbs []string) {
 	return e.txn.DatabaseNames()
 }
 
-func (e *txnEngine) Database(name string) (db engine.Database, err error) {
+func (e *txnEngine) Database(name string, _ engine.Snapshot) (db engine.Database, err error) {
 	h, err := e.txn.GetDatabase(name)
 	if err != nil {
 		return nil, err
@@ -54,6 +54,6 @@ func (e *txnEngine) Database(name string) (db engine.Database, err error) {
 	return db, err
 }
 
-func (e *txnEngine) Node(ip string) *engine.NodeInfo {
+func (e *txnEngine) Node(ip string, _ engine.Snapshot) *engine.NodeInfo {
 	return &engine.NodeInfo{Mcpu: runtime.NumCPU()}
 }

@@ -16,7 +16,6 @@ package mergeorder
 
 import (
 	"bytes"
-	"fmt"
 
 	compare "github.com/matrixorigin/matrixone/pkg/compare2"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
@@ -34,7 +33,7 @@ func String(arg interface{}, buf *bytes.Buffer) {
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("])"))
+	buf.WriteString("])")
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {

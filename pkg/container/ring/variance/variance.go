@@ -16,6 +16,8 @@ package variance
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"math"
 )
 
 // VarRing is the ring structure to compute the Overall variance
@@ -66,7 +67,6 @@ func (v *VarRing) Free(m *mheap.Mheap) {
 		v.SumX2 = nil
 		v.NullCounts = nil
 	}
-	return
 }
 
 func (v *VarRing) String() string {

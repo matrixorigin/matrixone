@@ -514,7 +514,7 @@ func printJoin(op *Join, s *Scope) string {
 }
 
 func printDedup(op *Dedup) string {
-	return fmt.Sprintf("δ()")
+	return "δ()"
 }
 
 func printOrder(op *Order) string {
@@ -527,7 +527,7 @@ func printOrder(op *Order) string {
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("])"))
+	buf.WriteString("])")
 	return buf.String()
 }
 

@@ -25,10 +25,10 @@ func Test_getParamFromCommand(t *testing.T) {
 		if tpeMock == nil {
 			return
 		}
-		err := tpeMock.Create(0, "ssb", 0)
+		err := tpeMock.Create(0, "ssb", 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpeMock.Database("ssb")
+		dbDesc, err := tpeMock.Database("ssb", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64, types.T_uint64, types.T_int64)
@@ -45,10 +45,10 @@ func Test_getParamFromCommand(t *testing.T) {
 			Comment: "A(a,b,c)",
 		})
 
-		err = dbDesc.Create(0, "t1", defs)
+		err = dbDesc.Create(0, "t1", defs, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		table, err := dbDesc.Relation("t1")
+		table, err := dbDesc.Relation("t1", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		tpe_relation, ok := table.(*TpeRelation)
@@ -151,7 +151,7 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(header, convey.ShouldEqual, header2)
 
 			bat.Zs = nil
-			err = tpe_relation.Write(uint64(cnt), bat)
+			err = tpe_relation.Write(uint64(cnt), bat, nil)
 			convey.So(err, convey.ShouldBeNil)
 
 			result, err = DumpTableInfo(tpeMock, opt)
@@ -178,7 +178,7 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(opt.PrimaryValue, convey.ShouldBeNil)
 
 			bat.Zs = nil
-			err = tpe_relation.Write(uint64(cnt), bat)
+			err = tpe_relation.Write(uint64(cnt), bat, nil)
 			convey.So(err, convey.ShouldBeNil)
 
 			result, err := DumpTableInfo(tpeMock, opt)
@@ -214,7 +214,7 @@ func Test_getParamFromCommand(t *testing.T) {
 
 		})
 
-		err = dbDesc.Delete(0, "t1")
+		err = dbDesc.Delete(0, "t1", nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

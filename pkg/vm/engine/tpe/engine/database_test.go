@@ -16,13 +16,14 @@ package engine
 
 import (
 	"fmt"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/smartystreets/goconvey/convey"
-	"strings"
-	"testing"
 )
 
 func TestTpeDatabase_Create(t *testing.T) {
@@ -35,10 +36,10 @@ func TestTpeDatabase_Create(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		dbName := "test"
-		err = tpe.Create(0, dbName, 0)
+		err = tpe.Create(0, dbName, 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database(dbName)
+		dbDesc, err := tpe.Database(dbName, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
@@ -64,10 +65,10 @@ func TestTpeDatabase_Create(t *testing.T) {
 			tableName := fmt.Sprintf("A%d", i)
 			tableNames = append(tableNames, tableName)
 
-			err = dbDesc.Create(0, tableName, defs)
+			err = dbDesc.Create(0, tableName, defs, nil)
 			convey.So(err, convey.ShouldBeNil)
 
-			table, err := dbDesc.Relation(tableName)
+			table, err := dbDesc.Relation(tableName, nil)
 			convey.So(err, convey.ShouldBeNil)
 
 			checkTable := func(table engine.Relation) {
@@ -100,7 +101,7 @@ func TestTpeDatabase_Create(t *testing.T) {
 			checkTable(table)
 		}
 
-		wantNames := dbDesc.Relations()
+		wantNames := dbDesc.Relations(nil)
 		for i := 0; i < cnt; i++ {
 			convey.So(wantNames[i], convey.ShouldEqual, tableNames[i])
 		}
@@ -108,19 +109,19 @@ func TestTpeDatabase_Create(t *testing.T) {
 		var restNames []string
 		for i := 0; i < cnt; i++ {
 			if i%2 == 0 {
-				err = dbDesc.Delete(0, tableNames[i])
+				err = dbDesc.Delete(0, tableNames[i], nil)
 				convey.So(err, convey.ShouldBeNil)
 			} else {
 				restNames = append(restNames, tableNames[i])
 			}
 		}
-		wantNames = dbDesc.Relations()
+		wantNames = dbDesc.Relations(nil)
 		convey.So(wantNames, convey.ShouldResemble, restNames)
 
 		//recreate the dropped table
 		for i := 0; i < cnt; i++ {
 			if i%2 == 0 {
-				err = dbDesc.Create(0, tableNames[i], defs)
+				err = dbDesc.Create(0, tableNames[i], defs, nil)
 				convey.So(err, convey.ShouldBeNil)
 			}
 		}
@@ -135,10 +136,10 @@ func TestTpeDatabase_Create(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		dbName := "test"
-		err = tpe.Create(0, dbName, 0)
+		err = tpe.Create(0, dbName, 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database(dbName)
+		dbDesc, err := tpe.Database(dbName, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c,primary key(a,b))
@@ -171,10 +172,10 @@ func TestTpeDatabase_Create(t *testing.T) {
 			tableName := fmt.Sprintf("A%d", i)
 			tableNames = append(tableNames, tableName)
 
-			err = dbDesc.Create(0, tableName, defs)
+			err = dbDesc.Create(0, tableName, defs, nil)
 			convey.So(err, convey.ShouldBeNil)
 
-			table, err := dbDesc.Relation(tableName)
+			table, err := dbDesc.Relation(tableName, nil)
 			convey.So(err, convey.ShouldBeNil)
 
 			checkTable := func(table engine.Relation) {
@@ -208,7 +209,7 @@ func TestTpeDatabase_Create(t *testing.T) {
 			checkTable(table)
 		}
 
-		wantNames := dbDesc.Relations()
+		wantNames := dbDesc.Relations(nil)
 		for i := 0; i < cnt; i++ {
 			convey.So(wantNames[i], convey.ShouldEqual, tableNames[i])
 		}
@@ -216,19 +217,19 @@ func TestTpeDatabase_Create(t *testing.T) {
 		var restNames []string
 		for i := 0; i < cnt; i++ {
 			if i%2 == 0 {
-				err = dbDesc.Delete(0, tableNames[i])
+				err = dbDesc.Delete(0, tableNames[i], nil)
 				convey.So(err, convey.ShouldBeNil)
 			} else {
 				restNames = append(restNames, tableNames[i])
 			}
 		}
-		wantNames = dbDesc.Relations()
+		wantNames = dbDesc.Relations(nil)
 		convey.So(wantNames, convey.ShouldResemble, restNames)
 
 		//recreate the dropped table
 		for i := 0; i < cnt; i++ {
 			if i%2 == 0 {
-				err = dbDesc.Create(0, tableNames[i], defs)
+				err = dbDesc.Create(0, tableNames[i], defs, nil)
 				convey.So(err, convey.ShouldBeNil)
 			}
 		}

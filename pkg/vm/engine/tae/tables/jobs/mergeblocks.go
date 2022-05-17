@@ -19,7 +19,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -147,7 +146,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		vec := view.ApplyDeletes()
 		vecs = append(vecs, vec)
-		rows[i] = uint32(gvec.Length(vec))
+		rows[i] = uint32(vector.Length(vec))
 		fromAddr = append(fromAddr, uint32(length))
 		length += vector.Length(vec)
 		ids = append(ids, block.Fingerprint())
@@ -179,7 +178,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	toAddr := make([]uint32, 0, len(vecs))
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
-		length += gvec.Length(vec)
+		length += vector.Length(vec)
 		blk, err = toSegEntry.CreateNonAppendableBlock()
 		if err != nil {
 			return err

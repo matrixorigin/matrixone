@@ -732,7 +732,7 @@ func Append(v *Vector, arg interface{}) error {
 	case types.T_decimal128:
 		v.Col = append(v.Col.([]types.Decimal128), arg.([]types.Decimal128)...)
 	default:
-		return errors.New(fmt.Sprintf("unexpect type %s for function vector.Append", v.Typ))
+		return fmt.Errorf("unexpect type %s for function vector.Append", v.Typ)
 	}
 	return nil
 }
@@ -3517,12 +3517,12 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 				index = int(selectIndexs[i])
 			}
 			if allData {
-				rs[i] = fmt.Sprintf("%s", vs[index].String())
+				rs[i] = vs[index].String()
 			} else {
 				if nulls.Contains(v.Nsp, uint64(index)) {
 					rs[i] = nullStr
 				} else {
-					rs[i] = fmt.Sprintf("%s", vs[index].String())
+					rs[i] = vs[index].String()
 				}
 			}
 			for count > 1 {
@@ -3544,12 +3544,12 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 				index = int(selectIndexs[i])
 			}
 			if allData {
-				rs[i] = fmt.Sprintf("%s", vs[index].String())
+				rs[i] = vs[index].String()
 			} else {
 				if nulls.Contains(v.Nsp, uint64(index)) {
 					rs[i] = nullStr
 				} else {
-					rs[i] = fmt.Sprintf("%s", vs[index].String())
+					rs[i] = vs[index].String()
 				}
 			}
 			for count > 1 {
@@ -3571,12 +3571,12 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 				index = int(selectIndexs[i])
 			}
 			if allData {
-				rs[i] = fmt.Sprintf("%s", vs[index].String())
+				rs[i] = vs[index].String()
 			} else {
 				if nulls.Contains(v.Nsp, uint64(index)) {
 					rs[i] = nullStr
 				} else {
-					rs[i] = fmt.Sprintf("%s", vs[index].String())
+					rs[i] = vs[index].String()
 				}
 			}
 			for count > 1 {
@@ -3640,7 +3640,7 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 			}
 		}
 	default:
-		return errors.New(fmt.Sprintf("unexpect type %v for function vector.GetColumnData", typ))
+		return fmt.Errorf("unexpect type %v for function vector.GetColumnData", typ)
 	}
 	return nil
 }

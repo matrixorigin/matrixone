@@ -67,7 +67,7 @@ func Eq(x, y *extend.ValueExtend) (extend.Extend, error) {
 			vector.SetCol(vec, []int64{0})
 		}
 	case x.V.Typ.Oid == types.T_varchar && y.V.Typ.Oid == types.T_varchar:
-		if bytes.Compare(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) == 0 {
+		if bytes.Equal(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) {
 			vector.SetCol(vec, []int64{1})
 		} else {
 			vector.SetCol(vec, []int64{0})
@@ -107,7 +107,7 @@ func Ne(x, y *extend.ValueExtend) (extend.Extend, error) {
 			vector.SetCol(vec, []int64{0})
 		}
 	case x.V.Typ.Oid == types.T_varchar && y.V.Typ.Oid == types.T_varchar:
-		if bytes.Compare(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) != 0 {
+		if bytes.Equal(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) {
 			vector.SetCol(vec, []int64{1})
 		} else {
 			vector.SetCol(vec, []int64{0})

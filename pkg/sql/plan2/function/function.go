@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -93,10 +94,7 @@ func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 }
 
 func (f Function) IsAggregate() bool {
-	if f.Flag == plan.Function_AGG {
-		return true
-	}
-	return false
+	return f.Flag == plan.Function_AGG
 }
 
 // functionRegister records the information about
@@ -167,8 +165,5 @@ func strictTypeCheck(args []types.T, require []types.T) bool {
 }
 
 func isNotScalarNull(t types.T) bool {
-	if t != ScalarNull {
-		return true
-	}
-	return false
+	return t != ScalarNull
 }

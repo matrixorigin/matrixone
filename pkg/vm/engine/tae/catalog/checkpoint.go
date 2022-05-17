@@ -125,7 +125,6 @@ func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointIt
 	cloned := item.CloneCreate()
 	entry.RUnlock()
 	ckpEntry.AddCommand(cloned.MakeLogEntry())
-	return
 }
 
 type Checkpoint struct {

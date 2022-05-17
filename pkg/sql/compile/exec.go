@@ -477,11 +477,11 @@ func (e *Exec) getRelationFromPlanScope(s *plan.Scope) engine.Relation {
 	case *plan.Projection:
 		return e.getRelationFromPlanScope(s.Children[0])
 	case *plan.Relation:
-		db, err := e.e.Database(op.Schema)
+		db, err := e.e.Database(op.Schema, nil)
 		if err != nil {
 			return nil
 		}
-		rel, err := db.Relation(op.Name)
+		rel, err := db.Relation(op.Name, nil)
 		if err != nil {
 			return nil
 		}
@@ -759,15 +759,15 @@ func (e *Exec) compileQ(ps *plan.Scope) ([]*Scope, error) {
 		}
 		return ss, nil
 	case *plan.Relation:
-		db, err := e.c.e.Database(op.Schema)
+		db, err := e.c.e.Database(op.Schema, nil)
 		if err != nil {
 			return nil, err
 		}
-		rel, err := db.Relation(op.Name)
+		rel, err := db.Relation(op.Name, nil)
 		if err != nil {
 			return nil, err
 		}
-		defer rel.Close()
+		defer rel.Close(nil)
 		// init date source
 		src := &Source{
 			IsMerge:      false,
@@ -780,7 +780,7 @@ func (e *Exec) compileQ(ps *plan.Scope) ([]*Scope, error) {
 			src.Attributes = append(src.Attributes, k)
 			src.RefCounts = append(src.RefCounts, uint64(v.Ref))
 		}
-		nodes := rel.Nodes()
+		nodes := rel.Nodes(nil)
 		ss := make([]*Scope, len(nodes))
 		for i := range nodes {
 			ss[i] = &Scope{
@@ -1009,15 +1009,15 @@ func (e *Exec) compileAQ(ps *plan.Scope) (*Scope, error) {
 		})
 		return rs, nil
 	case *plan.Relation:
-		db, err := e.c.e.Database(op.Schema)
+		db, err := e.c.e.Database(op.Schema, nil)
 		if err != nil {
 			return nil, err
 		}
-		rel, err := db.Relation(op.Name)
+		rel, err := db.Relation(op.Name, nil)
 		if err != nil {
 			return nil, err
 		}
-		defer rel.Close()
+		defer rel.Close(nil)
 		// init date source
 		src := &Source{
 			IsMerge:      false,
@@ -1030,7 +1030,7 @@ func (e *Exec) compileAQ(ps *plan.Scope) (*Scope, error) {
 			src.Attributes = append(src.Attributes, k)
 			src.RefCounts = append(src.RefCounts, uint64(v.Ref))
 		}
-		nodes := rel.Nodes()
+		nodes := rel.Nodes(nil)
 		ss := make([]*Scope, len(nodes))
 		for i := range nodes {
 			ss[i] = &Scope{
@@ -1602,15 +1602,15 @@ func (e *Exec) compileJoin(ps *plan.Scope) ([]*Scope, error) {
 func (e *Exec) compileFact(ps *plan.Scope) ([]*Scope, error) {
 	switch op := ps.Op.(type) {
 	case *plan.Relation:
-		db, err := e.c.e.Database(op.Schema)
+		db, err := e.c.e.Database(op.Schema, nil)
 		if err != nil {
 			return nil, err
 		}
-		rel, err := db.Relation(op.Name)
+		rel, err := db.Relation(op.Name, nil)
 		if err != nil {
 			return nil, err
 		}
-		defer rel.Close()
+		defer rel.Close(nil)
 		// init date source
 		src := &Source{
 			IsMerge:      false,
@@ -1623,7 +1623,7 @@ func (e *Exec) compileFact(ps *plan.Scope) ([]*Scope, error) {
 			src.Attributes = append(src.Attributes, k)
 			src.RefCounts = append(src.RefCounts, uint64(v.Ref))
 		}
-		nodes := rel.Nodes()
+		nodes := rel.Nodes(nil)
 		ss := make([]*Scope, len(nodes))
 		for i := range nodes {
 			ss[i] = &Scope{
@@ -1722,15 +1722,15 @@ func (e *Exec) compileFact(ps *plan.Scope) ([]*Scope, error) {
 func (e *Exec) compileCAQFact(ps *plan.Scope) ([]*Scope, error) {
 	switch op := ps.Op.(type) {
 	case *plan.Relation:
-		db, err := e.c.e.Database(op.Schema)
+		db, err := e.c.e.Database(op.Schema, nil)
 		if err != nil {
 			return nil, err
 		}
-		rel, err := db.Relation(op.Name)
+		rel, err := db.Relation(op.Name, nil)
 		if err != nil {
 			return nil, err
 		}
-		defer rel.Close()
+		defer rel.Close(nil)
 		// init date source
 		src := &Source{
 			IsMerge:      false,
@@ -1743,7 +1743,7 @@ func (e *Exec) compileCAQFact(ps *plan.Scope) ([]*Scope, error) {
 			src.Attributes = append(src.Attributes, k)
 			src.RefCounts = append(src.RefCounts, uint64(v.Ref))
 		}
-		nodes := rel.Nodes()
+		nodes := rel.Nodes(nil)
 		ss := make([]*Scope, len(nodes))
 		for i := range nodes {
 			ss[i] = &Scope{

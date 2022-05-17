@@ -236,7 +236,7 @@ func (mrs *MysqlResultSet) GetColumnCount() uint64 {
 }
 
 func (mrs *MysqlResultSet) GetColumn(index uint64) (Column, error) {
-	if index >= 0 && index < mrs.GetColumnCount() {
+	if index < mrs.GetColumnCount() {
 		return mrs.Columns[index], nil
 	} else {
 		return nil, fmt.Errorf("index valid column index %d ", index)
@@ -253,7 +253,7 @@ func (mrs *MysqlResultSet) GetRowCount() uint64 {
 }
 
 func (mrs *MysqlResultSet) GetRow(index uint64) ([]interface{}, error) {
-	if index >= 0 && index < mrs.GetRowCount() {
+	if index < mrs.GetRowCount() {
 		return mrs.Data[index], nil
 	} else {
 		return nil, fmt.Errorf("index valid row index %d ", index)

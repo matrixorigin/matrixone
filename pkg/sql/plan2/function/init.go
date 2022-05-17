@@ -2,10 +2,11 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"reflect"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 // init function fills the functionRegister with
@@ -71,10 +72,7 @@ func functionsEqual(f1 Function, f2 Function) bool {
 		tc1 := reflect.ValueOf(f1.TypeCheckFn)
 		tc2 := reflect.ValueOf(f2.TypeCheckFn)
 
-		if tc1.Pointer() == tc2.Pointer() {
-			return true
-		}
-		return false
+		return tc1.Pointer() == tc2.Pointer()
 	}
 	return false
 }
