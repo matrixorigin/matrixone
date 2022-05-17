@@ -146,10 +146,9 @@ func buildCast(astExpr *tree.CastExpr, ctx CompilerContext, query *Query, select
 	if err != nil {
 		return nil, err
 	}
-	oid := uint8(astExpr.Type.(*tree.T).InternalType.Oid)
-	typeId, ok := AstTypeToPlanTypeMap[oid]
-	if !ok {
-		return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("'%v' is not support now", astExpr))
+	typ, err := getTypeFromAst(astExpr.Type)
+	if err != nil {
+		return nil, err
 	}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
@@ -158,9 +157,7 @@ func buildCast(astExpr *tree.CastExpr, ctx CompilerContext, query *Query, select
 				Args: []*plan.Expr{expr},
 			},
 		},
-		Typ: &plan.Type{
-			Id: typeId,
-		},
+		Typ: typ,
 	}, nil
 }
 
