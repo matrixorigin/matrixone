@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package join
+package left
 
 import (
 	"bytes"
@@ -34,7 +34,7 @@ func init() {
 }
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" ⨝ ")
+	buf.WriteString(" ⟕ ")
 }
 
 func Prepare(proc *process.Process, arg interface{}) error {
@@ -387,10 +387,21 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			ctr.keys[k] = ctr.keys[k][:0]
 		}
 		for k := 0; k < n; k++ {
-			if ctr.zValues[k] == 0 {
-				continue
-			}
-			if ctr.values[k] == 0 {
+			if ctr.zValues[k] == 0 || ctr.values[k] == 0 {
+				for j, rp := range ap.Result {
+					if rp.Rel == 0 {
+						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp); err != nil {
+							batch.Clean(rbat, proc.Mp)
+							return err
+						}
+					} else {
+						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp); err != nil {
+							batch.Clean(rbat, proc.Mp)
+							return err
+						}
+					}
+				}
+				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
 			if ctr.flg {
