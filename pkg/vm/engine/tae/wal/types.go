@@ -15,7 +15,9 @@
 package wal
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -59,6 +61,34 @@ func (index *Index) Compare(o *Index) int {
 		return -1
 	}
 	return 0
+}
+
+func (index *Index) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, index.LSN); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, index.CSN); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, index.Size); err != nil {
+		return
+	}
+	n = 16
+	return
+}
+
+func (index *Index) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &index.LSN); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &index.CSN); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &index.Size); err != nil {
+		return
+	}
+	n = 16
+	return
 }
 
 func (index *Index) Clone() *Index {

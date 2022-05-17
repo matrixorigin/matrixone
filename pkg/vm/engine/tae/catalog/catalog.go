@@ -116,20 +116,22 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd) (err error) {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
 		for _, cmds := range cmds.Cmds {
-			catalog.ReplayCmd(cmds)
+			if err = catalog.ReplayCmd(cmds); err != nil {
+				break
+			}
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayBlock(cmd)
+		err = catalog.onReplayBlock(cmd)
 	case CmdLogSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplaySegment(cmd)
+		err = catalog.onReplaySegment(cmd)
 	case CmdLogTable:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayTable(cmd)
+		err = catalog.onReplayTable(cmd)
 	case CmdLogDatabase:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayDatabase(cmd)
+		err = catalog.onReplayDatabase(cmd)
 	case CmdCreateDatabase:
 		cmd := txncmd.(*EntryCommand)
 		err = catalog.onReplayCreateDatabase(cmd)
@@ -181,11 +183,14 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) (err error) {
 	if cmd.DB.CurrOp == OpCreate {
 		return catalog.addEntryLocked(cmd.DB)
 	} else {
-		db, _ := catalog.GetDatabaseByID(cmd.DB.ID)
-		if db != nil {
-			catalog.RemoveEntry(db)
+		db, err := catalog.GetDatabaseByID(cmd.DB.ID)
+		if err == nil {
+			if err = catalog.RemoveEntry(db); err != nil {
+				return err
+			}
 		}
-		return catalog.addEntryLocked(cmd.DB)
+		err = catalog.addEntryLocked(cmd.DB)
+		return err
 	}
 }
 
@@ -226,7 +231,9 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand) (err error) {
 	} else {
 		rel, _ := db.GetTableEntryByID(cmd.Table.ID)
 		if rel != nil {
-			db.RemoveEntry(rel)
+			if err = db.RemoveEntry(rel); err != nil {
+				return
+			}
 		}
 		return db.addEntryLocked(cmd.Table)
 	}
@@ -281,7 +288,9 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand) (err error) {
 	} else {
 		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
 		if seg != nil {
-			rel.deleteEntryLocked(seg)
+			if err = rel.deleteEntryLocked(seg); err != nil {
+				return
+			}
 		}
 		rel.addEntryLocked(cmd.Segment)
 	}
@@ -348,7 +357,9 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand) (err error) {
 	} else {
 		blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)
 		if blk != nil {
-			seg.deleteEntryLocked(blk)
+			if err = seg.deleteEntryLocked(blk); err != nil {
+				return
+			}
 		}
 		seg.addEntryLocked(cmd.Block)
 	}
@@ -360,12 +371,17 @@ func (catalog *Catalog) OnRelay(group uint32, commitId uint64, payload []byte, t
 		return
 	}
 	e := NewEmptyCheckpointEntry()
-	e.Unarshal(payload)
+	if err = e.Unmarshal(payload); err != nil {
+		return
+	}
 	checkpoint := new(Checkpoint)
-	checkpoint.LSN = commitId
+	checkpoint.CommitId = commitId
 	checkpoint.MaxTS = e.MaxTS
+	checkpoint.LSN = e.MaxIndex.LSN
 	for _, cmd := range e.Entries {
-		catalog.ReplayCmd(cmd)
+		if err = catalog.ReplayCmd(cmd); err != nil {
+			return
+		}
 	}
 	if len(catalog.checkpoints) == 0 {
 		catalog.checkpoints = append(catalog.checkpoints, checkpoint)
@@ -552,7 +568,6 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	dbIt := catalog.MakeDBIt(true)
 	for dbIt.Valid() {
 		dbEntry := dbIt.Get().GetPayload().(*DBEntry)
-		err = processor.OnDatabase(dbEntry)
 		if err = processor.OnDatabase(dbEntry); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil
@@ -599,7 +614,9 @@ func (catalog *Catalog) PrepareCheckpoint(startTs, endTs uint64) *CheckpointEntr
 		CheckpointOp(ckpEntry, entry, database, startTs, endTs)
 		return
 	}
-	catalog.RecurLoop(processor)
+	if err := catalog.RecurLoop(processor); err != nil {
+		panic(err)
+	}
 	return ckpEntry
 }
 
@@ -649,7 +666,8 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 	defer logEntry.Free()
 	checkpoint := new(Checkpoint)
 	checkpoint.MaxTS = maxTs
-	checkpoint.LSN, err = catalog.store.AppendEntry(0, logEntry)
+	checkpoint.LSN = entry.MaxIndex.LSN
+	checkpoint.CommitId, err = catalog.store.AppendEntry(0, logEntry)
 	if err != nil {
 		panic(err)
 	}

@@ -37,6 +37,7 @@ type CheckpointItem interface {
 	Clone() CheckpointItem
 	CloneCreate() CheckpointItem
 	MakeLogEntry() *EntryCommand
+	StringLocked() string
 }
 
 func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs uint64) bool {
@@ -128,15 +129,16 @@ func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointIt
 }
 
 type Checkpoint struct {
-	MaxTS uint64
-	LSN   uint64
+	MaxTS    uint64
+	LSN      uint64
+	CommitId uint64
 }
 
 func (ckp *Checkpoint) String() string {
 	if ckp == nil {
-		return "LSN=0,MaxTS=0"
+		return "CommitId=0,MaxTS=0,LSN=0"
 	}
-	return fmt.Sprintf("LSN=%d,MaxTS=%d", ckp.LSN, ckp.MaxTS)
+	return fmt.Sprintf("CommitId=%d,MaxTS=%d,LSN=%d", ckp.CommitId, ckp.MaxTS, ckp.LSN)
 }
 
 type CheckpointEntry struct {
@@ -175,35 +177,15 @@ func (e *CheckpointEntry) AddIndex(index *wal.Index) {
 	e.LogIndexes = append(e.LogIndexes, index)
 }
 
-func (e *CheckpointEntry) Unmarshal(buf []byte) (err error) {
-	r := bytes.NewBuffer(buf)
-	if err = binary.Read(r, binary.BigEndian, &e.MinTS); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &e.MaxTS); err != nil {
-		return
-	}
-	var cmdCnt uint32
-	if err = binary.Read(r, binary.BigEndian, &cmdCnt); err != nil {
-		return
-	}
-	for i := 0; i < int(cmdCnt); i++ {
-		cmd, _, err := txnbase.BuildCommandFrom(r)
-		if err != nil {
-			return err
-		}
-		e.Entries = append(e.Entries, cmd.(*EntryCommand))
-	}
-
-	return
-}
-
 func (e *CheckpointEntry) GetMaxIndex() *wal.Index {
 	return &e.MaxIndex
 }
 
 func (e *CheckpointEntry) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
+	if _, err = e.MaxIndex.WriteTo(&w); err != nil {
+		return
+	}
 	if err = binary.Write(&w, binary.BigEndian, e.MinTS); err != nil {
 		return
 	}
@@ -224,8 +206,11 @@ func (e *CheckpointEntry) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (e *CheckpointEntry) Unarshal(buf []byte) (err error) {
+func (e *CheckpointEntry) Unmarshal(buf []byte) (err error) {
 	r := bytes.NewBuffer(buf)
+	if _, err = e.MaxIndex.ReadFrom(r); err != nil {
+		return
+	}
 	if err = binary.Read(r, binary.BigEndian, &e.MinTS); err != nil {
 		return
 	}
@@ -253,7 +238,7 @@ func (e *CheckpointEntry) MakeLogEntry() (logEntry LogEntry, err error) {
 	}
 	logEntry = entry.GetBase()
 	logEntry.SetType(ETCatalogCheckpoint)
-	logEntry.Unmarshal(buf)
+	err = logEntry.Unmarshal(buf)
 	return
 }
 
