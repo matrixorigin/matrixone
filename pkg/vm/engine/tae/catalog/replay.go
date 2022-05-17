@@ -42,7 +42,7 @@ func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload 
 	checkpoint.LSN = e.MaxIndex.LSN
 	ts := uint64(0)
 	for _, cmd := range e.Entries {
-		if ts, err = replayer.catalog.ReplayCmd(cmd, replayer.dataFactory); err != nil {
+		if ts, err = replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil); err != nil {
 			return
 		}
 		if replayer.ts < ts {

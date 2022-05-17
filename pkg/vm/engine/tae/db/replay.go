@@ -43,24 +43,26 @@ func (replayer *Replayer) replayHandle(group uint32, commitId uint64, payload []
 	if group != wal.GroupC {
 		return
 	}
+	idx := &wal.Index{LSN: commitId}
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
 		return err
 	}
-	replayer.replayWalCmd(txnCmd)
+	replayer.replayWalCmd(txnCmd, idx)
 	return
 }
 
-func (replayer *Replayer) replayWalCmd(txncmd txnif.TxnCmd) (err error) {
+func (replayer *Replayer) replayWalCmd(txncmd txnif.TxnCmd, idx *wal.Index) (err error) {
 	ts := uint64(0)
 	switch cmd := txncmd.(type) {
 	case *txnbase.ComposedCmd:
-		for _, cmds := range cmd.Cmds {
-			replayer.replayWalCmd(cmds)
+		for i, cmds := range cmd.Cmds {
+			idx2 := &wal.Index{LSN: idx.LSN, Size: uint32(len(cmd.Cmds)), CSN: uint32(i)}
+			replayer.replayWalCmd(cmds, idx2)
 		}
 	case *catalog.EntryCommand:
-		ts, err = replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory)
+		ts, err = replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idx)
 	case *txnimpl.AppendCmd:
 		err = replayer.db.onReplayAppendCmd(cmd)
 	case *updates.UpdateCmd:

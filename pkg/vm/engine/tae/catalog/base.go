@@ -87,6 +87,7 @@ func NewReplayBaseEntry() *BaseEntry {
 		RWMutex: &sync.RWMutex{},
 	}
 }
+
 func (be *BaseEntry) MaxCommittedTS() uint64 {
 	if be.Txn == nil {
 		if be.DeleteAt != 0 {
@@ -271,6 +272,19 @@ func (be *BaseEntry) DeleteAfter(ts uint64) bool {
 
 func (be *BaseEntry) HasCreated() bool {
 	return be.CreateAt != 0
+}
+
+func (be *BaseEntry) OnReplayDrop(deleteAt uint64) error {
+	if be.HasDropped() {
+		return ErrNotFound
+	}
+	be.PrevCommit = &CommitInfo{
+		CurrOp:   be.CurrOp,
+		LogIndex: be.LogIndex,
+	}
+	be.DeleteAt = deleteAt
+	be.CurrOp = OpSoftDelete
+	return nil
 }
 
 func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {

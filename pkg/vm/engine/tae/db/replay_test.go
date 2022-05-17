@@ -9,7 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -287,6 +287,28 @@ func TestReplayCatalog4(t *testing.T) {
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	rel.Append(bat)
+	assert.Nil(t, txn.Commit())
+
+	txn = tae2.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	filter := new(handle.Filter)
+	filter.Op = handle.FilterEq
+	filter.Val = int32(5)
+	id, row, err := rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	err = rel.Update(id, row, uint16(0), int32(33))
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn = tae2.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	rel.RangeDelete(id, row, row)
 	assert.Nil(t, txn.Commit())
 
 	t.Log(c.SimplePPString(common.PPL1))
