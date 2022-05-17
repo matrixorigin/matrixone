@@ -156,8 +156,6 @@ func (bf *blockFile) Destroy() error {
 	for _, cb := range bf.columns {
 		cb.Unref()
 	}
-	bf.removeData(bf.deletes.dataFile)
-	bf.removeData(bf.indexMeta)
 	bf.columns = nil
 	bf.deletes = nil
 	bf.indexMeta = nil

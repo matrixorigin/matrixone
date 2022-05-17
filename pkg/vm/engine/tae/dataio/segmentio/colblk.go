@@ -148,5 +148,12 @@ func (cb *columnBlock) close() {
 
 func (cb *columnBlock) Destroy() {
 	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
-	cb.block.removeData(cb.data)
+	cb.mutex.RLock()
+	files := cb.data.file
+	cb.mutex.RUnlock()
+	if files != nil {
+		for _, file := range files {
+			cb.block.seg.GetSegmentFile().ReleaseFile(file)
+		}
+	}
 }

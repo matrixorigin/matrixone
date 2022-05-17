@@ -203,8 +203,6 @@ func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 }
 
 func (s *Segment) ReleaseFile(fd *BlockFile) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
 	if s.segFile == nil {
 		return
 	}
@@ -212,7 +210,9 @@ func (s *Segment) ReleaseFile(fd *BlockFile) {
 	if err != nil {
 		panic(any(err.Error()))
 	}
+	s.mutex.Lock()
 	delete(s.nodes, fd.name)
+	s.mutex.Unlock()
 	s.Free(fd)
 	fd = nil
 }

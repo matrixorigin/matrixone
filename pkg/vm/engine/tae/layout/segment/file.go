@@ -222,12 +222,13 @@ func (b *BlockFile) Read(data []byte) (n int, err error) {
 	if bufLen == 0 {
 		return 0, nil
 	}
-	b.snode.mutex.RLock()
-	defer b.snode.mutex.RUnlock()
 	n = 0
 	var boff uint32 = 0
 	var roff uint32 = 0
-	for _, ext := range b.snode.extents {
+	b.snode.mutex.RLock()
+	extents := b.snode.extents
+	b.snode.mutex.RUnlock()
+	for _, ext := range extents {
 		if bufLen == 0 {
 			break
 		}
