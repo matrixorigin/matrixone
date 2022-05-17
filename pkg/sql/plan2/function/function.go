@@ -37,8 +37,6 @@ const (
 var (
 	// an empty function structure just for return when we couldn't meet any function.
 	emptyFunction = Function{}
-
-	aggregateEvalError = errors.New(errno.AmbiguousFunction, "aggregate function should not call eval() directly")
 )
 
 // Function is an overload of
@@ -87,8 +85,8 @@ func (f Function) ReturnType() (typ types.T, nullable bool) {
 }
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if f.IsAggregate() {
-		return nil, aggregateEvalError
+	if f.Fn == nil {
+		return nil, errors.New(errno.AmbiguousFunction, "function doesn't implement its eval method")
 	}
 	return f.Fn(vs, proc)
 }
@@ -118,12 +116,12 @@ func GetFunctionByIndex(functionId int, overloadIndex int) (Function, error) {
 }
 
 // GetFunctionByName check a function exist or not by function name and arg types,
-// if matches, return its function structure.
-func GetFunctionByName(name string, args []types.T) (Function, error) {
+// if matches, return its function structure and function id.
+func GetFunctionByName(name string, args []types.T) (Function, int, error) {
 	matches := make([]Function, 0, 4)
 	fid, err := getFunctionId(name)
 	if err != nil {
-		return emptyFunction, err
+		return emptyFunction, -1, err
 	}
 
 	fs := functionRegister[fid]
@@ -135,7 +133,7 @@ func GetFunctionByName(name string, args []types.T) (Function, error) {
 
 	// must match only 1 function
 	if len(matches) == 0 {
-		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
+		return emptyFunction, -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
 	}
 	if len(matches) > 1 {
 		errMessage := "too much function matches:"
@@ -144,9 +142,9 @@ func GetFunctionByName(name string, args []types.T) (Function, error) {
 			errMessage += name
 			errMessage += fmt.Sprintf("%v", matches[i].Args)
 		}
-		return emptyFunction, errors.New(errno.SyntaxError, errMessage)
+		return emptyFunction, -1, errors.New(errno.SyntaxError, errMessage)
 	}
-	return matches[0], nil
+	return matches[0], fid, nil
 }
 
 // strictTypeCheck is a general type check method.
@@ -166,4 +164,28 @@ func strictTypeCheck(args []types.T, require []types.T) bool {
 
 func isNotScalarNull(t types.T) bool {
 	return t != ScalarNull
+}
+
+var (
+	anyNumbers = map[types.T]struct{}{
+		types.T_uint8:      {},
+		types.T_uint16:     {},
+		types.T_uint32:     {},
+		types.T_uint64:     {},
+		types.T_int8:       {},
+		types.T_int16:      {},
+		types.T_int32:      {},
+		types.T_int64:      {},
+		types.T_float32:    {},
+		types.T_float64:    {},
+		types.T_decimal64:  {},
+		types.T_decimal128: {},
+	}
+)
+
+func isNumberType(t types.T) bool {
+	if _, ok := anyNumbers[t]; ok {
+		return true
+	}
+	return false
 }

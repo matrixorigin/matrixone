@@ -28,6 +28,9 @@ const (
 	// any family
 	T_any T = T(plan.Type_ANY)
 
+	// bool family
+	T_bool T = T(plan.Type_BOOL)
+
 	// numeric/integer family
 	T_int8   T = T(plan.Type_INT8)
 	T_int16  T = T(plan.Type_INT16)
