@@ -61,9 +61,10 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 		taskFactory, taskType, scopes, err := segmentData.BuildCompactionTaskFactory()
 		if err != nil || taskFactory == nil {
 			logutil.Warnf("%s: %v", segmentData.MutationInfo(), err)
+		} else {
+			_, err = processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
+			logutil.Infof("[Mergeblocks] | %s | Scheduled | State=%v | Scopes=%s", segmentEntry.String(), err, common.IDArraryString(scopes))
 		}
-		_, err = processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
-		logutil.Infof("[Mergeblocks] | %s | Scheduled | State=%v | Scopes=%s", segmentEntry.String(), err, common.IDArraryString(scopes))
 	}
 	processor.blkCntOfSegment = 0
 	return

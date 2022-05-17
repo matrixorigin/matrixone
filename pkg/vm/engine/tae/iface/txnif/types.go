@@ -41,6 +41,7 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	GetID() uint64
+	GetCtx() []byte
 	GetStartTS() uint64
 	GetCommitTS() uint64
 	GetInfo() []byte

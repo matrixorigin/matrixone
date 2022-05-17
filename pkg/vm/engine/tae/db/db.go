@@ -66,6 +66,14 @@ func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit()
 }
 
+func (db *DB) GetTxnByCtx(ctx []byte) (txn txnif.AsyncTxn, err error) {
+	txn = db.TxnMgr.GetTxnByCtx(ctx)
+	if txn == nil {
+		err = txnbase.ErrNotFound
+	}
+	return
+}
+
 func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
