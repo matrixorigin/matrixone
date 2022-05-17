@@ -53,4 +53,5 @@ const (
 	EndsWith
 	Date
 	Bin
+	FindInSet
 )
