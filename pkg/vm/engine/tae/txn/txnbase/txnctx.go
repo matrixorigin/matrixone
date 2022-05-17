@@ -15,15 +15,27 @@
 package txnbase
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+func IDToIDCtx(id uint64) []byte {
+	ctx := make([]byte, 8)
+	binary.BigEndian.PutUint64(ctx, id)
+	return ctx
+}
+
+func IDCtxToID(buf []byte) uint64 {
+	return binary.BigEndian.Uint64(buf)
+}
+
 type TxnCtx struct {
 	*sync.RWMutex
 	ID                uint64
+	IDCtx             []byte
 	StartTS, CommitTS uint64
 	Info              []byte
 	State             int32
@@ -35,11 +47,16 @@ func NewTxnCtx(rwlocker *sync.RWMutex, id, start uint64, info []byte) *TxnCtx {
 	}
 	return &TxnCtx{
 		ID:       id,
+		IDCtx:    IDToIDCtx(id),
 		RWMutex:  rwlocker,
 		StartTS:  start,
 		CommitTS: txnif.UncommitTS,
 		Info:     info,
 	}
+}
+
+func (txn *TxnCtx) GetCtx() []byte {
+	return txn.IDCtx
 }
 
 func (ctx *TxnCtx) Repr() string {

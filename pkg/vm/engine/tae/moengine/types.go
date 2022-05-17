@@ -17,12 +17,22 @@ package moengine
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+type Txn interface {
+	GetCtx() []byte
+	GetID() uint64
+	Commit() error
+	Rollback() error
+	String() string
+	Repr() string
+	GetError() error
+}
+
 type txnEngine struct {
-	txn txnif.AsyncTxn
+	impl *db.DB
 }
 
 type txnDatabase struct {
@@ -32,11 +42,6 @@ type txnDatabase struct {
 type txnRelation struct {
 	handle handle.Relation
 }
-
-//TODO: commented due to static check
-//type txnSegment struct {
-//	handle handle.Segment
-//}
 
 type txnBlock struct {
 	handle handle.Block
