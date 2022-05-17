@@ -88,4 +88,21 @@ func TestPrepareInitialData(t *testing.T) {
 			convey.So(line, convey.ShouldResemble, s)
 		}
 	})
+
+	convey.Convey("mo_user", t, func() {
+		sch := DefineSchemaForMoUser()
+		data := PrepareInitialDataForMoUser()
+		bat := FillInitialDataForMoUser()
+		convey.So(bat, convey.ShouldNotBeNil)
+		convey.So(batch.Length(bat), convey.ShouldEqual, len(data))
+		convey.So(len(bat.Vecs), convey.ShouldEqual, len(data[0]))
+		convey.So(len(bat.Vecs), convey.ShouldEqual, sch.Length())
+		for i, attr := range sch.GetAttributes() {
+			convey.So(attr.AttributeType.Eq(bat.Vecs[i].Typ), convey.ShouldBeTrue)
+		}
+		for i, line := range data {
+			s := FormatLineInBatch(bat, i)
+			convey.So(line, convey.ShouldResemble, s)
+		}
+	})
 }

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"math"
 	"os"
 	"os/signal"
@@ -48,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	tpeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -123,9 +125,12 @@ call the catalog service to remove the epoch
 */
 func removeEpoch(epoch uint64) {
 	//logutil.Infof("removeEpoch %d",epoch)
-	_, err := c.RemoveDeletedTable(epoch)
-	if err != nil {
-		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
+	var err error
+	if c != nil {
+		_, err = c.RemoveDeletedTable(epoch)
+		if err != nil {
+			fmt.Printf("catalog remove ddl failed. error :%v \n", err)
+		}
 	}
 	/*
 		if tpe, ok := config.StorageEngine.(*tpeEngine.TpeEngine); ok {
@@ -135,6 +140,176 @@ func removeEpoch(epoch uint64) {
 			}
 		}
 	*/
+}
+
+type aoeHandler struct {
+	cube       driver.CubeDriver
+	port       int64
+	kvStorage  storage.DataStorage
+	aoeStorage storage.DataStorage
+}
+
+type tpeHandler struct {
+	aoe *aoeHandler
+}
+
+type taeHandler struct {
+}
+
+func initAoe(configFilePath string) *aoeHandler {
+	targetDir := config.GlobalSystemVariables.GetStorePath()
+	if err := recreateDir(targetDir); err != nil {
+		logutil.Infof("Recreate dir error:%v\n", err)
+		os.Exit(RecreateDirExit)
+	}
+
+	cfg := parseConfig(configFilePath, targetDir)
+
+	//aoe : kvstorage config
+	_, kvStorage := getKVDataStorage(targetDir, cfg)
+
+	//aoe : catalog
+	catalogListener := catalog.NewCatalogListener()
+	aoeStorage := getAOEDataStorage(configFilePath, targetDir, catalogListener, cfg)
+
+	//aoe cube driver
+	a, err := driver.NewCubeDriverWithOptions(kvStorage, aoeStorage, &cfg)
+	if err != nil {
+		logutil.Infof("Create cube driver failed, %v", err)
+		os.Exit(CreateCubeExit)
+	}
+	err = a.Start()
+	if err != nil {
+		logutil.Infof("Start cube driver failed, %v", err)
+		os.Exit(StartCubeExit)
+	}
+
+	//aoe & tpe: address for computation
+	addr := cfg.CubeConfig.AdvertiseClientAddr
+	if len(addr) != 0 {
+		logutil.Infof("compile init address from cube AdvertiseClientAddr %s", addr)
+	} else {
+		logutil.Infof("compile init address from cube ClientAddr %s", cfg.CubeConfig.ClientAddr)
+		addr = cfg.CubeConfig.ClientAddr
+	}
+
+	//put the node info to the computation
+	compile.InitAddress(addr)
+
+	//aoe: catalog
+	c = catalog.NewCatalog(a)
+	config.ClusterCatalog = c
+	catalogListener.UpdateCatalog(c)
+	cngineConfig := aoeEngine.EngineConfig{}
+	_, err = toml.DecodeFile(configFilePath, &cngineConfig)
+	if err != nil {
+		logutil.Infof("Decode cube config error:%v\n", err)
+		os.Exit(DecodeCubeConfigExit)
+	}
+
+	eng := aoeEngine.New(c, &cngineConfig)
+
+	err = waitClusterStartup(a, 300*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
+
+	if err != nil {
+		logutil.Infof("wait cube cluster startup failed, %v", err)
+		os.Exit(WaitCubeStartExit)
+	}
+
+	//test storage aoe_storage
+	config.StorageEngine = eng
+
+	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")
+	if li == -1 {
+		logutil.Infof("There is no port in client addr")
+		os.Exit(LoadConfigExit)
+	}
+	cubePort, err := strconv.ParseInt(string(cfg.CubeConfig.ClientAddr[li+1:]), 10, 32)
+	if err != nil {
+		logutil.Infof("Invalid port")
+		os.Exit(LoadConfigExit)
+	}
+	return &aoeHandler{
+		cube:       a,
+		port:       cubePort,
+		kvStorage:  kvStorage,
+		aoeStorage: aoeStorage,
+	}
+}
+
+func closeAoe(aoe *aoeHandler) {
+	aoe.kvStorage.Close()
+	aoe.aoeStorage.Close()
+	aoe.cube.Close()
+}
+
+func initTpe(configFilePath string, args []string) *tpeHandler {
+	aoe := initAoe(configFilePath)
+	tpeConf := &tpeEngine.TpeConfig{}
+	tpeConf.PBKV = nil
+	tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
+	tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
+	tpeConf.MultiNode = config.GlobalSystemVariables.GetTpeMultiNode()
+	tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
+	tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
+	tpeConf.TpeScanTimeout = time.Duration(config.GlobalSystemVariables.GetTpeScanTimeout())
+	tpeConf.TpeScanTryCount = int(config.GlobalSystemVariables.GetTpeScanTryCount())
+	tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
+	configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
+	if configKvTyp == "memorykv" {
+		tpeConf.KvType = tuplecodec.KV_MEMORY
+	} else if configKvTyp == "cubekv" {
+		tpeConf.KvType = tuplecodec.KV_CUBE
+		tpeConf.Cube = aoe.cube
+	} else {
+		logutil.Infof("there is no such kvType %s \n", configKvTyp)
+		os.Exit(CreateTpeExit)
+	}
+	configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
+	if configSerializeTyp == "concise" {
+		tpeConf.SerialType = tuplecodec.ST_CONCISE
+	} else if configSerializeTyp == "json" {
+		tpeConf.SerialType = tuplecodec.ST_JSON
+	} else if configSerializeTyp == "flat" {
+		tpeConf.SerialType = tuplecodec.ST_FLAT
+	} else {
+		logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
+		os.Exit(CreateTpeExit)
+	}
+	te, err := tpeEngine.NewTpeEngine(tpeConf)
+	if err != nil {
+		logutil.Infof("create tpe error:%v\n", err)
+		os.Exit(CreateTpeExit)
+	}
+	err = te.Open()
+	if err != nil {
+		logutil.Infof("open tpe error:%v\n", err)
+		os.Exit(CreateTpeExit)
+	}
+
+	//test storage aoe_storage
+	config.StorageEngine = te
+
+	//test cluster nodes
+	config.ClusterNodes = engine.Nodes{}
+	err = tpeEngine.DumpDatabaseInfo(config.StorageEngine, args)
+	if err != nil {
+		logutil.Errorf("%s", err)
+	}
+
+	return &tpeHandler{aoe: aoe}
+}
+
+func closeTpe(tpe *tpeHandler) {
+	closeAoe(tpe.aoe)
+}
+
+func initTae() *taeHandler {
+	return nil
+}
+
+func closeTae(tae *taeHandler) {
+
 }
 
 func main() {
@@ -191,123 +366,32 @@ func main() {
 
 	ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
 
+	//aoe : epochgc ?
 	pci = frontend.NewPDCallbackImpl(ppu)
 	pci.Id = int(NodeId)
-
-	targetDir := config.GlobalSystemVariables.GetStorePath()
-	if err := recreateDir(targetDir); err != nil {
-		logutil.Infof("Recreate dir error:%v\n", err)
-		os.Exit(RecreateDirExit)
-	}
-
-	cfg := parseConfig(configFilePath, targetDir)
-
-	//kvs, kvStorage := getKVDataStorage(targetDir, cfg)
-	_, kvStorage := getKVDataStorage(targetDir, cfg)
-	defer kvStorage.Close()
-
-	catalogListener := catalog.NewCatalogListener()
-	aoeStorage := getAOEDataStorage(configFilePath, targetDir, catalogListener, cfg)
-	defer aoeStorage.Close()
-
-	a, err := driver.NewCubeDriverWithOptions(kvStorage, aoeStorage, &cfg)
-	if err != nil {
-		logutil.Infof("Create cube driver failed, %v", err)
-		os.Exit(CreateCubeExit)
-	}
-	err = a.Start()
-	if err != nil {
-		logutil.Infof("Start cube driver failed, %v", err)
-		os.Exit(StartCubeExit)
-	}
-	defer a.Close()
-
-	addr := cfg.CubeConfig.AdvertiseClientAddr
-	if len(addr) != 0 {
-		logutil.Infof("compile init address from cube AdvertiseClientAddr %s", addr)
-	} else {
-		logutil.Infof("compile init address from cube ClientAddr %s", cfg.CubeConfig.ClientAddr)
-		addr = cfg.CubeConfig.ClientAddr
-	}
-
-	//put the node info to the computation
-	compile.InitAddress(addr)
-
-	c = catalog.NewCatalog(a)
-	config.ClusterCatalog = c
-	catalogListener.UpdateCatalog(c)
-	cngineConfig := aoeEngine.EngineConfig{}
-	_, err = toml.DecodeFile(configFilePath, &cngineConfig)
-	if err != nil {
-		logutil.Infof("Decode cube config error:%v\n", err)
-		os.Exit(DecodeCubeConfigExit)
-	}
-	var eng engine.Engine
-	//	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
-	/*
-		if enableTpe {
-			tpeConf := &tpeEngine.TpeConfig{}
-			tpeConf.PBKV = kvs
-			tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
-			tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
-			tpeConf.MultiNode = config.GlobalSystemVariables.GetTpeMultiNode()
-			tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
-			tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
-			tpeConf.TpeScanTimeout = time.Duration(config.GlobalSystemVariables.GetTpeScanTimeout())
-			tpeConf.TpeScanTryCount = int(config.GlobalSystemVariables.GetTpeScanTryCount())
-			tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
-			configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
-			if configKvTyp == "memorykv" {
-				tpeConf.KvType = tuplecodec.KV_MEMORY
-			} else if configKvTyp == "cubekv" {
-				tpeConf.KvType = tuplecodec.KV_CUBE
-				tpeConf.Cube = a
-			} else {
-				logutil.Infof("there is no such kvType %s \n", configKvTyp)
-				os.Exit(CreateTpeExit)
-			}
-			configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
-			if configSerializeTyp == "concise" {
-				tpeConf.SerialType = tuplecodec.ST_CONCISE
-			} else if configSerializeTyp == "json" {
-				tpeConf.SerialType = tuplecodec.ST_JSON
-			} else if configSerializeTyp == "flat" {
-				tpeConf.SerialType = tuplecodec.ST_FLAT
-			} else {
-				logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
-				os.Exit(CreateTpeExit)
-			}
-			te, err := tpeEngine.NewTpeEngine(tpeConf)
-			if err != nil {
-				logutil.Infof("create tpe error:%v\n", err)
-				os.Exit(CreateTpeExit)
-			}
-			err = te.Open()
-			if err != nil {
-				logutil.Infof("open tpe error:%v\n", err)
-				os.Exit(CreateTpeExit)
-			}
-			eng = te
-		} else {
-			eng = aoeEngine.New(c, &cngineConfig)
-		}
-	*/
-	eng = aoeEngine.New(c, &cngineConfig)
-
 	pci.SetRemoveEpoch(removeEpoch)
 
-	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")
-	if li == -1 {
-		logutil.Infof("There is no port in client addr")
-		os.Exit(LoadConfigExit)
-	}
-	cubePort, err := strconv.ParseInt(string(cfg.CubeConfig.ClientAddr[li+1:]), 10, 32)
-	if err != nil {
-		logutil.Infof("Invalid port")
+	engineName := config.GlobalSystemVariables.GetStorageEngine()
+	var port int64
+	port = config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
+
+	var aoe *aoeHandler
+	var tpe *tpeHandler
+	var tae *taeHandler
+	if engineName == "aoe" {
+		aoe = initAoe(configFilePath)
+		port = aoe.port
+	} else if engineName == "tae" {
+		tae = initTae()
+	} else if engineName == "tpe" {
+		tpe = initTpe(configFilePath, args)
+		port = tpe.aoe.port
+	} else {
+		logutil.Errorf("undefined engine %s", engineName)
 		os.Exit(LoadConfigExit)
 	}
 
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, cubePort+100), 1<<30, logutil.GetGlobalLogger())
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, port+100), 1<<30, logutil.GetGlobalLogger())
 	if err != nil {
 		logutil.Infof("Create rpcserver failed, %v", err)
 		os.Exit(CreateRPCExit)
@@ -315,15 +399,8 @@ func main() {
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
 	proc := process.New(mheap.New(gm))
-	hp := handler.New(eng, proc)
+	hp := handler.New(config.StorageEngine, proc)
 	srv.Register(hp.Process)
-
-	err = waitClusterStartup(a, 300*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
-
-	if err != nil {
-		logutil.Infof("wait cube cluster startup failed, %v", err)
-		os.Exit(WaitCubeStartExit)
-	}
 
 	go func() {
 		if err := srv.Run(); err != nil {
@@ -331,17 +408,6 @@ func main() {
 			os.Exit(RunRPCExit)
 		}
 	}()
-	//test storage aoe_storage
-	config.StorageEngine = eng
-
-	//test cluster nodes
-	config.ClusterNodes = engine.Nodes{}
-	/*
-		err = tpeEngine.DumpDatabaseInfo(eng, args)
-		if err != nil {
-			logutil.Errorf("%s", err)
-		}
-	*/
 
 	createMOServer(pci)
 
@@ -359,6 +425,14 @@ func main() {
 	}
 
 	cleanup()
+
+	if engineName == "aoe" {
+		closeAoe(aoe)
+	} else if engineName == "tae" {
+		closeTae(tae)
+	} else if engineName == "tpe" {
+		closeTpe(tpe)
+	}
 }
 
 func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
