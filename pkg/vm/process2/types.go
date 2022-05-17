@@ -19,6 +19,7 @@ import (
 
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -65,7 +66,8 @@ type Process struct {
 	// unix timestamp
 	UnixTime int64
 
-	// Log Sequence Number
-	Lsn    []byte
+	// snapshot is transaction context
+	snapshot engine.Snapshot
+
 	Cancel context.CancelFunc
 }
