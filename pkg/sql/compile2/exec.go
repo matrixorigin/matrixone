@@ -15,8 +15,12 @@
 package compile2
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -46,8 +50,24 @@ func (e *Exec) Run(ts uint64) (err error) {
 	switch e.scope.Magic {
 	case Merge:
 		return nil
+	case CreateDatabase:
+		return e.scope.CreateDatabase(ts, e.c.proc.Snapshot, e.c.e)
 	}
 	return nil
+}
+
+func (e *Exec) compileScope(pn *plan.Plan) (*Scope, error) {
+	switch qry := pn.Plan.(type) {
+	case *plan.Plan_Ddl:
+		switch qry.Ddl.DdlType {
+		case plan.DataDefinition_CREATE_DATABASE:
+			return &Scope{
+				Magic: CreateDatabase,
+				Plan:  pn,
+			}, nil
+		}
+	}
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }
 
 func (e *Exec) Statement() tree.Statement {
