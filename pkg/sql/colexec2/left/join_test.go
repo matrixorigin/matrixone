@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package join
+package left
 
 import (
 	"bytes"
@@ -273,6 +273,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos, c
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	bat := batch.New(len(ts))
+	bat.Cnt = 1
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])

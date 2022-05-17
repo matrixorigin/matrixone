@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package join
+package complement
 
 import (
 	"bytes"
@@ -34,7 +34,7 @@ func init() {
 }
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" ⨝ ")
+	buf.WriteString(" \\ ")
 }
 
 func Prepare(proc *process.Process, arg interface{}) error {
@@ -67,19 +67,6 @@ func Prepare(proc *process.Process, arg interface{}) error {
 				ap.Conditions[1][i].Scale = cond.Typ.Scale - typ.Scale
 			}
 		}
-	}
-	{
-		flg := false
-		for _, rp := range ap.Result {
-			if rp.Rel == 1 {
-				ap.ctr.poses = append(ap.ctr.poses, rp.Pos)
-				if _, ok := mp[rp.Pos]; ok {
-					continue
-				}
-				flg = true
-			}
-		}
-		ap.ctr.flg = flg
 	}
 	ap.ctr.decimal64Slice = make([]types.Decimal64, UnitLimit)
 	ap.ctr.decimal128Slice = make([]types.Decimal128, UnitLimit)
@@ -127,208 +114,104 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		ctr.strHashMap = bat.Ht.(*hashtable.StringHashMap)
 		return nil
 	}
-	if ctr.flg {
-		var err error
+	var err error
 
-		for {
-			bat := <-proc.Reg.MergeReceivers[1].Ch
-			if bat == nil {
-				break
-			}
-			if len(bat.Zs) == 0 {
-				continue
-			}
-			if ctr.bat == nil {
-				ctr.bat = batch.New(len(bat.Vecs))
-				for i, vec := range bat.Vecs {
-					ctr.bat.Vecs[i] = vector.New(vec.Typ)
-				}
-			}
-			if ctr.bat, err = ctr.bat.Append(proc.Mp, bat); err != nil {
-				batch.Clean(bat, proc.Mp)
-				batch.Clean(ctr.bat, proc.Mp)
-				return err
-			}
-			batch.Clean(bat, proc.Mp)
-		}
-		count := len(ctr.bat.Zs)
-		for i := 0; i < count; i += UnitLimit {
-			n := count - i
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			copy(ctr.zValues[:n], OneInt64s[:n])
-			for _, cond := range ap.Conditions[1] {
-				vec := ctr.bat.Vecs[cond.Pos]
-				switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-				case 1:
-					fillGroupStr[uint8](ctr, vec, n, 1, i)
-				case 2:
-					fillGroupStr[uint16](ctr, vec, n, 2, i)
-				case 4:
-					fillGroupStr[uint32](ctr, vec, n, 4, i)
-				case 8:
-					fillGroupStr[uint64](ctr, vec, n, 8, i)
-				case -8:
-					if cond.Scale > 0 {
-						fillGroupStrWithDecimal64(ctr, vec, n, i, cond.Scale)
-					} else {
-						fillGroupStr[uint64](ctr, vec, n, 8, i)
-					}
-				case -16:
-					if cond.Scale > 0 {
-						fillGroupStrWithDecimal128(ctr, vec, n, i, cond.Scale)
-					} else {
-						fillGroupStr[types.Decimal128](ctr, vec, n, 16, i)
-					}
-				default:
-					vs := vec.Col.(*types.Bytes)
-					if !nulls.Any(vec.Nsp) {
-						for k := 0; k < n; k++ {
-							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
-						}
-					} else {
-						for k := 0; k < n; k++ {
-							if vec.Nsp.Np.Contains(uint64(i + k)) {
-								ctr.zValues[i] = 0
-							} else {
-								ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
-							}
-						}
-					}
-				}
-			}
-			for k := 0; k < n; k++ {
-				if l := len(ctr.keys[k]); l < 16 {
-					ctr.keys[k] = append(ctr.keys[k], hashtable.StrKeyPadding[l:]...)
-				}
-			}
-			ctr.strHashMap.InsertStringBatchWithRing(ctr.zValues, ctr.strHashStates, ctr.keys[:n], ctr.values)
-			for k, v := range ctr.values[:n] {
-				if ctr.zValues[k] == 0 {
-					continue
-				}
-				if v > ctr.rows {
-					ctr.sels = append(ctr.sels, make([]int64, 0, 8))
-				}
-				ai := int64(v) - 1
-				ctr.sels[ai] = append(ctr.sels[ai], int64(i+k))
-			}
-			for k := 0; k < n; k++ {
-				ctr.keys[k] = ctr.keys[k][:0]
-			}
-		}
-		return nil
-	}
 	for {
 		bat := <-proc.Reg.MergeReceivers[1].Ch
 		if bat == nil {
-			return nil
+			break
 		}
 		if len(bat.Zs) == 0 {
 			continue
 		}
 		if ctr.bat == nil {
 			ctr.bat = batch.New(len(bat.Vecs))
-			for _, pos := range ctr.poses {
-				ctr.bat.Vecs[pos] = vector.New(bat.Vecs[pos].Typ)
+			for i, vec := range bat.Vecs {
+				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
 		}
-		count := len(bat.Zs)
-		for i := 0; i < count; i += UnitLimit {
-			n := count - i
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			copy(ctr.zValues[:n], OneInt64s[:n])
-			for _, cond := range ap.Conditions[1] {
-				vec := bat.Vecs[cond.Pos]
-				switch typLen := vec.Typ.Oid.FixedLength(); typLen {
-				case 1:
-					fillGroupStr[uint8](ctr, vec, n, 1, i)
-				case 2:
-					fillGroupStr[uint16](ctr, vec, n, 2, i)
-				case 4:
-					fillGroupStr[uint32](ctr, vec, n, 4, i)
-				case 8:
+		if ctr.bat, err = ctr.bat.Append(proc.Mp, bat); err != nil {
+			batch.Clean(bat, proc.Mp)
+			batch.Clean(ctr.bat, proc.Mp)
+			return err
+		}
+		batch.Clean(bat, proc.Mp)
+	}
+	count := len(ctr.bat.Zs)
+	for i := 0; i < count; i += UnitLimit {
+		n := count - i
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		copy(ctr.zValues[:n], OneInt64s[:n])
+		for _, cond := range ap.Conditions[1] {
+			vec := ctr.bat.Vecs[cond.Pos]
+			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
+			case 1:
+				fillGroupStr[uint8](ctr, vec, n, 1, i)
+			case 2:
+				fillGroupStr[uint16](ctr, vec, n, 2, i)
+			case 4:
+				fillGroupStr[uint32](ctr, vec, n, 4, i)
+			case 8:
+				fillGroupStr[uint64](ctr, vec, n, 8, i)
+			case -8:
+				if cond.Scale > 0 {
+					fillGroupStrWithDecimal64(ctr, vec, n, i, cond.Scale)
+				} else {
 					fillGroupStr[uint64](ctr, vec, n, 8, i)
-				case -8:
-					if cond.Scale > 0 {
-						fillGroupStrWithDecimal64(ctr, vec, n, i, cond.Scale)
-					} else {
-						fillGroupStr[uint64](ctr, vec, n, 8, i)
+				}
+			case -16:
+				if cond.Scale > 0 {
+					fillGroupStrWithDecimal128(ctr, vec, n, i, cond.Scale)
+				} else {
+					fillGroupStr[types.Decimal128](ctr, vec, n, 16, i)
+				}
+			default:
+				vs := vec.Col.(*types.Bytes)
+				if !nulls.Any(vec.Nsp) {
+					for k := 0; k < n; k++ {
+						ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 					}
-				case -16:
-					if cond.Scale > 0 {
-						fillGroupStrWithDecimal128(ctr, vec, n, i, cond.Scale)
-					} else {
-						fillGroupStr[types.Decimal128](ctr, vec, n, 16, i)
-					}
-				default:
-					vs := vec.Col.(*types.Bytes)
-					if !nulls.Any(vec.Nsp) {
-						for k := 0; k < n; k++ {
+				} else {
+					for k := 0; k < n; k++ {
+						if vec.Nsp.Np.Contains(uint64(i + k)) {
+							ctr.zValues[i] = 0
+						} else {
 							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 						}
-					} else {
-						for k := 0; k < n; k++ {
-							if vec.Nsp.Np.Contains(uint64(i + k)) {
-								ctr.zValues[i] = 0
-							} else {
-								ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
-							}
-						}
 					}
 				}
 			}
-			for k := 0; k < n; k++ {
-				if l := len(ctr.keys[k]); l < 16 {
-					ctr.keys[k] = append(ctr.keys[k], hashtable.StrKeyPadding[l:]...)
-				}
+		}
+		for k := 0; k < n; k++ {
+			if l := len(ctr.keys[k]); l < 16 {
+				ctr.keys[k] = append(ctr.keys[k], hashtable.StrKeyPadding[l:]...)
 			}
-			ctr.strHashMap.InsertStringBatchWithRing(ctr.zValues, ctr.strHashStates, ctr.keys[:n], ctr.values)
-			cnt := 0
-			copy(ctr.inserted[:n], ctr.zInserted[:n])
-			for k, v := range ctr.values[:n] {
-				if ctr.zValues[k] == 0 {
-					continue
-				}
-				if v > ctr.rows {
-					cnt++
-					ctr.rows++
-					ctr.inserted[k] = 1
-					ctr.bat.Zs = append(ctr.bat.Zs, 0)
-				}
-				ai := int64(v) - 1
-				ctr.bat.Zs[ai] += bat.Zs[i+k]
+		}
+		ctr.strHashMap.InsertStringBatchWithRing(ctr.zValues, ctr.strHashStates, ctr.keys[:n], ctr.values)
+		for k, v := range ctr.values[:n] {
+			if ctr.zValues[k] == 0 {
+				continue
 			}
-			if cnt > 0 {
-				for _, pos := range ctr.poses {
-					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
-						batch.Clean(bat, proc.Mp)
-						batch.Clean(ctr.bat, proc.Mp)
-						return err
-					}
-
-				}
+			if v > ctr.rows {
+				ctr.sels = append(ctr.sels, make([]int64, 0, 8))
 			}
-			for k := 0; k < n; k++ {
-				ctr.keys[k] = ctr.keys[k][:0]
-			}
-			batch.Clean(bat, proc.Mp)
+			ai := int64(v) - 1
+			ctr.sels[ai] = append(ctr.sels[ai], int64(i+k))
+		}
+		for k := 0; k < n; k++ {
+			ctr.keys[k] = ctr.keys[k][:0]
 		}
 	}
+	return nil
 }
 
 func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	defer batch.Clean(bat, proc.Mp)
 	rbat := batch.New(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
-		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
-		}
+	for i, pos := range ap.Result {
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
 	count := len(bat.Zs)
 	for i := 0; i < count; i += UnitLimit {
@@ -390,44 +273,16 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if ctr.zValues[k] == 0 {
 				continue
 			}
-			if ctr.values[k] == 0 {
+			if ctr.values[k] != 0 {
 				continue
 			}
-			if ctr.flg {
-				sels := ctr.sels[ctr.values[k]-1]
-				for _, sel := range sels {
-					for j, rp := range ap.Result {
-						if rp.Rel == 0 {
-							if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp); err != nil {
-								batch.Clean(rbat, proc.Mp)
-								return err
-							}
-						} else {
-							if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp); err != nil {
-								batch.Clean(rbat, proc.Mp)
-								return err
-							}
-						}
-					}
-					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
+			for j, pos := range ap.Result {
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
+					batch.Clean(rbat, proc.Mp)
+					return err
 				}
-			} else {
-				sel := int64(ctr.values[k] - 1)
-				for j, rp := range ap.Result {
-					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp); err != nil {
-							batch.Clean(rbat, proc.Mp)
-							return err
-						}
-					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp); err != nil {
-							batch.Clean(rbat, proc.Mp)
-							return err
-						}
-					}
-				}
-				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 			}
+			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 	}
 	proc.Reg.InputBatch = rbat

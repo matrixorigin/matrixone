@@ -29,6 +29,7 @@ import (
 
 func New(n int) *Batch {
 	return &Batch{
+		Cnt:  1,
 		Vecs: make([]*vector.Vector, n),
 	}
 }

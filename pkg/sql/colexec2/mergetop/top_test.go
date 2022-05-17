@@ -168,7 +168,6 @@ func newTestCase(m *mheap.Mheap, ds []bool, ts []types.Type, limit int64, fs []t
 // create a new block based on the type information, ds[i] == true: in descending order
 func newBatch(t *testing.T, ds []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	bat := batch.New(len(ts))
-	bat.Cnt = 1
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		flg := ds[i]

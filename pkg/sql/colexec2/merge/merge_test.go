@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package connector
+package merge
 
 import (
 	"bytes"
@@ -36,7 +36,7 @@ const (
 )
 
 // add unit tests for cases
-type connectorTestCase struct {
+type mergeTestCase struct {
 	arg    *Argument
 	types  []types.Type
 	proc   *process.Process
@@ -44,14 +44,14 @@ type connectorTestCase struct {
 }
 
 var (
-	tcs []connectorTestCase
+	tcs []mergeTestCase
 )
 
 func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
-	tcs = []connectorTestCase{
-		newTestCase(gm),
+	tcs = []mergeTestCase{
+		newTestCase(mheap.New(gm)),
 	}
 }
 
@@ -68,56 +68,58 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestConnector(t *testing.T) {
+func TestMerge(t *testing.T) {
 	for _, tc := range tcs {
 		Prepare(tc.proc, tc.arg)
-		bat := newBatch(t, tc.types, tc.proc, Rows)
-		tc.proc.Reg.InputBatch = bat
-		{
-			for _, vec := range bat.Vecs {
-				if vec.Or {
-					mheap.Free(tc.proc.Mp, vec.Data)
-				}
-			}
-		}
-		Call(tc.proc, tc.arg)
-		tc.proc.Reg.InputBatch = &batch.Batch{}
-		Call(tc.proc, tc.arg)
-		tc.proc.Reg.InputBatch = nil
-		Call(tc.proc, tc.arg)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[0].Ch <- nil
+		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
+		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
-			bat := <-tc.arg.Reg.Ch
-			if bat == nil {
+			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+				if tc.proc.Reg.InputBatch != nil {
+					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				}
 				break
 			}
-			if len(bat.Zs) == 0 {
-				continue
+			if tc.proc.Reg.InputBatch != nil {
+				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
 			}
-			batch.Clean(bat, tc.proc.Mp)
+		}
+		for i := 0; i < len(tc.proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
+			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
+				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
+				if bat != nil {
+					batch.Clean(bat, tc.proc.Mp)
+				}
+			}
 		}
 		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
 }
 
-func newTestCase(gm *guest.Mmu) connectorTestCase {
-	proc := process.New(mheap.New(gm))
+func newTestCase(m *mheap.Mheap) mergeTestCase {
+	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
-	return connectorTestCase{
+	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: ctx,
+		Ch:  make(chan *batch.Batch, 3),
+	}
+	proc.Reg.MergeReceivers[1] = &process.WaitRegister{
+		Ctx: ctx,
+		Ch:  make(chan *batch.Batch, 3),
+	}
+	return mergeTestCase{
 		proc: proc,
 		types: []types.Type{
 			{Oid: types.T_int8},
 		},
-		arg: &Argument{
-			Mmu: gm,
-			Reg: &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 3),
-			},
-		},
+		arg:    new(Argument),
 		cancel: cancel,
 	}
-
 }
 
 // create a new block based on the type information
@@ -126,7 +128,6 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])
-		vec.Or = true
 		switch vec.Typ.Oid {
 		case types.T_int8:
 			data, err := mheap.Alloc(proc.Mp, rows*1)

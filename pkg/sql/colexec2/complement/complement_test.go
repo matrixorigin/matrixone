@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package join
+package complement
 
 import (
 	"bytes"
@@ -38,7 +38,7 @@ const (
 )
 
 // add unit tests for cases
-type joinTestCase struct {
+type complementTestCase struct {
 	arg    *Argument
 	flgs   []bool // flgs[i] == true: nullable
 	types  []types.Type
@@ -47,14 +47,14 @@ type joinTestCase struct {
 }
 
 var (
-	tcs []joinTestCase
+	tcs []complementTestCase
 )
 
 func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
-	tcs = []joinTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
+	tcs = []complementTestCase{
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]Condition{
 				{
 					{0, 0, types.Type{Oid: types.T_int8}},
@@ -63,7 +63,7 @@ func init() {
 					{0, 0, types.Type{Oid: types.T_int8}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]Condition{
 				{
 					{0, 0, types.Type{Oid: types.T_int8}},
@@ -72,7 +72,7 @@ func init() {
 					{0, 0, types.Type{Oid: types.T_int8}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
 			[][]Condition{
 				{
 					{0, 0, types.Type{Oid: types.T_decimal64}},
@@ -81,7 +81,7 @@ func init() {
 					{0, 1, types.Type{Oid: types.T_decimal64}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal64}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
 			[][]Condition{
 				{
 					{0, 0, types.Type{Oid: types.T_decimal64}},
@@ -90,7 +90,7 @@ func init() {
 					{0, 1, types.Type{Oid: types.T_decimal64}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal128}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
 					{0, 0, types.Type{Oid: types.T_decimal128}},
@@ -99,7 +99,7 @@ func init() {
 					{0, 1, types.Type{Oid: types.T_decimal128}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal128}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
 					{0, 0, types.Type{Oid: types.T_decimal128}},
@@ -108,7 +108,7 @@ func init() {
 					{0, 1, types.Type{Oid: types.T_decimal128}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
 			[][]Condition{
 				{
 					{1, 0, types.Type{Oid: types.T_int64}},
@@ -117,7 +117,7 @@ func init() {
 					{1, 0, types.Type{Oid: types.T_int64}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
 			[][]Condition{
 				{
 					{1, 0, types.Type{Oid: types.T_int64}},
@@ -126,16 +126,7 @@ func init() {
 					{1, 0, types.Type{Oid: types.T_int64}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []ResultPos{{0, 0}, {1, 0}},
-			[][]Condition{
-				{
-					{1, 0, types.Type{Oid: types.T_decimal64}},
-				},
-				{
-					{1, 1, types.Type{Oid: types.T_decimal64}},
-				},
-			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
 			[][]Condition{
 				{
 					{1, 0, types.Type{Oid: types.T_decimal64}},
@@ -144,7 +135,16 @@ func init() {
 					{1, 1, types.Type{Oid: types.T_decimal64}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
+			[][]Condition{
+				{
+					{1, 0, types.Type{Oid: types.T_decimal64}},
+				},
+				{
+					{1, 1, types.Type{Oid: types.T_decimal64}},
+				},
+			}),
+		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
 					{1, 0, types.Type{Oid: types.T_decimal128}},
@@ -153,7 +153,7 @@ func init() {
 					{1, 1, types.Type{Oid: types.T_decimal128}},
 				},
 			}),
-		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []ResultPos{{0, 0}, {1, 0}},
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
 					{1, 0, types.Type{Oid: types.T_decimal128}},
@@ -178,7 +178,7 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
-func TestJoin(t *testing.T) {
+func TestComplement(t *testing.T) {
 	for _, tc := range tcs {
 		Prepare(tc.proc, tc.arg)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -200,12 +200,12 @@ func TestJoin(t *testing.T) {
 	}
 }
 
-func BenchmarkJoin(b *testing.B) {
+func BenchmarkComplement(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
-		tcs = []joinTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
+		tcs = []complementTestCase{
+			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]Condition{
 					{
 						{0, 0, types.Type{Oid: types.T_int8}},
@@ -214,7 +214,7 @@ func BenchmarkJoin(b *testing.B) {
 						{0, 0, types.Type{Oid: types.T_int8}},
 					},
 				}),
-			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []ResultPos{{0, 0}, {1, 0}},
+			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]Condition{
 					{
 						{0, 0, types.Type{Oid: types.T_int8}},
@@ -246,7 +246,7 @@ func BenchmarkJoin(b *testing.B) {
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos, cs [][]Condition) joinTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs [][]Condition) complementTestCase {
 	proc := process.New(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -258,7 +258,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos, c
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 3),
 	}
-	return joinTestCase{
+	return complementTestCase{
 		types:  ts,
 		flgs:   flgs,
 		proc:   proc,
