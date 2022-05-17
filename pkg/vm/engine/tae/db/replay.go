@@ -9,28 +9,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-func (db *DB) ReplayDDL() {
-	db.Wal.Replay(db.replayHandle)
+type Replayer struct {
+	DataFactory *tables.DataFactory
+	db          *DB
+	ts          uint64
 }
 
-func (db *DB) replayHandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
+	return &Replayer{
+		DataFactory: dataFactory,
+		db:          db,
+	}
+}
+func (db *DB) Replay(dataFactory *tables.DataFactory) uint64 {
+	replayer := newReplayer(dataFactory, db)
+	replayer.Replay()
+	return replayer.ts
+}
+
+func (replayer *Replayer) Replay() {
+	replayer.db.Wal.Replay(replayer.replayHandle)
+}
+
+func (replayer *Replayer) replayHandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+	if group != wal.GroupC {
+		return
+	}
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
 		return err
 	}
-	switch cmd := txnCmd.(type) {
+	replayer.replayWalCmd(txnCmd)
+	return
+}
+
+func (replayer *Replayer) replayWalCmd(txncmd txnif.TxnCmd) (err error) {
+	ts := uint64(0)
+	switch cmd := txncmd.(type) {
+	case *txnbase.ComposedCmd:
+		for _, cmds := range cmd.Cmds {
+			replayer.replayWalCmd(cmds)
+		}
 	case *catalog.EntryCommand:
-		err = db.Catalog.ReplayCmd(txnCmd)
+		ts, err = replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory)
 	case *txnimpl.AppendCmd:
-		err = db.onReplayAppendCmd(cmd)
+		err = replayer.db.onReplayAppendCmd(cmd)
 	case *updates.UpdateCmd:
-		err = db.onReplayUpdateCmd(cmd)
+		err = replayer.db.onReplayUpdateCmd(cmd)
+	}
+	if ts > replayer.ts {
+		replayer.ts = ts
 	}
 	return
 }

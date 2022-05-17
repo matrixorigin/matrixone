@@ -544,7 +544,7 @@ func TestApplyToColumn4(t *testing.T) {
 }
 
 func TestTxnManager1(t *testing.T) {
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil), TxnFactory(nil))
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil), TxnFactory(nil), 1)
 	mgr.Start()
 	txn := mgr.StartTxn(nil)
 	txn.MockIncWriteCnt()
@@ -604,7 +604,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
 	factory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, nil, dir)
 	// factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c), 1)
 	mgr.Start()
 	return c, mgr, driver
 }

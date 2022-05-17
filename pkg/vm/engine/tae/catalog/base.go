@@ -82,6 +82,11 @@ type BaseEntry struct {
 	CreateAt, DeleteAt uint64
 }
 
+func NewReplayBaseEntry() *BaseEntry {
+	return &BaseEntry{
+		RWMutex: &sync.RWMutex{},
+	}
+}
 func (be *BaseEntry) MaxCommittedTS() uint64 {
 	if be.Txn == nil {
 		if be.DeleteAt != 0 {

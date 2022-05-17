@@ -373,7 +373,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 
-	cmd.entry = &BaseEntry{}
+	cmd.entry = NewReplayBaseEntry()
 	if err = binary.Read(r, binary.BigEndian, &cmd.entry.ID); err != nil {
 		return
 	}
@@ -406,10 +406,9 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		cmd.entry.CurrOp = OpCreate
-		cmd.Table = &TableEntry{
-			BaseEntry: cmd.entry,
-			schema:    new(Schema),
-		}
+		cmd.Table = NewReplayTableEntry()
+		cmd.Table.BaseEntry = cmd.entry
+		cmd.Table.schema = new(Schema)
 		if sn, err = cmd.Table.schema.ReadFrom(r); err != nil {
 			return
 		}
