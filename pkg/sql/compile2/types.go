@@ -25,6 +25,7 @@ import (
 
 const (
 	Merge = iota
+	CreateDatabase
 )
 
 // Address is the ip:port of local node
