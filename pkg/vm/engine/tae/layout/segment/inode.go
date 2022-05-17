@@ -25,8 +25,10 @@ const (
 
 type Inode struct {
 	inode      uint64
+	algo       uint8
 	size       uint64
-	mutex      sync.Mutex
+	originSize uint64
+	mutex      sync.RWMutex
 	extents    []Extent
 	logExtents Extent
 	state      StateType

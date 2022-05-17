@@ -18,7 +18,7 @@ type ExtentType uint8
 
 const (
 	APPEND ExtentType = iota
-	UPDATE ExtentType = iota
+	UPDATE
 )
 
 type entry struct {
