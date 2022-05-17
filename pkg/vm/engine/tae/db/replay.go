@@ -20,7 +20,7 @@ import (
 type Replayer struct {
 	DataFactory *tables.DataFactory
 	db          *DB
-	ts          uint64
+	maxTs       uint64
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
@@ -29,47 +29,46 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 		db:          db,
 	}
 }
-func (db *DB) Replay(dataFactory *tables.DataFactory) uint64 {
-	replayer := newReplayer(dataFactory, db)
-	replayer.Replay()
-	return replayer.ts
-}
 
 func (replayer *Replayer) Replay() {
-	replayer.db.Wal.Replay(replayer.replayHandle)
+	replayer.db.Wal.Replay(replayer.OnReplayEntry)
 }
 
-func (replayer *Replayer) replayHandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
 	if group != wal.GroupC {
 		return
 	}
-	idx := &wal.Index{LSN: commitId}
+	idxCtx := wal.NewIndex(commitId, 0, 0)
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
 		return err
 	}
-	replayer.replayWalCmd(txnCmd, idx)
+	replayer.OnReplayCmd(txnCmd, idxCtx)
 	return
 }
 
-func (replayer *Replayer) replayWalCmd(txncmd txnif.TxnCmd, idx *wal.Index) (err error) {
-	ts := uint64(0)
+func (replayer *Replayer) OnTimeStamp(ts uint64) {
+	if ts > replayer.maxTs {
+		replayer.maxTs = ts
+	}
+}
+
+func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) (err error) {
 	switch cmd := txncmd.(type) {
 	case *txnbase.ComposedCmd:
-		for i, cmds := range cmd.Cmds {
-			idx2 := &wal.Index{LSN: idx.LSN, Size: uint32(len(cmd.Cmds)), CSN: uint32(i)}
-			replayer.replayWalCmd(cmds, idx2)
+		idxCtx.Size = uint32(len(cmd.Cmds))
+		for i, command := range cmd.Cmds {
+			idx := idxCtx.Clone()
+			idx.CSN = uint32(i)
+			replayer.OnReplayCmd(command, idx)
 		}
 	case *catalog.EntryCommand:
-		ts, err = replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idx)
+		err = replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer)
 	case *txnimpl.AppendCmd:
 		err = replayer.db.onReplayAppendCmd(cmd)
 	case *updates.UpdateCmd:
 		err = replayer.db.onReplayUpdateCmd(cmd)
-	}
-	if ts > replayer.ts {
-		replayer.ts = ts
 	}
 	return
 }

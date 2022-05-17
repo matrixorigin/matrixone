@@ -39,14 +39,14 @@ type TxnManager struct {
 	ActiveMask       *roaring64.Bitmap
 }
 
-func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, ts uint64) *TxnManager {
+func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnManager {
 	if txnFactory == nil {
 		txnFactory = DefaultTxnFactory
 	}
 	mgr := &TxnManager{
 		Active:          make(map[uint64]txnif.AsyncTxn),
 		IdAlloc:         common.NewIdAlloctor(1),
-		TsAlloc:         common.NewIdAlloctor(ts),
+		TsAlloc:         common.NewIdAlloctor(1),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		ActiveMask:      roaring64.New(),

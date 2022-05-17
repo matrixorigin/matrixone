@@ -65,21 +65,18 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.Wal = wal.NewDriver(dirname, WALDir, nil)
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(segmentio.SegmentFileIOFactory, mutBufMgr, db.Scheduler, db.Dir)
-	ts := uint64(1)
-	if ts, db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
+	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
 
-	walTs := db.Replay(dataFactory)
-	if walTs > ts {
-		ts = walTs
-	}
-
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
-	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, ts)
+	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory)
+
+	db.Replay(dataFactory)
+
 	db.TxnMgr.Start()
 
 	db.DBLocker, dbLocker = dbLocker, nil

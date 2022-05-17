@@ -17,14 +17,12 @@ package catalog
 type Replayer struct {
 	dataFactory DataFactory
 	catalog     *Catalog
-	ts          uint64
 }
 
 func NewReplayer(dataFactory DataFactory, catalog *Catalog) *Replayer {
 	return &Replayer{
 		dataFactory: dataFactory,
 		catalog:     catalog,
-		ts:          1,
 	}
 }
 
@@ -40,13 +38,9 @@ func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload 
 	checkpoint.CommitId = commitId
 	checkpoint.MaxTS = e.MaxTS
 	checkpoint.LSN = e.MaxIndex.LSN
-	ts := uint64(0)
 	for _, cmd := range e.Entries {
-		if ts, err = replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil); err != nil {
+		if err = replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil, nil); err != nil {
 			return
-		}
-		if replayer.ts < ts {
-			replayer.ts = ts
 		}
 	}
 	if len(replayer.catalog.checkpoints) == 0 {

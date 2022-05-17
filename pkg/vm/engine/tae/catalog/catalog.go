@@ -78,7 +78,7 @@ func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 	return catalog
 }
 
-func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory) (uint64, *Catalog, error) {
+func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler, dataFactory DataFactory) (*Catalog, error) {
 	driver, err := store.NewBaseStore(dir, name, cfg)
 	if err != nil {
 		panic(err)
@@ -96,7 +96,7 @@ func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 	catalog.InitSystemDB()
 	replayer := NewReplayer(dataFactory, catalog)
 	err = catalog.store.Replay(replayer.ReplayerHandle)
-	return replayer.ts, catalog, err
+	return catalog, err
 }
 
 func (catalog *Catalog) InitSystemDB() {
@@ -121,125 +121,135 @@ func (catalog *Catalog) InitSystemDB() {
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 
-func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, datafactory DataFactory, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, datafactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver) (err error) {
 	switch txncmd.GetType() {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
-		size := uint32(len(cmds.Cmds))
+		idxCtx.Size = uint32(len(cmds.Cmds))
 		for i, cmds := range cmds.Cmds {
-			idx2 := &wal.Index{LSN: idx.LSN, Size: size, CSN: uint32(i)}
-			if ts, err = catalog.ReplayCmd(cmds, datafactory, idx2); err != nil {
+			idx := idxCtx.Clone()
+			idx.CSN = uint32(i)
+			if err = catalog.ReplayCmd(cmds, datafactory, idx, observer); err != nil {
 				break
 			}
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayBlock(cmd, datafactory)
+		err = catalog.onReplayBlock(cmd, datafactory)
 	case CmdLogSegment:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplaySegment(cmd, datafactory)
+		err = catalog.onReplaySegment(cmd, datafactory)
 	case CmdLogTable:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayTable(cmd, datafactory)
+		err = catalog.onReplayTable(cmd, datafactory)
 	case CmdLogDatabase:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayDatabase(cmd)
+		err = catalog.onReplayDatabase(cmd)
 	case CmdCreateDatabase:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayCreateDatabase(cmd, idx)
+		err = catalog.onReplayCreateDatabase(cmd, idxCtx, observer)
 	case CmdCreateTable:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayCreateTable(cmd, datafactory, idx)
+		err = catalog.onReplayCreateTable(cmd, datafactory, idxCtx, observer)
 	case CmdCreateSegment:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayCreateSegment(cmd, datafactory, idx)
+		err = catalog.onReplayCreateSegment(cmd, datafactory, idxCtx, observer)
 	case CmdCreateBlock:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayCreateBlock(cmd, datafactory, idx)
+		err = catalog.onReplayCreateBlock(cmd, datafactory, idxCtx, observer)
 	case CmdDropTable:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayDropTable(cmd, idx)
+		err = catalog.onReplayDropTable(cmd, idxCtx, observer)
 	case CmdDropDatabase:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayDropDatabase(cmd, idx)
+		err = catalog.onReplayDropDatabase(cmd, idxCtx, observer)
 	case CmdDropSegment:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayDropSegment(cmd, idx)
+		err = catalog.onReplayDropSegment(cmd, idxCtx, observer)
 	case CmdDropBlock:
 		cmd := txncmd.(*EntryCommand)
-		ts, err = catalog.onReplayDropBlock(cmd, idx)
+		err = catalog.onReplayDropBlock(cmd, idxCtx, observer)
 	default:
 		panic("unsupport")
 	}
 	return
 }
 
-func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) (err error) {
 	entry := NewDBEntry(catalog, cmd.DB.name, nil)
 	entry.CreateAt = cmd.entry.CreateAt
 	err = catalog.addEntryLocked(entry)
 	entry.LogIndex = idx
 	catalog.OnReplayDBID(entry.ID)
-	ts = cmd.entry.CreateAt
+	if observer != nil {
+		observer.OnTimeStamp(cmd.entry.CreateAt)
+	}
 	return
 }
 
-func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		return 0, err
+		return
 	}
-	err = db.OnReplayDrop(cmd.entry.DeleteAt)
-	db.LogIndex = idx
-	ts = cmd.entry.DeleteAt
+	err = db.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if observer != nil {
+		observer.OnTimeStamp(cmd.entry.DeleteAt)
+	}
 	return
 }
 
-func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) (ts uint64, err error) {
+func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) (err error) {
 	cmd.DB.catalog = catalog
 	if cmd.DB.CurrOp == OpCreate {
 		catalog.OnReplayDBID(cmd.DB.ID)
-		return cmd.DB.CreateAt, catalog.addEntryLocked(cmd.DB)
+		return catalog.addEntryLocked(cmd.DB)
 	} else {
-		db, err := catalog.GetDatabaseByID(cmd.DB.ID)
+		var db *DBEntry
+		db, err = catalog.GetDatabaseByID(cmd.DB.ID)
 		if err == nil {
 			if err = catalog.RemoveEntry(db); err != nil {
-				return 0, err
+				return
 			}
 		}
 		err = catalog.addEntryLocked(cmd.DB)
-		return cmd.DB.DeleteAt, err
+		return
 	}
 }
 
-func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	cmd.Table.db = db
 	cmd.Table.tableData = datafactory.MakeTableFactory()(cmd.Table)
 	catalog.OnReplayTableID(cmd.Table.ID)
 	cmd.Table.LogIndex = idx
-	return cmd.Table.CreateAt, db.addEntryLocked(cmd.Table)
-}
-
-func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index) (ts uint64, err error) {
-	db, err := catalog.GetDatabaseByID(cmd.DBID)
-	if err != nil {
-		return 0, err
+	err = db.addEntryLocked(cmd.Table)
+	if observer != nil {
+		observer.OnTimeStamp(cmd.entry.CreateAt)
 	}
-	tbl, err := db.GetTableEntryByID(cmd.TableID)
-	if err != nil {
-		return 0, err
-	}
-	err = tbl.OnReplayDrop(cmd.entry.DeleteAt)
-	tbl.LogIndex = idx
-	ts = cmd.entry.DeleteAt
 	return
 }
 
-func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory) (ts uint64, err error) {
+func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) (err error) {
+	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	if err != nil {
+		return
+	}
+	tbl, err := db.GetTableEntryByID(cmd.TableID)
+	if err != nil {
+		return
+	}
+	err = tbl.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if observer != nil {
+		observer.OnTimeStamp(cmd.entry.DeleteAt)
+	}
+	return
+}
+
+func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		return
@@ -248,7 +258,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 	if cmd.Table.CurrOp == OpCreate {
 		catalog.OnReplayTableID(cmd.Table.ID)
 		cmd.Table.tableData = datafactory.MakeTableFactory()(cmd.Table)
-		return cmd.Table.CreateAt, db.addEntryLocked(cmd.Table)
+		err = db.addEntryLocked(cmd.Table)
 	} else {
 		rel, _ := db.GetTableEntryByID(cmd.Table.ID)
 		if rel != nil {
@@ -256,18 +266,19 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 				return
 			}
 		}
-		return cmd.Table.DeleteAt, db.addEntryLocked(cmd.Table)
+		err = db.addEntryLocked(cmd.Table)
 	}
+	return
 }
 
-func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	tbl, err := db.GetTableEntryByID(cmd.TableID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	cmd.Segment.table = tbl
 	cmd.Segment.RWMutex = new(sync.RWMutex)
@@ -278,30 +289,33 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory Dat
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	tbl.addEntryLocked(cmd.Segment)
 	cmd.Segment.LogIndex = idx
-	ts = cmd.Segment.CreateAt
+	if observer != nil {
+		observer.OnTimeStamp(cmd.Segment.CreateAt)
+	}
 	return
 }
 
-func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	tbl, err := db.GetTableEntryByID(cmd.TableID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	seg, err := tbl.GetSegmentByID(cmd.entry.ID)
 	if err != nil {
-		return 0, err
+		return
 	}
-	err = seg.OnReplayDrop(cmd.entry.DeleteAt)
-	seg.LogIndex = idx
-	ts = cmd.entry.DeleteAt
+	err = seg.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if observer != nil {
+		observer.OnTimeStamp(cmd.entry.DeleteAt)
+	}
 	return
 }
 
-func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFactory) (ts uint64, err error) {
+func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFactory) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		return
@@ -315,7 +329,6 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 		cmd.Segment.segData = datafactory.MakeSegmentFactory()(cmd.Segment)
 		catalog.OnReplaySegmentID(cmd.Segment.ID)
 		rel.addEntryLocked(cmd.Segment)
-		ts = cmd.Segment.CreateAt
 	} else {
 		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
 		if seg != nil {
@@ -324,23 +337,22 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 			}
 		}
 		rel.addEntryLocked(cmd.Segment)
-		ts = cmd.Segment.DeleteAt
 	}
-	return ts, nil
+	return
 }
 
-func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	tbl, err := db.GetTableEntryByID(cmd.TableID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	seg, err := tbl.GetSegmentByID(cmd.SegmentID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	cmd.Block.RWMutex = new(sync.RWMutex)
 	cmd.Block.CurrOp = OpCreate
@@ -349,34 +361,37 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataF
 	catalog.OnReplayBlockID(cmd.Block.ID)
 	cmd.Block.LogIndex = idx
 	seg.addEntryLocked(cmd.Block)
-	ts = cmd.Block.CreateAt
+	if observer != nil {
+		observer.OnTimeStamp(cmd.Block.CreateAt)
+	}
 	return
 }
 
-func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index) (ts uint64, err error) {
+func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	tbl, err := db.GetTableEntryByID(cmd.TableID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	seg, err := tbl.GetSegmentByID(cmd.SegmentID)
 	if err != nil {
-		return 0, err
+		return
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.entry.ID)
 	if err != nil {
-		return 0, err
+		return
 	}
-	err = blk.OnReplayDrop(cmd.entry.DeleteAt)
-	blk.LogIndex = idx
-	ts = cmd.entry.DeleteAt
+	err = blk.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if observer != nil {
+		observer.OnTimeStamp(cmd.entry.DeleteAt)
+	}
 	return
 }
 
-func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory) (ts uint64, err error) {
+func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory) (err error) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		return
@@ -394,7 +409,6 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory
 		cmd.Block.blkData = datafactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
 		catalog.OnReplayBlockID(cmd.Block.ID)
 		seg.addEntryLocked(cmd.Block)
-		ts = cmd.Block.CreateAt
 	} else {
 		blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)
 		if blk != nil {
@@ -403,9 +417,8 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory
 			}
 		}
 		seg.addEntryLocked(cmd.Block)
-		ts = cmd.Block.DeleteAt
 	}
-	return ts, nil
+	return nil
 }
 
 func (catalog *Catalog) Close() error {

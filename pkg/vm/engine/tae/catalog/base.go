@@ -274,16 +274,17 @@ func (be *BaseEntry) HasCreated() bool {
 	return be.CreateAt != 0
 }
 
-func (be *BaseEntry) OnReplayDrop(deleteAt uint64) error {
-	if be.HasDropped() {
-		return ErrNotFound
+func (be *BaseEntry) ApplyDeleteCmd(ts uint64, index *wal.Index) error {
+	if be.HasDropped() || ts < be.CreateAt {
+		panic("logic error")
 	}
 	be.PrevCommit = &CommitInfo{
 		CurrOp:   be.CurrOp,
 		LogIndex: be.LogIndex,
 	}
-	be.DeleteAt = deleteAt
+	be.DeleteAt = ts
 	be.CurrOp = OpSoftDelete
+	be.LogIndex = index
 	return nil
 }
 

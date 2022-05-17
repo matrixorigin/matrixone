@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -76,6 +77,18 @@ func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
 
 func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 	return txn.Rollback()
+}
+
+func (db *DB) Replay(dataFactory *tables.DataFactory) {
+	replayer := newReplayer(dataFactory, db)
+	replayer.Replay()
+
+	maxTs := db.Catalog.GetCheckpointed().MaxTS
+	if maxTs < replayer.maxTs {
+		maxTs = replayer.maxTs
+	}
+	// TODO: init txn id
+	db.TxnMgr.Init(0, maxTs)
 }
 
 func (db *DB) Close() error {
