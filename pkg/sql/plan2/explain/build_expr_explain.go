@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,55 +15,79 @@
 package explain
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"strconv"
 )
 
-func DescribeExpr(expr *plan.Expr) string {
+func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 	var result string
-	switch expr.Expr.(type) {
-	case *plan.Expr_Col:
-		colExpr := expr.Expr.(*plan.Expr_Col)
-		result += colExpr.Col.GetName()
-	case *plan.Expr_C:
-		constExpr := expr.Expr.(*plan.Expr_C)
-		if intConst, ok := constExpr.C.Value.(*plan.Const_Ival); ok {
-			result += fmt.Sprintf("%v", intConst.Ival)
-		}
 
-		if floatConst, ok := constExpr.C.Value.(*plan.Const_Dval); ok {
-			result += fmt.Sprintf("%v", floatConst.Dval)
-		}
+	if expr.Expr == nil {
+		result += expr.Alias
+	} else {
+		switch expr.Expr.(type) {
+		case *plan.Expr_Col:
+			colExpr := expr.Expr.(*plan.Expr_Col)
+			result += colExpr.Col.GetName()
+		case *plan.Expr_C:
+			constExpr := expr.Expr.(*plan.Expr_C)
+			if intConst, ok := constExpr.C.Value.(*plan.Const_Ival); ok {
+				result += strconv.FormatInt(intConst.Ival, 10)
+			}
 
-		if strConst, ok := constExpr.C.Value.(*plan.Const_Sval); ok {
-			result += fmt.Sprintf("%v", strConst.Sval)
+			if floatConst, ok := constExpr.C.Value.(*plan.Const_Dval); ok {
+				result += strconv.FormatFloat(floatConst.Dval, 'f', -1, 64)
+			}
+
+			if strConst, ok := constExpr.C.Value.(*plan.Const_Sval); ok {
+				result += "'" + strConst.Sval + "'"
+			}
+		case *plan.Expr_F:
+			funcExpr := expr.Expr.(*plan.Expr_F)
+			funcDesc, err := funcExprExplain(funcExpr, expr.Typ, options)
+			if err != nil {
+				return result, err
+			}
+			result += funcDesc
+		case *plan.Expr_Sub:
+			subqryExpr := expr.Expr.(*plan.Expr_Sub)
+			result += "subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10)
+		case *plan.Expr_Corr:
+			result += expr.Expr.(*plan.Expr_Corr).Corr.GetName()
+		case *plan.Expr_V:
+			panic("unimplement Expr_V")
+		case *plan.Expr_P:
+			panic("unimplement Expr_P")
+		case *plan.Expr_List:
+			exprlist := expr.Expr.(*plan.Expr_List)
+			if exprlist.List.List != nil {
+				exprListDescImpl := NewExprListDescribeImpl(exprlist.List.List)
+				desclist, err := exprListDescImpl.GetDescription(options)
+				if err != nil {
+					return result, err
+				}
+				result += desclist
+			}
+		default:
+			panic("error Expr")
 		}
-	case *plan.Expr_F:
-		funcExpr := expr.Expr.(*plan.Expr_F)
-		result += FuncExprExplain(funcExpr)
-	case *plan.Expr_V:
-		return "unimplement Expr_V"
-	case *plan.Expr_P:
-		return "unimplement Expr_P"
-	case *plan.Expr_List:
-		return "unimplement Expr_List"
-	default:
-		return "error Expr"
 	}
-	return result
+	return result, nil
 }
 
-func FuncExprExplain(funcExpr *plan.Expr_F) string {
+func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
 	//SysFunsAndOperatorsMap
 	var result string
 	funcName := funcExpr.F.GetFunc().GetObjName()
+	// Get function explain type
 	funcProtoType, ok := plan2.BuiltinFunctionsMap[funcName]
 	if !ok {
-		panic("unkonw expression")
+		return result, errors.New(errno.InvalidName, "invalid function or opreator name '"+funcName+"'")
 	}
-	switch funcProtoType.Kind {
+	switch funcProtoType.Layout {
 	case plan2.STANDARD_FUNCTION:
 		result += funcExpr.F.Func.GetObjName() + "("
 		if len(funcExpr.F.Args) > 0 {
@@ -73,7 +97,11 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 					result += ", "
 				}
 				first = false
-				result += DescribeExpr(v)
+				exprDesc, err := describeExpr(v, options)
+				if err != nil {
+					return result, err
+				}
+				result += exprDesc
 			}
 		}
 		result += ")"
@@ -84,29 +112,130 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 		} else {
 			opertator = "-"
 		}
-		result += opertator + DescribeExpr(funcExpr.F.Args[0])
-	case plan2.BINARY_ARITHMETIC_OPERATOR:
-		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
+		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		result += "(" + opertator + describeExpr + ")"
 	case plan2.UNARY_LOGICAL_OPERATOR:
-		result += funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[0])
+		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		result += "(" + funcExpr.F.Func.GetObjName() + " " + describeExpr + ")"
+	case plan2.BINARY_ARITHMETIC_OPERATOR:
+		fallthrough
 	case plan2.BINARY_LOGICAL_OPERATOR:
-		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
+		fallthrough
 	case plan2.COMPARISON_OPERATOR:
-		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
+		left, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		right, err := describeExpr(funcExpr.F.Args[1], options)
+		if err != nil {
+			return result, err
+		}
+		result += "(" + left + " " + funcExpr.F.Func.GetObjName() + " " + right + ")"
 	case plan2.CAST_EXPRESSION:
-		// panic("CAST_EXPRESSION is not support now")
+		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		result += "CAST(" + describeExpr + " AS " + plan.Type_TypeId_name[int32(Typ.Id)] + ")"
 	case plan2.CASE_WHEN_EXPRESSION:
-		panic("CASE_WHEN_EXPRESSION is not support now")
-	case plan2.BETWEEN_AND_EXPRESSION:
-		panic("CASE_WHEN_EXPRESSION is not support now")
-	case plan2.IN_EXISTS_EXPRESSION:
-		panic("CASE_WHEN_EXPRESSION is not support now")
+		result += "CASE"
+		// case when expression has three part (case expression, when expression, else expression)
+		if len(funcExpr.F.Args) != 3 {
+			return result, errors.New(errno.SyntaxErrororAccessRuleViolation, "case expression parameter number error")
+		}
+		// case expression can be null
+		if funcExpr.F.Args[0] != nil {
+			// get case expression
+			caseDesc, err := describeExpr(funcExpr.F.Args[0], options)
+			if err != nil {
+				return result, err
+			}
+			result += " " + caseDesc
+		}
+
+		// get when expression
+		var whenExpr *plan.Expr = funcExpr.F.Args[1]
+		var whenlist *plan.Expr_List = whenExpr.Expr.(*plan.Expr_List)
+		var list *plan.ExprList = whenlist.List
+
+		for i := 0; i < len(list.List); i++ {
+			whenThenExpr := list.List[i].Expr.(*plan.Expr_List)
+			if len(whenThenExpr.List.List) != 2 {
+				return result, errors.New(errno.SyntaxErrororAccessRuleViolation, "case when expression parameter number is not equal to 2")
+			}
+
+			whenExprDesc, err := describeExpr(whenThenExpr.List.List[0], options)
+			if err != nil {
+				return result, err
+			}
+			thenExprDesc, err := describeExpr(whenThenExpr.List.List[1], options)
+			if err != nil {
+				return result, err
+			}
+			result += " WHEN " + whenExprDesc + " THEN " + thenExprDesc
+		}
+		// when expression can be null
+		if funcExpr.F.Args[2] != nil {
+			// get else expression
+			elseExprDesc, err := describeExpr(funcExpr.F.Args[2], options)
+			if err != nil {
+				return result, err
+			}
+			result += " ELSE " + elseExprDesc
+		}
+		result += " END"
+	case plan2.IN_PREDICATE:
+		if len(funcExpr.F.Args) != 2 {
+			panic("Nested query predicate,such as in,exist,all,any parameter number error!")
+		}
+		descExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		descExprlist, err := describeExpr(funcExpr.F.Args[1], options)
+		if err != nil {
+			return result, err
+		}
+		result += descExpr + " " + funcExpr.F.Func.GetObjName() + "(" + descExprlist + ")"
+	case plan2.EXISTS_ANY_PREDICATE:
+		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		result += funcExpr.F.Func.GetObjName() + "(" + describeExpr + ")"
 	case plan2.IS_NULL_EXPRESSION:
-		result += DescribeExpr(funcExpr.F.Args[0]) + " IS NULL"
+		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		result += "(" + describeExpr + " IS NULL)"
 	case plan2.NOPARAMETER_FUNCTION:
 		result += funcExpr.F.Func.GetObjName()
+	case plan2.DATE_INTERVAL_EXPRESSION:
+		describeExpr, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		result += funcExpr.F.Func.GetObjName() + " " + describeExpr + ""
+	case plan2.EXTRACT_FUNCTION:
+		first, err := describeExpr(funcExpr.F.Args[0], options)
+		if err != nil {
+			return result, err
+		}
+		second, err := describeExpr(funcExpr.F.Args[1], options)
+		if err != nil {
+			return result, err
+		}
+
+		result += funcExpr.F.Func.GetObjName() + "(" + first + " from " + second + ")"
 	case plan2.UNKNOW_KIND_FUNCTION:
-		panic("UNKNOW_KIND_FUNCTION is not support now")
+		return result, errors.New(errno.UndefinedFunction, "UNKNOW_KIND_FUNCTION is not support now")
 	}
-	return result
+	return result, nil
 }

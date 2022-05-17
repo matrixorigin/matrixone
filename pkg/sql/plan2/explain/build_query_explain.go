@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,10 @@
 package explain
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -30,58 +33,96 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 	}
 }
 
-func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings, options *ExplainOptions) {
-	if node == nil {
-		return
-	}
-	explainStep(node, settings, options)
-	settings.level++
-	if len(node.Children) > 0 {
-		for _, childIndex := range node.Children {
-			traversalPlan(Nodes[childIndex], Nodes, settings, options)
-		}
-	}
-	settings.level--
-}
-
-func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) {
+func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error {
 	var Nodes []*plan.Node = e.QueryPlan.Nodes
-	for _, rootNodeId := range e.QueryPlan.Steps {
-		// logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
+	for index, rootNodeId := range e.QueryPlan.Steps {
+		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
 			offset: 0,
 			indent: 2,
 			level:  0,
 		}
-		traversalPlan(Nodes[rootNodeId], Nodes, &settings, options)
+		err := traversalPlan(Nodes[rootNodeId], Nodes, &settings, options)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (e *ExplainQueryImpl) ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) {
+func (e *ExplainQueryImpl) ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOptions) {
+func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		basicNodeInfo := nodedescImpl.GetNodeBasicInfo(options)
-
+		basicNodeInfo, err := nodedescImpl.GetNodeBasicInfo(options)
+		if err != nil {
+			return nil
+		}
 		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
+
+		// Process verbose optioan information , "Output:"
 		if options.Verbose {
-			projecrtInfo := nodedescImpl.GetProjectListInfo(options)
-			settings.buffer.PushNewLine(projecrtInfo, false, settings.level)
+			if nodedescImpl.Node.GetProjectList() != nil {
+				projecrtInfo, err := nodedescImpl.GetProjectListInfo(options)
+				if err != nil {
+					return err
+				}
+				settings.buffer.PushNewLine(projecrtInfo, false, settings.level)
+			}
+
+			if nodedescImpl.Node.NodeType == plan.Node_VALUE_SCAN {
+				rowsetDataDescImpl := &RowsetDataDescribeImpl{
+					RowsetData: nodedescImpl.Node.RowsetData,
+				}
+				rowsetInfo, err := rowsetDataDescImpl.GetDescription(options)
+				if err != nil {
+					return err
+				}
+				rowdatadesc := "Output: " + rowsetInfo
+				settings.buffer.PushNewLine(rowdatadesc, false, settings.level)
+			}
 		}
 
-		extraInfo := nodedescImpl.GetExtraInfo(options)
+		// Get other node descriptions, such as "Filter:", "Group Key:", "Sort Key:"
+		extraInfo, err := nodedescImpl.GetExtraInfo(options)
+		if err != nil {
+			return err
+		}
 		for _, line := range extraInfo {
 			settings.buffer.PushNewLine(line, false, settings.level)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		panic("implement me")
+		return errors.New(errno.FeatureNotSupported, "unimplement explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		panic("implement me")
+		return errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
+	return nil
+}
+
+func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings, options *ExplainOptions) error {
+	if node == nil {
+		return nil
+	}
+	err := explainStep(node, settings, options)
+	if err != nil {
+		return err
+	}
+	settings.level++
+	// Recursive traversal Query Plan
+	if len(node.Children) > 0 {
+		for _, childIndex := range node.Children {
+			err = traversalPlan(Nodes[childIndex], Nodes, settings, options)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	settings.level--
+	return nil
 }
