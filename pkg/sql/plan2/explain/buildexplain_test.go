@@ -225,10 +225,6 @@ func runTestShouldPass(opt plan2.Optimizer, t *testing.T, sqls []string) {
 	}
 }
 
-func runTestShouldError() {
-
-}
-
 func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 	t.Logf("SQL: %v\n", sql)
 	stmts, err := mysql.Parse(sql)
@@ -274,14 +270,14 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 		ctx := opt.CurrentContext()
 		logicPlan, err := plan2.BuildPlan(ctx, stmt.Statement)
 		if err != nil {
-			fmt.Printf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
+			t.Errorf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err
 		}
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(logicPlan.GetQuery())
 		err = explainQuery.ExplainPlan(buffer, es)
 		if err != nil {
-			fmt.Printf("expalin Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
+			t.Errorf("explain Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err
 		}
 	}

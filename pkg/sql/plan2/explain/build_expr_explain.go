@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -54,7 +54,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 			result += funcDesc
 		case *plan.Expr_Sub:
 			subqryExpr := expr.Expr.(*plan.Expr_Sub)
-			result += "subquery at nodes[" + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10) + "]"
+			result += "subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10)
 		case *plan.Expr_Corr:
 			result += expr.Expr.(*plan.Expr_Corr).Corr.GetName()
 		case *plan.Expr_V:
@@ -145,13 +145,13 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		result += "CAST(" + describeExpr + " AS " + plan.Type_TypeId_name[int32(Typ.Id)] + ")"
 	case plan2.CASE_WHEN_EXPRESSION:
 		result += "CASE"
-		// case when expresion has threee part (case exprssion, when exprssion, else exprssion)
+		// case when expression has three part (case expression, when expression, else expression)
 		if len(funcExpr.F.Args) != 3 {
 			return result, errors.New(errno.SyntaxErrororAccessRuleViolation, "case expression parameter number error")
 		}
-		// case exprssion can be null
+		// case expression can be null
 		if funcExpr.F.Args[0] != nil {
-			// get case exprssion
+			// get case expression
 			caseDesc, err := describeExpr(funcExpr.F.Args[0], options)
 			if err != nil {
 				return result, err
@@ -159,7 +159,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 			result += " " + caseDesc
 		}
 
-		// get when exprssion
+		// get when expression
 		var whenExpr *plan.Expr = funcExpr.F.Args[1]
 		var whenlist *plan.Expr_List = whenExpr.Expr.(*plan.Expr_List)
 		var list *plan.ExprList = whenlist.List
@@ -182,7 +182,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 		}
 		// when expression can be null
 		if funcExpr.F.Args[2] != nil {
-			// get else exprssion
+			// get else expression
 			elseExprDesc, err := describeExpr(funcExpr.F.Args[2], options)
 			if err != nil {
 				return result, err
