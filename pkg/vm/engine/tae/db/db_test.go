@@ -28,6 +28,7 @@ import (
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -1597,8 +1598,6 @@ func TestSystemDB1(t *testing.T) {
 	assert.Nil(t, err)
 
 	db, _ := txn.GetDatabase(catalog.SystemDBName)
-	_, err = db.CreateRelation(schema)
-	assert.NotNil(t, err)
 	table, err := db.GetRelationByName(catalog.SystemTable_DB_Name)
 	assert.Nil(t, err)
 	it := table.MakeBlockIt()
@@ -1662,4 +1661,48 @@ func TestSystemDB1(t *testing.T) {
 	err = txn.Rollback()
 	assert.Nil(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+}
+
+func TestSystemDB2(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	txn := tae.StartTxn(nil)
+	sysDB, err := txn.GetDatabase(catalog.SystemDBName)
+	assert.NoError(t, err)
+	_, err = sysDB.DropRelationByName(catalog.SystemTable_DB_Name)
+	assert.Error(t, err)
+	_, err = sysDB.DropRelationByName(catalog.SystemTable_Table_Name)
+	assert.Error(t, err)
+	_, err = sysDB.DropRelationByName(catalog.SystemTable_Columns_Name)
+	assert.Error(t, err)
+
+	schema := catalog.MockSchema(2)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockData(schema, 1000)
+
+	rel, err := sysDB.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NotNil(t, rel)
+	err = rel.Append(bat)
+	assert.Nil(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	sysDB, err = txn.GetDatabase(catalog.SystemDBName)
+	assert.NoError(t, err)
+	rel, err = sysDB.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	it := rel.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(0, nil, nil)
+		assert.NoError(t, err)
+		rows += movec.Length(view.GetColumnData())
+		it.Next()
+	}
+	assert.Equal(t, 1000, rows)
+	assert.NoError(t, txn.Commit())
 }

@@ -30,7 +30,7 @@ const (
 	SystemDBID               = uint64(1)
 	SystemDBName             = "mo_catalog"
 	CatalogName              = "taec"
-	SystemTable_DB_Name      = "mo_databases"
+	SystemTable_DB_Name      = "mo_database"
 	SystemTable_Table_Name   = "mo_tables"
 	SystemTable_Columns_Name = "mo_columns"
 	SystemTable_DB_ID        = uint64(1)
@@ -58,7 +58,7 @@ const (
 )
 
 const (
-	SystemDBAttr_Name        = "datName"
+	SystemDBAttr_Name        = "datname"
 	SystemDBAttr_CatalogName = "dat_catalog_name"
 	SystemDBAttr_CreateSQL   = "dat_createsql"
 
