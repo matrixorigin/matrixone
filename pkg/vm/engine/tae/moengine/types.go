@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -30,6 +31,13 @@ type Txn interface {
 	Repr() string
 	GetError() error
 }
+
+type TxnEngine interface {
+	engine.Engine
+	StartTxn(info []byte) (txn Txn, err error)
+}
+
+var _ TxnEngine = &txnEngine{}
 
 type txnEngine struct {
 	impl *db.DB
