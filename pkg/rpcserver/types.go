@@ -15,16 +15,14 @@
 package rpcserver
 
 import (
-	"github.com/fagongzi/goetty"
+	ksvr "github.com/cloudwego/kitex/server"
 )
 
 type Server interface {
-	Stop()
 	Run() error
-	Register(func(uint64, interface{}, goetty.IOSession) error) int
+	Stop() error
 }
 
 type server struct {
-	app goetty.NetApplication
-	fs  []func(uint64, interface{}, goetty.IOSession) error
+	ksvr.Server
 }

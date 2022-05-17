@@ -15,47 +15,29 @@
 package rpcserver
 
 import (
-	"fmt"
-
+	"github.com/cloudwego/kitex/pkg/klog"
+	ksvr "github.com/cloudwego/kitex/server"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/klogger"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
-	"go.uber.org/zap"
-
-	"github.com/fagongzi/goetty"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/rpchandler"
+	"net"
 )
 
-func New(addr string, maxsize int, log *zap.Logger) (Server, error) {
-	var err error
-
+func New(addr string, handler message.RPCHandler) (Server, error) {
+	// init conn pool
+	InitConn()
+	address := &net.UnixAddr{Net: "tcp", Name: addr}
+	klog.SetLogger(klogger.New())
+	svr := rpchandler.NewServer(handler, ksvr.WithServiceAddr(address))
 	s := new(server)
-	encoder, decoder := NewCodec(maxsize)
-	if s.app, err = goetty.NewTCPApplication(addr, s.onMessage,
-		goetty.WithAppSessionOptions(goetty.WithCodec(encoder, decoder), goetty.WithLogger(log))); err != nil {
-		return nil, err
-	}
+	s.Server = svr
 	return s, nil
 }
 
-func (s *server) Stop() {
-	if err := s.app.Stop(); err != nil {
-		panic(err)
-	}
-}
-
 func (s *server) Run() error {
-	return s.app.Start()
+	return s.Server.Run()
 }
 
-func (s *server) Register(f func(uint64, interface{}, goetty.IOSession) error) int {
-	s.fs = append(s.fs, f)
-	return len(s.fs)
-}
-
-func (s *server) onMessage(sess goetty.IOSession, value interface{}, seq uint64) error {
-	m := value.(*message.Message)
-	m.Sid = sess.ID()
-	defer message.Release(m)
-	if m.Cmd >= uint64(len(s.fs)) || s.fs[m.Cmd] == nil {
-		return fmt.Errorf("unsupport command '%v'", m.Cmd)
-	}
-	return s.fs[m.Cmd](seq, value, sess)
+func (s *server) Stop() error {
+	return s.Server.Stop()
 }

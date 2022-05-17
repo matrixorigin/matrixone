@@ -1,9 +1,14 @@
 syntax = "proto3";
 package message;
+option go_package = "message";
 
 message Message {
-    uint64   sid = 1;
+    uint64  sid = 1;
     uint64  cmd = 2;
     bytes   code = 3;
     bytes   data = 4;
+}
+
+service RPCHandler {
+    rpc Process(Message) returns (stream Message) {}
 }
