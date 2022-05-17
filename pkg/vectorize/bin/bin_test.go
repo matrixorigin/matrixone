@@ -83,6 +83,8 @@ func TestCountBitLenForFloat(t *testing.T) {
 		{2.99, 2},
 		{3.14, 2},
 		{-1.99, 64},
+		{0.99, 1},
+		{-0.99, 1},
 		{127.99, 7},
 		{-128.99, 64},
 		{100.99, 7},
@@ -203,8 +205,46 @@ func TestFloatToBinary(t *testing.T) {
 	require.Equal(t, buf.Bytes(), ret.Data)
 }
 
+func TestFormatNegativeIntToBinary(t *testing.T) {
+	tt := []struct {
+		num  int64
+		want string
+	}{
+		{-1, "1111111111111111111111111111111111111111111111111111111111111111"},
+		{-2, "1111111111111111111111111111111111111111111111111111111111111110"},
+		{-128, "1111111111111111111111111111111111111111111111111111111110000000"},
+		{math.MinInt64, "1000000000000000000000000000000000000000000000000000000000000000"},
+	}
+	for _, tc := range tt {
+		require.Equal(t, tc.want, negativeIntToBinStr(tc.num), tc.num)
+	}
+}
+
+func TestFormatFloatToBinary(t *testing.T) {
+	tt := []struct {
+		num  float64
+		want string
+	}{
+		{math.Pi, "11"},
+		{math.E, "10"},
+		{math.Phi, "1"},
+		{-1.99, "1111111111111111111111111111111111111111111111111111111111111111"},
+		{0.99, "0"},
+		{-0.99, "0"},
+		{1.99, "1"},
+		{math.MaxFloat64, "1111111111111111111111111111111111111111111111111111111111111111"},
+		{-math.MaxUint64, "1111111111111111111111111111111111111111111111111111111111111111"},
+		{127.99, "1111111"},
+		{-128.99, "1111111111111111111111111111111111111111111111111111111110000000"},
+		{-2, "1111111111111111111111111111111111111111111111111111111111111110"},
+	}
+	for _, tc := range tt {
+		require.Equal(t, tc.want, floatToBinStr(tc.num), strconv.FormatFloat(tc.num, 'f', -1, 64))
+	}
+}
+
 func TestFormatUintToBinary(t *testing.T) {
-	ttUint := []struct {
+	tt := []struct {
 		num  uint64
 		want string
 	}{
@@ -217,7 +257,7 @@ func TestFormatUintToBinary(t *testing.T) {
 		{1e9, "111011100110101100101000000000"},
 	}
 
-	for _, tc := range ttUint {
+	for _, tc := range tt {
 		require.Equal(t, uintToBinStr(tc.num), tc.want, tc.num)
 	}
 }

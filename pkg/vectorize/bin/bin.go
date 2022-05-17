@@ -74,9 +74,16 @@ func intBitLen[T constraints.Integer](xs []T) int64 {
 }
 
 func floatBitLen[T constraints.Float](xs []T) int64 {
-	var r int64
+	var (
+		r int64
+		v float64
+	)
 	for _, x := range xs {
-		v := math.Floor(float64(x))
+		if x > 0 {
+			v = math.Floor(float64(x))
+		} else {
+			v = math.Ceil(float64(x))
+		}
 		if v == 0 {
 			// special case for zero
 			r += 1
@@ -109,7 +116,7 @@ func intToBinary[T constraints.Integer](xs []T, result *types.Bytes) *types.Byte
 		if x >= 0 {
 			binStr = uintToBinStr(uint64(x))
 		} else {
-			binStr = negativeToBinStr(int64(x))
+			binStr = negativeIntToBinStr(int64(x))
 		}
 		copy(result.Data[offset:], binStr)
 		result.Lengths[i] = uint32(len(binStr))
@@ -133,18 +140,24 @@ func floatToBinary[T constraints.Float](xs []T, result *types.Bytes) *types.Byte
 }
 
 func floatToBinStr(x float64) string {
-	v := math.Floor(x)
+	var v float64
+	if x < 0 {
+		v = math.Ceil(x)
+	} else {
+		v = math.Floor(x)
+	}
+
 	if v == 0 {
 		return "0"
-	} else if v > 0 {
-		// truncate float to uint64
-		return uintToBinStr(uint64(v))
 	} else if math.Abs(v) >= math.MaxUint64 {
 		b := [64]byte{}
 		for i := 0; i < 64; i++ {
 			b[i] = '1'
 		}
 		return string(b[:])
+	} else if v > 0 {
+		// truncate float to uint64
+		return uintToBinStr(uint64(v))
 	} else {
 		// calc two's complement for negative number to improve the compatibility between arm64 and x86 platforms
 		// convert big int instead int64 to prevent truncating
@@ -156,7 +169,29 @@ func floatToBinStr(x float64) string {
 		n.Add(n, mask)
 
 		b, i := [64]byte{}, 63
-		d := n.Bits()[0]
+		for _, d := range n.Bits() {
+			for d > 0 {
+				if d&1 == 1 {
+					b[i] = '1'
+				} else {
+					b[i] = '0'
+				}
+				d >>= 1
+				i--
+			}
+		}
+		return string(b[i+1:])
+	}
+}
+
+func negativeIntToBinStr(x int64) string {
+	n := big.NewInt(x)
+	mask := big.NewInt(1)
+	mask.Lsh(mask, 64)
+	n.Add(n, mask)
+
+	b, i := [64]byte{}, 63
+	for _, d := range n.Bits() {
 		for d > 0 {
 			if d&1 == 1 {
 				b[i] = '1'
@@ -166,26 +201,6 @@ func floatToBinStr(x float64) string {
 			d >>= 1
 			i--
 		}
-		return string(b[i+1:])
-	}
-}
-
-func negativeToBinStr(x int64) string {
-	n := big.NewInt(x)
-	mask := big.NewInt(1)
-	mask.Lsh(mask, 64)
-	n.Add(n, mask)
-
-	b, i := [64]byte{}, 63
-	d := n.Bits()[0]
-	for d > 0 {
-		if d&1 == 1 {
-			b[i] = '1'
-		} else {
-			b[i] = '0'
-		}
-		d >>= 1
-		i--
 	}
 	return string(b[i+1:])
 }
