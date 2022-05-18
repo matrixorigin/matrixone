@@ -15,9 +15,23 @@
 package frontend
 
 import (
+	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"sort"
+)
+
+var (
+	errorIsNotTaeEngine           = errors.New("the engine is not tae")
+	errorMissingCatalogTables     = errors.New("missing catalog tables")
+	errorMissingCatalogDatabases  = errors.New("missing catalog databases")
+	errorNoSuchAttribute          = errors.New("no such attribute in the schema")
+	errorAttributeTypeIsDifferent = errors.New("attribute type is different with that in the schema")
+	errorAttributeIsNotPrimary    = errors.New("attribute is not primary key")
 )
 
 // CatalogSchemaAttribute defines the attribute of the schema
@@ -212,7 +226,7 @@ func PrepareInitialDataForMoTables() [][]string {
 		hard code tables:
 		mo_database,mo_tables,mo_columns
 
-		tabled created in the initdb step:
+		tables created in the initdb step:
 		mo_global_variables,mo_user
 	*/
 	data := [][]string{
@@ -473,7 +487,7 @@ func FillInitialDataForMoColumns() *batch.Batch {
 	return PrepareInitialDataForSchema(schema, data)
 }
 
-// DefineSchemaForMoColumns decides the schema of the mo_global_variables
+// DefineSchemaForMoGlobalVariables decides the schema of the mo_global_variables
 func DefineSchemaForMoGlobalVariables() *CatalogSchema {
 	/*
 		mo_global_variables schema
@@ -493,7 +507,7 @@ func DefineSchemaForMoGlobalVariables() *CatalogSchema {
 	gvVariableValueAttr := &CatalogSchemaAttribute{
 		AttributeName: "gv_variable_value",
 		AttributeType: types.T_varchar.ToType(),
-		IsPrimaryKey:  true,
+		IsPrimaryKey:  false,
 		Comment:       "",
 	}
 	gvVariableNameAttr.AttributeType.Width = 1024
@@ -522,4 +536,342 @@ func FillInitialDataForMoGlobalVariables() *batch.Batch {
 	schema := DefineSchemaForMoGlobalVariables()
 	data := PrepareInitialDataForMoGlobalVariables()
 	return PrepareInitialDataForSchema(schema, data)
+}
+
+// DefineSchemaForMoUser decides the schema of the mo_table
+func DefineSchemaForMoUser() *CatalogSchema {
+	/*
+		mo_user schema
+		| Attribute        | Type         | Primary Key | Note        |
+		| --------- | ------------ | ---- | --------- |
+		| user_host | varchar(256) | PK   | user host |
+		| user_name | varchar(256) | PK   | user name |
+		| authentication_string | varchar(4096) |     | password |
+	*/
+	userHostAttr := &CatalogSchemaAttribute{
+		AttributeName: "user_host",
+		AttributeType: types.T_varchar.ToType(),
+		IsPrimaryKey:  true,
+		Comment:       "user host",
+	}
+	userHostAttr.AttributeType.Width = 256
+
+	userNameAttr := &CatalogSchemaAttribute{
+		AttributeName: "user_name",
+		AttributeType: types.T_varchar.ToType(),
+		IsPrimaryKey:  true,
+		Comment:       "user name",
+	}
+	userNameAttr.AttributeType.Width = 256
+
+	passwordAttr := &CatalogSchemaAttribute{
+		AttributeName: "authentication_string",
+		AttributeType: types.T_varchar.ToType(),
+		IsPrimaryKey:  false,
+		Comment:       "password",
+	}
+	passwordAttr.AttributeType.Width = 256
+
+	attrs := []*CatalogSchemaAttribute{
+		userHostAttr,
+		userNameAttr,
+		passwordAttr,
+	}
+	return &CatalogSchema{Name: "mo_user", Attributes: attrs}
+}
+
+func PrepareInitialDataForMoUser() [][]string {
+	data := [][]string{
+		{"localhost", "root", "''"},
+		{"localhost", "dump", "111"},
+	}
+	return data
+}
+
+func FillInitialDataForMoUser() *batch.Batch {
+	schema := DefineSchemaForMoUser()
+	data := PrepareInitialDataForMoUser()
+	return PrepareInitialDataForSchema(schema, data)
+}
+
+// InitDB setups the initial catalog tables in tae
+func InitDB(tae engine.Engine) error {
+	taeEngine, ok := tae.(moengine.TxnEngine)
+	if !ok {
+		return errorIsNotTaeEngine
+	}
+
+	txnCtx, err := taeEngine.StartTxn(nil)
+	if err != nil {
+		return err
+	}
+
+	/*
+		stage 1: create catalog tables
+	*/
+	//1.get database mo_catalog handler
+	//TODO: use mo_catalog after tae is ready
+	catalogDbName := "mo_catalog_tmp"
+	err = tae.Create(0, catalogDbName, 0, txnCtx.GetCtx())
+	if err != nil {
+		logutil.Infof("create database %v failed.error:%v", catalogDbName, err)
+		err2 := txnCtx.Rollback()
+		if err2 != nil {
+			logutil.Infof("txnCtx rollback failed. error:%v", err2)
+			return err2
+		}
+		return err
+	}
+
+	catalogDB, err := tae.Database(catalogDbName, txnCtx.GetCtx())
+	if err != nil {
+		logutil.Infof("get database %v failed.error:%v", catalogDbName, err)
+		err2 := txnCtx.Rollback()
+		if err2 != nil {
+			logutil.Infof("txnCtx rollback failed. error:%v", err2)
+			return err2
+		}
+		return err
+	}
+
+	//2. create table mo_global_variables
+	gvSch := DefineSchemaForMoGlobalVariables()
+	gvDefs := convertCatalogSchemaToTableDef(gvSch)
+	err = catalogDB.Create(0, gvSch.GetName(), gvDefs, txnCtx.GetCtx())
+	if err != nil {
+		logutil.Infof("create table %v failed.error:%v", gvSch.GetName(), err)
+		err2 := txnCtx.Rollback()
+		if err2 != nil {
+			logutil.Infof("txnCtx rollback failed. error:%v", err2)
+			return err2
+		}
+		return err
+	}
+
+	//3. create table mo_user
+	userSch := DefineSchemaForMoUser()
+	userDefs := convertCatalogSchemaToTableDef(userSch)
+	err = catalogDB.Create(0, userSch.GetName(), userDefs, txnCtx.GetCtx())
+	if err != nil {
+		logutil.Infof("create table %v failed.error:%v", userSch.GetName(), err)
+		err2 := txnCtx.Rollback()
+		if err2 != nil {
+			logutil.Infof("txnCtx rollback failed. error:%v", err2)
+			return err2
+		}
+		return err
+	}
+
+	/*
+		stage 2: create information_schema database.
+		Views in the information_schema need to created by 'create view'
+	*/
+	//1. create database information_schema
+	infoSchemaName := "information_schema"
+	err = tae.Create(0, infoSchemaName, 0, txnCtx.GetCtx())
+	if err != nil {
+		logutil.Infof("create database %v failed.error:%v", infoSchemaName, err)
+		err2 := txnCtx.Rollback()
+		if err2 != nil {
+			logutil.Infof("txnCtx rollback failed. error:%v", err2)
+			return err2
+		}
+		return err
+	}
+	//TODO: create views after the computation engine is ready
+	err = txnCtx.Commit()
+	if err != nil {
+		logutil.Infof("txnCtx commit failed.error:%v", err)
+		return err
+	}
+
+	return sanityCheck(tae)
+}
+
+// sanityCheck checks the catalog is ready or not
+func sanityCheck(tae engine.Engine) error {
+	taeEngine, ok := tae.(moengine.TxnEngine)
+	if !ok {
+		return errorIsNotTaeEngine
+	}
+
+	txnCtx, err := taeEngine.StartTxn(nil)
+	if err != nil {
+		return err
+	}
+	// databases: mo_catalog,mo_catalog_tmp,information_schema
+	dbs := tae.Databases(txnCtx.GetCtx())
+	wantDbs := []string{"mo_catalog", "mo_catalog_tmp", "information_schema"}
+	if !isWanted(dbs, wantDbs) {
+		logutil.Infof("wantDbs %v,dbs %v", wantDbs, dbs)
+		return errorMissingCatalogDatabases
+	}
+
+	// database mo_catalog has tables:mo_database,mo_tables,mo_columns
+	//TODO:check tae.mo_catalog.mo_databases -> mo_database
+	//TODO:check tae.mo_catalog.mo_database.datName -> datname
+	wantTablesOfMoCatalog := []string{"mo_database", "mo_tables", "mo_columns"}
+	wantSchemasOfCatalog := []*CatalogSchema{
+		DefineSchemaForMoDatabase(),
+		DefineSchemaForMoTables(),
+		DefineSchemaForMoColumns(),
+	}
+	catalogDbName := "mo_catalog"
+	err = isWantedDatabase(taeEngine, txnCtx, catalogDbName, wantTablesOfMoCatalog, wantSchemasOfCatalog)
+	if err != nil {
+		return err
+	}
+
+	//TODO:fix it after tae is ready
+
+	// database mo_catalog_tmp has tables: mo_global_variables,mo_user
+	wantTablesOfMoCatalogTmp := []string{"mo_global_variables", "mo_user"}
+	wantSchemasOfCatalogTmp := []*CatalogSchema{
+		DefineSchemaForMoGlobalVariables(),
+		DefineSchemaForMoUser(),
+	}
+	catalogDbTmpName := "mo_catalog_tmp"
+	err = isWantedDatabase(taeEngine, txnCtx, catalogDbTmpName, wantTablesOfMoCatalogTmp, wantSchemasOfCatalogTmp)
+	if err != nil {
+		return err
+	}
+
+	err = txnCtx.Commit()
+	if err != nil {
+		logutil.Infof("txnCtx commit failed.error:%v", err)
+		return err
+	}
+
+	return nil
+}
+
+// isWanted checks the string slices are same
+func isWanted(want, actual []string) bool {
+	w := make([]string, len(want))
+	copy(w, want)
+	a := make([]string, len(actual))
+	copy(a, actual)
+	sort.Strings(w)
+	sort.Strings(a)
+	if len(w) != len(a) {
+		return false
+	}
+	for i := 0; i < len(w); i++ {
+		if w[i] != a[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isWantedDatabase checks the database has the right tables
+func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
+	dbName string, tables []string, schemas []*CatalogSchema) error {
+	db, err := taeEngine.Database(dbName, txnCtx.GetCtx())
+	if err != nil {
+		logutil.Infof("get database %v failed.error:%v", dbName, err)
+		err2 := txnCtx.Rollback()
+		if err2 != nil {
+			logutil.Infof("txnCtx rollback failed. error:%v", err2)
+			return err2
+		}
+		return err
+	}
+	tablesOfMoCatalog := db.Relations(txnCtx.GetCtx())
+	if !isWanted(tablesOfMoCatalog, tables) {
+		logutil.Infof("wantTables %v, tables %v", tables, tablesOfMoCatalog)
+		return errorMissingCatalogTables
+	}
+
+	//check table attributes
+	for i, tableName := range tables {
+		err = isWantedTable(db, txnCtx, tableName, schemas[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	return err
+}
+
+//isWantedTable checks the table has the right attributes
+func isWantedTable(db engine.Database, txnCtx moengine.Txn,
+	tableName string, schema *CatalogSchema) error {
+	table, err := db.Relation(tableName, txnCtx.GetCtx())
+	if err != nil {
+		logutil.Infof("get table %v failed.error:%v", tableName, err)
+		err2 := txnCtx.Rollback()
+		if err2 != nil {
+			logutil.Infof("txnCtx rollback failed. error:%v", err2)
+			return err2
+		}
+		return err
+	}
+	defs := table.TableDefs(txnCtx.GetCtx())
+
+	attrs := make(map[string]*CatalogSchemaAttribute)
+	for _, attr := range schema.GetAttributes() {
+		attrs[attr.GetName()] = attr
+	}
+
+	for _, def := range defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if schemaAttr, ok2 := attrs[attr.Attr.Name]; ok2 {
+				if attr.Attr.Name != schemaAttr.GetName() {
+					logutil.Infof("def name %v schema name %v", attr.Attr.Name, schemaAttr.GetName())
+					return errorNoSuchAttribute
+				}
+				if !attr.Attr.Type.Eq(schemaAttr.GetType()) {
+					return errorAttributeTypeIsDifferent
+				}
+
+				if !(attr.Attr.Primary && schemaAttr.GetIsPrimaryKey() ||
+					!attr.Attr.Primary && !schemaAttr.GetIsPrimaryKey()) {
+					return errorAttributeIsNotPrimary
+				}
+			} else {
+				logutil.Infof("def name 1 %v", attr.Attr.Name)
+				return errorNoSuchAttribute
+			}
+		} else if attr, ok2 := def.(*engine.PrimaryIndexDef); ok2 {
+			for _, name := range attr.Names {
+				if schemaAttr, ok2 := attrs[name]; ok2 {
+					if !schemaAttr.GetIsPrimaryKey() {
+						return errorAttributeIsNotPrimary
+					}
+				} else {
+					logutil.Infof("def name 2 %v", name)
+					return errorNoSuchAttribute
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func convertCatalogSchemaToTableDef(sch *CatalogSchema) []engine.TableDef {
+	var defs []engine.TableDef
+	var primaryKeyName []string
+
+	for _, attr := range sch.GetAttributes() {
+		if attr.GetIsPrimaryKey() {
+			primaryKeyName = append(primaryKeyName, attr.GetName())
+		}
+
+		defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{
+			Name:    attr.GetName(),
+			Alg:     0,
+			Type:    attr.GetType(),
+			Default: engine.DefaultExpr{},
+			Primary: attr.GetIsPrimaryKey(),
+		}})
+	}
+
+	if len(primaryKeyName) != 0 {
+		defs = append(defs, &engine.PrimaryIndexDef{
+			Names: primaryKeyName,
+		})
+	}
+	return defs
 }

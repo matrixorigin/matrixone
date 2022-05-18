@@ -52,6 +52,18 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
 		return buildCommitTransaction(stmt, ctx)
 	case *tree.RollbackTransaction:
 		return buildRollbackTransaction(stmt, ctx)
+	case *tree.CreateDatabase:
+		return buildCreateDatabase(stmt, ctx)
+	case *tree.DropDatabase:
+		return buildDropDatabase(stmt, ctx)
+	case *tree.CreateTable:
+		return buildCreateTable(stmt, ctx)
+	case *tree.DropTable:
+		return buildDropTable(stmt, ctx)
+	case *tree.CreateIndex:
+		return buildCreateIndex(stmt, ctx)
+	case *tree.DropIndex:
+		return buildDropIndex(stmt, ctx)
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}

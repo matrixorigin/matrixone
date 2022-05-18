@@ -16,7 +16,9 @@ package segmentio
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -154,8 +156,6 @@ func (bf *blockFile) Destroy() error {
 	for _, cb := range bf.columns {
 		cb.Unref()
 	}
-	bf.removeData(bf.deletes.dataFile)
-	bf.removeData(bf.indexMeta)
 	bf.columns = nil
 	bf.deletes = nil
 	bf.indexMeta = nil
@@ -177,13 +177,30 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 		}
 		defer f.Unref()
 		size := f.Stat().Size()
-		buf := make([]byte, size)
+		node := common.GPool.Alloc(uint64(size))
+		defer common.GPool.Free(node)
+		buf := node.Buf[:size]
 		if _, err = f.Read(buf); err != nil {
 			return
 		}
 		vec := vector.NewVector(colTypes[i], uint64(maxRow))
-		if err = vec.Unmarshal(buf); err != nil {
-			return
+		if colBlk.data.stat.CompressAlgo() == compress.Lz4 {
+			decompress := make([]byte, colBlk.data.stat.OriginSize())
+			decompress, err = compress.Decompress(buf, decompress, compress.Lz4)
+			if err != nil {
+				return nil, err
+			}
+			if len(decompress) != int(colBlk.data.stat.OriginSize()) {
+				panic(any(fmt.Sprintf("invalid decompressed size: %d, %d is expected",
+					len(decompress), colBlk.data.stat.OriginSize())))
+			}
+			if err = vec.Unmarshal(decompress); err != nil {
+				return
+			}
+		} else {
+			if err = vec.Unmarshal(buf); err != nil {
+				return
+			}
 		}
 		vecs[i] = vec
 		attrs[i] = i
@@ -206,8 +223,23 @@ func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat
 			return
 		}
 		vec := gvec.New(colTypes[i])
-		if err = vec.Read(buf); err != nil {
-			return
+		if colBlk.data.stat.CompressAlgo() == compress.Lz4 {
+			decompress := make([]byte, colBlk.data.stat.OriginSize())
+			decompress, err = compress.Decompress(buf, decompress, compress.Lz4)
+			if err != nil {
+				return nil, err
+			}
+			if len(decompress) != int(colBlk.data.stat.OriginSize()) {
+				panic(any(fmt.Sprintf("invalid decompressed size: %d, %d is expected",
+					len(decompress), colBlk.data.stat.OriginSize())))
+			}
+			if err = vec.Read(decompress); err != nil {
+				return
+			}
+		} else {
+			if err = vec.Read(buf); err != nil {
+				return
+			}
 		}
 		bat.Vecs[i] = vec
 	}

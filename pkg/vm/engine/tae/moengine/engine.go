@@ -18,6 +18,7 @@ import (
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -25,28 +26,45 @@ var (
 	_ engine.Engine = (*txnEngine)(nil)
 )
 
-func NewEngine(txn txnif.AsyncTxn) *txnEngine {
+func NewEngine(impl *db.DB) *txnEngine {
 	return &txnEngine{
-		txn: txn,
+		impl: impl,
 	}
 }
 
-func (e *txnEngine) Delete(_ uint64, name string, _ engine.Snapshot) (err error) {
-	_, err = e.txn.DropDatabase(name)
+func (e *txnEngine) Delete(_ uint64, name string, ctx engine.Snapshot) (err error) {
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+		panic(err)
+	}
+	_, err = txn.DropDatabase(name)
 	return
 }
 
-func (e *txnEngine) Create(_ uint64, name string, _ int, _ engine.Snapshot) (err error) {
-	_, err = e.txn.CreateDatabase(name)
+func (e *txnEngine) Create(_ uint64, name string, _ int, ctx engine.Snapshot) (err error) {
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+		panic(err)
+	}
+	_, err = txn.CreateDatabase(name)
 	return
 }
 
-func (e *txnEngine) Databases(_ engine.Snapshot) (dbs []string) {
-	return e.txn.DatabaseNames()
+func (e *txnEngine) Databases(ctx engine.Snapshot) (dbs []string) {
+	var err error
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+		panic(err)
+	}
+	return txn.DatabaseNames()
 }
 
-func (e *txnEngine) Database(name string, _ engine.Snapshot) (db engine.Database, err error) {
-	h, err := e.txn.GetDatabase(name)
+func (e *txnEngine) Database(name string, ctx engine.Snapshot) (db engine.Database, err error) {
+	var txn txnif.AsyncTxn
+	if txn, err = e.impl.GetTxnByCtx(ctx); err != nil {
+		panic(err)
+	}
+	h, err := txn.GetDatabase(name)
 	if err != nil {
 		return nil, err
 	}
@@ -56,4 +74,9 @@ func (e *txnEngine) Database(name string, _ engine.Snapshot) (db engine.Database
 
 func (e *txnEngine) Node(ip string, _ engine.Snapshot) *engine.NodeInfo {
 	return &engine.NodeInfo{Mcpu: runtime.NumCPU()}
+}
+
+func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
+	txn = e.impl.StartTxn(info)
+	return
 }

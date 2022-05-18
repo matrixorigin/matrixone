@@ -19,13 +19,21 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/stretchr/testify/assert"
+	"path"
 	"testing"
 )
 
+const (
+	ModuleName = "LAYOUT"
+)
+
 func TestSegment_Init(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "init.seg")
 	seg := Segment{}
-	err := seg.Init("1.seg")
+	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
 	file := seg.NewBlockFile("test")

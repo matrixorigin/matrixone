@@ -15,14 +15,11 @@
 package plan2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 //BuiltinFunctionsMap  change BuiltinFunctions to map
 var BuiltinFunctionsMap map[string]*FunctionSig
-
-var AstTypeToPlanTypeMap map[uint8]plan.Type_TypeId
 
 var CastLowTypeToHighTypeMap map[plan.Type_TypeId]map[plan.Type_TypeId]plan.Type_TypeId
 
@@ -32,29 +29,6 @@ func init() {
 	for _, fun := range BuiltinFunctions {
 		BuiltinFunctionsMap[fun.Name] = fun
 	}
-
-	//map ast type to plan2.Type_TypeId
-	AstTypeToPlanTypeMap = make(map[uint8]plan.Type_TypeId)
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_TINY] = plan.Type_INT8
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_SHORT] = plan.Type_INT16
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_LONG] = plan.Type_INT32
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_LONGLONG] = plan.Type_INT64
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_INT24] = plan.Type_INT32
-
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_FLOAT] = plan.Type_FLOAT32
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_DOUBLE] = plan.Type_FLOAT64
-
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_YEAR] = plan.Type_INT16
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_DATE] = plan.Type_DATE
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_TIME] = plan.Type_TIME
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_DATETIME] = plan.Type_DATETIME
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_TIMESTAMP] = plan.Type_TIMESTAMP
-
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_VARCHAR] = plan.Type_VARCHAR
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_VAR_STRING] = plan.Type_VARCHAR
-
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_JSON] = plan.Type_JSON
-	AstTypeToPlanTypeMap[defines.MYSQL_TYPE_DECIMAL] = plan.Type_DECIMAL
 
 	//map type cast rule
 	lowCastToHighTypeArray := make(map[plan.Type_TypeId][]plan.Type_TypeId)

@@ -125,6 +125,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		bat := <-proc.Reg.MergeReceivers[1].Ch
 		ctr.bat = bat
 		ctr.strHashMap = bat.Ht.(*hashtable.StringHashMap)
+		return nil
 	}
 	if ctr.flg {
 		var err error

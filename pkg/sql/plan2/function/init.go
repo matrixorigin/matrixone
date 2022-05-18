@@ -29,25 +29,21 @@ func initRelatedStructure() {
 
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.
 // Ensure that no duplicate functions will be added.
-func appendFunction(name string, newFunction Function) error {
-	if err := completenessCheck(newFunction, name); err != nil {
+func appendFunction(fid int, newFunction Function) error {
+	if err := completenessCheck(fid, newFunction); err != nil {
 		return err
 	}
 
-	fid, err := getFunctionId(name)
-	if err != nil {
-		return err
-	}
 	fs := functionRegister[fid]
 
 	requiredIndex := len(fs)
 	if newFunction.Index != requiredIndex {
-		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %s(%v)'s index should be %d", name, newFunction.Args, requiredIndex))
+		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex))
 	}
 
 	for _, f := range fs {
 		if functionsEqual(f, newFunction) {
-			return errors.New(errno.DuplicateFunction, fmt.Sprintf("conflict happens, duplicate function %s(%v)", name, f.Args))
+			return errors.New(errno.DuplicateFunction, fmt.Sprintf("conflict happens, duplicate function (fid = %d, index = %d)", fid, newFunction.Index))
 		}
 	}
 
@@ -57,14 +53,18 @@ func appendFunction(name string, newFunction Function) error {
 	return nil
 }
 
-func completenessCheck(f Function, name string) error {
-	if f.Fn == nil && !f.IsAggregate() {
-		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function '%s' missing its's Fn", name))
+func completenessCheck(id int, f Function) error {
+	if id < 0 || id >= FUNCTION_END_NUMBER {
+		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("illegal function id %d", id))
 	}
-	if f.TypeCheckFn == nil {
-		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function '%s' missing its's type check function", name))
-	}
-	return nil
+	return nil // just jump it now.
+	//if f.Fn == nil && !f.IsAggregate() {
+	//	return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %d missing its's Fn", id))
+	//}
+	//if f.TypeCheckFn == nil {
+	//	return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %d missing its's type check function", id))
+	//}
+	//return nil
 }
 
 func functionsEqual(f1 Function, f2 Function) bool {

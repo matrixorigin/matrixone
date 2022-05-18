@@ -34,6 +34,13 @@ type col struct {
 	Precision int32
 }
 
+func NewEmptyCompilerContext() *MockCompilerContext {
+	return &MockCompilerContext{
+		objects: make(map[string]*plan.ObjectRef),
+		tables:  make(map[string]*plan.TableDef),
+	}
+}
+
 func NewMockCompilerContext() *MockCompilerContext {
 	objects := make(map[string]*plan.ObjectRef)
 	tables := make(map[string]*plan.TableDef)
@@ -167,6 +174,14 @@ func NewMockCompilerContext() *MockCompilerContext {
 	}
 }
 
+func (m *MockCompilerContext) DatabaseExists(name string) bool {
+	return strings.ToLower(name) == "tpch"
+}
+
+func (m *MockCompilerContext) DefaultDatabase() string {
+	return "tpch"
+}
+
 func (m *MockCompilerContext) Resolve(name string) (*plan.ObjectRef, *plan.TableDef) {
 	name = strings.ToLower(name)
 	return m.objects[name], m.tables[name]
@@ -189,6 +204,12 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 
 type MockOptimizer struct {
 	ctxt MockCompilerContext
+}
+
+func NewEmptyMockOptimizer() *MockOptimizer {
+	return &MockOptimizer{
+		ctxt: *NewEmptyCompilerContext(),
+	}
 }
 
 func NewMockOptimizer() *MockOptimizer {
