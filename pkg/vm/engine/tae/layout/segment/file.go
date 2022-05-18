@@ -47,11 +47,17 @@ func (b *BlockFile) GetOriginSize() int64 {
 	return int64(b.snode.originSize)
 }
 
+func (b *BlockFile) GetAlgo() uint8 {
+	b.snode.mutex.RLock()
+	defer b.snode.mutex.RUnlock()
+	return b.snode.algo
+}
+
 func (b *BlockFile) GetName() string {
 	return b.name
 }
 
-func (b *BlockFile) Append(offset uint64, data []byte) (err error) {
+func (b *BlockFile) Append(offset uint64, data []byte, originSize uint32) (err error) {
 	cbufLen := uint32(p2roundup(uint64(len(data)), uint64(b.segment.super.blockSize)))
 	_, err = b.segment.segFile.WriteAt(data, int64(offset))
 	if err != nil {
@@ -65,7 +71,7 @@ func (b *BlockFile) Append(offset uint64, data []byte) (err error) {
 		data:   entry{offset: 0, length: uint32(len(data))},
 	})
 	b.snode.size += uint64(len(data))
-	b.snode.originSize += uint64(len(data))
+	b.snode.originSize += uint64(originSize)
 	b.snode.mutex.Unlock()
 	return nil
 }

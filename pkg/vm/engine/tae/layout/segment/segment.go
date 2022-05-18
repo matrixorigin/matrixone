@@ -185,7 +185,7 @@ func (s *Segment) Append(fd *BlockFile, pl []byte) (err error) {
 		//panic(any("no space"))
 		panic(any("no space"))
 	}
-	err = fd.Append(DATA_START+offset, buf)
+	err = fd.Append(DATA_START+offset, buf, uint32(len(pl)))
 	if err != nil {
 		return err
 	}

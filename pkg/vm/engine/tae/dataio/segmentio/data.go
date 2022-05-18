@@ -89,6 +89,7 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 	file := df.file[len(df.file)-1]
 	df.colBlk.mutex.RUnlock()
 	err = file.GetSegement().Append(file, buf)
+	df.stat.algo = file.GetAlgo()
 	df.stat.originSize = file.GetOriginSize()
 	df.stat.size = file.GetFileSize()
 	return
