@@ -27,11 +27,36 @@ func newSysBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnSysBlock {
 	return blk
 }
 
-func (blk *txnSysBlock) GetTotalChanges() int                      { panic("not supported") }
-func (blk *txnSysBlock) BatchDedup(pks *movec.Vector) (err error)  { panic("not supported") }
-func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) { panic("not supported") }
+func (blk *txnSysBlock) isSysTable() bool {
+	return sysTableNames[blk.table.GetSchema().Name]
+}
+
+func (blk *txnSysBlock) GetTotalChanges() int {
+	if blk.isSysTable() {
+		panic("not supported")
+	}
+	return blk.txnBlock.GetTotalChanges()
+}
+
+func (blk *txnSysBlock) BatchDedup(pks *movec.Vector) (err error) {
+	if blk.isSysTable() {
+		panic("not supported")
+	}
+	return blk.txnBlock.BatchDedup(pks)
+}
+
+func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) {
+	if blk.isSysTable() {
+		panic("not supported")
+	}
+	return blk.txnBlock.RangeDelete(start, end)
+}
+
 func (blk *txnSysBlock) Update(row uint32, col uint16, v interface{}) (err error) {
-	panic("not supported")
+	if blk.isSysTable() {
+		panic("not supported")
+	}
+	return blk.txnBlock.Update(row, col, v)
 }
 
 func (blk *txnSysBlock) dbRows() int {
@@ -90,6 +115,9 @@ func (blk *txnSysBlock) columnRows() int {
 }
 
 func (blk *txnSysBlock) Rows() int {
+	if !blk.isSysTable() {
+		return blk.txnBlock.Rows()
+	}
 	if blk.table.GetID() == catalog.SystemTable_DB_ID {
 		return blk.dbRows()
 	} else if blk.table.GetID() == catalog.SystemTable_Table_ID {
@@ -212,6 +240,9 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 }
 
 func (blk *txnSysBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+	if !blk.isSysTable() {
+		return blk.txnBlock.GetColumnDataById(colIdx, compressed, decompressed)
+	}
 	if blk.table.GetID() == catalog.SystemTable_DB_ID {
 		return blk.getDBTableData(colIdx)
 	} else if blk.table.GetID() == catalog.SystemTable_Table_ID {
@@ -229,5 +260,8 @@ func (blk *txnSysBlock) GetColumnDataByName(attr string, compressed, decompresse
 }
 
 func (blk *txnSysBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	if !blk.isSysTable() {
+		return blk.txnBlock.LogTxnEntry(entry, readed)
+	}
 	panic("not supported")
 }

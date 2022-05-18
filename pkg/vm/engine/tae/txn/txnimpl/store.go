@@ -298,7 +298,7 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 		if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
 			return
 		}
-		handle := newDatabase(store.txn, entry)
+		handle := buildDB(store.txn, entry)
 		db = newTxnDB(store, handle)
 		store.dbs[id] = db
 	}
