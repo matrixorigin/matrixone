@@ -445,30 +445,48 @@ message Plan {
 
 message DataDefinition {
 	enum DdlType {
-		CREATE_DATABASE = 0;
-		ALTER_DATABASE 	= 1;
-		DROP_DATABASE	= 2;
-		CREATE_TABLE 	= 3;
-		ALTER_TABLE		= 4;
-		DROP_TABLE		= 5;
-		CREATE_INDEX	= 6;
-		ALTER_INDEX		= 7;
-		DROP_INDEX		= 8;
-		TRUNCATE_TABLE	= 9;
+		CREATE_DATABASE 	= 0;
+		ALTER_DATABASE 		= 1;
+		DROP_DATABASE		= 2;
+		CREATE_TABLE 		= 3;
+		ALTER_TABLE			= 4;
+		DROP_TABLE			= 5;
+		CREATE_INDEX		= 6;
+		ALTER_INDEX			= 7;
+		DROP_INDEX			= 8;
+		TRUNCATE_TABLE		= 9;
+		SHOW_CREATEDATABASE = 10;
+		SHOW_CREATETABLE 	= 11;
+		SHOW_DATABASES		= 12;
+		SHOW_TABLES			= 13;
+		SHOW_COLUMNS		= 14;
+		SHOW_INDEX			= 15;
+		SHOW_VARIABLES		= 16;
+		SHOW_WARNINGS		= 17;
+		SHOW_ERRORS			= 18;
+		SHOW_STATUS			= 19;
+		SHOW_PROCESSLIST	= 20;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
+
+	//other show statement we will rewrite to a select statement
+	//then we will get a Query
+	//eg: 'show databases' will rewrite to 'select md.datname as `Database` from mo_database md'
+	Query query = 2;
+
 	oneof definition {
-		CreateDatabase create_database 	= 2;
-		AlterDatabase alter_database 	= 3;
-		DropDatabase drop_database		= 4;
-		CreateTable create_table		= 5;
-		AlterTable alter_table 			= 6;
-		DropTable drop_table			= 7;
-		CreateIndex create_index 		= 8;
-		AlterIndex alter_index 			= 9;
-		DropIndex drop_index 			= 10;
-		TruncateTable truncate_table	= 11;
+		CreateDatabase create_database 	= 3;
+		AlterDatabase alter_database 	= 4;
+		DropDatabase drop_database		= 5;
+		CreateTable create_table		= 6;
+		AlterTable alter_table 			= 7;
+		DropTable drop_table			= 8;
+		CreateIndex create_index 		= 9;
+		AlterIndex alter_index 			= 10;
+		DropIndex drop_index 			= 11;
+		TruncateTable truncate_table	= 12;
+		ShowVariables show_variables 	= 13;
 	}
 }
 
@@ -522,3 +540,7 @@ message TruncateTable {
 	string table = 1;
 }
 
+message ShowVariables {
+	bool global 			= 1;
+	repeated Expr where 	= 2; 
+}

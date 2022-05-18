@@ -162,6 +162,7 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"HEX_DECODE", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_VARBINARY, plan.Type_VARCHAR}, []int8{1}},
 	{"HEX_ENCODE", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_VARBINARY}, []int8{1}},
 
+	{"IF", plan.Function_NONE, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_ANY, plan.Type_BOOL}, []int8{1, 0, 0}},
 	{"IFF", plan.Function_NONE, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_ANY, plan.Type_BOOL}, []int8{1, 0, 0}},
 	{"IFNULL", plan.Function_NONE, IS_NULL_EXPRESSION, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
 	{"ILIKE", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_VARCHAR}, []int8{1, 1}},

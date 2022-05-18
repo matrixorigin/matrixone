@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,8 +28,12 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `drop table nation`
-	// stmts, _ := mysql.Parse(sql)
+	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
+	sql := `show databases`
+	// stmts, err := mysql.Parse(sql)
+	// if err != nil {
+	// 	t.Fatalf("%+v", err)
+	// }
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
 	mock := NewMockOptimizer()
@@ -562,6 +567,100 @@ func TestDdl(t *testing.T) {
 		"drop index idx1 on tbl",              //unsupport now
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestShow(t *testing.T) {
+	mock := NewMockOptimizer()
+	//should pass
+	sqls := []string{
+		"show variables",
+		"show create database tpch",
+		"show create table nation",
+		"show databases",
+		"show databases like '%d'",
+		"show databases where `Database` = '11'",
+		"show databases where `Database` = '11' or `Database` = 'ddd'",
+		"show tables",
+		"show tables from tpch",
+		"show tables like '%dd'",
+		"show tables from tpch where Tables_in_tpch = 'aa' or Tables_in_tpch like '%dd'",
+		"show columns from nation",
+		"show columns from nation from tpch",
+		"show columns from nation where `Field` like '%ff' or `Type` = 'int' or `Null` = 'NO'",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"show create database db_not_exist",                    //db no exist
+		"show databases where d ='a'",                          //Column not exist,  show databases only have one column named 'Database'
+		"show databases where `Databaseddddd` = '11'",          //column not exist
+		"show tables from tpch22222",                           //database not exist
+		"show tables from tpch where Tables_in_tpch222 = 'aa'", //column not exist
+		"show columns from nation_ddddd",                       //table not exist
+		"show columns from nation_ddddd from tpch",             //table not exist
+		"show columns from nation where `Field22` like '%ff'",  //column not exist
+
+		"show index from nation", //unsupport now
+		"show warnings",          //unsupport now
+		"show errors",            //unsupport now
+		"show status",            //unsupport now
+		"show processlist",       //unsupport now
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+func TestResultColumns(t *testing.T) {
+	mock := NewMockOptimizer()
+	getColumns := func(sql string) []*plan.ColDef {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("sql %s build plan error:%+v", sql, err)
+		}
+		return GetResultColumnsFromPlan(logicPlan)
+	}
+
+	returnNilSql := []string{
+		"begin",
+		"commit",
+		"rollback",
+		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"DELETE FROM NATION",
+		"create database db_name",
+		"drop database tpch",
+		"create table tbl_name (b int unsigned, c char(20))",
+		"drop table nation",
+	}
+	for _, sql := range returnNilSql {
+		columns := getColumns(sql)
+		if columns != nil {
+			t.Fatalf("sql:%+v, return columns should be nil", sql)
+		}
+	}
+
+	returnColumnsSql := map[string]string{
+		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE abs(N_REGIONKEY) > 0 ORDER BY a DESC": "N_NAME,a",
+		"show variables":            "Variable_name,Value",
+		"show create database tpch": "Database,Create Database",
+		"show create table nation":  "Table,Create Table",
+		"show databases":            "Database",
+		"show tables":               "Tables_in_tpch",
+		"show columns from nation":  "Field,Type,Null,Key,Default,Comment",
+	}
+	for sql, colsStr := range returnColumnsSql {
+		cols := strings.Split(colsStr, ",")
+		columns := getColumns(sql)
+		if len(columns) != len(cols) {
+			t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
+		}
+		for idx, col := range cols {
+			//now ast always change col_name to lower string. will be fixed soon
+			if !strings.EqualFold(columns[idx].Name, col) {
+				t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
+			}
+		}
+	}
 }
 
 func getJson(v any, t *testing.T) []byte {
