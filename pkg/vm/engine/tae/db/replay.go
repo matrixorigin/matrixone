@@ -61,11 +61,18 @@ func (replayer *Replayer) OnTimeStamp(ts uint64) {
 func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) (err error) {
 	switch cmd := txncmd.(type) {
 	case *txnbase.ComposedCmd:
-		idxCtx.Size = uint32(len(cmd.Cmds))
+		idxCtx.Size = cmd.CmdSize
+		internalCnt := uint32(0)
 		for i, command := range cmd.Cmds {
-			idx := idxCtx.Clone()
-			idx.CSN = uint32(i)
-			replayer.OnReplayCmd(command, idx)
+			_, ok := command.(*txnimpl.AppendCmd)
+			if ok {
+				internalCnt++
+				replayer.OnReplayCmd(command, nil)
+			} else {
+				idx := idxCtx.Clone()
+				idx.CSN = uint32(i) - internalCnt
+				replayer.OnReplayCmd(command, idx)
+			}
 		}
 	case *catalog.EntryCommand:
 		err = replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer)
