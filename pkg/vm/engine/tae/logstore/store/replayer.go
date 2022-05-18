@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -39,7 +40,7 @@ type replayer struct {
 	state           vFileState
 	uncommit        map[uint32]map[uint64][]*replayEntry
 	entrys          []*replayEntry
-	checkpointrange map[uint32]*common.ClosedIntervals
+	checkpointrange map[uint32]*checkpointInfo
 	checkpoints     []*replayEntry
 	mergeFuncs      map[uint32]func(pre, curr []byte) []byte
 	applyEntry      ApplyHandle
@@ -88,7 +89,7 @@ func newReplayer(h ApplyHandle) *replayer {
 	return &replayer{
 		uncommit:        make(map[uint32]map[uint64][]*replayEntry),
 		entrys:          make([]*replayEntry, 0),
-		checkpointrange: make(map[uint32]*common.ClosedIntervals),
+		checkpointrange: make(map[uint32]*checkpointInfo),
 		checkpoints:     make([]*replayEntry, 0),
 		mergeFuncs:      make(map[uint32]func(pre []byte, curr []byte) []byte),
 		applyEntry:      h,
@@ -117,15 +118,17 @@ func (r *replayer) Apply() {
 	for _, e := range r.checkpoints {
 		err := r.applyEntry(e.group, e.commitId, e.payload, e.entryType, e.info)
 		if err != nil {
-			panic(err)
+			s := fmt.Sprintf("%d %d", e.group, e.entryType)
+			panic(s)
 		}
 	}
 
 	for _, e := range r.entrys {
-		interval, ok := r.checkpointrange[e.group]
+		ckpinfo, ok := r.checkpointrange[e.group]
 		if ok {
-			if interval.ContainsInterval(
+			if ckpinfo.ranges.ContainsInterval(
 				common.ClosedInterval{Start: e.commitId, End: e.commitId}) {
+				logutil.Infof("covered %v %v", ckpinfo.ranges, e.commitId)
 				continue
 			}
 		}
@@ -204,14 +207,20 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		r.checkpoints = append(r.checkpoints, replayEty)
 
 		for _, ckp := range info.Checkpoints {
-			interval, ok := r.checkpointrange[ckp.Group]
+			ckpInfo, ok := r.checkpointrange[ckp.Group]
 			if !ok {
-				//TODO: all the ranges
-				interval = common.NewClosedIntervalsByIntervals(ckp.Ranges)
-			} else {
-				interval.TryMerge(*ckp.Ranges)
+				ckpInfo = newCheckpointInfo()
+
+				r.checkpointrange[ckp.Group] = ckpInfo
 			}
-			r.checkpointrange[ckp.Group] = interval
+			if ckp.Ranges != nil && len(ckp.Ranges.Intervals) > 0 {
+				ckpInfo.UpdateWtihRanges(ckp.Ranges)
+			}
+			if ckp.Command != nil {
+				for lsn, cmds := range ckp.Command {
+					ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
+				}
+			}
 		}
 		vf.OnNewCheckpoint(info)
 	case entry.ETUncommitted:

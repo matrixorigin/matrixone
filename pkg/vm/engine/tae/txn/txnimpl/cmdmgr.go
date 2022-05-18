@@ -57,6 +57,7 @@ func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
 	}
+	mgr.cmd.SetCmdSize(mgr.csn)
 	var buf []byte
 	if buf, err = mgr.cmd.Marshal(); err != nil {
 		panic(err)

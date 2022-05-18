@@ -9,28 +9,89 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-func (db *DB) ReplayDDL() {
-	db.Wal.Replay(db.replayHandle)
+type Replayer struct {
+	DataFactory *tables.DataFactory
+	db          *DB
+	maxTs       uint64
 }
 
-func (db *DB) replayHandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
+	return &Replayer{
+		DataFactory: dataFactory,
+		db:          db,
+	}
+}
+
+func (replayer *Replayer) Replay() {
+	err := replayer.db.Wal.Replay(replayer.OnReplayEntry)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+	if group != wal.GroupC {
+		return
+	}
+	idxCtx := wal.NewIndex(commitId, 0, 0)
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
 		return err
 	}
-	switch cmd := txnCmd.(type) {
+	err = replayer.OnReplayCmd(txnCmd, idxCtx)
+	if err != nil {
+		return err
+	}
+	return
+}
+
+func (replayer *Replayer) GetMaxTS() uint64 {
+	return replayer.maxTs
+}
+
+func (replayer *Replayer) OnTimeStamp(ts uint64) {
+	if ts > replayer.maxTs {
+		replayer.maxTs = ts
+	}
+}
+
+func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) (err error) {
+	switch cmd := txncmd.(type) {
+	case *txnbase.ComposedCmd:
+		idxCtx.Size = cmd.CmdSize
+		internalCnt := uint32(0)
+		for i, command := range cmd.Cmds {
+			_, ok := command.(*txnimpl.AppendCmd)
+			if ok {
+				internalCnt++
+				err = replayer.OnReplayCmd(command, nil)
+				if err != nil {
+					return
+				}
+			} else {
+				idx := idxCtx.Clone()
+				idx.CSN = uint32(i) - internalCnt
+				err = replayer.OnReplayCmd(command, idx)
+				if err != nil {
+					return
+				}
+			}
+		}
 	case *catalog.EntryCommand:
-		err = db.Catalog.ReplayCmd(txnCmd)
+		err = replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer)
 	case *txnimpl.AppendCmd:
-		err = db.onReplayAppendCmd(cmd)
+		err = replayer.db.onReplayAppendCmd(cmd)
 	case *updates.UpdateCmd:
-		err = db.onReplayUpdateCmd(cmd)
+		err = replayer.db.onReplayUpdateCmd(cmd)
 	}
 	return
 }
@@ -108,7 +169,10 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 		if err != nil {
 			return nil, err
 		}
-		srcVec, _ := src.Window(start, end+1).CopyToVector()
+		srcVec, err := src.Window(start, end+1).CopyToVector()
+		if err != nil {
+			return nil, err
+		}
 		deletes := common.BitMapWindow(deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
 		ret.Vecs[i] = srcVec
@@ -119,11 +183,11 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd) (err error) {
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
-		db.onReplayAppend(cmd)
+		err = db.onReplayAppend(cmd)
 	case txnbase.CmdUpdate:
-		db.onReplayUpdate(cmd)
+		err = db.onReplayUpdate(cmd)
 	case txnbase.CmdDelete:
-		db.onReplayDelete(cmd)
+		err = db.onReplayDelete(cmd)
 	}
 	return
 }
@@ -151,7 +215,10 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) (err error) {
 	iterator := deleteNode.GetDeleteMaskLocked().Iterator()
 	for iterator.HasNext() {
 		row := iterator.Next()
-		datablk.OnReplayDelete(row, row)
+		err = datablk.OnReplayDelete(row, row)
+		if err != nil {
+			return
+		}
 	}
 	return
 }

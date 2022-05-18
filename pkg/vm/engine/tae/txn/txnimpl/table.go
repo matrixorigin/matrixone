@@ -148,6 +148,18 @@ func (tbl *txnTable) WaitSynced() {
 }
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
+	tbl.csnStart = uint32(cmdMgr.GetCSN())
+	for _, txnEntry := range tbl.txnEntries {
+		csn := cmdMgr.GetCSN()
+		cmd, err := txnEntry.MakeCommand(csn)
+		if err != nil {
+			return err
+		}
+		if cmd == nil {
+			panic(txnEntry)
+		}
+		cmdMgr.AddCmd(cmd)
+	}
 	for i, node := range tbl.inodes {
 		h := tbl.store.nodesMgr.Pin(node)
 		if h == nil {
@@ -168,18 +180,6 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 		if cmd != nil {
 			cmdMgr.AddInternalCmd(cmd)
 		}
-	}
-	tbl.csnStart = uint32(cmdMgr.GetCSN())
-	for _, txnEntry := range tbl.txnEntries {
-		csn := cmdMgr.GetCSN()
-		cmd, err := txnEntry.MakeCommand(csn)
-		if err != nil {
-			return err
-		}
-		if cmd == nil {
-			panic(txnEntry)
-		}
-		cmdMgr.AddCmd(cmd)
 	}
 	return nil
 }
