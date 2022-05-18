@@ -227,8 +227,15 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*plan.Plan, erro
 	if len(stmt.Names) != 1 {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("support drop one table now"))
 	}
+	dropTable.Database = string(stmt.Names[0].SchemaName)
+	if dropTable.Database == "" {
+		dropTable.Database = ctx.DefaultDatabase()
+	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 	if !stmt.IfExists {
+		if !ctx.DatabaseExists(dropTable.Database) {
+			return nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("database '%v' doesn't exist", dropTable.Database))
+		}
 		_, tableDef := ctx.Resolve(dropTable.Table)
 		if tableDef == nil {
 			return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", dropTable.Table))
