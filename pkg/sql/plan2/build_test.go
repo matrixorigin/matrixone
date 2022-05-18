@@ -29,19 +29,19 @@ import (
 //only use in developing
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	sql := `drop table db.tbl`
-	stmts, err := mysql.Parse(sql)
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-	t.Logf("%+v", string(getJson(stmts[0], t)))
-
-	// mock := NewMockOptimizer()
-	// logicPlan, err := runOneStmt(mock, t, sql)
+	sql := `drop table tpch.nation`
+	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
 	// }
-	// outPutPlan(logicPlan, true, t)
+	// t.Logf("%+v", string(getJson(stmts[0], t)))
+
+	mock := NewMockOptimizer()
+	logicPlan, err := runOneStmt(mock, t, sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
