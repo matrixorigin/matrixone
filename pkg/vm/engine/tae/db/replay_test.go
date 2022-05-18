@@ -300,7 +300,7 @@ func TestReplayCatalog4(t *testing.T) {
 	filter.Val = int32(5)
 	id, row, err := rel.GetByFilter(filter)
 	assert.Nil(t, err)
-	err = rel.Update(id, row, uint16(0), int32(33))
+	err = rel.Update(id, row-1, uint16(0), int32(33))
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -309,7 +309,7 @@ func TestReplayCatalog4(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	err = rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row+1, row+1)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -317,8 +317,31 @@ func TestReplayCatalog4(t *testing.T) {
 	c.Close()
 	tae2.Close()
 
+	logutil.Infof("lalala start replay")
+
 	tae3, err := Open(tae.Dir, nil)
 	assert.Nil(t, err)
 	c3 := tae3.Catalog
 	t.Log(c3.SimplePPString(common.PPL1))
+
+	txn = tae3.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	filter = new(handle.Filter)
+	filter.Op = handle.FilterEq
+	filter.Val = int32(5)
+	id2, row2, err := rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	assert.Equal(t, id.BlockID, id2.BlockID)
+	assert.Equal(t, row, row2)
+
+	val, err := rel.GetValue(id, row-1, 0)
+	assert.Nil(t, err)
+	assert.Equal(t, int32(33), val)
+	assert.Nil(t, txn.Commit())
+
+	c3.Close()
+	tae3.Close()
 }
