@@ -52,7 +52,7 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 }
 
 func (e *ExplainQueryImpl) ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 

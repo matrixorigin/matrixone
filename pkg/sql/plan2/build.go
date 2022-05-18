@@ -24,11 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
-	runBuildSelect := func(stmt *tree.Select) (*plan.Plan, error) {
-		query, selectCtx := newQueryAndSelectCtx(plan.Query_SELECT)
-		err := buildSelect(stmt, ctx, query, selectCtx)
-		return &plan.Plan{
+func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
+	runBuildSelect := func(stmt *tree.Select) (*Plan, error) {
+		query, binderCtx := newQueryAndSelectCtx(plan.Query_SELECT)
+		nodeId, err := buildSelect(stmt, ctx, query, binderCtx)
+		query.Steps = append(query.Steps, nodeId)
+		return &Plan{
 			Plan: &plan.Plan_Query{
 				Query: query,
 			},
@@ -92,13 +93,13 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
 }
 
 //GetResultColumnsFromPlan
-func GetResultColumnsFromPlan(p *plan.Plan) []*plan.ColDef {
-	getResultColumnsByProjectionlist := func(query *plan.Query) []*plan.ColDef {
+func GetResultColumnsFromPlan(p *Plan) []*ColDef {
+	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
 		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]
-		columns := make([]*plan.ColDef, len(lastNode.ProjectList))
+		columns := make([]*ColDef, len(lastNode.ProjectList))
 		for idx, expr := range lastNode.ProjectList {
-			columns[idx] = &plan.ColDef{
-				Name: expr.Alias,
+			columns[idx] = &ColDef{
+				Name: expr.ColName,
 				Typ:  expr.Typ,
 			}
 		}
@@ -111,11 +112,11 @@ func GetResultColumnsFromPlan(p *plan.Plan) []*plan.ColDef {
 		case plan.Query_SELECT:
 			return getResultColumnsByProjectionlist(logicPlan.Query)
 		default:
-			//insert/update/delete statement will return nil
+			// insert/update/delete statement will return nil
 			return nil
 		}
 	case *plan.Plan_Tcl:
-		//begin/commmit/rollback statement will return nil
+		// begin/commmit/rollback statement will return nil
 		return nil
 	case *plan.Plan_Ddl:
 		switch logicPlan.Ddl.DdlType {
@@ -124,7 +125,7 @@ func GetResultColumnsFromPlan(p *plan.Plan) []*plan.ColDef {
 				Id:    plan.Type_VARCHAR,
 				Width: 1024,
 			}
-			return []*plan.ColDef{
+			return []*ColDef{
 				{Typ: typ, Name: "Variable_name"},
 				{Typ: typ, Name: "Value"},
 			}
@@ -133,7 +134,7 @@ func GetResultColumnsFromPlan(p *plan.Plan) []*plan.ColDef {
 				Id:    plan.Type_VARCHAR,
 				Width: 1024,
 			}
-			return []*plan.ColDef{
+			return []*ColDef{
 				{Typ: typ, Name: "Database"},
 				{Typ: typ, Name: "Create Database"},
 			}
@@ -142,12 +143,12 @@ func GetResultColumnsFromPlan(p *plan.Plan) []*plan.ColDef {
 				Id:    plan.Type_VARCHAR,
 				Width: 1024,
 			}
-			return []*plan.ColDef{
+			return []*ColDef{
 				{Typ: typ, Name: "Table"},
 				{Typ: typ, Name: "Create Table"},
 			}
 		default:
-			//show statement(except show variables) will return a query
+			// show statement(except show variables) will return a query
 			if logicPlan.Ddl.Query != nil {
 				return getResultColumnsByProjectionlist(logicPlan.Ddl.Query)
 			}

@@ -15,10 +15,11 @@
 package explain
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"strconv"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -404,13 +405,13 @@ func NewOrderByDescribeImpl(OrderBy *plan.OrderBySpec) *OrderByDescribeImpl {
 
 func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	var result string = " "
-	descExpr, err := describeExpr(o.OrderBy.GetOrderBy(), options)
+	descExpr, err := describeExpr(o.OrderBy.Expr, options)
 	if err != nil {
 		return result, err
 	}
 	result += descExpr
 
-	flagKey := int32(o.OrderBy.GetOrderByFlags())
+	flagKey := int32(o.OrderBy.Flag)
 	orderbyFlag := plan.OrderBySpec_OrderByFlag_name[flagKey]
 	result += " " + orderbyFlag
 	return result, nil
@@ -421,7 +422,7 @@ type WinSpecDescribeImpl struct {
 }
 
 func (w *WinSpecDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
@@ -447,7 +448,7 @@ type UpdateListDescribeImpl struct {
 }
 
 func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
-	//u.UpdateList.Columns
+	// u.UpdateList.Columns
 	var result string
 	var first bool = true
 	if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {

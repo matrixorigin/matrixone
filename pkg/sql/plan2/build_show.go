@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
 		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", stmt.Name))
 	}
@@ -34,7 +34,7 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
-func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
 	sql := `
 		SELECT mc.* 
 			FROM mo_tables mt JOIN mo_columns mc 
@@ -55,7 +55,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*pla
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
 
-func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
@@ -67,7 +67,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*plan.Pl
 	}
 
 	if stmt.Like != nil {
-		//append filter [AND datname like stmt.Like] to WHERE clause
+		// append filter [AND datname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("datname")
 		return returnByLikeAndSql(ctx, sql, likeExpr, ddlType)
@@ -76,7 +76,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*plan.Pl
 	return returnByRewriteSql(ctx, sql, ddlType)
 }
 
-func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
@@ -100,7 +100,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*plan.Plan, er
 	}
 
 	if stmt.Like != nil {
-		//append filter [AND relname like stmt.Like] to WHERE clause
+		// append filter [AND relname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("relname")
 		return returnByLikeAndSql(ctx, sql, likeExpr, ddlType)
@@ -109,7 +109,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*plan.Plan, er
 	return returnByRewriteSql(ctx, sql, ddlType)
 }
 
-func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
@@ -141,7 +141,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*plan.Plan, 
 	}
 
 	if stmt.Like != nil {
-		//append filter [AND ma.attname like stmt.Like] to WHERE clause
+		// append filter [AND ma.attname like stmt.Like] to WHERE clause
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.SetUnresolvedName("attname")
 		return returnByLikeAndSql(ctx, sql, likeExpr, ddlType)
@@ -150,11 +150,11 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*plan.Plan, 
 	return returnByRewriteSql(ctx, sql, ddlType)
 }
 
-func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }
 
-func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
@@ -163,21 +163,21 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*plan.Pl
 		Global: stmt.Global,
 	}
 	if stmt.Like != nil {
-		expr, err := buildComparisonExpr(stmt.Like, ctx, nil, nil)
+		expr, err := buildComparisonExpr(stmt.Like, ctx, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
 		showVariables.Where = append(showVariables.Where, expr)
 	}
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil)
+		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil, nil)
 		if err != nil {
 			return nil, err
 		}
 		showVariables.Where = append(showVariables.Where, exprs...)
 	}
 
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_SHOW_VARIABLES,
@@ -189,23 +189,23 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*plan.Pl
 	}, nil
 }
 
-func buildShowWarnings(stmt *tree.ShowWarnings, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowWarnings(stmt *tree.ShowWarnings, ctx CompilerContext) (*Plan, error) {
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }
 
-func buildShowErrors(stmt *tree.ShowErrors, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowErrors(stmt *tree.ShowErrors, ctx CompilerContext) (*Plan, error) {
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }
 
-func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) {
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }
 
-func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*plan.Plan, error) {
+func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Plan, error) {
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }
 
-func returnByRewriteSql(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*plan.Plan, error) {
+func returnByRewriteSql(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	stmt, err := getRewriteSqlStmt(sql)
 	if err != nil {
 		return nil, err
@@ -213,19 +213,19 @@ func returnByRewriteSql(ctx CompilerContext, sql string, ddlType plan.DataDefini
 	return getReturnDdlBySelectStmt(ctx, stmt, ddlType)
 }
 
-func returnByWhereAndBaseSql(ctx CompilerContext, baseSql string, where *tree.Where, ddlType plan.DataDefinition_DdlType) (*plan.Plan, error) {
+func returnByWhereAndBaseSql(ctx CompilerContext, baseSql string, where *tree.Where, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSql)
 	// log.Println(sql)
 	newStmt, err := getRewriteSqlStmt(sql)
 	if err != nil {
 		return nil, err
 	}
-	//set show statement's where clause to new statement
+	// set show statement's where clause to new statement
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = where
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
-func returnByLikeAndSql(ctx CompilerContext, sql string, like *tree.ComparisonExpr, ddlType plan.DataDefinition_DdlType) (*plan.Plan, error) {
+func returnByLikeAndSql(ctx CompilerContext, sql string, like *tree.ComparisonExpr, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSqlStmt(sql)
 	if err != nil {
 		return nil, err
@@ -246,7 +246,7 @@ func returnByLikeAndSql(ctx CompilerContext, sql string, like *tree.ComparisonEx
 			},
 		}
 	}
-	//set show statement's like clause to new statement
+	// set show statement's like clause to new statement
 	newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = whereExpr
 	// log.Println(tree.String(newStmt, dialect.MYSQL))
 	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
@@ -263,12 +263,12 @@ func getRewriteSqlStmt(sql string) (tree.Statement, error) {
 	return newStmts[0], nil
 }
 
-func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement, ddlType plan.DataDefinition_DdlType) (*plan.Plan, error) {
+func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	queryPlan, err := BuildPlan(ctx, stmt)
 	if err != nil {
 		return nil, err
 	}
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: ddlType,

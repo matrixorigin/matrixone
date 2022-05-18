@@ -22,8 +22,8 @@ import (
 )
 
 type MockCompilerContext struct {
-	objects map[string]*plan.ObjectRef
-	tables  map[string]*plan.TableDef
+	objects map[string]*ObjectRef
+	tables  map[string]*TableDef
 }
 
 type col struct {
@@ -37,8 +37,8 @@ type col struct {
 //for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
-		objects: make(map[string]*plan.ObjectRef),
-		tables:  make(map[string]*plan.TableDef),
+		objects: make(map[string]*ObjectRef),
+		tables:  make(map[string]*TableDef),
 	}
 }
 
@@ -155,16 +155,16 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"att_comment", plan.Type_VARCHAR, false, 1024, 0},
 	}
 
-	objects := make(map[string]*plan.ObjectRef)
-	tables := make(map[string]*plan.TableDef)
-	//build tpch/mo context data(schema)
+	objects := make(map[string]*ObjectRef)
+	tables := make(map[string]*TableDef)
+	// build tpch/mo context data(schema)
 	for db, schema := range schemas {
 		tableIdx := 0
 		for tableName, cols := range schema {
-			colDefs := make([]*plan.ColDef, 0, len(cols))
+			colDefs := make([]*ColDef, 0, len(cols))
 
 			for _, col := range cols {
-				colDefs = append(colDefs, &plan.ColDef{
+				colDefs = append(colDefs, &ColDef{
 					Typ: &plan.Type{
 						Id:        col.Id,
 						Nullable:  col.Nullable,
@@ -176,7 +176,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 				})
 			}
 
-			objects[tableName] = &plan.ObjectRef{
+			objects[tableName] = &ObjectRef{
 				Server:     0,
 				Db:         0,
 				Schema:     0,
@@ -187,7 +187,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 				ObjName:    tableName,
 			}
 
-			tables[tableName] = &plan.TableDef{
+			tables[tableName] = &TableDef{
 				Name: tableName,
 				Cols: colDefs,
 			}
@@ -209,7 +209,7 @@ func (m *MockCompilerContext) DefaultDatabase() string {
 	return "tpch"
 }
 
-func (m *MockCompilerContext) Resolve(name string) (*plan.ObjectRef, *plan.TableDef) {
+func (m *MockCompilerContext) Resolve(name string) (*ObjectRef, *TableDef) {
 	name = strings.ToLower(name)
 	return m.objects[name], m.tables[name]
 }

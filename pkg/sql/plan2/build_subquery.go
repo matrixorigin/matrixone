@@ -23,26 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
-	nowLength := len(query.Nodes)
-	nodeId := query.Nodes[nowLength-1].NodeId
-	subQueryParentId := append([]int32{nodeId}, selectCtx.subQueryParentId...)
-	newCtx := &SelectContext{
-		columnAlias:          make(map[string]*plan.Expr),
-		subQueryIsCorrelated: false,
-		subQueryParentId:     subQueryParentId,
-		cteTables:            selectCtx.cteTables,
+func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext) (*Expr, error) {
+	subqueryParentIds := append([]int32{node.NodeId}, binderCtx.subqueryParentIds...)
+	newCtx := &BinderContext{
+		columnAlias:          make(map[string]*Expr),
+		subqueryIsCorrelated: false,
+		subqueryParentIds:    subqueryParentIds,
+		cteTables:            binderCtx.cteTables,
 	}
 
-	expr := &plan.SubQuery{
-		NodeId:       nodeId,
-		IsCorrelated: false,
-		IsScalar:     false,
-	}
-
+	var nodeId int32
+	var err error
 	switch sub := subquery.Select.(type) {
 	case *tree.ParenSelect:
-		err := buildSelect(sub.Select, ctx, query, newCtx)
+		nodeId, err = buildSelect(sub.Select, ctx, query, newCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -51,17 +45,14 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, s
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", subquery))
 	}
-	expr.IsCorrelated = newCtx.subQueryIsCorrelated
 
-	//move subquery node to top
-	for i := len(query.Nodes) - 1; i >= 0; i-- {
-		if query.Nodes[i].NodeId == nodeId {
-			query.Nodes = append(query.Nodes[i+1:], query.Nodes[:i+1]...)
-			break
-		}
+	expr := &plan.SubQuery{
+		NodeId:       nodeId,
+		IsScalar:     false,
+		IsCorrelated: newCtx.subqueryIsCorrelated,
 	}
 
-	returnExpr := &plan.Expr{
+	returnExpr := &Expr{
 		Expr: &plan.Expr_Sub{
 			Sub: expr,
 		},
@@ -70,11 +61,11 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, s
 		},
 	}
 	if subquery.Exists {
-		returnExpr = &plan.Expr{
+		returnExpr = &Expr{
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
 					Func: getFunctionObjRef("EXISTS"),
-					Args: []*plan.Expr{returnExpr},
+					Args: []*Expr{returnExpr},
 				},
 			},
 			Typ: &plan.Type{

@@ -16,22 +16,23 @@ package explain
 
 import (
 	"fmt"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
-	"strings"
-	"testing"
 )
 
 func TestSingleSql(t *testing.T) {
-	//input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
-	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
-	//input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
-	//input := "explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA'"
-	//input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10"
+	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
+	// input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
+	// input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
+	// input := "explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA'"
+	// input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10"
 	input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10"
 
 	mock := plan2.NewMockOptimizer()
@@ -266,7 +267,7 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 			}
 		}
 
-		//this sql always return one stmt
+		// this sql always return one stmt
 		ctx := opt.CurrentContext()
 		logicPlan, err := plan2.BuildPlan(ctx, stmt.Statement)
 		if err != nil {
