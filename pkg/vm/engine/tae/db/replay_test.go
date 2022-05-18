@@ -286,7 +286,8 @@ func TestReplayCatalog4(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	rel.Append(bat)
+	err = rel.Append(bat)
+	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	txn = tae2.StartTxn(nil)
@@ -308,7 +309,8 @@ func TestReplayCatalog4(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	rel.RangeDelete(id, row, row)
+	err = rel.RangeDelete(id, row, row)
+	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	t.Log(c.SimplePPString(common.PPL1))

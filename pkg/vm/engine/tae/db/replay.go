@@ -31,7 +31,10 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 }
 
 func (replayer *Replayer) Replay() {
-	replayer.db.Wal.Replay(replayer.OnReplayEntry)
+	err := replayer.db.Wal.Replay(replayer.OnReplayEntry)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
@@ -44,7 +47,10 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	if err != nil {
 		return err
 	}
-	replayer.OnReplayCmd(txnCmd, idxCtx)
+	err = replayer.OnReplayCmd(txnCmd, idxCtx)
+	if err != nil {
+		return err
+	}
 	return
 }
 
@@ -67,11 +73,17 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) (e
 			_, ok := command.(*txnimpl.AppendCmd)
 			if ok {
 				internalCnt++
-				replayer.OnReplayCmd(command, nil)
+				err = replayer.OnReplayCmd(command, nil)
+				if err != nil {
+					return
+				}
 			} else {
 				idx := idxCtx.Clone()
 				idx.CSN = uint32(i) - internalCnt
-				replayer.OnReplayCmd(command, idx)
+				err = replayer.OnReplayCmd(command, idx)
+				if err != nil {
+					return
+				}
 			}
 		}
 	case *catalog.EntryCommand:
@@ -157,7 +169,10 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 		if err != nil {
 			return nil, err
 		}
-		srcVec, _ := src.Window(start, end+1).CopyToVector()
+		srcVec, err := src.Window(start, end+1).CopyToVector()
+		if err != nil {
+			return nil, err
+		}
 		deletes := common.BitMapWindow(deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
 		ret.Vecs[i] = srcVec
@@ -168,11 +183,11 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd) (err error) {
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
-		db.onReplayAppend(cmd)
+		err = db.onReplayAppend(cmd)
 	case txnbase.CmdUpdate:
-		db.onReplayUpdate(cmd)
+		err = db.onReplayUpdate(cmd)
 	case txnbase.CmdDelete:
-		db.onReplayDelete(cmd)
+		err = db.onReplayDelete(cmd)
 	}
 	return
 }
@@ -200,7 +215,10 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) (err error) {
 	iterator := deleteNode.GetDeleteMaskLocked().Iterator()
 	for iterator.HasNext() {
 		row := iterator.Next()
-		datablk.OnReplayDelete(row, row)
+		err = datablk.OnReplayDelete(row, row)
+		if err != nil {
+			return
+		}
 	}
 	return
 }
