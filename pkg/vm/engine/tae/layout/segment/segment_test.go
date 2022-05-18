@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +63,7 @@ func mackData(size uint32) []byte {
 	return info
 }*/
 
-func TestBitmapAllocator(t *testing.T) {
+func TestBitmapAllocator_Allocate(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
 	seg := Segment{}
@@ -70,6 +71,7 @@ func TestBitmapAllocator(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	file := seg.NewBlockFile("bitmap")
+	file.snode.algo = compress.None
 	level0 := seg.allocator.(*BitmapAllocator).level0
 	level1 := seg.allocator.(*BitmapAllocator).level1
 	for i := 0; i < 20; i++ {
@@ -99,6 +101,109 @@ func TestBitmapAllocator(t *testing.T) {
 	//ret = uint64(0x4) - level0[0]
 	assert.Equal(t, 4, int(level0[0]))
 	//fmt.Printf(debugBitmap(seg.allocator.(*BitmapAllocator)))
+}
+
+func TestBitmapAllocator_Free(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "free.seg")
+	seg := Segment{}
+	err := seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	file := seg.NewBlockFile("bitmap")
+	file.snode.algo = compress.None
+	level0 := seg.allocator.(*BitmapAllocator).level0
+	level1 := seg.allocator.(*BitmapAllocator).level1
+	buffer1 := mackData(2048000)
+	assert.NotNil(t, buffer1)
+	err = file.segment.Append(file, buffer1)
+	assert.Nil(t, err)
+	buffer2 := mackData(49152)
+	assert.NotNil(t, buffer2)
+	err = file.segment.Append(file, buffer2)
+	assert.Nil(t, err)
+	buffer3 := mackData(8192)
+	assert.NotNil(t, buffer3)
+	err = file.segment.Append(file, buffer3)
+	assert.Nil(t, err)
+	buffer4 := mackData(5242880)
+	assert.NotNil(t, buffer4)
+	err = file.segment.Append(file, buffer4)
+	assert.Nil(t, err)
+	l0pos := uint32(file.snode.originSize) / seg.GetPageSize() / BITS_PER_UNIT
+	l1pos := l0pos / BITS_PER_UNITSET
+
+	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos-1]))
+	ret := 0xFFFFFFFFFFFFFFFC - level0[l0pos]
+	assert.Equal(t, 0, int(ret))
+	ret = 0xFFFFFFFFFFFFFFF8 - level1[l1pos]
+	assert.Equal(t, 0, int(ret))
+
+	l0pos = 2048000 / seg.GetPageSize() / BITS_PER_UNIT
+	seg.allocator.Free(2048000, 49152)
+	ret = 0xFFF0000000000000 - level0[l0pos]
+	//ret = uint64(0x4) - level0[0]
+	assert.Equal(t, 0, int(ret))
+	seg.allocator.Free(2101248, 4096)
+	buffer5 := mackData(53248)
+	assert.NotNil(t, buffer5)
+	err = file.segment.Append(file, buffer5)
+	assert.Nil(t, err)
+	extents := *file.GetExtents()
+	offset := extents[len(extents)-1].offset
+	size := 2048000 + 8192 + 49152 + 5242880
+	assert.Equal(t, size, int(offset-DATA_START))
+	//fmt.Printf(debugBitmap(seg.allocator.(*BitmapAllocator)))
+}
+
+func TestBlockFile_GetExtents(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "free.seg")
+	seg := Segment{}
+	err := seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	file := seg.NewBlockFile("bitmap")
+	file.snode.algo = compress.None
+	for i := 0; i < 16; i++ {
+		buffer1 := mackData(8388608)
+		assert.NotNil(t, buffer1)
+		err = file.segment.Append(file, buffer1)
+		assert.Nil(t, err)
+	}
+	for i := 0; i < 10; i++ {
+		buffer2 := mackData(4096)
+		assert.NotNil(t, buffer2)
+		err = file.segment.Append(file, buffer2)
+		assert.Nil(t, err)
+	}
+	buffer3 := mackData(2097152)
+	assert.NotNil(t, buffer3)
+	err = file.segment.Append(file, buffer3)
+	assert.Nil(t, err)
+
+	level0 := seg.allocator.(*BitmapAllocator).level0
+	level1 := seg.allocator.(*BitmapAllocator).level1
+	l0pos := uint32(file.snode.originSize) / seg.GetPageSize() / BITS_PER_UNIT
+	l1pos := l0pos / BITS_PER_UNITSET
+
+	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos-1]))
+	ret := 0xFFFFFFFFFFFFFC00 - level0[l0pos]
+	assert.Equal(t, 0, int(ret))
+	ret = 0xFFFFFFFFFFFFFFFE - level1[l1pos]
+	assert.Equal(t, 0, int(ret))
+	extents := *file.GetExtents()
+	size := uint32(0)
+	for i, extent := range extents {
+		size += extent.length
+		if i == len(extents)-1 {
+			break
+		}
+		assert.Equal(t, extents[i+1].offset, extent.offset+extent.length)
+	}
+
+	assert.Equal(t, size, uint32(file.GetFileSize()))
+
 }
 
 func TestSegment_Init(t *testing.T) {

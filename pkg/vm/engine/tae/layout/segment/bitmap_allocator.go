@@ -272,8 +272,7 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 				}
 				allocated += uint64(needPage * b.pageSize)
 				l0start := uint64(startIdx)*BITS_PER_UNIT + uint64(startPos)
-				b.lastPos = l0start*uint64(b.pageSize) +
-					uint64(l1freePos*BITS_PER_UNITSET+uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT))
+				b.lastPos = l0start * uint64(b.pageSize)
 				l0end := l0start + uint64(needPage)
 				b.markAllocFree0(l0start, l0end, false)
 				l0start = p2align(l0start, BITS_PER_UNITSET)

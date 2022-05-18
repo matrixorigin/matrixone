@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/pierrec/lz4"
 	"os"
 	"sync"
 )
@@ -157,6 +158,7 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 			extents:    make([]Extent, 0),
 			logExtents: Extent{},
 			state:      RESIDENT,
+			algo:       compress.Lz4,
 		}
 	}
 	file = &BlockFile{
@@ -169,13 +171,21 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	return file
 }
 
-func (s *Segment) Append(fd *BlockFile, pl []byte) error {
-	offset, allocated := s.allocator.Allocate(uint64(len(pl)))
+func (s *Segment) Append(fd *BlockFile, pl []byte) (err error) {
+	buf := pl
+	if fd.snode.algo == compress.Lz4 {
+		colSize := len(pl)
+		buf = make([]byte, lz4.CompressBlockBound(colSize))
+		if buf, err = compress.Compress(pl, buf, compress.Lz4); err != nil {
+			return err
+		}
+	}
+	offset, allocated := s.allocator.Allocate(uint64(len(buf)))
 	if allocated == 0 {
 		//panic(any("no space"))
 		panic(any("no space"))
 	}
-	err := fd.Append(DATA_START+offset, pl)
+	err = fd.Append(DATA_START+offset, buf)
 	if err != nil {
 		return err
 	}
