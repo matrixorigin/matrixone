@@ -1632,6 +1632,7 @@ func TestSystemDB1(t *testing.T) {
 	}
 	assert.Equal(t, 4, rows)
 
+	bat := gbat.New(true, []string{catalog.SystemColAttr_DBName, catalog.SystemColAttr_RelName, catalog.SystemColAttr_Name, catalog.SystemColAttr_ConstraintType})
 	table, err = db.GetRelationByName(catalog.SystemTable_Columns_Name)
 	assert.Nil(t, err)
 	it = table.MakeBlockIt()
@@ -1639,16 +1640,25 @@ func TestSystemDB1(t *testing.T) {
 	for it.Valid() {
 		blk := it.GetBlock()
 		rows += blk.Rows()
-		view, err := blk.GetColumnDataByName(catalog.SystemColAttr_Name, nil, nil)
+		view, err := blk.GetColumnDataByName(catalog.SystemColAttr_DBName, nil, nil)
+		assert.NoError(t, err)
+		bat.Vecs[0] = view.GetColumnData()
+
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_RelName, nil, nil)
+		assert.Nil(t, err)
+		bat.Vecs[1] = view.GetColumnData()
+
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Name, nil, nil)
 		assert.Nil(t, err)
 		t.Log(view.GetColumnData().String())
+		bat.Vecs[2] = view.GetColumnData()
+
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_ConstraintType, nil, nil)
 		assert.Nil(t, err)
 		t.Log(view.GetColumnData().String())
+		bat.Vecs[3] = view.GetColumnData()
+
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Type, nil, nil)
-		assert.Nil(t, err)
-		t.Log(view.GetColumnData().String())
-		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_RelName, nil, nil)
 		assert.Nil(t, err)
 		t.Log(view.GetColumnData().String())
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Num, nil, nil)
@@ -1657,6 +1667,35 @@ func TestSystemDB1(t *testing.T) {
 		it.Next()
 	}
 	t.Log(rows)
+
+	for i := 0; i < movec.Length(bat.Vecs[0]); i++ {
+		dbName := compute.GetValue(bat.Vecs[0], uint32(i))
+		relName := compute.GetValue(bat.Vecs[1], uint32(i))
+		attrName := compute.GetValue(bat.Vecs[2], uint32(i))
+		ct := compute.GetValue(bat.Vecs[3], uint32(i))
+		t.Logf("%s,%s,%s,%s", dbName, relName, attrName, ct)
+		if dbName == catalog.SystemDBName {
+			if relName == catalog.SystemTable_DB_Name {
+				if attrName == catalog.SystemDBAttr_Name {
+					assert.Equal(t, catalog.SystemColPKConstraint, ct)
+				} else {
+					assert.Equal(t, catalog.SystemColNoConstraint, ct)
+				}
+			} else if relName == catalog.SystemTable_Table_Name {
+				if attrName == catalog.SystemRelAttr_DBName || attrName == catalog.SystemRelAttr_Name {
+					assert.Equal(t, catalog.SystemColPKConstraint, ct)
+				} else {
+					assert.Equal(t, catalog.SystemColNoConstraint, ct)
+				}
+			} else if relName == catalog.SystemTable_Columns_Name {
+				if attrName == catalog.SystemColAttr_DBName || attrName == catalog.SystemColAttr_RelName || attrName == catalog.SystemColAttr_Name {
+					assert.Equal(t, catalog.SystemColPKConstraint, ct)
+				} else {
+					assert.Equal(t, catalog.SystemColNoConstraint, ct)
+				}
+			}
+		}
+	}
 
 	err = txn.Rollback()
 	assert.Nil(t, err)
