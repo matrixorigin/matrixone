@@ -109,8 +109,8 @@ func (r Range) Contain(key TupleKey) bool {
 
 // Equal checks the range is equal to the another range.
 func (r Range) Equal(another Range) bool {
-	return bytes.Compare(r.startKey, another.startKey) == 0 &&
-		bytes.Compare(r.endKey, another.endKey) == 0
+	return bytes.Equal(r.startKey, another.startKey) &&
+		bytes.Equal(r.endKey, another.endKey)
 }
 
 // Merge merges two ranges
@@ -153,7 +153,7 @@ func (r Range) Overlap(another Range) bool {
 	}
 
 	if len(r.endKey) == 0 && len(another.endKey) == 0 {
-		return bytes.Compare(r.startKey, another.startKey) == 0
+		return bytes.Equal(r.startKey, another.startKey)
 	} else if len(r.endKey) == 0 {
 		return bytes.Compare(r.startKey, another.startKey) >= 0 &&
 			bytes.Compare(r.startKey, another.endKey) < 0

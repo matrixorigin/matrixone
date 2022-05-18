@@ -17,6 +17,7 @@ package frontend
 import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -42,10 +43,12 @@ type Session struct {
 	ep *tree.ExportParam
 
 	closeRef *CloseExportData
+
+	//tae txn
+	taeTxn moengine.Txn
 }
 
-func NewSession(proto Protocol, pdHook *PDCallbackImpl,
-	gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit) *Session {
+func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, taeTxn moengine.Txn) *Session {
 	return &Session{
 		protocol: proto,
 		pdHook:   pdHook,
@@ -57,6 +60,7 @@ func NewSession(proto Protocol, pdHook *PDCallbackImpl,
 			Fields:  &tree.Fields{},
 			Lines:   &tree.Lines{},
 		},
+		taeTxn: taeTxn,
 	}
 }
 

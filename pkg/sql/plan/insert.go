@@ -61,7 +61,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	orderAttr := make([]string, 0, 32)        // order relation's attribute names
 	{
 		count := 0
-		for _, def := range r.TableDefs() {
+		for _, def := range r.TableDefs(nil) {
 			if v, ok := def.(*engine.AttributeDef); ok {
 				attrType[v.Attr.Name] = v.Attr.Type
 				orderAttr = append(orderAttr, v.Attr.Name)
@@ -83,6 +83,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	} else {
 		attrs = orderAttr // todo: need to use copy ?
 	}
+
 	// deal with default Expr
 	rows.Rows, attrs, err = rewriteInsertRows(stmt.Columns == nil, attrs, orderAttr, rows.Rows, attrDefault)
 	if err != nil {

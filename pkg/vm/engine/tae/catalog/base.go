@@ -147,6 +147,7 @@ func (be *BaseEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	sn := int64(0)
 	sn, err = be.CommitInfo.ReadFrom(r)
 	n = sn + 8 + 8 + 8
+	be.RWMutex = new(sync.RWMutex)
 	return
 }
 
@@ -398,7 +399,7 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool
 	}
 
 	// This entry was deleted before txn start
-	// Delete is uncommited by other txn, skip this entry
+	// Delete is uncommitted by other txn, skip this entry
 	if !be.IsCommitting() {
 		return false
 	}

@@ -25,11 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
+func buildInsert(stmt *tree.Insert, ctx CompilerContext) (*plan.Plan, error) {
+	query, _ := newQueryAndSelectCtx(plan.Query_INSERT)
+
 	//get table
 	objRef, tableDef, err := getInsertTable(stmt.Table, ctx, query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	//get columns
@@ -49,7 +51,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 			columnName := string(identifier)
 			col, err := getColDef(columnName)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			columns = append(columns, col)
 		}
@@ -67,12 +69,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 	switch rows := stmt.Rows.Select.(type) {
 	case *tree.Select:
 		selectCtx := &SelectContext{
-			// tableAlias:  make(map[string]string),
 			columnAlias: make(map[string]*plan.Expr),
 		}
 		err := buildSelect(rows, ctx, query, selectCtx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		//fixme need check preNode's projectionList match rowset.Schema
 	case *tree.ValuesClause:
@@ -84,7 +85,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 		}
 		err := getValues(rowset, rows, columnCount)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		node := &plan.Node{
 			NodeType:   plan.Node_VALUE_SCAN,
@@ -92,7 +93,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 		}
 		appendQueryNode(query, node, false)
 	default:
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport rows expr: %T", stmt))
+		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport rows expr: %T", stmt))
 	}
 
 	node := &plan.Node{
@@ -103,9 +104,17 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 	appendQueryNode(query, node, false)
 
 	preNode := query.Nodes[len(query.Nodes)-1]
-	query.Steps = append(query.Steps, preNode.NodeId)
+	if len(query.Steps) > 0 {
+		query.Steps[len(query.Steps)-1] = preNode.NodeId
+	} else {
+		query.Steps = append(query.Steps, preNode.NodeId)
+	}
 
-	return nil
+	return &plan.Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, nil
 }
 
 func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int) error {
@@ -171,7 +180,7 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 					return err
 				}
 			default:
-				return errors.New(errno.InvalidSchemaName, fmt.Sprintf("insert value must be constant"))
+				return errors.New(errno.InvalidSchemaName, "insert value must be constant")
 			}
 		}
 	}

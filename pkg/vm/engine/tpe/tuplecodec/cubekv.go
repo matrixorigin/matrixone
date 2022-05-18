@@ -42,15 +42,12 @@ const (
 
 var (
 	errorAllocateIDTimeout                    = errors.New("allocate id timeout")
-	errorCanNotComeHere                       = errors.New("can not come here")
 	errorIDTypeDoesNotExist                   = errors.New("id type does not exist")
 	errorInitIDPoolTimeout                    = errors.New("init id pool is timeout")
 	errorCubeDriverIsNull                     = errors.New("cube driver is nil")
 	errorInvalidIDPool                        = errors.New("invalid idpool")
 	errorInvalidKeyValueCount                 = errors.New("key count != value count")
-	errorUnsupportedInCubeKV                  = errors.New("unsupported in cubekv")
 	errorPrefixLengthIsLongerThanStartKey     = errors.New("the preifx length is longer than the startKey 1")
-	errorRangeIsInvalid                       = errors.New("the range is invalid")
 	errorNoKeysToSet                          = errors.New("the count of keys is zero")
 	errorAsyncTpeCheckKeysExistGenNilResponse = errors.New("TpeAsyncCheckKeysExist generates nil response")
 )
@@ -223,7 +220,7 @@ func (ck *CubeKV) SetBatch(keys []TupleKey, values []TupleValue) error {
 		return errorNoKeysToSet
 	}
 
-	var retErr error = nil
+	var retErr error
 	var checkErr int32
 
 	atomic.StoreInt32(&checkErr, 0)
@@ -449,7 +446,7 @@ func (ckec *checkKeysExistedContext) callbackForCheckKeysExisted(cr driver.Custo
 				ckec.getKey(realKeyIndex))
 		}
 	} else {
-		logutil.Errorf("DedupSetBatch get nil repsonse.")
+		logutil.Errorf("DedupSetBatch get nil response.")
 		ckec.setShardError(cr.ToShard, errorAsyncTpeCheckKeysExistGenNilResponse)
 	}
 	ckec.done()
@@ -548,24 +545,24 @@ func checkErrorsFunc(errs []error, needAllError bool) error {
 	return e
 }
 
-func checkShardsErrorsFunc(errs map[uint64]error, needAllError bool) error {
-	var e error = nil
-	//check errors
-	for _, err := range errs {
-		if err != nil {
-			if needAllError { //return any error includes the ErrTimeout
-				e = err
-				break
-			} else if !(isTimeoutError(err) || isNeedReRouteError(err)) {
-				//if there is a error that is not the ErrTimeout and the NeedReRoutError, just return it
-				e = err
-				break
-			}
-		}
-	}
+//func checkShardsErrorsFunc(errs map[uint64]error, needAllError bool) error {
+//	var e error = nil
+//	//check errors
+//	for _, err := range errs {
+//		if err != nil {
+//			if needAllError { //return any error includes the ErrTimeout
+//				e = err
+//				break
+//			} else if !(isTimeoutError(err) || isNeedReRouteError(err)) {
+//				//if there is a error that is not the ErrTimeout and the NeedReRoutError, just return it
+//				e = err
+//				break
+//			}
+//		}
+//	}
 
-	return e
-}
+//	return e
+//}
 
 func (ck *CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 	if len(keys) != len(values) {
@@ -593,7 +590,7 @@ func (ck *CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 	for i := 1; i < len(keysIndexes); i++ {
 		preKey := keys[keysIndexes[i-1]]
 		curKey := keys[keysIndexes[i]]
-		if bytes.Compare(preKey, curKey) == 0 {
+		if bytes.Equal(preKey, curKey) {
 			return errorKeyExists
 		}
 	}
@@ -820,7 +817,7 @@ func (ck *CubeKV) Get(key TupleKey) (TupleValue, error) {
 }
 
 func (ck *CubeKV) GetBatch(keys []TupleKey) ([]TupleValue, error) {
-	var values []TupleValue
+	values := make([]TupleValue, 0, len(keys))
 	for _, key := range keys {
 		get, err := ck.Get(key)
 		if err != nil {

@@ -40,17 +40,17 @@ func TestTpeEngine_Create(t *testing.T) {
 		}
 
 		for i := 0; i < cnt; i++ {
-			err := tpe.Create(0, dbNames[i], 0)
+			err := tpe.Create(0, dbNames[i], 0, nil)
 			convey.So(err, convey.ShouldBeNil)
 		}
 
-		wantDbNames := tpe.Databases()
+		wantDbNames := tpe.Databases(nil)
 		convey.So(reflect.DeepEqual(dbNames, wantDbNames), convey.ShouldBeTrue)
 
 		var dbNames2 []string
 		for i := 0; i < cnt; i++ {
 			if i%2 != 0 {
-				err := tpe.Delete(0, dbNames[i])
+				err := tpe.Delete(0, dbNames[i], nil)
 				convey.So(err, convey.ShouldBeNil)
 			}
 			if i%2 == 0 {
@@ -58,10 +58,10 @@ func TestTpeEngine_Create(t *testing.T) {
 			}
 		}
 
-		wantDbNames = tpe.Databases()
+		wantDbNames = tpe.Databases(nil)
 		convey.So(reflect.DeepEqual(dbNames2, wantDbNames), convey.ShouldBeTrue)
 
-		db, err := tpe.Database(dbNames2[0])
+		db, err := tpe.Database(dbNames2[0], nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		tpeDb, ok := db.(*TpeDatabase)
@@ -73,7 +73,7 @@ func TestTpeEngine_Create(t *testing.T) {
 		//recreate database again
 		for i := 0; i < cnt; i++ {
 			if i%2 != 0 {
-				err = tpe.Create(0, dbNames[i], 0)
+				err = tpe.Create(0, dbNames[i], 0, nil)
 				convey.So(err, convey.ShouldBeNil)
 			}
 		}
@@ -86,7 +86,7 @@ func TestTpeEngine_Create(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		ni := tpe.Node("")
+		ni := tpe.Node("", nil)
 		convey.So(ni.Mcpu, convey.ShouldEqual, 1)
 	})
 }
@@ -107,7 +107,7 @@ func TestTpeCubeKVEngine_Create(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(tpe, convey.ShouldBeNil)
-		convey.So(tpe, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
 
 		tpe, err = NewTpeEngine(&TpeConfig{
 			KvType:                    tuplecodec.KV_MEMORY,

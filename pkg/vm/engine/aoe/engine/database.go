@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	log "github.com/sirupsen/logrus"
 
 	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -36,7 +35,7 @@ func (db *database) Type() int {
 }
 
 //Delete deletes the table.
-func (db *database) Delete(epoch uint64, name string) error {
+func (db *database) Delete(epoch uint64, name string, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -46,7 +45,7 @@ func (db *database) Delete(epoch uint64, name string) error {
 }
 
 //Create creates the table
-func (db *database) Create(epoch uint64, name string, defs []engine.TableDef) error {
+func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -60,7 +59,7 @@ func (db *database) Create(epoch uint64, name string, defs []engine.TableDef) er
 }
 
 //Relations returns names of all the tables in the database.
-func (db *database) Relations() []string {
+func (db *database) Relations(_ engine.Snapshot) []string {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -77,7 +76,7 @@ func (db *database) Relations() []string {
 }
 
 //Relation returns an instance with the given name.
-func (db *database) Relation(name string) (engine.Relation, error) {
+func (db *database) Relation(name string, _ engine.Snapshot) (engine.Relation, error) {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -86,7 +85,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 	if err != nil {
 		return nil, err
 	}
-	if tablets == nil || len(tablets) == 0 {
+	if len(tablets) == 0 {
 		return nil, catalog.ErrTableNotExists
 	}
 
@@ -110,7 +109,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddress
 			storeId := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ID
-			if lRelation, err := ldb.Relation(aoedbName.IDToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
+			if lRelation, err := ldb.Relation(adb.IDToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
 			logutil.Debugf("ClientAddr: %v, shardId: %d, storeId: %d", addr, tbl.ShardId, storeId)

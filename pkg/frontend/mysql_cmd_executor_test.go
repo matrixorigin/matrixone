@@ -378,7 +378,7 @@ func Test_mce(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any()).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -471,7 +471,7 @@ func Test_mce(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -542,8 +542,8 @@ func Test_mce_selfhandle(t *testing.T) {
 		eng := mock_frontend.NewMockEngine(ctrl)
 
 		cnt := 0
-		eng.EXPECT().Database(gomock.Any()).DoAndReturn(
-			func(db string) (engine.Database, error) {
+		eng.EXPECT().Database(gomock.Any(), nil).DoAndReturn(
+			func(db string, dump interface{}) (engine.Database, error) {
 				cnt++
 				if cnt == 1 {
 					return nil, nil
@@ -566,7 +566,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -584,7 +584,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 
-		eng.EXPECT().Database(gomock.Any()).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -601,7 +601,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
 		ses.Mrs = &MysqlResultSet{}
 
 		mce := NewMysqlCmdExecutor()
@@ -657,7 +657,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 
-		eng.EXPECT().Database(gomock.Any()).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -674,7 +674,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
 		ses.Mrs = &MysqlResultSet{}
 
 		// mce := NewMysqlCmdExecutor()
@@ -741,7 +741,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		epochgc := getPCI()
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
 		ses.Mrs = &MysqlResultSet{}
 
 		convey.So(getDataFromPipeline(ses, nil), convey.ShouldBeNil)
@@ -913,7 +913,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any()).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -944,7 +944,7 @@ func Test_handleShowVariables(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().Database(gomock.Any()).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(nil, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()

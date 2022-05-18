@@ -16,8 +16,10 @@ package plan2
 
 import (
 	"fmt"
+	"go/constant"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -42,7 +44,7 @@ func splitExprToAND(expr tree.Expr) []*tree.Expr {
 
 func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
 	for idx, col := range tableDef.Cols {
-		if strings.ToUpper(col.Name) == strings.ToUpper(name) {
+		if strings.EqualFold(col.Name, name) {
 			return int32(idx)
 		}
 	}
@@ -177,12 +179,12 @@ func getExprFromUnresolvedName(query *Query, name string, table string, selectCt
 		if table == "" {
 			arr := strings.SplitN(alias, ".", 2)
 			if len(arr) > 1 {
-				return strings.ToUpper(arr[1]) == strings.ToUpper(name)
+				return strings.EqualFold(arr[1], name)
 			} else {
-				return strings.ToUpper(arr[0]) == strings.ToUpper(name)
+				return strings.EqualFold(arr[0], name)
 			}
 		}
-		return strings.ToUpper(alias) == strings.ToUpper(aliasName)
+		return strings.EqualFold(alias, aliasName)
 	}
 
 	//get name from select
@@ -240,7 +242,7 @@ func getExprFromUnresolvedName(query *Query, name string, table string, selectCt
 		for _, parentId := range selectCtx.subQueryParentId {
 			preNode = getNode(parentId)
 			if preNode == nil {
-				return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("parent node id not found in subquery"))
+				return nil, errors.New(errno.InvalidColumnReference, "parent node id not found in subquery")
 			}
 			for {
 				if preNode.ProjectList != nil {
@@ -306,7 +308,7 @@ func setDerivedTableAlias(query *Query, ctx CompilerContext, selectCtx *SelectCo
 	prefix := alias + "."
 	if cols != nil {
 		if len(preNode.ProjectList) != len(cols) {
-			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Derived table column length not match"))
+			return errors.New(errno.InvalidColumnReference, "Derived table column length not match")
 		}
 		for idx, col := range cols {
 			exprs = append(exprs, &plan.Expr{
@@ -349,7 +351,7 @@ func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectConte
 	}
 
 	//get table from CTE
-	tableDef, ok := selectCtx.cteTables[strings.ToUpper(tblName)]
+	tableDef, ok := selectCtx.cteTables[strings.ToLower(tblName)]
 	if ok {
 		objRef = &plan.ObjectRef{
 			ObjName: tblName,
@@ -372,4 +374,119 @@ func getLastTableDef(query *Query) (*plan.ObjectRef, *plan.TableDef) {
 		node = query.Nodes[node.Children[0]]
 	}
 	return nil, nil
+}
+
+func newQueryAndSelectCtx(typ plan.Query_StatementType) (*Query, *SelectContext) {
+	selectCtx := &SelectContext{
+		columnAlias: make(map[string]*plan.Expr),
+		cteTables:   make(map[string]*plan.TableDef),
+	}
+	query := &Query{
+		StmtType: typ,
+	}
+	return query, selectCtx
+}
+
+func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
+	if n, ok := typ.(*tree.T); ok {
+		switch uint8(n.InternalType.Oid) {
+		case defines.MYSQL_TYPE_TINY:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT8, Width: n.InternalType.Width}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT8, Width: n.InternalType.Width}, nil
+		case defines.MYSQL_TYPE_SHORT:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT16, Width: n.InternalType.Width}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT16, Width: n.InternalType.Width}, nil
+		case defines.MYSQL_TYPE_LONG:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT32, Width: n.InternalType.Width}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT32, Width: n.InternalType.Width}, nil
+		case defines.MYSQL_TYPE_LONGLONG:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT64, Width: n.InternalType.Width}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT64, Width: n.InternalType.Width}, nil
+		case defines.MYSQL_TYPE_FLOAT:
+			return &plan.Type{Id: plan.Type_FLOAT32, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_DOUBLE:
+			return &plan.Type{Id: plan.Type_FLOAT64, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_STRING:
+			if n.InternalType.DisplayWith == -1 { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Width: 1}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Width: n.InternalType.DisplayWith}, nil
+		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
+			if n.InternalType.DisplayWith == -1 { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Width: 1}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Width: n.InternalType.DisplayWith}, nil
+		case defines.MYSQL_TYPE_DATE:
+			return &plan.Type{Id: plan.Type_DATE}, nil
+		case defines.MYSQL_TYPE_DATETIME:
+			return &plan.Type{Id: plan.Type_DATETIME}, nil
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			return &plan.Type{Id: plan.Type_TIMESTAMP, Precision: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_DECIMAL:
+			if n.InternalType.DisplayWith > 18 {
+				return &plan.Type{Id: plan.Type_DECIMAL128, Width: n.InternalType.DisplayWith, Precision: n.InternalType.Precision}, nil
+			}
+			return &plan.Type{Id: plan.Type_DECIMAL64, Width: n.InternalType.DisplayWith, Precision: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_BOOL:
+			return &plan.Type{Id: plan.Type_BOOL}, nil
+		}
+	}
+	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport type: '%v'", typ))
+}
+
+func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*plan.DefaultExpr, error) {
+	allowNull := true // be false when column has not null constraint
+	isNullExpr := func(expr tree.Expr) bool {
+		v, ok := expr.(*tree.NumVal)
+		return ok && v.Value.Kind() == constant.Unknown
+	}
+
+	//get isAllowNull setting
+	{
+		for _, attr := range column.Attributes {
+			if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is == false {
+				allowNull = false
+				break
+			}
+		}
+	}
+
+	for _, attr := range column.Attributes {
+		if d, ok := attr.(*tree.AttributeDefault); ok {
+			defaultExpr := d.Expr
+			//check allowNull
+			if isNullExpr(defaultExpr) {
+				if !allowNull {
+					return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+				}
+				return &plan.DefaultExpr{
+					Exist:  true,
+					IsNull: true,
+				}, nil
+			}
+
+			value, err := buildExpr(d.Expr, nil, nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			//todo check value match type
+			return &plan.DefaultExpr{
+				Exist:  true,
+				Value:  value,
+				IsNull: false,
+			}, nil
+		}
+	}
+
+	return &plan.DefaultExpr{
+		Exist: false,
+	}, nil
 }

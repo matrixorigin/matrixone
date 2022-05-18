@@ -17,9 +17,9 @@ package engine
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
@@ -27,24 +27,24 @@ import (
 )
 
 var (
-	errorUnsupportedTableDef     = errors.New("unsupported tableDef")
 	errorDuplicatePrimaryKeyName = errors.New("duplicate primary key name")
 	errorDuplicateAttributeName  = errors.New("duplicate attribute name")
 )
 
-func (td *TpeDatabase) Relations() []string {
-	var names []string
+func (td *TpeDatabase) Relations(_ engine.Snapshot) []string {
 	tableDescs, err := td.computeHandler.ListTables(td.id)
 	if err != nil {
-		return names
+		return nil
 	}
+
+	names := make([]string, 0, len(tableDescs))
 	for _, desc := range tableDescs {
 		names = append(names, desc.Name)
 	}
 	return names
 }
 
-func (td *TpeDatabase) Relation(name string) (engine.Relation, error) {
+func (td *TpeDatabase) Relation(name string, _ engine.Snapshot) (engine.Relation, error) {
 	tableDesc, err := td.computeHandler.GetTable(td.id, name)
 	if err != nil {
 		return nil, err
@@ -74,7 +74,7 @@ func (td *TpeDatabase) Relation(name string) (engine.Relation, error) {
 	}, nil
 }
 
-func (td *TpeDatabase) Delete(epoch uint64, name string) error {
+func (td *TpeDatabase) Delete(epoch uint64, name string, _ engine.Snapshot) error {
 	_, err := td.computeHandler.DropTable(epoch, td.id, name)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (td *TpeDatabase) Delete(epoch uint64, name string) error {
 	return nil
 }
 
-func (td *TpeDatabase) Create(epoch uint64, name string, defs []engine.TableDef) error {
+func (td *TpeDatabase) Create(epoch uint64, name string, defs []engine.TableDef, _ engine.Snapshot) error {
 	//convert defs into desc
 	tableDesc := &descriptor.RelationDesc{}
 

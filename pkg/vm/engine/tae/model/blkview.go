@@ -148,6 +148,5 @@ func (view *BlockView) Unmarshal(buf []byte) (err error) {
 		return
 	}
 	view.AppliedIBatch = &batch.Batch{}
-	view.AppliedIBatch.Unmarshal(buf[pos : pos+int(batLength)])
-	return
+	return view.AppliedIBatch.Unmarshal(buf[pos : pos+int(batLength)])
 }

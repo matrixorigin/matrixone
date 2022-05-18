@@ -537,7 +537,7 @@ exit:
 		s.scanIdentifier(false)
 	}
 
-	return token, s.buf[start:s.Pos]
+	return token, strings.ToLower(s.buf[start:s.Pos])
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
@@ -557,13 +557,13 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
-		return keywordID, keywordName
+		return keywordID, lower
 	}
 	// dual must always be case-insensitive
 	if lower == "dual" {
 		return ID, lower
 	}
-	return ID, keywordName
+	return ID, lower
 }
 
 func (s *Scanner) scanBitLiteral() (int, string) {

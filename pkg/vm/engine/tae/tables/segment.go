@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,14 +28,19 @@ import (
 )
 
 type dataSegment struct {
+	common.ClosedState
 	meta      *catalog.SegmentEntry
 	file      file.Segment
 	bufMgr    base.INodeManager
 	scheduler tasks.TaskScheduler
 }
 
-func newSegment(meta *catalog.SegmentEntry, factory file.SegmentFileFactory, bufMgr base.INodeManager) *dataSegment {
-	segFile := factory("xxx", meta.GetID())
+func newSegment(meta *catalog.SegmentEntry,
+	factory file.SegmentFileFactory,
+	bufMgr base.INodeManager,
+	dir string) *dataSegment {
+	filePath := fmt.Sprintf("%s/%d.seg", dir, meta.GetID())
+	segFile := factory(filePath, meta.GetID())
 	seg := &dataSegment{
 		meta:      meta,
 		file:      segFile,
@@ -46,6 +52,15 @@ func newSegment(meta *catalog.SegmentEntry, factory file.SegmentFileFactory, buf
 
 func (segment *dataSegment) GetSegmentFile() file.Segment {
 	return segment.file
+}
+
+func (segment *dataSegment) Destory() (err error) {
+	if !segment.TryClose() {
+		return
+	}
+	segment.file.Close()
+	segment.file.Unref()
+	return
 }
 
 func (segment *dataSegment) GetID() uint64 { return segment.meta.GetID() }

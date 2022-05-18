@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -67,10 +68,7 @@ func (units *Units) PrepareConsume(maxDuration time.Duration) bool {
 	units.RLock()
 	duration := time.Since(units.ts)
 	units.RUnlock()
-	if duration >= maxDuration {
-		return true
-	}
-	return false
+	return duration >= maxDuration
 }
 
 type LeveledUnits struct {
@@ -129,8 +127,9 @@ func (lunits *LeveledUnits) Scan() {
 				logutil.Warnf("%s: %v", unit.MutationInfo(), err)
 				continue
 			}
-			logutil.Infof("%s", unit.MutationInfo())
-			lunits.scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
+			// logutil.Infof("%s", unit.MutationInfo())
+			_, err = lunits.scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
+			logutil.Infof("[Compaction] | Scheduled | Err=%v | Scopes=%s", err, common.IDArraryString(scopes))
 		}
 	}
 }

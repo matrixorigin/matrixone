@@ -69,7 +69,6 @@ func (n *staticFilterIndexNode) OnLoad() {
 	if err != nil {
 		panic(err)
 	}
-	return
 }
 
 func (n *staticFilterIndexNode) OnUnload() {

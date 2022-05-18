@@ -16,7 +16,6 @@ package connector
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -51,7 +50,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	vecs := n.vecs[:0]
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Or {
-			fmt.Println("wangjian sqlDup1 is")
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp)
 			if err != nil {
 				return false, err
@@ -72,7 +70,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		process.FreeRegisters(proc)
 		return true, nil
 	case reg.Ch <- bat:
-		n.Mmu.Alloc(size)
+		if err := n.Mmu.Alloc(size); err != nil {
+			return false, err
+		}
 		proc.Mp.Gm.Free(size)
 		return false, nil
 	}

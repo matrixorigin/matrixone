@@ -71,26 +71,26 @@ const (
 // CreateDatabase do create database work according to create database plan.
 func (s *Scope) CreateDatabase(ts uint64) error {
 	p, _ := s.Plan.(*plan.CreateDatabase)
-	if _, err := p.E.Database(p.Id); err == nil {
+	if _, err := p.E.Database(p.Id, nil); err == nil {
 		if p.IfNotExistFlag {
 			return nil
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", p.Id))
 	}
-	return p.E.Create(ts, p.Id, 0)
+	return p.E.Create(ts, p.Id, 0, nil)
 }
 
 // CreateTable do create table work according to create table plan.
 func (s *Scope) CreateTable(ts uint64) error {
 	p, _ := s.Plan.(*plan.CreateTable)
-	if r, err := p.Db.Relation(p.Id); err == nil {
-		r.Close()
+	if r, err := p.Db.Relation(p.Id, nil); err == nil {
+		r.Close(nil)
 		if p.IfNotExistFlag {
 			return nil
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", p.Id))
 	}
-	return p.Db.Create(ts, p.Id, p.Defs)
+	return p.Db.Create(ts, p.Id, p.Defs, nil)
 }
 
 // CreateIndex do create index work according to create index plan
@@ -100,9 +100,9 @@ func (s *Scope) CreateIndex(ts uint64) error {
 		return nil
 	}
 
-	defer o.Relation.Close()
+	defer o.Relation.Close(nil)
 	for _, def := range o.Defs {
-		if err := o.Relation.AddTableDef(ts, def); err != nil {
+		if err := o.Relation.AddTableDef(ts, def, nil); err != nil {
 			return err
 		}
 	}
@@ -112,35 +112,35 @@ func (s *Scope) CreateIndex(ts uint64) error {
 // DropDatabase do drop database work according to drop index plan
 func (s *Scope) DropDatabase(ts uint64) error {
 	p, _ := s.Plan.(*plan.DropDatabase)
-	if _, err := p.E.Database(p.Id); err != nil {
+	if _, err := p.E.Database(p.Id, nil); err != nil {
 		if p.IfExistFlag {
 			return nil
 		}
 		return err
 	}
-	return p.E.Delete(ts, p.Id)
+	return p.E.Delete(ts, p.Id, nil)
 }
 
 // DropTable do drop table work according to drop table plan
 func (s *Scope) DropTable(ts uint64) error {
 	p, _ := s.Plan.(*plan.DropTable)
 	for i := range p.Dbs {
-		db, err := p.E.Database(p.Dbs[i])
+		db, err := p.E.Database(p.Dbs[i], nil)
 		if err != nil {
 			if p.IfExistFlag {
 				continue
 			}
 			return err
 		}
-		if r, err := db.Relation(p.Ids[i]); err != nil {
+		if r, err := db.Relation(p.Ids[i], nil); err != nil {
 			if p.IfExistFlag {
 				continue
 			}
 			return err
 		} else {
-			r.Close()
+			r.Close(nil)
 		}
-		if err := db.Delete(ts, p.Ids[i]); err != nil {
+		if err := db.Delete(ts, p.Ids[i], nil); err != nil {
 			return err
 		}
 	}
@@ -154,7 +154,7 @@ func (s *Scope) DropIndex(ts uint64) error {
 		return nil
 	}
 
-	defer p.Relation.Close()
+	defer p.Relation.Close(nil)
 	//return p.Relation.DropIndex(ts, p.Id)
 	return nil
 }
@@ -166,7 +166,7 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 	bat := batch.New(true, []string{attrs[0].Name})
 	// Column 1
 	{
-		rs := p.E.Databases()
+		rs := p.E.Databases(nil)
 		vs := make([][]byte, len(rs))
 
 		// like
@@ -205,7 +205,7 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 	bat := batch.New(true, []string{attrs[0].Name})
 	// Column 1
 	{
-		rs := p.Db.Relations()
+		rs := p.Db.Relations(nil)
 		vs := make([][]byte, len(rs))
 
 		// like
@@ -278,7 +278,7 @@ type columnInfo struct {
 func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowColumns)
 	results := p.ResultColumns() // field, type, null, key, default, extra
-	defs := p.Relation.TableDefs()
+	defs := p.Relation.TableDefs(nil)
 	attrs := make([]columnInfo, len(defs))
 
 	names := make([]string, 0)
@@ -351,12 +351,24 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 		emptyVector[i] = []byte("")
 	}
 
-	vector.Append(bat.Vecs[0], nameVector)         // field
-	vector.Append(bat.Vecs[1], typeVector)         // type
-	vector.Append(bat.Vecs[2], emptyVector)        // null todo: not implement
-	vector.Append(bat.Vecs[3], keyVector)          // key
-	vector.Append(bat.Vecs[4], defaultValueVector) // default
-	vector.Append(bat.Vecs[5], emptyVector)        // extra todo: not implement
+	if err := vector.Append(bat.Vecs[0], nameVector); err != nil { // field
+		return err
+	}
+	if err := vector.Append(bat.Vecs[1], typeVector); err != nil { // type
+		return err
+	}
+	if err := vector.Append(bat.Vecs[2], emptyVector); err != nil { // null todo: not implement
+		return err
+	}
+	if err := vector.Append(bat.Vecs[3], keyVector); err != nil { // key
+		return err
+	}
+	if err := vector.Append(bat.Vecs[4], defaultValueVector); err != nil { // default
+		return err
+	}
+	if err := vector.Append(bat.Vecs[5], emptyVector); err != nil { // extra todo: not implement
+		return err
+	}
 
 	bat.InitZsOne(count)
 	return fill(u, bat)
@@ -366,8 +378,8 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowCreateTable)
 	results := p.ResultColumns()
-	tn := p.Relation.ID()
-	defs := p.Relation.TableDefs()
+	tn := p.Relation.ID(nil)
+	defs := p.Relation.TableDefs(nil)
 
 	names := make([]string, 0)
 	for _, r := range results {
@@ -420,8 +432,12 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 	tableName[0] = []byte(tn)
 	createTable[0] = buf.Bytes()
 
-	vector.Append(bat.Vecs[0], tableName)
-	vector.Append(bat.Vecs[1], createTable)
+	if err := vector.Append(bat.Vecs[0], tableName); err != nil {
+		return err
+	}
+	if err := vector.Append(bat.Vecs[1], createTable); err != nil {
+		return err
+	}
 
 	bat.InitZsOne(1)
 	return fill(u, bat)
@@ -430,7 +446,7 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 // ShowCreateDatabase fill batch with definition of a database
 func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowCreateDatabase)
-	if _, err := p.E.Database(p.Id); err != nil {
+	if _, err := p.E.Database(p.Id, nil); err != nil {
 		if p.IfNotExistFlag {
 			return nil
 		}
@@ -458,8 +474,12 @@ func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.
 	dbName[0] = []byte(p.Id)
 	createDatabase[0] = buf.Bytes()
 
-	vector.Append(bat.Vecs[0], dbName)
-	vector.Append(bat.Vecs[1], createDatabase)
+	if err := vector.Append(bat.Vecs[0], dbName); err != nil {
+		return err
+	}
+	if err := vector.Append(bat.Vecs[1], createDatabase); err != nil {
+		return err
+	}
 
 	bat.InitZsOne(1)
 	return fill(u, bat)
@@ -468,10 +488,8 @@ func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.
 // Insert will insert a batch into relation and return numbers of affectedRow
 func (s *Scope) Insert(ts uint64) (uint64, error) {
 	p, _ := s.Plan.(*plan.Insert)
-	defer p.Relation.Close()
-	fmt.Println("wangjian sqlInsert is", p.Bat.Attrs, p.Bat.Vecs[0].Col)
-	fmt.Printf("wangjian sqlInsert2 is %T\n", p.Bat.Vecs[0].Col)
-	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
+	defer p.Relation.Close(nil)
+	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat, nil)
 }
 
 // Delete will delete rows from a single of table
@@ -479,7 +497,7 @@ func (s *Scope) Delete(ts uint64, e engine.Engine) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deleteTag.Argument)
 	arg.Ts = ts
-	defer arg.Relation.Close()
+	defer arg.Relation.Close(nil)
 	if err := s.MergeRun(e); err != nil {
 		return 0, err
 	}
@@ -491,7 +509,7 @@ func (s *Scope) Update(ts uint64, e engine.Engine) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*updateTag.Argument)
 	arg.Ts = ts
-	defer arg.Relation.Close()
+	defer arg.Relation.Close(nil)
 	if err := s.MergeRun(e); err != nil {
 		return 0, err
 	}
@@ -512,7 +530,6 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	errChan := make(chan error, len(s.PreScopes))
 
 	for i := range s.PreScopes {
-		// fmt.Println("wangjian sqlMergeRun is", s.PreScopes[i].Magic)
 		switch s.PreScopes[i].Magic {
 		case Normal:
 			go func(cs *Scope) {
@@ -699,16 +716,16 @@ func (s *Scope) RunQ(e engine.Engine) error {
 
 	mcpu := runtime.NumCPU()
 	{
-		db, err := e.Database(s.DataSource.SchemaName)
+		db, err := e.Database(s.DataSource.SchemaName, nil)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(s.DataSource.RelationName)
+		rel, err := db.Relation(s.DataSource.RelationName, nil)
 		if err != nil {
 			return err
 		}
-		defer rel.Close()
-		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
+		defer rel.Close(nil)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data, nil)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -865,16 +882,16 @@ func (s *Scope) RunAQ(e engine.Engine) error {
 
 	mcpu := runtime.NumCPU()
 	{
-		db, err := e.Database(s.DataSource.SchemaName)
+		db, err := e.Database(s.DataSource.SchemaName, nil)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(s.DataSource.RelationName)
+		rel, err := db.Relation(s.DataSource.RelationName, nil)
 		if err != nil {
 			return err
 		}
-		defer rel.Close()
-		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
+		defer rel.Close(nil)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data, nil)
 	}
 	ss := make([]*Scope, mcpu)
 	arg := s.Instructions[0].Arg.(*transform.Argument)
@@ -1066,16 +1083,16 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 	}
 	mcpu := runtime.NumCPU()
 	{
-		db, err := e.Database(s.DataSource.SchemaName)
+		db, err := e.Database(s.DataSource.SchemaName, nil)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(s.DataSource.RelationName)
+		rel, err := db.Relation(s.DataSource.RelationName, nil)
 		if err != nil {
 			return err
 		}
-		defer rel.Close()
-		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
+		defer rel.Close(nil)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data, nil)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -1429,16 +1446,16 @@ func (s *Scope) RunCAQ(e engine.Engine, op *times.Argument) error {
 	}
 	mcpu := runtime.NumCPU()
 	{
-		db, err := e.Database(s.DataSource.SchemaName)
+		db, err := e.Database(s.DataSource.SchemaName, nil)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(s.DataSource.RelationName)
+		rel, err := db.Relation(s.DataSource.RelationName, nil)
 		if err != nil {
 			return err
 		}
-		defer rel.Close()
-		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
+		defer rel.Close(nil)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data, nil)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {

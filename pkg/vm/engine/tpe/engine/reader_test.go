@@ -18,17 +18,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"sort"
 	"strings"
 	"testing"
 
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -40,10 +41,10 @@ func TestTpeReader_Read(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		err = tpe.Create(0, "test", 0)
+		err = tpe.Create(0, "test", 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database("test")
+		dbDesc, err := tpe.Database("test", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
@@ -61,27 +62,28 @@ func TestTpeReader_Read(t *testing.T) {
 			rawDefs = append(rawDefs, def)
 		}
 
-		err = dbDesc.Create(0, "A", defs)
+		err = dbDesc.Create(0, "A", defs, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		tableDesc, err := dbDesc.Relation("A")
+		tableDesc, err := dbDesc.Relation("A", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//make data
 		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
 
 		bat.Zs = nil
-		err = tableDesc.Write(0, bat)
+		err = tableDesc.Write(0, bat, nil)
 
 		convey.So(err, convey.ShouldBeNil)
 
 		var get *batch.Batch
 
-		readers := tableDesc.NewReader(10, nil, nil)
+		readers := tableDesc.NewReader(10, nil, nil, nil)
 		for i, reader := range readers {
 			if i == 0 {
 				for {
 					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
+					convey.So(err, convey.ShouldBeNil)
 					if get == nil {
 						break
 					}
@@ -106,10 +108,10 @@ func TestTpeReader_Read(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		err = tpe.Create(0, "test", 0)
+		err = tpe.Create(0, "test", 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database("test")
+		dbDesc, err := tpe.Database("test", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
@@ -131,10 +133,10 @@ func TestTpeReader_Read(t *testing.T) {
 
 		defs = append(defs, pkDef)
 
-		err = dbDesc.Create(0, "A", defs)
+		err = dbDesc.Create(0, "A", defs, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		tableDesc, err := dbDesc.Relation("A")
+		tableDesc, err := dbDesc.Relation("A", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//make data
@@ -148,17 +150,17 @@ func TestTpeReader_Read(t *testing.T) {
 			vec1[i] = uint64(i)
 		}
 		bat.Zs = nil
-		err = tableDesc.Write(0, bat)
+		err = tableDesc.Write(0, bat, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		var get *batch.Batch
 
-		readers := tableDesc.NewReader(10, nil, nil)
+		readers := tableDesc.NewReader(10, nil, nil, nil)
 		for i, reader := range readers {
 			if i == 0 {
 				for {
-					get, err = reader.Read([]uint64{1, 1},
-						[]string{"a", "c"})
+					get, err = reader.Read([]uint64{1, 1}, []string{"a", "c"})
+					convey.So(err, convey.ShouldBeNil)
 					if get == nil {
 						break
 					}
@@ -218,10 +220,10 @@ func Test_ParallelReader(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		err = tpe.Create(0, "test", 0)
+		err = tpe.Create(0, "test", 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database("test")
+		dbDesc, err := tpe.Database("test", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
@@ -239,17 +241,17 @@ func Test_ParallelReader(t *testing.T) {
 			rawDefs = append(rawDefs, def)
 		}
 
-		err = dbDesc.Create(0, "A", defs)
+		err = dbDesc.Create(0, "A", defs, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		tableDesc, err := dbDesc.Relation("A")
+		tableDesc, err := dbDesc.Relation("A", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//make data
 		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
 
 		bat.Zs = nil
-		err = tableDesc.Write(0, bat)
+		err = tableDesc.Write(0, bat, nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		dumpShards := &tuplecodec.CubeShards{
@@ -265,14 +267,14 @@ func Test_ParallelReader(t *testing.T) {
 		payload, err := json.Marshal(dumpShards)
 		convey.So(err, convey.ShouldBeNil)
 
-		readers := tableDesc.NewReader(1, nil, payload)
+		readers := tableDesc.NewReader(1, nil, payload, nil)
 		readers[0].(*TpeReader).parallelReader = false
 		readers[0].(*TpeReader).multiNode = false
 
 		_, err = readers[0].Read([]uint64{1, 1}, []string{"a", "b"})
 		convey.So(err, convey.ShouldBeNil)
 
-		readers = tableDesc.NewReader(1, nil, payload)
+		readers = tableDesc.NewReader(1, nil, payload, nil)
 		readers[0].(*TpeReader).parallelReader = true
 
 		readers[0].(*TpeReader).shardInfos = make([]ShardInfo, 2)
@@ -304,10 +306,10 @@ func Test_printBatch(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		err = tpe.Create(0, "test", 0)
+		err = tpe.Create(0, "test", 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database("test")
+		dbDesc, err := tpe.Database("test", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
@@ -327,10 +329,10 @@ func Test_printBatch(t *testing.T) {
 			rawDefs = append(rawDefs, def)
 		}
 
-		err = dbDesc.Create(0, "A", defs)
+		err = dbDesc.Create(0, "A", defs, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		tableDesc, err := dbDesc.Relation("A")
+		tableDesc, err := dbDesc.Relation("A", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		cnt := 1
@@ -339,7 +341,7 @@ func Test_printBatch(t *testing.T) {
 		tuplecodec.FillBatch(lines, bat)
 
 		bat.Zs = nil
-		err = tableDesc.Write(0, bat)
+		err = tableDesc.Write(0, bat, nil)
 
 		convey.So(err, convey.ShouldBeNil)
 		dumpShards := &tuplecodec.CubeShards{
@@ -355,8 +357,9 @@ func Test_printBatch(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		var get *batch.Batch
-		readers := tableDesc.NewReader(1, nil, payload)
+		readers := tableDesc.NewReader(1, nil, payload, nil)
 		get, err = readers[0].Read(make([]uint64, 14), attrNames)
+		convey.So(err, convey.ShouldBeNil)
 		printBatch(readers[0].(*TpeReader), get, attrNames)
 
 		for i := 0; i < len(bat.Vecs); i++ {

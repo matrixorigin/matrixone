@@ -27,16 +27,16 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20`
+	sql := `drop table nation`
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
 	mock := NewMockOptimizer()
-	query, err := runOneStmt(mock, t, sql)
+	logicPlan, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutQuery(query, true, t)
+	outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
@@ -294,7 +294,8 @@ func TestNodeTree(t *testing.T) {
 	//run test and check node tree
 	for sql, check := range nodeTreeCheckList {
 		mock := NewMockOptimizer()
-		query, err := runOneStmt(mock, t, sql)
+		logicPlan, err := runOneStmt(mock, t, sql)
+		query := logicPlan.GetQuery()
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)
 		}
@@ -457,7 +458,6 @@ func TestUpdate(t *testing.T) {
 		// "UPDATE NATION SET N_NAME = 'U1', N_REGIONKEY=2.2",  // column type not match
 	}
 	runTestShouldError(mock, t, sqls)
-
 }
 
 func TestDelete(t *testing.T) {
@@ -473,10 +473,9 @@ func TestDelete(t *testing.T) {
 	// should error
 	sqls = []string{
 		"DELETE FROM NATION2222",                     // table not exist
-		"DELETE FROM NATION WHERE N_NATIONKEY2 > 10", // column type not match
+		"DELETE FROM NATION WHERE N_NATIONKEY2 > 10", // column not found
 	}
 	runTestShouldError(mock, t, sqls)
-
 }
 
 func TestSubQuery(t *testing.T) {
@@ -512,7 +511,57 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
 
+func TestTcl(t *testing.T) {
+	mock := NewMockOptimizer()
+	//should pass
+	sqls := []string{
+		"start transaction",
+		"start transaction read write",
+		"begin",
+		"commit and chain",
+		"commit and chain no release",
+		"rollback and chain",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{}
+	runTestShouldError(mock, t, sqls)
+}
+
+func TestDdl(t *testing.T) {
+	mock := NewMockOptimizer()
+	//should pass
+	sqls := []string{
+		"create database db_name",               //db not exists and pass
+		"create database if not exists db_name", //db not exists but pass
+		"create database if not exists tpch",    //db exists and pass
+		"drop database if exists db_name",       //db not exists but pass
+		"drop database tpch",                    //db exists, pass
+
+		"create table tbl_name (t bool(20), b int unsigned, c char(20), d varchar(20), primary key(b), index idx_t(c)) comment 'test comment'",
+		"create table if not exists tbl_name (b int default 20 primary key, c char(20) default 'ss', d varchar(20) default 'kkk')",
+		"create table if not exists nation (t bool(20), b int, c char(20), d varchar(20))",
+		"drop table if exists tbl_name",
+		"drop table if exists nation",
+		"drop table nation",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"create database tpch",  //we mock database tpch。 so tpch is exist
+		"drop database db_name", //we mock database tpch。 so tpch is exist
+		"create table nation (t bool(20), b int, c char(20), d varchar(20))",             //table exists in tpch
+		"create table nation (b int primary key, c char(20) primary key, d varchar(20))", //Multiple primary key
+		"drop table tbl_name", //table not exists in tpch
+
+		"create index idx1 using bsi on a(a)", //unsupport now
+		"drop index idx1 on tbl",              //unsupport now
+	}
+	runTestShouldError(mock, t, sqls)
 }
 
 func getJson(v any, t *testing.T) []byte {
@@ -528,8 +577,16 @@ func getJson(v any, t *testing.T) []byte {
 	return out.Bytes()
 }
 
-func outPutQuery(query *plan.Query, toFile bool, t *testing.T) {
-	json := getJson(query, t)
+func outPutPlan(logicPlan *plan.Plan, toFile bool, t *testing.T) {
+	var json []byte
+	switch logicPlan.Plan.(type) {
+	case *plan.Plan_Query:
+		json = getJson(logicPlan.GetQuery(), t)
+	case *plan.Plan_Tcl:
+		json = getJson(logicPlan.GetTcl(), t)
+	case *plan.Plan_Ddl:
+		json = getJson(logicPlan.GetDdl(), t)
+	}
 	if toFile {
 		err := ioutil.WriteFile("/tmp/mo_plan2_test.json", json, 0777)
 		if err != nil {
@@ -540,23 +597,24 @@ func outPutQuery(query *plan.Query, toFile bool, t *testing.T) {
 	}
 }
 
-func runOneStmt(opt Optimizer, t *testing.T, sql string) (*plan.Query, error) {
+func runOneStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 	//this sql always return one stmt
-	return opt.Optimize(stmts[0])
+	ctx := opt.CurrentContext()
+	return BuildPlan(ctx, stmts[0])
 }
 
 func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJson bool, toFile bool) {
 	for _, sql := range sqls {
-		query, err := runOneStmt(opt, t, sql)
+		logicPlan, err := runOneStmt(opt, t, sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
 		if printJson {
-			outPutQuery(query, toFile, t)
+			outPutPlan(logicPlan, toFile, t)
 		}
 	}
 }

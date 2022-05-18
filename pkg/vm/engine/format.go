@@ -39,7 +39,6 @@ func (node *Attribute) Format(buf *bytes.Buffer) {
 		str := fmt.Sprintf("%d", node.Type.Width)
 		buf.WriteString(str)
 		buf.WriteString(", ")
-		str = fmt.Sprintf("%d", node.Type.Scale)
 		buf.WriteByte(')')
 	} else if node.Type.Width > 0 {
 		buf.WriteString("(")

@@ -22,7 +22,6 @@ import (
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -48,7 +47,7 @@ func TestTables1(t *testing.T) {
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
 
-	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, db.MTBufMgr, db.Scheduler)
+	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, db.MTBufMgr, db.Scheduler, db.Dir)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()
@@ -68,6 +67,7 @@ func TestTables1(t *testing.T) {
 	t.Log(toAppend)
 
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
+	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
 	appender.Close()
 
@@ -79,6 +79,7 @@ func TestTables1(t *testing.T) {
 	appender = handle.SetAppender(id)
 
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
+	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	appender.Close()
 
@@ -91,9 +92,11 @@ func TestTables1(t *testing.T) {
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 	toAppend, err = appender.PrepareAppend(rows - 2*toAppend)
+	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	txn.Rollback()
+	err = txn.Rollback()
+	assert.Nil(t, err)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
@@ -111,9 +114,11 @@ func TestTxn1(t *testing.T) {
 	bats := compute.SplitBatch(bat, 20)
 	{
 		txn := db.StartTxn(nil)
-		database, _ := txn.CreateDatabase("db")
-		database.CreateRelation(schema)
-		err := txn.Commit()
+		database, err := txn.CreateDatabase("db")
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema)
+		assert.Nil(t, err)
+		err = txn.Commit()
 		assert.Nil(t, err)
 	}
 	var wg sync.WaitGroup
@@ -131,10 +136,12 @@ func TestTxn1(t *testing.T) {
 			assert.Nil(t, err)
 		}
 	}
-	p, _ := ants.NewPool(4)
+	p, err := ants.NewPool(4)
+	assert.Nil(t, err)
 	for _, toAppend := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(toAppend))
+		err := p.Submit(doAppend(toAppend))
+		assert.Nil(t, err)
 	}
 
 	wg.Wait()
@@ -276,7 +283,8 @@ func TestTxn3(t *testing.T) {
 			// err = blk.Update(0, colIdx, int32(200))
 			assert.NotNil(t, err)
 
-			txn.Rollback()
+			err = txn.Rollback()
+			assert.Nil(t, err)
 		}
 		err = txn.Commit()
 		assert.Nil(t, err)
@@ -339,7 +347,7 @@ func TestTxn4(t *testing.T) {
 		txn := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
-		pk := gvec.New(schema.ColDefs[schema.PrimaryKey].Type)
+		pk := vector.New(schema.ColDefs[schema.PrimaryKey].Type)
 		compute.AppendValue(pk, int32(1))
 		compute.AppendValue(pk, int32(2))
 		compute.AppendValue(pk, int32(1))
@@ -368,7 +376,8 @@ func TestTxn5(t *testing.T) {
 	{
 		txn := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
-		database.CreateRelation(schema)
+		_, err := database.CreateRelation(schema)
+		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -488,9 +497,10 @@ func TestTxn6(t *testing.T) {
 			// Update row that has uncommitted delete -- FAIL
 			err = rel.Update(id, row+1, uint16(3), int64(55))
 			assert.NotNil(t, err)
-			v, err = rel.GetValue(id, row+1, uint16(3))
+			_, err = rel.GetValue(id, row+1, uint16(3))
 			assert.Nil(t, err)
-			txn.Rollback()
+			err = txn.Rollback()
+			assert.Nil(t, err)
 		}
 		err = rel.Update(id, row+2, uint16(3), int64(99))
 		assert.Nil(t, err)
@@ -522,7 +532,7 @@ func TestTxn6(t *testing.T) {
 				blk := it.GetBlock()
 				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &comp, &decomp)
 				assert.Nil(t, err)
-				assert.Equal(t, gvec.Length(bats[0].Vecs[0]), gvec.Length(view.AppliedVec))
+				assert.Equal(t, vector.Length(bats[0].Vecs[0]), vector.Length(view.AppliedVec))
 				assert.True(t, view.DeleteMask.Contains(row+1))
 				t.Log(view.DeleteMask.String())
 				it.Next()
@@ -550,8 +560,8 @@ func TestMergeBlocks1(t *testing.T) {
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
-	pk := gvec.New(schema.GetPKType())
-	col3 := gvec.New(schema.ColDefs[3].Type)
+	pk := vector.New(schema.GetPKType())
+	col3 := vector.New(schema.ColDefs[3].Type)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
 		compute.AppendValue(pk, v)
@@ -626,7 +636,7 @@ func TestMergeBlocks1(t *testing.T) {
 				t.Log(view.DeleteMask.String())
 			}
 			pkView, _ := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
-			for i := 0; i < gvec.Length(pkView.AppliedVec); i++ {
+			for i := 0; i < vector.Length(pkView.AppliedVec); i++ {
 				pkv := compute.GetValue(pkView.AppliedVec, uint32(i))
 				colv := compute.GetValue(view.AppliedVec, uint32(i))
 				assert.Equal(t, mapping[pkv.(int32)], colv)
@@ -659,8 +669,8 @@ func TestMergeBlocks2(t *testing.T) {
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
-	pk := gvec.New(schema.GetPKType())
-	col3 := gvec.New(schema.ColDefs[3].Type)
+	pk := vector.New(schema.GetPKType())
+	col3 := vector.New(schema.ColDefs[3].Type)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
 		compute.AppendValue(pk, v)

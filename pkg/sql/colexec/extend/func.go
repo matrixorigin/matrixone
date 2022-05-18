@@ -16,6 +16,7 @@ package extend
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -76,11 +77,11 @@ func (a *FuncExtend) String() string {
 	for i, arg := range a.Args {
 		switch i {
 		case 0:
-			r += fmt.Sprintf("%s", arg)
+			r += arg.String()
 		default:
 			r += fmt.Sprintf(", %s", arg)
 		}
 	}
-	r += fmt.Sprintf(")")
+	r += ")"
 	return r
 }

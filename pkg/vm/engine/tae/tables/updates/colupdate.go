@@ -105,6 +105,12 @@ func (node *ColumnNode) GetDLNode() *common.DLNode {
 	return node.DLNode
 }
 
+func (node *ColumnNode) GetMask() *roaring.Bitmap {
+	return node.txnMask
+}
+func (node *ColumnNode) GetValues() map[uint32]interface{} {
+	return node.txnVals
+}
 func (node *ColumnNode) Compare(o common.NodePayload) int {
 	op := o.(*ColumnNode)
 	node.RLock()
@@ -249,14 +255,13 @@ func (node *ColumnNode) UpdateLocked(row uint32, v interface{}) error {
 	return nil
 }
 
-func (node *ColumnNode) MergeLocked(o *ColumnNode) error {
+func (node *ColumnNode) MergeLocked(o *ColumnNode) {
 	for k, v := range o.txnVals {
 		if vv := node.txnVals[k]; vv == nil {
 			node.txnMask.Add(k)
 			node.txnVals[k] = v
 		}
 	}
-	return nil
 }
 
 func (node *ColumnNode) GetStartTS() uint64        { return node.startTs }

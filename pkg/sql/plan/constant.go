@@ -17,12 +17,13 @@ package plan
 import (
 	"bytes"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"math"
 )
 
 func Neg(x *extend.ValueExtend) (extend.Extend, error) {
@@ -66,7 +67,7 @@ func Eq(x, y *extend.ValueExtend) (extend.Extend, error) {
 			vector.SetCol(vec, []int64{0})
 		}
 	case x.V.Typ.Oid == types.T_varchar && y.V.Typ.Oid == types.T_varchar:
-		if bytes.Compare(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) == 0 {
+		if bytes.Equal(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) {
 			vector.SetCol(vec, []int64{1})
 		} else {
 			vector.SetCol(vec, []int64{0})
@@ -106,7 +107,7 @@ func Ne(x, y *extend.ValueExtend) (extend.Extend, error) {
 			vector.SetCol(vec, []int64{0})
 		}
 	case x.V.Typ.Oid == types.T_varchar && y.V.Typ.Oid == types.T_varchar:
-		if bytes.Compare(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) != 0 {
+		if bytes.Equal(x.V.Col.(*types.Bytes).Data, y.V.Col.(*types.Bytes).Data) {
 			vector.SetCol(vec, []int64{1})
 		} else {
 			vector.SetCol(vec, []int64{0})
@@ -625,20 +626,4 @@ func toChar(e *extend.ValueExtend) error {
 		return errors.New(errno.DatatypeMismatch, fmt.Sprintf("cannot convert %s to char", e.V.Typ))
 	}
 	return nil
-}
-
-func toTimestamp(e *extend.ValueExtend) error {
-	vec := vector.New(types.Type{Oid: types.T_datetime, Size: 8})
-	vec.Ref = 1
-
-	if e.V.Typ.Oid == types.T_char || e.V.Typ.Oid == types.T_varchar {
-		d, err := types.ParseTimestamp(string(e.V.Col.(*types.Bytes).Get(0)), 6) // 6 is the default fsp for timestamp
-		if err != nil {
-			return err
-		}
-		vec.Col = []types.Timestamp{d}
-		e.V = vec
-		return nil
-	}
-	return errors.New(errno.DatatypeMismatch, fmt.Sprintf("cannot convert %s to datetime", e.V.Typ))
 }

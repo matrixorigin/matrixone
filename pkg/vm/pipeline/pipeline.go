@@ -51,7 +51,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	var err error
 	var bat *batch.Batch
 
-	// fmt.Println("wangjian sqlPipeRun is")
 	defer func() {
 		if err != nil {
 			for i, in := range p.instructions {
@@ -63,7 +62,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 			}
 		} else {
 			proc.Reg.InputBatch = nil
-			vm.Run(p.instructions, proc)
+			_, err = vm.Run(p.instructions, proc)
 		}
 	}()
 	if err = vm.Prepare(p.instructions, proc); err != nil {
@@ -103,7 +102,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 			}
 		} else {
 			proc.Reg.InputBatch = nil
-			vm.Run(p.instructions, proc)
+			_, err = vm.Run(p.instructions, proc)
 		}
 		proc.Cancel()
 	}()

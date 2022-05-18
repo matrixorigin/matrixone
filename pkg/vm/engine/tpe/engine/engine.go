@@ -16,11 +16,12 @@ package engine
 
 import (
 	"errors"
+	"strings"
+
 	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
-	"strings"
 )
 
 var (
@@ -87,7 +88,7 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	return te, nil
 }
 
-func (te *TpeEngine) Delete(epoch uint64, name string) error {
+func (te *TpeEngine) Delete(epoch uint64, name string, _ engine.Snapshot) error {
 	err := te.computeHandler.DropDatabase(epoch, name)
 	if err != nil {
 		return err
@@ -95,7 +96,7 @@ func (te *TpeEngine) Delete(epoch uint64, name string) error {
 	return nil
 }
 
-func (te *TpeEngine) Create(epoch uint64, name string, typ int) error {
+func (te *TpeEngine) Create(epoch uint64, name string, typ int, _ engine.Snapshot) error {
 	_, err := te.computeHandler.CreateDatabase(epoch, name, typ)
 	if err != nil {
 		return err
@@ -103,7 +104,7 @@ func (te *TpeEngine) Create(epoch uint64, name string, typ int) error {
 	return err
 }
 
-func (te *TpeEngine) Databases() []string {
+func (te *TpeEngine) Databases(_ engine.Snapshot) []string {
 	var names []string
 	if dbDescs, err := te.computeHandler.ListDatabases(); err == nil {
 		for _, desc := range dbDescs {
@@ -113,7 +114,7 @@ func (te *TpeEngine) Databases() []string {
 	return names
 }
 
-func (te *TpeEngine) Database(name string) (engine.Database, error) {
+func (te *TpeEngine) Database(name string, _ engine.Snapshot) (engine.Database, error) {
 	dbDesc, err := te.computeHandler.GetDatabase(name)
 	if err != nil {
 		return nil, err
@@ -131,7 +132,7 @@ func (te *TpeEngine) Database(name string) (engine.Database, error) {
 		nil
 }
 
-func (te *TpeEngine) Node(ip string) *engine.NodeInfo {
+func (te *TpeEngine) Node(ip string, _ engine.Snapshot) *engine.NodeInfo {
 	var ni *engine.NodeInfo
 	if te.tpeConfig.Cube != nil {
 		te.tpeConfig.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup), true, func(shard metapb.Shard, store metapb.Store) bool {

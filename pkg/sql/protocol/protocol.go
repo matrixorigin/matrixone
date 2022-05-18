@@ -865,12 +865,12 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 	if n := encoding.DecodeUint32(data); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			vec, remaing, err := DecodeVector(data)
+			vec, remaining, err := DecodeVector(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			bat.Vecs = append(bat.Vecs, vec)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -943,16 +943,15 @@ func DecodeBatchWithProcess(data []byte, proc *process.Process) (*batch.Batch, [
 	if n := encoding.DecodeUint32(data); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			vec, remaing, err := DecodeVector(data)
+			vec, remaining, err := DecodeVector(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			bat.Vecs = append(bat.Vecs, vec)
-			data = remaing
+			data = remaining
 		}
 		var err error
 		for i, vec := range bat.Vecs {
-			fmt.Println("wangjian sqlDup2 is")
 			if bat.Vecs[i], err = vector.Dup(vec, proc.Mp); err != nil {
 				return nil, nil, err
 			}

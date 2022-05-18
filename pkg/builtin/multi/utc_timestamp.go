@@ -15,7 +15,6 @@ package multi
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/builtin"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -34,7 +33,7 @@ func init() {
 		return types.T_datetime // return in 'YYYY-MM-DD hh:mm:ss' format
 	}
 	extend.MultiStrings[builtin.UTCTimestamp] = func(e []extend.Extend) string {
-		return fmt.Sprintf("utc_timestamp()")
+		return "utc_timestamp()"
 	}
 	overload.AppendFunctionRets(builtin.UTCTimestamp, []types.T{}, types.T_char)
 	overload.MultiOps[builtin.UTCTimestamp] = []*overload.MultiOp{

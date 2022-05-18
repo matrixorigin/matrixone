@@ -29,13 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/panjf2000/ants/v2"
 )
 
 var sampleDir = "/tmp/sample3"
-var txnBufSize = common.G
-var mutBufSize = common.G
 var dbName = "db"
 var cpuprofile = "/tmp/sample3/cpuprofile"
 var memprofile = "/tmp/sample3/memprofile"
@@ -46,38 +45,43 @@ func init() {
 
 func startProfile() {
 	f, _ := os.Create(cpuprofile)
-	pprof.StartCPUProfile(f)
+	if err := pprof.StartCPUProfile(f); err != nil {
+		panic(err)
+	}
 }
 
 func stopProfile() {
 	pprof.StopCPUProfile()
 	memf, _ := os.Create(memprofile)
 	defer memf.Close()
-	pprof.Lookup("heap").WriteTo(memf, 0)
+	_ = pprof.Lookup("heap").WriteTo(memf, 0)
 }
 
 func main() {
 	tae, _ := db.Open(sampleDir, nil)
 	defer tae.Close()
+	eng := moengine.NewEngine(tae)
 
 	var schema *catalog.Schema
 	{
-		txn := tae.StartTxn(nil)
-		eng := moengine.NewEngine(txn)
-		err := eng.Create(0, dbName, 0)
+		txn, _ := eng.StartTxn(nil)
+		err := eng.Create(0, dbName, 0, txn.GetCtx())
 		if err != nil {
 			panic(err)
 		}
-		db, err := eng.Database(dbName)
+		db, err := eng.Database(dbName, txn.GetCtx())
 		if err != nil {
 			panic(err)
 		}
 		tblInfo := moengine.MockTableInfo(4)
 		tblInfo.Columns[0].PrimaryKey = true
 		_, _, _, _, defs, _ := helper.UnTransfer(*tblInfo)
-		err = db.Create(0, tblInfo.Name, defs)
+		err = db.Create(0, tblInfo.Name, defs, txn.GetCtx())
+		if err != nil {
+			panic(err)
+		}
 		{
-			db, _ := txn.GetDatabase(dbName)
+			db, _ := txn.(txnif.AsyncTxn).GetDatabase(dbName)
 			rel, _ := db.GetRelationByName(tblInfo.Name)
 			schema = rel.GetMeta().(*catalog.TableEntry).GetSchema()
 		}
@@ -94,21 +98,20 @@ func main() {
 	doAppend := func(b *batch.Batch) func() {
 		return func() {
 			defer wg.Done()
-			txn := tae.StartTxn(nil)
+			txn, _ := eng.StartTxn(nil)
 			// {
 			// 	db, _ := txn.GetDatabase(dbName)
 			// 	rel, _ := db.GetRelationByName(schema.Name)
 			// }
-			eng := moengine.NewEngine(txn)
-			db, err := eng.Database(dbName)
+			db, err := eng.Database(dbName, txn.GetCtx())
 			if err != nil {
 				panic(err)
 			}
-			rel, err := db.Relation(schema.Name)
+			rel, err := db.Relation(schema.Name, txn.GetCtx())
 			if err != nil {
 				panic(err)
 			}
-			if err := rel.Write(0, b); err != nil {
+			if err := rel.Write(0, b, txn.GetCtx()); err != nil {
 				panic(err)
 			}
 			if err := txn.Commit(); err != nil {
@@ -121,19 +124,18 @@ func main() {
 	startProfile()
 	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(b))
+		_ = p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	stopProfile()
 	logutil.Infof("Append takes: %s", time.Since(now))
 	{
-		txn := tae.StartTxn(nil)
-		eng := moengine.NewEngine(txn)
-		db, err := eng.Database(dbName)
+		txn, _ := eng.StartTxn(nil)
+		db, err := eng.Database(dbName, txn.GetCtx())
 		if err != nil {
 			panic(err)
 		}
-		rel, err := db.Relation(schema.Name)
+		rel, err := db.Relation(schema.Name, txn.GetCtx())
 		if err != nil {
 			panic(err)
 		}
@@ -152,7 +154,7 @@ func main() {
 		}
 
 		parallel := 10
-		readers := rel.NewReader(parallel, nil, nil)
+		readers := rel.NewReader(parallel, nil, nil, txn.GetCtx())
 		for _, reader := range readers {
 			wg.Add(1)
 			go readProc(reader)

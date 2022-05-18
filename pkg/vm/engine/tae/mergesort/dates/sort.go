@@ -206,56 +206,6 @@ func maxDepth(n int) int {
 	return depth * 2
 }
 
-// Notes on stable sorting:
-// The used algorithms are simple and provable correct on all input and use
-// only logarithmic additional stack space. They perform well if compared
-// experimentally to other stable in-place sorting algorithms.
-//
-// Remarks on other algorithms evaluated:
-//  - GCC's 4.6.3 stable_sort with merge_without_buffer from libstdc++:
-//    Not faster.
-//  - GCC's __rotate for block rotations: Not faster.
-//  - "Practical in-place mergesort" from  Jyrki Katajainen, Tomi A. Pasanen
-//    and Jukka Teuhola; Nordic Journal of Computing 3,1 (1996), 27-40:
-//    The given algorithms are in-place, number of Swap and Assignments
-//    grow as n log n but the algorithm is not stable.
-//  - "Fast Stable In-Place Sorting with Operator(n) DataSource Moves" J.I. Munro and
-//    V. Raman in Algorithmica (1996) 16, 115-160:
-//    This algorithm either needs additional 2n bits or works only if there
-//    are enough different elements available to encode some permutations
-//    which have to be undone later (so not stable on any input).
-//  - All the optimal in-place sorting/merging algorithms I found are either
-//    unstable or rely on enough different elements in each step to encode the
-//    performed block rearrangements. See also "In-Place Merging Algorithms",
-//    Denham Coates-Evely, Department of Computer Science, Kings College,
-//    January 2004 and the references in there.
-//  - Often "optimal" algorithms are optimal in the number of assignments
-//    but Interface has only Swap as operation.
-
-func stable(data sortSlice, n int) {
-	blockSize := 20 // must be > 0
-	a, b := 0, blockSize
-	for b <= n {
-		insertionSort(data, a, b)
-		a = b
-		b += blockSize
-	}
-	insertionSort(data, a, n)
-
-	for blockSize < n {
-		a, b = 0, 2*blockSize
-		for b <= n {
-			symMerge(data, a, a+blockSize, b)
-			a = b
-			b += 2 * blockSize
-		}
-		if m := a + blockSize; m < n {
-			symMerge(data, a, m, n)
-		}
-		blockSize *= 2
-	}
-}
-
 // symMerge merges the two sorted subsequences data[a:m] and data[m:b] using
 // the SymMerge algorithm from Pok-Son Kim and Arne Kutzner, "Stable Minimum
 // Storage Merging by Symmetric Comparisons", in Susanne Albers and Tomasz
@@ -437,12 +387,4 @@ Calls to Swap Operator(n * log^2(n) - (t^2+t)/2*n) = Operator(n * log^2(n))
 func sortUnstable(data sortSlice) {
 	n := len(data)
 	quickSort(data, 0, n, maxDepth(n))
-}
-
-// Stable sorts data while keeping the original order of equal elements.
-//
-// It makes one call to data.Len to determine n, Operator(n*log(n)) calls to
-// data.Less and Operator(n*log(n)*log(n)) calls to data.Swap.
-func sortStable(data sortSlice) {
-	stable(data, len(data))
 }

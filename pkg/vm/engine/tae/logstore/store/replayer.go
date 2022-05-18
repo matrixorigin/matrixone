@@ -115,7 +115,10 @@ func (r *replayer) mergeUncommittedEntries(pre, curr *replayEntry) *replayEntry 
 
 func (r *replayer) Apply() {
 	for _, e := range r.checkpoints {
-		r.applyEntry(e.group, e.commitId, e.payload, e.entryType, e.info)
+		err := r.applyEntry(e.group, e.commitId, e.payload, e.entryType, e.info)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	for _, e := range r.entrys {
@@ -133,16 +136,25 @@ func (r *replayer) Apply() {
 				entries, ok := tidMap[e.tid]
 				if ok {
 					for _, entry := range entries {
-						r.applyEntry(entry.group, entry.commitId, entry.payload, entry.entryType, nil)
+						err := r.applyEntry(entry.group, entry.commitId, entry.payload, entry.entryType, nil)
+						if err != nil {
+							panic(err)
+						}
 						// pre = r.mergeUncommittedEntries(
 						// 	pre, entry)
 					}
 				}
 			}
 			// e = r.mergeUncommittedEntries(pre, e)
-			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
+			err := r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
+			if err != nil {
+				panic(err)
+			}
 		} else {
-			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
+			err := r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 }
@@ -291,7 +303,10 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		if !errors.Is(err, io.EOF) {
 			return err
 		}
-		vfile.Truncate(int64(r.state.pos))
+		err2 := vfile.Truncate(int64(r.state.pos))
+		if err2 != nil {
+			panic(err2)
+		}
 		return err
 	}
 
@@ -300,16 +315,21 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		if !errors.Is(err, io.EOF) {
 			return err
 		}
-		vfile.Truncate(int64(r.state.pos))
+		err2 := vfile.Truncate(int64(r.state.pos))
+		if err2 != nil {
+			panic(err2)
+		}
 		return err
 	}
 	if int(n) != entry.TotalSizeExpectMeta() {
 		if current.pos == r.state.pos+int(n) {
-			vfile.Truncate(int64(current.pos))
+			err2 := vfile.Truncate(int64(current.pos))
+			if err2 != nil {
+				return err
+			}
 			return io.EOF
 		} else {
-			return errors.New(fmt.Sprintf(
-				"payload mismatch: %d != %d", n, entry.GetPayloadSize()))
+			return fmt.Errorf("payload mismatch: %d != %d", n, entry.GetPayloadSize())
 		}
 	}
 	if err = r.onReplayEntry(entry, o); err != nil {

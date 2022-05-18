@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -29,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 )
 
 var (
@@ -54,7 +54,7 @@ func NewkvExecutor(kv storage.KVStorage) storage.Executor {
 }
 
 func (ce *kvExecutor) set(wb util.WriteBatch, req storage.Request) (uint64, []byte) {
-	customReq := &pb3.SetRequest{}
+	customReq := &pb.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 	wb.Set(req.Key, customReq.Value)
 	writtenBytes := uint64(len(req.Key) + len(req.Cmd))
@@ -62,7 +62,7 @@ func (ce *kvExecutor) set(wb util.WriteBatch, req storage.Request) (uint64, []by
 }
 
 func (ce *kvExecutor) tpeSetBatch(ctx storage.WriteContext, wb util.WriteBatch, req storage.Request) (uint64, []byte) {
-	userReq := &pb3.TpeSetBatchRequest{}
+	userReq := &pb.TpeSetBatchRequest{}
 	protoc.MustUnmarshal(userReq, req.Cmd)
 	writtenBytes := uint64(len(req.Cmd))
 	keys := userReq.GetKeys()

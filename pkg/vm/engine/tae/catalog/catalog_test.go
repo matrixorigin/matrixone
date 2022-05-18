@@ -48,14 +48,14 @@ func TestCreateDB1(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(db1.String())
 
-	assert.Equal(t, 1, len(catalog.entries))
+	assert.Equal(t, 2, len(catalog.entries))
 	cnt := 0
 	catalog.link.Loop(func(n *common.DLNode) bool {
 		t.Log(n.GetPayload().(*DBEntry).GetID())
 		cnt++
 		return true
 	}, true)
-	assert.Equal(t, 1, cnt)
+	assert.Equal(t, 2, cnt)
 
 	_, err = txn1.CreateDatabase(name)
 	assert.Equal(t, ErrDuplicate, err)
@@ -68,7 +68,8 @@ func TestCreateDB1(t *testing.T) {
 	_, err = txn1.GetDatabase(name)
 	assert.Nil(t, err)
 
-	txn1.Commit()
+	err = txn1.Commit()
+	assert.Nil(t, err)
 
 	assert.Nil(t, err)
 	// assert.False(t, db1.(*mcokDBHandle).entry.IsCommitting())
@@ -93,11 +94,12 @@ func TestCreateDB1(t *testing.T) {
 		cnt++
 		return true
 	}, true)
-	assert.Equal(t, 2, cnt)
+	assert.Equal(t, 3, cnt)
 
 	txn4 := txnMgr.StartTxn(nil)
 
 	h, err := txn4.GetDatabase(name)
+	assert.Nil(t, err)
 	assert.NotNil(t, h)
 	// assert.Equal(t, db1.(*mcokDBHandle).entry, h.(*mcokDBHandle).entry)
 }

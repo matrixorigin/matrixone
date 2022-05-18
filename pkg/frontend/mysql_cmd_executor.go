@@ -188,13 +188,11 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 	access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
-	fmt.Println("wangjian sqlpipe0 is")
 	ses := obj.(*Session)
 
 	if bat == nil {
 		return nil
 	}
-	fmt.Println("wangjian sqlpipe1 is", bat.Attrs, bat.Vecs)
 
 	goID := GetRoutineId()
 
@@ -237,7 +235,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	n := vector.Length(bat.Vecs[0])
 
 	if enableProfile {
-		pprof.StartCPUProfile(cpuf)
+		if err := pprof.StartCPUProfile(cpuf); err != nil {
+			return err
+		}
 	}
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
@@ -542,7 +542,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	ses := mce.GetSession()
 	//TODO: check meta data
-	if _, err := ses.Pu.StorageEngine.Database(db); err != nil {
+	if _, err := ses.Pu.StorageEngine.Database(db, nil); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
@@ -738,7 +738,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 		loadDb = ses.protocol.GetDatabaseName()
 	}
 
-	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb)
+	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, nil)
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
@@ -754,7 +754,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(loadTable)
+	tableHandler, err := dbHandler.Relation(loadTable, nil)
 	if err != nil {
 		//echo client. no such table
 		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
@@ -915,11 +915,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 }
 
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
-	es := &explain.ExplainOptions{
-		Verbose: false,
-		Anzlyze: false,
-		Format:  explain.EXPLAIN_FORMAT_TEXT,
-	}
+	es := explain.NewExplainDefaultOptions()
 
 	for _, v := range stmt.Options {
 		if strings.EqualFold(v.Name, "VERBOSE") {
@@ -953,19 +949,24 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		}
 	}
 
-	//get CompilerContext
-	ctx := plan2.NewMockCompilerContext()
-	qry, err := plan2.BuildPlan(ctx, stmt.Statement)
+	//get query optimizer and execute Optimize
+	mockOptimizer := plan2.NewMockOptimizer()
+	qry, err := mockOptimizer.Optimize(stmt.Statement)
+
 	if err != nil {
-		//fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
+		logutil.Errorf("build query plan and optimize failed, error: %v", err)
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("build query plan and optimize failed:'%v'", err))
 	}
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(qry)
-	explainQuery.ExplainPlan(buffer, es)
+	err = explainQuery.ExplainPlan(buffer, es)
+	if err != nil {
+		logutil.Errorf("explain Query statement error: %v", err)
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("explain Query statement error:%v", err))
+	}
 
 	session := mce.GetSession()
 	protocol := session.GetMysqlProtocol()
@@ -1134,7 +1135,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
-	fmt.Println("wangjian sql0 is", sql)
+	fmt.Println("wangjian sql-1 is", sql)
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
@@ -1293,7 +1294,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		case *tree.ExplainAnalyze:
 			selfHandle = true
-			return errors.New(errno.FeatureNotSupported, "not support explain analyze statment now")
+			return errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 		}
 
 		if selfHandle {

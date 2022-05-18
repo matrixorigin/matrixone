@@ -16,22 +16,29 @@ package mockio
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
 
 var SegmentFileMockFactory = func(name string, id uint64) file.Segment {
-	return newSegmentFile(name, id)
+	return mockFS.OpenFile(name, id)
 }
 
 type segmentFile struct {
+	sync.RWMutex
 	common.RefHelper
 	id     *common.ID
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
+}
+
+func (sf *segmentFile) GetSegmentFile() *segment.Segment {
+	panic(any("implement me"))
 }
 
 func newSegmentFile(name string, id uint64) *segmentFile {
@@ -51,16 +58,20 @@ func (sf *segmentFile) Fingerprint() *common.ID { return sf.id }
 func (sf *segmentFile) Close() error            { return nil }
 
 func (sf *segmentFile) close() {
-	sf.Destory()
+	sf.Destroy()
 }
-func (sf *segmentFile) Destory() {
-	for _, block := range sf.blocks {
-		block.Unref()
-	}
-	logutil.Infof("Destoring Segment %d", sf.id.SegmentID)
+func (sf *segmentFile) Destroy() {
+	// for _, block := range sf.blocks {
+	// 	block.Unref()
+	// }
+
+	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
+	mockFS.RemoveFile(sf.id.SegmentID)
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
+	sf.Lock()
+	defer sf.Unlock()
 	bf := sf.blocks[id]
 	if bf == nil {
 		bf = newBlock(id, sf, colCnt, indexCnt)
@@ -68,6 +79,12 @@ func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (b
 	}
 	block = bf
 	return
+}
+
+func (sf *segmentFile) RemoveBlock(id uint64) {
+	sf.Lock()
+	defer sf.Unlock()
+	delete(sf.blocks, id)
 }
 
 func (sf *segmentFile) WriteTS(ts uint64) error {

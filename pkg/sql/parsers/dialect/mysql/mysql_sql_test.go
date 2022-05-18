@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "explain (analyze true,verbose false) select * from emp",
-		//output: "select * from R inner join S on R.uid = S.uid",
+		input:  "SELECT md.datname as `Database` FROM TT md",
+		output: "select md.datname as Database from tt as md",
 	}
 )
 
@@ -56,7 +56,23 @@ var (
 		input  string
 		output string
 	}{{
-		input: "select Quarter from ontime limit 1",
+		input:  "SELECT md.datname as `Database` FROM TT md",
+		output: "select md.datname as Database from tt as md",
+	}, {
+		input:  "select * from t where a = `Hello`",
+		output: "select * from t where a = Hello",
+	}, {
+		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
+		output: "create view v as select * from t where t.id = f(t.name)",
+	}, {
+		input:  "CREATE VIEW v AS SELECT qty, price, qty*price AS value FROM t;",
+		output: "create view v as select qty, price, qty * price as value from t",
+	}, {
+		input: "create view v_today (today) as select current_day from t",
+	}, {
+		input: "explain (analyze true,verbose false) select * from emp",
+	}, {
+		input: "select quarter from ontime limit 1",
 	}, {
 		input: "select month from ontime limit 1",
 	}, {
@@ -73,7 +89,7 @@ var (
 		output: "select extract(year, l_shipdate) as l_year from t",
 	}, {
 		input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112 day'",
-		output: "select * from R inner join S on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112 day)",
+		output: "select * from r inner join s on r.uid = s.uid where l_shipdate <= date(1998-12-01) - interval(112 day)",
 	}, {
 		input: "create table deci_table (a decimal(10, 5))",
 	}, {
@@ -93,7 +109,7 @@ var (
 		input: "select substring(name, 5, 3) from t1",
 	}, {
 		input:  "select * from R join S on R.uid = S.uid",
-		output: "select * from R inner join S on R.uid = S.uid",
+		output: "select * from r inner join s on r.uid = s.uid",
 	}, {
 		input:  "create table t (a int, b char, key idx1 type zonemap (a, b))",
 		output: "create table t (a int, b char, index idx1 using zonemap (a, b))",
@@ -120,7 +136,7 @@ var (
 		input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 		output: "show variables",
 	}, {
-		input: "create index idx1 using bsi on A (a) ",
+		input: "create index idx1 using bsi on a (a) ",
 	}, {
 		input:  "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
 		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
@@ -131,7 +147,8 @@ var (
 		input:  "INSERT INTO t1 SET f1 = -1;",
 		output: "insert into t1 (f1) values (-1)",
 	}, {
-		input: "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
+		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
+		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
 	}, {
 		input:  "create table t (a int) properties(\"host\" = \"127.0.0.1\", \"port\" = \"8239\", \"user\" = \"mysql_user\", \"password\" = \"mysql_passwd\")",
 		output: "create table t (a int) properties(host = 127.0.0.1, port = 8239, user = mysql_user, password = mysql_passwd)",
@@ -144,7 +161,7 @@ var (
 	}, {
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
-		input: "create table t (a int, b char, foreign key sdf (a, b) references B(a asc, b desc))",
+		input: "create table t (a int, b char, foreign key sdf (a, b) references b(a asc, b desc))",
 	}, {
 		input: "create table t (a int, b char, unique key idx (a, b))",
 	}, {
@@ -158,7 +175,7 @@ var (
 		input: "create table t (a int, b char, primary key idx (a, b))",
 	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
-		output: "set NAMES = utf8mb4 utf8mb4_general_ci",
+		output: "set names = utf8mb4 utf8mb4_general_ci",
 	}, {
 		input: "insert into cms values (null, default)",
 	}, {
@@ -170,7 +187,7 @@ var (
 		input: "insert into t2 values (-3, 2)",
 	}, {
 		input:  "select spID,userID,score from t1 where spID>(userID-1);",
-		output: "select spID, userID, score from t1 where spID > (userID - 1)",
+		output: "select spid, userid, score from t1 where spid > (userid - 1)",
 	}, {
 		input:  "CREATE TABLE t2(product VARCHAR(32),country_id INTEGER NOT NULL,year INTEGER,profit INTEGER)",
 		output: "create table t2 (product varchar(32), country_id integer not null, year integer, profit integer)",
@@ -180,7 +197,7 @@ var (
 		input: "create table numtable (a tinyint unsigned, b smallint unsigned, c int unsigned, d bigint unsigned)",
 	}, {
 		input:  "SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by user",
-		output: "select userID as user, max(score) as max from t1 group by userID order by user",
+		output: "select userid as user, max(score) as max from t1 group by userid order by user",
 	}, {
 		input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
@@ -201,29 +218,29 @@ var (
 		output: "show tables from test01 where tables_in_test01 like %t2%",
 	}, {
 		input:  "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score",
-		output: "select userID, max(score) as max_score from t1 where userID < 2 or userID > 3 group by userID order by max_score",
+		output: "select userid, max(score) as max_score from t1 where userid < 2 or userid > 3 group by userid order by max_score",
 	}, {
 		input: "select c1, -c2 from t2 order by -c1 desc",
 	}, {
 		input:  "select * from t1 where spID>2 AND userID <2 || userID >=2 OR userID < 2 limit 3",
-		output: "select * from t1 where spID > 2 and userID < 2 or userID >= 2 or userID < 2 limit 3",
+		output: "select * from t1 where spid > 2 and userid < 2 or userid >= 2 or userid < 2 limit 3",
 	}, {
 		input:  "select * from t10 where (b='ba' or b='cb') and (c='dc' or c='ed');",
 		output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",
 	}, {
 		input:  "select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2",
-		output: "select cast(userID as double) as cast_double, cast(userID as float(3)) as cast_float, cast(userID as real) as cast_real, cast(userID as signed) as cast_signed, cast(userID as unsigned unsigned) as cast_unsigned from t1 limit 2",
+		output: "select cast(userid as double) as cast_double, cast(userid as float(3)) as cast_float, cast(userid as real) as cast_real, cast(userid as signed) as cast_signed, cast(userid as unsigned unsigned) as cast_unsigned from t1 limit 2",
 	}, {
 		input: "select distinct name as name1 from t1",
 	}, {
 		input:  "select userID, userID DIV 2 as user_dir, userID%2 as user_percent, userID MOD 2 as user_mod from t1",
-		output: "select userID, userID div 2 as user_dir, userID % 2 as user_percent, userID % 2 as user_mod from t1",
+		output: "select userid, userid div 2 as user_dir, userid % 2 as user_percent, userid % 2 as user_mod from t1",
 	}, {
 		input:  "select sum(score) as sum from t1 where spID=6 group by score order by sum desc",
-		output: "select sum(score) as sum from t1 where spID = 6 group by score order by sum desc",
+		output: "select sum(score) as sum from t1 where spid = 6 group by score order by sum desc",
 	}, {
 		input:  "select userID,count(score) from t1 where userID>2 group by userID having count(score)>1",
-		output: "select userID, count(score) from t1 where userID > 2 group by userID having count(score) > 1",
+		output: "select userid, count(score) from t1 where userid > 2 group by userid having count(score) > 1",
 	}, {
 		input:  "SELECT product, SUM(profit),AVG(profit) FROM t2 where product<>'TV' GROUP BY product order by product asc",
 		output: "select product, sum(profit), avg(profit) from t2 where product != TV group by product order by product asc",
@@ -344,43 +361,43 @@ var (
 	}, {
 		input: "select t.a from sa.t",
 	}, {
-		input: "create table A (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
+		input: "create table a (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
 	}, {
-		input: "create table A (a int) partition by key (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
+		input: "create table a (a int) partition by key (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
 	}, {
-		input:  "create table A (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
-		output: "create table A (a int) engine = innodb row_format = dynamic comment = table A compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
+		input:  "create table a (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
+		output: "create table a (a int) engine = innodb row_format = dynamic comment = table A compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
 	}, {
-		input: "create table A (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
+		input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
 	}, {
-		input: "create table A (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key (a, b, db.t.c) subpartitions 10",
+		input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key (a, b, db.t.c) subpartitions 10",
 	}, {
-		input: "create table A (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10",
+		input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10",
 	}, {
-		input: "create table A (a int) partition by linear hash (1 + 1234 / 32)",
+		input: "create table a (a int) partition by linear hash (1 + 1234 / 32)",
 	}, {
-		input: "create table A (a int) partition by linear key algorithm = 31 (a, b, db.t.c)",
+		input: "create table a (a int) partition by linear key algorithm = 31 (a, b, db.t.c)",
 	}, {
-		input: "create table A (a int) partition by linear key (a, b, db.t.c)",
+		input: "create table a (a int) partition by linear key (a, b, db.t.c)",
 	}, {
-		input: "create table A (a int) partition by list columns (a, b, db.t.c)",
+		input: "create table a (a int) partition by list columns (a, b, db.t.c)",
 	}, {
-		input: "create table A (a int) partition by list columns (a, b, db.t.c)",
+		input: "create table a (a int) partition by list columns (a, b, db.t.c)",
 	}, {
-		input: "create table A (a int) partition by range columns (a, b, db.t.c)",
+		input: "create table a (a int) partition by range columns (a, b, db.t.c)",
 	}, {
-		input: "create table A (a int) partition by range(1 + 21)",
+		input: "create table a (a int) partition by range(1 + 21)",
 	}, {
-		input: "create table A (a int storage disk constraint cx check (b + c) enforced)",
+		input: "create table a (a int storage disk constraint cx check (b + c) enforced)",
 	}, {
-		input: "create table A (a int storage disk, b int references B(a asc, b desc) match full on delete cascade on update restrict)",
+		input: "create table a (a int storage disk, b int references b(a asc, b desc) match full on delete cascade on update restrict)",
 	}, {
-		input: "create table A (a int storage disk, b int)",
+		input: "create table a (a int storage disk, b int)",
 	}, {
-		input: "create table A (a int not null default 1 auto_increment unique primary key collate utf8_bin storage disk)",
+		input: "create table a (a int not null default 1 auto_increment unique primary key collate utf8_bin storage disk)",
 	}, {
 		input:  "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A to u1, 'u2'@'h2', ''@'h3' with grant option",
-		output: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A to u1, u2@h2, @h3 with grant option",
+		output: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2@h2, @h3 with grant option",
 	}, {
 		input: "grant proxy on u1 to u2, u3, u4 with grant option",
 	}, {
@@ -392,16 +409,16 @@ var (
 		output: "grant super(a, b, c) on procedure db.func to h3",
 	}, {
 		input:  "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
-		output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, u2@h2, @h3",
+		output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
 	}, {
 		input: "revoke r1, r2, r3 from u1, u2, u3",
 	}, {
 		input: "revoke super(a, b, c) on procedure db.func from h3",
 	}, {
 		input:  "revoke all on table db.A from u1, 'u2'@'h2', ''@'h3'",
-		output: "revoke all on table db.A from u1, u2@h2, @h3",
+		output: "revoke all on table db.a from u1, u2@h2, @h3",
 	}, {
-		input: "revoke all on table db.A from u1",
+		input: "revoke all on table db.a from u1",
 	}, {
 		input: "set default role r1, r2, r3 to u1, u2, u3",
 	}, {
@@ -462,20 +479,20 @@ var (
 	}, {
 		input: "use",
 	}, {
-		input: "update A as AA set a = 3, b = 4 where a != 0 order by b limit 1",
+		input: "update a as aa set a = 3, b = 4 where a != 0 order by b limit 1",
 	}, {
-		input: "update A as AA set a = 3, b = 4",
+		input: "update a as aa set a = 3, b = 4",
 	}, {
 		input: "explain insert into u (a, b, c, d) values (1, 2, 3, 4), (5, 6, 7, 8)",
 	}, {
-		input: "explain delete from A where a != 0 order by b limit 1",
+		input: "explain delete from a where a != 0 order by b limit 1",
 	}, {
-		input: "explain select a from A union select b from B",
+		input: "explain select a from a union select b from b",
 	}, {
-		input: "explain select a from A",
+		input: "explain select a from a",
 	}, {
 		input:  "explain (format text) select a from A",
-		output: "explain (format text) select a from A",
+		output: "explain (format text) select a from a",
 	}, {
 		input:  "explain analyze select * from t",
 		output: "explain (analyze) select * from t",
@@ -483,9 +500,9 @@ var (
 		input:  "explain format = 'tree' for connection 10",
 		output: "explain format = tree for connection 10",
 	}, {
-		input: "explain db.A db.A.a",
+		input: "explain db.a db.a.a",
 	}, {
-		input: "explain A",
+		input: "explain a",
 	}, {
 		input:  "alter user u1 require cipher 'xxx' subject 'yyy' with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
 		output: "alter user u1 require cipher xxx subject yyy with max_queries_per_hour 0 password expire interval 1 day password expire default account lock account unlock",
@@ -579,15 +596,15 @@ var (
 		input:  "create role 'admin', 'developer'",
 		output: "create role admin, developer",
 	}, {
-		input:  "create index idx1 on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
-		output: "create index idx1 on A (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
+		input:  "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
+		output: "create index idx1 on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 	}, {
 		input:  "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment 'x' invisible",
-		output: "create index idx1 using btree on A (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
+		output: "create index idx1 using btree on a (a) KEY_BLOCK_SIZE 10 with parser x comment x invisible",
 	}, {
-		input: "create index idx1 on A (a)",
+		input: "create index idx1 on a (a)",
 	}, {
-		input: "create unique index idx1 using btree on A (a, b(10), (a + b), (a - b)) visible",
+		input: "create unique index idx1 using btree on a (a, b(10), (a + b), (a - b)) visible",
 	}, {
 		input:  "create database test_db default collate 'utf8mb4_general_ci' collate utf8mb4_general_ci",
 		output: "create database test_db default collate utf8mb4_general_ci collate utf8mb4_general_ci",
@@ -600,7 +617,7 @@ var (
 	}, {
 		input: "create database db",
 	}, {
-		input: "delete from A as AA",
+		input: "delete from a as aa",
 	}, {
 		input: "delete from t where a > 1 order by b limit 1 offset 2",
 	}, {

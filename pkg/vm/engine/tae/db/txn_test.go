@@ -220,7 +220,7 @@ func (c *APP1Client) CheckBound() {
 	}
 }
 
-// TODO: rewirte
+// TODO: rewrite
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeBlockIt()
@@ -391,7 +391,12 @@ func (app1 *APP1) GetGoods() *APP1Goods {
 
 func (app1 *APP1) Init(factor int) {
 	txn := app1.Mgr.StartTxn(nil)
-	defer txn.Commit()
+	defer func() {
+		err := txn.Commit()
+		if err != nil {
+			panic(err)
+		}
+	}()
 	db, err := App1CreateTables(txn)
 	if err != nil {
 		panic(err)
@@ -496,9 +501,11 @@ func TestApp1(t *testing.T) {
 		err := client.BuyGood(goods.ID, uint64(rand.Intn(2)+10))
 		if err != nil {
 			// t.Log(err)
-			txn.Rollback()
+			err := txn.Rollback()
+			assert.Nil(t, err)
 		} else {
-			txn.Commit()
+			err := txn.Commit()
+			assert.Nil(t, err)
 		}
 		if txn.GetTxnState(true) == txnif.TxnStateRollbacked {
 			t.Log(txn.String())
@@ -506,7 +513,8 @@ func TestApp1(t *testing.T) {
 	}
 	for i := 0; i < 5000; i++ {
 		wg.Add(1)
-		p.Submit(buyTxn)
+		err := p.Submit(buyTxn)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Log(c.SimplePPString(common.PPL1))

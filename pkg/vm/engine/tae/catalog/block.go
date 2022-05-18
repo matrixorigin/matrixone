@@ -34,7 +34,7 @@ type BlockEntry struct {
 	blkData data.Block
 }
 
-func NewEmptyBlockEntry() *BlockEntry {
+func NewReplayBlockEntry() *BlockEntry {
 	return &BlockEntry{
 		BaseEntry: new(BaseEntry),
 	}
@@ -56,6 +56,22 @@ func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, 
 	}
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
+	}
+	return e
+}
+
+func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
+	e := &BlockEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		segment: segment,
+		state:   ES_Appendable,
 	}
 	return e
 }
@@ -90,6 +106,11 @@ func (entry *BlockEntry) PPString(level common.PPLevel, depth int, prefix string
 	return s
 }
 
+func (entry *BlockEntry) Repr() string {
+	id := entry.AsCommonID()
+	return fmt.Sprintf("[%s]BLOCK[%s]", entry.state.Repr(), id.String())
+}
+
 func (entry *BlockEntry) String() string {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -116,7 +137,9 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 	currOp := entry.CurrOp
 	entry.RUnlock()
 	if currOp == OpCreate {
-		err = entry.GetSegment().RemoveEntry(entry)
+		if err = entry.GetSegment().RemoveEntry(entry); err != nil {
+			return
+		}
 	}
 	if err = entry.BaseEntry.PrepareRollback(); err != nil {
 		return

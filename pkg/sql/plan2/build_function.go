@@ -65,6 +65,10 @@ func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerC
 		if err != nil {
 			return nil, err
 		}
+		expr, err = convertValueIntoBool(name, expr)
+		if err != nil {
+			return nil, err
+		}
 		args = append(args, expr)
 	}
 
@@ -74,6 +78,7 @@ func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerC
 		return nil, err
 	}
 
+	fmt.Println("wangjian test0 is", returnType, args)
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -260,3 +265,39 @@ func checkNumberType(typ plan.Type_TypeId, alias string) error {
 // 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not time", alias))
 // 	}
 // }
+
+func convertValueIntoBool(name string, expr *plan.Expr) (*plan.Expr, error) {
+	if name != "AND" && name != "OR" && name != "NOT" {
+		return expr, nil
+	}
+
+	fmt.Printf("wangjian sqlconvertValueIntoBool is %T\n", expr.Expr)
+	// fmt.Printf("wangjian test2 is %T\n", expr.Expr)
+	switch ex := expr.Expr.(type) {
+	case *plan.Expr_C:
+		expr.Typ.Id = plan.Type_BOOL
+		switch value := ex.C.Value.(type) {
+		case *plan.Const_Ival:
+			if value.Ival == 0 {
+				ex.C.Value = &plan.Const_Bval{Bval : false}
+			} else if value.Ival == 1 {
+				ex.C.Value = &plan.Const_Bval{Bval : true}
+			} else {
+				return nil, errors.New("", "the params type is not right")
+			}
+		case *plan.Const_Sval:
+			if value.Sval == "true" {
+				ex.C.Value = &plan.Const_Bval{Bval : true}
+			} else if value.Sval == "false" {
+				ex.C.Value = &plan.Const_Bval{Bval : false}
+			} else {
+				return nil, errors.New("", "the params type is not right")
+			}
+		}
+	case *plan.Expr_F:
+		fmt.Println("wangjian test7 is", ex)
+	default:
+		return nil, errors.New("", "the expr type is not right")
+	}
+	return expr, nil
+}

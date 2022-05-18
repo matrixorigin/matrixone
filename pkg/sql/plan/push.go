@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -157,7 +156,7 @@ func pushDownAggregation(aggs []*Aggregation, qry *Query) error {
 	for i := 0; i < len(aggs); i++ {
 		s, e, ok := pushDownProjection(aggs[i].E, qry)
 		if !ok {
-			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("attributes involved in the aggregation by must belong to the same relation"))
+			return errors.New(errno.SQLStatementNotYetComplete, "attributes involved in the aggregation by must belong to the same relation")
 		}
 		aggs[i].Name = e.String()
 		switch rel := s.Op.(type) {
@@ -181,7 +180,7 @@ func pushDownFreeVariables(es []extend.Extend, qry *Query) error {
 	for i := 0; i < len(es); i++ {
 		s, e, ok := pushDownProjection(es[i], qry)
 		if !ok {
-			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("attributes involved in the group by must belong to the same relation"))
+			return errors.New(errno.SQLStatementNotYetComplete, "attributes involved in the group by must belong to the same relation")
 		}
 		es[i] = &extend.Attribute{
 			Name: es[i].String(),

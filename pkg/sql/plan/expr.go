@@ -228,7 +228,7 @@ func (b *build) buildFunc(flg bool, e *tree.FuncExpr, qry *Query, fn func(tree.E
 	funcName := strings.ToLower(name.Parts[0])
 	if !flg {
 		if _, ok := transformer.TransformerNamesMap[funcName]; ok {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Invalid use of group function"))
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "Invalid use of group function")
 		}
 		args := make([]extend.Extend, len(e.Exprs))
 		{
@@ -247,7 +247,7 @@ func (b *build) buildFunc(flg bool, e *tree.FuncExpr, qry *Query, fn func(tree.E
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Illegal function call '%s'", e))
 		}
 		if e.Type == tree.FUNC_TYPE_DISTINCT || e.Type == tree.FUNC_TYPE_ALL {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function type not support now"))
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "function type not support now")
 		}
 		return b.buildAggregation(op, funcName, e.Exprs[0], qry, fn)
 	}
@@ -602,9 +602,6 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 				return nil, ErrZeroModulus
 			}
 			tempResult := int(lf / rf)
-			if tempResult > math.MaxInt64 || tempResult < math.MinInt64 {
-				return nil, errBinaryOutRange
-			}
 			floatResult = lf - float64(tempResult)*rf
 		default:
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
@@ -643,7 +640,7 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, e.Op))
 		}
 	case *tree.UnresolvedName:
-		floatResult, err := strconv.ParseFloat(e.Parts[0], 10)
+		floatResult, err := strconv.ParseFloat(e.Parts[0], 64)
 		if err != nil {
 			return nil, err
 		}
@@ -774,9 +771,6 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			if err != nil || len(parts) == 1 {
 				return v, errConstantOutRange
 			}
-			if v < 0 {
-				return nil, errConstantOutRange
-			}
 			if len(parts[1]) > 0 && parts[1][0] >= '5' {
 				if v+1 < v {
 					return nil, errConstantOutRange
@@ -809,6 +803,8 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case types.T_decimal128:
 			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
+		case types.T_bool:
+			return types.ParseStringToBool(str)
 		}
 		if !num.Negative() {
 			switch typ.Oid {

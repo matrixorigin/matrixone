@@ -240,7 +240,10 @@ func (info *vInfo) LogUncommitInfo(entryInfo *entry.Info) error {
 	if !ok {
 		g = newuncommitGroup(info, entryInfo.Group)
 	}
-	g.Log(entryInfo)
+	err := g.Log(entryInfo)
+	if err != nil {
+		return err
+	}
 	info.groupmu.Lock()
 	info.groups[entryInfo.Group] = g
 	info.groupmu.Unlock()
@@ -267,7 +270,10 @@ func (info *vInfo) LogCheckpoint(entryInfo *entry.Info) error {
 	if !ok {
 		g = newcheckpointGroup(info, entryInfo.Group)
 	}
-	g.Log(entryInfo)
+	err := g.Log(entryInfo)
+	if err != nil {
+		return err
+	}
 	info.groupmu.Lock()
 	info.groups[entryInfo.Group] = g
 	info.groupmu.Unlock()

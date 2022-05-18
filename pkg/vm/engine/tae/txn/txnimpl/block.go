@@ -91,7 +91,14 @@ func (it *blockIt) Next() {
 }
 
 func (it *blockIt) GetBlock() handle.Block {
-	return newBlock(it.txn, it.curr)
+	return buildBlock(it.txn, it.curr)
+}
+
+func buildBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) handle.Block {
+	if meta.GetSegment().GetTable().GetDB().IsSystemDB() {
+		return newSysBlock(txn, meta)
+	}
+	return newBlock(txn, meta)
 }
 
 func newBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnBlock {
@@ -126,12 +133,16 @@ func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
 func (blk *txnBlock) BatchDedup(pks *gvec.Vector) (err error) {
 	blkData := blk.entry.GetBlockData()
-	blk.Txn.GetStore().LogBlockID(blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
+	blk.Txn.GetStore().LogBlockID(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
 	return blkData.BatchDedup(blk.Txn, pks)
 }
 
+func (blk *txnBlock) getDBID() uint64 {
+	return blk.entry.GetSegment().GetTable().GetDB().ID
+}
+
 func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
-	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end)
+	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end)
 }
 
 // func (blk *txnBlock) GetByFilter(filter handle.Filter) (uint32, error) {
@@ -139,7 +150,7 @@ func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
 // }
 
 func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
-	return blk.Txn.GetStore().Update(blk.entry.AsCommonID(), row, col, v)
+	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)
 }
 
 // TODO: temp use coarse rows
@@ -153,7 +164,7 @@ func (blk *txnBlock) GetColumnDataByName(attr string, compressed, decompressed *
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return blk.Txn.GetStore().LogTxnEntry(blk.entry.GetSegment().GetTable().GetID(), entry, readed)
+	return blk.Txn.GetStore().LogTxnEntry(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), entry, readed)
 }
 
 func (blk *txnBlock) GetSegment() (seg handle.Segment) {

@@ -139,7 +139,7 @@ func (h *baseHistory) Extend(vf []*VersionFile) {
 }
 
 func (h *baseHistory) String() string {
-	s := fmt.Sprintf("{")
+	s := "{"
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, v := range h.versions {

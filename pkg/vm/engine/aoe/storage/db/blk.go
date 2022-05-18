@@ -16,8 +16,8 @@ package db
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -93,7 +93,7 @@ func (blk *Block) Prefetch(attrs []string) {
 func (blk *Block) Read(cs []uint64, attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error) {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data == nil {
-		return nil, errors.New(fmt.Sprintf("specified blk %d not found", blk.Id))
+		return nil, fmt.Errorf("specified blk %d not found", blk.Id)
 	}
 	defer data.Unref()
 	bat := batch.New(true, attrs)

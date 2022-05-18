@@ -42,7 +42,7 @@ func TestARTIndexNumeric(t *testing.T) {
 		batches = append(batches, batch)
 	}
 
-	row, err = idx.Search(int32(55))
+	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 
 	err = idx.Delete(int32(55))
@@ -55,13 +55,13 @@ func TestARTIndexNumeric(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(55), row)
 
-	row, err = idx.Search(int32(100))
+	_, err = idx.Search(int32(100))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 
 	err = idx.Delete(int32(55))
 	require.NoError(t, err)
 
-	row, err = idx.Search(int32(55))
+	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
@@ -74,7 +74,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(123), row)
 
-	row, err = idx.Search(int32(233))
+	_, err = idx.Search(int32(233))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 
 	err = idx.Insert(int32(55), uint32(55))
@@ -120,7 +120,7 @@ func TestArtIndexString(t *testing.T) {
 		batches = append(batches, batch)
 	}
 
-	row, err = idx.Search([]byte(strconv.Itoa(55)))
+	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 
 	err = idx.Delete([]byte(strconv.Itoa(55)))
@@ -133,13 +133,13 @@ func TestArtIndexString(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(55), row)
 
-	row, err = idx.Search([]byte(strconv.Itoa(100)))
+	_, err = idx.Search([]byte(strconv.Itoa(100)))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 
 	err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
 
-	row, err = idx.Search([]byte(strconv.Itoa(55)))
+	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
@@ -152,6 +152,6 @@ func TestArtIndexString(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(123), row)
 
-	row, err = idx.Search([]byte(strconv.Itoa(233)))
+	_, err = idx.Search([]byte(strconv.Itoa(233)))
 	require.ErrorIs(t, err, errors.ErrKeyNotFound)
 }

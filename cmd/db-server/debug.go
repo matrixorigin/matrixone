@@ -15,7 +15,6 @@ import (
 )
 
 var (
-	versionFlag              = flag.String("version", "", "if the argument passed in is '--version', mo-server will print MatrixOne build information and exits")
 	cpuProfilePathFlag       = flag.String("cpu-profile", "", "write cpu profile to the specified file")
 	allocsProfilePathFlag    = flag.String("allocs-profile", "", "write allocs profile to the specified file")
 	heapProfilePathFlag      = flag.String("heap-profile", "", "write heap profile to the specified file")
@@ -36,7 +35,10 @@ func startCPUProfile() func() {
 	if err != nil {
 		panic(err)
 	}
-	pprof.StartCPUProfile(f)
+	err = pprof.StartCPUProfile(f)
+	if err != nil {
+		panic(err)
+	}
 	logutil.Infof("CPU profiling enabled, writing to %s", cpuProfilePath)
 	return func() {
 		pprof.StopCPUProfile()
@@ -76,29 +78,34 @@ func handleDebugFlags() {
 			}
 			var lastUsing uint64
 			for range time.NewTicker(time.Second).C {
-				metrics.Read(samples)
-				using := samples[0].Value.Uint64()
-				if using-lastUsing > *heapProfileThresholdFlag {
-					profile := pprof.Lookup("heap")
-					if profile == nil {
-						continue
+
+				writeHeapProfile := func() {
+					metrics.Read(samples)
+					using := samples[0].Value.Uint64()
+					if using-lastUsing > *heapProfileThresholdFlag {
+						profile := pprof.Lookup("heap")
+						if profile == nil {
+							return
+						}
+						profilePath := *heapProfilePathFlag
+						if profilePath == "" {
+							profilePath = "allocs-profile"
+						}
+						profilePath += "." + time.Now().Format("15:04:05.000000")
+						f, err := os.Create(profilePath)
+						if err != nil {
+							panic(err)
+						}
+						defer f.Close()
+						if err := profile.WriteTo(f, 0); err != nil {
+							panic(err)
+						}
+						logutil.Infof("Heap profile written to %s", profilePath)
 					}
-					profilePath := *heapProfilePathFlag
-					if profilePath == "" {
-						profilePath = "allocs-profile"
-					}
-					profilePath += "." + time.Now().Format("15:04:05.000000")
-					f, err := os.Create(profilePath)
-					if err != nil {
-						panic(err)
-					}
-					defer f.Close()
-					if err := profile.WriteTo(f, 0); err != nil {
-						panic(err)
-					}
-					logutil.Infof("Heap profile written to %s", profilePath)
+					lastUsing = using
 				}
-				lastUsing = using
+
+				writeHeapProfile()
 			}
 
 		}()

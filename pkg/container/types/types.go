@@ -28,8 +28,10 @@ const (
 	// any family
 	T_any T = T(plan.Type_ANY)
 
+	// bool family
+	T_bool T = T(plan.Type_BOOL)
+
 	// numeric/integer family
-	T_bool   T = T(plan.Type_BOOL)
 	T_int8   T = T(plan.Type_INT8)
 	T_int16  T = T(plan.Type_INT16)
 	T_int32  T = T(plan.Type_INT32)
@@ -106,8 +108,8 @@ var Types map[string]T = map[string]T{
 	"integer unsigned":  T_uint32,
 	"bigint unsigned":   T_uint64,
 
-	//"decimal64":  T_decimal64,
-	//"decimal128": T_decimal128,
+	"decimal64":  T_decimal64,
+	"decimal128": T_decimal128,
 
 	"float":  T_float32,
 	"double": T_float64,
@@ -362,15 +364,15 @@ func (t T) FixedLength() int {
 	case T_int64, T_uint64, T_datetime, T_float64, T_timestamp:
 		return 8
 	case T_decimal64:
-		return 8
+		return -8
 	case T_decimal128:
-		return 16
+		return -16
 	case T_char:
 		return -24
 	case T_varchar:
 		return -24
 	case T_sel:
-		return -8
+		return 8
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }

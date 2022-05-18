@@ -37,7 +37,7 @@ func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) erro
 	if err != nil {
 		return err
 	}
-	db, err := b.e.Database(dbName)
+	db, err := b.e.Database(dbName, nil)
 	if err != nil {
 		return err
 	}
@@ -255,7 +255,7 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 
 	{
 		for _, attr := range column.Attributes {
-			if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is == false {
+			if nullAttr, ok := attr.(*tree.AttributeNull); ok && !nullAttr.Is {
 				allowNull = false
 				break
 			}
@@ -320,15 +320,15 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 	case uint64:
 		switch typ.Oid {
 		case types.T_uint8:
-			if v <= math.MaxUint8 && v >= 0 {
+			if v <= math.MaxUint8 {
 				return uint8(v), nil
 			}
 		case types.T_uint16:
-			if v <= math.MaxUint16 && v >= 0 {
+			if v <= math.MaxUint16 {
 				return uint16(v), nil
 			}
 		case types.T_uint32:
-			if v <= math.MaxUint32 && v >= 0 {
+			if v <= math.MaxUint32 {
 				return uint32(v), nil
 			}
 		case types.T_uint64:
@@ -384,9 +384,4 @@ func isDefaultExpr(expr tree.Expr) bool {
 func isNullExpr(expr tree.Expr) bool {
 	v, ok := expr.(*tree.NumVal)
 	return ok && v.Value.Kind() == constant.Unknown
-}
-
-func isParenExpr(expr tree.Expr) bool {
-	_, ok := expr.(*tree.ParenExpr)
-	return ok
 }

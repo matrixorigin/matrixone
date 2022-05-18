@@ -47,7 +47,7 @@ func newHistory(mu *sync.RWMutex) *history {
 }
 
 func (h *history) String() string {
-	s := fmt.Sprintf("{")
+	s := "{"
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, entry := range h.entries {
@@ -154,7 +154,10 @@ func (h *history) TryTruncate() error {
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		e.LoadMeta()
+		err := e.LoadMeta()
+		if err != nil {
+			return err
+		}
 		wrapper := entryWrapper{entry: e}
 		if e.IsToDelete(c) {
 			wrapper.offset = i

@@ -147,7 +147,7 @@ func (cache *replayCache) onReplayTxn(store *TxnStore) error {
 			return err
 		} else {
 			if n != int64(meta.PayloadSize()) {
-				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
+				return fmt.Errorf("payload mismatch: %d != %d", n, meta.PayloadSize())
 			}
 			if err = cache.onReplayTxnEntry(entry); err != nil {
 				return err

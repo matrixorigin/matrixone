@@ -54,7 +54,7 @@ func (chain *DeleteChain) GetDeleteCnt() uint32 {
 }
 
 func (chain *DeleteChain) StringLocked() string {
-	msg := fmt.Sprintf("DeleteChain:")
+	msg := "DeleteChain:"
 	line := 1
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		n.RLock()
