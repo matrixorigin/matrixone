@@ -332,7 +332,7 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 					return LEX_ERROR, ""
 				}
 				s.skip(1)
-				return ID, strings.ToLower(s.buf[start : s.Pos-1])
+				return ID, s.buf[start : s.Pos-1]
 			}
 
 			var buf strings.Builder
@@ -378,7 +378,7 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) 
 		}
 		s.skip(1)
 	}
-	return ID, strings.ToLower(buf.String())
+	return ID, buf.String()
 }
 
 // scanCommentTypeBlock scans a '/*' delimited comment;

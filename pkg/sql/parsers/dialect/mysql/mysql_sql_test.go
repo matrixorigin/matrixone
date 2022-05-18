@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from R join S on R.uid = S.uid",
-		output: "select * from r inner join s on r.uid = s.uid",
+		input:  "SELECT md.datname as `Database` FROM TT md",
+		output: "select md.datname as Database from tt as md",
 	}
 )
 
@@ -56,6 +56,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "SELECT md.datname as `Database` FROM TT md",
+		output: "select md.datname as Database from tt as md",
+	}, {
+		input:  "select * from t where a = `Hello`",
+		output: "select * from t where a = Hello",
+	}, {
 		input:  "CREATE VIEW v AS SELECT * FROM t WHERE t.id = f(t.name);",
 		output: "create view v as select * from t where t.id = f(t.name)",
 	}, {
