@@ -148,6 +148,18 @@ func New(typ types.Type) *Vector {
 	}
 }
 
+func NewConst(typ types.Type) *Vector {
+	v := New(typ)
+	v.IsConst = true
+	return v
+}
+
+func NewConstNull(typ types.Type) *Vector {
+	v := New(typ)
+	v.IsConstNull = true
+	return v
+}
+
 func Reset(v *Vector) {
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
