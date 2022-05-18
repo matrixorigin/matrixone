@@ -611,17 +611,17 @@ func InitDB(tae engine.Engine) error {
 	*/
 	//1.get database mo_catalog handler
 	//TODO: use mo_catalog after tae is ready
-	catalogDbName := "mo_catalog_tmp"
-	err = tae.Create(0, catalogDbName, 0, txnCtx.GetCtx())
-	if err != nil {
-		logutil.Infof("create database %v failed.error:%v", catalogDbName, err)
-		err2 := txnCtx.Rollback()
-		if err2 != nil {
-			logutil.Infof("txnCtx rollback failed. error:%v", err2)
-			return err2
-		}
-		return err
-	}
+	catalogDbName := "mo_catalog"
+	//err = tae.Create(0, catalogDbName, 0, txnCtx.GetCtx())
+	//if err != nil {
+	//	logutil.Infof("create database %v failed.error:%v", catalogDbName, err)
+	//	err2 := txnCtx.Rollback()
+	//	if err2 != nil {
+	//		logutil.Infof("txnCtx rollback failed. error:%v", err2)
+	//		return err2
+	//	}
+	//	return err
+	//}
 
 	catalogDB, err := tae.Database(catalogDbName, txnCtx.GetCtx())
 	if err != nil {
@@ -699,18 +699,16 @@ func sanityCheck(tae engine.Engine) error {
 	if err != nil {
 		return err
 	}
-	// databases: mo_catalog,mo_catalog_tmp,information_schema
+	// databases: mo_catalog,information_schema
 	dbs := tae.Databases(txnCtx.GetCtx())
-	wantDbs := []string{"mo_catalog", "mo_catalog_tmp", "information_schema"}
+	wantDbs := []string{"mo_catalog", "information_schema"}
 	if !isWanted(dbs, wantDbs) {
 		logutil.Infof("wantDbs %v,dbs %v", wantDbs, dbs)
 		return errorMissingCatalogDatabases
 	}
 
-	// database mo_catalog has tables:mo_database,mo_tables,mo_columns
-	//TODO:check tae.mo_catalog.mo_databases -> mo_database
-	//TODO:check tae.mo_catalog.mo_database.datName -> datname
-	wantTablesOfMoCatalog := []string{"mo_database", "mo_tables", "mo_columns"}
+	// database mo_catalog has tables:mo_database,mo_tables,mo_columns,mo_global_variables, mo_user
+	wantTablesOfMoCatalog := []string{"mo_database", "mo_tables", "mo_columns", "mo_global_variables", "mo_user"}
 	wantSchemasOfCatalog := []*CatalogSchema{
 		DefineSchemaForMoDatabase(),
 		DefineSchemaForMoTables(),
@@ -718,20 +716,6 @@ func sanityCheck(tae engine.Engine) error {
 	}
 	catalogDbName := "mo_catalog"
 	err = isWantedDatabase(taeEngine, txnCtx, catalogDbName, wantTablesOfMoCatalog, wantSchemasOfCatalog)
-	if err != nil {
-		return err
-	}
-
-	//TODO:fix it after tae is ready
-
-	// database mo_catalog_tmp has tables: mo_global_variables,mo_user
-	wantTablesOfMoCatalogTmp := []string{"mo_global_variables", "mo_user"}
-	wantSchemasOfCatalogTmp := []*CatalogSchema{
-		DefineSchemaForMoGlobalVariables(),
-		DefineSchemaForMoUser(),
-	}
-	catalogDbTmpName := "mo_catalog_tmp"
-	err = isWantedDatabase(taeEngine, txnCtx, catalogDbTmpName, wantTablesOfMoCatalogTmp, wantSchemasOfCatalogTmp)
 	if err != nil {
 		return err
 	}
@@ -783,13 +767,14 @@ func isWantedDatabase(taeEngine moengine.TxnEngine, txnCtx moengine.Txn,
 		return errorMissingCatalogTables
 	}
 
+	//TODO:fix it after tae is ready
 	//check table attributes
-	for i, tableName := range tables {
-		err = isWantedTable(db, txnCtx, tableName, schemas[i])
-		if err != nil {
-			return err
-		}
-	}
+	//for i, tableName := range tables {
+	//	err = isWantedTable(db, txnCtx, tableName, schemas[i])
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 
 	return err
 }
@@ -821,14 +806,18 @@ func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 					logutil.Infof("def name %v schema name %v", attr.Attr.Name, schemaAttr.GetName())
 					return errorNoSuchAttribute
 				}
-				if !attr.Attr.Type.Eq(schemaAttr.GetType()) {
+				//TODO: fix it after the tae is ready
+				//if !attr.Attr.Type.Eq(schemaAttr.GetType()) {
+				//	return errorAttributeTypeIsDifferent
+				//}
+				if attr.Attr.Type.Oid != schemaAttr.GetType().Oid {
 					return errorAttributeTypeIsDifferent
 				}
 
-				if !(attr.Attr.Primary && schemaAttr.GetIsPrimaryKey() ||
-					!attr.Attr.Primary && !schemaAttr.GetIsPrimaryKey()) {
-					return errorAttributeIsNotPrimary
-				}
+				//if !(attr.Attr.Primary && schemaAttr.GetIsPrimaryKey() ||
+				//	!attr.Attr.Primary && !schemaAttr.GetIsPrimaryKey()) {
+				//	return errorAttributeIsNotPrimary
+				//}
 			} else {
 				logutil.Infof("def name 1 %v", attr.Attr.Name)
 				return errorNoSuchAttribute

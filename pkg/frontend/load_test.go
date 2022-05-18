@@ -181,7 +181,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -347,7 +347,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
 		mce := NewMysqlCmdExecutor()
 
