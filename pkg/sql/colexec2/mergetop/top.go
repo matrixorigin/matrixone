@@ -47,9 +47,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 			n.ctr.poses[i] = f.Pos
 		}
 	}
-	n.ctr.n = len(n.Fs)
 	n.ctr.sels = make([]int64, 0, n.Limit)
-	n.ctr.cmps = make([]compare.Compare, len(n.Fs))
 	return nil
 }
 
@@ -92,19 +90,22 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				continue
 			}
 			if ctr.bat == nil {
-				batch.Reorder(bat, ctr.poses)
+				mp := make(map[int]int)
+				for i, pos := range ctr.poses {
+					mp[int(pos)] = i
+				}
 				ctr.bat = batch.New(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
-				for i, f := range n.Fs {
-					ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == top.Descending)
+				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
+				for i := range ctr.cmps {
+					if pos, ok := mp[i]; ok {
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, n.Fs[pos].Type == top.Descending)
+					} else {
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, true)
+					}
 				}
-				for i := len(n.Fs); i < len(bat.Vecs); i++ {
-					ctr.cmps = append(ctr.cmps, compare.New(bat.Vecs[i].Typ.Oid, true))
-				}
-			} else {
-				batch.Reorder(bat, ctr.poses)
 			}
 			if err := ctr.processBatch(n.Limit, bat, proc); err != nil {
 				batch.Clean(bat, proc.Mp)

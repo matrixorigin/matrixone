@@ -45,7 +45,6 @@ func Prepare(_ *process.Process, arg interface{}) error {
 			n.ctr.poses[i] = f.Pos
 		}
 	}
-	n.ctr.cmps = make([]compare.Compare, len(n.Fs))
 	return nil
 }
 
@@ -91,16 +90,20 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				continue
 			}
 			if ctr.bat == nil {
-				batch.Reorder(bat, ctr.poses)
-				ctr.bat = bat
-				for i, f := range n.Fs {
-					ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == order.Descending)
+				mp := make(map[int]int)
+				for i, pos := range ctr.poses {
+					mp[int(pos)] = i
 				}
-				for i := len(n.Fs); i < len(bat.Vecs); i++ {
-					ctr.cmps = append(ctr.cmps, compare.New(bat.Vecs[i].Typ.Oid, true))
+				ctr.bat = bat
+				ctr.cmps = make([]compare.Compare, len(bat.Vecs))
+				for i := range ctr.cmps {
+					if pos, ok := mp[i]; ok {
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, n.Fs[pos].Type == order.Descending)
+					} else {
+						ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, true)
+					}
 				}
 			} else {
-				batch.Reorder(bat, ctr.poses)
 				if err := ctr.processBatch(bat, proc); err != nil {
 					batch.Clean(bat, proc.Mp)
 					batch.Clean(ctr.bat, proc.Mp)
@@ -130,8 +133,8 @@ func (ctr *Container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 	// do merge-sort work
 	for i < l1 && j < l2 {
 		compareResult := 0
-		for k := range ctr.cmps {
-			compareResult = ctr.cmps[k].Compare(0, 1, i, j)
+		for _, pos := range ctr.poses {
+			compareResult = ctr.cmps[pos].Compare(0, 1, i, j)
 			if compareResult != 0 {
 				break
 			}

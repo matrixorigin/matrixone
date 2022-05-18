@@ -36,7 +36,6 @@ func TestBatch(t *testing.T) {
 	mp := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	bat0 := newBatch(t, []types.Type{{Oid: types.T_int8}}, mp)
 	bat1 := newBatch(t, []types.Type{{Oid: types.T_int8}}, mp)
-	Reorder(bat0, []int32{0})
 	SetLength(bat0, 10)
 	sels := []int64{1, 2, 3}
 	Shrink(bat0, sels)
