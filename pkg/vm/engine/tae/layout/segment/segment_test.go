@@ -83,7 +83,7 @@ func TestBitmapAllocator(t *testing.T) {
 	l0pos := uint32(file.snode.originSize) / seg.GetPageSize() / BITS_PER_UNIT
 	//l1pos := l0pos / BITS_PER_UNIT
 
-	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos -1]))
+	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos-1]))
 	ret := 0xFFFFFFFFFFF00000 - level0[l0pos]
 	assert.Equal(t, 0, int(ret))
 	//ret = ALL_UNIT_SET - level1[l1pos]

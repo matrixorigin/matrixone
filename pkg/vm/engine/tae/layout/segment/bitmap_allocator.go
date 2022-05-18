@@ -224,7 +224,7 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 				//TODO:Need to allocate huge pages to debug
 				l0freePos = b.getBitPos(*val, 0)
 				nextPos = l0freePos + 1
-				if startIdx == 0 && !setStart{
+				if startIdx == 0 && !setStart {
 					startIdx = idx
 					startPos = l0freePos
 					setStart = true
