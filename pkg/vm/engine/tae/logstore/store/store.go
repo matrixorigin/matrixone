@@ -525,8 +525,8 @@ func (s *baseStore) Replay(h ApplyHandle) error {
 	for _, ent := range r.entrys {
 		s.synced.ids[ent.group] = ent.commitId
 	}
-	r.Apply()
 	s.OnReplay(r)
+	r.Apply()
 	return nil
 }
 
