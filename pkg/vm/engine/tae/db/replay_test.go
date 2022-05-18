@@ -340,6 +340,9 @@ func TestReplayCatalog4(t *testing.T) {
 	val, err := rel.GetValue(id, row-1, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, int32(33), val)
+
+	_, err = rel.GetValue(id, row+1, 0)
+	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit())
 
 	c3.Close()
