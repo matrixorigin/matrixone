@@ -76,6 +76,8 @@ func (routine *Routine) Loop() {
 	var err error
 	var resp *Response
 	defer routine.Quit()
+	//session for the connection
+	var ses *Session = nil
 	for {
 		quit := false
 		select {
@@ -94,7 +96,10 @@ func (routine *Routine) Loop() {
 		mgr := routine.GetRoutineMgr()
 
 		routine.protocol.(*MysqlProtocolImpl).sequenceId = req.seq
-		ses := NewSession(routine.protocol, mgr.getEpochgc(), routine.guestMmu, routine.mempool, mgr.getParameterUnit(), nil)
+
+		if ses == nil {
+			ses = NewSession(routine.protocol, mgr.getEpochgc(), routine.guestMmu, routine.mempool, mgr.getParameterUnit())
+		}
 
 		routine.executor.PrepareSessionBeforeExecRequest(ses)
 

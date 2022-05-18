@@ -44,6 +44,9 @@ const (
 	ShowCreateDatabase
 	Delete
 	Update
+	BeginTxn
+	CommitTxn
+	RollbackTxn
 )
 
 // type of query

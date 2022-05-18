@@ -231,6 +231,13 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 		return e.compileDelete(qry.Qry)
 	case *plan.Update:
 		return e.compileUpdate(qry)
+	//beginTxn/CommitTxn/RollbackTxn handled in the function doComQuery
+	case *plan.BeginTxn:
+		return &Scope{Magic: BeginTxn, Plan: pn, Proc: e.c.proc}, nil
+	case *plan.CommitTxn:
+		return &Scope{Magic: CommitTxn, Plan: pn, Proc: e.c.proc}, nil
+	case *plan.RollbackTxn:
+		return &Scope{Magic: RollbackTxn, Plan: pn, Proc: e.c.proc}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }
