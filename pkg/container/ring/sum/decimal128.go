@@ -24,16 +24,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func NewDecimal64(typ types.Type) *Decimal64Ring {
-	//return &Decimal64Ring{Typ: typ}
-	return &Decimal64Ring{Typ: types.Type{Oid: typ.Oid, Size: typ.Size, Width: typ.Width, Scale: typ.Scale}}
+var Decimal128Size = encoding.Decimal128Size
+
+func NewDecimal128(typ types.Type) *Decimal128Ring {
+	return &Decimal128Ring{Typ: typ}
 }
 
-func (r *Decimal64Ring) String() string {
+func (r *Decimal128Ring) String() string {
 	return fmt.Sprintf("%v-%v", r.Vs, r.Ns)
 }
 
-func (r *Decimal64Ring) Free(m *mheap.Mheap) {
+func (r *Decimal128Ring) Free(m *mheap.Mheap) {
 	if r.Da != nil {
 		mheap.Free(m, r.Da)
 		r.Da = nil
@@ -42,30 +43,30 @@ func (r *Decimal64Ring) Free(m *mheap.Mheap) {
 	}
 }
 
-func (r *Decimal64Ring) Count() int {
+func (r *Decimal128Ring) Count() int {
 	return len(r.Vs)
 }
 
-func (r *Decimal64Ring) Size() int {
+func (r *Decimal128Ring) Size() int {
 	return cap(r.Da)
 }
 
-func (r *Decimal64Ring) Dup() ring.Ring {
-	return &Decimal64Ring{
+func (r *Decimal128Ring) Dup() ring.Ring {
+	return &Decimal128Ring{
 		Typ: r.Typ,
 	}
 }
 
-func (r *Decimal64Ring) Type() types.Type {
+func (r *Decimal128Ring) Type() types.Type {
 	return r.Typ
 }
 
-func (r *Decimal64Ring) SetLength(n int) {
+func (r *Decimal128Ring) SetLength(n int) {
 	r.Vs = r.Vs[:n]
 	r.Ns = r.Ns[:n]
 }
 
-func (r *Decimal64Ring) Shrink(sels []int64) {
+func (r *Decimal128Ring) Shrink(sels []int64) {
 	for i, sel := range sels {
 		r.Vs[i] = r.Vs[sel]
 		r.Ns[i] = r.Ns[sel]
@@ -74,55 +75,55 @@ func (r *Decimal64Ring) Shrink(sels []int64) {
 	r.Ns = r.Ns[:len(sels)]
 }
 
-func (r *Decimal64Ring) Shuffle(_ []int64, _ *mheap.Mheap) error {
+func (r *Decimal128Ring) Shuffle(_ []int64, _ *mheap.Mheap) error {
 	return nil
 }
 
-func (r *Decimal64Ring) Grow(m *mheap.Mheap) error {
+func (r *Decimal128Ring) Grow(m *mheap.Mheap) error {
 	n := len(r.Vs)
 	if n == 0 {
-		data, err := mheap.Alloc(m, 64)
+		data, err := mheap.Alloc(m, 64*2)
 		if err != nil {
 			return err
 		}
 		r.Da = data
 		r.Ns = make([]int64, 0, 8)
-		r.Vs = encoding.DecodeDecimal64Slice(data)
+		r.Vs = encoding.DecodeDecimal128Slice(data)
 	} else if n+1 >= cap(r.Vs) {
-		r.Da = r.Da[:n*8]
-		data, err := mheap.Grow(m, r.Da, int64(n+1)*8)
+		r.Da = r.Da[:n*Decimal128Size]
+		data, err := mheap.Grow(m, r.Da, int64((n+1)*Decimal128Size))
 		if err != nil {
 			return err
 		}
 		mheap.Free(m, r.Da)
 		r.Da = data
-		r.Vs = encoding.DecodeDecimal64Slice(data)
+		r.Vs = encoding.DecodeDecimal128Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
-	r.Vs[n] = 0
+	r.Vs[n] = types.InitDecimal128(0)
 	r.Ns = append(r.Ns, 0)
 	return nil
 }
 
-func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
+func (r *Decimal128Ring) Grows(size int, m *mheap.Mheap) error {
 	n := len(r.Vs)
 	if n == 0 {
-		data, err := mheap.Alloc(m, int64(size*8))
+		data, err := mheap.Alloc(m, int64(size*Decimal128Size))
 		if err != nil {
 			return err
 		}
 		r.Da = data
 		r.Ns = make([]int64, 0, size)
-		r.Vs = encoding.DecodeDecimal64Slice(data)
+		r.Vs = encoding.DecodeDecimal128Slice(data)
 	} else if n+size >= cap(r.Vs) {
-		r.Da = r.Da[:n*8]
-		data, err := mheap.Grow(m, r.Da, int64(n+size)*8)
+		r.Da = r.Da[:n*Decimal128Size]
+		data, err := mheap.Grow(m, r.Da, int64((n+size)*Decimal128Size))
 		if err != nil {
 			return err
 		}
 		mheap.Free(m, r.Da)
 		r.Da = data
-		r.Vs = encoding.DecodeDecimal64Slice(data)
+		r.Vs = encoding.DecodeDecimal128Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
 	for i := 0; i < size; i++ {
@@ -132,17 +133,19 @@ func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
 }
 
 // what is this z?
-func (r *Decimal64Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
-	r.Vs[i] += types.Decimal64Int64Mul(vec.Col.([]types.Decimal64)[sel], z)
+func (r *Decimal128Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
+	tmp := types.Decimal128Int64Mul(vec.Col.([]types.Decimal128)[sel], z)
+	r.Vs[i] = types.Decimal128AddAligned(r.Vs[i], tmp)
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
 		r.Ns[i] += z
 	}
 }
 
-func (r *Decimal64Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
-	vs := vec.Col.([]types.Decimal64)
+func (r *Decimal128Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
+	vs := vec.Col.([]types.Decimal128)
 	for i := range os {
-		r.Vs[vps[i]-1] += types.Decimal64Int64Mul(vs[int64(i)+start], zs[int64(i)+start])
+		tmp := types.Decimal128Int64Mul(vs[int64(i)+start], zs[int64(i)+start])
+		r.Vs[vps[i]-1] = types.Decimal128AddAligned(r.Vs[vps[i]-1], tmp)
 	}
 	if nulls.Any(vec.Nsp) {
 		for i := range os {
@@ -153,11 +156,11 @@ func (r *Decimal64Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []in
 	}
 }
 
-func (r *Decimal64Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
-	vs := vec.Col.([]types.Decimal64)
+func (r *Decimal128Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
+	vs := vec.Col.([]types.Decimal128)
 	for j, v := range vs {
-		tmp := types.Decimal64Int64Mul(v, zs[j])
-		r.Vs[i] = types.Decimal64AddAligned(r.Vs[i], tmp)
+		tmp := types.Decimal128Int64Mul(v, zs[j])
+		r.Vs[i] = types.Decimal128AddAligned(r.Vs[i], tmp)
 		if nulls.Any(vec.Nsp) {
 			for k := range vs {
 				if nulls.Contains(vec.Nsp, uint64(k)) {
@@ -168,28 +171,29 @@ func (r *Decimal64Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	}
 }
 
-func (r *Decimal64Ring) Add(a interface{}, x, y int64) {
-	ar := a.(*Decimal64Ring)
-	r.Vs[x] += ar.Vs[y]
+func (r *Decimal128Ring) Add(a interface{}, x, y int64) {
+	ar := a.(*Decimal128Ring)
+	r.Vs[x] = types.Decimal128AddAligned(r.Vs[x], ar.Vs[y])
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
-	ar := a.(*Decimal64Ring)
+func (r *Decimal128Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
+	ar := a.(*Decimal128Ring)
 	for i := range os {
-		r.Vs[vps[i]-1] += ar.Vs[int64(i)+start]
+		r.Vs[vps[i]-1] = types.Decimal128AddAligned(r.Vs[vps[i]-1], ar.Vs[int64(i)+start])
 		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]
 	}
 }
 
 // r[x] += a[y] * z
-func (r *Decimal64Ring) Mul(a interface{}, x, y, z int64) {
-	ar := a.(*Decimal64Ring)
+func (r *Decimal128Ring) Mul(a interface{}, x, y, z int64) {
+	ar := a.(*Decimal128Ring)
 	r.Ns[x] += ar.Ns[y] * z
-	r.Vs[x] += types.Decimal64Int64Mul(r.Vs[y], z)
+	tmp := types.Decimal128Int64Mul(r.Vs[y], z)
+	r.Vs[x] = types.Decimal128AddAligned(r.Vs[x], tmp)
 }
 
-func (r *Decimal64Ring) Eval(zs []int64) *vector.Vector {
+func (r *Decimal128Ring) Eval(zs []int64) *vector.Vector {
 	defer func() {
 		r.Da = nil
 		r.Vs = nil

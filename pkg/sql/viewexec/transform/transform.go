@@ -113,7 +113,6 @@ func (ctr *Container) processBoundVars(proc *process.Process, arg *Argument) (bo
 		for i, bvar := range arg.BoundVars {
 			ctr.bat.As[i] = bvar.Alias
 			ctr.bat.Refs[i] = uint64(bvar.Ref)
-			fmt.Println("ctr.Is[i] is", ctr.Is[i])
 			if ctr.bat.Rs[i], err = transformer.New(bvar.Op, bat.Vecs[ctr.Is[i]].Typ); err != nil {
 				ctr.bat.Rs = ctr.bat.Rs[:i]
 				batch.Clean(ctr.bat, proc.Mp)

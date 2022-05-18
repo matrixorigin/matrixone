@@ -43,17 +43,18 @@ func init() {
 }
 
 var sumReturnTypes = map[types.T]types.T{
-	types.T_int8:      types.T_int64,
-	types.T_int16:     types.T_int64,
-	types.T_int32:     types.T_int64,
-	types.T_int64:     types.T_int64,
-	types.T_uint8:     types.T_uint64,
-	types.T_uint16:    types.T_uint64,
-	types.T_uint32:    types.T_uint64,
-	types.T_uint64:    types.T_uint64,
-	types.T_float32:   types.T_float64,
-	types.T_float64:   types.T_float64,
-	types.T_decimal64: types.T_decimal64,
+	types.T_int8:       types.T_int64,
+	types.T_int16:      types.T_int64,
+	types.T_int32:      types.T_int64,
+	types.T_int64:      types.T_int64,
+	types.T_uint8:      types.T_uint64,
+	types.T_uint16:     types.T_uint64,
+	types.T_uint32:     types.T_uint64,
+	types.T_uint64:     types.T_uint64,
+	types.T_float32:    types.T_float64,
+	types.T_float64:    types.T_float64,
+	types.T_decimal64:  types.T_decimal64,
+	types.T_decimal128: types.T_decimal128,
 }
 
 func ReturnType(op int, typ types.T) types.T {
@@ -87,7 +88,6 @@ func ReturnType(op int, typ types.T) types.T {
 func New(op int, typ types.Type) (ring.Ring, error) {
 	switch op {
 	case Sum:
-		fmt.Println(typ, typ.Width, typ.Scale)
 		return NewSum(typ)
 	case Avg:
 		return avg.NewAvg(typ), nil
@@ -140,7 +140,6 @@ func NewBitXor(typ types.Type) (ring.Ring, error) {
 }
 
 func NewSum(typ types.Type) (ring.Ring, error) {
-	fmt.Println("inside function NewSum", typ, typ.Width, typ.Scale)
 	switch typ.Oid {
 	case types.T_float32, types.T_float64:
 		return sum.NewFloat(typ), nil
@@ -149,12 +148,9 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return sum.NewUint(typ), nil
 	case types.T_decimal64:
-		fmt.Println("inside function NewSum switch case types.T_decimal64", typ, typ.Width, typ.Scale)
 		return sum.NewDecimal64(typ), nil
-		/*
-			case types.T_decimal128:
-				return sum.NewDecimal128(typ), nil
-		*/
+	case types.T_decimal128:
+		return sum.NewDecimal128(typ), nil
 	}
 	return nil, errors.New(fmt.Sprintf("'%v' not support Sum", typ))
 }

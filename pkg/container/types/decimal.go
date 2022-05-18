@@ -272,6 +272,10 @@ func Decimal128Decimal128Mul(a Decimal128, b Decimal128) (result Decimal128) {
 	return result
 }
 
+func Decimal128Int64Mul(a Decimal128, b int64) (result Decimal128) {
+	C.mul_int128_int64(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	return result
+}
 func InitDecimal128(value int64) (result Decimal128) {
 	if value == 1 {
 		C.init_int128_as_1(unsafe.Pointer(&result))
