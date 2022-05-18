@@ -168,6 +168,18 @@ const (
 	SUBSTRING // SUBSTRING
 	YEAR      // YEAR
 
+	// Add MO Extre function
+	DAYOFYEAR
+	BIN
+	EMPTY
+	LENGTHUTF8
+	MONTH
+	OCT
+	REVERSE
+	SINH
+	SPACE
+	WEEKDAY
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
