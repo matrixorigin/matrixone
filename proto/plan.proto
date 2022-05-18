@@ -519,7 +519,8 @@ message AlterTable {
 
 message DropTable {
 	bool if_exists 	= 1;
-	string table 	= 2;
+	string database = 2;
+	string table 	= 3;
 }
 
 message CreateIndex {

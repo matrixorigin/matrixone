@@ -29,19 +29,19 @@ import (
 //only use in developing
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	sql := `show databases`
-	// stmts, err := mysql.Parse(sql)
-	// if err != nil {
-	// 	t.Fatalf("%+v", err)
-	// }
-	// t.Logf("%+v", string(getJson(stmts[0], t)))
-
-	mock := NewMockOptimizer()
-	logicPlan, err := runOneStmt(mock, t, sql)
+	sql := `drop table db.tbl`
+	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutPlan(logicPlan, true, t)
+	t.Logf("%+v", string(getJson(stmts[0], t)))
+
+	// mock := NewMockOptimizer()
+	// logicPlan, err := runOneStmt(mock, t, sql)
+	// if err != nil {
+	// 	t.Fatalf("%+v", err)
+	// }
+	// outPutPlan(logicPlan, true, t)
 }
 
 //Test Query Node Tree
@@ -552,6 +552,9 @@ func TestDdl(t *testing.T) {
 		"drop table if exists tbl_name",
 		"drop table if exists nation",
 		"drop table nation",
+		"drop table tpch.nation",
+		"drop table if exists tpch.tbl_not_exist",
+		"drop table if exists db_not_exist.tbl",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -561,7 +564,9 @@ func TestDdl(t *testing.T) {
 		"drop database db_name", //we mock database tpch。 so tpch is exist
 		"create table nation (t bool(20), b int, c char(20), d varchar(20))",             //table exists in tpch
 		"create table nation (b int primary key, c char(20) primary key, d varchar(20))", //Multiple primary key
-		"drop table tbl_name", //table not exists in tpch
+		"drop table tbl_name",           //table not exists in tpch
+		"drop table tpch.tbl_not_exist", //database not exists
+		"drop table db_not_exist.tbl",   //table not exists
 
 		"create index idx1 using bsi on a(a)", //unsupport now
 		"drop index idx1 on tbl",              //unsupport now
