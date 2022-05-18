@@ -37,9 +37,6 @@ var binArgsAndRets = []argsAndRet{
 	{[]types.T{types.T_int16}, types.T_varchar},
 	{[]types.T{types.T_int32}, types.T_varchar},
 	{[]types.T{types.T_int64}, types.T_varchar},
-
-	{[]types.T{types.T_float32}, types.T_varchar},
-	{[]types.T{types.T_float64}, types.T_varchar},
 }
 
 func init() {
@@ -101,16 +98,6 @@ func init() {
 			ReturnType: types.T_varchar,
 			Fn:         binFn,
 		},
-		{
-			Typ:        types.T_float32,
-			ReturnType: types.T_varchar,
-			Fn:         binFn,
-		},
-		{
-			Typ:        types.T_float64,
-			ReturnType: types.T_varchar,
-			Fn:         binFn,
-		},
 	}
 }
 
@@ -150,11 +137,6 @@ func toBinary(vecCol interface{}, results *types.Bytes) *types.Bytes {
 		results = bin.Int32ToBinary(col, results)
 	case []int64:
 		results = bin.Int64ToBinary(col, results)
-
-	case []float32:
-		results = bin.Float32ToBinary(col, results)
-	case []float64:
-		results = bin.Float64ToBinary(col, results)
 	}
 
 	return results
@@ -186,13 +168,6 @@ func calcBytesNeed(vecCol interface{}) (bytesNeed int64, colLen int) {
 		colLen = len(col)
 	case []int64:
 		bytesNeed = bin.Int64BitLen(col)
-		colLen = len(col)
-
-	case []float32:
-		bytesNeed = bin.Float32BitLen(col)
-		colLen = len(col)
-	case []float64:
-		bytesNeed = bin.Float64BitLen(col)
 		colLen = len(col)
 	}
 

@@ -70,55 +70,6 @@ func TestCountBitLenForInt(t *testing.T) {
 	}
 }
 
-// due to differences between x86/arm, this TestCountBitLenForFloat function has some compatibility issues and therefore commented out
-func TestCountBitLenForFloat(t *testing.T) {
-	// count bits for float
-	// eg: 0.2(0), 1.8(1), 2.99(10), 3.14(11)
-	ttF32 := []struct {
-		num  float32
-		want int64
-	}{
-		{.2, 1},
-		{1.8, 1},
-		{2.99, 2},
-		{3.14, 2},
-		{-1.99, 64},
-		{0.99, 1},
-		{-0.99, 1},
-		{127.99, 7},
-		{-128.99, 64},
-		{100.99, 7},
-		{200.99, 8},
-	}
-
-	for _, tc := range ttF32 {
-		require.Equal(t, tc.want, Float32BitLen([]float32{tc.num}), tc.num)
-	}
-
-	ttF64 := []struct {
-		num  float64
-		want int64
-	}{
-		{-1e7, 64},
-		{-1e9, 64},
-		{1e7, 24},
-		{1e9, 30},
-		// Phi=1.61...(1), E=2.7(10), Pi=3.14(11)
-		{math.Phi, 1},
-		{math.E, 2},
-		{math.Pi, 2},
-		// max length of bits should be 64 to follow the behavior of mysql 8.0
-		{math.MaxFloat64, 64},
-		{-math.MaxFloat64, 64},
-		{-math.MaxUint64 - 1, 64},
-		{math.MaxUint64 + 1, 64},
-	}
-
-	for _, tc := range ttF64 {
-		require.Equal(t, tc.want, Float64BitLen([]float64{tc.num}), strconv.FormatFloat(tc.num, 'f', -1, 64))
-	}
-}
-
 func TestUnsignedIntToBinary(t *testing.T) {
 	cases := []uint64{0, 1, 2, 3, 127, 128}
 	var buf bytes.Buffer
@@ -177,34 +128,6 @@ func TestIntToBinary(t *testing.T) {
 	require.Equal(t, buf.Bytes(), ret.Data)
 }
 
-func TestFloatToBinary(t *testing.T) {
-	cases := []float64{float64(math.Phi), float64(math.E), float64(math.Pi)}
-	var buf bytes.Buffer
-	for _, x := range cases {
-		buf.WriteString(strconv.FormatUint(uint64(x), 2))
-	}
-
-	bytesNeed := Float64BitLen(cases)
-	ret := &types.Bytes{
-		Data:    make([]byte, bytesNeed),
-		Lengths: make([]uint32, len(cases)),
-		Offsets: make([]uint32, len(cases)),
-	}
-	ret = Float64ToBinary(cases, ret)
-
-	var (
-		length, offset int
-	)
-	for i, x := range cases {
-		length = bits.Len64(uint64(x))
-		require.Equal(t, uint32(length), ret.Lengths[i])
-		require.Equal(t, uint32(offset), ret.Offsets[i])
-		offset += length
-	}
-
-	require.Equal(t, buf.Bytes(), ret.Data)
-}
-
 func TestFormatNegativeIntToBinary(t *testing.T) {
 	tt := []struct {
 		num  int64
@@ -217,29 +140,6 @@ func TestFormatNegativeIntToBinary(t *testing.T) {
 	}
 	for _, tc := range tt {
 		require.Equal(t, tc.want, negativeIntToBinStr(tc.num), tc.num)
-	}
-}
-
-func TestFormatFloatToBinary(t *testing.T) {
-	tt := []struct {
-		num  float64
-		want string
-	}{
-		{math.Pi, "11"},
-		{math.E, "10"},
-		{math.Phi, "1"},
-		{-1.99, "1111111111111111111111111111111111111111111111111111111111111111"},
-		{0.99, "0"},
-		{-0.99, "0"},
-		{1.99, "1"},
-		{math.MaxFloat64, "1111111111111111111111111111111111111111111111111111111111111111"},
-		{-math.MaxUint64, "1111111111111111111111111111111111111111111111111111111111111111"},
-		{127.99, "1111111"},
-		{-128.99, "1111111111111111111111111111111111111111111111111111111110000000"},
-		{-2, "1111111111111111111111111111111111111111111111111111111111111110"},
-	}
-	for _, tc := range tt {
-		require.Equal(t, tc.want, floatToBinStr(tc.num), strconv.FormatFloat(tc.num, 'f', -1, 64))
 	}
 }
 
