@@ -34,12 +34,6 @@ func New(n int) *Batch {
 	}
 }
 
-func Reorder(bat *Batch, poses []int32) {
-	for i, pos := range poses {
-		bat.Vecs[i], bat.Vecs[pos] = bat.Vecs[pos], bat.Vecs[i]
-	}
-}
-
 func SetLength(bat *Batch, n int) {
 	for _, vec := range bat.Vecs {
 		vector.SetLength(vec, n)
