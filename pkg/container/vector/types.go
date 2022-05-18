@@ -59,6 +59,11 @@ type Vector struct {
 	Typ  types.Type
 	Col  interface{}  // column data, encoded Data
 	Nsp  *nulls.Nulls // nulls list
+
+	// some attributes for const vector (a vector with a lot of rows of a same const value)
+	IsConst     bool
+	IsConstNull bool
+	Length      int
 }
 
 // emptyInterface is the header for an interface{} value.

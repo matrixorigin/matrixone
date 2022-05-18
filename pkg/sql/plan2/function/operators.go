@@ -15,13 +15,10 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
 )
 
 func initOperators() {
@@ -49,27 +46,9 @@ var operators = map[int][]Function{
 				types.T_uint8, // left part of +
 				types.T_uint8, // right part of +
 			},
-			ReturnTyp: types.T_uint8,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				lv, rv := vs[0], vs[1]
-				lvs, rvs := lv.Col.([]uint8), rv.Col.([]uint8)
-				vec, err := process.Get(proc, int64(len(lvs)), lv.Typ)
-				if err != nil {
-					return nil, err
-				}
-				rs := encoding.DecodeUint8Slice(vec.Data)
-				rs = rs[:len(rvs)]
-				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-				vector.SetCol(vec, add.Uint8Add(lvs, rvs, rs))
-				if lv.Ref == 0 {
-					process.Put(proc, lv)
-				}
-				if rv.Ref == 0 {
-					process.Put(proc, rv)
-				}
-				return vec, nil
-			},
+			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
 		},
 		{
 			Index: 1,

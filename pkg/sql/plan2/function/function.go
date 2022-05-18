@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
 )
 
 const (
