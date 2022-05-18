@@ -67,7 +67,7 @@ type Process struct {
 	UnixTime int64
 
 	// snapshot is transaction context
-	snapshot engine.Snapshot
+	Snapshot engine.Snapshot
 
 	Cancel context.CancelFunc
 }

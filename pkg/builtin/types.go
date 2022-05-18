@@ -52,5 +52,7 @@ const (
 	Weekday
 	EndsWith
 	Date
+	BitLength
 	Bin
+	FindInSet
 )

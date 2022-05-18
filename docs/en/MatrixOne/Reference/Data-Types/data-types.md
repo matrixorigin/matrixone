@@ -1,4 +1,4 @@
-# **Data Types**
+# **Data Types Overview**
 
 MatrixOne Data types conforms with MySQL Data types definition. 
 

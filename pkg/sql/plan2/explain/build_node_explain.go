@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,12 @@
 
 package explain
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"strconv"
+)
 
 var _ NodeDescribe = &NodeDescribeImpl{}
 
@@ -28,21 +33,24 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 	}
 }
 
-func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string, error) {
 	var result string
 	var pname string /* node type name for text output */
 
+	// Get the Node Name
 	switch ndesc.Node.NodeType {
 	case plan.Node_UNKNOWN:
 		pname = "UnKnow Node"
 	case plan.Node_VALUE_SCAN:
-		pname = "Value Scan"
+		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
 		pname = "Table Scan"
 	case plan.Node_FUNCTION_SCAN:
 		pname = "Function Scan"
 	case plan.Node_EXTERNAL_SCAN:
 		pname = "External Scan"
+	case plan.Node_MATERIAL_SCAN:
+		pname = "Material Scan"
 	case plan.Node_PROJECT:
 		pname = "Project"
 	case plan.Node_EXTERNAL_FUNCTION:
@@ -79,27 +87,40 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 		pname = "Gather"
 	case plan.Node_ASSERT:
 		pname = "Assert"
+	case plan.Node_INSERT:
+		pname = "Insert"
+	case plan.Node_UPDATE:
+		pname = "Update"
+	case plan.Node_DELETE:
+		pname = "Delete"
 	default:
-		pname = "???"
+		panic("error node type")
 	}
 
+	// Get Node's operator object info ,such as table, view
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		result += pname
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
-			fallthrough
+			result += " \"*VALUES*\" "
 		case plan.Node_TABLE_SCAN:
 			fallthrough
 		case plan.Node_FUNCTION_SCAN:
 			fallthrough
 		case plan.Node_EXTERNAL_SCAN:
+			fallthrough
+		case plan.Node_MATERIAL_SCAN:
+			fallthrough
+		case plan.Node_INSERT:
+			fallthrough
+		case plan.Node_UPDATE:
+			fallthrough
+		case plan.Node_DELETE:
 			result += " on "
 			if ndesc.Node.ObjRef != nil {
-				objRefImpl := NewObjRefDescribeImpl(ndesc.Node.ObjRef)
-				result += objRefImpl.GetDescription(options)
+				result += ndesc.Node.ObjRef.GetDbName() + "." + ndesc.Node.ObjRef.GetObjName()
 			} else if ndesc.Node.TableDef != nil {
-				tableDefImpl := NewTableDefDescribeImpl(ndesc.Node.TableDef)
-				result += tableDefImpl.GetDescription(options)
+				result += ndesc.Node.TableDef.GetName()
 			}
 		case plan.Node_PROJECT:
 			fallthrough
@@ -144,65 +165,109 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 		}
 	}
 
+	// Get Costs info of Node
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
-	} else {
-		//TODO implement me
-		panic("implement me")
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
-	return result
+	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) []string {
+func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, error) {
 	lines := make([]string, 0)
+	// Get Sort list info
 	if ndesc.Node.OrderBy != nil {
-		orderByInfo := ndesc.GetOrderByInfo(options)
+		orderByInfo, err := ndesc.GetOrderByInfo(options)
+		if err != nil {
+			return nil, err
+		}
 		lines = append(lines, orderByInfo)
 	}
 
+	// Get Join Condition info
 	if ndesc.Node.OnList != nil {
-		joinOnInfo := ndesc.GetJoinConditionInfo(options)
+		joinOnInfo, err := ndesc.GetJoinConditionInfo(options)
+		if err != nil {
+			return nil, err
+		}
 		lines = append(lines, joinOnInfo)
 	}
 
+	// Get Group key info
 	if ndesc.Node.GroupBy != nil {
-		groupByInfo := ndesc.GetGroupByInfo(options)
+		groupByInfo, err := ndesc.GetGroupByInfo(options)
+		if err != nil {
+			return nil, err
+		}
 		lines = append(lines, groupByInfo)
 	}
 
+	// Get Filter list info
 	if ndesc.Node.WhereList != nil {
-		filterInfo := ndesc.GetWhereConditionInfo(options)
+		filterInfo, err := ndesc.GetWhereConditionInfo(options)
+		if err != nil {
+			return nil, err
+		}
 		lines = append(lines, filterInfo)
 	}
 
+	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
 		var temp string
-		limitInfo := DescribeExpr(ndesc.Node.Limit)
+		limitInfo, err := describeExpr(ndesc.Node.Limit, options)
+		if err != nil {
+			return nil, err
+		}
 		temp += "Limit: " + limitInfo
 		if ndesc.Node.Offset != nil {
-			offsetInfo := DescribeExpr(ndesc.Node.Offset)
+			offsetInfo, err := describeExpr(ndesc.Node.Offset, options)
+			if err != nil {
+				return nil, err
+			}
 			temp += ", Offset: " + offsetInfo
 		}
 		lines = append(lines, temp)
 	}
-	return lines
+
+	if ndesc.Node.UpdateList != nil {
+		updateListDesc := &UpdateListDescribeImpl{
+			UpdateList: ndesc.Node.UpdateList,
+		}
+		updatedesc, err := updateListDesc.GetDescription(options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, "Set columns with("+updatedesc+")")
+	}
+	return lines, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (string, error) {
 	var result string = "Output:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.ProjectList)
-	result += exprs.GetDescription(options)
-	return result
+	describe, err := exprs.GetDescription(options)
+	if err != nil {
+		return result, err
+	}
+	result += describe
+	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (string, error) {
 	var result string = "Join Cond:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
-	result += exprs.GetDescription(options)
-	return result
+	describe, err := exprs.GetDescription(options)
+	if err != nil {
+		return result, err
+	}
+	result += describe
+	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) (string, error) {
 	var result string = "Filter: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
@@ -211,15 +276,21 @@ func (ndesc *NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) st
 				result += " AND "
 			}
 			first = false
-			result += DescribeExpr(v)
+			descV, err := describeExpr(v, options)
+			if err != nil {
+				return result, err
+			}
+			result += descV
 		}
-	} else {
-		panic("implement me")
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
-	return result
+	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, error) {
 	var result string = "Group Key:"
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
@@ -228,15 +299,21 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) string {
 				result += ", "
 			}
 			first = false
-			result += DescribeExpr(v)
+			descV, err := describeExpr(v, options)
+			if err != nil {
+				return result, err
+			}
+			result += descV
 		}
-	} else {
-		panic("implement me")
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
-	return result
+	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) (string, error) {
 	var result string = "Sort Key:"
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
@@ -246,29 +323,40 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) string {
 			}
 			first = false
 			orderByDescImpl := NewOrderByDescribeImpl(v)
-			result += orderByDescImpl.GetDescription(options)
+			describe, err := orderByDescImpl.GetDescription(options)
+			if err != nil {
+				return result, err
+			}
+			result += describe
 		}
-	} else {
-		panic("implement me")
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
-	return result
+	return result, nil
 }
 
 var _ NodeElemDescribe = &CostDescribeImpl{}
 var _ NodeElemDescribe = &ExprListDescribeImpl{}
 var _ NodeElemDescribe = &OrderByDescribeImpl{}
 var _ NodeElemDescribe = &WinSpecDescribeImpl{}
-var _ NodeElemDescribe = &TableDefDescribeImpl{}
-var _ NodeElemDescribe = &ObjRefDescribeImpl{}
 var _ NodeElemDescribe = &RowsetDataDescribeImpl{}
+var _ NodeElemDescribe = &UpdateListDescribeImpl{}
 
 type CostDescribeImpl struct {
-	Cost *Cost
+	Cost *plan.Cost
 }
 
-func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) string {
-	//TODO implement me
-	panic("implement me")
+func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+	//(cost=11.75..13.15 rows=140 width=4)
+	var result string = "(cost=" +
+		strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
+		".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
+		" rows=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
+		" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
+		" width=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64)
+	return result, nil
 }
 
 type ExprListDescribeImpl struct {
@@ -281,7 +369,7 @@ func NewExprListDescribeImpl(ExprList []*plan.Expr) *ExprListDescribeImpl {
 	}
 }
 
-func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) string {
+func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	var first bool = true
 	var result string = " "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -290,12 +378,18 @@ func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) string {
 				result += ", "
 			}
 			first = false
-			result += DescribeExpr(v)
+			descV, err := describeExpr(v, options)
+			if err != nil {
+				return result, err
+			}
+			result += descV
 		}
-	} else {
-		panic("implement me")
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
 	}
-	return result
+	return result, nil
 }
 
 type OrderByDescribeImpl struct {
@@ -308,63 +402,71 @@ func NewOrderByDescribeImpl(OrderBy *plan.OrderBySpec) *OrderByDescribeImpl {
 	}
 }
 
-func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) string {
+func (o *OrderByDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	var result string = " "
-	result += DescribeExpr(o.OrderBy.GetOrderBy())
+	descExpr, err := describeExpr(o.OrderBy.GetOrderBy(), options)
+	if err != nil {
+		return result, err
+	}
+	result += descExpr
 
 	flagKey := int32(o.OrderBy.GetOrderByFlags())
 	orderbyFlag := plan.OrderBySpec_OrderByFlag_name[flagKey]
 	result += " " + orderbyFlag
-	return result
+	return result, nil
 }
 
 type WinSpecDescribeImpl struct {
 	WinSpec *plan.WindowSpec
 }
 
-func (w *WinSpecDescribeImpl) GetDescription(options *ExplainOptions) string {
+func (w *WinSpecDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	//TODO implement me
 	panic("implement me")
-}
-
-type TableDefDescribeImpl struct {
-	TableDef *plan.TableDef
-}
-
-func NewTableDefDescribeImpl(TableDef *plan.TableDef) *TableDefDescribeImpl {
-	return &TableDefDescribeImpl{
-		TableDef: TableDef,
-	}
-}
-func (t *TableDefDescribeImpl) GetDescription(options *ExplainOptions) string {
-	if t.TableDef != nil {
-		return t.TableDef.GetName()
-	}
-	return ""
-}
-
-type ObjRefDescribeImpl struct {
-	ObjRef *plan.ObjectRef
-}
-
-func NewObjRefDescribeImpl(ObjRef *plan.ObjectRef) *ObjRefDescribeImpl {
-	return &ObjRefDescribeImpl{
-		ObjRef: ObjRef,
-	}
-}
-
-func (o *ObjRefDescribeImpl) GetDescription(options *ExplainOptions) string {
-	if o.ObjRef != nil {
-		return o.ObjRef.DbName + "." + o.ObjRef.GetObjName()
-	}
-	return ""
 }
 
 type RowsetDataDescribeImpl struct {
-	RowsetData *RowsetData
+	RowsetData *plan.RowsetData
 }
 
-func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) string {
-	//TODO implement me
-	panic("implement me")
+func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+	var result string
+	var first bool = true
+	for index := range r.RowsetData.Cols {
+		if !first {
+			result += ", "
+		}
+		first = false
+		result += "\"*VALUES*\".column" + strconv.Itoa(index+1)
+	}
+	return result, nil
+}
+
+type UpdateListDescribeImpl struct {
+	UpdateList *plan.UpdateList
+}
+
+func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+	//u.UpdateList.Columns
+	var result string
+	var first bool = true
+	if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {
+		panic("update node number of columns and values is not equal")
+	}
+	for i, columnExpr := range u.UpdateList.Columns {
+		if !first {
+			result += ", "
+		}
+		colstr, err := describeExpr(columnExpr, options)
+		if err != nil {
+			return result, err
+		}
+		valstr, err := describeExpr(u.UpdateList.Values[i], options)
+		if err != nil {
+			return result, err
+		}
+		result += colstr + " = " + valstr
+		first = false
+	}
+	return result, nil
 }

@@ -102,6 +102,10 @@ func (mgr *TxnManager) DeleteTxn(id uint64) {
 	mgr.ActiveMask.Remove(txn.GetStartTS())
 }
 
+func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
+	return mgr.GetTxn(IDCtxToID(ctx))
+}
+
 func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {
 	mgr.RLock()
 	defer mgr.RUnlock()

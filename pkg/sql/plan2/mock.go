@@ -34,6 +34,7 @@ type col struct {
 	Precision int32
 }
 
+//for test create/drop statement
 func NewEmptyCompilerContext() *MockCompilerContext {
 	return &MockCompilerContext{
 		objects: make(map[string]*plan.ObjectRef),
@@ -42,10 +43,14 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 }
 
 func NewMockCompilerContext() *MockCompilerContext {
-	objects := make(map[string]*plan.ObjectRef)
-	tables := make(map[string]*plan.TableDef)
-
 	tpchSchema := make(map[string][]col)
+	moSchema := make(map[string][]col)
+
+	schemas := map[string]map[string][]col{
+		"tpch": tpchSchema,
+		"mo":   moSchema,
+	}
+
 	tpchSchema["nation"] = []col{
 		{"n_nationkey", plan.Type_INT32, false, 0, 0},
 		{"n_name", plan.Type_VARCHAR, false, 25, 0},
@@ -130,42 +135,64 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"l_comment", plan.Type_VARCHAR, false, 44, 0},
 	}
 
-	defaultDbName := "tpch"
+	moSchema["mo_database"] = []col{
+		{"datname", plan.Type_VARCHAR, false, 50, 0},
+	}
+	moSchema["mo_tables"] = []col{
+		{"reldatabase", plan.Type_VARCHAR, false, 50, 0},
+		{"relname", plan.Type_VARCHAR, false, 50, 0},
+	}
+	moSchema["mo_columns"] = []col{
+		{"att_database", plan.Type_VARCHAR, false, 50, 0},
+		{"att_relname", plan.Type_VARCHAR, false, 50, 0},
+		{"attname", plan.Type_VARCHAR, false, 50, 0},
+		{"atttyp", plan.Type_INT32, false, 0, 0},
+		{"attnum", plan.Type_INT32, false, 0, 0},
+		{"att_length", plan.Type_INT32, false, 0, 0},
+		{"attnotnull", plan.Type_INT8, false, 0, 0},
+		{"att_constraint_type", plan.Type_CHAR, false, 1, 0},
+		{"att_default", plan.Type_VARCHAR, false, 1024, 0},
+		{"att_comment", plan.Type_VARCHAR, false, 1024, 0},
+	}
 
-	//build tpch context data(schema)
-	tableIdx := 0
-	for tableName, cols := range tpchSchema {
-		colDefs := make([]*plan.ColDef, 0, len(cols))
+	objects := make(map[string]*plan.ObjectRef)
+	tables := make(map[string]*plan.TableDef)
+	//build tpch/mo context data(schema)
+	for db, schema := range schemas {
+		tableIdx := 0
+		for tableName, cols := range schema {
+			colDefs := make([]*plan.ColDef, 0, len(cols))
 
-		for _, col := range cols {
-			colDefs = append(colDefs, &plan.ColDef{
-				Typ: &plan.Type{
-					Id:        col.Id,
-					Nullable:  col.Nullable,
-					Width:     col.Width,
-					Precision: col.Precision,
-				},
-				Name:  col.Name,
-				Pkidx: 1,
-			})
+			for _, col := range cols {
+				colDefs = append(colDefs, &plan.ColDef{
+					Typ: &plan.Type{
+						Id:        col.Id,
+						Nullable:  col.Nullable,
+						Width:     col.Width,
+						Precision: col.Precision,
+					},
+					Name:  col.Name,
+					Pkidx: 1,
+				})
+			}
+
+			objects[tableName] = &plan.ObjectRef{
+				Server:     0,
+				Db:         0,
+				Schema:     0,
+				Obj:        int64(tableIdx),
+				ServerName: "",
+				DbName:     "",
+				SchemaName: db,
+				ObjName:    tableName,
+			}
+
+			tables[tableName] = &plan.TableDef{
+				Name: tableName,
+				Cols: colDefs,
+			}
+			tableIdx++
 		}
-
-		objects[tableName] = &plan.ObjectRef{
-			Server:     0,
-			Db:         0,
-			Schema:     0,
-			Obj:        int64(tableIdx),
-			ServerName: "",
-			DbName:     defaultDbName,
-			SchemaName: "",
-			ObjName:    tableName,
-		}
-
-		tables[tableName] = &plan.TableDef{
-			Name: tableName,
-			Cols: colDefs,
-		}
-		tableIdx++
 	}
 
 	return &MockCompilerContext{
@@ -175,7 +202,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) DatabaseExists(name string) bool {
-	return strings.ToLower(name) == "tpch"
+	return strings.ToLower(name) == "tpch" || strings.ToLower(name) == "mo"
 }
 
 func (m *MockCompilerContext) DefaultDatabase() string {

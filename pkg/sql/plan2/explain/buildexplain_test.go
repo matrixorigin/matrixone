@@ -16,20 +16,24 @@ package explain
 
 import (
 	"fmt"
-	"strings"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"strings"
+	"testing"
 )
 
 func TestSingleSql(t *testing.T) {
-	//input := "explain verbose SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0"
-	input := "explain verbose SELECT DISTINCT N_NAME FROM NATION limit 10"
+	//input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
+	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
+	//input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
+	//input := "explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA'"
+	//input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10"
+	input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10"
+
 	mock := plan2.NewMockOptimizer()
 	err := runOneStmt(mock, t, input)
 	if err != nil {
@@ -42,7 +46,9 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain verbose SELECT N_NAME,N_REGIONKEY, 23 as a FROM NATION",
 		"explain verbose SELECT N_NAME,abs(N_REGIONKEY), 23 as a FROM NATION",
 		"explain SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10",
+		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10",
 		"explain SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10",
+		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10",
 		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10 ORDER BY N_NAME, N_REGIONKEY DESC",
 		"explain verbose SELECT count(*) FROM NATION group by N_NAME",
 		"explain verbose SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10",
@@ -121,14 +127,93 @@ func TestJoinQuery(t *testing.T) {
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
-// Nested query
+// Nested query <no pass>
 func TestNestedQuery(t *testing.T) {
+	sqls := []string{
+		"explain verbose SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",
+		"explain SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",
+		`explain verbose select
+		sum(l_extendedprice) / 7.0 as avg_yearly
+	from
+		lineitem,
+		part
+	where
+		p_partkey = l_partkey
+		and p_brand = 'Brand#54'
+		and p_container = 'LG BAG'
+		and l_quantity < (
+			select
+				0.2 * avg(l_quantity)
+			from
+				lineitem
+			where
+				l_partkey = p_partkey
+		);`, //tpch q17
+	}
+	mockOptimizer := plan2.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
 
+// Test Derived Table Query
+func TestDerivedTableQuery(t *testing.T) {
+	sqls := []string{
+		"explain select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a",
+		"explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a",
+		"explain select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a where ff > 0 order by c_custkey",
+		"explain verbose select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a where ff > 0 order by c_custkey",
+		"explain select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
+		"explain verbose select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
+		"explain select a.* from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
+		"explain verbose select a.* from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
+		"explain select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
+		"explain verbose select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
+	}
+	mockOptimizer := plan2.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
 // Collection query
 func TestCollectionQuery(t *testing.T) {
 
+}
+
+func TestDMLInsert(t *testing.T) {
+	sqls := []string{
+		"explain INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		"explain verbose INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		"explain INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
+		"explain verbose INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
+		"explain INSERT INTO NATION SELECT * FROM NATION2",
+		"explain verbose INSERT INTO NATION SELECT * FROM NATION2",
+	}
+	mockOptimizer := plan2.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+func TestDMLUpdate(t *testing.T) {
+	sqls := []string{
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+	}
+	mockOptimizer := plan2.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
+}
+
+func TestDMLDelete(t *testing.T) {
+	sqls := []string{
+		"explain DELETE FROM NATION",
+		"explain verbose DELETE FROM NATION",
+		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+	}
+	mockOptimizer := plan2.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
 func runTestShouldPass(opt plan2.Optimizer, t *testing.T, sqls []string) {
@@ -141,19 +226,14 @@ func runTestShouldPass(opt plan2.Optimizer, t *testing.T, sqls []string) {
 }
 
 func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
-	// t.Logf("SQL: %v\n", sql)
+	t.Logf("SQL: %v\n", sql)
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
 
 	if stmt, ok := stmts[0].(*tree.ExplainStmt); ok {
-		es := &ExplainOptions{
-			Verbose: false,
-			Anzlyze: false,
-			Format:  EXPLAIN_FORMAT_TEXT,
-		}
-
+		es := NewExplainDefaultOptions()
 		for _, v := range stmt.Options {
 			if strings.EqualFold(v.Name, "VERBOSE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -190,13 +270,16 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 		ctx := opt.CurrentContext()
 		logicPlan, err := plan2.BuildPlan(ctx, stmt.Statement)
 		if err != nil {
-			fmt.Printf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
+			t.Errorf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err
 		}
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(logicPlan.GetQuery())
-		explainQuery.ExplainPlan(buffer, es)
-		// t.Logf("\n")
+		err = explainQuery.ExplainPlan(buffer, es)
+		if err != nil {
+			t.Errorf("explain Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
+			return err
+		}
 	}
 	return nil
 }
