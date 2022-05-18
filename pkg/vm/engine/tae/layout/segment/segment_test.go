@@ -39,11 +39,14 @@ func mackData(size uint32) []byte {
 	if ibufLen > uint32(sbuffer.Len()) {
 		zero := make([]byte, ibufLen-uint32(sbuffer.Len()))
 		err = binary.Write(&sbuffer, binary.BigEndian, zero)
+		if err != nil {
+			return nil
+		}
 	}
 	return sbuffer.Bytes()
 }
 
-func debugBitmap(b *BitmapAllocator) (info string) {
+/*func debugBitmap(b *BitmapAllocator) (info string) {
 	if len(b.level1) < 20 {
 		// log allocator
 		return ""
@@ -57,7 +60,7 @@ func debugBitmap(b *BitmapAllocator) (info string) {
 		info = fmt.Sprintf("%v-%x\n", info, b.level1[i])
 	}
 	return info
-}
+}*/
 
 func TestBitmapAllocator(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -68,26 +71,29 @@ func TestBitmapAllocator(t *testing.T) {
 	seg.Mount()
 	file := seg.NewBlockFile("bitmap")
 	level0 := seg.allocator.(*BitmapAllocator).level0
-	//level1 := seg.allocator.(*BitmapAllocator).level1
+	level1 := seg.allocator.(*BitmapAllocator).level1
 	for i := 0; i < 20; i++ {
 		buffer1 := mackData(1048576)
+		assert.NotNil(t, buffer1)
 		err = file.segment.Append(file, buffer1)
 		assert.Nil(t, err)
 		buffer2 := mackData(4096)
+		assert.NotNil(t, buffer2)
 		err = file.segment.Append(file, buffer2)
 		assert.Nil(t, err)
 		buffer3 := mackData(5242880)
+		assert.NotNil(t, buffer3)
 		err = file.segment.Append(file, buffer3)
 		assert.Nil(t, err)
 	}
 	l0pos := uint32(file.snode.originSize) / seg.GetPageSize() / BITS_PER_UNIT
-	//l1pos := l0pos / BITS_PER_UNIT
+	l1pos := l0pos / BITS_PER_UNITSET
 
 	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos-1]))
 	ret := 0xFFFFFFFFFFF00000 - level0[l0pos]
 	assert.Equal(t, 0, int(ret))
-	//ret = ALL_UNIT_SET - level1[l1pos]
-	//assert.NotEqual(t, 0, int(ret))
+	ret = 0xF000000000000000 - level1[l1pos]
+	assert.Equal(t, 0, int(ret))
 
 	seg.allocator.Free(8192, 4096)
 	//ret = uint64(0x4) - level0[0]

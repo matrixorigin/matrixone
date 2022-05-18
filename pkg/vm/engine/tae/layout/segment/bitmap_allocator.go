@@ -130,12 +130,7 @@ func (b *BitmapAllocator) markAllocFree0(start, length uint64, free bool) {
 	}
 }
 
-func (b *BitmapAllocator) markLevel1(start, length uint64, free bool) {
-	if start%UNITSET_BYTES != 0 {
-		panic(any("start align error"))
-	} else if length%UNITSET_BYTES != 0 {
-		panic(any("length align error"))
-	}
+func (b *BitmapAllocator) markUnitLevel1(start, length uint64, free bool) {
 	clear := true
 	for idx := start / BITS_PER_UNIT; idx < length/BITS_PER_UNIT; idx++ {
 		val := &(b.level0[idx])
@@ -162,6 +157,23 @@ func (b *BitmapAllocator) markLevel1(start, length uint64, free bool) {
 			var bit uint64 = 1 << (l1pos % BITS_PER_UNIT)
 			*l1val |= bit
 		}
+	}
+}
+
+func (b *BitmapAllocator) markLevel1(start, length uint64, free bool) {
+	if start%UNITSET_BYTES != 0 {
+		panic(any("start align error"))
+	} else if length%UNITSET_BYTES != 0 {
+		panic(any("length align error"))
+	}
+	idx := uint64(0)
+	idxEnd := length / BITS_PER_UNITSET
+	for {
+		if idx >= idxEnd {
+			break
+		}
+		b.markUnitLevel1(start+idx*BITS_PER_UNITSET, start+(idx+1)*BITS_PER_UNITSET, free)
+		idx++
 	}
 }
 
