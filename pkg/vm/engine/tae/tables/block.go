@@ -573,12 +573,13 @@ func (blk *dataBlock) getVectorWithBuffer(colIdx int, compressed, decompressed *
 
 	wrapper := vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
 	wrapper.File = dataFile
-	if compressed == nil || decompressed == nil {
-		_, err = wrapper.ReadFrom(dataFile)
-	} else {
-		_, err = wrapper.ReadWithBuffer(dataFile, compressed, decompressed)
+	if compressed == nil {
+		compressed = new(bytes.Buffer)
 	}
-	if err != nil {
+	if decompressed == nil {
+		decompressed = new(bytes.Buffer)
+	}
+	if _, err = wrapper.ReadWithBuffer(dataFile, compressed, decompressed); err != nil {
 		return
 	}
 	vec = &wrapper.Vector
