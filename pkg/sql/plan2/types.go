@@ -20,13 +20,16 @@ import (
 )
 
 type TableDef = plan.TableDef
+type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
+type ColRef = plan.ColRef
 type Cost = plan.Cost
 type Const = plan.Const
 type Expr = plan.Expr
 type Node = plan.Node
 type RowsetData = plan.RowsetData
 type Query = plan.Query
+type Plan = plan.Plan
 
 type CompilerContext interface {
 	DefaultDatabase() string
@@ -41,15 +44,15 @@ type Optimizer interface {
 }
 
 //use for build select
-type SelectContext struct {
-	//when build_projection we may set columnAlias and then use in build_orderby
+type BinderContext struct {
+	// when build_projection we may set columnAlias and then use in build_orderby
 	columnAlias map[string]*Expr
-	//when build_cte will set cteTables and use in build_from
+	// when build_cte will set cteTables and use in build_from
 	cteTables map[string]*TableDef
 
-	//use for build subquery
-	subQueryIsCorrelated bool
-	subQueryIsScalar     bool
+	// use for build subquery
+	subqueryIsCorrelated bool
+	subqueryIsScalar     bool
 
-	subQueryParentId []int32
+	subqueryParentIds []int32
 }

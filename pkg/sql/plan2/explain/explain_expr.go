@@ -15,23 +15,23 @@
 package explain
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
-	"strconv"
 )
 
 func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 	var result string
 
 	if expr.Expr == nil {
-		result += expr.Alias
+		result += expr.ColName
 	} else {
 		switch expr.Expr.(type) {
 		case *plan.Expr_Col:
-			colExpr := expr.Expr.(*plan.Expr_Col)
-			result += colExpr.Col.GetName()
+			result += expr.ColName
 		case *plan.Expr_C:
 			constExpr := expr.Expr.(*plan.Expr_C)
 			if intConst, ok := constExpr.C.Value.(*plan.Const_Ival); ok {
@@ -56,7 +56,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 			subqryExpr := expr.Expr.(*plan.Expr_Sub)
 			result += "subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10)
 		case *plan.Expr_Corr:
-			result += expr.Expr.(*plan.Expr_Corr).Corr.GetName()
+			result += expr.ColName
 		case *plan.Expr_V:
 			panic("unimplement Expr_V")
 		case *plan.Expr_P:
@@ -79,7 +79,7 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 }
 
 func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
-	//SysFunsAndOperatorsMap
+	// SysFunsAndOperatorsMap
 	var result string
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	// Get function explain type

@@ -24,23 +24,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*plan.Plan, error) {
+func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
-		TableDef: &plan.TableDef{
+		TableDef: &TableDef{
 			Name: string(stmt.Table.ObjectName),
 		},
 	}
 
-	//get database name
+	// get database name
 	if len(stmt.Table.SchemaName) == 0 {
 		createTable.Database = ctx.DefaultDatabase()
 	} else {
 		createTable.Database = string(stmt.Table.SchemaName)
 	}
 
-	//get table name
+	// get table name
 	if !stmt.IfNotExists {
 		_, def := ctx.Resolve(createTable.TableDef.Name)
 		if def != nil {
@@ -48,13 +48,13 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*plan.Plan, 
 		}
 	}
 
-	//set tableDef
+	// set tableDef
 	err := buildTableDefs(stmt.Defs, ctx, createTable.TableDef)
 	if err != nil {
 		return nil, err
 	}
 
-	//set option
+	// set option
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.TableOptionProperties:
@@ -72,7 +72,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*plan.Plan, 
 					},
 				},
 			})
-		//todo confirm: option data store like this?
+		// todo confirm: option data store like this?
 		case *tree.TableOptionComment:
 			properties := []*plan.Property{
 				{
@@ -87,7 +87,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*plan.Plan, 
 					},
 				},
 			})
-		//these table options is not support in plan
+		// these table options is not support in plan
 		// case *tree.TableOptionEngine, *tree.TableOptionSecondaryEngine, *tree.TableOptionCharset,
 		// 	*tree.TableOptionCollate, *tree.TableOptionAutoIncrement, *tree.TableOptionComment,
 		// 	*tree.TableOptionAvgRowLength, *tree.TableOptionChecksum, *tree.TableOptionCompression,
@@ -103,12 +103,12 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*plan.Plan, 
 		}
 	}
 
-	//set partition(unsupport now)
+	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("partition unsupport now; statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
 
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_TABLE,
@@ -120,7 +120,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*plan.Plan, 
 	}, nil
 }
 
-func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *plan.TableDef) error {
+func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {
 	var primaryKeys []string
 	for _, item := range defs {
 		switch def := item.(type) {
@@ -133,7 +133,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *plan.Tab
 			if err != nil {
 				return err
 			}
-			col := &plan.ColDef{
+			col := &ColDef{
 				Name:    def.Name.Parts[0],
 				Alg:     plan.CompressType_Lz4,
 				Typ:     colType,
@@ -201,7 +201,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *plan.Tab
 				},
 			})
 		case *tree.UniqueIndex, *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
-			//unsupport in plan. will support in next version.
+			// unsupport in plan. will support in next version.
 			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
 		default:
 			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
@@ -220,7 +220,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *plan.Tab
 	return nil
 }
 
-func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*plan.Plan, error) {
+func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	dropTable := &plan.DropTable{
 		IfExists: stmt.IfExists,
 	}
@@ -242,7 +242,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*plan.Plan, erro
 		}
 	}
 
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_DROP_TABLE,
@@ -254,7 +254,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*plan.Plan, erro
 	}, nil
 }
 
-func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*plan.Plan, error) {
+func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan, error) {
 	createDb := &plan.CreateDatabase{
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),
@@ -265,7 +265,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*plan.
 		}
 	}
 
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_DATABASE,
@@ -277,7 +277,7 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*plan.
 	}, nil
 }
 
-func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*plan.Plan, error) {
+func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, error) {
 	dropDb := &plan.DropDatabase{
 		IfExists: stmt.IfExists,
 		Database: string(stmt.Name),
@@ -289,7 +289,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*plan.Plan
 		}
 	}
 
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_DROP_DATABASE,
@@ -301,11 +301,11 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*plan.Plan
 	}, nil
 }
 
-func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*plan.Plan, error) {
+func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
-	//todo unsupport now
+	// todo unsupport now
 	// createIndex := &plan.CreateIndex{}
-	// return &plan.Plan{
+	// return &Plan{
 	// 	Plan: &plan.Plan_Ddl{
 	// 		Ddl: &plan.DataDefinition{
 	// 			DdlType: plan.DataDefinition_CREATE_INDEX,
@@ -317,14 +317,14 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*plan.Plan, 
 	// }, nil
 }
 
-func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*plan.Plan, error) {
+func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
-	//todo unsupport now
+	// todo unsupport now
 	// dropIndex := &plan.DropIndex{
 	// 	IfExists: stmt.IfExists,
 	// 	Index:    string(stmt.Name),
 	// }
-	// return &plan.Plan{
+	// return &Plan{
 	// 	Plan: &plan.Plan_Ddl{
 	// 		Ddl: &plan.DataDefinition{
 	// 			DdlType: plan.DataDefinition_DROP_INDEX,

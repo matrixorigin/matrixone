@@ -95,17 +95,14 @@ message VarRef {
 
 // Reference a column in the proj list of a node.
 message ColRef {
-	string name   = 1;
-	int32 rel_pos = 2;
-	int32 col_pos = 3;
+	int32 rel_pos	= 1;
+	int32 col_pos	= 2;
 }
 
 // Reference a correlated column in the proj list of a node.
 message CorrColRef {
-	string name = 1;
-	int32 rel_pos = 2;
-	int32 col_pos = 3;
-	int32 node_id = 4;
+	int32 node_id = 1;
+	int32 col_pos = 2;
 }
 
 // ExprList is a type of Expr
@@ -115,9 +112,9 @@ message ExprList {
 
 // Reference a subquery
 message SubQuery {
-	int32 node_id   = 1;
-	bool is_correlated = 2;
-	bool is_scalar  = 3;
+	int32 node_id		= 1;
+	bool is_correlated	= 2;
+	bool is_scalar		= 3;
 }
 
 // Object ref, reference a object in database, 4 part name.
@@ -126,10 +123,10 @@ message ObjectRef {
 	int64 db		= 2;
 	int64 schema	= 3;
 	int64 obj		= 4;
-	string server_name = 5;
+	string server_name	= 5;
 	string db_name		= 6;
-	string schema_name = 7;
-	string obj_name	= 8;
+	string schema_name	= 7;
+	string obj_name		= 8;
 }
 
 message Function {
@@ -162,17 +159,18 @@ message Function {
 }
 
 message Expr {
-	Type typ	 = 1;
-	string alias = 2;
+	Type	typ			= 1;
+	string	table_name	= 2;
+	string	col_name	= 3;
 	oneof expr {
-		Const		c	  = 3;
-		ParamRef	p	  = 4;
-		VarRef		v	  = 5;
-		ColRef		col   = 6;
-		Function	f	  = 7;
-		ExprList    list  = 8;
-		SubQuery    sub   = 9;
-		CorrColRef  corr  = 10;
+		Const		c		= 4;
+		ParamRef	p		= 5;
+		VarRef		v		= 6;
+		ColRef		col 	= 7;
+		Function	f		= 8;
+		ExprList	list	= 9;
+		SubQuery	sub		= 10;
+		CorrColRef	corr	= 11;
 	}
 }
 
@@ -189,11 +187,12 @@ message DefaultExpr {
 
 message ColDef {
 	string name 		= 1;
-	CompressType alg 	= 2;
-	Type typ			= 3;
-	DefaultExpr default = 4;
-	bool primary        = 5;
-	int32 pkidx 		= 6;
+	string alias		= 2;
+	CompressType alg 	= 3;
+	Type typ			= 4;
+	DefaultExpr default = 5;
+	bool primary        = 6;
+	int32 pkidx 		= 7;
 }
 
 message IndexDef {
@@ -223,14 +222,15 @@ message PropertiesDef {
 message TableDef {
 	message DefType {
 		oneof def {
-			PrimaryKeyDef pk 			= 1;
-			IndexDef idx 				= 2;
-			PropertiesDef  properties	= 3;
+			PrimaryKeyDef pk			= 1;
+			IndexDef idx				= 2;
+			PropertiesDef properties	= 3;
 		}
 	}
-	string name						= 1;
-	repeated ColDef cols			= 2;
-	repeated DefType defs 			= 3;
+	string name				= 1;
+	string alias			= 2;
+	repeated ColDef cols	= 3;
+	repeated DefType defs	= 4;
 }
 
 message Cost {
@@ -267,14 +267,14 @@ message OrderBySpec {
 		INTERNAL    = 16;
 	}
 
-	Expr order_by = 1;
-	string order_by_collations = 2;
-	OrderByFlag order_by_flags = 3;
+	Expr expr = 1;
+	string collation = 2;
+	OrderByFlag flag = 3;
 }
 
 message WindowSpec {
 	repeated Expr partition_by = 1;
-	repeated OrderBySpec odery_by = 2;
+	repeated OrderBySpec order_by = 2;
 	int32 lead = 3;
 	int32 lag  = 4;
 }
@@ -294,14 +294,14 @@ message Node {
 		TABLE_SCAN		= 2;
 		FUNCTION_SCAN	= 3;
 		EXTERNAL_SCAN	= 4;
-		MATERIAL_SCAN   = 5;
+		MATERIAL_SCAN	= 5;
 
-		// Proj, for convinience
+		// Proj, for convenience
 		PROJECT = 10; 
 		// External function call (UDF)
 		EXTERNAL_FUNCTION = 11; 
 
-		// Matrial, CTE, etc.
+		// Material, CTE, etc.
 		MATERIAL		= 20;
 		RECURSIVE_CTE	= 21;
 		SINK			= 22;
@@ -326,9 +326,9 @@ message Node {
 		ASSERT			= 50; 
 
 		//
-		INSERT          = 51;
-		UPDATE  		= 52;
-		DELETE  		= 53;
+		INSERT			= 51;
+		UPDATE			= 52;
+		DELETE			= 53;
 	}
 
 	enum JoinFlag {
@@ -357,16 +357,17 @@ message Node {
 	repeated Expr on_list			= 7;
 	repeated Expr where_list		= 8;
 	repeated Expr group_by			= 9;
-	repeated Expr grouping_set	    = 10;
-	repeated OrderBySpec order_by   = 11;
-	UpdateList update_list = 12;
-	WindowSpec win_spec = 13;
-	Expr limit			= 14;
-	Expr offset			= 15;
-	TableDef table_def	= 16;
-	ObjectRef obj_ref	= 17;
-	RowsetData rowset_data = 18;
-	string extra_options   = 19;
+	repeated Expr grouping_set		= 10;
+	repeated Expr agg_list			= 11;
+	repeated OrderBySpec order_by   = 12;
+	UpdateList update_list = 13;
+	WindowSpec win_spec = 14;
+	Expr limit			= 15;
+	Expr offset			= 16;
+	TableDef table_def	= 17;
+	ObjectRef obj_ref	= 18;
+	RowsetData rowset_data = 19;
+	string extra_options   = 20;
 }
 
 message Query {
@@ -382,7 +383,7 @@ message Query {
 	StatementType stmt_type		= 1;
 
 	// A query may need to run in steps.   This in theory is not
-	// necessary but often convinient and/or can be better optimized.
+	// necessary but often convenient and/or can be better optimized.
 	// For example, executing non correctlated scalar subquery first
 	// we can plug the value in the optmizer and the newly available
 	// value may generate better plan.

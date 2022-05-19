@@ -17,7 +17,6 @@ package plan2
 import (
 	"fmt"
 	"go/constant"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -42,319 +41,320 @@ func splitExprToAND(expr tree.Expr) []*tree.Expr {
 	return exprs
 }
 
-func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
-	for idx, col := range tableDef.Cols {
-		if strings.EqualFold(col.Name, name) {
+func getColumnIndex(projectList []*Expr, colName string) int32 {
+	for idx, expr := range projectList {
+		if expr.ColName == colName {
 			return int32(idx)
 		}
 	}
 	return -1
 }
 
-func getColumnsWithSameName(left *plan.TableDef, right *plan.TableDef) []*plan.Expr {
-	var exprs []*plan.Expr
+func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) []*Expr {
+	var commonList []*Expr
+
+	leftMap := make(map[string]int)
+
+	for idx, col := range leftProjList {
+		leftMap[col.ColName] = idx
+	}
 
 	funName := getFunctionObjRef("=")
-	for leftIdx, leftCol := range left.Cols {
-		for rightIdx, rightCol := range right.Cols {
-			if leftCol.Name == rightCol.Name {
-				exprs = append(exprs, &plan.Expr{
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: funName,
-							Args: []*plan.Expr{
-								{
-									Expr: &plan.Expr_Col{
-										Col: &plan.ColRef{
-											Name:   leftCol.Name,
-											RelPos: 0,
-											ColPos: int32(leftIdx),
-										},
+	for idx, col := range rightProjList {
+		if leftIdx, ok := leftMap[col.ColName]; ok {
+			commonList = append(commonList, &Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: funName,
+						Args: []*Expr{
+							{
+								TableName: leftProjList[leftIdx].TableName,
+								ColName:   col.ColName,
+								Expr: &plan.Expr_Col{
+									Col: &ColRef{
+										RelPos: 0,
+										ColPos: int32(leftIdx),
 									},
 								},
-								{
-									Expr: &plan.Expr_Col{
-										Col: &plan.ColRef{
-											Name:   rightCol.Name,
-											RelPos: 1,
-											ColPos: int32(rightIdx),
-										},
+							},
+							{
+								TableName: col.TableName,
+								ColName:   col.ColName,
+								Expr: &plan.Expr_Col{
+									Col: &ColRef{
+										RelPos: 1,
+										ColPos: int32(idx),
 									},
 								},
 							},
 						},
 					},
-				})
-			}
+				},
+			})
 		}
 	}
-	return exprs
+
+	return commonList
 }
 
-func appendQueryNode(query *Query, node *plan.Node, isFrom bool) {
-	nodeLength := len(query.Nodes)
-	node.NodeId = int32(nodeLength)
+func appendQueryNode(query *Query, node *Node) int32 {
+	nodeId := int32(len(query.Nodes))
+	node.NodeId = nodeId
 	query.Nodes = append(query.Nodes, node)
 
-	if !isFrom && node.Children == nil && nodeLength > 0 {
-		node.Children = []int32{int32(nodeLength) - 1}
-	}
+	return nodeId
 }
 
-func fillTableScanProjectList(query *Query, alias string) {
-	// log.Printf("fillTableScanProjectList")
-	node := query.Nodes[len(query.Nodes)-1]
+func fillTableProjectList(query *Query, nodeId int32, alias tree.AliasClause) (int32, error) {
+	node := query.Nodes[nodeId]
+	if node.ProjectList == nil {
+		if node.TableDef == nil {
+			return nodeId, nil
+		}
 
-	//special sql like: select abs(-1)
-	if node.TableDef == nil {
-		return
-	}
+		if len(alias.Cols) > len(node.TableDef.Cols) {
+			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
+		}
 
-	if alias == "" {
-		alias = node.TableDef.Name
-	}
-	exprs := make([]*plan.Expr, 0, len(node.TableDef.Cols))
-	for idx, col := range node.TableDef.Cols {
-		exprs = append(exprs,
-			&plan.Expr{
-				Alias: alias + "." + col.Name,
+		// Table scan
+		if alias.Alias != "" {
+			node.TableDef.Alias = string(alias.Alias)
+		} else {
+			node.TableDef.Alias = node.TableDef.Name
+		}
+
+		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
+		for idx, col := range node.TableDef.Cols {
+			if idx < len(alias.Cols) {
+				col.Alias = string(alias.Cols[idx])
+			} else {
+				col.Alias = col.Name
+			}
+
+			node.ProjectList[idx] = &Expr{
+				Typ:       col.Typ,
+				TableName: node.TableDef.Alias,
+				ColName:   col.Alias,
 				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						Name:   col.Name,
+					Col: &ColRef{
+						RelPos: 0,
 						ColPos: int32(idx),
 					},
 				},
-				Typ: col.Typ,
-			})
+			}
+		}
+	} else {
+		// Subquery
+		if len(alias.Cols) > len(node.ProjectList) {
+			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.ProjectList), len(alias.Cols)))
+		}
+
+		projNode := &Node{
+			NodeType: plan.Node_PROJECT,
+			Children: []int32{nodeId},
+		}
+		projNode.ProjectList = make([]*Expr, len(node.ProjectList))
+		tableName := string(alias.Alias)
+		var colName string
+		for idx, col := range node.ProjectList {
+			if idx < len(alias.Cols) {
+				colName = string(alias.Cols[idx])
+			} else {
+				colName = col.ColName
+			}
+
+			col.TableName = tableName
+			col.ColName = colName
+
+			projNode.ProjectList[idx] = &Expr{
+				Typ:       col.Typ,
+				TableName: tableName,
+				ColName:   colName,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(idx),
+					},
+				},
+			}
+		}
+		nodeId = appendQueryNode(query, projNode)
 	}
-	node.ProjectList = exprs
+
+	return nodeId, nil
 }
 
-func fillJoinProjectList(node *plan.Node, leftNode *plan.Node, rightNode *plan.Node) {
-	exprs := make([]*plan.Expr, 0, len(leftNode.ProjectList)+len(rightNode.ProjectList))
-	for idx, expr := range leftNode.ProjectList {
-		exprs = append(exprs, &plan.Expr{
+func fillJoinProjectList(node *Node, leftChild *Node, rightChild *Node) {
+	// TODO: NATURAL JOIN should not include duplicate columns
+
+	resultLen := len(leftChild.ProjectList) + len(rightChild.ProjectList)
+	if leftChild.JoinType&(plan.Node_SEMI|plan.Node_ANTI) != 0 {
+		resultLen = len(leftChild.ProjectList)
+	}
+
+	node.ProjectList = make([]*Expr, resultLen)
+	idx := 0
+
+	for i, expr := range leftChild.ProjectList {
+		if expr == nil {
+			panic(i)
+		}
+		node.ProjectList[idx] = &Expr{
+			Typ:       expr.Typ,
+			TableName: expr.TableName,
+			ColName:   expr.ColName,
 			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					// Name:   expr.Expr.(*plan.Expr_Col).Col.Name,
-					Name:   expr.Alias,
+				Col: &ColRef{
 					RelPos: 0,
-					ColPos: int32(idx),
+					ColPos: int32(i),
 				},
 			},
-			Alias: expr.Alias,
-			Typ:   expr.Typ,
-		})
-	}
-	for idx, expr := range rightNode.ProjectList {
-		exprs = append(exprs, &plan.Expr{
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					// Name:   expr.Expr.(*plan.Expr_Col).Col.Name,
-					Name:   expr.Alias,
-					RelPos: 1,
-					ColPos: int32(idx),
-				},
-			},
-			Alias: expr.Alias,
-			Typ:   expr.Typ,
-		})
+		}
+		idx++
 	}
 
-	node.ProjectList = exprs
+	if leftChild.JoinType&(plan.Node_SEMI|plan.Node_ANTI) != 0 {
+		return
+	}
+
+	for i, expr := range rightChild.ProjectList {
+		node.ProjectList[idx] = &Expr{
+			Typ:       expr.Typ,
+			TableName: expr.TableName,
+			ColName:   expr.ColName,
+			Expr: &plan.Expr_Col{
+				Col: &ColRef{
+					RelPos: 1,
+					ColPos: int32(i),
+				},
+			},
+		}
+		idx++
+	}
 }
 
-func getExprFromUnresolvedName(query *Query, name string, table string, selectCtx *SelectContext) (*plan.Expr, error) {
-	aliasName := table + "." + name
-	colRef := &plan.ColRef{
-		Name: "",
+func buildUnresolvedName(query *Query, node *Node, colName string, tableName string, binderCtx *BinderContext) (*Expr, error) {
+	var name string
+	if tableName != "" {
+		name = tableName + "." + colName
+	} else {
+		name = colName
 	}
-	colExpr := &plan.Expr{
+
+	colRef := &ColRef{
+		RelPos: -1,
+		ColPos: -1,
+	}
+	colExpr := &Expr{
 		Expr: &plan.Expr_Col{
 			Col: colRef,
 		},
 	}
 
-	matchName := func(alias string) bool {
-		if table == "" {
-			arr := strings.SplitN(alias, ".", 2)
-			if len(arr) > 1 {
-				return strings.EqualFold(arr[1], name)
-			} else {
-				return strings.EqualFold(arr[0], name)
-			}
-		}
-		return strings.EqualFold(alias, aliasName)
+	matchName := func(expr *Expr) bool {
+		return colName == expr.ColName && (len(tableName) == 0 || tableName == expr.TableName)
 	}
 
-	//get name from select
-	preNode := query.Nodes[len(query.Nodes)-1]
-	for {
-		if preNode.ProjectList != nil {
-			for idx, col := range preNode.ProjectList {
-				// log.Printf("col=%v, search=%v", col.Alias, aliasName)
-				if matchName(col.Alias) {
-					if colRef.Name != "" {
-						return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' in the field list is ambiguous", name))
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		// search name from TableDef
+		if len(tableName) == 0 || tableName == node.TableDef.Alias {
+			for j, col := range node.TableDef.Cols {
+				if colName == col.Alias {
+					if colRef.RelPos != -1 {
+						return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference '%v' is ambiguous", name))
 					}
-					colRef.Name = col.Alias
 					colRef.RelPos = 0
-					colRef.ColPos = int32(idx)
+					colRef.ColPos = int32(j)
 
-					colExpr.Alias = col.Alias
 					colExpr.Typ = col.Typ
+					colExpr.ColName = colName
+					colExpr.TableName = tableName
 				}
 			}
-			break
 		}
-		if preNode.Children == nil {
-			break
+	} else {
+		// Search name from children
+		for i, child := range node.Children {
+			for j, col := range query.Nodes[child].ProjectList {
+				if matchName(col) {
+					if colRef.RelPos != -1 {
+						return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference '%v' is ambiguous", name))
+					}
+					colRef.RelPos = int32(i)
+					colRef.ColPos = int32(j)
+
+					colExpr.Typ = col.Typ
+					colExpr.ColName = col.ColName
+					colExpr.TableName = col.TableName
+				}
+			}
 		}
-		preNode = query.Nodes[preNode.Children[0]]
 	}
 
-	//if get from select ok, then return
-	//see tpch-11
-	if colRef.Name != "" {
+	if colRef.RelPos != -1 {
 		return colExpr, nil
 	}
 
-	//get from parent query
-	corrRef := &plan.CorrColRef{
-		Name: "",
+	if len(binderCtx.subqueryParentIds) == 0 {
+		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
 	}
-	corrExpr := &plan.Expr{
+
+	// Search from parent queries
+	corrRef := &plan.CorrColRef{
+		NodeId: -1,
+		ColPos: -1,
+	}
+	corrExpr := &Expr{
 		Expr: &plan.Expr_Corr{
 			Corr: corrRef,
 		},
 	}
-	getNode := func(id int32) *plan.Node {
-		for _, node := range query.Nodes {
-			if node.NodeId == id {
-				return node
+
+	for _, parentId := range binderCtx.subqueryParentIds {
+		for i, col := range query.Nodes[parentId].ProjectList {
+			if matchName(col) {
+				if corrRef.NodeId != -1 {
+					return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' in the field list is ambiguous", colName))
+				}
+				corrRef.NodeId = parentId
+				corrRef.ColPos = int32(i)
+
+				corrExpr.Typ = col.Typ
+				corrExpr.ColName = col.ColName
+				corrExpr.TableName = col.TableName
 			}
 		}
-		return nil
-	}
-
-	if selectCtx.subQueryParentId != nil {
-		// log.Printf("parentId=%+v", selectCtx.subQueryParentId)
-		for _, parentId := range selectCtx.subQueryParentId {
-			preNode = getNode(parentId)
-			if preNode == nil {
-				return nil, errors.New(errno.InvalidColumnReference, "parent node id not found in subquery")
-			}
-			for {
-				if preNode.ProjectList != nil {
-					for idx, col := range preNode.ProjectList {
-						if matchName(col.Alias) {
-							if corrRef.Name != "" {
-								return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' in the field list is ambiguous", name))
-							}
-							selectCtx.subQueryIsCorrelated = true
-							corrRef.Name = col.Alias
-							corrRef.RelPos = 0
-							corrRef.ColPos = int32(idx)
-							corrRef.NodeId = parentId
-
-							corrExpr.Alias = col.Alias
-							corrExpr.Typ = col.Typ
-						}
-					}
-					break
-				}
-				if preNode.Children == nil {
-					break
-				}
-				preNode = query.Nodes[preNode.Children[0]]
-			}
+		if corrRef.ColPos != -1 {
+			return corrExpr, nil
 		}
 	}
 
-	if corrRef.Name != "" {
-		return corrExpr, nil
-	}
-	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' not found", name))
+	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
 }
 
 //if table == ""  => select * from tbl
 //if table is not empty => select a.* from a,b on a.id = b.id
-func unfoldStar(query *Query, list *plan.ExprList, table string) error {
-	preNode := query.Nodes[len(query.Nodes)-1]
-
-	matchName := func(alias string) bool {
-		if table != "" {
-			arr := strings.SplitN(alias, ".", 2)
-			return arr[0] == table
-		}
-		return true
-	}
-
-	for _, expr := range preNode.ProjectList {
-		if matchName(expr.Alias) {
-			list.List = append(list.List, expr)
+func unfoldStar(node *Node, list *plan.ExprList, table string) error {
+	for _, col := range node.ProjectList {
+		if len(table) == 0 || table == col.TableName {
+			list.List = append(list.List, col)
 		}
 	}
 	return nil
 }
 
-func setDerivedTableAlias(query *Query, ctx CompilerContext, selectCtx *SelectContext, alias string, cols tree.IdentifierList) error {
-	//create a project node for reset projection list
-	node := &plan.Node{
-		NodeType: plan.Node_PROJECT,
-	}
-	preNode := query.Nodes[len(query.Nodes)-1]
-	exprs := make([]*plan.Expr, 0, len(preNode.ProjectList))
-	prefix := alias + "."
-	if cols != nil {
-		if len(preNode.ProjectList) != len(cols) {
-			return errors.New(errno.InvalidColumnReference, "Derived table column length not match")
-		}
-		for idx, col := range cols {
-			exprs = append(exprs, &plan.Expr{
-				Expr:  nil,
-				Alias: prefix + string(col),
-				Typ:   preNode.ProjectList[idx].Typ,
-			})
-		}
-		node.ProjectList = exprs
-	} else {
-		for _, col := range preNode.ProjectList {
-			alias := col.Alias
-			if !strings.HasPrefix(col.Alias, prefix) {
-				alias = prefix + alias
-			}
-			exprs = append(exprs, &plan.Expr{
-				Expr:  nil,
-				Alias: alias,
-				Typ:   col.Typ,
-			})
-		}
-		node.ProjectList = exprs
-	}
-	appendQueryNode(query, node, false)
-
-	//create new project node by default。
-	//if next node is join, you need remove this node
-	tmpNode := &plan.Node{
-		NodeType: plan.Node_PROJECT,
-	}
-	appendQueryNode(query, tmpNode, false)
-	return nil
-}
-
-func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectContext) (*plan.ObjectRef, *plan.TableDef, bool) {
-	//get table from context
-	objRef, tableDef := ctx.Resolve(tblName)
+func getResolveTable(tableName string, ctx CompilerContext, binderCtx *BinderContext) (*ObjectRef, *TableDef, bool) {
+	// get table from context
+	objRef, tableDef := ctx.Resolve(tableName)
 	if tableDef != nil {
 		return objRef, tableDef, false
 	}
 
-	//get table from CTE
-	tableDef, ok := selectCtx.cteTables[strings.ToLower(tblName)]
+	// get table from CTE
+	tableDef, ok := binderCtx.cteTables[tableName]
 	if ok {
-		objRef = &plan.ObjectRef{
-			ObjName: tblName,
+		objRef = &ObjectRef{
+			ObjName: tableName,
 		}
 		return objRef, tableDef, true
 	}
@@ -362,7 +362,8 @@ func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectConte
 }
 
 //getLastTableDef get insert/update/delete tableDef
-func getLastTableDef(query *Query) (*plan.ObjectRef, *plan.TableDef) {
+// FIXME
+func getLastTableDef(query *Query) (*ObjectRef, *TableDef) {
 	node := query.Nodes[query.Steps[len(query.Steps)-1]]
 	for {
 		if node.TableDef != nil {
@@ -376,15 +377,15 @@ func getLastTableDef(query *Query) (*plan.ObjectRef, *plan.TableDef) {
 	return nil, nil
 }
 
-func newQueryAndSelectCtx(typ plan.Query_StatementType) (*Query, *SelectContext) {
-	selectCtx := &SelectContext{
-		columnAlias: make(map[string]*plan.Expr),
-		cteTables:   make(map[string]*plan.TableDef),
+func newQueryAndSelectCtx(typ plan.Query_StatementType) (*Query, *BinderContext) {
+	binderCtx := &BinderContext{
+		columnAlias: make(map[string]*Expr),
+		cteTables:   make(map[string]*TableDef),
 	}
 	query := &Query{
 		StmtType: typ,
 	}
-	return query, selectCtx
+	return query, binderCtx
 }
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
@@ -449,7 +450,7 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 		return ok && v.Value.Kind() == constant.Unknown
 	}
 
-	//get isAllowNull setting
+	// get isAllowNull setting
 	{
 		for _, attr := range column.Attributes {
 			if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is == false {
@@ -462,7 +463,7 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 	for _, attr := range column.Attributes {
 		if d, ok := attr.(*tree.AttributeDefault); ok {
 			defaultExpr := d.Expr
-			//check allowNull
+			// check allowNull
 			if isNullExpr(defaultExpr) {
 				if !allowNull {
 					return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
@@ -473,11 +474,11 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 				}, nil
 			}
 
-			value, err := buildExpr(d.Expr, nil, nil, nil)
+			value, err := buildExpr(d.Expr, nil, nil, nil, nil)
 			if err != nil {
 				return nil, err
 			}
-			//todo check value match type
+			// todo check value match type
 			return &plan.DefaultExpr{
 				Exist:  true,
 				Value:  value,

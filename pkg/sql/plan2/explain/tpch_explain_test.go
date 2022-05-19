@@ -16,12 +16,13 @@ package explain
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -58,7 +59,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 	*/
 
-	//test simple sql
+	// test simple sql
 	qf, err := os.ReadFile(dir + "/tpch/simple.sql")
 	t.Logf("# tpch file: /tpch/simple.sql")
 	if err != nil {
@@ -83,9 +84,9 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 	}
 
-	//test tpch query
+	// test tpch query
 	for qn := 1; qn <= 22; qn += 1 {
-		//qn := 15
+		// qn := 15
 		qnf, err := os.ReadFile(fmt.Sprintf("%s/tpch/q%d.sql", dir, qn))
 		if err != nil {
 			t.Errorf("Cannot open file of query %d, error %v", qn, err)
