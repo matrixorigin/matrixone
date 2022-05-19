@@ -198,10 +198,7 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) (*Ob
 	switch tbl := stmt.(type) {
 	case *tree.TableName:
 		tblName := string(tbl.ObjectName)
-		dbName := ""
-		if len(tbl.SchemaName) > 0 {
-			dbName = string(tbl.SchemaName)
-		}
+		dbName := string(tbl.SchemaName)
 		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
 			return nil, nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", tblName))
