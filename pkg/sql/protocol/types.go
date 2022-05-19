@@ -52,6 +52,7 @@ const (
 	MaxUInt64Ring
 	MaxFloat32Ring
 	MaxFloat64Ring
+	MaxDecimal64Ring
 	MaxStrRing
 	// Min
 	MinInt8Ring

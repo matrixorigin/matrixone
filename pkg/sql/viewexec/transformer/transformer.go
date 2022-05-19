@@ -176,6 +176,8 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 		return max.NewDate(typ), nil
 	case types.T_datetime:
 		return max.NewDatetime(typ), nil
+	case types.T_decimal64:
+		return max.NewDecimal64(typ), nil
 	}
 	return nil, fmt.Errorf("'%v' not support Max", typ)
 }

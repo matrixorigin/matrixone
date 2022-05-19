@@ -111,3 +111,11 @@ type DatetimeRing struct {
 	Ns  []int64
 	Typ types.Type
 }
+
+type Decimal64Ring struct {
+	Es  []bool // isempty
+	Da  []byte
+	Ns  []int64
+	Vs  []types.Decimal64
+	Typ types.Type
+}
