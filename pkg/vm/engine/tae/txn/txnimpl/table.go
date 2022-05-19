@@ -431,7 +431,11 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 
 func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if tbl.localSegment != nil {
-		return tbl.localSegment.GetByFilter(filter)
+		id, offset, err = tbl.localSegment.GetByFilter(filter)
+		if err == nil {
+			return
+		}
+		err = nil
 	}
 	blockIt := tbl.handle.MakeBlockIt()
 	for blockIt.Valid() {
