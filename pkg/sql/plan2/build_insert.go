@@ -17,7 +17,6 @@ package plan2
 import (
 	"fmt"
 	"go/constant"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -198,13 +197,11 @@ func getValues(rowset *RowsetData, rows *tree.ValuesClause, columnCount int) err
 func getInsertTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) (*ObjectRef, *TableDef, error) {
 	switch tbl := stmt.(type) {
 	case *tree.TableName:
-		name := string(tbl.ObjectName)
-		if len(tbl.SchemaName) > 0 {
-			name = strings.Join([]string{string(tbl.SchemaName), name}, ".")
-		}
-		objRef, tableDef := ctx.Resolve(name)
+		tblName := string(tbl.ObjectName)
+		dbName := string(tbl.SchemaName)
+		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
-			return nil, nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", name))
+			return nil, nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", tblName))
 		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:

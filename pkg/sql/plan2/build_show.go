@@ -44,7 +44,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	dbName := ctx.DefaultDatabase()
 	tblName := stmt.Name.Parts[0]
 
-	_, tableDef := ctx.Resolve(tblName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
@@ -126,7 +126,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	_, tableDef := ctx.Resolve(tblName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}

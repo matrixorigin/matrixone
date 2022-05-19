@@ -343,9 +343,9 @@ func unfoldStar(node *Node, list *plan.ExprList, table string) error {
 	return nil
 }
 
-func getResolveTable(tableName string, ctx CompilerContext, binderCtx *BinderContext) (*ObjectRef, *TableDef, bool) {
+func getResolveTable(dbName string, tableName string, ctx CompilerContext, binderCtx *BinderContext) (*ObjectRef, *TableDef, bool) {
 	// get table from context
-	objRef, tableDef := ctx.Resolve(tableName)
+	objRef, tableDef := ctx.Resolve(dbName, tableName)
 	if tableDef != nil {
 		return objRef, tableDef, false
 	}
@@ -354,7 +354,8 @@ func getResolveTable(tableName string, ctx CompilerContext, binderCtx *BinderCon
 	tableDef, ok := binderCtx.cteTables[tableName]
 	if ok {
 		objRef = &ObjectRef{
-			ObjName: tableName,
+			SchemaName: dbName,
+			ObjName:    tableName,
 		}
 		return objRef, tableDef, true
 	}

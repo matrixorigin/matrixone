@@ -42,7 +42,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// get table name
 	if !stmt.IfNotExists {
-		_, def := ctx.Resolve(createTable.TableDef.Name)
+		_, def := ctx.Resolve(createTable.Database, createTable.TableDef.Name)
 		if def != nil {
 			return nil, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table '%v' exist", createTable.TableDef.Name))
 		}
@@ -236,7 +236,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		if !ctx.DatabaseExists(dropTable.Database) {
 			return nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("database '%v' doesn't exist", dropTable.Database))
 		}
-		_, tableDef := ctx.Resolve(dropTable.Table)
+		_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 		if tableDef == nil {
 			return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", dropTable.Table))
 		}

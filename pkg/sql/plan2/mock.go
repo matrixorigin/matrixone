@@ -209,8 +209,8 @@ func (m *MockCompilerContext) DefaultDatabase() string {
 	return "tpch"
 }
 
-func (m *MockCompilerContext) Resolve(name string) (*ObjectRef, *TableDef) {
-	name = strings.ToLower(name)
+func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {
+	name := strings.ToLower(tableName)
 	return m.objects[name], m.tables[name]
 }
 

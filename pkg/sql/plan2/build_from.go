@@ -72,19 +72,17 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, binderCt
 		return buildSelect(tbl, ctx, query, newCtx)
 
 	case *tree.TableName:
-		name := string(tbl.ObjectName)
-		if len(tbl.SchemaName) > 0 {
-			name = string(tbl.SchemaName) + "." + name
-		}
-		if strings.ToLower(name) == "dual" { //special table name
+		tblName := string(tbl.ObjectName)
+		dbName := string(tbl.SchemaName)
+		if strings.ToLower(tblName) == "dual" { //special table name
 			node := &Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}
 			nodeId = appendQueryNode(query, node)
 		} else {
-			obj, tableDef, isCte := getResolveTable(name, ctx, binderCtx)
+			obj, tableDef, isCte := getResolveTable(dbName, tblName, ctx, binderCtx)
 			if tableDef == nil {
-				return 0, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' does not exist", name))
+				return 0, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table '%v' does not exist", tblName))
 			}
 			node := &Node{
 				ObjRef:   obj,
