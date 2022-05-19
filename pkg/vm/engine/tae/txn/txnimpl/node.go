@@ -185,13 +185,13 @@ type insertNode struct {
 	typ     txnbase.NodeState
 	deletes *roaring.Bitmap
 	rows    uint32
-	table   Table
+	table   *txnTable
 	appends []*appendInfo
 }
 
-func NewInsertNode(tbl Table, mgr base.INodeManager, id common.ID, driver wal.Driver) *insertNode {
+func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver wal.Driver) *insertNode {
 	impl := new(insertNode)
-	impl.Node = buffer.NewNode(impl, mgr, id, 0)
+	impl.Node = buffer.NewNode(impl, mgr, *id, 0)
 	impl.driver = driver
 	impl.typ = txnbase.PersistNode
 	impl.UnloadFunc = impl.OnUnload

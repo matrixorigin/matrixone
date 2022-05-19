@@ -80,7 +80,7 @@ func makeTable(t *testing.T, dir string, colCnt int, bufSize uint64) *txnTable {
 	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
 	store := newStore(nil, driver, mgr, nil)
 	store.BindTxn(txn)
-	return newTxnTable(store, rel)
+	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
 }
 
 func TestInsertNode(t *testing.T) {
@@ -103,7 +103,7 @@ func TestInsertNode(t *testing.T) {
 				var cid common.ID
 				cid.BlockID = id
 				cid.Idx = uint16(i)
-				n := NewInsertNode(tbl, tbl.store.nodesMgr, cid, tbl.store.driver)
+				n := NewInsertNode(tbl, tbl.store.nodesMgr, &cid, tbl.store.driver)
 				nodes[i] = n
 				h := tbl.store.nodesMgr.Pin(n)
 				var err error
@@ -231,8 +231,7 @@ func TestAppend(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
-	table, _ := tDB.getOrSetTable(rel.ID())
-	tbl := table.(*txnTable)
+	tbl, _ := tDB.getOrSetTable(rel.ID())
 	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
 	brows := rows / 3
 	bat := compute.MockBatch(tbl.GetSchema().Types(), rows, int(tbl.GetSchema().PrimaryKey), nil)
@@ -333,8 +332,7 @@ func TestLoad(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
-	table, _ := tDB.getOrSetTable(rel.ID())
-	tbl := table.(*txnTable)
+	tbl, _ := tDB.getOrSetTable(rel.ID())
 
 	err := tbl.Append(bats[0])
 	assert.Nil(t, err)
@@ -365,8 +363,7 @@ func TestNodeCommand(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 
 	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
-	table, _ := tDB.getOrSetTable(rel.ID())
-	tbl := table.(*txnTable)
+	tbl, _ := tDB.getOrSetTable(rel.ID())
 	err := tbl.Append(bat)
 	assert.Nil(t, err)
 

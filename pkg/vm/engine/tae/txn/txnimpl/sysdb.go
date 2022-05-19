@@ -3,7 +3,6 @@ package txnimpl
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var sysTableNames map[string]bool
@@ -15,20 +14,20 @@ func init() {
 	sysTableNames[catalog.SystemTable_DB_Name] = true
 }
 
-func buildDB(txn txnif.AsyncTxn, meta *catalog.DBEntry) handle.Database {
-	if meta.IsSystemDB() {
-		return newSysDB(txn, meta)
+func buildDB(db *txnDB) handle.Database {
+	if db.entry.IsSystemDB() {
+		return newSysDB(db)
 	}
-	return newDatabase(txn, meta)
+	return newDatabase(db)
 }
 
 type txnSysDB struct {
 	*txnDatabase
 }
 
-func newSysDB(txn txnif.AsyncTxn, meta *catalog.DBEntry) *txnSysDB {
+func newSysDB(db *txnDB) *txnSysDB {
 	sysDB := &txnSysDB{
-		txnDatabase: newDatabase(txn, meta),
+		txnDatabase: newDatabase(db),
 	}
 	return sysDB
 }

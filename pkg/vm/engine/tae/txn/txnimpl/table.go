@@ -35,7 +35,7 @@ var (
 	ErrDuplicateNode = errors.New("tae: duplicate node")
 )
 
-type Table interface {
+type Table2 interface {
 	io.Closer
 	GetSchema() *catalog.Schema
 	GetID() uint64
@@ -92,7 +92,6 @@ type txnTable struct {
 	updateNodes  map[common.ID]txnif.UpdateNode
 	deleteNodes  map[common.ID]txnif.DeleteNode
 	entry        *catalog.TableEntry
-	handle       handle.Relation
 	logs         []wal.LogEntry
 	maxSegId     uint64
 	maxBlkId     uint64
@@ -101,11 +100,10 @@ type txnTable struct {
 	csnStart   uint32
 }
 
-func newTxnTable(store *txnStore, handle handle.Relation) *txnTable {
+func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 	tbl := &txnTable{
 		store:       store,
-		handle:      handle,
-		entry:       handle.GetMeta().(*catalog.TableEntry),
+		entry:       entry,
 		updateNodes: make(map[common.ID]txnif.UpdateNode),
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
@@ -166,7 +164,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 		err = txnbase.ErrNotFound
 	}
 	meta.RUnlock()
-	seg = newSegment(tbl.store.txn, meta)
+	seg = newSegment(tbl, meta)
 	return
 }
 
@@ -189,7 +187,7 @@ func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error
 	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, catalog.ES_NotAppendable, factory); err != nil {
 		return
 	}
-	seg = newSegment(tbl.store.txn, meta)
+	seg = newSegment(tbl, meta)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -204,7 +202,7 @@ func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, catalog.ES_Appendable, factory); err != nil {
 		return
 	}
-	seg = newSegment(tbl.store.txn, meta)
+	seg = newSegment(tbl, meta)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -241,7 +239,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	if err != nil {
 		return
 	}
-	blk = buildBlock(tbl.store.txn, meta)
+	blk = buildBlock(tbl, meta)
 	return
 }
 
@@ -273,7 +271,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 	}
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
-	return buildBlock(tbl.store.txn, meta), err
+	return buildBlock(tbl, meta), err
 }
 
 func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
@@ -434,7 +432,8 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 		}
 		err = nil
 	}
-	blockIt := tbl.handle.MakeBlockIt()
+	h := newRelation(tbl)
+	blockIt := h.MakeBlockIt()
 	for blockIt.Valid() {
 		h := blockIt.GetBlock()
 		block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
@@ -609,7 +608,8 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 			return
 		}
 	}
-	segIt := tbl.handle.MakeSegmentIt()
+	h := newRelation(tbl)
+	segIt := h.MakeSegmentIt()
 	for segIt.Valid() {
 		seg := segIt.GetSegment()
 		if err = seg.BatchDedup(pks); err == data.ErrDuplicate {

@@ -65,9 +65,9 @@ func (seg *localSegment) registerInsertNode() error {
 	if seg.appendable != nil {
 		seg.appendable.Close()
 	}
-	id := seg.entry.AsCommonID()
-	id.BlockID = uint64(len(seg.nodes))
-	n := NewInsertNode(seg.table, seg.table.store.nodesMgr, *id, seg.table.store.driver)
+	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.Txn.GetStartTS())
+	seg.entry.AddEntryLocked(meta)
+	n := NewInsertNode(seg.table, seg.table.store.nodesMgr, meta.AsCommonID(), seg.table.store.driver)
 	seg.appendable = seg.table.store.nodesMgr.Pin(n)
 	seg.nodes = append(seg.nodes, n)
 	return nil
