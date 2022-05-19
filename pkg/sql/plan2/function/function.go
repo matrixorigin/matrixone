@@ -16,6 +16,8 @@ package function
 
 import (
 	"fmt"
+	"math"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,11 +34,52 @@ const (
 	// if we input a SQL `select built_in_function(columnA, NULL);`, and columnA is int64 column.
 	// it will use [types.T_int64, ScalarNull] to match function when we were building the query plan.
 	ScalarNull = types.T_any
+
+	// argument type implicit convert related const
+	matchDirectly = 0
+	matchFailed   = -1
+
+	upFailed = -1 // it means type1 can not up to type2
 )
 
 var (
 	// an empty function structure just for return when we couldn't meet any function.
 	emptyFunction = Function{}
+
+	// levelUpRules records the implicit convert rule for function's argument.
+	// key is the original type, and value is the convertible type
+	levelUpRules = map[types.T][]types.T{
+		types.T_uint8: {
+			types.T_uint16, types.T_uint32, types.T_uint64,
+			types.T_int16, types.T_int32, types.T_int64,
+			types.T_float64,
+		},
+		types.T_uint16: {
+			types.T_uint32, types.T_uint64,
+			types.T_int32, types.T_int64,
+			types.T_float64,
+		},
+		types.T_uint32: {
+			types.T_uint64,
+			types.T_int64,
+			types.T_float64,
+		},
+		types.T_uint64: {types.T_float64},
+		types.T_int8: {
+			types.T_int16, types.T_int32, types.T_int64, types.T_float64,
+		},
+		types.T_int16: {
+			types.T_int32, types.T_int64, types.T_float64,
+		},
+		types.T_int32: {
+			types.T_int64, types.T_float64,
+		},
+		types.T_int64:     {types.T_float64},
+		types.T_float32:   {types.T_float64},
+		types.T_decimal64: {types.T_decimal128},
+		types.T_char:      {types.T_varchar},
+		types.T_varchar:   {types.T_char},
+	}
 )
 
 // Function is an overload of
@@ -101,6 +144,11 @@ func (f Function) IsAggregate() bool {
 // For use in other packages, see GetFunctionByIndex and GetFunctionByName
 var functionRegister = [][]Function{nil}
 
+// levelUp records the convert rule for functions' arguments
+//
+// it will be filled by initLevelUpRules according to levelUpRules
+var levelUp [][]int
+
 // get function id from map functionIdRegister, see functionIds.go
 func getFunctionId(name string) (int, error) {
 	if fid, ok := functionIdRegister[name]; ok {
@@ -115,36 +163,55 @@ func GetFunctionByIndex(functionId int, overloadIndex int) (Function, error) {
 	return fs[overloadIndex], nil
 }
 
-// GetFunctionByName check a function exist or not by function name and arg types,
-// if matches, return its function structure and function id.
-func GetFunctionByName(name string, args []types.T) (Function, int, error) {
-	matches := make([]Function, 0, 4)
+// GetFunctionByName check a function exist or not according to input function name and arg types,
+// if matches,
+// return function structure and function id
+// and final converted argument types(if it needs to do type level-up work, it will be nil if not).
+func GetFunctionByName(name string, args []types.T) (Function, int, []types.T, error) {
+	levelUpFunction, get, minCost := emptyFunction, false, math.MaxInt32 // store the best function which can be matched by type level-up
+	matches := make([]Function, 0, 4)                                    // functions can be matched directly
+
 	fid, err := getFunctionId(name)
 	if err != nil {
-		return emptyFunction, -1, err
+		return emptyFunction, -1, nil, err
 	}
 
 	fs := functionRegister[fid]
 	for _, f := range fs {
-		if f.TypeCheck(args) {
-			matches = append(matches, f)
+		if cost := f.typeCheckWithLevelUp(args); cost != matchFailed {
+			if cost == matchDirectly {
+				matches = append(matches, f)
+			} else {
+				if cost < minCost {
+					levelUpFunction = f
+					get = true
+					minCost = cost
+				} else if cost == minCost {
+					levelUpFunction = compare(levelUpFunction, f)
+					get = true
+					minCost = cost
+				}
+			}
 		}
 	}
 
-	// must match only 1 function
-	if len(matches) == 0 {
-		return emptyFunction, -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
-	}
-	if len(matches) > 1 {
+	if len(matches) == 1 {
+		return matches[0], fid, nil, nil
+	} else if len(matches) > 1 {
 		errMessage := "too much function matches:"
 		for i := range matches {
 			errMessage += "\n"
 			errMessage += name
 			errMessage += fmt.Sprintf("%v", matches[i].Args)
 		}
-		return emptyFunction, -1, errors.New(errno.SyntaxError, errMessage)
+		return emptyFunction, -1, nil, errors.New(errno.SyntaxError, errMessage)
+	} else {
+		// len(matches) == 0
+		if get {
+			return levelUpFunction, fid, levelUpFunction.Args, nil
+		}
 	}
-	return matches[0], fid, nil
+	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
 }
 
 // strictTypeCheck is a general type check method.
@@ -160,6 +227,45 @@ func strictTypeCheck(args []types.T, require []types.T) bool {
 		}
 	}
 	return true
+}
+
+// returns the cost if t1 can level up to t2
+func up(t1, t2 types.T) int {
+	return levelUp[t1][t2]
+}
+
+// typeCheckWithLevelUp check if the input parameters meet the function requirements.
+// If the level-up by parameter type can meet successfully, return the cost.
+// Else, just return matchDirectly or matchFailed.
+func (f *Function) typeCheckWithLevelUp(sources []types.T) int {
+	if f.TypeCheck(sources) {
+		return matchDirectly
+	}
+	if len(f.Args) != len(sources) {
+		return matchFailed
+	}
+	if reflect.ValueOf(f.TypeCheckFn).Pointer() == reflect.ValueOf(strictTypeCheck).Pointer() {
+		// types of function's arguments are clear and not confused.
+		cost := 0
+		for i := range sources {
+			c := up(sources[i], f.Args[i])
+			if c == upFailed {
+				return matchFailed
+			}
+			cost += c
+		}
+		return cost
+	}
+	return matchFailed
+}
+
+// choose a function when convert cost is equal
+// and just return the small-index one.
+func compare(f1, f2 Function) Function {
+	if f1.Index < f2.Index {
+		return f1
+	}
+	return f2
 }
 
 func isNotScalarNull(t types.T) bool {

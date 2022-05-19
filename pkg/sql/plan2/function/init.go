@@ -2,6 +2,7 @@ package function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"reflect"
 	"sync"
 
@@ -19,12 +20,34 @@ func init() {
 	initOperators()
 	initBuiltIns()
 	initAggregateFunction()
+
+	initLevelUpRules()
 }
 
 var registerMutex sync.RWMutex
 
 func initRelatedStructure() {
 	functionRegister = make([][]Function, FUNCTION_END_NUMBER)
+}
+
+func initLevelUpRules() {
+	base := types.T_tuple + 10
+	levelUp = make([][]int, base)
+	for i := range levelUp {
+		levelUp[i] = make([]int, base)
+		for j := range levelUp[i] {
+			levelUp[i][j] = upFailed
+		}
+	}
+	// convert map levelUpRules to be a group
+	for i := range levelUp {
+		levelUp[i][i] = 0
+	}
+	for k, v := range levelUpRules {
+		for i, t := range v {
+			levelUp[k][t] = i + 1
+		}
+	}
 }
 
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.

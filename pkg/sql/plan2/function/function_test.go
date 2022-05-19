@@ -134,7 +134,7 @@ func TestFunctionRegister(t *testing.T) {
 	for _, tc := range testCases {
 		msg := fmt.Sprintf("case id is %d", tc.id)
 
-		f1, _, err := GetFunctionByName(tc.fname, tc.args)
+		f1, _, _, err := GetFunctionByName(tc.fname, tc.args)
 		if tc.index == notFound {
 			require.Equal(t, emptyFunction, f1, msg)
 		} else {
@@ -149,18 +149,18 @@ func TestFunctionRegister(t *testing.T) {
 
 	// test errMsg
 	{
-		_, _, err := GetFunctionByName("testFunctionName", nil)
+		_, _, _, err := GetFunctionByName("testFunctionName", nil)
 		require.Equal(t, errors.New(errno.UndefinedFunction, "function 'testFunctionName' doesn't register, get id failed"), err)
 	}
 	{
-		_, _, err := GetFunctionByName("f1", []types.T{})
+		_, _, _, err := GetFunctionByName("f1", []types.T{})
 		require.Equal(t, errors.New(errno.UndefinedFunction, "undefined function f1[]"), err)
 	}
 	{
 		errMessage := "too much function matches:\n" +
 			"f1[BIGINT BIGINT]\n" +
 			"f1[BIGINT DOUBLE]"
-		_, _, err := GetFunctionByName("f1", []types.T{types.T_int64, ScalarNull})
+		_, _, _, err := GetFunctionByName("f1", []types.T{types.T_int64, ScalarNull})
 		require.Equal(t, errors.New(errno.SyntaxError, errMessage), err)
 	}
 }
