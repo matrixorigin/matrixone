@@ -2837,7 +2837,7 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
 			data = data[n*8:]
 		}
-		// deDecimalSumx2
+		// decode Sumx2
 		n = encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if n > 0 {
