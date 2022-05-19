@@ -146,10 +146,12 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, binderCtx 
 
 		// add a projection node
 		alias := string(cte.Name.Alias)
+		preNode := query.Nodes[len(query.Nodes)-1]
+
 		node := &Node{
 			NodeType: plan.Node_MATERIAL,
+			Children: []int32{preNode.NodeId},
 		}
-		preNode := query.Nodes[len(query.Nodes)-1]
 
 		columnLength := len(preNode.ProjectList)
 		tableDef := &TableDef{
