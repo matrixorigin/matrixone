@@ -41,7 +41,7 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, n
 			return nil, err
 		}
 	case *tree.SelectClause:
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("support select statement: %T", subquery))
+		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement: %T", subquery))
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", subquery))
 	}
