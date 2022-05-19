@@ -573,9 +573,6 @@ func (blk *dataBlock) getVectorWithBuffer(colIdx int, compressed, decompressed *
 
 	wrapper := vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
 	wrapper.File = dataFile
-	if compressed == nil {
-		compressed = new(bytes.Buffer)
-	}
 	if decompressed == nil {
 		decompressed = new(bytes.Buffer)
 	}
