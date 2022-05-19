@@ -210,8 +210,8 @@ func GetFunctionByName(name string, args []types.T) (Function, int, []types.T, e
 		if get {
 			return levelUpFunction, fid, levelUpFunction.Args, nil
 		}
-		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
 	}
+	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
 }
 
 // strictTypeCheck is a general type check method.
