@@ -30,6 +30,7 @@ type Node = plan.Node
 type RowsetData = plan.RowsetData
 type Query = plan.Query
 type Plan = plan.Plan
+type Type = plan.Type
 
 type CompilerContext interface {
 	// Default database/schema in context
