@@ -29,7 +29,7 @@ import (
 //only use in developing
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	sql := `drop table tpch.nation`
+	sql := `INSERT INTO NATION SELECT * FROM NATION2`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -441,6 +441,7 @@ func TestInsert(t *testing.T) {
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, abs(2), 'NAME1'), (2, 22, 'NAME2')",         // function expr not support now
+		"INSERT INTO region SELECT * FROM NATION2",                                                                   // column length not match
 	}
 	runTestShouldError(mock, t, sqls)
 }

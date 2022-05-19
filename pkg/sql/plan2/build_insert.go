@@ -56,16 +56,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext) (*plan.Plan, error) {
 			columns = append(columns, col)
 		}
 	}
+	columnCount := len(columns)
 	rowset := &plan.RowsetData{
 		Schema: &plan.TableDef{
 			Name: tableDef.Name,
 			Cols: columns,
 		},
-		Cols: make([]*plan.ColData, len(columns)),
+		Cols: make([]*plan.ColData, columnCount),
 	}
 
 	//get rows
-	columnCount := len(columns)
 	switch rows := stmt.Rows.Select.(type) {
 	case *tree.Select:
 		selectCtx := &SelectContext{
@@ -75,7 +75,12 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext) (*plan.Plan, error) {
 		if err != nil {
 			return nil, err
 		}
-		//fixme need check preNode's projectionList match rowset.Schema
+		//check lastNode's projectionList match rowset.Schema
+		lastNode := query.Nodes[len(query.Nodes)-1]
+		if len(lastNode.ProjectList) != columnCount {
+			return nil, errors.New(errno.InvalidColumnDefinition, "insert column length does not match value length")
+		}
+		//todo Now MO don't check projectionList type match rowset type just like MySQL。
 	case *tree.ValuesClause:
 		rowCount := len(rows.Rows)
 		for idx := range rowset.Cols {
