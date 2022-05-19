@@ -113,7 +113,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
 	if table.IsDeleted() {
 		return txnbase.ErrNotFound
 	}
-	return table.RangeDelete(id.PartID, id.SegmentID, id.BlockID, start, end)
+	return table.RangeDelete(id, start, end)
 }
 
 func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -148,7 +148,7 @@ func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v interface{})
 	if table.IsDeleted() {
 		return txnbase.ErrNotFound
 	}
-	return table.Update(id.PartID, id.SegmentID, id.BlockID, row, colIdx, v)
+	return table.Update(id, row, colIdx, v)
 }
 
 func (db *txnDB) CreateRelation(def interface{}) (relation handle.Relation, err error) {

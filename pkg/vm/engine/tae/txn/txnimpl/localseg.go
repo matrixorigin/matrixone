@@ -25,6 +25,10 @@ func init() {
 	localSegmentIdAlloc = common.NewIdAlloctor(LocalSegmentStartID)
 }
 
+func isLocalSegment(id *common.ID) bool {
+	return id.SegmentID >= LocalSegmentStartID
+}
+
 type localSegment struct {
 	*txnbase.TxnSegment
 	entry       *catalog.SegmentEntry
@@ -303,9 +307,7 @@ func (seg *localSegment) Rows() uint32 {
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	offset, err = seg.index.Find(filter.Val)
 	if err == nil {
-		id = &common.ID{}
-		id.PartID = 1
-		id.TableID = seg.table.entry.ID
+		id = seg.entry.AsCommonID()
 	}
 	return
 }

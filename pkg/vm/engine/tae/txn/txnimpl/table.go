@@ -44,8 +44,8 @@ type Table interface {
 	LocalDeletesToString() string
 	IsLocalDeleted(row uint32) bool
 	UpdateLocalValue(row uint32, col uint16, value interface{}) error
-	Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) error
-	RangeDelete(inode uint32, segmentId, blockId uint64, start, end uint32) error
+	Update(id *common.ID, row uint32, col uint16, v interface{}) error
+	RangeDelete(id *common.ID, start, end uint32) error
 	UncommittedRows() uint32
 	BatchDedupLocal(data *batch.Batch) error
 	BatchDedup(col *vector.Vector) error
@@ -383,13 +383,10 @@ func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
 	return tbl.localSegment.IsDeleted(row)
 }
 
-func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start, end uint32) (err error) {
-	if inode != 0 {
+func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
+	if isLocalSegment(id) {
 		return tbl.RangeDeleteLocalRows(start, end)
 	}
-	id := tbl.entry.AsCommonID()
-	id.SegmentID = segmentId
-	id.BlockID = blockId
 	node := tbl.deleteNodes[*id]
 	if node != nil {
 		chain := node.GetChain().(*updates.DeleteChain)
@@ -403,17 +400,17 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 		}
 		writeLock.Unlock()
 		if err != nil {
-			seg, _ := tbl.entry.GetSegmentByID(segmentId)
-			blk, _ := seg.GetBlockEntryByID(blockId)
+			seg, _ := tbl.entry.GetSegmentByID(id.SegmentID)
+			blk, _ := seg.GetBlockEntryByID(id.BlockID)
 			tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
 		}
 		return
 	}
-	seg, err := tbl.entry.GetSegmentByID(segmentId)
+	seg, err := tbl.entry.GetSegmentByID(id.SegmentID)
 	if err != nil {
 		return
 	}
-	blk, err := seg.GetBlockEntryByID(blockId)
+	blk, err := seg.GetBlockEntryByID(id.BlockID)
 	if err != nil {
 		return
 	}
@@ -459,7 +456,7 @@ func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v interface{}, err e
 }
 
 func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interface{}, err error) {
-	if id.PartID != 0 {
+	if isLocalSegment(id) {
 		return tbl.localSegment.GetValue(row, col)
 	}
 	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
@@ -487,30 +484,27 @@ func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTx
 	return
 }
 
-func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) (err error) {
-	if inode != 0 {
+func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}) (err error) {
+	if isLocalSegment(id) {
 		return tbl.UpdateLocalValue(row, col, v)
 	}
-	node := tbl.updateNodes[common.ID{
-		TableID:   tbl.GetID(),
-		SegmentID: segmentId,
-		BlockID:   blockId,
-		Idx:       col,
-	}]
+	uid := *id
+	uid.Idx = col
+	node := tbl.updateNodes[uid]
 	if node != nil {
 		err = tbl.updateWithFineLock(node, tbl.store.txn, row, v)
 		if err != nil {
-			seg, _ := tbl.entry.GetSegmentByID(segmentId)
-			blk, _ := seg.GetBlockEntryByID(blockId)
+			seg, _ := tbl.entry.GetSegmentByID(id.SegmentID)
+			blk, _ := seg.GetBlockEntryByID(id.BlockID)
 			tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, blk.AsCommonID())
 		}
 		return
 	}
-	seg, err := tbl.entry.GetSegmentByID(segmentId)
+	seg, err := tbl.entry.GetSegmentByID(id.SegmentID)
 	if err != nil {
 		return
 	}
-	blk, err := seg.GetBlockEntryByID(blockId)
+	blk, err := seg.GetBlockEntryByID(id.BlockID)
 	if err != nil {
 		return
 	}
