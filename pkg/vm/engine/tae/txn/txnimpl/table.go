@@ -21,11 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -46,13 +43,11 @@ type Table interface {
 	Append(data *batch.Batch) error
 	LocalDeletesToString() string
 	IsLocalDeleted(row uint32) bool
-	GetLocalPhysicalAxis(row uint32) (int, uint32)
 	UpdateLocalValue(row uint32, col uint16, value interface{}) error
 	Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) error
 	RangeDelete(inode uint32, segmentId, blockId uint64, start, end uint32) error
-	Rows() uint32
+	UncommittedRows() uint32
 	BatchDedupLocal(data *batch.Batch) error
-	BatchDedupLocalByCol(col *vector.Vector) error
 	BatchDedup(col *vector.Vector) error
 	AddUpdateNode(txnif.UpdateNode) error
 	IsDeleted() bool
@@ -73,6 +68,7 @@ type Table interface {
 	SetDropEntry(txnif.TxnEntry) error
 	GetMeta() *catalog.TableEntry
 
+	GetLocalValue(row uint32, col uint16) (interface{}, error)
 	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
 	GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error)
 	GetSegment(id uint64) (handle.Segment, error)
@@ -89,22 +85,17 @@ type Table interface {
 }
 
 type txnTable struct {
-	store       *txnStore
-	createEntry txnif.TxnEntry
-	dropEntry   txnif.TxnEntry
-	inodes      []InsertNode
-	appendable  base.INodeHandle
-	updateNodes map[common.ID]txnif.UpdateNode
-	deleteNodes map[common.ID]txnif.DeleteNode
-	appends     []*appendCtx
-	tableHandle data.TableHandle
-	entry       *catalog.TableEntry
-	handle      handle.Relation
-	index       TableIndex
-	rows        uint32
-	logs        []wal.LogEntry
-	maxSegId    uint64
-	maxBlkId    uint64
+	store        *txnStore
+	createEntry  txnif.TxnEntry
+	dropEntry    txnif.TxnEntry
+	localSegment *localSegment
+	updateNodes  map[common.ID]txnif.UpdateNode
+	deleteNodes  map[common.ID]txnif.DeleteNode
+	entry        *catalog.TableEntry
+	handle       handle.Relation
+	logs         []wal.LogEntry
+	maxSegId     uint64
+	maxBlkId     uint64
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
@@ -113,13 +104,10 @@ type txnTable struct {
 func newTxnTable(store *txnStore, handle handle.Relation) *txnTable {
 	tbl := &txnTable{
 		store:       store,
-		inodes:      make([]InsertNode, 0),
 		handle:      handle,
 		entry:       handle.GetMeta().(*catalog.TableEntry),
-		index:       NewSimpleTableIndex(),
 		updateNodes: make(map[common.ID]txnif.UpdateNode),
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
-		appends:     make([]*appendCtx, 0),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
 	}
@@ -147,7 +135,7 @@ func (tbl *txnTable) WaitSynced() {
 	}
 }
 
-func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
+func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
 	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
@@ -160,28 +148,12 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 		}
 		cmdMgr.AddCmd(cmd)
 	}
-	for i, node := range tbl.inodes {
-		h := tbl.store.nodesMgr.Pin(node)
-		if h == nil {
-			panic("not expected")
-		}
-		forceFlush := i < len(tbl.inodes)-1
-		// csn := cmdMgr.GetCSN()
-		csn := uint32(0xffff) // Special cmd
-		cmd, entry, err := node.MakeCommand(csn, forceFlush)
-		if err != nil {
-			panic(err)
-		}
-		if entry != nil {
-			tbl.logs = append(tbl.logs, entry)
-		}
-		node.ToTransient()
-		h.Close()
-		if cmd != nil {
-			cmdMgr.AddInternalCmd(cmd)
+	if tbl.localSegment != nil {
+		if err = tbl.localSegment.CollectCmd(cmdMgr); err != nil {
+			return
 		}
 	}
-	return nil
+	return
 }
 
 func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
@@ -344,39 +316,15 @@ func (tbl *txnTable) GetID() uint64 {
 
 func (tbl *txnTable) Close() error {
 	var err error
-	if tbl.appendable != nil {
-		if tbl.appendable.Close(); err != nil {
+	if tbl.localSegment != nil {
+		if err = tbl.localSegment.Close(); err != nil {
 			return err
 		}
+		tbl.localSegment = nil
 	}
-	for _, node := range tbl.inodes {
-		if err = node.Close(); err != nil {
-			return err
-		}
-	}
-	tbl.index.Close()
-	tbl.index = nil
-	tbl.appendable = nil
-	tbl.inodes = nil
 	tbl.updateNodes = nil
 	tbl.deleteNodes = nil
-	tbl.tableHandle = nil
 	tbl.logs = nil
-	return nil
-}
-
-func (tbl *txnTable) registerInsertNode() error {
-	if tbl.appendable != nil {
-		tbl.appendable.Close()
-	}
-	id := common.ID{
-		TableID:   tbl.entry.GetID(),
-		SegmentID: uint64(len(tbl.inodes)),
-		BlockID:   tbl.store.txn.GetID(),
-	}
-	n := NewInsertNode(tbl, tbl.store.nodesMgr, id, tbl.store.driver)
-	tbl.appendable = tbl.store.nodesMgr.Pin(n)
-	tbl.inodes = append(tbl.inodes, n)
 	return nil
 }
 
@@ -407,113 +355,32 @@ func (tbl *txnTable) Append(data *batch.Batch) error {
 	if err != nil {
 		return err
 	}
-	if tbl.appendable == nil {
-		if err = tbl.registerInsertNode(); err != nil {
-			return err
-		}
+	if tbl.localSegment == nil {
+		tbl.localSegment = newLocalSegment(tbl)
 	}
-	appended := uint32(0)
-	offset := uint32(0)
-	length := uint32(vector.Length(data.Vecs[0]))
-	for {
-		h := tbl.appendable
-		n := h.GetNode().(*insertNode)
-		toAppend := n.PrepareAppend(data, offset)
-		size := compute.EstimateSize(data, offset, toAppend)
-		logutil.Debugf("Offset=%d, ToAppend=%d, EstimateSize=%d", offset, toAppend, size)
-		err = n.Expand(size, func() error {
-			appended, err = n.Append(data, offset)
-			return err
-		})
-		if err != nil {
-			logutil.Info(tbl.store.nodesMgr.String())
-			panic(err)
-		}
-		space := n.GetSpace()
-		logutil.Debugf("Appended: %d, Space:%d", appended, space)
-		start := tbl.rows
-		if err = tbl.index.BatchInsert(data.Vecs[tbl.GetSchema().PrimaryKey], int(offset), int(appended), start, false); err != nil {
-			break
-		}
-		offset += appended
-		tbl.rows += appended
-		if space == 0 {
-			if err = tbl.registerInsertNode(); err != nil {
-				break
-			}
-		}
-		if offset >= length {
-			break
-		}
-	}
-	return err
+	return tbl.localSegment.Append(data)
 }
 
-// 1. Split the interval into multiple intervals, with each interval belongs to only one insert node
-// 2. For each new interval, call insert node RangeDelete
-// 3. Update the table index
-func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) error {
-	first, firstOffset := tbl.GetLocalPhysicalAxis(start)
-	last, lastOffset := tbl.GetLocalPhysicalAxis(end)
-	var err error
-	if last == first {
-		node := tbl.inodes[first]
-		err = node.RangeDelete(firstOffset, lastOffset)
-		if err == nil {
-			for i := firstOffset; i <= lastOffset; i++ {
-				v, _ := node.GetValue(int(tbl.entry.GetSchema().PrimaryKey), i)
-				if err = tbl.index.Delete(v); err != nil {
-					break
-				}
-			}
-		}
-	} else {
-		node := tbl.inodes[first]
-		err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
-		node = tbl.inodes[last]
-		err = node.RangeDelete(0, lastOffset)
-		for i := uint32(0); i <= lastOffset; i++ {
-			v, _ := node.GetValue(int(tbl.entry.GetSchema().PrimaryKey), i)
-			if err = tbl.index.Delete(v); err != nil {
-				break
-			}
-		}
-		if last > first+1 && err == nil {
-			for i := first + 1; i < last; i++ {
-				node = tbl.inodes[i]
-				if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
-					break
-				}
-				for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
-					v, _ := node.GetValue(int(tbl.entry.GetSchema().PrimaryKey), i)
-					if err = tbl.index.Delete(v); err != nil {
-						break
-					}
-				}
-			}
-		}
+func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
+	if tbl.localSegment != nil {
+		err = tbl.localSegment.RangeDelete(start, end)
 	}
-	return err
+	return
 }
 
 func (tbl *txnTable) LocalDeletesToString() string {
 	s := fmt.Sprintf("<txnTable-%d>[LocalDeletes]:\n", tbl.GetID())
-	for i, n := range tbl.inodes {
-		s = fmt.Sprintf("%s\t<INode-%d>: %s\n", s, i, n.PrintDeletes())
+	if tbl.localSegment != nil {
+		s = fmt.Sprintf("%s%s", s, tbl.localSegment.DeletesToString())
 	}
 	return s
 }
 
 func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
-	npos, noffset := tbl.GetLocalPhysicalAxis(row)
-	n := tbl.inodes[npos]
-	return n.IsRowDeleted(noffset)
-}
-
-func (tbl *txnTable) GetLocalPhysicalAxis(row uint32) (int, uint32) {
-	npos := int(row) / int(txnbase.MaxNodeRows)
-	noffset := row % uint32(txnbase.MaxNodeRows)
-	return npos, noffset
+	if tbl.localSegment == nil {
+		return false
+	}
+	return tbl.localSegment.IsDeleted(row)
 }
 
 func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start, end uint32) (err error) {
@@ -563,13 +430,8 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 }
 
 func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	offset, err = tbl.index.Find(filter.Val)
-	if err == nil {
-		id = &common.ID{}
-		id.PartID = 1
-		id.TableID = tbl.entry.ID
-		err = nil
-		return
+	if tbl.localSegment != nil {
+		return tbl.localSegment.GetByFilter(filter)
 	}
 	blockIt := tbl.handle.MakeBlockIt()
 	for blockIt.Valid() {
@@ -585,9 +447,16 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	return
 }
 
+func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v interface{}, err error) {
+	if tbl.localSegment == nil {
+		return
+	}
+	return tbl.localSegment.GetValue(row, col)
+}
+
 func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interface{}, err error) {
 	if id.PartID != 0 {
-		return tbl.GetLocalValue(row, col)
+		return tbl.localSegment.GetValue(row, col)
 	}
 	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
 	if err != nil {
@@ -657,38 +526,25 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 // 3. Build a new row
 // 4. Delete the row in the node
 // 5. Append the new row
-func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value interface{}) error {
-	npos, noffset := tbl.GetLocalPhysicalAxis(row)
-	n := tbl.inodes[npos]
-	window, err := n.Window(uint32(noffset), uint32(noffset))
-	if err != nil {
-		return err
+func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value interface{}) (err error) {
+	if tbl.localSegment != nil {
+		err = tbl.localSegment.Update(row, col, value)
 	}
-	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
-		return err
-	}
-	v, _ := n.GetValue(int(tbl.entry.GetSchema().PrimaryKey), row)
-	if err = tbl.index.Delete(v); err != nil {
-		panic(err)
-	}
-	err = tbl.Append(window)
-	return err
+	return
 }
 
-func (tbl *txnTable) Rows() uint32 {
-	cnt := len(tbl.inodes)
-	if cnt == 0 {
+func (tbl *txnTable) UncommittedRows() uint32 {
+	if tbl.localSegment == nil {
 		return 0
 	}
-	return (uint32(cnt)-1)*txnbase.MaxNodeRows + tbl.inodes[cnt-1].Rows()
+	return tbl.localSegment.Rows()
 }
 
 func (tbl *txnTable) PreCommitDededup() (err error) {
-	if tbl.index == nil || tbl.index.Count() == 0 {
+	if tbl.localSegment == nil {
 		return
 	}
-	schema := tbl.entry.GetSchema()
-	pks := tbl.index.KeyToVector(schema.ColDefs[schema.PrimaryKey].Type)
+	pks := tbl.localSegment.GetPrimaryColumn()
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
@@ -745,8 +601,15 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 }
 
 func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
-	if err = tbl.BatchDedupLocalByCol(pks); err != nil {
-		return err
+	index := NewSimpleTableIndex()
+	err = index.BatchInsert(pks, 0, vector.Length(pks), 0, true)
+	if err != nil {
+		return
+	}
+	if tbl.localSegment != nil {
+		if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
+			return
+		}
 	}
 	segIt := tbl.handle.MakeSegmentIt()
 	for segIt.Valid() {
@@ -774,25 +637,11 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 	return
 }
 
-func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) error {
-	return tbl.BatchDedupLocalByCol(bat.Vecs[tbl.GetSchema().PrimaryKey])
-}
-
-func (tbl *txnTable) BatchDedupLocalByCol(col *vector.Vector) error {
-	index := NewSimpleTableIndex()
-	err := index.BatchInsert(col, 0, vector.Length(col), 0, true)
-	if err != nil {
-		return err
+func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
+	if tbl.localSegment != nil {
+		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().PrimaryKey])
 	}
-	return tbl.index.BatchDedup(col)
-}
-
-func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (interface{}, error) {
-	npos, noffset := tbl.GetLocalPhysicalAxis(row)
-	n := tbl.inodes[npos]
-	h := tbl.store.nodesMgr.Pin(n)
-	defer h.Close()
-	return n.GetValue(int(col), noffset)
+	return
 }
 
 func (tbl *txnTable) PrepareRollback() (err error) {
@@ -805,81 +654,14 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 }
 
 func (tbl *txnTable) ApplyAppend() {
-	var err error
-	for _, ctx := range tbl.appends {
-		var (
-			destOff    uint32
-			appendNode txnif.AppendNode
-		)
-		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, tbl.store.txn); err != nil {
-			panic(err)
-		}
-		ctx.driver.Close()
-		id := ctx.driver.GetID()
-		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, tbl.entry.GetDB().ID, id)
-		logutil.Debugf(info.String())
-		if err = appendNode.PrepareCommit(); err != nil {
-			panic(err)
-		}
-		tbl.txnEntries = append(tbl.txnEntries, appendNode)
+	if tbl.localSegment != nil {
+		tbl.localSegment.ApplyAppend()
 	}
-	if tbl.tableHandle != nil {
-		tbl.entry.GetTableData().ApplyHandle(tbl.tableHandle)
-	}
-}
-
-func (tbl *txnTable) prepareAppend(node InsertNode) (err error) {
-	tableData := tbl.entry.GetTableData()
-	if tbl.tableHandle == nil {
-		tbl.tableHandle = tableData.GetHandle()
-	}
-	appended := uint32(0)
-	for appended < node.RowsWithoutDeletes() {
-		appender, err := tbl.tableHandle.GetAppender()
-		if err == data.ErrAppendableSegmentNotFound {
-			seg, err := tbl.CreateSegment()
-			if err != nil {
-				return err
-			}
-			blk, err := seg.CreateBlock()
-			if err != nil {
-				return err
-			}
-			appender = tbl.tableHandle.SetAppender(blk.Fingerprint())
-		} else if err == data.ErrAppendableBlockNotFound {
-			id := appender.GetID()
-			blk, err := tbl.CreateBlock(id.SegmentID)
-			if err != nil {
-				return err
-			}
-			appender = tbl.tableHandle.SetAppender(blk.Fingerprint())
-		}
-		toAppend, err := appender.PrepareAppend(node.RowsWithoutDeletes() - appended)
-		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
-		ctx := &appendCtx{
-			driver: appender,
-			node:   node,
-			start:  appended,
-			count:  toAppendWithDeletes,
-		}
-		id := appender.GetID()
-		tbl.store.warChecker.ReadBlock(tbl.entry.GetDB().ID, id)
-		tbl.appends = append(tbl.appends, ctx)
-		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(tbl.appends))
-		appended += toAppend
-		if appended == node.Rows() {
-			break
-		}
-	}
-	return
 }
 
 func (tbl *txnTable) PreCommit() (err error) {
-	for _, node := range tbl.inodes {
-		if err = tbl.prepareAppend(node); err != nil {
-			break
-		}
+	if tbl.localSegment != nil {
+		err = tbl.localSegment.PrepareApply()
 	}
 	return
 }
@@ -911,41 +693,4 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 		}
 	}
 	return
-}
-
-func (tbl *txnTable) buildCommitCmd(cmdSeq *uint32) (cmd txnif.TxnCmd, entries []wal.LogEntry, err error) {
-	composedCmd := txnbase.NewComposedCmd()
-
-	for i, inode := range tbl.inodes {
-		h := tbl.store.nodesMgr.Pin(inode)
-		if h == nil {
-			panic("not expected")
-		}
-		forceFlush := (i < len(tbl.inodes)-1)
-		cmd, entry, err := inode.MakeCommand(*cmdSeq, forceFlush)
-		if err != nil {
-			return cmd, entries, err
-		}
-		*cmdSeq += uint32(1)
-		if cmd == nil {
-			inode.ToTransient()
-			h.Close()
-			inode.Close()
-			continue
-		}
-		if entry != nil {
-			entries = append(entries, entry)
-		}
-		composedCmd.AddCmd(cmd)
-		h.Close()
-	}
-	for _, node := range tbl.updateNodes {
-		updateCmd, err := node.MakeCommand(*cmdSeq)
-		if err != nil {
-			return cmd, entries, err
-		}
-		composedCmd.AddCmd(updateCmd)
-		*cmdSeq += uint32(1)
-	}
-	return composedCmd, entries, err
 }

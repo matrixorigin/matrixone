@@ -118,13 +118,6 @@ func (blk *txnBlock) String() string {
 	// return blk.entry.String()
 }
 
-// func (blk *txnBlock) IsAppendable() bool {
-// 	if !blk.entry.IsAppendable() {
-// 		return false
-// 	}
-// 	return
-// }
-
 func (blk *txnBlock) GetTotalChanges() int {
 	return blk.entry.GetBlockData().GetTotalChanges()
 }
@@ -144,10 +137,6 @@ func (blk *txnBlock) getDBID() uint64 {
 func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end)
 }
-
-// func (blk *txnBlock) GetByFilter(filter handle.Filter) (uint32, error) {
-// 	return blk.Txn.GetStore().GetByFilter(blk.entry.AsCommonID(), filter)
-// }
 
 func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
 	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)

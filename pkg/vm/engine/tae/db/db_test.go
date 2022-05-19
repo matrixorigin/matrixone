@@ -1706,3 +1706,31 @@ func TestSystemDB2(t *testing.T) {
 	assert.Equal(t, 1000, rows)
 	assert.NoError(t, txn.Commit())
 }
+
+func TestScan1(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows-1)
+	txn := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	it := rel.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		rows += blk.Rows()
+		it.Next()
+	}
+	t.Logf("rows=%d", rows)
+	assert.NoError(t, txn.Commit())
+}

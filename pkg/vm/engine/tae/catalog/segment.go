@@ -68,6 +68,24 @@ func NewReplaySegmentEntry() *SegmentEntry {
 	return e
 }
 
+func NewStandaloneSegment(table *TableEntry, id uint64, ts uint64) *SegmentEntry {
+	e := &SegmentEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: ts,
+		},
+		table:   table,
+		link:    new(common.Link),
+		entries: make(map[uint64]*common.DLNode),
+		state:   ES_Appendable,
+	}
+	return e
+}
+
 func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntry: &BaseEntry{
@@ -94,7 +112,7 @@ func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 		panic("not supported")
 	}
 	block := NewSysBlockEntry(e, bid)
-	e.addEntryLocked(block)
+	e.AddEntryLocked(block)
 	return e
 }
 
@@ -205,7 +223,7 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewBlockEntry(entry, txn, state, dataFactory)
-	entry.addEntryLocked(created)
+	entry.AddEntryLocked(created)
 	return
 }
 
@@ -229,7 +247,7 @@ func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.LinkIt {
 	return common.NewLinkIt(entry.RWMutex, entry.link, reverse)
 }
 
-func (entry *SegmentEntry) addEntryLocked(block *BlockEntry) {
+func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
 	n := entry.link.Insert(block)
 	entry.entries[block.GetID()] = n
 }

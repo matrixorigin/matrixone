@@ -208,11 +208,11 @@ func TestUpdateUncommitted(t *testing.T) {
 	tbl, _ := tDB.getOrSetTable(rel.ID())
 	row := uint32(9)
 	assert.False(t, tbl.IsLocalDeleted(row))
-	rows := tbl.Rows()
+	rows := tbl.UncommittedRows()
 	err := tbl.UpdateLocalValue(row, 0, 999)
 	assert.Nil(t, err)
 	assert.True(t, tbl.IsLocalDeleted(row))
-	assert.Equal(t, rows+1, tbl.Rows())
+	assert.Equal(t, rows+1, tbl.UncommittedRows())
 }
 
 func TestAppend(t *testing.T) {
@@ -243,8 +243,8 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	err = tbl.Append(bats[0])
 	assert.Nil(t, err)
-	assert.Equal(t, int(brows), int(tbl.Rows()))
-	assert.Equal(t, int(brows), int(tbl.index.Count()))
+	assert.Equal(t, int(brows), int(tbl.UncommittedRows()))
+	assert.Equal(t, int(brows), int(tbl.localSegment.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[0])
 	assert.NotNil(t, err)
@@ -253,15 +253,15 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	err = tbl.Append(bats[1])
 	assert.Nil(t, err)
-	assert.Equal(t, 2*int(brows), int(tbl.Rows()))
-	assert.Equal(t, 2*int(brows), int(tbl.index.Count()))
+	assert.Equal(t, 2*int(brows), int(tbl.UncommittedRows()))
+	assert.Equal(t, 2*int(brows), int(tbl.localSegment.index.Count()))
 
 	err = tbl.BatchDedupLocal(bats[2])
 	assert.Nil(t, err)
 	err = tbl.Append(bats[2])
 	assert.Nil(t, err)
-	assert.Equal(t, 3*int(brows), int(tbl.Rows()))
-	assert.Equal(t, 3*int(brows), int(tbl.index.Count()))
+	assert.Equal(t, 3*int(brows), int(tbl.UncommittedRows()))
+	assert.Equal(t, 3*int(brows), int(tbl.localSegment.index.Count()))
 }
 
 func TestIndex(t *testing.T) {
@@ -373,7 +373,7 @@ func TestNodeCommand(t *testing.T) {
 	err = tbl.RangeDeleteLocalRows(100, 200)
 	assert.Nil(t, err)
 
-	for i, inode := range tbl.inodes {
+	for i, inode := range tbl.localSegment.nodes {
 		cmd, entry, err := inode.MakeCommand(uint32(i), false)
 		assert.Nil(t, err)
 		if i == 0 {
@@ -387,47 +387,6 @@ func TestNodeCommand(t *testing.T) {
 		}
 		t.Log(cmd.String())
 	}
-}
-
-func TestBuildCommand(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(t, dir)
-	defer driver.Close()
-	defer c.Close()
-	defer mgr.Stop()
-
-	schema := catalog.MockSchemaAll(14)
-	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 10
-	schema.PrimaryKey = 13
-
-	bat := compute.MockBatch(schema.Types(), 55000, int(schema.PrimaryKey), nil)
-	txn := mgr.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
-
-	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
-	table, _ := tDB.getOrSetTable(rel.ID())
-	tbl := table.(*txnTable)
-	err := tbl.Append(bat)
-	assert.Nil(t, err)
-
-	err = tbl.RangeDeleteLocalRows(100, 200)
-	assert.Nil(t, err)
-
-	t.Log(tbl.store.nodesMgr.String())
-	cmdSeq := uint32(1)
-	cmd, entries, err := tbl.buildCommitCmd(&cmdSeq)
-	assert.Nil(t, err)
-	tbl.Close()
-	assert.Equal(t, 0, tbl.store.nodesMgr.Count())
-	t.Log(cmd.String())
-	for _, e := range entries {
-		err := e.WaitDone()
-		assert.Nil(t, err)
-		e.Free()
-	}
-	t.Log(tbl.store.nodesMgr.String())
 }
 
 func TestApplyToColumn1(t *testing.T) {
