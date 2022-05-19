@@ -393,51 +393,51 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		switch uint8(n.InternalType.Oid) {
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: plan.Type_UINT8, Width: n.InternalType.Width}, nil
+				return &plan.Type{Id: plan.Type_UINT8, Width: n.InternalType.Width, Size: 1}, nil
 			}
-			return &plan.Type{Id: plan.Type_INT8, Width: n.InternalType.Width}, nil
+			return &plan.Type{Id: plan.Type_INT8, Width: n.InternalType.Width, Size: 1}, nil
 		case defines.MYSQL_TYPE_SHORT:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: plan.Type_UINT16, Width: n.InternalType.Width}, nil
+				return &plan.Type{Id: plan.Type_UINT16, Width: n.InternalType.Width, Size: 2}, nil
 			}
-			return &plan.Type{Id: plan.Type_INT16, Width: n.InternalType.Width}, nil
+			return &plan.Type{Id: plan.Type_INT16, Width: n.InternalType.Width, Size: 2}, nil
 		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: plan.Type_UINT32, Width: n.InternalType.Width}, nil
+				return &plan.Type{Id: plan.Type_UINT32, Width: n.InternalType.Width, Size: 4}, nil
 			}
-			return &plan.Type{Id: plan.Type_INT32, Width: n.InternalType.Width}, nil
+			return &plan.Type{Id: plan.Type_INT32, Width: n.InternalType.Width, Size: 4}, nil
 		case defines.MYSQL_TYPE_LONGLONG:
 			if n.InternalType.Unsigned {
-				return &plan.Type{Id: plan.Type_UINT64, Width: n.InternalType.Width}, nil
+				return &plan.Type{Id: plan.Type_UINT64, Width: n.InternalType.Width, Size: 8}, nil
 			}
-			return &plan.Type{Id: plan.Type_INT64, Width: n.InternalType.Width}, nil
+			return &plan.Type{Id: plan.Type_INT64, Width: n.InternalType.Width, Size: 8}, nil
 		case defines.MYSQL_TYPE_FLOAT:
-			return &plan.Type{Id: plan.Type_FLOAT32, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: plan.Type_FLOAT32, Width: n.InternalType.Width, Size: 4, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DOUBLE:
-			return &plan.Type{Id: plan.Type_FLOAT64, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: plan.Type_FLOAT64, Width: n.InternalType.Width, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_STRING:
 			if n.InternalType.DisplayWith == -1 { // type char
-				return &plan.Type{Id: plan.Type_CHAR, Width: 1}, nil
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
 			}
-			return &plan.Type{Id: plan.Type_VARCHAR, Width: n.InternalType.DisplayWith}, nil
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			if n.InternalType.DisplayWith == -1 { // type char
-				return &plan.Type{Id: plan.Type_CHAR, Width: 1}, nil
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
 			}
-			return &plan.Type{Id: plan.Type_VARCHAR, Width: n.InternalType.DisplayWith}, nil
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
 		case defines.MYSQL_TYPE_DATE:
-			return &plan.Type{Id: plan.Type_DATE}, nil
+			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
-			return &plan.Type{Id: plan.Type_DATETIME}, nil
+			return &plan.Type{Id: plan.Type_DATETIME, Size: 8}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			return &plan.Type{Id: plan.Type_TIMESTAMP, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: plan.Type_TIMESTAMP, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 18 {
-				return &plan.Type{Id: plan.Type_DECIMAL128, Width: n.InternalType.DisplayWith, Precision: n.InternalType.Precision}, nil
+				return &plan.Type{Id: plan.Type_DECIMAL128, Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 			}
-			return &plan.Type{Id: plan.Type_DECIMAL64, Width: n.InternalType.DisplayWith, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: plan.Type_DECIMAL64, Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_BOOL:
-			return &plan.Type{Id: plan.Type_BOOL}, nil
+			return &plan.Type{Id: plan.Type_BOOL, Size: 1}, nil
 		}
 	}
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport type: '%v'", typ))
