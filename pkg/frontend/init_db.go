@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
@@ -792,50 +793,69 @@ func isWantedTable(db engine.Database, txnCtx moengine.Txn,
 		}
 		return err
 	}
-	defs := table.TableDefs(txnCtx.GetCtx())
+	//TODO:fix it after tae is ready
+	/*
+		defs := table.TableDefs(txnCtx.GetCtx())
 
-	attrs := make(map[string]*CatalogSchemaAttribute)
-	for _, attr := range schema.GetAttributes() {
-		attrs[attr.GetName()] = attr
-	}
-
-	for _, def := range defs {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			if schemaAttr, ok2 := attrs[attr.Attr.Name]; ok2 {
-				if attr.Attr.Name != schemaAttr.GetName() {
-					logutil.Infof("def name %v schema name %v", attr.Attr.Name, schemaAttr.GetName())
-					return errorNoSuchAttribute
-				}
-				//TODO: fix it after the tae is ready
-				//if !attr.Attr.Type.Eq(schemaAttr.GetType()) {
-				//	return errorAttributeTypeIsDifferent
-				//}
-				if attr.Attr.Type.Oid != schemaAttr.GetType().Oid {
-					return errorAttributeTypeIsDifferent
-				}
-
-				//if !(attr.Attr.Primary && schemaAttr.GetIsPrimaryKey() ||
-				//	!attr.Attr.Primary && !schemaAttr.GetIsPrimaryKey()) {
-				//	return errorAttributeIsNotPrimary
-				//}
-			} else {
-				logutil.Infof("def name 1 %v", attr.Attr.Name)
-				return errorNoSuchAttribute
+			attrs := make(map[string]*CatalogSchemaAttribute)
+			for _, attr := range schema.GetAttributes() {
+				attrs[attr.GetName()] = attr
 			}
-		} else if attr, ok2 := def.(*engine.PrimaryIndexDef); ok2 {
-			for _, name := range attr.Names {
-				if schemaAttr, ok2 := attrs[name]; ok2 {
-					if !schemaAttr.GetIsPrimaryKey() {
-						return errorAttributeIsNotPrimary
+
+			for _, def := range defs {
+				if attr, ok := def.(*engine.AttributeDef); ok {
+					if schemaAttr, ok2 := attrs[attr.Attr.Name]; ok2 {
+						if attr.Attr.Name != schemaAttr.GetName() {
+							logutil.Infof("def name %v schema name %v", attr.Attr.Name, schemaAttr.GetName())
+							return errorNoSuchAttribute
+						}
+						//TODO: fix it after the tae is ready
+						//if !attr.Attr.Type.Eq(schemaAttr.GetType()) {
+						//	return errorAttributeTypeIsDifferent
+						//}
+						if attr.Attr.Type.Oid != schemaAttr.GetType().Oid {
+							return errorAttributeTypeIsDifferent
+						}
+
+						//if !(attr.Attr.Primary && schemaAttr.GetIsPrimaryKey() ||
+						//	!attr.Attr.Primary && !schemaAttr.GetIsPrimaryKey()) {
+						//	return errorAttributeIsNotPrimary
+						//}
+					} else {
+						logutil.Infof("def name 1 %v", attr.Attr.Name)
+						return errorNoSuchAttribute
 					}
-				} else {
-					logutil.Infof("def name 2 %v", name)
-					return errorNoSuchAttribute
+				} else if attr, ok2 := def.(*engine.PrimaryIndexDef); ok2 {
+					for _, name := range attr.Names {
+						if schemaAttr, ok2 := attrs[name]; ok2 {
+							if !schemaAttr.GetIsPrimaryKey() {
+								return errorAttributeIsNotPrimary
+							}
+						} else {
+							logutil.Infof("def name 2 %v", name)
+							return errorNoSuchAttribute
+						}
+					}
 				}
 			}
-		}
+	*/
+	//read data from table
+	readers := table.NewReader(1, nil, nil, txnCtx.GetCtx())
+	x := make([]uint64, schema.Length())
+	fieldNames := make([]string, schema.Length())
+	for i := 0; i < schema.Length(); i++ {
+		x[i] = 1
+		fieldNames[i] = schema.GetAttribute(i).GetName()
 	}
-
+	logutil.Infof("tableName %s fieldNames %v", tableName, fieldNames)
+	result, err := readers[0].Read(x, fieldNames)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < vector.Length(result.Vecs[0]); i++ {
+		lines := FormatLineInBatch(result, i)
+		fmt.Println(lines)
+	}
 	return nil
 }
 
