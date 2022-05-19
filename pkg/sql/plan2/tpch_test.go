@@ -48,7 +48,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 	}
 
 	mock = NewMockOptimizer()
-	//test simple sql
+	// test simple sql
 	qf, err := os.ReadFile(dir + "/tpch/simple.sql")
 	if err != nil {
 		t.Errorf("Cannot open queries file, error %v", err)
@@ -64,7 +64,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 	}
 
-	//test tpch query
+	// test tpch query
 	for qn := 1; qn <= 22; qn += 1 {
 		qnf, err := os.ReadFile(fmt.Sprintf("%s/tpch/q%d.sql", dir, qn))
 		if err != nil {

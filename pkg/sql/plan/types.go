@@ -598,3 +598,36 @@ func (p Update) String() string {
 func (p Update) ResultColumns() []*Attribute {
 	return nil
 }
+
+type BeginTxn struct {
+}
+
+func (b BeginTxn) String() string {
+	return "begin transaction"
+}
+
+func (b BeginTxn) ResultColumns() []*Attribute {
+	return nil
+}
+
+type CommitTxn struct {
+}
+
+func (c CommitTxn) String() string {
+	return "commit transaction"
+}
+
+func (c CommitTxn) ResultColumns() []*Attribute {
+	return nil
+}
+
+type RollbackTxn struct {
+}
+
+func (r RollbackTxn) String() string {
+	return "rollback transaction"
+}
+
+func (r RollbackTxn) ResultColumns() []*Attribute {
+	return nil
+}

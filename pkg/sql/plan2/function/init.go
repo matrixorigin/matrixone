@@ -58,13 +58,13 @@ func completenessCheck(id int, f Function) error {
 		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("illegal function id %d", id))
 	}
 	return nil // just jump it now.
-	//if f.Fn == nil && !f.IsAggregate() {
+	// if f.Fn == nil && !f.IsAggregate() {
 	//	return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %d missing its's Fn", id))
 	//}
-	//if f.TypeCheckFn == nil {
+	// if f.TypeCheckFn == nil {
 	//	return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %d missing its's type check function", id))
 	//}
-	//return nil
+	// return nil
 }
 
 func functionsEqual(f1 Function, f2 Function) bool {

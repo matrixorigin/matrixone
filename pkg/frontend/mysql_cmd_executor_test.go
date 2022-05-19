@@ -471,7 +471,7 @@ func Test_mce(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -566,7 +566,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -601,7 +601,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 		ses.Mrs = &MysqlResultSet{}
 
 		mce := NewMysqlCmdExecutor()
@@ -674,7 +674,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 		ses.Mrs = &MysqlResultSet{}
 
 		// mce := NewMysqlCmdExecutor()
@@ -741,7 +741,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		epochgc := getPCI()
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 		ses.Mrs = &MysqlResultSet{}
 
 		convey.So(getDataFromPipeline(ses, nil), convey.ShouldBeNil)

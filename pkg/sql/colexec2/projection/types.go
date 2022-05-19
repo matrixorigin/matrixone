@@ -12,16 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package decimal128s
+package projection
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-)
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-type compare struct {
-	xs [][]types.Decimal128
-	ns []*nulls.Nulls
-	vs []*vector.Vector
+type Argument struct {
+	Es []*plan.Expr
 }

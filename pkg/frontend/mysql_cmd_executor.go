@@ -529,10 +529,25 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	ses := mce.GetSession()
+	var txnCtx []byte = nil
+	if !ses.IsInTaeTxn() {
+		err := ses.BeginAutocommitTaeTxn()
+		if err != nil {
+			return err
+		}
+		taeTxn := ses.GetTaeTxn()
+		if taeTxn != nil {
+			txnCtx = taeTxn.GetCtx()
+		}
+	}
 	//TODO: check meta data
-	if _, err := ses.Pu.StorageEngine.Database(db, nil); err != nil {
+	if _, err := ses.Pu.StorageEngine.Database(db, txnCtx); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
+	}
+	err := ses.CommitTaeTxnAutocommitOnly()
+	if err != nil {
+		return err
 	}
 	oldDB := ses.protocol.GetDatabaseName()
 	ses.protocol.SetDatabaseName(db)
@@ -1152,6 +1167,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	defer func() {
 		ses.Mrs = nil
+		err2 := ses.ClearTaeTxn()
+		if err2 != nil {
+			logutil.Errorf("reset tae txn failed. error:%v", err2)
+		}
 	}()
 
 	for _, cw := range cws {
@@ -1160,6 +1179,30 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		//temp try 0 epoch
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
 		statementCount++
+
+		//check transaction states
+		switch stmt.(type) {
+		case *tree.BeginTransaction:
+			err = ses.BeginTaeTxn()
+			if err != nil {
+				return err
+			}
+		case *tree.CommitTransaction:
+			err = ses.CommitTaeTxnBegan()
+			if err != nil {
+				return err
+			}
+		case *tree.RollbackTransaction:
+			err = ses.RollbackTaeTxn()
+			if err != nil {
+				return err
+			}
+		default:
+			err = ses.BeginAutocommitTaeTxn()
+			if err != nil {
+				return err
+			}
+		}
 
 		switch st := stmt.(type) {
 		case *tree.Select:
@@ -1179,6 +1222,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 								}
 
 								//next statement
+								err = ses.CommitTaeTxnAutocommitOnly()
+								if err != nil {
+									return err
+								}
 								continue
 							}
 						}
@@ -1190,6 +1237,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
+							err = ses.CommitTaeTxnAutocommitOnly()
+							if err != nil {
+								return err
+							}
 							continue
 						} else if strings.ToLower(ve.Name) == "version_comment" {
 							err = mce.handleVersionComment()
@@ -1198,6 +1249,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
+							err = ses.CommitTaeTxnAutocommitOnly()
+							if err != nil {
+								return err
+							}
 							continue
 						} else if strings.ToLower(ve.Name) == "tx_isolation" {
 							err = mce.handleTxIsolation()
@@ -1206,6 +1261,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
+							err = ses.CommitTaeTxnAutocommitOnly()
+							if err != nil {
+								return err
+							}
 							continue
 						}
 					}
@@ -1219,7 +1278,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			switch t := stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
-				*tree.Use, *tree.SetVar:
+				*tree.Use, *tree.SetVar,
+				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			case *tree.ShowColumns:
 				if t.Table.ToTableName().SchemaName == "" {
 					return NewMysqlError(ER_NO_DB_ERROR)
@@ -1285,6 +1345,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if selfHandle {
+			err = ses.CommitTaeTxnAutocommitOnly()
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		if err = cw.SetDatabaseName(proto.GetDatabaseName()); err != nil {
@@ -1432,6 +1496,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
+		}
+
+		err = ses.CommitTaeTxnAutocommitOnly()
+		if err != nil {
+			return err
 		}
 	}
 

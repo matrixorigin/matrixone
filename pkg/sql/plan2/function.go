@@ -233,12 +233,12 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"VAR_POP", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
 	{"VAR_SAMPLE", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
 
-	//add for subquery
+	// add for subquery
 	{"EXISTS", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 	{"ALL", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 	{"ANY", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 
-	//add for tpch
+	// add for tpch
 	{"DATE", plan.Function_STRICT, DATE_INTERVAL_EXPRESSION, []plan.Type_TypeId{plan.Type_DATE, plan.Type_VARCHAR}, []int8{1}},
 	{"INTERVAL", plan.Function_STRICT, DATE_INTERVAL_EXPRESSION, []plan.Type_TypeId{plan.Type_INTERVAL, plan.Type_VARCHAR}, []int8{1}},
 	{"EXTRACT", plan.Function_STRICT, EXTRACT_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_VARCHAR}, []int8{1, 0}},

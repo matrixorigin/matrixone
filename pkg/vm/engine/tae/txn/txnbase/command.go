@@ -81,7 +81,8 @@ type BatchCmd struct {
 
 type ComposedCmd struct {
 	BaseCmd
-	Cmds []txnif.TxnCmd
+	Cmds    []txnif.TxnCmd
+	CmdSize uint32
 }
 
 type BaseCustomizedCmd struct {
@@ -276,6 +277,10 @@ func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 2
+	if err = binary.Write(w, binary.BigEndian, cc.CmdSize); err != nil {
+		return
+	}
+	n += 4
 	cmds := uint32(len(cc.Cmds))
 	if err = binary.Write(w, binary.BigEndian, cmds); err != nil {
 		return
@@ -293,6 +298,10 @@ func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (cc *ComposedCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &cc.CmdSize); err != nil {
+		return
+	}
+	n += 4
 	cmds := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &cmds); err != nil {
 		return
@@ -314,8 +323,12 @@ func (cc *ComposedCmd) AddCmd(cmd txnif.TxnCmd) {
 	cc.Cmds = append(cc.Cmds, cmd)
 }
 
+func (cc *ComposedCmd) SetCmdSize(size uint32) {
+	cc.CmdSize = size
+}
+
 func (cc *ComposedCmd) ToString(prefix string) string {
-	s := fmt.Sprintf("%sComposedCmd: Cnt=%d", prefix, len(cc.Cmds))
+	s := fmt.Sprintf("%sComposedCmd: Cnt=%d/%d", prefix, cc.CmdSize, len(cc.Cmds))
 	for _, cmd := range cc.Cmds {
 		s = fmt.Sprintf("%s\n%s\t%s", s, prefix, cmd.String())
 	}

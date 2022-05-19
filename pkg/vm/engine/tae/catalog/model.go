@@ -162,7 +162,7 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemTableSchema.AppendCol(SystemDBAttr_CreateSQL, t)
+	SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, t)
 
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
 	t = types.Type{
@@ -184,19 +184,19 @@ func init() {
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_Name, t)
 	t = types.Type{
-		Oid:   types.T_uint32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_Type, t)
 	t = types.Type{
-		Oid:   types.T_uint32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_Num, t)
 	t = types.Type{
-		Oid:   types.T_uint32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}

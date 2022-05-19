@@ -35,6 +35,10 @@ type Index struct {
 	Size uint32
 }
 
+type ReplayObserver interface {
+	OnTimeStamp(uint64)
+}
+
 type LogEntry entry.Entry
 
 type Driver interface {
@@ -47,6 +51,14 @@ type Driver interface {
 	Compact() error
 	Replay(handle store.ApplyHandle) (err error)
 	Close() error
+}
+
+func NewIndex(lsn uint64, csn, size uint32) *Index {
+	return &Index{
+		LSN:  lsn,
+		CSN:  csn,
+		Size: size,
+	}
 }
 
 func (index *Index) Compare(o *Index) int {
