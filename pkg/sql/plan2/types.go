@@ -32,9 +32,13 @@ type Query = plan.Query
 type Plan = plan.Plan
 
 type CompilerContext interface {
+	// Default database/schema in context
 	DefaultDatabase() string
+	// check if database exist
 	DatabaseExists(name string) bool
-	Resolve(name string) (*ObjectRef, *TableDef)
+	// get table definition by database/schema
+	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get estimated cost by table & expr
 	Cost(obj *ObjectRef, e *Expr) *Cost
 }
 
