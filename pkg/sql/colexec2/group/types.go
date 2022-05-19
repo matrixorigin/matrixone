@@ -15,8 +15,10 @@
 package group
 
 import (
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/aggregate"
 )
 
@@ -32,6 +34,11 @@ const (
 	HStr
 )
 
+type evalVector struct {
+	needFree bool
+	vec      *vector.Vector
+}
+
 type Container struct {
 	typ           int
 	rows          uint64
@@ -44,6 +51,9 @@ type Container struct {
 	values        []uint64
 	intHashMap    *hashtable.Int64HashMap
 	strHashMap    *hashtable.StringHashMap
+
+	aggVecs   []evalVector
+	groupVecs []evalVector
 
 	h8 struct {
 		keys  []uint64
@@ -68,7 +78,7 @@ type Container struct {
 }
 
 type Argument struct {
-	Poses []int32 // group attributes
 	ctr   *Container
+	Exprs []*plan.Expr          // group Expressions
 	Aggs  []aggregate.Aggregate // aggregations
 }

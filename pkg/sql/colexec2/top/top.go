@@ -19,10 +19,10 @@ import (
 	"container/heap"
 	"fmt"
 
-	compare "github.com/matrixorigin/matrixone/pkg/compare2"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -81,7 +81,7 @@ func (ctr *Container) build(n *Argument, bat *batch.Batch, proc *process.Process
 		for i, pos := range ctr.poses {
 			mp[int(pos)] = i
 		}
-		ctr.bat = batch.New(len(bat.Vecs))
+		ctr.bat = batch.NewWithSize(len(bat.Vecs))
 		for i, vec := range bat.Vecs {
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 		}
@@ -94,7 +94,7 @@ func (ctr *Container) build(n *Argument, bat *batch.Batch, proc *process.Process
 			}
 		}
 	}
-	defer batch.Clean(bat, proc.Mp)
+	defer bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
 	return ctr.processBatch(n.Limit, bat, proc)
 }
@@ -111,7 +111,7 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
 				if err := vector.UnionOne(vec, bat.Vecs[j], i, proc.Mp); err != nil {
-					batch.Clean(ctr.bat, proc.Mp)
+					ctr.bat.Clean(proc.Mp)
 					return err
 				}
 			}
@@ -135,7 +135,7 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		if ctr.compare(1, 0, i, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
-					batch.Clean(ctr.bat, proc.Mp)
+					ctr.bat.Clean(proc.Mp)
 					return err
 				}
 				ctr.bat.Zs[0] = bat.Zs[i]
@@ -157,8 +157,8 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
-	if err := batch.Shuffle(ctr.bat, sels, proc.Mp); err != nil {
-		batch.Clean(ctr.bat, proc.Mp)
+	if err := ctr.bat.Shuffle(sels, proc.Mp); err != nil {
+		ctr.bat.Clean(proc.Mp)
 		ctr.bat = nil
 	}
 	proc.Reg.InputBatch = ctr.bat

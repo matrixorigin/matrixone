@@ -17,6 +17,7 @@ package batch
 import (
 	"bytes"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -177,6 +178,72 @@ func Cow(bat *Batch) {
 	}
 	bat.Ro = false
 	bat.Attrs = attrs
+}
+
+func NewWithSize(n int) *Batch {
+	return &Batch{
+		Cnt:  1,
+		Vecs: make([]*vector.Vector, n),
+	}
+}
+
+func (bat *Batch) Shrink(sels []int64) {
+	for _, vec := range bat.Vecs {
+		vector.Shrink(vec, sels)
+	}
+	vs := bat.Zs
+	for i, sel := range sels {
+		vs[i] = vs[sel]
+	}
+	bat.Zs = bat.Zs[:len(sels)]
+}
+
+func (bat *Batch) Shuffle(sels []int64, m *mheap.Mheap) error {
+	if len(sels) > 0 {
+		for _, vec := range bat.Vecs {
+			if err := vector.Shuffle(vec, sels, m); err != nil {
+				return err
+			}
+		}
+		data, err := mheap.Alloc(m, int64(len(bat.Zs))*8)
+		if err != nil {
+			return err
+		}
+		ws := encoding.DecodeInt64Slice(data)
+		bat.Zs = shuffle.Int64Shuffle(bat.Zs, ws, sels)
+		mheap.Free(m, data)
+	}
+	return nil
+}
+
+func (bat *Batch) Length() int {
+	return len(bat.Zs)
+}
+
+func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
+	for i, pos := range poses {
+		vecs[i] = bat.GetVector(pos)
+	}
+}
+
+func (bat *Batch) GetVector(pos int32) *vector.Vector {
+	return bat.Vecs[pos]
+}
+
+func (bat *Batch) Clean(m *mheap.Mheap) {
+	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		if vec != nil {
+			vector.Clean(vec, m)
+		}
+	}
+	for _, r := range bat.Rs {
+		r.Free(m)
+	}
+	bat.Vecs = nil
+	bat.Zs = nil
 }
 
 func (bat *Batch) String() string {

@@ -29,6 +29,8 @@ import (
 type Batch struct {
 	// Ro if true, Attrs is read only
 	Ro bool
+	// reference count, default is 1
+	Cnt int64
 	// SelsData encoded row number list
 	SelsData []byte
 	// Sels row number list

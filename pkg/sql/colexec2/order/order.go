@@ -17,10 +17,10 @@ package order
 import (
 	"bytes"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -59,7 +59,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 }
 
 func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, error) {
-	ovec := batch.GetVector(bat, ctr.poses[0])
+	ovec := bat.GetVector(ctr.poses[0])
 	n := len(bat.Zs)
 	sels := make([]int64, n)
 	for i := range sels {
@@ -67,7 +67,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	}
 	sort.Sort(ctr.ds[0], sels, ovec)
 	if len(ctr.poses) == 1 {
-		if err := batch.Shuffle(bat, sels, proc.Mp); err != nil {
+		if err := bat.Shuffle(sels, proc.Mp); err != nil {
 			panic(err)
 		}
 		return false, nil
@@ -77,7 +77,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	for i, j := 1, len(ctr.poses); i < j; i++ {
 		desc := ctr.ds[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
-		vec := batch.GetVector(bat, ctr.poses[i])
+		vec := bat.GetVector(ctr.poses[i])
 		for i, j := 0, len(ps); i < j; i++ {
 			if i == j-1 {
 				sort.Sort(desc, sels[ps[i]:], vec)
@@ -87,7 +87,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 		}
 		ovec = vec
 	}
-	if err := batch.Shuffle(bat, sels, proc.Mp); err != nil {
+	if err := bat.Shuffle(sels, proc.Mp); err != nil {
 		panic(err)
 	}
 	return false, nil

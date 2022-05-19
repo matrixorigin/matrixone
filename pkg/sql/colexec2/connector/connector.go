@@ -17,9 +17,8 @@ package connector
 import (
 	"bytes"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -37,7 +36,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if bat == nil {
 		select {
 		case <-reg.Ctx.Done():
-			process.FreeRegisters(proc)
 			return true, nil
 		case reg.Ch <- bat:
 			return false, nil
@@ -64,8 +62,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	select {
 	case <-reg.Ctx.Done():
-		batch.Clean(bat, proc.Mp)
-		process.FreeRegisters(proc)
+		bat.Clean(proc.Mp)
 		return true, nil
 	case reg.Ch <- bat:
 		return false, nil

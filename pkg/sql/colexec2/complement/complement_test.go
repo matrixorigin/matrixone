@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"testing"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -194,7 +194,7 @@ func TestComplement(t *testing.T) {
 			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
 		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
@@ -240,7 +240,7 @@ func BenchmarkComplement(b *testing.B) {
 				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
 					break
 				}
-				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 			}
 		}
 	}
@@ -272,7 +272,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []int32, cs []
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.New(len(ts))
+	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])

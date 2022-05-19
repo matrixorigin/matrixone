@@ -19,11 +19,11 @@ import (
 	"container/heap"
 	"fmt"
 
-	compare "github.com/matrixorigin/matrixone/pkg/compare2"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	top "github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -94,7 +94,7 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				for i, pos := range ctr.poses {
 					mp[int(pos)] = i
 				}
-				ctr.bat = batch.New(len(bat.Vecs))
+				ctr.bat = batch.NewWithSize(len(bat.Vecs))
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
@@ -108,10 +108,10 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				}
 			}
 			if err := ctr.processBatch(n.Limit, bat, proc); err != nil {
-				batch.Clean(bat, proc.Mp)
+				bat.Clean(proc.Mp)
 				return err
 			}
-			batch.Clean(bat, proc.Mp)
+			bat.Clean(proc.Mp)
 		}
 	}
 	return nil
@@ -173,8 +173,8 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
-	if err := batch.Shuffle(ctr.bat, sels, proc.Mp); err != nil {
-		batch.Clean(ctr.bat, proc.Mp)
+	if err := ctr.bat.Shuffle(sels, proc.Mp); err != nil {
+		ctr.bat.Clean(proc.Mp)
 		ctr.bat = nil
 	}
 	proc.Reg.InputBatch = ctr.bat
