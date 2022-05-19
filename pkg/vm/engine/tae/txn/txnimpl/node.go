@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -56,6 +57,7 @@ type InsertNode interface {
 	RangeDelete(start, end uint32) error
 	IsRowDeleted(row uint32) bool
 	PrintDeletes() string
+	FillColumnView(*model.ColumnView, *bytes.Buffer, *bytes.Buffer) error
 	Window(start, end uint32) (*gbat.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
@@ -390,6 +392,23 @@ func (n *insertNode) Append(data *gbat.Batch, offset uint32) (uint32, error) {
 		n.rows = uint32(vec.Length())
 	}
 	return uint32(cnt), nil
+}
+
+func (n *insertNode) FillColumnView(view *model.ColumnView, compressed, decompressed *bytes.Buffer) (err error) {
+	ivec, err := n.data.GetVectorByAttr(view.ColIdx)
+	if err != nil {
+		return
+	}
+	ivec = ivec.GetLatestView()
+	if decompressed == nil || compressed == nil {
+		view.AppliedVec, err = ivec.CopyToVector()
+	} else {
+		decompressed.Reset()
+		compressed.Reset()
+		view.AppliedVec, err = ivec.CopyToVectorWithBuffer(compressed, decompressed)
+	}
+	view.DeleteMask = n.deletes
+	return
 }
 
 func (n *insertNode) GetSpace() uint32 {

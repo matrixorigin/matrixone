@@ -58,13 +58,13 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 		curr.RUnlock()
 		it.linkIt.Next()
 	}
-	// if table.localSegment != nil {
-	// 	cit := &composedSegmentIt{
-	// 		segmentIt:   it,
-	// 		uncommitted: table.localSegment.entry,
-	// 	}
-	// 	return cit
-	// }
+	if table.localSegment != nil {
+		cit := &composedSegmentIt{
+			segmentIt:   it,
+			uncommitted: table.localSegment.entry,
+		}
+		return cit
+	}
 	return it
 }
 
@@ -94,6 +94,13 @@ func (it *segmentIt) Next() {
 
 func (it *segmentIt) GetSegment() handle.Segment {
 	return newSegment(it.table, it.curr)
+}
+
+func (cit *composedSegmentIt) GetSegment() handle.Segment {
+	if cit.uncommitted != nil {
+		return newSegment(cit.table, cit.uncommitted)
+	}
+	return cit.segmentIt.GetSegment()
 }
 
 func (cit *composedSegmentIt) Valid() bool {
@@ -134,6 +141,9 @@ func (seg *txnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) 
 	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.getDBID(), seg.entry.AsCommonID())
 }
 
+func (seg *txnSegment) IsUncommitted() bool {
+	return isLocalSegmentByID(seg.entry.GetID())
+}
 func (seg *txnSegment) SoftDeleteBlock(id uint64) (err error) {
 	fp := seg.entry.AsCommonID()
 	fp.BlockID = id
@@ -155,6 +165,9 @@ func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
 }
 
 func (seg *txnSegment) BatchDedup(pks *vector.Vector) (err error) {
+	if isLocalSegment(seg.entry.AsCommonID()) {
+		return seg.table.localSegment.BatchDedupByCol(pks)
+	}
 	segData := seg.entry.GetSegmentData()
 	seg.Txn.GetStore().LogSegmentID(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())
 	return segData.BatchDedup(seg.Txn, pks)

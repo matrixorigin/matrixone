@@ -1,6 +1,7 @@
 package txnimpl
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -27,6 +29,10 @@ func init() {
 
 func isLocalSegment(id *common.ID) bool {
 	return id.SegmentID >= LocalSegmentStartID
+}
+
+func isLocalSegmentByID(id uint64) bool {
+	return id >= LocalSegmentStartID
 }
 
 type localSegment struct {
@@ -319,6 +325,26 @@ func (seg *localSegment) GetPrimaryColumn() *vector.Vector {
 
 func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {
 	return seg.index.BatchDedup(col)
+}
+
+func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
+	npos := int(blk.ID)
+	n := seg.nodes[npos]
+	h := seg.table.store.nodesMgr.Pin(n)
+	err = n.FillColumnView(view, compressed, decompressed)
+	h.Close()
+	if err != nil {
+		return
+	}
+	view.ApplyDeletes()
+	return
+}
+
+func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
+	npos := int(blk.ID)
+	n := seg.nodes[npos]
+	return int(n.Rows())
 }
 
 func (seg *localSegment) GetValue(row uint32, col uint16) (interface{}, error) {

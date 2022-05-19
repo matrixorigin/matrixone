@@ -436,8 +436,13 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	blockIt := h.MakeBlockIt()
 	for blockIt.Valid() {
 		h := blockIt.GetBlock()
-		block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		offset, err = block.GetByFilter(tbl.store.txn, filter)
+		if h.IsUncommitted() {
+			blockIt.Next()
+			continue
+		}
+		offset, err = h.GetByFilter(filter)
+		// block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		// offset, err = block.GetByFilter(tbl.store.txn, filter)
 		if err == nil {
 			id = h.Fingerprint()
 			break
@@ -603,16 +608,16 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 	if err != nil {
 		return
 	}
-	if tbl.localSegment != nil {
-		if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
-			return
-		}
-	}
+	// if tbl.localSegment != nil {
+	// 	if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
+	// 		return
+	// 	}
+	// }
 	h := newRelation(tbl)
 	segIt := h.MakeSegmentIt()
 	for segIt.Valid() {
 		seg := segIt.GetSegment()
-		if err = seg.BatchDedup(pks); err == data.ErrDuplicate {
+		if err = seg.BatchDedup(pks); err == txnbase.ErrDuplicated {
 			break
 		}
 		if err == data.ErrPossibleDuplicate {
