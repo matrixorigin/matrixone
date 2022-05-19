@@ -14,7 +14,9 @@
 
 package segment
 
-import "sync"
+import (
+	"sync"
+)
 
 type StateType uint8
 
@@ -24,6 +26,7 @@ const (
 )
 
 type Inode struct {
+	magic      uint64
 	inode      uint64
 	algo       uint8
 	size       uint64
@@ -32,4 +35,5 @@ type Inode struct {
 	extents    []Extent
 	logExtents Extent
 	state      StateType
+	seq        uint64
 }
