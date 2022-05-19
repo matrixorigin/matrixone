@@ -29,6 +29,12 @@ const (
 	Normal
 	Remote
 	Parallel
+	CreateDatabase
+	CreateTable
+	CreateIndex
+	DropDatabase
+	DropTable
+	DropIndex
 )
 
 // Address is the ip:port of local node

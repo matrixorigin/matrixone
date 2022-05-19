@@ -73,14 +73,59 @@ func (c *compile) Run(ts uint64) (err error) {
 	switch c.scope.Magic {
 	case Merge:
 		return nil
+	case CreateDatabase:
+		return c.scope.CreateDatabase(ts, c.proc.Snapshot, c.e)
+	case DropDatabase:
+		return c.scope.DropDatabase(ts, c.proc.Snapshot, c.e)
+	case CreateTable:
+		return c.scope.CreateTable(ts, c.proc.Snapshot, c.e)
+	case DropTable:
+		return c.scope.DropTable(ts, c.proc.Snapshot, c.e)
+	case CreateIndex:
+		return c.scope.CreateIndex(ts, c.proc.Snapshot, c.e)
+	case DropIndex:
+		return c.scope.DropIndex(ts, c.proc.Snapshot, c.e)
 	}
 	return nil
 }
 
 func (c *compile) compileScope(pn *plan.Plan) (*Scope, error) {
-	switch pn.Plan.(type) {
+	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
 		return nil, nil
+	case *plan.Plan_Ddl:
+		switch qry.Ddl.DdlType {
+		case plan.DataDefinition_CREATE_DATABASE:
+			return &Scope{
+				Magic: CreateDatabase,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_DROP_DATABASE:
+			return &Scope{
+				Magic: DropDatabase,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_CREATE_TABLE:
+			return &Scope{
+				Magic: CreateTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_DROP_TABLE:
+			return &Scope{
+				Magic: DropTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_CREATE_INDEX:
+			return &Scope{
+				Magic: CreateIndex,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_DROP_INDEX:
+			return &Scope{
+				Magic: DropIndex,
+				Plan:  pn,
+			}, nil
+		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }
