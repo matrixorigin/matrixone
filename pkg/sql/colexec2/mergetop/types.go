@@ -15,9 +15,9 @@
 package mergetop
 
 import (
-	compare "github.com/matrixorigin/matrixone/pkg/compare2"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
-	top "github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
 )
 
 const (

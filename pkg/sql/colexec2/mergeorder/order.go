@@ -17,11 +17,11 @@ package mergeorder
 import (
 	"bytes"
 
-	compare "github.com/matrixorigin/matrixone/pkg/compare2"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	order "github.com/matrixorigin/matrixone/pkg/sql/colexec2/order"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -105,11 +105,11 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				}
 			} else {
 				if err := ctr.processBatch(bat, proc); err != nil {
-					batch.Clean(bat, proc.Mp)
-					batch.Clean(ctr.bat, proc.Mp)
+					bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.Mp)
 					return err
 				}
-				batch.Clean(bat, proc.Mp)
+				bat.Clean(proc.Mp)
 			}
 		}
 	}
@@ -118,13 +118,13 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 
 func (ctr *Container) processBatch(bat2 *batch.Batch, proc *process.Process) error {
 	bat1 := ctr.bat
-	rbat := batch.New(len(bat1.Vecs))
+	rbat := batch.NewWithSize(len(bat1.Vecs))
 	for i, vec := range bat1.Vecs {
 		rbat.Vecs[i] = vector.New(vec.Typ)
 	}
 	for i, cmp := range ctr.cmps {
-		cmp.Set(0, batch.GetVector(bat1, int32(i)))
-		cmp.Set(1, batch.GetVector(bat2, int32(i)))
+		cmp.Set(0, bat1.GetVector(int32(i)))
+		cmp.Set(1, bat2.GetVector(int32(i)))
 	}
 	// init index-number for merge-sort
 	i, j := int64(0), int64(0)
@@ -143,7 +143,7 @@ func (ctr *Container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 			for k := 0; k < len(rbat.Vecs); k++ {
 				err := vector.UnionOne(rbat.Vecs[k], bat1.Vecs[k], i, proc.Mp)
 				if err != nil {
-					batch.Clean(rbat, proc.Mp)
+					rbat.Clean(proc.Mp)
 					return err
 				}
 			}
@@ -153,7 +153,7 @@ func (ctr *Container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 			for k := 0; k < len(rbat.Vecs); k++ {
 				err := vector.UnionOne(rbat.Vecs[k], bat2.Vecs[k], j, proc.Mp)
 				if err != nil {
-					batch.Clean(rbat, proc.Mp)
+					rbat.Clean(proc.Mp)
 					return err
 				}
 			}
@@ -167,7 +167,7 @@ func (ctr *Container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		for k := 0; k < len(rbat.Vecs); k++ {
 			err := vector.UnionBatch(rbat.Vecs[k], bat1.Vecs[k], i, count, makeFlagsOne(count), proc.Mp)
 			if err != nil {
-				batch.Clean(rbat, proc.Mp)
+				rbat.Clean(proc.Mp)
 				return err
 			}
 		}
@@ -179,13 +179,13 @@ func (ctr *Container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		for k := 0; k < len(rbat.Vecs); k++ {
 			err := vector.UnionBatch(rbat.Vecs[k], bat2.Vecs[k], j, count, makeFlagsOne(count), proc.Mp)
 			if err != nil {
-				batch.Clean(rbat, proc.Mp)
+				rbat.Clean(proc.Mp)
 				return err
 			}
 		}
 		rbat.Zs = append(rbat.Zs, bat2.Zs[j:]...)
 	}
-	batch.Clean(ctr.bat, proc.Mp)
+	ctr.bat.Clean(proc.Mp)
 	ctr.bat = rbat
 	return nil
 }

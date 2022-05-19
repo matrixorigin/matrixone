@@ -18,9 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -40,7 +39,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
 	vec, err := colexec.EvalExpr(bat, proc, ap.E)
 	if err != nil {
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc.Mp)
 		return false, err
 	}
 	bs := vec.Col.([]bool)
@@ -50,7 +49,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			sels = append(sels, int64(i))
 		}
 	}
-	batch.Shrink(bat, sels)
+	bat.Shrink(sels)
 	proc.Reg.InputBatch = bat
 	return false, nil
 }

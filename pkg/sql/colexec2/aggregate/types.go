@@ -14,6 +14,8 @@
 
 package aggregate
 
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 const (
 	Sum = iota
 	Avg
@@ -45,6 +47,6 @@ var Names = [...]string{
 }
 
 type Aggregate struct {
-	Op  int
-	Pos int32
+	Op int
+	E  *plan.Expr
 }

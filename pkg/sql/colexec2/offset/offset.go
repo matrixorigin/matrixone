@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -44,12 +44,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if n.Seen+uint64(length) > n.Offset {
 		sels := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen))
 		n.Seen += uint64(length)
-		batch.Shrink(bat, sels)
+		bat.Shrink(sels)
 		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	n.Seen += uint64(length)
-	batch.Clean(bat, proc.Mp)
+	bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
 	return false, nil
 }
