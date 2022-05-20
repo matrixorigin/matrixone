@@ -251,7 +251,9 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Equal(t, tae.Catalog.GetCheckpointed(), c.GetCheckpointed())
 }
 
-func TestReplayCatalog4(t *testing.T) {
+// catalog and data not checkpoint
+// catalog not softdelete
+func TestReplay1(t *testing.T) {
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2)
 	schema.BlockMaxRows = 1000
@@ -317,8 +319,6 @@ func TestReplayCatalog4(t *testing.T) {
 	c.Close()
 	tae2.Close()
 
-	logutil.Infof("lalala start replay")
-
 	tae3, err := Open(tae.Dir, nil)
 	assert.Nil(t, err)
 	c3 := tae3.Catalog
@@ -346,5 +346,151 @@ func TestReplayCatalog4(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 
 	c3.Close()
+	tae3.Close()
+}
+
+// 1. Create db and tbl, append data, update and delete.
+// 2. Get id and row of data
+// 3. Delete first blk
+// replay (catalog and data not ckp, catalog softdelete)
+// check 1. blk not exist, 2. id and row of data
+// 1. Checkpoint catalog
+// 2. Append, update and delete
+// replay (catalog ckp, data not ckp)
+// check id and row of data
+func TestReplay2(t *testing.T) {
+	tae := initDB(t, nil)
+	schema := catalog.MockSchema(2)
+	schema.BlockMaxRows = 1000
+	schema.SegmentMaxBlocks = 2
+	bat := compute.MockBatch(schema.Types(), 10000, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 2)
+
+	txn := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.Nil(t, err)
+	err = rel.Append(bats[0])
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	filter := new(handle.Filter)
+	filter.Op = handle.FilterEq
+	filter.Val = int32(1500)
+	id, row, err := rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	err = rel.Update(id, row-1, uint16(0), int32(33))
+	assert.Nil(t, err)
+	err = rel.RangeDelete(id, row+1, row+100)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	filter = new(handle.Filter)
+	filter.Op = handle.FilterEq
+	filter.Val = int32(1500)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	assert.Nil(t, err)
+	err = rel.Update(id, row-1, uint16(0), int32(33))
+	assert.Nil(t, err)
+	err = rel.RangeDelete(id, row+1, row+100)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	blkIterator := rel.MakeBlockIt()
+	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
+	seg, err := rel.GetSegment(blk.GetSegment().ID)
+	assert.Nil(t, err)
+	err = seg.SoftDeleteBlock(blk.ID)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	ts := txn.GetCommitTS()
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	tae.Close()
+
+	tae2, err := Open(tae.Dir, nil)
+	assert.Nil(t, err)
+	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
+
+	txn = tae2.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	seg, err = rel.GetSegment(seg.GetID())
+	assert.Nil(t, err)
+	_, err = seg.GetBlock(blk.ID)
+	assert.Nil(t, err)
+	filter = new(handle.Filter)
+	filter.Op = handle.FilterEq
+	filter.Val = int32(1500)
+	id2, row2, err := rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	assert.Equal(t, id.BlockID, id2.BlockID)
+	assert.Equal(t, row, row2)
+	val, err := rel.GetValue(id, row-1, 0)
+	assert.Nil(t, err)
+	assert.Equal(t, int32(33), val)
+	_, err = rel.GetValue(id, row+1, 0)
+	assert.NotNil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	err = tae2.Catalog.Checkpoint(ts)
+	assert.Nil(t, err)
+
+	txn = tae2.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	err = rel.Append(bats[1])
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
+	tae2.Close()
+
+	tae3, err := Open(tae.Dir, nil)
+	assert.Nil(t, err)
+	t.Log(tae3.Catalog.SimplePPString(common.PPL1))
+
+	txn = tae3.StartTxn(nil)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	seg, err = rel.GetSegment(seg.GetID())
+	assert.Nil(t, err)
+	_, err = seg.GetBlock(blk.ID)
+	assert.Nil(t, err)
+	filter = new(handle.Filter)
+	filter.Op = handle.FilterEq
+	filter.Val = int32(1500)
+	id2, row2, err = rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	assert.Equal(t, id.BlockID, id2.BlockID)
+	assert.Equal(t, row, row2)
+	val, err = rel.GetValue(id, row-1, 0)
+	assert.Nil(t, err)
+	assert.Equal(t, int32(33), val)
+	_, err = rel.GetValue(id, row+1, 0)
+	assert.NotNil(t, err)
+	assert.Nil(t, txn.Commit())
+
 	tae3.Close()
 }

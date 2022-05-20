@@ -413,7 +413,7 @@ func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 		return toAppend
 	}
 	appendedOffset := n.offsetWithDeletes(appended)
-	toAppendOffset := n.offsetWithDeletes(toAppend)
+	toAppendOffset := n.offsetWithDeletes(toAppend + appended)
 	return toAppendOffset - appendedOffset
 }
 
