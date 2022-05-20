@@ -454,9 +454,8 @@ func TestReplay(t *testing.T) {
 	s.Close()
 
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
 		t.Logf("%s", payload)
-		return nil
 	}
 	r := newReplayer(a)
 	o := &noopObserver{}
@@ -664,9 +663,8 @@ func TestLoad(t *testing.T) {
 
 	fmt.Printf("\n***********replay***********\n\n")
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
 		fmt.Printf("%s", payload)
-		return nil
 	}
 	err = s.Replay(a)
 	assert.Nil(t, err)

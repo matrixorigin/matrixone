@@ -26,28 +26,24 @@ func NewReplayer(dataFactory DataFactory, catalog *Catalog) *Replayer {
 	}
 }
 
-func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
 	if typ != ETCatalogCheckpoint {
 		return
 	}
 	e := NewEmptyCheckpointEntry()
-	if err = e.Unmarshal(payload); err != nil {
-		return
+	if err := e.Unmarshal(payload); err != nil {
+		panic(err)
 	}
 	checkpoint := new(Checkpoint)
 	checkpoint.CommitId = commitId
 	checkpoint.MaxTS = e.MaxTS
 	checkpoint.LSN = e.MaxIndex.LSN
 	for _, cmd := range e.Entries {
-		if err = replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil, nil); err != nil {
-			return
-		}
+		replayer.catalog.ReplayCmd(cmd, replayer.dataFactory, nil, nil)
 	}
 	if len(replayer.catalog.checkpoints) == 0 {
 		replayer.catalog.checkpoints = append(replayer.catalog.checkpoints, checkpoint)
 	} else {
 		replayer.catalog.checkpoints[0] = checkpoint
 	}
-	return
-
 }

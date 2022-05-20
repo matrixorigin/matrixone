@@ -116,11 +116,7 @@ func (r *replayer) mergeUncommittedEntries(pre, curr *replayEntry) *replayEntry 
 
 func (r *replayer) Apply() {
 	for _, e := range r.checkpoints {
-		err := r.applyEntry(e.group, e.commitId, e.payload, e.entryType, e.info)
-		if err != nil {
-			s := fmt.Sprintf("%d %d", e.group, e.entryType)
-			panic(s)
-		}
+		r.applyEntry(e.group, e.commitId, e.payload, e.entryType, e.info)
 	}
 
 	for _, e := range r.entrys {
@@ -139,25 +135,13 @@ func (r *replayer) Apply() {
 				entries, ok := tidMap[e.tid]
 				if ok {
 					for _, entry := range entries {
-						err := r.applyEntry(entry.group, entry.commitId, entry.payload, entry.entryType, nil)
-						if err != nil {
-							panic(err)
-						}
-						// pre = r.mergeUncommittedEntries(
-						// 	pre, entry)
+						r.applyEntry(entry.group, entry.commitId, entry.payload, entry.entryType, nil)
 					}
 				}
 			}
-			// e = r.mergeUncommittedEntries(pre, e)
-			err := r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
-			if err != nil {
-				panic(err)
-			}
+			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
 		} else {
-			err := r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
-			if err != nil {
-				panic(err)
-			}
+			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
 		}
 	}
 }

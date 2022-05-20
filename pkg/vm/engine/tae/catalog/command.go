@@ -391,9 +391,8 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		cmd.entry.CurrOp = OpCreate
-		cmd.DB = &DBEntry{
-			BaseEntry: cmd.entry,
-		}
+		cmd.DB = NewReplayDBEntry()
+		cmd.DB.BaseEntry = cmd.entry
 		if cmd.DB.name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
