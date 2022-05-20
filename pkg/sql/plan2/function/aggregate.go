@@ -38,7 +38,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         0,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint8,
@@ -47,7 +47,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         1,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint16,
@@ -56,7 +56,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         2,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint32,
@@ -65,7 +65,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         3,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
@@ -74,7 +74,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         4,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int8,
@@ -83,7 +83,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         5,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int16,
@@ -92,7 +92,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         6,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int32,
@@ -101,7 +101,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         7,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
@@ -110,7 +110,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         8,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_float32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float32,
@@ -119,7 +119,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         9,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_float64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
@@ -128,7 +128,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         10,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_varchar},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_varchar,
@@ -137,7 +137,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         11,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_char},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_char,
@@ -146,7 +146,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         12,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_date},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_date,
@@ -155,10 +155,28 @@ var aggregates = map[int][]Function{
 		{
 			Index:         13,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_datetime},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_datetime,
+			AggregateInfo: nil,
+		},
+		{
+			Index:         14,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_decimal64},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_decimal64,
+			AggregateInfo: nil,
+		},
+		{
+			Index:         15,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_decimal128},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_decimal128,
 			AggregateInfo: nil,
 		},
 	},
@@ -166,7 +184,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         0,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint8,
@@ -175,7 +193,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         1,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint16,
@@ -184,7 +202,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         2,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint32,
@@ -193,7 +211,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         3,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
@@ -202,7 +220,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         4,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int8,
@@ -211,7 +229,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         5,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int16,
@@ -220,7 +238,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         6,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int32,
@@ -229,7 +247,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         7,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
@@ -238,7 +256,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         8,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_float32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float32,
@@ -247,7 +265,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         9,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_float64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
@@ -256,7 +274,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         10,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_varchar},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_varchar,
@@ -265,7 +283,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         11,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_char},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_char,
@@ -274,7 +292,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         12,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_date},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_date,
@@ -283,10 +301,28 @@ var aggregates = map[int][]Function{
 		{
 			Index:         13,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_datetime},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_datetime,
+			AggregateInfo: nil,
+		},
+		{
+			Index:         14,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_decimal64},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_decimal64,
+			AggregateInfo: nil,
+		},
+		{
+			Index:         15,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_decimal128},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_decimal128,
 			AggregateInfo: nil,
 		},
 	},
@@ -294,7 +330,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         0,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
@@ -303,7 +339,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         1,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
@@ -312,7 +348,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         2,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
@@ -321,7 +357,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         3,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_uint64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
@@ -330,7 +366,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         4,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
@@ -339,7 +375,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         5,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
@@ -348,7 +384,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         6,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
@@ -357,7 +393,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         7,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
@@ -366,7 +402,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         8,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_float32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
@@ -375,7 +411,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         9,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_float64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
@@ -384,7 +420,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         10,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_varchar},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_varchar,
@@ -393,7 +429,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         11,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_char},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_char,
@@ -402,7 +438,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:         12,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_date},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_date,
@@ -411,10 +447,28 @@ var aggregates = map[int][]Function{
 		{
 			Index:         13,
 			Flag:          plan.Function_AGG,
-			Kind:          STANDARD_FUNCTION,
+			Layout:        STANDARD_FUNCTION,
 			Args:          []types.T{types.T_datetime},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_datetime,
+			AggregateInfo: nil,
+		},
+		{
+			Index:         14,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_decimal64},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_decimal64,
+			AggregateInfo: nil,
+		},
+		{
+			Index:         15,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_decimal128},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_decimal128,
 			AggregateInfo: nil,
 		},
 	},
@@ -422,7 +476,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_AGG,
-			Kind:      STANDARD_FUNCTION,
+			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_float64,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) == 1 && isNumberType(inputTypes[0]) {
@@ -437,7 +491,7 @@ var aggregates = map[int][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_AGG,
-			Kind:      STANDARD_FUNCTION,
+			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_int64,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) == 1 {

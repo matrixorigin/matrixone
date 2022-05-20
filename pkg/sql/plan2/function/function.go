@@ -52,33 +52,34 @@ var (
 		types.T_uint8: {
 			types.T_uint16, types.T_uint32, types.T_uint64,
 			types.T_int16, types.T_int32, types.T_int64,
-			types.T_float64,
+			types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_uint16: {
 			types.T_uint32, types.T_uint64,
 			types.T_int32, types.T_int64,
-			types.T_float64,
+			types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_uint32: {
 			types.T_uint64,
 			types.T_int64,
-			types.T_float64,
+			types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
-		types.T_uint64: {types.T_float64},
+		types.T_uint64: {types.T_float64, types.T_decimal64, types.T_decimal128},
 		types.T_int8: {
-			types.T_int16, types.T_int32, types.T_int64, types.T_float64,
+			types.T_int16, types.T_int32, types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_int16: {
-			types.T_int32, types.T_int64, types.T_float64,
+			types.T_int32, types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_int32: {
-			types.T_int64, types.T_float64,
+			types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
-		types.T_int64:     {types.T_float64},
+		types.T_int64:     {types.T_float64, types.T_decimal64, types.T_decimal128},
 		types.T_float32:   {types.T_float64},
 		types.T_decimal64: {types.T_decimal128},
 		types.T_char:      {types.T_varchar},
 		types.T_varchar:   {types.T_char},
+		types.T_tuple:     {types.T_float64},
 	}
 )
 
@@ -90,9 +91,9 @@ type Function struct {
 
 	Flag plan.Function_FuncFlag
 
-	// Kind adapt to plan2/function.go, used for explaining.
-	// TODO: combine Kind with SQLFn, or just make a map (from function_id to Kind) outside ?
-	Kind Kind
+	// Layout adapt to plan2/function.go, used for explaining.
+	// TODO: combine Layout with SQLFn, or just make a map (from function_id to Layout) outside ?
+	Layout FuncExplainLayout
 
 	Args      []types.T
 	ReturnTyp types.T

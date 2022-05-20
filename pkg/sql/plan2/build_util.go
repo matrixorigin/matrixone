@@ -41,16 +41,16 @@ func splitExprToAND(expr tree.Expr) []*tree.Expr {
 	return exprs
 }
 
-func getColumnIndex(projectList []*Expr, colName string) int32 {
+func getColumnIndexAndType(projectList []*Expr, colName string) (int32, *Type) {
 	for idx, expr := range projectList {
 		if expr.ColName == colName {
-			return int32(idx)
+			return int32(idx), expr.Typ
 		}
 	}
-	return -1
+	return -1, nil
 }
 
-func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) []*Expr {
+func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) ([]*Expr, error) {
 	var commonList []*Expr
 
 	leftMap := make(map[string]int)
@@ -59,42 +59,40 @@ func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) []*Expr
 		leftMap[col.ColName] = idx
 	}
 
-	funName := getFunctionObjRef("=")
 	for idx, col := range rightProjList {
 		if leftIdx, ok := leftMap[col.ColName]; ok {
-			commonList = append(commonList, &Expr{
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: funName,
-						Args: []*Expr{
-							{
-								TableName: leftProjList[leftIdx].TableName,
-								ColName:   col.ColName,
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										RelPos: 0,
-										ColPos: int32(leftIdx),
-									},
-								},
-							},
-							{
-								TableName: col.TableName,
-								ColName:   col.ColName,
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										RelPos: 1,
-										ColPos: int32(idx),
-									},
-								},
-							},
-						},
+			leftColExpr := &plan.Expr{
+				TableName: leftProjList[leftIdx].TableName,
+				ColName:   col.ColName,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(leftIdx),
 					},
 				},
-			})
+				Typ: col.Typ,
+			}
+			rightColExpr := &plan.Expr{
+				TableName: col.TableName,
+				ColName:   col.ColName,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 1,
+						ColPos: int32(idx),
+					},
+				},
+				Typ: leftProjList[leftIdx].Typ,
+			}
+
+			equalFunctionExpr, err := getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rightColExpr})
+			if err != nil {
+				return nil, err
+			}
+			commonList = append(commonList, equalFunctionExpr)
 		}
 	}
 
-	return commonList
+	return commonList, nil
 }
 
 func appendQueryNode(query *Query, node *Node) int32 {

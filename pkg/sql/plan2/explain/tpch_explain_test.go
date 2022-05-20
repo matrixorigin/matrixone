@@ -107,7 +107,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 			explainQuery := NewExplainQueryImpl(query)
 			err = explainQuery.ExplainPlan(buffer, es)
 			if err != nil {
-				t.Errorf("explain failed, WXL")
+				t.Errorf("explain failed, WXL %v", err)
 			}
 		}
 	}

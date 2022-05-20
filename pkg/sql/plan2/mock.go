@@ -76,7 +76,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"p_type", plan.Type_VARCHAR, false, 25, 0},
 		{"p_size", plan.Type_INT32, false, 0, 0},
 		{"p_container", plan.Type_VARCHAR, false, 10, 0},
-		{"p_retailprice", plan.Type_DECIMAL, false, 15, 2},
+		{"p_retailprice", plan.Type_FLOAT64, false, 15, 2},
 		{"p_comment", plan.Type_VARCHAR, false, 23, 0},
 	}
 	tpchSchema["supplier"] = []col{
@@ -85,14 +85,14 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"s_address", plan.Type_VARCHAR, false, 40, 0},
 		{"s_nationkey", plan.Type_INT32, false, 0, 0},
 		{"s_phone", plan.Type_VARCHAR, false, 15, 0},
-		{"s_acctbal", plan.Type_DECIMAL, false, 15, 2},
+		{"s_acctbal", plan.Type_FLOAT64, false, 15, 2},
 		{"s_comment", plan.Type_VARCHAR, false, 101, 0},
 	}
 	tpchSchema["partsupp"] = []col{
 		{"ps_partkey", plan.Type_INT32, false, 0, 0},
 		{"ps_suppkey", plan.Type_INT32, false, 0, 0},
 		{"ps_availqty", plan.Type_INT32, false, 0, 0},
-		{"ps_supplycost", plan.Type_DECIMAL, false, 15, 2},
+		{"ps_supplycost", plan.Type_FLOAT64, false, 15, 2},
 		{"ps_comment", plan.Type_VARCHAR, false, 199, 0},
 	}
 	tpchSchema["customer"] = []col{
@@ -101,7 +101,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"c_address", plan.Type_VARCHAR, false, 40, 0},
 		{"c_nationkey", plan.Type_INT32, false, 0, 0},
 		{"c_phone", plan.Type_VARCHAR, false, 15, 0},
-		{"c_acctbal", plan.Type_DECIMAL, false, 15, 2},
+		{"c_acctbal", plan.Type_FLOAT64, false, 15, 2},
 		{"c_mktsegment", plan.Type_VARCHAR, false, 10, 0},
 		{"c_comment", plan.Type_VARCHAR, false, 117, 0},
 	}
@@ -109,7 +109,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"o_orderkey", plan.Type_INT64, false, 0, 0},
 		{"o_custkey", plan.Type_INT32, false, 0, 0},
 		{"o_orderstatus", plan.Type_VARCHAR, false, 1, 0},
-		{"o_totalprice", plan.Type_DECIMAL, false, 15, 2},
+		{"o_totalprice", plan.Type_FLOAT64, false, 15, 2},
 		{"o_orderdate", plan.Type_DATE, false, 0, 0},
 		{"o_orderpriority", plan.Type_VARCHAR, false, 15, 0},
 		{"o_clerk", plan.Type_VARCHAR, false, 15, 0},
@@ -122,9 +122,9 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"l_suppkey", plan.Type_INT32, false, 0, 0},
 		{"l_linenumber", plan.Type_INT32, false, 0, 0},
 		{"l_quantity", plan.Type_INT32, false, 0, 0},
-		{"l_extendedprice", plan.Type_DECIMAL, false, 15, 2},
-		{"l_discount", plan.Type_DECIMAL, false, 15, 2},
-		{"l_tax", plan.Type_DECIMAL, false, 15, 2},
+		{"l_extendedprice", plan.Type_FLOAT64, false, 15, 2},
+		{"l_discount", plan.Type_FLOAT64, false, 15, 2},
+		{"l_tax", plan.Type_FLOAT64, false, 15, 2},
 		{"l_returnflag", plan.Type_VARCHAR, false, 1, 0},
 		{"l_linestatus", plan.Type_VARCHAR, false, 1, 0},
 		{"l_shipdate", plan.Type_DATE, false, 0, 0},

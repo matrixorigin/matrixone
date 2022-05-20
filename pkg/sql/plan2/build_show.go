@@ -132,7 +132,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, if(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 
 	sql = fmt.Sprintf(sql, dbName, tblName)
 
