@@ -67,8 +67,8 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_Col:
 		return bat.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
-		fid, overloadIndex := int(t.F.Func.GetSchema()), int(t.F.Func.GetDb())
-		f, err := function.GetFunctionByIndex(fid, overloadIndex)
+		overloadId := t.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
 		if err != nil {
 			return nil, err
 		}

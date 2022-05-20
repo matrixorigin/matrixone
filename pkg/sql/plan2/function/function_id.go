@@ -174,7 +174,7 @@ const (
 )
 
 // functionIdRegister is what function we have registered already.
-var functionIdRegister = map[string]int{
+var functionIdRegister = map[string]int32{
 	// operators
 	"=":           EQUAL,
 	">":           GREAT_THAN,
