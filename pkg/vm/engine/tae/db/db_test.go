@@ -1628,6 +1628,12 @@ func TestSystemDB1(t *testing.T) {
 		view, err := blk.GetColumnDataByName(catalog.SystemRelAttr_Name, nil, nil)
 		assert.Nil(t, err)
 		assert.Equal(t, 4, vector.Length(view.GetColumnData()))
+		view, err = blk.GetColumnDataByName(catalog.SystemRelAttr_Persistence, nil, nil)
+		assert.NoError(t, err)
+		t.Log(view.GetColumnData().String())
+		view, err = blk.GetColumnDataByName(catalog.SystemRelAttr_Kind, nil, nil)
+		assert.NoError(t, err)
+		t.Log(view.GetColumnData().String())
 		it.Next()
 	}
 	assert.Equal(t, 4, rows)
