@@ -83,7 +83,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 		panic("not supported")
 	}
 	segment := NewSysSegmentEntry(e, sid)
-	e.addEntryLocked(segment)
+	e.AddEntryLocked(segment)
 	return e
 }
 
@@ -128,7 +128,7 @@ func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dat
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewSegmentEntry(entry, txn, state, dataFactory)
-	entry.addEntryLocked(created)
+	entry.AddEntryLocked(created)
 	return
 }
 
@@ -142,7 +142,7 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newTableCmd(id, cmdType, entry), nil
 }
 
-func (entry *TableEntry) addEntryLocked(segment *SegmentEntry) {
+func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
 	entry.entries[segment.GetID()] = n
 }

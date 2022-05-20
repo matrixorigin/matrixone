@@ -14,21 +14,21 @@ import (
 
 type txnSysBlock struct {
 	*txnBlock
-	table   *catalog.TableEntry
+	table   *txnTable
 	catalog *catalog.Catalog
 }
 
-func newSysBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnSysBlock {
+func newSysBlock(table *txnTable, meta *catalog.BlockEntry) *txnSysBlock {
 	blk := &txnSysBlock{
-		txnBlock: newBlock(txn, meta),
-		table:    meta.GetSegment().GetTable(),
+		txnBlock: newBlock(table, meta),
+		table:    table,
 		catalog:  meta.GetSegment().GetTable().GetCatalog(),
 	}
 	return blk
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return sysTableNames[blk.table.GetSchema().Name]
+	return sysTableNames[blk.table.entry.GetSchema().Name]
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
