@@ -15,60 +15,17 @@
 package binary
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/builtin"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/findinset"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/process2"
 )
 
-func init() {
-	// register built-in func and its args and rets
-	extend.FunctionRegistry["find_in_set"] = builtin.FindInSet
-	overload.OpTypes[builtin.FindInSet] = overload.Binary
-
-	extend.BinaryReturnTypes[builtin.FindInSet] = func(e extend.Extend, e2 extend.Extend) types.T {
-		return types.T_uint64
-	}
-	extend.BinaryStrings[builtin.FindInSet] = func(e extend.Extend, e2 extend.Extend) string {
-		return fmt.Sprintf("find_in_set(%s, %s)", e, e2)
-	}
-	overload.BinOps[builtin.FindInSet] = []*overload.BinOp{
-		{
-			LeftType:   types.T_varchar,
-			RightType:  types.T_varchar,
-			ReturnType: types.T_uint64,
-			Fn:         findInSetFn,
-		},
-		{
-			LeftType:   types.T_char,
-			RightType:  types.T_char,
-			ReturnType: types.T_uint64,
-			Fn:         findInSetFn,
-		},
-		{
-			LeftType:   types.T_varchar,
-			RightType:  types.T_char,
-			ReturnType: types.T_uint64,
-			Fn:         findInSetFn,
-		},
-		{
-			LeftType:   types.T_char,
-			RightType:  types.T_varchar,
-			ReturnType: types.T_uint64,
-			Fn:         findInSetFn,
-		},
-	}
-}
-
-func findInSetFn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
+// findinset function's evaluation for arguments: [varchar, varchar], [char, char], [varchar, char], [char, varchar],
+func FdsFindintset(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs, rvs := vs[0].Col.(*types.Bytes), vs[1].Col.(*types.Bytes)
 
 	var resultsLen int
 	if len(lvs.Lengths) > len(rvs.Lengths) {
@@ -85,14 +42,14 @@ func findInSetFn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*ve
 	results = results[:resultsLen]
 	retVec.Col = results
 
-	nulls.Or(lv.Nsp, rv.Nsp, retVec.Nsp)
+	nulls.Or(vs[0].Nsp, vs[1].Nsp, retVec.Nsp)
 
 	switch {
-	case lc && rc:
+	case vs[0].IsConstant() && vs[1].IsConstant():
 		vector.SetCol(retVec, findinset.FindInSetWithAllConst(lvs, rvs, results))
-	case lc:
+	case vs[0].IsConstant():
 		vector.SetCol(retVec, findinset.FindInSetWithLeftConst(lvs, rvs, results))
-	case rc:
+	case vs[1].IsConstant():
 		vector.SetCol(retVec, findinset.FindInSetWithRightConst(lvs, rvs, results))
 	default:
 		vector.SetCol(retVec, findinset.FindInSet(lvs, rvs, results))

@@ -17,17 +17,21 @@ package function
 type Kind int32
 
 const (
-	STANDARD_FUNCTION          Kind = 0
-	UNARY_ARITHMETIC_OPERATOR  Kind = 1
-	BINARY_ARITHMETIC_OPERATOR Kind = 2
-	UNARY_LOGICAL_OPERATOR     Kind = 3
-	BINARY_LOGICAL_OPERATOR    Kind = 4
-	COMPARISON_OPERATOR        Kind = 5
-	CAST_EXPRESSION            Kind = 6
-	CASE_WHEN_EXPRESSION       Kind = 7
+	STANDARD_FUNCTION          Kind = 0 //standard function
+	UNARY_ARITHMETIC_OPERATOR  Kind = 1 //unary arithmetic operator
+	BINARY_ARITHMETIC_OPERATOR Kind = 2 //binary arithmetic operator
+	UNARY_LOGICAL_OPERATOR     Kind = 3 // unary logical operator
+	BINARY_LOGICAL_OPERATOR    Kind = 4 // binary logical operator
+	COMPARISON_OPERATOR        Kind = 5 // comparison operator
+	CAST_EXPRESSION            Kind = 6 // cast expression
+	CASE_WHEN_EXPRESSION       Kind = 7 // case when expression
 	BETWEEN_AND_EXPRESSION     Kind = 8
-	IN_EXISTS_EXPRESSION       Kind = 9
-	IS_NULL_EXPRESSION         Kind = 10
-	NOPARAMETER_FUNCTION       Kind = 11
-	UNKNOW_KIND_FUNCTION       Kind = 12
+	IN_PREDICATE               Kind = 9  //query 'in' predicate
+	EXISTS_ANY_PREDICATE       Kind = 10 //query predicate,such as exist,all,any
+	IS_NULL_EXPRESSION         Kind = 11 // is null expression
+	NOPARAMETER_FUNCTION       Kind = 12 // noparameter function
+	DATE_INTERVAL_EXPRESSION   Kind = 13 // date expression,interval expression
+	EXTRACT_FUNCTION           Kind = 14 // extract function,such as extract(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
+	POSITION_FUNCTION          Kind = 15 // position function, such as POSITION(substr IN str)
+	UNKNOW_KIND_FUNCTION       Kind = 16
 )

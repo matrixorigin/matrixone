@@ -179,6 +179,10 @@ const (
 	SINH
 	SPACE
 	WEEKDAY
+	FIND_IN_SET
+	POWER
+	PI
+	UTC_TIMESTAMP
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.

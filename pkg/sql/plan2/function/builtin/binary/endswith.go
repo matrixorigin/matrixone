@@ -15,40 +15,40 @@
 package binary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/endswith"
 	"github.com/matrixorigin/matrixone/pkg/vm/process2"
 )
 
-//func endswith_fn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
-//	lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
-//	var resultsLen int
-//	if len(lvs.Lengths) > len(rvs.Lengths) {
-//		resultsLen = len(lvs.Lengths)
-//	} else {
-//		resultsLen = len(rvs.Lengths)
-//	}
-//
-//	resultVector, err := process.Get(proc, int64(resultsLen), types.Type{Oid: types.T_uint8, Size: 1})
-//	if err != nil {
-//		return nil, err
-//	}
-//	results := encoding.DecodeUint8Slice(resultVector.Data)
-//	results = results[:resultsLen]
-//	resultVector.Col = results
-//	nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-//	if lc && rc {
-//		vector.SetCol(resultVector, endswith.EndsWithAllConst(lvs, rvs, results))
-//	} else if !lc && rc {
-//		vector.SetCol(resultVector, endswith.EndsWithRightConst(lvs, rvs, results))
-//	} else if lc && !rc {
-//		vector.SetCol(resultVector, endswith.EndsWithLeftConst(lvs, rvs, results))
-//	} else {
-//		vector.SetCol(resultVector, endswith.EndsWith(lvs, rvs, results))
-//	}
-//	return resultVector, nil
-//}
-
-// endswith function's evaluation for arguments: [varchar, varchar], [char, char], [varchar, char], [char, varchar],
+// endswith function's evaluation for arguments: [varchar, varchar], [char, char], [varchar, char], [char, varchar]
 func FdsEndsWith(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	panic("unimplemet")
+	lvs, rvs := vs[0].Col.(*types.Bytes), vs[0].Col.(*types.Bytes)
+	var resultsLen int
+	if len(lvs.Lengths) > len(rvs.Lengths) {
+		resultsLen = len(lvs.Lengths)
+	} else {
+		resultsLen = len(rvs.Lengths)
+	}
+
+	resultVector, err := process.Get(proc, int64(resultsLen), types.Type{Oid: types.T_uint8, Size: 1})
+	if err != nil {
+		return nil, err
+	}
+	results := encoding.DecodeUint8Slice(resultVector.Data)
+	results = results[:resultsLen]
+	resultVector.Col = results
+	nulls.Or(vs[0].Nsp, vs[0].Nsp, resultVector.Nsp)
+	if vs[0].IsConstant() && vs[1].IsConstant() {
+		vector.SetCol(resultVector, endswith.EndsWithAllConst(lvs, rvs, results))
+	} else if !vs[0].IsConstant() && vs[1].IsConstant() {
+		vector.SetCol(resultVector, endswith.EndsWithRightConst(lvs, rvs, results))
+	} else if vs[0].IsConstant() && !vs[1].IsConstant() {
+		vector.SetCol(resultVector, endswith.EndsWithLeftConst(lvs, rvs, results))
+	} else {
+		vector.SetCol(resultVector, endswith.EndsWith(lvs, rvs, results))
+	}
+	return resultVector, nil
 }

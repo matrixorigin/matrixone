@@ -15,21 +15,17 @@
 package binary
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/builtin"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/startswith"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/process2"
 )
 
-func fn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
+// startswith function's evaluation for arguments: [varchar, varchar], [char, char], [varchar, char], [char, varchar]
+func FdsStartsWith(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs, rvs := vs[0].Col.(*types.Bytes), vs[1].Col.(*types.Bytes)
 
 	var resultsLen int
 	if len(lvs.Lengths) > len(rvs.Lengths) {
@@ -45,58 +41,17 @@ func fn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vect
 	results := encoding.DecodeUint8Slice(resultVector.Data)
 	results = results[:resultsLen]
 	resultVector.Col = results
-	nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
+	nulls.Or(vs[0].Nsp, vs[1].Nsp, resultVector.Nsp)
 
-	if lc && rc {
+	if vs[0].IsConstant() && vs[1].IsConstant() {
 		vector.SetCol(resultVector, startswith.StartsWithAllConst(lvs, rvs, results))
-	} else if !lc && rc {
+	} else if !vs[0].IsConstant() && vs[1].IsConstant() {
 		vector.SetCol(resultVector, startswith.StartsWithRightConst(lvs, rvs, results))
-	} else if lc && !rc {
+	} else if vs[0].IsConstant() && !vs[1].IsConstant() {
 		vector.SetCol(resultVector, startswith.StartsWithLeftConst(lvs, rvs, results))
 	} else {
 		vector.SetCol(resultVector, startswith.StartsWith(lvs, rvs, results))
 	}
 
 	return resultVector, nil
-}
-
-func init() {
-	extend.FunctionRegistry["startswith"] = builtin.StartsWith
-	extend.BinaryReturnTypes[builtin.StartsWith] = func(e extend.Extend, e2 extend.Extend) types.T {
-		return types.T_uint8
-	}
-
-	extend.BinaryStrings[builtin.StartsWith] = func(e extend.Extend, e2 extend.Extend) string {
-		return fmt.Sprintf("startsWith(%s, %s)", e, e2)
-	}
-
-	overload.OpTypes[builtin.StartsWith] = overload.Binary
-
-	overload.BinOps[builtin.StartsWith] = []*overload.BinOp{
-		{
-			LeftType:   types.T_char,
-			RightType:  types.T_char,
-			ReturnType: types.T_uint8,
-			Fn:         fn,
-		},
-		{
-			LeftType:   types.T_char,
-			RightType:  types.T_varchar,
-			ReturnType: types.T_uint8,
-			Fn:         fn,
-		},
-		{
-			LeftType:   types.T_varchar,
-			RightType:  types.T_char,
-			ReturnType: types.T_uint8,
-			Fn:         fn,
-		},
-		{
-			LeftType:   types.T_varchar,
-			RightType:  types.T_varchar,
-			ReturnType: types.T_uint8,
-			Fn:         fn,
-		},
-	}
-
 }
