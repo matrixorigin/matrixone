@@ -1752,6 +1752,24 @@ func TestSystemDB2(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 }
 
+func TestSystemDB3(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	txn := tae.StartTxn(nil)
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 12
+	bat := catalog.MockData(schema, 20)
+	db, err := txn.GetDatabase(catalog.SystemDBName)
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
 func TestScan1(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
