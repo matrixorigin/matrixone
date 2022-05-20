@@ -12,13 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compile2
+package overload
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+const (
+	Top = iota
+	Join
+	Left
+	Limit
+	Merge
+	Order
+	Group
+	Output
+	Offset
+	Product
+	Restrict
+	Connector
+	Projection
+	Complement
+
+	MergeTop
+	MergeLimit
+	MergeOrder
+	MergeGroup
+	MergeOffset
 )
-
-func (s *Scope) CreateDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
-	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	return engine.Create(ts, dbName, 0, snapshot)
-}

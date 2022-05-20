@@ -18,18 +18,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// type of scope
 const (
 	Merge = iota
-	CreateDatabase
+	Normal
+	Remote
+	Parallel
 )
 
 // Address is the ip:port of local node
 var Address string
+
+// Source contains information of a relation which will be used in execution,
+type Source struct {
+	SchemaName   string
+	RelationName string
+	Attributes   []string
+	R            engine.Reader
+	Bat          *batch.Batch
+}
 
 // Col is the information of attribute
 type Col struct {
@@ -47,31 +59,26 @@ type Scope struct {
 	Magic int
 
 	Plan *plan.Plan
-}
-
-// Exec stores all information related to the execution phase of a single sql.
-type Exec struct {
-	//err stores err information if error occurred during execution.
-	//	err error
-	//resultCols stores the column information of result.
-	resultCols []*Col
-	scope      *Scope
-	c          *compile
-	//affectRows stores the number of rows affected while insert / update / delete
-	affectRows uint64
-	//e is a db engine instance
-	e engine.Engine
-	//stmt ast of a single sql
-	stmt tree.Statement
-
-	u interface{}
-	//fill is a result writer runs a callback function.
-	//fill will be called when result data is ready.
-	fill func(interface{}, *batch.Batch) error
+	// DataSource stores information about data source.
+	DataSource *Source
+	// PreScopes contains children of this scope will inherit and execute.
+	PreScopes []*Scope
+	// NodeInfo contains the information about the remote node.
+	NodeInfo engine.Node
+	// Instructions contains command list of this scope.
+	Instructions vm.Instructions
+	// Proc contains the execution context.
+	Proc *process.Process
 }
 
 // compile contains all the information needed for compilation.
 type compile struct {
+	scope *Scope
+	u     interface{}
+	//fill is a result writer runs a callback function.
+	//fill will be called when result data is ready.
+	fill func(interface{}, *batch.Batch) error
+
 	// db current database name.
 	db string
 	// uid the user who initiated the sql.

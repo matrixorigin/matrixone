@@ -27,6 +27,7 @@ const (
 )
 
 type Container struct {
+	n     int // result vector number
 	state int
 	sels  []int64
 	poses []int32           // sorted list of attributes
