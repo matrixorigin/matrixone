@@ -91,9 +91,9 @@ type Function struct {
 
 	Flag plan.Function_FuncFlag
 
-	// Kind adapt to plan2/function.go, used for explaining.
-	// TODO: combine Kind with SQLFn, or just make a map (from function_id to Kind) outside ?
-	Kind Kind
+	// Layout adapt to plan2/function.go, used for explaining.
+	// TODO: combine Layout with SQLFn, or just make a map (from function_id to Layout) outside ?
+	Layout FuncExplainLayout
 
 	Args      []types.T
 	ReturnTyp types.T
