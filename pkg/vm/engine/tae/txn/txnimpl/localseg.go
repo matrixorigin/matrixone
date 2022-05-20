@@ -63,7 +63,7 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 	return npos, noffset
 }
 
-func (seg *localSegment) registerInsertNode() error {
+func (seg *localSegment) registerInsertNode() {
 	if seg.appendable != nil {
 		seg.appendable.Close()
 	}
@@ -72,7 +72,6 @@ func (seg *localSegment) registerInsertNode() error {
 	n := NewInsertNode(seg.table, seg.table.store.nodesMgr, meta.AsCommonID(), seg.table.store.driver)
 	seg.appendable = seg.table.store.nodesMgr.Pin(n)
 	seg.nodes = append(seg.nodes, n)
-	return nil
 }
 
 func (seg *localSegment) ApplyAppend() {
@@ -157,9 +156,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 
 func (seg *localSegment) Append(data *batch.Batch) (err error) {
 	if seg.appendable == nil {
-		if err = seg.registerInsertNode(); err != nil {
-			return err
-		}
+		seg.registerInsertNode()
 	}
 	appended := uint32(0)
 	offset := uint32(0)
@@ -187,9 +184,7 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		offset += appended
 		seg.rows += appended
 		if space == 0 {
-			if err = seg.registerInsertNode(); err != nil {
-				break
-			}
+			seg.registerInsertNode()
 		}
 		if offset >= length {
 			break

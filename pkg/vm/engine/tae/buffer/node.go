@@ -163,7 +163,7 @@ func (n *Node) prepareExpand(delta uint64) bool {
 
 func (n *Node) Expand(delta uint64, fn func() error) error {
 	if !n.prepareExpand(delta) {
-		return errors.New("aoe node expand: no enough space")
+		return errors.New("tae node expand: no enough space")
 	}
 	if fn != nil {
 		if err := fn(); err != nil {
