@@ -258,6 +258,17 @@ comment = "record the time elapsed of executing sql request"
 update-mode = "dynamic"
 
 [[parameter]]
+name = "useplan2"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["0"]
+comment = "the Node ID of the cube. In a distributed setting, each node in a cluster should have a different nodeID."
+update-mode = "dynamic"
+
+
+[[parameter]]
 name = "nodeID"
 scope = ["global"]
 access = ["file"]

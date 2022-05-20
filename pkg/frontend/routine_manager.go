@@ -27,6 +27,8 @@ type RoutineManager struct {
 	rwlock  sync.RWMutex
 	clients map[goetty.IOSession]*Routine
 
+	useplan2 bool
+
 	//epoch gc handler
 	pdHook *PDCallbackImpl
 
@@ -43,7 +45,7 @@ func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()), rm.pu.SV)
-	exe := NewMysqlCmdExecutor()
+	exe := NewMysqlCmdExecutor(rm.useplan2)
 	exe.SetRoutineManager(rm)
 
 	routine := NewRoutine(pro, exe, rm.pu)
@@ -166,9 +168,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	return nil
 }
 
-func NewRoutineManager(pu *config.ParameterUnit, pdHook *PDCallbackImpl) *RoutineManager {
+func NewRoutineManager(useplan2 bool, pu *config.ParameterUnit, pdHook *PDCallbackImpl) *RoutineManager {
 	rm := &RoutineManager{
-		clients: make(map[goetty.IOSession]*Routine),
+		useplan2: useplan2,
+		clients:  make(map[goetty.IOSession]*Routine),
 
 		pdHook: pdHook,
 		pu:     pu,

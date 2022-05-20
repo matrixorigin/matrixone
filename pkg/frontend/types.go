@@ -20,3 +20,8 @@ type ComputationWrapper interface {
 
 	Run(ts uint64) error
 }
+
+// ComputationWrapper is the wrapper of the computation
+type ComputationWrapper2 interface {
+	Run(ts uint64) error
+}

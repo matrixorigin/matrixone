@@ -53,7 +53,7 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024, tRM.pu.SV)
-	exe := NewMysqlCmdExecutor()
+	exe := NewMysqlCmdExecutor(false)
 	routine := NewRoutine(pro, exe, tRM.pu)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
@@ -276,7 +276,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
 	pci := NewPDCallbackImpl(ppu)
 	pci.Id = 0
-	rm := NewRoutineManager(pu, pci)
+	rm := NewRoutineManager(false, pu, pci)
 
 	encoder, decoder := NewSqlCodec()
 

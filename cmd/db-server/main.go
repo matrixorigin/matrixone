@@ -18,9 +18,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"math"
 	"os"
 	"os/signal"
@@ -28,6 +25,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
@@ -92,10 +93,10 @@ var (
 	MoVersion    = ""
 )
 
-func createMOServer(callback *frontend.PDCallbackImpl) {
+func createMOServer(useplan2 bool, callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
-	mo = frontend.NewMOServer(address, pu, callback)
+	mo = frontend.NewMOServer(address, useplan2, pu, callback)
 	frontend.InitServerVersion(MoVersion)
 }
 
@@ -458,7 +459,7 @@ func main() {
 		}
 	}()
 
-	createMOServer(pci)
+	createMOServer(config.GlobalSystemVariables.GetUseplan2() != 0, pci)
 
 	err = runMOServer()
 	if err != nil {

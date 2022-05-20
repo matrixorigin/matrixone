@@ -391,7 +391,7 @@ func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Eng
 	}
 
 	address := fmt.Sprintf("%s:%d", pu.SV.GetHost(), port)
-	sver := NewMOServer(address, pu, pd)
+	sver := NewMOServer(address, false, pu, pd)
 	return sver, nil
 }
 

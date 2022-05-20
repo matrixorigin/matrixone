@@ -473,7 +473,7 @@ func Test_mce(t *testing.T) {
 
 		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
-		mce := NewMysqlCmdExecutor()
+		mce := NewMysqlCmdExecutor(false)
 
 		mce.PrepareSessionBeforeExecRequest(ses)
 
@@ -568,7 +568,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
-		mce := NewMysqlCmdExecutor()
+		mce := NewMysqlCmdExecutor(false)
 		mce.PrepareSessionBeforeExecRequest(ses)
 		err = mce.handleChangeDB("T")
 		convey.So(err, convey.ShouldBeNil)
@@ -604,7 +604,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 		ses.Mrs = &MysqlResultSet{}
 
-		mce := NewMysqlCmdExecutor()
+		mce := NewMysqlCmdExecutor(false)
 		mce.PrepareSessionBeforeExecRequest(ses)
 		err = mce.handleSelectDatabase(nil)
 		convey.So(err, convey.ShouldBeNil)

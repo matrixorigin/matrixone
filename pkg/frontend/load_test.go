@@ -183,7 +183,7 @@ func Test_load(t *testing.T) {
 
 		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
-		mce := NewMysqlCmdExecutor()
+		mce := NewMysqlCmdExecutor(false)
 
 		mce.PrepareSessionBeforeExecRequest(ses)
 
@@ -349,7 +349,7 @@ func Test_load(t *testing.T) {
 
 		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
-		mce := NewMysqlCmdExecutor()
+		mce := NewMysqlCmdExecutor(false)
 
 		mce.PrepareSessionBeforeExecRequest(ses)
 

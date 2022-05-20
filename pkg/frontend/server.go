@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"fmt"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"sync/atomic"
 
 	"github.com/fagongzi/goetty"
 )
@@ -57,9 +58,9 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) *MOServer {
+func NewMOServer(addr string, useplan2 bool, pu *config.ParameterUnit, pdHook *PDCallbackImpl) *MOServer {
 	encoder, decoder := NewSqlCodec()
-	rm := NewRoutineManager(pu, pdHook)
+	rm := NewRoutineManager(useplan2, pu, pdHook)
 	// TODO asyncFlushBatch
 	app, err := goetty.NewTCPApplication(addr, rm.Handler,
 		goetty.WithAppSessionOptions(

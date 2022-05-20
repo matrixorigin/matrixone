@@ -2,14 +2,15 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/stretchr/testify/require"
 	"math"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/stretchr/testify/require"
 )
 
 func create_test_server() *MOServer {
@@ -34,7 +35,7 @@ func create_test_server() *MOServer {
 	pci.Id = 0
 
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	return NewMOServer(address, pu, pci)
+	return NewMOServer(address, false, pu, pci)
 }
 
 func Test_Closed(t *testing.T) {
