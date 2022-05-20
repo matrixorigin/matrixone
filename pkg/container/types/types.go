@@ -49,6 +49,7 @@ const (
 	T_date      T = T(plan.Type_DATE)
 	T_datetime  T = T(plan.Type_DATETIME)
 	T_timestamp T = T(plan.Type_TIMESTAMP)
+	T_interval  T = T(plan.Type_INTERVAL)
 
 	// string family
 	T_char    T = T(plan.Type_CHAR)
@@ -96,6 +97,8 @@ type Decimal128 struct {
 }
 
 var Types map[string]T = map[string]T{
+	"bool": T_bool,
+
 	"tinyint":  T_int8,
 	"smallint": T_int16,
 	"int":      T_int32,
@@ -117,6 +120,7 @@ var Types map[string]T = map[string]T{
 	"date":      T_date,
 	"datetime":  T_datetime,
 	"timestamp": T_timestamp,
+	"interval":  T_interval,
 
 	"char":    T_char,
 	"varchar": T_varchar,
@@ -173,6 +177,8 @@ func (t T) ToType() Type {
 
 func (t T) String() string {
 	switch t {
+	case T_bool:
+		return "BOOL"
 	case T_int8:
 		return "TINYINT"
 	case T_int16:

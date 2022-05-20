@@ -182,6 +182,42 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index: 12,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_varchar,
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 13,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_char,
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 14,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_date,
+				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	GREAT_THAN: {
 		{
@@ -323,6 +359,42 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_decimal128,
 				types.T_decimal128,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 12,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_varchar,
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 13,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_char,
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 14,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_date,
+				types.T_date,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -474,6 +546,42 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index: 12,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_varchar,
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 13,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_char,
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 14,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_date,
+				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	LESS_THAN: {
 		{
@@ -615,6 +723,42 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_decimal128,
 				types.T_decimal128,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 12,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_varchar,
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 13,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_char,
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 14,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_date,
+				types.T_date,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -766,6 +910,42 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index: 12,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_varchar,
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 13,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_char,
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 14,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_date,
+				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	NOT_EQUAL: {
 		{
@@ -907,6 +1087,42 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_decimal128,
 				types.T_decimal128,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 12,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_varchar,
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 13,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_char,
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index: 14,
+			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_date,
+				types.T_date,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -1266,6 +1482,15 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:       12,
+			Flag:        plan.Function_STRICT,
+			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Args:        []types.T{types.T_date, types.T_interval},
+			ReturnTyp:   types.T_date,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	MINUS: {
 		{
@@ -1373,6 +1598,15 @@ var operators = map[int][]Function{
 			Kind:        BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:       12,
+			Flag:        plan.Function_STRICT,
+			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Args:        []types.T{types.T_date, types.T_interval},
+			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
@@ -3287,6 +3521,15 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:       158,
+			Flag:        plan.Function_STRICT,
+			Kind:        CAST_EXPRESSION,
+			Args:        []types.T{types.T_varchar, types.T_interval},
+			ReturnTyp:   types.T_interval,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	CASE: {
 		{
@@ -3300,28 +3543,43 @@ var operators = map[int][]Function{
 				return nil, nil
 			},
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				l := len(inputTypes)
-				if l < 3 {
-					return false
-				}
-				caseType := inputTypes[0]
-				for i := 0; i < l-1; i += 2 { // when should be caseType
-					if inputTypes[i] != caseType && isNotScalarNull(inputTypes[i]) {
-						return false
-					}
-				}
-				for i := 1; i < l-1; i += 2 { // then should be int64
-					if inputTypes[i] != types.T_int64 && isNotScalarNull(inputTypes[i]) {
-						return false
-					}
-				}
-				if l%2 == 1 { // has else part
-					if inputTypes[l-1] != types.T_int64 && isNotScalarNull(inputTypes[l-1]) {
-						return false
-					}
-				}
+				return true
+				// TODO: need rewrite to deal with case is nil
+				// l := len(inputTypes)
+				// if l < 3 {
+				// 	return false
+				// }
+				// caseType := inputTypes[0]
+				// for i := 0; i < l-1; i += 2 { // when should be caseType
+				// 	if inputTypes[i] != caseType && isNotScalarNull(inputTypes[i]) {
+				// 		return false
+				// 	}
+				// }
+				// for i := 1; i < l-1; i += 2 { // then should be int64
+				// 	if inputTypes[i] != types.T_int64 && isNotScalarNull(inputTypes[i]) {
+				// 		return false
+				// 	}
+				// }
+				// if l%2 == 1 { // has else part
+				// 	if inputTypes[l-1] != types.T_int64 && isNotScalarNull(inputTypes[l-1]) {
+				// 		return false
+				// 	}
+				// }
+				// return true
+			},
+		},
+	},
+	IFF: {
+		{
+			Index:     0,
+			Flag:      plan.Function_STRICT,
+			Kind:      UNKNOW_KIND_FUNCTION,
+			Args:      []types.T{types.T_any, types.T_any, types.T_any},
+			ReturnTyp: types.T_any,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				return true
 			},
+			Fn: nil,
 		},
 	},
 }
