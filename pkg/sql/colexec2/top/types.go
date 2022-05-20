@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -38,6 +39,7 @@ const (
 )
 
 type Container struct {
+	n     int // result vector number
 	state int
 	sels  []int64
 	poses []int32 // sorted list of attributes
@@ -47,7 +49,7 @@ type Container struct {
 }
 
 type Field struct {
-	Pos  int32
+	E    *plan.Expr
 	Type Direction
 }
 
@@ -64,7 +66,7 @@ var directionName = [...]string{
 }
 
 func (n Field) String() string {
-	s := fmt.Sprintf("%v", n.Pos)
+	s := fmt.Sprintf("%v", n.E)
 	if n.Type != DefaultDirection {
 		s += " " + n.Type.String()
 	}

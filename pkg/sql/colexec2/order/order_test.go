@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -50,10 +51,10 @@ func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	tcs = []orderTestCase{
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{Pos: 0, Type: 0}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{Pos: 0, Type: 2}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{Pos: 0, Type: 0}, {Pos: 1, Type: 0}}),
-		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{Pos: 0, Type: 2}, {Pos: 1, Type: 2}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 0}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 2}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{E: newExpression(0), Type: 0}, {E: newExpression(1), Type: 0}}),
+		newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{E: newExpression(0), Type: 2}, {E: newExpression(1), Type: 2}}),
 	}
 }
 
@@ -96,10 +97,8 @@ func BenchmarkOrder(b *testing.B) {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
 		tcs = []orderTestCase{
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{Pos: 0, Type: 0}}),
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{Pos: 0, Type: 2}}),
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{Pos: 0, Type: 0}, {Pos: 1, Type: 0}}),
-			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []Field{{Pos: 0, Type: 2}, {Pos: 1, Type: 2}}),
+			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 0}}),
+			newTestCase(mheap.New(gm), []types.Type{{Oid: types.T_int8}}, []Field{{E: newExpression(0), Type: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -128,6 +127,16 @@ func newTestCase(m *mheap.Mheap, ts []types.Type, fs []Field) orderTestCase {
 		proc:  process.New(m),
 		arg: &Argument{
 			Fs: fs,
+		},
+	}
+}
+
+func newExpression(pos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
 		},
 	}
 }

@@ -27,6 +27,7 @@ const (
 )
 
 type Container struct {
+	n     int // result vector number
 	state int
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structures used to do sort work for attrs
