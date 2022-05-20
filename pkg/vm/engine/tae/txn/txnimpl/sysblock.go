@@ -214,9 +214,9 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 		case catalog.SystemRelAttr_Comment:
 			compute.AppendValue(colData, []byte(table.GetSchema().Comment))
 		case catalog.SystemRelAttr_Persistence:
-			compute.AppendValue(colData, catalog.SystemPersistRel)
+			compute.AppendValue(colData, []byte(catalog.SystemPersistRel))
 		case catalog.SystemRelAttr_Kind:
-			compute.AppendValue(colData, catalog.SystemOrdinaryRel)
+			compute.AppendValue(colData, []byte(catalog.SystemOrdinaryRel))
 		case catalog.SystemRelAttr_CreateSQL:
 			compute.AppendValue(colData, []byte("todosql"))
 		default:
