@@ -166,6 +166,7 @@ type Session struct {
 	txnHandler    *TxnHandler
 	txnCompileCtx *TxnCompilerContext
 	storage       engine.Engine
+	sql           string
 }
 
 func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit) *Session {
@@ -194,6 +195,18 @@ func (ses *Session) GetEpochgc() *PDCallbackImpl {
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
+}
+
+func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
+	return ses.txnCompileCtx
+}
+
+func (ses *Session) SetSql(sql string) {
+	ses.sql = sql
+}
+
+func (ses *Session) GetSql() string {
+	return ses.sql
 }
 
 func (ses *Session) IsTaeEngine() bool {
@@ -255,8 +268,8 @@ func (th *TxnHandler) IsTaeEngine() bool {
 	return ok
 }
 
-func (th *TxnHandler) Begin() error {
-	logutil.Infof("begin begin")
+func (th *TxnHandler) StartByBegin() error {
+	logutil.Infof("start txn by begin")
 	var err error
 	if taeEng, ok := th.storage.(moengine.TxnEngine); ok {
 		switch th.txnState.getState() {
@@ -280,8 +293,8 @@ func (th *TxnHandler) Begin() error {
 	return err
 }
 
-func (th *TxnHandler) BeginAutocommit() error {
-	logutil.Infof("begin autocommit")
+func (th *TxnHandler) StartByAutocommit() error {
+	logutil.Infof("start txn by autocommit")
 	var err error
 	if taeEng, ok := th.storage.(moengine.TxnEngine); ok {
 		switch th.txnState.getState() {
@@ -305,10 +318,10 @@ func (th *TxnHandler) BeginAutocommit() error {
 	return err
 }
 
-// BeginAutocommitIfNeeded starts a new txn or uses an existed txn
+// StartByAutocommitIfNeeded starts a new txn or uses an existed txn
 // true denotes a new txn
-func (th *TxnHandler) BeginAutocommitIfNeeded() (bool, error) {
-	logutil.Infof("begin autocommit if needed")
+func (th *TxnHandler) StartByAutocommitIfNeeded() (bool, error) {
+	logutil.Infof("start txn autocommit if needed")
 	var err error
 	if th.IsInTaeTxn() {
 		return false, nil
@@ -463,11 +476,14 @@ func (th *TxnHandler) ClearTxn() error {
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 type TxnCompilerContext struct {
-	dbName     string ``
+	dbName     string
 	txnHandler *TxnHandler
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
+	if len(db) == 0 {
+		db = "mo_catalog"
+	}
 	return &TxnCompilerContext{txnHandler: txn, dbName: db}
 }
 
@@ -476,7 +492,7 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
-	newTxn, err := tcc.txnHandler.BeginAutocommitIfNeeded()
+	newTxn, err := tcc.txnHandler.StartByAutocommitIfNeeded()
 	if err != nil {
 		logutil.Errorf("error %v", err)
 		return false
@@ -504,10 +520,14 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
-	newTxn, err := tcc.txnHandler.BeginAutocommitIfNeeded()
+	newTxn, err := tcc.txnHandler.StartByAutocommitIfNeeded()
 	if err != nil {
 		logutil.Errorf("error %v", err)
 		return nil, nil
+	}
+
+	if len(dbName) == 0 {
+		dbName = tcc.DefaultDatabase()
 	}
 
 	//open database

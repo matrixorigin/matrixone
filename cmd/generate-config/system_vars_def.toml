@@ -518,6 +518,16 @@ values = ["20000", "20000", "65535"]
 comment = "port defines which port the rpc server listens on"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "usePlan2"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "default is false. true : use plan2/compile2 false : use stuff in v0.4.0"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
