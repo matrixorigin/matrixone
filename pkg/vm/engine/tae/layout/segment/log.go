@@ -17,6 +17,7 @@ package segment
 import (
 	"bytes"
 	"encoding/binary"
+	"unsafe"
 )
 
 type Log struct {
@@ -26,9 +27,70 @@ type Log struct {
 	allocator Allocator
 }
 
+func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error) {
+	var nameLen uint32
+	var extentLen uint64
+	n = 0
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.magic); err != nil {
+		return
+	}
+	if file.snode.magic != MAGIC {
+		return 0, nil
+	}
+	n += int(unsafe.Sizeof(file.snode.magic))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.inode); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.inode))
+	if err = binary.Read(cache, binary.BigEndian, &nameLen); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(nameLen))
+	name := make([]byte, nameLen)
+	if err = binary.Read(cache, binary.BigEndian, name); err != nil {
+		return
+	}
+	n += len(name)
+	file.name = string(name)
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.seq); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.seq))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.algo); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.algo))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.state); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.state))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.size); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.size))
+	if err = binary.Read(cache, binary.BigEndian, &extentLen); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(extentLen))
+	file.snode.extents = make([]Extent, extentLen)
+	for i := 0; i < int(extentLen); i++ {
+		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].typ); err != nil {
+			return
+		}
+		n += int(unsafe.Sizeof(file.snode.extents[i].typ))
+		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].offset); err != nil {
+			return
+		}
+		n += int(unsafe.Sizeof(file.snode.extents[i].offset))
+		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].length); err != nil {
+			return
+		}
+		n += int(unsafe.Sizeof(file.snode.extents[i].length))
+	}
+	return
+}
+
 func (l *Log) Replay(cache *bytes.Buffer) error {
-	l.logFile.segment.lastInode = 1
-	l.logFile.name = "logfile"
 	n, err := l.logFile.segment.segFile.ReadAt(cache.Bytes(), LOG_START)
 	if err != nil {
 		return err
@@ -38,55 +100,34 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 	}
 	l.logFile.segment.mutex.Lock()
 	defer l.logFile.segment.mutex.Unlock()
+	l.logFile.segment.lastInode = 1
+	l.logFile.name = "logfile"
 	l.logFile.segment.nodes[l.logFile.name] = l.logFile
 	file := &BlockFile{
 		snode:   &Inode{},
 		segment: l.logFile.segment,
 	}
-	var nameLen uint32
-	var extentLen uint64
-	if err = binary.Read(cache, binary.BigEndian, &file.snode.magic); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, binary.BigEndian, &file.snode.inode); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, binary.BigEndian, &nameLen); err != nil {
-		return err
-	}
-	name := make([]byte, nameLen)
-	if err = binary.Read(cache, binary.BigEndian, name); err != nil {
-		return err
-	}
-	file.name = string(name)
-	if err = binary.Read(cache, binary.BigEndian, &file.snode.seq); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, binary.BigEndian, &file.snode.algo); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, binary.BigEndian, &file.snode.state); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, binary.BigEndian, &file.snode.size); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, binary.BigEndian, &extentLen); err != nil {
-		return err
-	}
-	file.snode.extents = make([]Extent, extentLen)
-	for i := 0; i < int(extentLen); i++ {
-		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].typ); err != nil {
+	magicLen := uint32(unsafe.Sizeof(file.snode.magic))
+	for {
+		n, err = l.readInode(cache, file)
+		if err != nil {
 			return err
 		}
-		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].offset); err != nil {
-			return err
+		if n == 0 {
+			if int(l.logFile.segment.super.blockSize-magicLen) == cache.Len() {
+				break
+			}
+			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.segment.super.blockSize-magicLen:])
+			continue
 		}
-		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].length); err != nil {
-			return err
+		seekLen := (l.logFile.segment.super.blockSize - (uint32(n) % l.logFile.segment.super.blockSize))
+		if int(seekLen) == cache.Len() {
+			break
 		}
+		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
+		l.logFile.segment.nodes[file.name] = file
+		l.logFile.segment.lastInode++
 	}
-	l.logFile.segment.nodes[file.name] = file
 	return nil
 }
 
@@ -149,7 +190,7 @@ func (l *Log) Append(file *BlockFile) error {
 	}
 	ibufLen := (segment.super.blockSize - (uint32(ibuffer.Len()) % segment.super.blockSize)) + uint32(ibuffer.Len())
 	offset, allocated := l.allocator.Allocate(uint64(ibufLen))
-	if _, err = segment.segFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil {
+	if n, err := segment.segFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil || n != ibuffer.Len() {
 		return err
 	}
 	l.allocator.Free(file.snode.logExtents.offset, file.snode.logExtents.length)
