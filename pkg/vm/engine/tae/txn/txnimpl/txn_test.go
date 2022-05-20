@@ -209,7 +209,7 @@ func TestUpdateUncommitted(t *testing.T) {
 	row := uint32(9)
 	assert.False(t, tbl.IsLocalDeleted(row))
 	rows := tbl.UncommittedRows()
-	err := tbl.UpdateLocalValue(row, 0, 999)
+	err := tbl.UpdateLocalValue(row, 1, int16(999))
 	assert.Nil(t, err)
 	assert.True(t, tbl.IsLocalDeleted(row))
 	assert.Equal(t, rows+1, tbl.UncommittedRows())
