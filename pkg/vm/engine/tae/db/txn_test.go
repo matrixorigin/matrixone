@@ -549,3 +549,39 @@ func TestWarehouse(t *testing.T) {
 	}
 
 }
+
+func TestTxn7(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 12
+
+	bat := catalog.MockData(schema, 20)
+
+	txn := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ := db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	{
+		txn := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bat)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit())
+	}
+	err = txn.Commit()
+	t.Log(err)
+	assert.Error(t, err)
+	t.Log(txn.String())
+}

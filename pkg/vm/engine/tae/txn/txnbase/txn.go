@@ -170,7 +170,7 @@ func (txn *Txn) PrepareCommit() error {
 
 func (txn *Txn) ApplyCommit() (err error) {
 	defer func() {
-		if err == nil || err == txnif.TxnRollbacked {
+		if err == nil {
 			err = txn.Store.Close()
 		} else {
 			txn.Store.Close()
@@ -199,6 +199,11 @@ func (txn *Txn) PreCommit() error {
 func (txn *Txn) PrepareRollback() error {
 	logutil.Debugf("Prepare Rollbacking %d", txn.ID)
 	return txn.Store.PrepareRollback()
+}
+
+func (txn *Txn) String() string {
+	str := txn.TxnCtx.String()
+	return fmt.Sprintf("%s: %v", str, txn.GetError())
 }
 
 func (txn *Txn) WaitDone() error {
