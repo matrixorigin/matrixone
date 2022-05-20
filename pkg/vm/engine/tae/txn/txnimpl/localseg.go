@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -64,13 +65,17 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 }
 
 func (seg *localSegment) registerInsertNode() {
+	var err error
 	if seg.appendable != nil {
 		seg.appendable.Close()
 	}
 	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewInsertNode(seg.table, seg.table.store.nodesMgr, meta.AsCommonID(), seg.table.store.driver)
-	seg.appendable = seg.table.store.nodesMgr.Pin(n)
+	seg.appendable, err = seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		panic(err)
+	}
 	seg.nodes = append(seg.nodes, n)
 }
 
@@ -239,9 +244,9 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 
 func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 	for i, node := range seg.nodes {
-		h := seg.table.store.nodesMgr.Pin(node)
-		if h == nil {
-			panic("not expected")
+		h, err := seg.table.store.nodesMgr.TryPin(node, time.Second)
+		if err != nil {
+			return err
 		}
 		forceFlush := i < len(seg.nodes)-1
 		csn := uint32(0xffff) // Special cmd
@@ -327,7 +332,10 @@ func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, 
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	h := seg.table.store.nodesMgr.Pin(n)
+	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		return
+	}
 	err = n.FillColumnView(view, compressed, decompressed)
 	h.Close()
 	if err != nil {
@@ -346,7 +354,10 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 func (seg *localSegment) GetValue(row uint32, col uint16) (interface{}, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
-	h := seg.table.store.nodesMgr.Pin(n)
+	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		return nil, err
+	}
 	defer h.Close()
 	return n.GetValue(int(col), noffset)
 }

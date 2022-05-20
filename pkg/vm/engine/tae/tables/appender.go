@@ -15,7 +15,10 @@
 package tables
 
 import (
+	"time"
+
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
@@ -89,9 +92,9 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 	return
 }
 func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
-	h := appender.node.mgr.Pin(appender.node)
-	if h == nil {
-		panic("not expected")
+	var h base.INodeHandle
+	if h, err = appender.node.mgr.TryPin(appender.node, time.Second); err != nil {
+		return
 	}
 	defer h.Close()
 	writeLock := appender.node.block.mvcc.GetExclusiveLock()

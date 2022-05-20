@@ -71,7 +71,7 @@ func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 	n.Lock()
 	defer n.Unlock()
 	if n.txn == nil {
-		panic("not expected")
+		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	n.txn = nil
 	n.logIndex = index
