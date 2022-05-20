@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"os"
 	"runtime/pprof"
 	"strconv"
@@ -529,25 +530,25 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	ses := mce.GetSession()
+	txnHandler := ses.GetTxnHandler()
 	var txnCtx []byte = nil
-	if !ses.IsInTaeTxn() {
-		err := ses.BeginAutocommitTaeTxn()
-		if err != nil {
-			return err
-		}
-		taeTxn := ses.GetTaeTxn()
-		if taeTxn != nil {
-			txnCtx = taeTxn.GetCtx()
-		}
+	var newTxn bool = false
+	var err error = nil
+	newTxn, err = txnHandler.BeginAutocommitIfNeeded()
+	if err != nil {
+		return err
 	}
+	txnCtx = txnHandler.GetTxn().GetCtx()
 	//TODO: check meta data
 	if _, err := ses.Pu.StorageEngine.Database(db, txnCtx); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
-	err := ses.CommitTaeTxnAutocommitOnly()
-	if err != nil {
-		return err
+	if newTxn {
+		err = txnHandler.CommitAfterAutocommitOnly()
+		if err != nil {
+			return err
+		}
 	}
 	oldDB := ses.protocol.GetDatabaseName()
 	ses.protocol.SetDatabaseName(db)
@@ -741,8 +742,18 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 		loadDb = ses.protocol.GetDatabaseName()
 	}
 
-	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, nil)
+	txnHandler := ses.GetTxnHandler()
+	newTxn, err := txnHandler.BeginAutocommitIfNeeded()
 	if err != nil {
+		return err
+	}
+
+	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		err2 := txnHandler.RollbackAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
 	}
@@ -757,8 +768,12 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(loadTable, nil)
+	tableHandler, err := dbHandler.Relation(loadTable, txnHandler.GetTxn().GetCtx())
 	if err != nil {
+		err2 := txnHandler.RollbackAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 		//echo client. no such table
 		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
 	}
@@ -768,7 +783,18 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	*/
 	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
 	if err != nil {
+		err2 := txnHandler.RollbackAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 		return err
+	}
+
+	if newTxn {
+		err2 := txnHandler.CommitAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 	}
 
 	/*
@@ -1137,17 +1163,26 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 }
 
 //execute query
-func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
+func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
 	statementCount := uint64(1)
+	txnHandler := ses.GetTxnHandler()
 
 	//pin the epoch with 1
 	epoch, _ := pdHook.IncQueryCountAtCurrentEpoch(statementCount)
 	defer func() {
 		pdHook.DecQueryCountAtEpoch(epoch, statementCount)
 	}()
+
+	//TODO: fix it after process/compile/batch is ready
+	if ses.IsTaeEngine() {
+		_, err := parsers.Parse(dialect.MYSQL, sql)
+		if err != nil {
+			return err
+		}
+	}
 
 	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
@@ -1167,10 +1202,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	defer func() {
 		ses.Mrs = nil
-		err2 := ses.ClearTaeTxn()
-		if err2 != nil {
-			logutil.Errorf("reset tae txn failed. error:%v", err2)
-		}
 	}()
 
 	for _, cw := range cws {
@@ -1183,25 +1214,21 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
-			err = ses.BeginTaeTxn()
+			err = txnHandler.Begin()
 			if err != nil {
 				return err
 			}
 		case *tree.CommitTransaction:
-			err = ses.CommitTaeTxnBegan()
+			err = txnHandler.CommitAfterBegin()
 			if err != nil {
 				return err
 			}
 		case *tree.RollbackTransaction:
-			err = ses.RollbackTaeTxn()
+			err = txnHandler.Rollback()
 			if err != nil {
 				return err
 			}
 		default:
-			err = ses.BeginAutocommitTaeTxn()
-			if err != nil {
-				return err
-			}
 		}
 
 		switch st := stmt.(type) {
@@ -1222,10 +1249,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 								}
 
 								//next statement
-								err = ses.CommitTaeTxnAutocommitOnly()
-								if err != nil {
-									return err
-								}
 								continue
 							}
 						}
@@ -1237,10 +1260,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
-							err = ses.CommitTaeTxnAutocommitOnly()
-							if err != nil {
-								return err
-							}
 							continue
 						} else if strings.ToLower(ve.Name) == "version_comment" {
 							err = mce.handleVersionComment()
@@ -1249,10 +1268,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
-							err = ses.CommitTaeTxnAutocommitOnly()
-							if err != nil {
-								return err
-							}
 							continue
 						} else if strings.ToLower(ve.Name) == "tx_isolation" {
 							err = mce.handleTxIsolation()
@@ -1261,10 +1276,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
-							err = ses.CommitTaeTxnAutocommitOnly()
-							if err != nil {
-								return err
-							}
 							continue
 						}
 					}
@@ -1345,10 +1356,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if selfHandle {
-			err = ses.CommitTaeTxnAutocommitOnly()
-			if err != nil {
-				return err
-			}
 			continue
 		}
 		if err = cw.SetDatabaseName(proto.GetDatabaseName()); err != nil {
@@ -1496,11 +1503,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
-		}
-
-		err = ses.CommitTaeTxnAutocommitOnly()
-		if err != nil {
-			return err
 		}
 	}
 

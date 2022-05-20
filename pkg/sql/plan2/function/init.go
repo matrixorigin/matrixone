@@ -2,6 +2,7 @@ package function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"reflect"
 	"sync"
 
@@ -19,12 +20,34 @@ func init() {
 	initOperators()
 	initBuiltIns()
 	initAggregateFunction()
+
+	initLevelUpRules()
 }
 
 var registerMutex sync.RWMutex
 
 func initRelatedStructure() {
 	functionRegister = make([][]Function, FUNCTION_END_NUMBER)
+}
+
+func initLevelUpRules() {
+	base := types.T_tuple + 10
+	levelUp = make([][]int, base)
+	for i := range levelUp {
+		levelUp[i] = make([]int, base)
+		for j := range levelUp[i] {
+			levelUp[i][j] = upFailed
+		}
+	}
+	// convert map levelUpRules to be a group
+	for i := range levelUp {
+		levelUp[i][i] = 0
+	}
+	for k, v := range levelUpRules {
+		for i, t := range v {
+			levelUp[k][t] = i + 1
+		}
+	}
 }
 
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.
@@ -58,13 +81,13 @@ func completenessCheck(id int, f Function) error {
 		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("illegal function id %d", id))
 	}
 	return nil // just jump it now.
-	//if f.Fn == nil && !f.IsAggregate() {
+	// if f.Fn == nil && !f.IsAggregate() {
 	//	return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %d missing its's Fn", id))
 	//}
-	//if f.TypeCheckFn == nil {
+	// if f.TypeCheckFn == nil {
 	//	return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %d missing its's type check function", id))
 	//}
-	//return nil
+	// return nil
 }
 
 func functionsEqual(f1 Function, f2 Function) bool {

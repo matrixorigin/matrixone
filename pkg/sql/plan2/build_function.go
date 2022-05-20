@@ -24,26 +24,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
-	//Get function
+func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext) (*Expr, error) {
+	// Get function
 	functionSig, ok := BuiltinFunctionsMap[name]
 	if !ok {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function name '%v' is not exist", name))
 	}
 
-	//Check parameters length
+	// Check parameters length
 	if len(functionSig.ArgType) != len(exprs) {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("number of parameters does not match for function '%v'", functionSig.Name))
 	}
 
-	//Get original input expr
-	args := make([]*plan.Expr, 0, len(exprs))
-	//todo special case  need check
+	// Get original input expr
+	args := make([]*Expr, 0, len(exprs))
+	// TODO: special case  need check
 	if name == "EXTRACT" {
 		kindExpr := exprs[0].(*tree.UnresolvedName)
-		args = append(args, &plan.Expr{
+		args = append(args, &Expr{
 			Expr: &plan.Expr_C{
-				C: &plan.Const{
+				C: &Const{
 					Isnull: false,
 					Value: &plan.Const_Sval{
 						Sval: kindExpr.Parts[0],
@@ -61,20 +61,20 @@ func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerC
 	}
 
 	for _, astExpr := range exprs {
-		expr, err := buildExpr(astExpr, ctx, query, selectCtx)
+		expr, err := buildExpr(astExpr, ctx, query, node, binderCtx)
 		if err != nil {
 			return nil, err
 		}
 		args = append(args, expr)
 	}
 
-	//Convert input parameter types if necessary
+	// Convert input parameter types if necessary
 	returnType, err := covertArgsTypeAndGetReturnType(functionSig, args)
 	if err != nil {
 		return nil, err
 	}
 
-	return &plan.Expr{
+	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(name),
@@ -85,12 +85,12 @@ func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerC
 	}, nil
 }
 
-func covertArgsTypeAndGetReturnType(fun *FunctionSig, args []*plan.Expr) (*plan.Type, error) {
+func covertArgsTypeAndGetReturnType(fun *FunctionSig, args []*Expr) (*plan.Type, error) {
 	var returnType *plan.Type
 	switch fun.Name {
 	case "+", "-", "*", "/", "%":
-		leftIsNumber := checkNumberType(args[0].Typ.Id, args[0].Alias) == nil
-		rightIsNumber := checkNumberType(args[1].Typ.Id, args[1].Alias) == nil
+		leftIsNumber := checkNumberType(args[0].Typ.Id, args[0].ColName) == nil
+		rightIsNumber := checkNumberType(args[1].Typ.Id, args[1].ColName) == nil
 
 		if !leftIsNumber && !rightIsNumber {
 			newExpr, err := appendCastExpr(args[0], plan.Type_INT64) // todo need research
@@ -130,14 +130,14 @@ func covertArgsTypeAndGetReturnType(fun *FunctionSig, args []*plan.Expr) (*plan.
 			}, nil
 		}
 
-		//equal type, return directly
+		// equal type, return directly
 		if args[0].Typ.Id == args[1].Typ.Id {
 			return &plan.Type{
 				Id: args[0].Typ.Id,
 			}, nil
 		}
 
-		//cast low type to high type
+		// cast low type to high type
 		_, ok := CastLowTypeToHighTypeMap[args[0].Typ.Id]
 		if !ok {
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type mapping not found, arg[0] type= %v", args[0].Typ.Id))
@@ -165,7 +165,7 @@ func covertArgsTypeAndGetReturnType(fun *FunctionSig, args []*plan.Expr) (*plan.
 		}, nil
 	case "UNARY_PLUS", "UNARY_MINUS":
 		expr := args[0]
-		isNumberType := checkNumberType(expr.Typ.Id, expr.Alias) == nil
+		isNumberType := checkNumberType(expr.Typ.Id, expr.ColName) == nil
 		if !isNumberType {
 			newExpr, err := appendCastExpr(expr, plan.Type_INT64)
 			if err != nil {
@@ -186,13 +186,13 @@ func covertArgsTypeAndGetReturnType(fun *FunctionSig, args []*plan.Expr) (*plan.
 	}
 }
 
-func appendCastExpr(expr *plan.Expr, toType plan.Type_TypeId) (*plan.Expr, error) {
-	//todo check and cast constant expr in buildding
-	return &plan.Expr{
+func appendCastExpr(expr *Expr, toType plan.Type_TypeId) (*Expr, error) {
+	// todo check and cast constant expr in buildding
+	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef("CAST"),
-				Args: []*plan.Expr{expr},
+				Args: []*Expr{expr},
 			},
 		},
 		Typ: &plan.Type{
@@ -201,8 +201,8 @@ func appendCastExpr(expr *plan.Expr, toType plan.Type_TypeId) (*plan.Expr, error
 	}, nil
 }
 
-func getFunctionObjRef(name string) *plan.ObjectRef {
-	return &plan.ObjectRef{
+func getFunctionObjRef(name string) *ObjectRef {
+	return &ObjectRef{
 		ObjName: name,
 	}
 }

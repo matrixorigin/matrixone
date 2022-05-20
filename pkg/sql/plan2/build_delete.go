@@ -21,10 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*plan.Plan, error) {
+func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
-			//todo confirm how to set row_id
+			// todo confirm how to set row_id
 			Exprs: tree.SelectExprs{
 				tree.SelectExpr{
 					Expr: tree.UnqualifiedStar{},
@@ -36,35 +36,36 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*plan.Plan, error) {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	query, selectCtx := newQueryAndSelectCtx(plan.Query_DELETE)
-	err := buildSelect(selectStmt, ctx, query, selectCtx)
+	query, binderCtx := newQueryAndSelectCtx(plan.Query_DELETE)
+	nodeId, err := buildSelect(selectStmt, ctx, query, binderCtx)
 	if err != nil {
 		return nil, err
 	}
+	query.Steps = append(query.Steps, nodeId)
 
 	return appendDeleteNode(query)
 }
 
-func appendDeleteNode(query *Query) (*plan.Plan, error) {
-	//get tableDef
+func appendDeleteNode(query *Query) (*Plan, error) {
+	// get tableDef
 	objRef, tableDef := getLastTableDef(query)
 	if tableDef == nil {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find delete table")
 	}
 
-	//append delete node
-	node := &plan.Node{
+	// append delete node
+	node := &Node{
 		NodeType: plan.Node_DELETE,
 		ObjRef:   objRef,
 		TableDef: tableDef,
 	}
-	appendQueryNode(query, node, false)
+	appendQueryNode(query, node)
 
-	//reset root node
+	// reset root node
 	preNode := query.Nodes[len(query.Nodes)-1]
 	query.Steps[len(query.Steps)-1] = preNode.NodeId
 
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Query{
 			Query: query,
 		},

@@ -24,13 +24,13 @@ var BuiltinFunctionsMap map[string]*FunctionSig
 var CastLowTypeToHighTypeMap map[plan.Type_TypeId]map[plan.Type_TypeId]plan.Type_TypeId
 
 func init() {
-	//change BuiltinFunctions to map
+	// change BuiltinFunctions to map
 	BuiltinFunctionsMap = make(map[string]*FunctionSig)
 	for _, fun := range BuiltinFunctions {
 		BuiltinFunctionsMap[fun.Name] = fun
 	}
 
-	//map type cast rule
+	// map type cast rule
 	lowCastToHighTypeArray := make(map[plan.Type_TypeId][]plan.Type_TypeId)
 	lowCastToHighTypeArray[plan.Type_INT8] = []plan.Type_TypeId{
 		plan.Type_INT16, plan.Type_INT32, plan.Type_INT64, plan.Type_INT128,

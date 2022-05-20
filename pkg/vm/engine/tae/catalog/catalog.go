@@ -104,17 +104,17 @@ func (catalog *Catalog) InitSystemDB() {
 	dbTables := NewSystemTableEntry(sysDB, SystemTable_DB_ID, SystemDBSchema)
 	tableTables := NewSystemTableEntry(sysDB, SystemTable_Table_ID, SystemTableSchema)
 	columnTables := NewSystemTableEntry(sysDB, SystemTable_Columns_ID, SystemColumnSchema)
-	err := sysDB.addEntryLocked(dbTables)
+	err := sysDB.AddEntryLocked(dbTables)
 	if err != nil {
 		panic(err)
 	}
-	if err = sysDB.addEntryLocked(tableTables); err != nil {
+	if err = sysDB.AddEntryLocked(tableTables); err != nil {
 		panic(err)
 	}
-	if err = sysDB.addEntryLocked(columnTables); err != nil {
+	if err = sysDB.AddEntryLocked(columnTables); err != nil {
 		panic(err)
 	}
-	if err = catalog.addEntryLocked(sysDB); err != nil {
+	if err = catalog.AddEntryLocked(sysDB); err != nil {
 		panic(err)
 	}
 }
@@ -178,7 +178,7 @@ func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index
 	if err == nil {
 		return
 	}
-	err = catalog.addEntryLocked(cmd.DB)
+	err = catalog.AddEntryLocked(cmd.DB)
 	cmd.DB.catalog = catalog
 	cmd.DB.LogIndex = idx
 	catalog.OnReplayDBID(cmd.DB.ID)
@@ -210,7 +210,7 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	cmd.DB.catalog = catalog
 	if cmd.DB.CurrOp == OpCreate {
 		catalog.OnReplayDBID(cmd.DB.ID)
-		err = catalog.addEntryLocked(cmd.DB)
+		err = catalog.AddEntryLocked(cmd.DB)
 		if err != nil {
 			panic(err)
 		}
@@ -222,7 +222,7 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 				panic(err)
 			}
 		}
-		err = catalog.addEntryLocked(cmd.DB)
+		err = catalog.AddEntryLocked(cmd.DB)
 		if err != nil {
 			panic(err)
 		}
@@ -242,7 +242,7 @@ func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, datafactory DataF
 	cmd.Table.tableData = datafactory.MakeTableFactory()(cmd.Table)
 	catalog.OnReplayTableID(cmd.Table.ID)
 	cmd.Table.LogIndex = idx
-	err = db.addEntryLocked(cmd.Table)
+	err = db.AddEntryLocked(cmd.Table)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.CreateAt)
 	}
@@ -278,7 +278,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 	if cmd.Table.CurrOp == OpCreate {
 		catalog.OnReplayTableID(cmd.Table.ID)
 		cmd.Table.tableData = datafactory.MakeTableFactory()(cmd.Table)
-		err = db.addEntryLocked(cmd.Table)
+		err = db.AddEntryLocked(cmd.Table)
 	} else {
 		rel, _ := db.GetTableEntryByID(cmd.Table.ID)
 		if rel != nil {
@@ -286,7 +286,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 				panic(err)
 			}
 		}
-		err = db.addEntryLocked(cmd.Table)
+		err = db.AddEntryLocked(cmd.Table)
 	}
 	if err != nil {
 		panic(err)
@@ -313,7 +313,7 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory Dat
 	cmd.Segment.entries = make(map[uint64]*common.DLNode)
 	cmd.Segment.segData = datafactory.MakeSegmentFactory()(cmd.Segment)
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
-	tbl.addEntryLocked(cmd.Segment)
+	tbl.AddEntryLocked(cmd.Segment)
 	cmd.Segment.LogIndex = idx
 	if observer != nil {
 		observer.OnTimeStamp(cmd.Segment.CreateAt)
@@ -355,7 +355,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 	if cmd.Segment.CurrOp == OpCreate {
 		cmd.Segment.segData = datafactory.MakeSegmentFactory()(cmd.Segment)
 		catalog.OnReplaySegmentID(cmd.Segment.ID)
-		rel.addEntryLocked(cmd.Segment)
+		rel.AddEntryLocked(cmd.Segment)
 	} else {
 		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
 		if seg != nil {
@@ -363,7 +363,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 				panic(err)
 			}
 		}
-		rel.addEntryLocked(cmd.Segment)
+		rel.AddEntryLocked(cmd.Segment)
 	}
 }
 
@@ -390,7 +390,7 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataF
 	cmd.Block.blkData = datafactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
 	catalog.OnReplayBlockID(cmd.Block.ID)
 	cmd.Block.LogIndex = idx
-	seg.addEntryLocked(cmd.Block)
+	seg.AddEntryLocked(cmd.Block)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.Block.CreateAt)
 	}
@@ -439,7 +439,7 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory
 	if cmd.Block.CurrOp == OpCreate {
 		cmd.Block.blkData = datafactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
 		catalog.OnReplayBlockID(cmd.Block.ID)
-		seg.addEntryLocked(cmd.Block)
+		seg.AddEntryLocked(cmd.Block)
 	} else {
 		blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)
 		if blk != nil {
@@ -447,7 +447,7 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory
 				panic(err)
 			}
 		}
-		seg.addEntryLocked(cmd.Block)
+		seg.AddEntryLocked(cmd.Block)
 	}
 }
 
@@ -477,7 +477,7 @@ func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	return
 }
 
-func (catalog *Catalog) addEntryLocked(database *DBEntry) error {
+func (catalog *Catalog) AddEntryLocked(database *DBEntry) error {
 	nn := catalog.nameNodes[database.name]
 	if nn == nil {
 		n := catalog.link.Insert(database)
@@ -618,7 +618,7 @@ func (catalog *Catalog) CreateDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEn
 	var err error
 	catalog.Lock()
 	entry := NewDBEntry(catalog, name, txnCtx)
-	err = catalog.addEntryLocked(entry)
+	err = catalog.AddEntryLocked(entry)
 	catalog.Unlock()
 
 	return entry, err

@@ -29,7 +29,7 @@ import (
 //only use in developing
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	sql := `drop table tpch.nation`
+	sql := `with tbl(col1, col2) as (select n_nationkey, n_name from nation) select * from tbl order by col2`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -47,7 +47,7 @@ func TestSingleSql(t *testing.T) {
 //Test Query Node Tree
 func TestNodeTree(t *testing.T) {
 	type queryCheck struct {
-		root     int32                      //root node index
+		steps    []int32                    //steps
 		nodeType map[int]plan.Node_NodeType //node_type in each node
 		children map[int][]int32            //children in each node
 	}
@@ -55,30 +55,30 @@ func TestNodeTree(t *testing.T) {
 	// map[sql string]checkData
 	nodeTreeCheckList := map[string]queryCheck{
 		"SELECT abs(-1)": {
-			root: 0,
+			steps: []int32{0},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_VALUE_SCAN,
 			},
 			children: nil,
 		},
 		"SELECT abs(-1) from dual": {
-			root: 0,
+			steps: []int32{0},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_VALUE_SCAN,
 			},
 			children: nil,
 		},
-		//one node
+		// one node
 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3": {
-			root: 0,
+			steps: []int32{0},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 			},
 			children: nil,
 		},
-		//two nodes- SCAN + SORT
+		// two nodes- SCAN + SORT
 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3 Order By N_REGIONKEY": {
-			root: 1,
+			steps: []int32{1},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_SORT,
@@ -87,9 +87,9 @@ func TestNodeTree(t *testing.T) {
 				1: {0},
 			},
 		},
-		//two nodes- SCAN + AGG(group by)
+		// two nodes- SCAN + AGG(group by)
 		"SELECT N_NAME FROM NATION WHERE N_REGIONKEY = 3 Group By N_NAME": {
-			root: 1,
+			steps: []int32{1},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_AGG,
@@ -98,9 +98,9 @@ func TestNodeTree(t *testing.T) {
 				1: {0},
 			},
 		},
-		//two nodes- SCAN + AGG(distinct)
+		// two nodes- SCAN + AGG(distinct)
 		"SELECT distinct N_NAME FROM NATION": {
-			root: 1,
+			steps: []int32{1},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_AGG,
@@ -109,9 +109,9 @@ func TestNodeTree(t *testing.T) {
 				1: {0},
 			},
 		},
-		//three nodes- SCAN + AGG(group by) + SORT
+		// three nodes- SCAN + AGG(group by) + SORT
 		"SELECT N_NAME, count(*) as ttl FROM NATION Group By N_NAME Order By ttl": {
-			root: 2,
+			steps: []int32{2},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_AGG,
@@ -122,9 +122,9 @@ func TestNodeTree(t *testing.T) {
 				2: {1},
 			},
 		},
-		//three nodes - SCAN, SCAN, JOIN
+		// three nodes - SCAN, SCAN, JOIN
 		"SELECT N_NAME, N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY": {
-			root: 2,
+			steps: []int32{2},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_TABLE_SCAN,
@@ -134,9 +134,9 @@ func TestNodeTree(t *testing.T) {
 				2: {0, 1},
 			},
 		},
-		//three nodes - SCAN, SCAN, JOIN  //use where for join condition
+		// three nodes - SCAN, SCAN, JOIN  //use where for join condition
 		"SELECT N_NAME, N_REGIONKEY FROM NATION, REGION WHERE NATION.N_REGIONKEY = REGION.R_REGIONKEY": {
-			root: 2,
+			steps: []int32{2},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_TABLE_SCAN,
@@ -146,9 +146,9 @@ func TestNodeTree(t *testing.T) {
 				2: {0, 1},
 			},
 		},
-		//5 nodes - SCAN, SCAN, JOIN, SCAN, JOIN  //join three table
+		// 5 nodes - SCAN, SCAN, JOIN, SCAN, JOIN  //join three table
 		"SELECT l.L_ORDERKEY FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERDATE < 10": {
-			root: 4,
+			steps: []int32{4},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_TABLE_SCAN,
@@ -161,9 +161,9 @@ func TestNodeTree(t *testing.T) {
 				4: {2, 3},
 			},
 		},
-		//6 nodes - SCAN, SCAN, JOIN, SCAN, JOIN, SORT  //join three table
+		// 6 nodes - SCAN, SCAN, JOIN, SCAN, JOIN, SORT  //join three table
 		"SELECT l.L_ORDERKEY FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERDATE < 10 order by c.C_CUSTKEY": {
-			root: 5,
+			steps: []int32{5},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_TABLE_SCAN,
@@ -178,41 +178,37 @@ func TestNodeTree(t *testing.T) {
 				5: {4},
 			},
 		},
-		//3 nodes  //Derived table
+		// 3 nodes  //Derived table
 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey) a where ff > 0": {
-			root: 3,
+			steps: []int32{2},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_AGG,
 				2: plan.Node_PROJECT,
-				3: plan.Node_PROJECT,
 			},
 			children: map[int][]int32{
 				1: {0},
 				2: {1},
-				3: {2},
 			},
 		},
-		//4 nodes  //Derived table
+		// 4 nodes  //Derived table
 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a where ff > 0 order by c_custkey": {
-			root: 4,
+			steps: []int32{3},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_AGG,
 				2: plan.Node_PROJECT,
-				3: plan.Node_PROJECT,
-				4: plan.Node_SORT,
+				3: plan.Node_SORT,
 			},
 			children: map[int][]int32{
 				1: {0},
 				2: {1},
 				3: {2},
-				4: {3},
 			},
 		},
-		//Derived table join normal table
+		// Derived table join normal table
 		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10 order By b.N_REGIONKEY": {
-			root: 5,
+			steps: []int32{5},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_AGG,
@@ -228,9 +224,9 @@ func TestNodeTree(t *testing.T) {
 				5: {4},
 			},
 		},
-		//insert from values
+		// insert from values
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')": {
-			root: 1,
+			steps: []int32{1},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_VALUE_SCAN,
 				1: plan.Node_INSERT,
@@ -239,9 +235,9 @@ func TestNodeTree(t *testing.T) {
 				1: {0},
 			},
 		},
-		//insert from select
+		// insert from select
 		"INSERT NATION SELECT * FROM NATION2": {
-			root: 1,
+			steps: []int32{1},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_INSERT,
@@ -250,9 +246,9 @@ func TestNodeTree(t *testing.T) {
 				1: {0},
 			},
 		},
-		//update
+		// update
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20": {
-			root: 1,
+			steps: []int32{1},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_UPDATE,
@@ -261,42 +257,56 @@ func TestNodeTree(t *testing.T) {
 				1: {0},
 			},
 		},
-		//delete
+		// delete
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20": {
-			root: 1,
+			steps: []int32{1},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
 				1: plan.Node_DELETE,
 			},
 		},
-		// unrelated subquery
+		// uncorrelated subquery
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)": {
-			root: 0,
+			steps: []int32{0},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN, //nodeid = 1  here is the subquery
 				1: plan.Node_TABLE_SCAN, //nodeid = 0, here is SELECT * FROM NATION where N_REGIONKEY > [subquery]
 			},
 			children: map[int][]int32{},
 		},
-		// related subquery
-		`SELECT * FROM NATION where N_REGIONKEY > 
-			(select avg(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME) 
+		// correlated subquery
+		`SELECT * FROM NATION where N_REGIONKEY >
+			(select avg(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME)
 		order by N_NATIONKEY`: {
-			root: 3,
+			steps: []int32{3},
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN, //nodeid = 1  subquery node，so,wo pop it to top
-				1: plan.Node_AGG,        //nodeid = 2  subquery node，so,wo pop it to top
-				2: plan.Node_TABLE_SCAN, //nodeid = 0
+				1: plan.Node_TABLE_SCAN, //nodeid = 0
+				2: plan.Node_AGG,        //nodeid = 2  subquery node，so,wo pop it to top
 				3: plan.Node_SORT,       //nodeid = 3
 			},
 			children: map[int][]int32{
-				1: {1}, //nodeid = 2, have children(NodeId=1, position=0)
-				3: {2}, //nodeid = 3, have children(NodeId=0, position=2)
+				2: {1}, //nodeid = 2, have children(NodeId=1, position=0)
+				3: {0}, //nodeid = 3, have children(NodeId=0, position=2)
+			},
+		},
+		// cte
+		`with tbl(col1, col2) as (select n_nationkey, n_name from nation) select * from tbl order by col2`: {
+			steps: []int32{1, 3},
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN,
+				1: plan.Node_MATERIAL,
+				2: plan.Node_MATERIAL_SCAN,
+				3: plan.Node_SORT,
+			},
+			children: map[int][]int32{
+				1: {0},
+				3: {2},
 			},
 		},
 	}
 
-	//run test and check node tree
+	// run test and check node tree
 	for sql, check := range nodeTreeCheckList {
 		mock := NewMockOptimizer()
 		logicPlan, err := runOneStmt(mock, t, sql)
@@ -304,9 +314,13 @@ func TestNodeTree(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v, sql=%v", err, sql)
 		}
-
-		if query.Steps[len(query.Steps)-1] != check.root {
-			t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.root, query.Steps[0])
+		if len(query.Steps) != len(check.steps) {
+			t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.steps, query.Steps)
+		}
+		for idx, step := range query.Steps {
+			if step != check.steps[idx] {
+				t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.steps, query.Steps)
+			}
 		}
 		for idx, typ := range check.nodeType {
 			if idx >= len(query.Nodes) {
@@ -370,7 +384,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 
-	//should pass
+	// should pass
 	sqls := []string{
 		"SELECT N_NAME,N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY",
 		"SELECT N_NAME, N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY WHERE abs(NATION.N_REGIONKEY) > 0",
@@ -399,7 +413,7 @@ func TestJoinTableSqlBuilder(t *testing.T) {
 //test derived table plan building
 func TestDerivedTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"select c_custkey from (select c_custkey from CUSTOMER ) a",
 		"select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a",
@@ -424,7 +438,7 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 
 func TestInsert(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
@@ -441,13 +455,14 @@ func TestInsert(t *testing.T) {
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, abs(2), 'NAME1'), (2, 22, 'NAME2')",         // function expr not support now
+		"INSERT INTO region SELECT * FROM NATION2",                                                                   // column length not match
 	}
 	runTestShouldError(mock, t, sqls)
 }
 
 func TestUpdate(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
@@ -467,7 +482,7 @@ func TestUpdate(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"DELETE FROM NATION",
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
@@ -485,7 +500,7 @@ func TestDelete(t *testing.T) {
 
 func TestSubQuery(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
@@ -520,7 +535,7 @@ func TestSubQuery(t *testing.T) {
 
 func TestTcl(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"start transaction",
 		"start transaction read write",
@@ -538,7 +553,7 @@ func TestTcl(t *testing.T) {
 
 func TestDdl(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"create database db_name",               //db not exists and pass
 		"create database if not exists db_name", //db not exists but pass
@@ -576,7 +591,7 @@ func TestDdl(t *testing.T) {
 
 func TestShow(t *testing.T) {
 	mock := NewMockOptimizer()
-	//should pass
+	// should pass
 	sqls := []string{
 		"show variables",
 		"show create database tpch",
@@ -617,7 +632,7 @@ func TestShow(t *testing.T) {
 
 func TestResultColumns(t *testing.T) {
 	mock := NewMockOptimizer()
-	getColumns := func(sql string) []*plan.ColDef {
+	getColumns := func(sql string) []*ColDef {
 		logicPlan, err := runOneStmt(mock, t, sql)
 		if err != nil {
 			t.Fatalf("sql %s build plan error:%+v", sql, err)
@@ -660,7 +675,7 @@ func TestResultColumns(t *testing.T) {
 			t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
 		}
 		for idx, col := range cols {
-			//now ast always change col_name to lower string. will be fixed soon
+			// now ast always change col_name to lower string. will be fixed soon
 			if !strings.EqualFold(columns[idx].Name, col) {
 				t.Fatalf("sql:%+v, return columns should be [%s]", sql, colsStr)
 			}
@@ -681,7 +696,7 @@ func getJson(v any, t *testing.T) []byte {
 	return out.Bytes()
 }
 
-func outPutPlan(logicPlan *plan.Plan, toFile bool, t *testing.T) {
+func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 	var json []byte
 	switch logicPlan.Plan.(type) {
 	case *plan.Plan_Query:
@@ -701,12 +716,12 @@ func outPutPlan(logicPlan *plan.Plan, toFile bool, t *testing.T) {
 	}
 }
 
-func runOneStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
+func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	//this sql always return one stmt
+	// this sql always return one stmt
 	ctx := opt.CurrentContext()
 	return BuildPlan(ctx, stmts[0])
 }
@@ -715,7 +730,7 @@ func runTestShouldPass(opt Optimizer, t *testing.T, sqls []string, printJson boo
 	for _, sql := range sqls {
 		logicPlan, err := runOneStmt(opt, t, sql)
 		if err != nil {
-			t.Fatalf("%+v", err)
+			t.Fatalf("%+v, sql=%v", err, sql)
 		}
 		if printJson {
 			outPutPlan(logicPlan, toFile, t)

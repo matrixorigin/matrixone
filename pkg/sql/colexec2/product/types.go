@@ -15,7 +15,7 @@
 package product
 
 import (
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 const (

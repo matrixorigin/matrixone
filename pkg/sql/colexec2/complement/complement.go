@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"unsafe"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
@@ -88,7 +88,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				batch.Clean(ctr.bat, proc.Mp)
+				ctr.bat.Clean(proc.Mp)
 				continue
 			}
 			if len(bat.Zs) == 0 {
@@ -125,17 +125,17 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			continue
 		}
 		if ctr.bat == nil {
-			ctr.bat = batch.New(len(bat.Vecs))
+			ctr.bat = batch.NewWithSize(len(bat.Vecs))
 			for i, vec := range bat.Vecs {
 				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
 		}
 		if ctr.bat, err = ctr.bat.Append(proc.Mp, bat); err != nil {
-			batch.Clean(bat, proc.Mp)
-			batch.Clean(ctr.bat, proc.Mp)
+			bat.Clean(proc.Mp)
+			ctr.bat.Clean(proc.Mp)
 			return err
 		}
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc.Mp)
 	}
 	count := len(ctr.bat.Zs)
 	for i := 0; i < count; i += UnitLimit {
@@ -208,8 +208,8 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 }
 
 func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	defer batch.Clean(bat, proc.Mp)
-	rbat := batch.New(len(ap.Result))
+	defer bat.Clean(proc.Mp)
+	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
@@ -278,7 +278,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			for j, pos := range ap.Result {
 				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
-					batch.Clean(rbat, proc.Mp)
+					rbat.Clean(proc.Mp)
 					return err
 				}
 			}

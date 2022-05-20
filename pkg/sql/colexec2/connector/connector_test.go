@@ -20,14 +20,14 @@ import (
 	"strconv"
 	"testing"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -93,7 +93,7 @@ func TestConnector(t *testing.T) {
 			if len(bat.Zs) == 0 {
 				continue
 			}
-			batch.Clean(bat, tc.proc.Mp)
+			bat.Clean(tc.proc.Mp)
 		}
 		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
 	}
@@ -122,7 +122,7 @@ func newTestCase(gm *guest.Mmu) connectorTestCase {
 
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.New(len(ts))
+	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])
