@@ -17,7 +17,6 @@ package txnimpl
 import (
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,55 +33,6 @@ import (
 var (
 	ErrDuplicateNode = errors.New("tae: duplicate node")
 )
-
-type Table2 interface {
-	io.Closer
-	GetSchema() *catalog.Schema
-	GetID() uint64
-	RangeDeleteLocalRows(start, end uint32) error
-	Append(data *batch.Batch) error
-	LocalDeletesToString() string
-	IsLocalDeleted(row uint32) bool
-	UpdateLocalValue(row uint32, col uint16, value interface{}) error
-	Update(id *common.ID, row uint32, col uint16, v interface{}) error
-	RangeDelete(id *common.ID, start, end uint32) error
-	UncommittedRows() uint32
-	BatchDedupLocal(data *batch.Batch) error
-	BatchDedup(col *vector.Vector) error
-	AddUpdateNode(txnif.UpdateNode) error
-	IsDeleted() bool
-	PreCommit() error
-	PreCommitDededup() error
-	ApplyAppend()
-	PrepareCommit() error
-	PrepareRollback() error
-	ApplyCommit() error
-	ApplyRollback() error
-
-	LogSegmentID(sid uint64)
-	LogBlockID(bid uint64)
-
-	WaitSynced()
-
-	SetCreateEntry(txnif.TxnEntry)
-	SetDropEntry(txnif.TxnEntry) error
-	GetMeta() *catalog.TableEntry
-
-	GetLocalValue(row uint32, col uint16) (interface{}, error)
-	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
-	GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error)
-	GetSegment(id uint64) (handle.Segment, error)
-	CreateSegment() (handle.Segment, error)
-	CreateNonAppendableSegment() (handle.Segment, error)
-	CreateBlock(sid uint64) (handle.Block, error)
-	GetBlock(id *common.ID) (handle.Block, error)
-	SoftDeleteSegment(id uint64) error
-	SoftDeleteBlock(id *common.ID) error
-	CreateNonAppendableBlock(sid uint64) (handle.Block, error)
-	CollectCmd(*commandManager) error
-
-	LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error)
-}
 
 type txnTable struct {
 	store        *txnStore
