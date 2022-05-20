@@ -17,6 +17,7 @@ package segment
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"unsafe"
 )
 
@@ -86,6 +87,14 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 			return
 		}
 		n += int(unsafe.Sizeof(file.snode.extents[i].length))
+		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].data.offset); err != nil {
+			return
+		}
+		n += int(unsafe.Sizeof(file.snode.extents[i].data.offset))
+		if err = binary.Read(cache, binary.BigEndian, &file.snode.extents[i].data.length); err != nil {
+			return
+		}
+		n += int(unsafe.Sizeof(file.snode.extents[i].data.length))
 	}
 	return
 }
@@ -103,12 +112,12 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 	l.logFile.segment.lastInode = 1
 	l.logFile.name = "logfile"
 	l.logFile.segment.nodes[l.logFile.name] = l.logFile
-	file := &BlockFile{
-		snode:   &Inode{},
-		segment: l.logFile.segment,
-	}
-	magicLen := uint32(unsafe.Sizeof(file.snode.magic))
+	magicLen := uint32(unsafe.Sizeof(l.logFile.snode.magic))
 	for {
+		file := &BlockFile{
+			snode:   &Inode{},
+			segment: l.logFile.segment,
+		}
 		n, err = l.readInode(cache, file)
 		if err != nil {
 			return err
@@ -120,13 +129,20 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.segment.super.blockSize-magicLen:])
 			continue
 		}
-		seekLen := (l.logFile.segment.super.blockSize - (uint32(n) % l.logFile.segment.super.blockSize))
+		seekLen := l.logFile.segment.super.blockSize - (uint32(n) % l.logFile.segment.super.blockSize)
 		if int(seekLen) == cache.Len() {
 			break
 		}
 		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
-		l.logFile.segment.nodes[file.name] = file
-		l.logFile.segment.lastInode++
+		block := l.logFile.segment.nodes[file.name]
+		if block == nil || block.snode.seq < file.snode.seq {
+			l.logFile.segment.nodes[file.name] = file
+		}
+		if block == nil {
+			l.logFile.segment.lastInode++
+		} else {
+			logutil.Infof("block: %v seq: %d is overwritten", block.name, block.snode.seq)
+		}
 	}
 	return nil
 }
@@ -185,6 +201,12 @@ func (l *Log) Append(file *BlockFile) error {
 			return err
 		}
 		if err = binary.Write(&ibuffer, binary.BigEndian, ext.length); err != nil {
+			return err
+		}
+		if err = binary.Write(&ibuffer, binary.BigEndian, ext.data.offset); err != nil {
+			return err
+		}
+		if err = binary.Write(&ibuffer, binary.BigEndian, ext.data.length); err != nil {
 			return err
 		}
 	}
