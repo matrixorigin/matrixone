@@ -36,7 +36,6 @@ func isLocalSegmentByID(id uint64) bool {
 }
 
 type localSegment struct {
-	*txnbase.TxnSegment
 	entry       *catalog.SegmentEntry
 	appendable  base.INodeHandle
 	index       TableIndex
@@ -50,9 +49,6 @@ type localSegment struct {
 func newLocalSegment(table *txnTable) *localSegment {
 	entry := catalog.NewStandaloneSegment(table.entry, localSegmentIdAlloc.Alloc(), table.store.txn.GetStartTS())
 	return &localSegment{
-		TxnSegment: &txnbase.TxnSegment{
-			Txn: table.store.txn,
-		},
 		entry:   entry,
 		nodes:   make([]InsertNode, 0),
 		index:   NewSimpleTableIndex(),
@@ -71,7 +67,7 @@ func (seg *localSegment) registerInsertNode() error {
 	if seg.appendable != nil {
 		seg.appendable.Close()
 	}
-	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.Txn.GetStartTS())
+	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewInsertNode(seg.table, seg.table.store.nodesMgr, meta.AsCommonID(), seg.table.store.driver)
 	seg.appendable = seg.table.store.nodesMgr.Pin(n)
@@ -87,7 +83,7 @@ func (seg *localSegment) ApplyAppend() {
 			appendNode txnif.AppendNode
 		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, seg.Txn); err != nil {
+		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, seg.table.store.txn); err != nil {
 			panic(err)
 		}
 		ctx.driver.Close()

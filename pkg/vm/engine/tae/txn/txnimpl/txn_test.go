@@ -382,7 +382,9 @@ func TestNodeCommand(t *testing.T) {
 			_ = entry.WaitDone()
 			entry.Free()
 		}
-		t.Log(cmd.String())
+		if cmd != nil {
+			t.Log(cmd.String())
+		}
 	}
 }
 
