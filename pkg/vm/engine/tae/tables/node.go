@@ -17,6 +17,7 @@ package tables
 import (
 	"bytes"
 	"sync/atomic"
+	"time"
 
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -65,6 +66,10 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.flushTs = flushTs
 	mgr.RegisterNode(impl)
 	return impl
+}
+
+func (node *appendableNode) TryPin() (base.INodeHandle, error) {
+	return node.mgr.TryPin(node.Node, time.Second)
 }
 
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {

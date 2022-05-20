@@ -88,14 +88,14 @@ func (seg *localSegment) ApplyAppend() {
 		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
 		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, seg.table.store.txn); err != nil {
-			panic(err)
+			return
 		}
 		ctx.driver.Close()
 		id := ctx.driver.GetID()
 		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
 		logutil.Debugf(info.String())
 		if err = appendNode.PrepareCommit(); err != nil {
-			panic(err)
+			return
 		}
 		seg.table.txnEntries = append(seg.table.txnEntries, appendNode)
 	}
@@ -178,7 +178,7 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		})
 		if err != nil {
 			logutil.Info(seg.table.store.nodesMgr.String())
-			panic(err)
+			break
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
