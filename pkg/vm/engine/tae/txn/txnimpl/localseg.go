@@ -294,6 +294,11 @@ func (seg *localSegment) Update(row uint32, col uint16, value interface{}) error
 	if err = seg.index.Delete(v); err != nil {
 		panic(err)
 	}
+
+	vec := vector.New(window.Vecs[col].Typ)
+	compute.AppendValue(vec, value)
+	window.Vecs[col] = vec
+
 	err = seg.Append(window)
 	return err
 }
@@ -333,7 +338,7 @@ func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, 
 	if err != nil {
 		return
 	}
-	view.ApplyDeletes()
+	// view.ApplyDeletes()
 	return
 }
 

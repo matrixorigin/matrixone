@@ -1832,3 +1832,100 @@ func TestDedup(t *testing.T) {
 	err = txn.Rollback()
 	assert.NoError(t, err)
 }
+
+func TestScan2(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.PrimaryKey = 12
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 10
+	rows := schema.BlockMaxRows * 5 / 2
+	bat := catalog.MockData(schema, rows)
+	bats := compute.SplitBatch(bat, 2)
+
+	txn := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bats[0])
+	assert.NoError(t, err)
+
+	actualRows := 0
+	blkIt := rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	assert.Equal(t, movec.Length(bats[0].Vecs[0]), actualRows)
+
+	err = rel.Append(bats[0])
+	assert.Error(t, err)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+
+	actualRows = 0
+	blkIt = rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	assert.Equal(t, int(rows), actualRows)
+
+	pkv := compute.GetValue(bat.Vecs[schema.PrimaryKey], 5)
+	filter := handle.NewEQFilter(pkv)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+
+	actualRows = 0
+	blkIt = rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	t.Log(actualRows)
+	assert.Equal(t, int(rows)-1, actualRows)
+
+	pkv = compute.GetValue(bat.Vecs[schema.PrimaryKey], 8)
+	filter = handle.NewEQFilter(pkv)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	updateV := int64(999)
+	err = rel.Update(id, row, 3, updateV)
+	assert.NoError(t, err)
+
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	v, err := rel.GetValue(id, row, 3)
+	assert.NoError(t, err)
+	t.Log(v)
+	assert.Equal(t, updateV, v.(int64))
+
+	actualRows = 0
+	blkIt = rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	t.Log(actualRows)
+	assert.Equal(t, int(rows)-1, actualRows)
+
+	assert.NoError(t, txn.Commit())
+}

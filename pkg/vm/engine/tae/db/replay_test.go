@@ -382,7 +382,7 @@ func TestReplay2(t *testing.T) {
 	filter.Val = int32(1500)
 	id, row, err := rel.GetByFilter(filter)
 	assert.Nil(t, err)
-	err = rel.Update(id, row-1, uint16(0), int32(33))
+	err = rel.Update(id, row-1, uint16(0), int32(33333))
 	assert.Nil(t, err)
 	err = rel.RangeDelete(id, row+1, row+100)
 	assert.Nil(t, err)
