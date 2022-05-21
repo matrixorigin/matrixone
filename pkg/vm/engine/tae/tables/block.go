@@ -716,15 +716,19 @@ func (blk *dataBlock) CollectAppendLogIndexes(startTs, endTs uint64) (indexes []
 	return blk.mvcc.CollectAppendLogIndexesLocked(startTs, endTs)
 }
 
-func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.BlockView) {
+func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.BlockView, err error) {
 	view = model.NewBlockView(endTs)
 	blk.mvcc.RLock()
 
 	for i := range blk.meta.GetSchema().ColDefs {
 		chain := blk.mvcc.GetColumnChain(uint16(i))
 		chain.RLock()
-		updateMask, updateVals, indexes := chain.CollectCommittedInRangeLocked(startTs, endTs)
+		updateMask, updateVals, indexes, err := chain.CollectCommittedInRangeLocked(startTs, endTs)
 		chain.RUnlock()
+		if err != nil {
+			blk.mvcc.RUnlock()
+			return view, err
+		}
 		if updateMask != nil {
 			view.UpdateMasks[uint16(i)] = updateMask
 			view.UpdateVals[uint16(i)] = updateVals

@@ -500,7 +500,8 @@ func TestCompactBlock1(t *testing.T) {
 		}
 
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		changes := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs+1)
+		changes, err := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs+1)
+		assert.NoError(t, err)
 		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
 
 		destBlock, err := seg.CreateNonAppendableBlock()
@@ -516,7 +517,8 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		t.Log(destBlockData.PPString(common.PPL1, 0, ""))
 
-		view := destBlockData.CollectChangesInRange(0, math.MaxUint64)
+		view, err := destBlockData.CollectChangesInRange(0, math.MaxUint64)
+		assert.NoError(t, err)
 		assert.True(t, view.DeleteMask.Equals(changes.DeleteMask))
 	}
 }

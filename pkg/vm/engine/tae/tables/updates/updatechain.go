@@ -166,7 +166,7 @@ func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[
 	return chain.view.CollectUpdates(ts)
 }
 
-func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, indexes []*wal.Index) {
+func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, indexes []*wal.Index, err error) {
 	var merged *ColumnNode
 	chain.LoopChainLocked(func(n *ColumnNode) bool {
 		n.RLock()
@@ -189,6 +189,9 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			// 3.1.1. Rollbacked. Skip it and go to next
 			if state == txnif.TxnStateRollbacked {
 				return true
+			} else if state == txnif.TxnStateUnknown {
+				err = txnif.TxnInternalErr
+				return false
 			}
 			// 3.1.2. Committed
 			n.RLock()

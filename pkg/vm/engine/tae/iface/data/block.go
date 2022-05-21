@@ -63,7 +63,7 @@ type Block interface {
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (txnif.UpdateNode, error)
 
 	GetTotalChanges() int
-	CollectChangesInRange(startTs, endTs uint64) *model.BlockView
+	CollectChangesInRange(startTs, endTs uint64) (*model.BlockView, error)
 	CollectAppendLogIndexes(startTs, endTs uint64) ([]*wal.Index, error)
 
 	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error
