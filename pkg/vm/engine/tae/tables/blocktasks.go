@@ -15,6 +15,8 @@
 package tables
 
 import (
+	"time"
+
 	"github.com/RoaringBitmap/roaring"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -132,7 +134,10 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	if blk.node.GetBlockMaxFlushTS() >= ts {
 		return
 	}
-	h := blk.bufMgr.Pin(blk.node)
+	h, err := blk.bufMgr.TryPin(blk.node, time.Second)
+	if err != nil {
+		return
+	}
 	defer h.Close()
 	// Why check again? May be a flush was executed in between
 	if blk.node.GetBlockMaxFlushTS() >= ts {

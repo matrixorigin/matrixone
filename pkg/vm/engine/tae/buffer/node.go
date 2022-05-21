@@ -14,9 +14,10 @@
 package buffer
 
 import (
-	"errors"
+	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -163,7 +164,17 @@ func (n *Node) prepareExpand(delta uint64) bool {
 
 func (n *Node) Expand(delta uint64, fn func() error) error {
 	if !n.prepareExpand(delta) {
-		return errors.New("aoe node expand: no enough space")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := common.DoRetry(func() error {
+			if !n.prepareExpand(delta) {
+				return base.ErrNoSpace
+			}
+			return nil
+		}, ctx)
+		if err != nil {
+			return err
+		}
 	}
 	if fn != nil {
 		if err := fn(); err != nil {

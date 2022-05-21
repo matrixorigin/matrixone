@@ -47,7 +47,7 @@ type TxnReader interface {
 	GetInfo() []byte
 	IsTerminated(bool) bool
 	IsVisible(o TxnReader) bool
-	GetTxnState(waitIfcommitting bool) int32
+	GetTxnState(waitIfcommitting bool) TxnState
 	GetError() error
 	GetStore() TxnStore
 	String() string

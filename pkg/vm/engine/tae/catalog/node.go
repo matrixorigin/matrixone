@@ -136,8 +136,7 @@ func (n *nodeList) GetDBNode() *common.DLNode {
 // 7. Txn3 commit
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
-func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) *common.DLNode {
-	var dn *common.DLNode
+func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) (dn *common.DLNode, err error) {
 	fn := func(nn *nameNode) (goNext bool) {
 		dlNode := nn.GetTableNode()
 		entry := dlNode.GetPayload().(*TableEntry)
@@ -217,7 +216,10 @@ func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) *common.DLNode 
 		return true
 	}
 	n.ForEachNodes(fn)
-	return dn
+	if dn == nil {
+		err = ErrNotFound
+	}
+	return
 }
 
 func (n *nodeList) TxnGetDBNodeLocked(txnCtx txnif.TxnReader) *common.DLNode {

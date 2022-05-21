@@ -410,9 +410,9 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 }
 
 func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompressed *bytes.Buffer, raw bool) (view *model.ColumnView, err error) {
-	h := blk.node.mgr.Pin(blk.node)
-	if h == nil {
-		panic("not expected")
+	var h base.INodeHandle
+	if h, err = blk.node.TryPin(); err != nil {
+		return
 	}
 	defer h.Close()
 

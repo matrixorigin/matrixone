@@ -33,7 +33,7 @@ import (
 func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		defer wg.Done()
-		txn := e.StartTxn(nil)
+		txn, _ := e.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(name)
 		err := rel.Append(data)
@@ -45,7 +45,7 @@ func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *s
 func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		defer wg.Done()
-		txn := e.StartTxn(nil)
+		txn, _ := e.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(name)
 		err := rel.Append(data)
@@ -62,14 +62,14 @@ func TestGCBlock1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 
 	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	err := rel.Append(bat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
 	it := rel.MakeBlockIt()
@@ -116,7 +116,7 @@ func TestAutoGC1(t *testing.T) {
 	bats := compute.SplitBatch(bat, 100)
 	pool, _ := ants.NewPool(50)
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		_, err := database.CreateRelation(schema)
 		assert.Nil(t, err)
