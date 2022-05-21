@@ -36,14 +36,13 @@ func NewColumnView() *ColumnView {
 	}
 }
 
-func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}) {
+func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, err error) {
 	if len(view.links) == 0 {
 		return
 	}
 	mask = roaring.New()
 	vals = make(map[uint32]interface{})
 	it := view.mask.Iterator()
-	var err error
 	var v interface{}
 	for it.HasNext() {
 		row := it.Next()
@@ -51,7 +50,10 @@ func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals ma
 		if err == nil {
 			vals[row] = v
 			mask.Add(row)
+		} else if err == txnif.TxnInternalErr {
+			break
 		}
+		err = nil
 	}
 	return
 }

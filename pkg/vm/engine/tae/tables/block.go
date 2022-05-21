@@ -303,32 +303,42 @@ func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *dataBlock) FillColumnUpdates(view *model.ColumnView) {
+func (blk *dataBlock) FillColumnUpdates(view *model.ColumnView) (err error) {
 	chain := blk.mvcc.GetColumnChain(uint16(view.ColIdx))
 	chain.RLock()
-	view.UpdateMask, view.UpdateVals = chain.CollectUpdatesLocked(view.Ts)
+	view.UpdateMask, view.UpdateVals, err = chain.CollectUpdatesLocked(view.Ts)
 	chain.RUnlock()
+	return
 }
 
-func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView) {
+func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView) (err error) {
 	deleteChain := blk.mvcc.GetDeleteChain()
 	deleteChain.RLock()
-	dnode := deleteChain.CollectDeletesLocked(view.Ts, false).(*updates.DeleteNode)
+	n, err := deleteChain.CollectDeletesLocked(view.Ts, false)
 	deleteChain.RUnlock()
+	if err != nil {
+		return
+	}
+	dnode := n.(*updates.DeleteNode)
 	if dnode != nil {
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
 	}
+	return
 }
 
-func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) {
+func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err error) {
 	chain := blk.mvcc.GetColumnChain(colIdx)
 	chain.RLock()
-	updateMask, updateVals := chain.CollectUpdatesLocked(view.Ts)
+	updateMask, updateVals, err := chain.CollectUpdatesLocked(view.Ts)
 	chain.RUnlock()
+	if err != nil {
+		return
+	}
 	if updateMask != nil {
 		view.UpdateMasks[colIdx] = updateMask
 		view.UpdateVals[colIdx] = updateVals
 	}
+	return
 }
 
 func (blk *dataBlock) MakeBlockView() (view *model.BlockView, err error) {
@@ -337,10 +347,21 @@ func (blk *dataBlock) MakeBlockView() (view *model.BlockView, err error) {
 	ts := mvcc.LoadMaxVisible()
 	view = model.NewBlockView(ts)
 	for i := range blk.meta.GetSchema().ColDefs {
-		blk.FillBlockView(uint16(i), view)
+		if err = blk.FillBlockView(uint16(i), view); err != nil {
+			break
+		}
+	}
+	if err != nil {
+		mvcc.RUnlock()
+		return
 	}
 	deleteChain := mvcc.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(ts, true).(*updates.DeleteNode)
+	n, err := deleteChain.CollectDeletesLocked(ts, true)
+	if err != nil {
+		mvcc.RUnlock()
+		return
+	}
+	dnode := n.(*updates.DeleteNode)
 	if dnode != nil {
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
 	}
@@ -384,8 +405,11 @@ func (blk *dataBlock) GetPKColumnDataOptimized(ts uint64) (view *model.ColumnVie
 	view.MemNode = wrapper.MNode
 	view.RawVec = &wrapper.Vector
 	blk.mvcc.RLock()
-	blk.FillColumnDeletes(view)
+	err = blk.FillColumnDeletes(view)
 	blk.mvcc.RUnlock()
+	if err != nil {
+		return
+	}
 	view.AppliedVec = view.RawVec
 	return
 }
@@ -406,9 +430,14 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 	}
 
 	blk.mvcc.RLock()
-	blk.FillColumnUpdates(view)
-	blk.FillColumnDeletes(view)
+	err = blk.FillColumnUpdates(view)
+	if err == nil {
+		err = blk.FillColumnDeletes(view)
+	}
 	blk.mvcc.RUnlock()
+	if err != nil {
+		return
+	}
 	err = view.Eval(true)
 	return
 }
@@ -453,9 +482,14 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 	}
 
 	blk.mvcc.RLock()
-	blk.FillColumnUpdates(view)
-	blk.FillColumnDeletes(view)
+	err = blk.FillColumnUpdates(view)
+	if err == nil {
+		err = blk.FillColumnDeletes(view)
+	}
 	blk.mvcc.RUnlock()
+	if err != nil {
+		return
+	}
 
 	err = view.Eval(true)
 
@@ -550,6 +584,9 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 		chain.RLock()
 		v, err = chain.GetValueLocked(row, ts)
 		chain.RUnlock()
+		if err == txnif.TxnInternalErr {
+			return
+		}
 		if err != nil {
 			v = nil
 			err = nil
@@ -737,7 +774,7 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.
 	}
 	deleteChain := blk.mvcc.GetDeleteChain()
 	deleteChain.RLock()
-	view.DeleteMask, view.DeleteLogIndexes = deleteChain.CollectDeletesInRange(startTs, endTs)
+	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs)
 	deleteChain.RUnlock()
 	blk.mvcc.RUnlock()
 	return

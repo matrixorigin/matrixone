@@ -162,7 +162,7 @@ func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v interface{}, 
 	return chain.view.GetValue(row, ts)
 }
 
-func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]interface{}) {
+func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]interface{}, error) {
 	return chain.view.CollectUpdates(ts)
 }
 
