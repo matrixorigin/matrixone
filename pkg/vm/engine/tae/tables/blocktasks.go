@@ -85,7 +85,10 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	if endTs <= ckpTs {
 		return
 	}
-	indexes := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
+	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
+	if err != nil {
+		return
+	}
 	view := blk.CollectChangesInRange(ckpTs+1, endTs)
 	for _, idxes := range view.ColLogIndexes {
 		if err = blk.scheduler.Checkpoint(idxes); err != nil {
@@ -144,8 +147,11 @@ func (blk *dataBlock) ForceCompact() (err error) {
 		return
 	}
 	blk.mvcc.RLock()
-	maxRow, _ := blk.mvcc.GetMaxVisibleRowLocked(ts)
+	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
+	if err != nil {
+		return
+	}
 	view, err := blk.node.GetColumnsView(maxRow)
 	if err != nil {
 		return

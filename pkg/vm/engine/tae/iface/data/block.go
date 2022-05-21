@@ -64,7 +64,7 @@ type Block interface {
 
 	GetTotalChanges() int
 	CollectChangesInRange(startTs, endTs uint64) *model.BlockView
-	CollectAppendLogIndexes(startTs, endTs uint64) []*wal.Index
+	CollectAppendLogIndexes(startTs, endTs uint64) ([]*wal.Index, error)
 
 	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)

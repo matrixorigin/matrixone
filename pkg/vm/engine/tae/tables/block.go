@@ -344,7 +344,11 @@ func (blk *dataBlock) MakeBlockView() (view *model.BlockView, err error) {
 	if dnode != nil {
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
 	}
-	maxRow, _ := blk.mvcc.GetMaxVisibleRowLocked(ts)
+	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
+	if err != nil {
+		mvcc.RUnlock()
+		return
+	}
 	if blk.node != nil {
 		attrs := make([]int, len(blk.meta.GetSchema().ColDefs))
 		vecs := make([]vector.IVector, len(blk.meta.GetSchema().ColDefs))
@@ -418,9 +422,9 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 
 	maxRow := uint32(0)
 	blk.mvcc.RLock()
-	maxRow, visible := blk.mvcc.GetMaxVisibleRowLocked(ts)
+	maxRow, visible, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
-	if !visible {
+	if !visible || err != nil {
 		return
 	}
 
@@ -603,7 +607,15 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 	if err != nil {
 		return
 	}
-	if blk.mvcc.IsDeletedLocked(offset, ts) || !blk.mvcc.IsVisibleLocked(offset, ts) {
+	if blk.mvcc.IsDeletedLocked(offset, ts) {
+		err = txnbase.ErrNotFound
+		return
+	}
+	visible, err := blk.mvcc.IsVisibleLocked(offset, ts)
+	if err != nil {
+		return
+	}
+	if !visible {
 		err = txnbase.ErrNotFound
 	}
 	return
@@ -685,7 +697,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 	return
 }
 
-func (blk *dataBlock) CollectAppendLogIndexes(startTs, endTs uint64) (indexes []*wal.Index) {
+func (blk *dataBlock) CollectAppendLogIndexes(startTs, endTs uint64) (indexes []*wal.Index, err error) {
 	readLock := blk.mvcc.GetSharedLock()
 	defer readLock.Unlock()
 	return blk.mvcc.CollectAppendLogIndexesLocked(startTs, endTs)

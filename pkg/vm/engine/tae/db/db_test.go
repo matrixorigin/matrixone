@@ -1473,13 +1473,17 @@ func TestLogIndex1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		indexes := meta.GetBlockData().CollectAppendLogIndexes(txns[0].GetStartTS(), txns[len(txns)-1].GetCommitTS())
+		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(txns[0].GetStartTS(), txns[len(txns)-1].GetCommitTS())
+		assert.NoError(t, err)
 		assert.Equal(t, len(txns), len(indexes))
-		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetStartTS(), txns[len(txns)-1].GetCommitTS())
+		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetStartTS(), txns[len(txns)-1].GetCommitTS())
+		assert.NoError(t, err)
 		assert.Equal(t, len(txns)-1, len(indexes))
-		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[2].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
+		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[2].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
+		assert.NoError(t, err)
 		assert.Equal(t, len(txns)-2, len(indexes))
-		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[3].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
+		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[3].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
+		assert.NoError(t, err)
 		assert.Equal(t, len(txns)-3, len(indexes))
 	}
 	{
@@ -1491,7 +1495,8 @@ func TestLogIndex1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		indexes := meta.GetBlockData().CollectAppendLogIndexes(0, txn.GetStartTS())
+		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(0, txn.GetStartTS())
+		assert.NoError(t, err)
 		for i, index := range indexes {
 			t.Logf("%d: %s", i, index.String())
 		}
