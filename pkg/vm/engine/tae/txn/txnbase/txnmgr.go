@@ -84,6 +84,11 @@ func (mgr *TxnManager) StatSafeTS() (ts uint64) {
 }
 
 func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
+	if exp := mgr.Execption.Load(); exp != nil {
+		err = exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return
+	}
 	mgr.Lock()
 	defer mgr.Unlock()
 	txnId := mgr.IdAlloc.Alloc()
@@ -115,8 +120,9 @@ func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {
 	return mgr.Active[id]
 }
 
-func (mgr *TxnManager) OnOpTxn(op *OpTxn) {
-	_, _ = mgr.EnqueueRecevied(op)
+func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
+	_, err = mgr.EnqueueRecevied(op)
+	return
 }
 
 func (mgr *TxnManager) onPreCommit(txn txnif.AsyncTxn) {
@@ -196,4 +202,15 @@ func (mgr *TxnManager) onCommit(items ...interface{}) {
 		logutil.Debugf("%s Done", op.Repr())
 	}
 	logutil.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
+}
+
+func (mgr *TxnManager) Stop() {
+	mgr.StateMachine.Stop()
+	exp := mgr.Execption.Load()
+	for exp == nil {
+		if mgr.Execption.CompareAndSwap(exp, common.ClosedErr) {
+			break
+		}
+		exp = mgr.Execption.Load()
+	}
 }

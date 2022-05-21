@@ -18,11 +18,6 @@ type OnFinCB = func()
 type EnqueueOp = func(interface{}) interface{}
 type OnItemsCB = func(...interface{})
 
-type Closable interface {
-	IsClosed() bool
-	TryClose() bool
-}
-
 type Queue interface {
 	Start()
 	Stop()

@@ -76,16 +76,26 @@ func (txn *Txn) GetError() error    { return txn.Err }
 
 func (txn *Txn) SetPrepareCommitFn(fn func(interface{}) error) { txn.PrepareCommitFn = fn }
 
-func (txn *Txn) Commit() error {
+func (txn *Txn) Commit() (err error) {
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
 		return nil
 	}
 	txn.Add(1)
-	txn.Mgr.OnOpTxn(&OpTxn{
+	err = txn.Mgr.OnOpTxn(&OpTxn{
 		Txn: txn,
 		Op:  OpCommit,
 	})
+	// TxnManager is closed
+	if err != nil {
+		txn.SetError(err)
+		txn.Lock()
+		_ = txn.ToRollbackingLocked(txn.GetStartTS() + 1)
+		txn.Unlock()
+		_ = txn.PrepareRollback()
+		_ = txn.ApplyRollback()
+		txn.Done()
+	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
 	return txn.GetError()
@@ -95,19 +105,25 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 	return txn.Store
 }
 
-func (txn *Txn) Rollback() error {
+func (txn *Txn) Rollback() (err error) {
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
-		return nil
+		return
 	}
 	txn.Add(1)
-	txn.Mgr.OnOpTxn(&OpTxn{
+	err = txn.Mgr.OnOpTxn(&OpTxn{
 		Txn: txn,
 		Op:  OpRollback,
 	})
+	if err != nil {
+		_ = txn.PrepareRollback()
+		_ = txn.ApplyRollback()
+		txn.Done()
+	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
-	return txn.Err
+	err = txn.Err
+	return
 }
 
 func (txn *Txn) Done() {

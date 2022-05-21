@@ -585,3 +585,48 @@ func TestTxn7(t *testing.T) {
 	assert.Error(t, err)
 	t.Log(txn.String())
 }
+
+func TestTxn8(t *testing.T) {
+	tae := initDB(t, nil)
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows*10)
+	bats := compute.SplitBatch(bat, 2)
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.GetDatabase(catalog.SystemDBName)
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bats[0])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase(catalog.SystemDBName)
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	pkv := compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(pkv)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.Update(id, row, 3, int64(9999))
+	assert.NoError(t, err)
+
+	pkv = compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 3)
+	filter = handle.NewEQFilter(pkv)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+
+	tae.Close()
+
+	_, err = tae.StartTxn(nil)
+	assert.Error(t, err)
+
+	err = txn.Commit()
+	t.Log(err)
+}
