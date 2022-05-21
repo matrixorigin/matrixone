@@ -18,15 +18,18 @@ const (
 	UncommitTS = ^uint64(0)
 )
 
+type TxnState int32
+
 const (
-	TxnStateActive int32 = iota
+	TxnStateActive TxnState = iota
 	TxnStateCommitting
 	TxnStateRollbacking
 	TxnStateCommitted
 	TxnStateRollbacked
+	TxnStateUnknown
 )
 
-func TxnStrState(state int32) string {
+func TxnStrState(state TxnState) string {
 	switch state {
 	case TxnStateActive:
 		return "Active"
@@ -38,6 +41,8 @@ func TxnStrState(state int32) string {
 		return "Committed"
 	case TxnStateRollbacked:
 		return "Rollbacked"
+	case TxnStateUnknown:
+		return "Unknown"
 	}
 	panic("state not support")
 }

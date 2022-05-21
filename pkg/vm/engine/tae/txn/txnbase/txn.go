@@ -147,7 +147,7 @@ func (txn *Txn) IsTerminated(waitIfcommitting bool) bool {
 	return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
 }
 
-func (txn *Txn) GetTxnState(waitIfcommitting bool) int32 {
+func (txn *Txn) GetTxnState(waitIfcommitting bool) txnif.TxnState {
 	txn.RLock()
 	state := txn.State
 	if !waitIfcommitting {
