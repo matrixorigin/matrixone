@@ -20,16 +20,26 @@ import (
 )
 
 type TableDef = plan.TableDef
+type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
+type ColRef = plan.ColRef
 type Cost = plan.Cost
 type Const = plan.Const
 type Expr = plan.Expr
 type Node = plan.Node
 type RowsetData = plan.RowsetData
 type Query = plan.Query
+type Plan = plan.Plan
+type Type = plan.Type
 
 type CompilerContext interface {
-	Resolve(name string) (*ObjectRef, *TableDef)
+	// Default database/schema in context
+	DefaultDatabase() string
+	// check if database exist
+	DatabaseExists(name string) bool
+	// get table definition by database/schema
+	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get estimated cost by table & expr
 	Cost(obj *ObjectRef, e *Expr) *Cost
 }
 
@@ -39,15 +49,15 @@ type Optimizer interface {
 }
 
 //use for build select
-type SelectContext struct {
-	//when build_projection we may set columnAlias and then use in build_orderby
+type BinderContext struct {
+	// when build_projection we may set columnAlias and then use in build_orderby
 	columnAlias map[string]*Expr
-	//when build_cte will set cteTables and use in build_from
+	// when build_cte will set cteTables and use in build_from
 	cteTables map[string]*TableDef
 
-	//use for build subquery
-	subQueryIsCorrelated bool
-	subQueryIsScalar     bool
+	// use for build subquery
+	subqueryIsCorrelated bool
+	subqueryIsScalar     bool
 
-	subQueryParentId []int32
+	subqueryParentIds []int32
 }

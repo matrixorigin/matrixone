@@ -20,6 +20,10 @@ GENERATE_OVERLOAD_COMPARE := ./pkg/sql/colexec/extend/overload/eq.go ./pkg/sql/c
 GENERATE_OVERLOAD_OTHERS := ./pkg/sql/colexec/extend/overload/like.go ./pkg/sql/colexec/extend/overload/cast.go
 GENERATE_OVERLOAD_UNARYS := ./pkg/sql/colexec/extend/overload/unaryops.go
 
+# files generated from cmd/generate-config
+# they need to be deleted in cleaning
+CONFIG_CODE_GENERATED := ./pkg/config/system_vars.go ./pkg/config/system_vars_test.go
+
 # Creating build config
 .PHONY: config
 config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/generate-config/system_vars_def.toml
@@ -98,6 +102,7 @@ clean:
 	@rm -f $(GENERATE_OVERLOAD_COMPARE)
 	@rm -f $(GENERATE_OVERLOAD_OTHERS)
 	@rm -f $(GENERATE_OVERLOAD_UNARYS)
+	@rm -f $(CONFIG_CODE_GENERATED)
 ifneq ($(wildcard $(BIN_NAME)),)
 	$(info Remove file $(BIN_NAME))
 	@rm -f $(BIN_NAME)

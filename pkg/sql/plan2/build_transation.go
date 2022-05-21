@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildBeginTransaction(stmt *tree.BeginTransaction, ctx CompilerContext) (*plan.Plan, error) {
+func buildBeginTransaction(stmt *tree.BeginTransaction, ctx CompilerContext) (*Plan, error) {
 	beginTransation := &plan.TransationBegin{}
 	switch stmt.Modes.RwMode {
 	case tree.READ_WRITE_MODE_NONE:
@@ -30,7 +30,7 @@ func buildBeginTransaction(stmt *tree.BeginTransaction, ctx CompilerContext) (*p
 		beginTransation.Mode = plan.TransationBegin_READ_WRITE
 	}
 
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Tcl{
 			Tcl: &plan.TransationControl{
 				TclType: plan.TransationControl_BEGIN,
@@ -42,7 +42,7 @@ func buildBeginTransaction(stmt *tree.BeginTransaction, ctx CompilerContext) (*p
 	}, nil
 }
 
-func buildCommitTransaction(stmt *tree.CommitTransaction, ctx CompilerContext) (*plan.Plan, error) {
+func buildCommitTransaction(stmt *tree.CommitTransaction, ctx CompilerContext) (*Plan, error) {
 	commitTransation := &plan.TransationCommit{}
 	switch stmt.Type {
 	case tree.COMPLETION_TYPE_CHAIN:
@@ -52,7 +52,7 @@ func buildCommitTransaction(stmt *tree.CommitTransaction, ctx CompilerContext) (
 	case tree.COMPLETION_TYPE_NO_CHAIN:
 		commitTransation.CompletionType = plan.TransationCompletionType_NO_CHAIN
 	}
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Tcl{
 			Tcl: &plan.TransationControl{
 				TclType: plan.TransationControl_COMMIT,
@@ -64,7 +64,7 @@ func buildCommitTransaction(stmt *tree.CommitTransaction, ctx CompilerContext) (
 	}, nil
 }
 
-func buildRollbackTransaction(stmt *tree.RollbackTransaction, ctx CompilerContext) (*plan.Plan, error) {
+func buildRollbackTransaction(stmt *tree.RollbackTransaction, ctx CompilerContext) (*Plan, error) {
 	rollbackTransation := &plan.TransationRollback{}
 	switch stmt.Type {
 	case tree.COMPLETION_TYPE_CHAIN:
@@ -74,7 +74,7 @@ func buildRollbackTransaction(stmt *tree.RollbackTransaction, ctx CompilerContex
 	case tree.COMPLETION_TYPE_NO_CHAIN:
 		rollbackTransation.CompletionType = plan.TransationCompletionType_NO_CHAIN
 	}
-	return &plan.Plan{
+	return &Plan{
 		Plan: &plan.Plan_Tcl{
 			Tcl: &plan.TransationControl{
 				TclType: plan.TransationControl_ROLLBACK,

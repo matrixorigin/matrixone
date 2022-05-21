@@ -19,32 +19,33 @@ import (
 	"fmt"
 	"unsafe"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
 	ap := arg.(*Argument)
 	buf.WriteString("γ([")
-	for i, pos := range ap.Poses {
+	for i, expr := range ap.Exprs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		buf.WriteString(fmt.Sprintf("%v", pos))
+		buf.WriteString(fmt.Sprintf("%v", expr))
 	}
 	buf.WriteString("], [")
 	for i, agg := range ap.Aggs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		buf.WriteString(fmt.Sprintf("%v(%v)", aggregate.Names[agg.Op], agg.Pos))
+		buf.WriteString(fmt.Sprintf("%v(%v)", aggregate.Names[agg.Op], agg.E))
 	}
 	buf.WriteString("])")
 }
@@ -57,7 +58,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
-	if len(ap.Poses) == 0 {
+	if len(ap.Exprs) == 0 {
 		return ap.ctr.process(ap, proc)
 	}
 	return ap.ctr.processWithGroup(ap, proc)
@@ -75,28 +76,57 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	defer batch.Clean(bat, proc.Mp)
+	defer bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
+	if len(ctr.aggVecs) == 0 {
+		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
+	}
+	for i, agg := range ap.Aggs {
+		vec, err := colexec.EvalExpr(bat, proc, agg.E)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				if ctr.aggVecs[j].needFree {
+					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
+				}
+			}
+			return false, nil
+		}
+		ctr.aggVecs[i].vec = vec
+		ctr.aggVecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.aggVecs[i].needFree = false
+				break
+			}
+		}
+	}
+	defer func() {
+		for i := range ctr.aggVecs {
+			if ctr.aggVecs[i].needFree {
+				vector.Clean(ctr.aggVecs[i].vec, proc.Mp)
+			}
+		}
+	}()
 	if ctr.bat == nil {
 		var err error
 
-		ctr.bat = batch.New(0)
+		ctr.bat = batch.NewWithSize(0)
 		ctr.bat.Zs = []int64{0}
 		ctr.bat.Rs = make([]ring.Ring, len(ap.Aggs))
 		for i, agg := range ap.Aggs {
-			if ctr.bat.Rs[i], err = aggregate.New(agg.Op, bat.Vecs[agg.Pos].Typ); err != nil {
+			if ctr.bat.Rs[i], err = aggregate.New(agg.Op, ctr.aggVecs[i].vec.Typ); err != nil {
 				return false, err
 			}
 		}
 		for _, r := range ctr.bat.Rs {
 			if err := r.Grow(proc.Mp); err != nil {
-				batch.Clean(ctr.bat, proc.Mp)
+				ctr.bat.Clean(proc.Mp)
 				return false, err
 			}
 		}
 	}
 	if err := ctr.processH0(bat, ap, proc); err != nil {
-		batch.Clean(ctr.bat, proc.Mp)
+		ctr.bat.Clean(proc.Mp)
 		return false, err
 	}
 	return false, nil
@@ -128,13 +158,71 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	defer batch.Clean(bat, proc.Mp)
+	defer bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
+	if len(ctr.aggVecs) == 0 {
+		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
+	}
+	for i, agg := range ap.Aggs {
+		vec, err := colexec.EvalExpr(bat, proc, agg.E)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				if ctr.aggVecs[j].needFree {
+					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
+				}
+			}
+			return false, nil
+		}
+		ctr.aggVecs[i].vec = vec
+		ctr.aggVecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.aggVecs[i].needFree = false
+				break
+			}
+		}
+	}
+	defer func() {
+		for i := range ctr.aggVecs {
+			if ctr.aggVecs[i].needFree {
+				vector.Clean(ctr.aggVecs[i].vec, proc.Mp)
+			}
+		}
+	}()
+	if len(ctr.groupVecs) == 0 {
+		ctr.groupVecs = make([]evalVector, len(ap.Exprs))
+	}
+	for i, expr := range ap.Exprs {
+		vec, err := colexec.EvalExpr(bat, proc, expr)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				if ctr.groupVecs[j].needFree {
+					vector.Clean(ctr.groupVecs[j].vec, proc.Mp)
+				}
+			}
+			return false, nil
+		}
+		ctr.groupVecs[i].vec = vec
+		ctr.groupVecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.groupVecs[i].needFree = false
+				break
+			}
+		}
+	}
+	defer func() {
+		for i := range ctr.groupVecs {
+			if ctr.groupVecs[i].needFree {
+				vector.Clean(ctr.groupVecs[i].vec, proc.Mp)
+			}
+		}
+	}()
 	if ctr.bat == nil {
 		size := 0
-		ctr.bat = batch.New(len(ap.Poses))
-		for i, pos := range ap.Poses {
-			vec := bat.Vecs[pos]
+		ctr.bat = batch.NewWithSize(len(ap.Exprs))
+		for i := range ctr.groupVecs {
+			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			switch vec.Typ.Oid {
 			case types.T_int8, types.T_uint8:
@@ -157,7 +245,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 		}
 		ctr.bat.Rs = make([]ring.Ring, len(ap.Aggs))
 		for i, agg := range ap.Aggs {
-			if ctr.bat.Rs[i], err = aggregate.New(agg.Op, bat.Vecs[agg.Pos].Typ); err != nil {
+			if ctr.bat.Rs[i], err = aggregate.New(agg.Op, ctr.aggVecs[i].vec.Typ); err != nil {
 				return false, err
 			}
 		}
@@ -210,7 +298,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 		err = ctr.processHStr(bat, ap, proc)
 	}
 	if err != nil {
-		batch.Clean(ctr.bat, proc.Mp)
+		ctr.bat.Clean(proc.Mp)
 		ctr.bat = nil
 		return false, err
 	}
@@ -222,7 +310,7 @@ func (ctr *Container) processH0(bat *batch.Batch, ap *Argument, proc *process.Pr
 		ctr.bat.Zs[0] += z
 	}
 	for i, r := range ctr.bat.Rs {
-		r.BulkFill(0, bat.Zs, bat.Vecs[ap.Aggs[i].Pos])
+		r.BulkFill(0, bat.Zs, ctr.aggVecs[i].vec)
 	}
 	return nil
 }
@@ -236,8 +324,8 @@ func (ctr *Container) processH8(bat *batch.Batch, ap *Argument, proc *process.Pr
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
 		copy(ctr.h8.keys, ctr.h8.zKeys)
-		for _, pos := range ap.Poses {
-			vec := bat.Vecs[pos]
+		for _, evec := range ctr.groupVecs {
+			vec := evec.vec
 			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 			case 1:
 				fillGroup[uint8](ctr, vec, ctr.h8.keys, n, 1, i)
@@ -273,8 +361,8 @@ func (ctr *Container) processH24(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
 		copy(ctr.h24.keys, ctr.h24.zKeys)
-		for _, pos := range ap.Poses {
-			vec := bat.Vecs[pos]
+		for _, evec := range ctr.groupVecs {
+			vec := evec.vec
 			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 			case 1:
 				fillGroup[uint8](ctr, vec, ctr.h24.keys, n, 1, i)
@@ -309,8 +397,8 @@ func (ctr *Container) processH32(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
 		copy(ctr.h32.keys, ctr.h32.zKeys)
-		for _, pos := range ap.Poses {
-			vec := bat.Vecs[pos]
+		for _, evec := range ctr.groupVecs {
+			vec := evec.vec
 			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 			case 1:
 				fillGroup[uint8](ctr, vec, ctr.h32.keys, n, 1, i)
@@ -345,8 +433,8 @@ func (ctr *Container) processH40(bat *batch.Batch, ap *Argument, proc *process.P
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
 		copy(ctr.h40.keys, ctr.h40.zKeys)
-		for _, pos := range ap.Poses {
-			vec := bat.Vecs[pos]
+		for _, evec := range ctr.groupVecs {
+			vec := evec.vec
 			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 			case 1:
 				fillGroup[uint8](ctr, vec, ctr.h40.keys, n, 1, i)
@@ -379,8 +467,8 @@ func (ctr *Container) processHStr(bat *batch.Batch, ap *Argument, proc *process.
 		if n > UnitLimit {
 			n = UnitLimit
 		}
-		for _, pos := range ap.Poses {
-			vec := bat.Vecs[pos]
+		for _, evec := range ctr.groupVecs {
+			vec := evec.vec
 			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 			case 1:
 				fillGroupStr[uint8](ctr, vec, n, 1, i)
@@ -445,7 +533,7 @@ func (ctr *Container) batchFill(i int, n int, bat *batch.Batch, ap *Argument, pr
 	}
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
-			if err := vector.UnionBatch(vec, bat.Vecs[ap.Poses[j]], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
+			if err := vector.UnionBatch(vec, ctr.groupVecs[j].vec, int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
 				return err
 			}
 		}
@@ -456,7 +544,7 @@ func (ctr *Container) batchFill(i int, n int, bat *batch.Batch, ap *Argument, pr
 		}
 	}
 	for j, r := range ctr.bat.Rs {
-		r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, bat.Vecs[ap.Aggs[j].Pos])
+		r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, ctr.aggVecs[j].vec)
 	}
 	return nil
 }

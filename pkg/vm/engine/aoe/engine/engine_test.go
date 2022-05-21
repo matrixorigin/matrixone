@@ -136,33 +136,33 @@ func TestAOEEngine(t *testing.T) {
 	aoeEngine := New(catalogs[0], &EngineConfig{})
 
 	//test engine
-	n := aoeEngine.Node("")
+	n := aoeEngine.Node("", nil)
 	require.NotNil(t, n, "the result of Node()")
 
 	t0 := time.Now()
-	err := aoeEngine.Create(0, testDBName, 0)
+	err := aoeEngine.Create(0, testDBName, 0, nil)
 	require.NoError(t, err)
 	logutil.Infof("Create cost %d ms", time.Since(t0).Milliseconds())
 
-	dbs := aoeEngine.Databases()
+	dbs := aoeEngine.Databases(nil)
 	require.Equal(t, 1, len(dbs))
 
-	err = aoeEngine.Delete(1, testDBName)
+	err = aoeEngine.Delete(1, testDBName, nil)
 	require.NoError(t, err)
 
-	dbs = aoeEngine.Databases()
+	dbs = aoeEngine.Databases(nil)
 	require.Equal(t, 0, len(dbs))
 
-	_, err = aoeEngine.Database(testDBName)
+	_, err = aoeEngine.Database(testDBName, nil)
 	require.NotNil(t, err)
 
-	err = aoeEngine.Create(2, testDBName, 0)
+	err = aoeEngine.Create(2, testDBName, 0, nil)
 	require.NoError(t, err)
-	db, err := aoeEngine.Database(testDBName)
+	db, err := aoeEngine.Database(testDBName, nil)
 	require.NoError(t, err)
 
 	//test database
-	tbls := db.Relations()
+	tbls := db.Relations(nil)
 	require.Equal(t, 0, len(tbls))
 
 	mockTbl := adaptor.MockTableInfo(colCnt)
@@ -171,7 +171,7 @@ func TestAOEEngine(t *testing.T) {
 
 	time.Sleep(10 * time.Second)
 
-	err = db.Create(3, mockTbl.Name, defs)
+	err = db.Create(3, mockTbl.Name, defs, nil)
 	if err != nil {
 		stdLog.Printf("create table %v failed, %v", mockTbl.Name, err)
 	} else {
@@ -179,12 +179,12 @@ func TestAOEEngine(t *testing.T) {
 	}
 	require.NoError(t, err)
 
-	tbls = db.Relations()
-	require.Equal(t, 1, len(tbls))
+	tbls = db.Relations(nil)
+	require.Equal(t, 1, len(tbls), nil)
 
-	tb, err := db.Relation(mockTbl.Name)
+	tb, err := db.Relation(mockTbl.Name, nil)
 	require.NoError(t, err)
-	require.Equal(t, tb.ID(), mockTbl.Name)
+	require.Equal(t, tb.ID(nil), mockTbl.Name)
 
 	attrs := helper.Attribute(*mockTbl)
 	typs := make([]types.Type, 0)
@@ -200,31 +200,31 @@ func TestAOEEngine(t *testing.T) {
 
 	totalRows := 0
 	for i := 0; i < blockCnt; i++ {
-		err = tb.Write(4, ibat)
+		err = tb.Write(4, ibat, nil)
 		require.NoError(t, err)
 		totalRows += blockRows
 	}
 
-	tb.Close()
+	tb.Close(nil)
 	time.Sleep(1 * time.Second)
 
-	tb, err = db.Relation(mockTbl.Name)
+	tb, err = db.Relation(mockTbl.Name, nil)
 	require.Nil(t, err)
 	rows := tb.Rows()
 	require.Equal(t, totalRows, int(rows))
-	tb.Close()
+	tb.Close(nil)
 
 	tb = &relation{}
-	err = tb.Write(4, ibat)
+	err = tb.Write(4, ibat, nil)
 	require.EqualError(t, err, "no tablets exists", "wrong err")
 
 	//test relation
-	tb, err = db.Relation(mockTbl.Name)
+	tb, err = db.Relation(mockTbl.Name, nil)
 	require.NoError(t, err)
-	require.Equal(t, tb.ID(), mockTbl.Name)
+	require.Equal(t, tb.ID(nil), mockTbl.Name)
 
 	var vattrs []vengine.Attribute
-	tdefs := tb.TableDefs()
+	tdefs := tb.TableDefs(nil)
 	for _, def := range tdefs {
 		if v, ok := def.(*vengine.AttributeDef); ok {
 			vattrs = append(vattrs, v.Attr)
@@ -243,7 +243,7 @@ func TestAOEEngine(t *testing.T) {
 	}
 	require.Equal(t, len(attrs), len(index), "Index: wrong len")
 
-	readers := tb.NewReader(6, nil, nil)
+	readers := tb.NewReader(6, nil, nil, nil)
 	for _, reader := range readers {
 		/*
 			fileter := reader.NewSparseFilter()
@@ -255,14 +255,14 @@ func TestAOEEngine(t *testing.T) {
 		}
 		require.NoError(t, err)
 	}
-	num := tb.NewReader(15, nil, nil)
+	num := tb.NewReader(15, nil, nil, nil)
 	require.Equal(t, 15, len(num))
-	tb.Close()
+	tb.Close(nil)
 
-	err = db.Delete(5, mockTbl.Name)
+	err = db.Delete(5, mockTbl.Name, nil)
 	require.NoError(t, err)
 
-	tbls = db.Relations()
+	tbls = db.Relations(nil)
 	require.Equal(t, 0, len(tbls))
 
 	if restart {
@@ -311,17 +311,17 @@ func doRestartEngine(t *testing.T) {
 	catalog := catalog2.NewCatalog(c.CubeDrivers[0])
 	aoeEngine := New(catalog, &EngineConfig{})
 
-	dbs := aoeEngine.Databases()
+	dbs := aoeEngine.Databases(nil)
 	require.Equal(t, 1, len(dbs))
 
-	db, err := aoeEngine.Database(testDBName)
+	db, err := aoeEngine.Database(testDBName, nil)
 	require.NoError(t, err)
 
-	tbls := db.Relations()
+	tbls := db.Relations(nil)
 	require.Equal(t, 9, len(tbls))
 
 	for _, tName := range tbls {
-		_, err := db.Relation(tName)
+		_, err := db.Relation(tName, nil)
 		require.NoError(t, err)
 		//require.Equal(t, segmentCnt, len(tb.Segments()))
 		//logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())

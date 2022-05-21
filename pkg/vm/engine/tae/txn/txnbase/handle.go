@@ -107,15 +107,15 @@ func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) 
 func (blk *TxnSegment) BatchDedup(*vector.Vector) (err error)                       { return }
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
-func (blk *TxnBlock) GetTotalChanges() int                                 { return 0 }
-func (blk *TxnBlock) IsAppendableBlock() bool                              { return true }
-func (blk *TxnBlock) Fingerprint() *common.ID                              { return &common.ID{} }
-func (blk *TxnBlock) Rows() int                                            { return 0 }
-func (blk *TxnBlock) ID() uint64                                           { return 0 }
-func (blk *TxnBlock) String() string                                       { return "" }
-func (blk *TxnBlock) Close() error                                         { return nil }
-func (blk *TxnBlock) GetMeta() interface{}                                 { return nil }
-func (blk *TxnBlock) GetByFilter(handle.Filter) (offset uint32, err error) { return }
+func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
+func (blk *TxnBlock) IsAppendableBlock() bool                               { return true }
+func (blk *TxnBlock) Fingerprint() *common.ID                               { return &common.ID{} }
+func (blk *TxnBlock) Rows() int                                             { return 0 }
+func (blk *TxnBlock) ID() uint64                                            { return 0 }
+func (blk *TxnBlock) String() string                                        { return "" }
+func (blk *TxnBlock) Close() error                                          { return nil }
+func (blk *TxnBlock) GetMeta() interface{}                                  { return nil }
+func (blk *TxnBlock) GetByFilter(*handle.Filter) (offset uint32, err error) { return }
 
 func (blk *TxnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return

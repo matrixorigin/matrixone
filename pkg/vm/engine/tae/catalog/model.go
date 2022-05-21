@@ -30,7 +30,7 @@ const (
 	SystemDBID               = uint64(1)
 	SystemDBName             = "mo_catalog"
 	CatalogName              = "taec"
-	SystemTable_DB_Name      = "mo_databases"
+	SystemTable_DB_Name      = "mo_database"
 	SystemTable_Table_Name   = "mo_tables"
 	SystemTable_Columns_Name = "mo_columns"
 	SystemTable_DB_ID        = uint64(1)
@@ -58,7 +58,7 @@ const (
 )
 
 const (
-	SystemDBAttr_Name        = "datName"
+	SystemDBAttr_Name        = "datname"
 	SystemDBAttr_CatalogName = "dat_catalog_name"
 	SystemDBAttr_CreateSQL   = "dat_createsql"
 
@@ -69,7 +69,7 @@ const (
 	SystemRelAttr_Comment     = "rel_comment"
 	SystemRelAttr_CreateSQL   = "rel_createsql"
 
-	SystemColAttr_Name            = "att_name"
+	SystemColAttr_Name            = "attname"
 	SystemColAttr_DBName          = "att_database"
 	SystemColAttr_RelName         = "att_relname"
 	SystemColAttr_Type            = "atttyp"
@@ -162,7 +162,7 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemTableSchema.AppendCol(SystemDBAttr_CreateSQL, t)
+	SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, t)
 
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
 	t = types.Type{
@@ -184,19 +184,19 @@ func init() {
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_Name, t)
 	t = types.Type{
-		Oid:   types.T_uint32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_Type, t)
 	t = types.Type{
-		Oid:   types.T_uint32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_Num, t)
 	t = types.Type{
-		Oid:   types.T_uint32,
+		Oid:   types.T_int32,
 		Size:  4,
 		Width: 32,
 	}

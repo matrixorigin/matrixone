@@ -94,7 +94,7 @@ type History interface {
 	TryTruncate() error
 }
 
-type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error)
+type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{})
 
 type File interface {
 	io.Closer

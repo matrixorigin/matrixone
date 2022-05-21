@@ -15,7 +15,6 @@
 package store
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -37,7 +36,7 @@ func NewMaxSizeRotateChecker(size int) *MaxSizeRotateChecker {
 
 func (c *MaxSizeRotateChecker) PrepareAppend(vfile VFile, delta int) (needRot bool, err error) {
 	if delta > c.MaxSize {
-		return false, errors.New(fmt.Sprintf("MaxSize is %d, but %d is received", c.MaxSize, delta))
+		return false, fmt.Errorf("MaxSize is %d, but %d is received", c.MaxSize, delta)
 
 	}
 	if vfile == nil {

@@ -180,7 +180,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *gvec.Vector) 
 		if unique {
 			for i := uint64(0); i < rows; i++ {
 				str, _ := faker.GetAddress().Latitude(reflect.Value{})
-				s := fmt.Sprintf("%d-%s", i, str)
+				s := fmt.Sprintf("%d-%v", i, str)
 				vals = append(vals, []byte(s))
 			}
 		} else {

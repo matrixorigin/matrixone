@@ -244,7 +244,6 @@ func CompareDecimal128Decimal128(a, b Decimal128, aScale, bScale int32) (result 
 func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, scaleDiff int32) {
 	length := int64(len(src))
 	C.align_int128_using_scale_diff(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), unsafe.Pointer(&length), unsafe.Pointer(&scaleDiff))
-	return
 }
 
 func ScaleDecimal128By10(a Decimal128) (result Decimal128) {
@@ -262,11 +261,20 @@ func Decimal64Decimal64Mul(a Decimal64, b Decimal64) (result Decimal128) {
 	return result
 }
 
+func Decimal64Int64Mul(a Decimal64, b int64) (result Decimal64) {
+	result = Decimal64(int64(a) * b)
+	return result
+}
+
 func Decimal128Decimal128Mul(a Decimal128, b Decimal128) (result Decimal128) {
 	C.mul_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
 	return result
 }
 
+func Decimal128Int64Mul(a Decimal128, b int64) (result Decimal128) {
+	C.mul_int128_int64(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	return result
+}
 func InitDecimal128(value int64) (result Decimal128) {
 	if value == 1 {
 		C.init_int128_as_1(unsafe.Pointer(&result))
@@ -338,7 +346,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 			}
 		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123.45" is invalid for Decimal(5, 3)
-			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+			return result, carry, neg, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
 		}
 		if len(part1Bytes) > int(scale) {
 			for i := int(scale); i < len(part1Bytes); i++ {
@@ -368,7 +376,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 			part0Bytes = part0Bytes[1:]
 		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123" is invalid for Decimal(5, 3)
-			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+			return result, carry, neg, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
 		}
 		for i := 0; i < int(scale); i++ {
 			part0Bytes = append(part0Bytes, '0')
@@ -481,7 +489,7 @@ func (a Decimal128) Decimal128ToString(scale int32) []byte {
 	result := ""
 	neg := Decimal128IsNegative(a)
 	notZero := Decimal128IsNotZero(a)
-	if notZero == false {
+	if !notZero {
 		return []byte("0")
 	}
 	tmp := a
@@ -629,4 +637,8 @@ func Decimal128Decimal128Div(a, b Decimal128, aScale, bScale int32) (result Deci
 func Decimal64ToDecimal128(a Decimal64) (result Decimal128) {
 	C.int64_to_int128(unsafe.Pointer(&a), unsafe.Pointer(&result))
 	return result
+}
+
+func (a Decimal64) String() string {
+	return string("hahaha")
 }

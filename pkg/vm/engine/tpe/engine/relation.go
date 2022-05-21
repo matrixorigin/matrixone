@@ -56,14 +56,14 @@ func (trel *TpeRelation) Cardinality(_ string) int64 {
 	return 1
 }
 
-func (trel *TpeRelation) Close() {
+func (trel *TpeRelation) Close(_ engine.Snapshot) {
 }
 
-func (trel *TpeRelation) ID() string {
+func (trel *TpeRelation) ID(_ engine.Snapshot) string {
 	return trel.desc.Name
 }
 
-func (trel *TpeRelation) Nodes() engine.Nodes {
+func (trel *TpeRelation) Nodes(_ engine.Snapshot) engine.Nodes {
 	for i, node := range trel.nodes {
 		cs := &tuplecodec.CubeShards{}
 		err := json.Unmarshal(node.Data, cs)
@@ -77,7 +77,7 @@ func (trel *TpeRelation) Nodes() engine.Nodes {
 	return trel.nodes
 }
 
-func (trel *TpeRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+func (trel *TpeRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	var attrs []engine.Attribute
 	hasPriKey := false
 	for _, attr := range trel.desc.Attributes {
@@ -108,7 +108,7 @@ func (trel *TpeRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
 	return nil, false
 }
 
-func (trel *TpeRelation) TableDefs() []engine.TableDef {
+func (trel *TpeRelation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	var defs []engine.TableDef
 	var pkNames []string
 	for _, attr := range trel.desc.Attributes {
@@ -140,7 +140,7 @@ func (trel *TpeRelation) TableDefs() []engine.TableDef {
 	return defs
 }
 
-func (trel *TpeRelation) Write(_ uint64, batch *batch.Batch) error {
+func (trel *TpeRelation) Write(_ uint64, batch *batch.Batch, _ engine.Snapshot) error {
 	//attribute set
 	attrSet := make(map[string]uint32)
 	for _, attr := range trel.desc.Attributes {
@@ -210,11 +210,11 @@ func (trel *TpeRelation) Write(_ uint64, batch *batch.Batch) error {
 	return nil
 }
 
-func (trel *TpeRelation) AddTableDef(u uint64, def engine.TableDef) error {
+func (trel *TpeRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic("implement me")
 }
 
-func (trel *TpeRelation) DelTableDef(u uint64, def engine.TableDef) error {
+func (trel *TpeRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	panic("implement me")
 }
 
@@ -300,7 +300,7 @@ func (trel *TpeRelation) parallelReader(cnt int, payload []byte) []engine.Reader
 	return retReaders
 }
 
-func (trel *TpeRelation) NewReader(cnt int, _ extend.Extend, payload []byte) []engine.Reader {
+func (trel *TpeRelation) NewReader(cnt int, _ extend.Extend, payload []byte, _ engine.Snapshot) []engine.Reader {
 	logutil.Infof("table %s newreader cnt %d storeID %d\n", trel.desc.Name, cnt, trel.storeID)
 	logutil.Infof("table %s storeID %d payload len %d \n", trel.desc.Name, trel.storeID, len(payload))
 	if trel.computeHandler.ParallelReader() || trel.computeHandler.MultiNode() {

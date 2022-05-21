@@ -113,10 +113,10 @@ func Test_load(t *testing.T) {
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
 		}
-		rel.EXPECT().TableDefs().Return(tableDefs).AnyTimes()
+		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
-		rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(a, b interface{}) error {
+		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).DoAndReturn(
+			func(a, b, c interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return nil
@@ -127,8 +127,8 @@ func Test_load(t *testing.T) {
 				return fmt.Errorf("fake error")
 			},
 		).AnyTimes()
-		db.EXPECT().Relation(gomock.Any()).Return(rel, nil).AnyTimes()
-		eng.EXPECT().Database(gomock.Any()).Return(db, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), nil).Return(rel, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(db, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -158,7 +158,7 @@ func Test_load(t *testing.T) {
 			}
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
-			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 
 			cws = append(cws, select_2)
@@ -263,10 +263,10 @@ func Test_load(t *testing.T) {
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
 		}
-		rel.EXPECT().TableDefs().Return(tableDefs).AnyTimes()
+		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
-		rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(a, b interface{}) error {
+		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).DoAndReturn(
+			func(a, b, c interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return fmt.Errorf("fake error")
@@ -277,8 +277,8 @@ func Test_load(t *testing.T) {
 				return nil
 			},
 		).AnyTimes()
-		db.EXPECT().Relation(gomock.Any()).Return(rel, nil).AnyTimes()
-		eng.EXPECT().Database(gomock.Any()).Return(db, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), nil).Return(rel, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(db, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -412,7 +412,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		rel := mock_frontend.NewMockRelation(ctrl)
-		rel.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).Return(nil).AnyTimes()
 
 		var curBatchSize int = 13
 		handler := &WriteBatchHandler{

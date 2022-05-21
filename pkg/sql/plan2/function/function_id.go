@@ -166,6 +166,7 @@ const (
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
 	SUBSTRING // SUBSTRING
+	YEAR      // YEAR
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -174,7 +175,42 @@ const (
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int{
-	"=":    EQUAL,
-	"case": CASE,
-	"max":  MAX,
+	// operators
+	"=":           EQUAL,
+	">":           GREAT_THAN,
+	">=":          GREAT_EQUAL,
+	"<":           LESS_THAN,
+	"<=":          LESS_EQUAL,
+	"<>":          NOT_EQUAL,
+	"!=":          NOT_EQUAL,
+	"not":         NOT,
+	"and":         AND,
+	"or":          OR,
+	"like":        LIKE,
+	"between":     BETWEEN,
+	"in":          IN,
+	"exists":      EXISTS,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"case":        CASE,
+	"cast":        CAST,
+	// aggregate
+	"max":   MAX,
+	"min":   MIN,
+	"sum":   SUM,
+	"avg":   AVG,
+	"count": COUNT,
+	// builtin
+	"extract":   EXTRACT,
+	"year":      YEAR,
+	"substr":    SUBSTRING,
+	"substring": SUBSTRING,
+	"iff":       IFF,
 }

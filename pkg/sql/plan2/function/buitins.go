@@ -16,9 +16,7 @@ package function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func initBuiltIns() {
@@ -34,41 +32,66 @@ func initBuiltIns() {
 	}
 }
 
-var builtins = map[string][]Function{
-	"case": {
+// builtins contains the builtin function indexed by function id.
+var builtins = map[int][]Function{
+	EXTRACT: {
 		{
-			Index:     0,
-			Flag:      plan.Function_NONE,
-			Kind:      CASE_WHEN_EXPRESSION,
-			Args:      nil,
-			ReturnTyp: types.T_int64,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				// not implement now.
-				return nil, nil
-			},
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				l := len(inputTypes)
-				if l < 3 {
-					return false
-				}
-				caseType := inputTypes[0]
-				for i := 0; i < l-1; i += 2 { // when should be caseType
-					if inputTypes[i] != caseType && isNotScalarNull(inputTypes[i]) {
-						return false
-					}
-				}
-				for i := 1; i < l-1; i += 2 { // then should be int64
-					if inputTypes[i] != types.T_int64 && isNotScalarNull(inputTypes[i]) {
-						return false
-					}
-				}
-				if l%2 == 1 { // has else part
-					if inputTypes[l-1] != types.T_int64 && isNotScalarNull(inputTypes[l-1]) {
-						return false
-					}
-				}
-				return true
-			},
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_date},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_datetime},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+	},
+	YEAR: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date},
+			ReturnTyp:   types.T_uint16,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_datetime},
+			ReturnTyp:   types.T_uint16,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+	},
+	SUBSTRING: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_char, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_char,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
 		},
 	},
 }

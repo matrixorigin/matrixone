@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"unsafe"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
@@ -174,7 +174,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) error {
 		err = ctr.processHStr(bat, proc)
 	}
 	if err != nil {
-		batch.Clean(ctr.bat, proc.Mp)
+		ctr.bat.Clean(proc.Mp)
 		ctr.bat = nil
 		return err
 	}
@@ -186,7 +186,7 @@ func (ctr *Container) processH0(bat *batch.Batch, proc *process.Process) error {
 		ctr.bat = bat
 		return nil
 	}
-	defer batch.Clean(bat, proc.Mp)
+	defer bat.Clean(proc.Mp)
 	for _, z := range bat.Zs {
 		ctr.bat.Zs[0] += z
 	}
@@ -200,7 +200,7 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
 	flg := ctr.bat == nil
 	if !flg {
-		defer batch.Clean(bat, proc.Mp)
+		defer bat.Clean(proc.Mp)
 	}
 	for i := 0; i < count; i += UnitLimit {
 		n := count - i
@@ -246,7 +246,7 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 	count := len(bat.Zs)
 	flg := ctr.bat == nil
 	if !flg {
-		defer batch.Clean(bat, proc.Mp)
+		defer bat.Clean(proc.Mp)
 	}
 	for i := 0; i < count; i += UnitLimit {
 		n := count - i
@@ -291,7 +291,7 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 	count := len(bat.Zs)
 	flg := ctr.bat == nil
 	if !flg {
-		defer batch.Clean(bat, proc.Mp)
+		defer bat.Clean(proc.Mp)
 	}
 	for i := 0; i < count; i += UnitLimit {
 		n := count - i
@@ -336,7 +336,7 @@ func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error 
 	count := len(bat.Zs)
 	flg := ctr.bat == nil
 	if !flg {
-		defer batch.Clean(bat, proc.Mp)
+		defer bat.Clean(proc.Mp)
 	}
 	for i := 0; i < count; i += UnitLimit {
 		n := count - i
@@ -381,7 +381,7 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 	count := len(bat.Zs)
 	flg := ctr.bat == nil
 	if !flg {
-		defer batch.Clean(bat, proc.Mp)
+		defer bat.Clean(proc.Mp)
 	}
 	for i := 0; i < count; i += UnitLimit { // batch
 		n := count - i

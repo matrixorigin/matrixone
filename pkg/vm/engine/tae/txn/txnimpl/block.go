@@ -29,15 +29,16 @@ import (
 
 type txnBlock struct {
 	*txnbase.TxnBlock
-	entry *catalog.BlockEntry
-	store txnif.TxnStore
+	isUncommitted bool
+	entry         *catalog.BlockEntry
+	table         *txnTable
 }
 
 type blockIt struct {
 	sync.RWMutex
-	txn    txnif.AsyncTxn
 	linkIt *common.LinkIt
 	curr   *catalog.BlockEntry
+	table  *txnTable
 }
 
 type relBlockIt struct {
@@ -47,15 +48,15 @@ type relBlockIt struct {
 	blockIt   handle.BlockIt
 }
 
-func newBlockIt(txn txnif.AsyncTxn, meta *catalog.SegmentEntry) *blockIt {
+func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 	it := &blockIt{
-		txn:    txn,
+		table:  table,
 		linkIt: meta.MakeBlockIt(true),
 	}
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.txn, curr.RWMutex) {
+		if curr.TxnCanRead(it.table.store.txn, curr.RWMutex) {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -81,7 +82,7 @@ func (it *blockIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.BlockEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.txn, entry.RWMutex)
+		valid = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
 		if valid {
 			it.curr = entry
@@ -91,22 +92,24 @@ func (it *blockIt) Next() {
 }
 
 func (it *blockIt) GetBlock() handle.Block {
-	return buildBlock(it.txn, it.curr)
+	return buildBlock(it.table, it.curr)
 }
 
-func buildBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) handle.Block {
+func buildBlock(table *txnTable, meta *catalog.BlockEntry) handle.Block {
 	if meta.GetSegment().GetTable().GetDB().IsSystemDB() {
-		return newSysBlock(txn, meta)
+		return newSysBlock(table, meta)
 	}
-	return newBlock(txn, meta)
+	return newBlock(table, meta)
 }
 
-func newBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnBlock {
+func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
 	blk := &txnBlock{
 		TxnBlock: &txnbase.TxnBlock{
-			Txn: txn,
+			Txn: table.store.txn,
 		},
-		entry: meta,
+		entry:         meta,
+		table:         table,
+		isUncommitted: isLocalSegmentByID(meta.GetSegment().ID),
 	}
 	return blk
 }
@@ -118,13 +121,9 @@ func (blk *txnBlock) String() string {
 	// return blk.entry.String()
 }
 
-// func (blk *txnBlock) IsAppendable() bool {
-// 	if !blk.entry.IsAppendable() {
-// 		return false
-// 	}
-// 	return
-// }
-
+func (blk *txnBlock) IsUncommitted() bool {
+	return blk.isUncommitted
+}
 func (blk *txnBlock) GetTotalChanges() int {
 	return blk.entry.GetBlockData().GetTotalChanges()
 }
@@ -145,21 +144,29 @@ func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end)
 }
 
-// func (blk *txnBlock) GetByFilter(filter handle.Filter) (uint32, error) {
-// 	return blk.Txn.GetStore().GetByFilter(blk.entry.AsCommonID(), filter)
-// }
-
 func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
 	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)
 }
 
 // TODO: temp use coarse rows
-func (blk *txnBlock) Rows() int { return blk.entry.GetBlockData().Rows(blk.Txn, true) }
+func (blk *txnBlock) Rows() int {
+	if blk.isUncommitted {
+		return blk.table.localSegment.GetBlockRows(blk.entry)
+	}
+	return blk.entry.GetBlockData().Rows(blk.Txn, true)
+}
 
 func (blk *txnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error) {
+	if blk.isUncommitted {
+		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx, compressed, decompressed)
+	}
 	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx, compressed, decompressed)
 }
 func (blk *txnBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error) {
+	if blk.isUncommitted {
+		attrId := blk.table.entry.GetSchema().GetColIdx(attr)
+		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId, compressed, decompressed)
+	}
 	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr, compressed, decompressed)
 }
 
@@ -168,8 +175,12 @@ func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 }
 
 func (blk *txnBlock) GetSegment() (seg handle.Segment) {
-	seg = newSegment(blk.Txn, blk.entry.GetSegment())
+	seg = newSegment(blk.table, blk.entry.GetSegment())
 	return
+}
+
+func (blk *txnBlock) GetByFilter(filter *handle.Filter) (offset uint32, err error) {
+	return blk.entry.GetBlockData().GetByFilter(blk.table.store.txn, filter)
 }
 
 // TODO: segmentit or tableit

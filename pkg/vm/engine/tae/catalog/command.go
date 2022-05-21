@@ -257,13 +257,16 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, cmd.Segment.ID); err != nil {
 			return
 		}
+		if err = binary.Write(w, binary.BigEndian, cmd.Block.state); err != nil {
+			return
+		}
 		if err = binary.Write(w, binary.BigEndian, cmd.entry.ID); err != nil {
 			return
 		}
 		if err = binary.Write(w, binary.BigEndian, cmd.entry.CreateAt); err != nil {
 			return
 		}
-		n += 8 + 8 + 8 + 8
+		n += 8 + 8 + 8 + 8 + 8
 	case CmdDropTable:
 		if err = binary.Write(w, binary.BigEndian, cmd.Table.db.ID); err != nil {
 			return
@@ -373,7 +376,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 
-	cmd.entry = &BaseEntry{}
+	cmd.entry = NewReplayBaseEntry()
 	if err = binary.Read(r, binary.BigEndian, &cmd.entry.ID); err != nil {
 		return
 	}
@@ -388,9 +391,8 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		cmd.entry.CurrOp = OpCreate
-		cmd.DB = &DBEntry{
-			BaseEntry: cmd.entry,
-		}
+		cmd.DB = NewReplayDBEntry()
+		cmd.DB.BaseEntry = cmd.entry
 		if cmd.DB.name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
@@ -406,10 +408,9 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		cmd.entry.CurrOp = OpCreate
-		cmd.Table = &TableEntry{
-			BaseEntry: cmd.entry,
-			schema:    new(Schema),
-		}
+		cmd.Table = NewReplayTableEntry()
+		cmd.Table.BaseEntry = cmd.entry
+		cmd.Table.schema = new(Schema)
 		if sn, err = cmd.Table.schema.ReadFrom(r); err != nil {
 			return
 		}
@@ -447,6 +448,10 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		if err = binary.Read(r, binary.BigEndian, &cmd.SegmentID); err != nil {
 			return
 		}
+		var state EntryState
+		if err = binary.Read(r, binary.BigEndian, &state); err != nil {
+			return
+		}
 		if err = binary.Read(r, binary.BigEndian, &cmd.entry.ID); err != nil {
 			return
 		}
@@ -456,6 +461,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		cmd.entry.CurrOp = OpCreate
 		cmd.Block = &BlockEntry{
 			BaseEntry: cmd.entry,
+			state:     state,
 		}
 		n += 8 + 8 + 8 + 8
 	case CmdDropTable:
@@ -512,6 +518,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	return
 }
+
 func (cmd *EntryCommand) Unmarshal(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = cmd.ReadFrom(bbuf)

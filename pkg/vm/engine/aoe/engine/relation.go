@@ -19,9 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/rand"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"time"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,22 +27,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
 	log "github.com/sirupsen/logrus"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
 
 var FilterTypeMap = map[int]int32{
@@ -59,14 +55,14 @@ var FilterTypeMap = map[int]int32{
 const defaultRetryTimes = 5
 
 //Close closes the relation. It closes all relations of the tablet in the aoe store.
-func (r *relation) Close() {
+func (r *relation) Close(_ engine.Snapshot) {
 	for _, v := range r.mp {
 		v.Close()
 	}
 }
 
 //ID returns the name of the table.
-func (r *relation) ID() string {
+func (r *relation) ID(_ engine.Snapshot) string {
 	return r.tbl.Name
 }
 
@@ -95,7 +91,7 @@ func (r *relation) Attribute() []engine.Attribute {
 }
 
 //Attribute writes the batch into the table.
-func (r *relation) Write(_ uint64, bat *batch.Batch) error {
+func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -144,7 +140,7 @@ func (r *relation) update() error {
 	if err != nil {
 		return err
 	}
-	if tablets == nil || len(tablets) == 0 {
+	if len(tablets) == 0 {
 		return catalog.ErrTableNotExists
 	}
 
@@ -168,7 +164,7 @@ func (r *relation) update() error {
 			storeId := r.catalog.Driver.RaftStore().
 				GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(
-				aoedbName.IDToNameFactory.Encode(
+				adb.IDToNameFactory.Encode(
 					tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
@@ -221,11 +217,11 @@ func (r *relation) DropIndex(epoch uint64, name string) error {
 	return r.catalog.DropIndex(epoch, r.tbl.Id, r.tbl.SchemaId, name)
 }
 
-func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
+func (r *relation) AddAttribute(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
+func (r *relation) DelAttribute(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
@@ -249,28 +245,28 @@ func (r *relation) Cardinality(_ string) int64 {
 	return 0
 }
 
-func (r *relation) Nodes() engine.Nodes {
+func (r *relation) Nodes(_ engine.Snapshot) engine.Nodes {
 	return r.nodes
 }
 
-func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+func (r *relation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	return nil, false
 }
 
-func (r *relation) TableDefs() []engine.TableDef {
+func (r *relation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	_, _, _, _, defs, _ := helper.UnTransfer(*r.tbl)
 	return defs
 }
 
-func (r *relation) AddTableDef(u uint64, def engine.TableDef) error {
+func (r *relation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
+func (r *relation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) NewReader(num int, e extend.Extend, _ []byte) []engine.Reader {
+func (r *relation) NewReader(num int, e extend.Extend, _ []byte, _ engine.Snapshot) []engine.Reader {
 	fcs := getFilterContext(e)
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {

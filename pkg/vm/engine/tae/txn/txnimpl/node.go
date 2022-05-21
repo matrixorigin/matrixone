@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -56,13 +57,14 @@ type InsertNode interface {
 	RangeDelete(start, end uint32) error
 	IsRowDeleted(row uint32) bool
 	PrintDeletes() string
+	FillColumnView(*model.ColumnView, *bytes.Buffer, *bytes.Buffer) error
 	Window(start, end uint32) (*gbat.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) (interface{}, error)
 	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
 	ToTransient()
-	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
+	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
 	GetAppends() []*appendInfo
@@ -71,6 +73,7 @@ type InsertNode interface {
 type appendInfo struct {
 	seq              uint32
 	srcOff, srcLen   uint32
+	dbid             uint64
 	dest             *common.ID
 	destOff, destLen uint32
 }
@@ -89,6 +92,24 @@ func mockAppendInfo() *appendInfo {
 		destLen: 9876,
 	}
 }
+func (info *appendInfo) GetDest() *common.ID {
+	return info.dest
+}
+func (info *appendInfo) GetDBID() uint64 {
+	return info.dbid
+}
+func (info *appendInfo) GetSrcOff() uint32 {
+	return info.srcOff
+}
+func (info *appendInfo) GetSrcLen() uint32 {
+	return info.srcLen
+}
+func (info *appendInfo) GetDestOff() uint32 {
+	return info.destOff
+}
+func (info *appendInfo) GetDestLen() uint32 {
+	return info.destLen
+}
 func (info *appendInfo) String() string {
 	s := fmt.Sprintf("[%d]: Append from [%d:%d] to blk %s[%d:%d]",
 		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.ToBlockFileName(), info.destOff, info.destLen+info.destOff)
@@ -102,6 +123,9 @@ func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, info.srcLen); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, info.dbid); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, info.dest.TableID); err != nil {
@@ -132,6 +156,9 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &info.srcLen); err != nil {
 		return
 	}
+	if err = binary.Read(r, binary.BigEndian, &info.dbid); err != nil {
+		return
+	}
 	info.dest = &common.ID{}
 	if err = binary.Read(r, binary.BigEndian, &info.dest.TableID); err != nil {
 		return
@@ -160,13 +187,13 @@ type insertNode struct {
 	typ     txnbase.NodeState
 	deletes *roaring.Bitmap
 	rows    uint32
-	table   Table
+	table   *txnTable
 	appends []*appendInfo
 }
 
-func NewInsertNode(tbl Table, mgr base.INodeManager, id common.ID, driver wal.Driver) *insertNode {
+func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver wal.Driver) *insertNode {
 	impl := new(insertNode)
-	impl.Node = buffer.NewNode(impl, mgr, id, 0)
+	impl.Node = buffer.NewNode(impl, mgr, *id, 0)
 	impl.driver = driver
 	impl.typ = txnbase.PersistNode
 	impl.UnloadFunc = impl.OnUnload
@@ -190,12 +217,13 @@ func mockInsertNodeWithAppendInfo(infos []*appendInfo) *insertNode {
 func (n *insertNode) GetAppends() []*appendInfo {
 	return n.appends
 }
-func (n *insertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo {
+func (n *insertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo {
 	seq := len(n.appends)
 	info := &appendInfo{
 		dest:    dest,
 		destOff: destOff,
 		destLen: destLen,
+		dbid:    dbid,
 		srcOff:  srcOff,
 		srcLen:  srcLen,
 		seq:     uint32(seq),
@@ -366,6 +394,23 @@ func (n *insertNode) Append(data *gbat.Batch, offset uint32) (uint32, error) {
 	return uint32(cnt), nil
 }
 
+func (n *insertNode) FillColumnView(view *model.ColumnView, compressed, decompressed *bytes.Buffer) (err error) {
+	ivec, err := n.data.GetVectorByAttr(view.ColIdx)
+	if err != nil {
+		return
+	}
+	ivec = ivec.GetLatestView()
+	if decompressed == nil || compressed == nil {
+		view.AppliedVec, err = ivec.CopyToVector()
+	} else {
+		decompressed.Reset()
+		compressed.Reset()
+		view.AppliedVec, err = ivec.CopyToVectorWithBuffer(compressed, decompressed)
+	}
+	view.DeleteMask = n.deletes
+	return
+}
+
 func (n *insertNode) GetSpace() uint32 {
 	return txnbase.MaxNodeRows - n.rows
 }
@@ -387,7 +432,7 @@ func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 		return toAppend
 	}
 	appendedOffset := n.offsetWithDeletes(appended)
-	toAppendOffset := n.offsetWithDeletes(toAppend)
+	toAppendOffset := n.offsetWithDeletes(toAppend + appended)
 	return toAppendOffset - appendedOffset
 }
 
@@ -432,7 +477,7 @@ func (n *insertNode) IsRowDeleted(row uint32) bool {
 
 func (n *insertNode) PrintDeletes() string {
 	if n.deletes == nil {
-		return fmt.Sprintf("NoDeletes")
+		return "NoDeletes"
 	}
 	return n.deletes.String()
 }

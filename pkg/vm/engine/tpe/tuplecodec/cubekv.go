@@ -590,7 +590,7 @@ func (ck *CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 	for i := 1; i < len(keysIndexes); i++ {
 		preKey := keys[keysIndexes[i-1]]
 		curKey := keys[keysIndexes[i]]
-		if bytes.Compare(preKey, curKey) == 0 {
+		if bytes.Equal(preKey, curKey) {
 			return errorKeyExists
 		}
 	}

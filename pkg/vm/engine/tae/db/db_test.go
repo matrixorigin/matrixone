@@ -28,6 +28,7 @@ import (
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -1597,8 +1598,6 @@ func TestSystemDB1(t *testing.T) {
 	assert.Nil(t, err)
 
 	db, _ := txn.GetDatabase(catalog.SystemDBName)
-	_, err = db.CreateRelation(schema)
-	assert.NotNil(t, err)
 	table, err := db.GetRelationByName(catalog.SystemTable_DB_Name)
 	assert.Nil(t, err)
 	it := table.MakeBlockIt()
@@ -1629,10 +1628,17 @@ func TestSystemDB1(t *testing.T) {
 		view, err := blk.GetColumnDataByName(catalog.SystemRelAttr_Name, nil, nil)
 		assert.Nil(t, err)
 		assert.Equal(t, 4, vector.Length(view.GetColumnData()))
+		view, err = blk.GetColumnDataByName(catalog.SystemRelAttr_Persistence, nil, nil)
+		assert.NoError(t, err)
+		t.Log(view.GetColumnData().String())
+		view, err = blk.GetColumnDataByName(catalog.SystemRelAttr_Kind, nil, nil)
+		assert.NoError(t, err)
+		t.Log(view.GetColumnData().String())
 		it.Next()
 	}
 	assert.Equal(t, 4, rows)
 
+	bat := gbat.New(true, []string{catalog.SystemColAttr_DBName, catalog.SystemColAttr_RelName, catalog.SystemColAttr_Name, catalog.SystemColAttr_ConstraintType})
 	table, err = db.GetRelationByName(catalog.SystemTable_Columns_Name)
 	assert.Nil(t, err)
 	it = table.MakeBlockIt()
@@ -1640,16 +1646,25 @@ func TestSystemDB1(t *testing.T) {
 	for it.Valid() {
 		blk := it.GetBlock()
 		rows += blk.Rows()
-		view, err := blk.GetColumnDataByName(catalog.SystemColAttr_Name, nil, nil)
+		view, err := blk.GetColumnDataByName(catalog.SystemColAttr_DBName, nil, nil)
+		assert.NoError(t, err)
+		bat.Vecs[0] = view.GetColumnData()
+
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_RelName, nil, nil)
+		assert.Nil(t, err)
+		bat.Vecs[1] = view.GetColumnData()
+
+		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Name, nil, nil)
 		assert.Nil(t, err)
 		t.Log(view.GetColumnData().String())
+		bat.Vecs[2] = view.GetColumnData()
+
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_ConstraintType, nil, nil)
 		assert.Nil(t, err)
 		t.Log(view.GetColumnData().String())
+		bat.Vecs[3] = view.GetColumnData()
+
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Type, nil, nil)
-		assert.Nil(t, err)
-		t.Log(view.GetColumnData().String())
-		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_RelName, nil, nil)
 		assert.Nil(t, err)
 		t.Log(view.GetColumnData().String())
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Num, nil, nil)
@@ -1659,7 +1674,258 @@ func TestSystemDB1(t *testing.T) {
 	}
 	t.Log(rows)
 
+	for i := 0; i < movec.Length(bat.Vecs[0]); i++ {
+		dbName := compute.GetValue(bat.Vecs[0], uint32(i))
+		relName := compute.GetValue(bat.Vecs[1], uint32(i))
+		attrName := compute.GetValue(bat.Vecs[2], uint32(i))
+		ct := compute.GetValue(bat.Vecs[3], uint32(i))
+		t.Logf("%s,%s,%s,%s", dbName, relName, attrName, ct)
+		if dbName == catalog.SystemDBName {
+			if relName == catalog.SystemTable_DB_Name {
+				if attrName == catalog.SystemDBAttr_Name {
+					assert.Equal(t, catalog.SystemColPKConstraint, ct)
+				} else {
+					assert.Equal(t, catalog.SystemColNoConstraint, ct)
+				}
+			} else if relName == catalog.SystemTable_Table_Name {
+				if attrName == catalog.SystemRelAttr_DBName || attrName == catalog.SystemRelAttr_Name {
+					assert.Equal(t, catalog.SystemColPKConstraint, ct)
+				} else {
+					assert.Equal(t, catalog.SystemColNoConstraint, ct)
+				}
+			} else if relName == catalog.SystemTable_Columns_Name {
+				if attrName == catalog.SystemColAttr_DBName || attrName == catalog.SystemColAttr_RelName || attrName == catalog.SystemColAttr_Name {
+					assert.Equal(t, catalog.SystemColPKConstraint, ct)
+				} else {
+					assert.Equal(t, catalog.SystemColNoConstraint, ct)
+				}
+			}
+		}
+	}
+
 	err = txn.Rollback()
 	assert.Nil(t, err)
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+}
+
+func TestSystemDB2(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	txn := tae.StartTxn(nil)
+	sysDB, err := txn.GetDatabase(catalog.SystemDBName)
+	assert.NoError(t, err)
+	_, err = sysDB.DropRelationByName(catalog.SystemTable_DB_Name)
+	assert.Error(t, err)
+	_, err = sysDB.DropRelationByName(catalog.SystemTable_Table_Name)
+	assert.Error(t, err)
+	_, err = sysDB.DropRelationByName(catalog.SystemTable_Columns_Name)
+	assert.Error(t, err)
+
+	schema := catalog.MockSchema(2)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockData(schema, 1000)
+
+	rel, err := sysDB.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NotNil(t, rel)
+	err = rel.Append(bat)
+	assert.Nil(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	sysDB, err = txn.GetDatabase(catalog.SystemDBName)
+	assert.NoError(t, err)
+	rel, err = sysDB.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	it := rel.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(0, nil, nil)
+		assert.NoError(t, err)
+		rows += movec.Length(view.GetColumnData())
+		it.Next()
+	}
+	assert.Equal(t, 1000, rows)
+	assert.NoError(t, txn.Commit())
+}
+
+func TestSystemDB3(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	txn := tae.StartTxn(nil)
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 12
+	bat := catalog.MockData(schema, 20)
+	db, err := txn.GetDatabase(catalog.SystemDBName)
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
+func TestScan1(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows-1)
+	txn := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	it := rel.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		rows += blk.Rows()
+		it.Next()
+	}
+	t.Logf("rows=%d", rows)
+	assert.NoError(t, txn.Commit())
+}
+
+func TestDedup(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+
+	bat := catalog.MockData(schema, 10)
+	txn := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	err = rel.Append(bat)
+	t.Log(err)
+	it := rel.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(2, nil, nil)
+		assert.NoError(t, err)
+		rows += view.Length()
+		t.Log(view.GetColumnData().String())
+		it.Next()
+	}
+	assert.Equal(t, 10, rows)
+	assert.Error(t, err)
+	err = txn.Rollback()
+	assert.NoError(t, err)
+}
+
+func TestScan2(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.PrimaryKey = 12
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 10
+	rows := schema.BlockMaxRows * 5 / 2
+	bat := catalog.MockData(schema, rows)
+	bats := compute.SplitBatch(bat, 2)
+
+	txn := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bats[0])
+	assert.NoError(t, err)
+
+	actualRows := 0
+	blkIt := rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	assert.Equal(t, movec.Length(bats[0].Vecs[0]), actualRows)
+
+	err = rel.Append(bats[0])
+	assert.Error(t, err)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+
+	actualRows = 0
+	blkIt = rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	assert.Equal(t, int(rows), actualRows)
+
+	pkv := compute.GetValue(bat.Vecs[schema.PrimaryKey], 5)
+	filter := handle.NewEQFilter(pkv)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+
+	actualRows = 0
+	blkIt = rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	t.Log(actualRows)
+	assert.Equal(t, int(rows)-1, actualRows)
+
+	pkv = compute.GetValue(bat.Vecs[schema.PrimaryKey], 8)
+	filter = handle.NewEQFilter(pkv)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	updateV := int64(999)
+	err = rel.Update(id, row, 3, updateV)
+	assert.NoError(t, err)
+
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	v, err := rel.GetValue(id, row, 3)
+	assert.NoError(t, err)
+	t.Log(v)
+	assert.Equal(t, updateV, v.(int64))
+
+	actualRows = 0
+	blkIt = rel.MakeBlockIt()
+	for blkIt.Valid() {
+		blk := blkIt.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		actualRows += view.Length()
+		blkIt.Next()
+	}
+	t.Log(actualRows)
+	assert.Equal(t, int(rows)-1, actualRows)
+
+	assert.NoError(t, txn.Commit())
 }

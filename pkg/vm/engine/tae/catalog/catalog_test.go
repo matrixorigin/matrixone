@@ -68,7 +68,8 @@ func TestCreateDB1(t *testing.T) {
 	_, err = txn1.GetDatabase(name)
 	assert.Nil(t, err)
 
-	txn1.Commit()
+	err = txn1.Commit()
+	assert.Nil(t, err)
 
 	assert.Nil(t, err)
 	// assert.False(t, db1.(*mcokDBHandle).entry.IsCommitting())

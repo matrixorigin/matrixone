@@ -123,22 +123,22 @@ var DumpTableInfo = func(eng vm_engine.Engine, opt *batch.DumpOption) (*batch.Du
 		return nil, errors.New("TpeEngine convert failed")
 	}
 	if opt.Db_name == nil {
-		opt.Db_name = tpe_eng.Databases()
+		opt.Db_name = tpe_eng.Databases(nil)
 	}
 	for _, db_name := range opt.Db_name {
 		if db_name == "system" {
 			continue
 		}
-		db, err := eng.Database(db_name)
+		db, err := eng.Database(db_name, nil)
 		if err != nil {
 			return nil, err
 		}
 		if opt.Table_name == nil {
-			opt.Table_name = db.Relations()
+			opt.Table_name = db.Relations(nil)
 		}
 
 		for _, table_name := range opt.Table_name {
-			table, err := db.Relation(table_name)
+			table, err := db.Relation(table_name, nil)
 			if err != nil {
 				return nil, err
 			}

@@ -132,7 +132,7 @@ func (base *syncBase) OnReplay(r *replayer) {
 		base.synced.ids[k] = v
 	}
 	for groupId, ckps := range r.checkpointrange {
-		base.checkpointed.ids[groupId] = ckps.Intervals[0].End
+		base.checkpointed.ids[groupId] = ckps.GetCheckpointed()
 	}
 }
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {

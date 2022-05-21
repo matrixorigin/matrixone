@@ -192,25 +192,15 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 }
 
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
-	if e.IsSystemDB() {
-		err = ErrNotPermitted
-		logutil.Warnf("cannot create table into system db")
-		return
-	}
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
-	err = e.addEntryLocked(created)
+	err = e.AddEntryLocked(created)
 	e.Unlock()
 
 	return created, err
 }
 
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
-	if e.IsSystemDB() {
-		err = ErrNotPermitted
-		logutil.Warnf("cannot drop table from system db")
-		return err
-	}
 	logutil.Infof("Removing: %s", table.String())
 	e.Lock()
 	defer e.Unlock()
@@ -227,7 +217,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	return
 }
 
-func (e *DBEntry) addEntryLocked(table *TableEntry) error {
+func (e *DBEntry) AddEntryLocked(table *TableEntry) error {
 	nn := e.nameNodes[table.schema.Name]
 	if nn == nil {
 		n := e.link.Insert(table)

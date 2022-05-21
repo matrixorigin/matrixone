@@ -17,8 +17,9 @@ package top
 import (
 	"fmt"
 
-	compare "github.com/matrixorigin/matrixone/pkg/compare2"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -38,8 +39,8 @@ const (
 )
 
 type Container struct {
+	n     int // result vector number
 	state int
-	n     int // number of attributes involved in sorting
 	sels  []int64
 	poses []int32 // sorted list of attributes
 	cmps  []compare.Compare
@@ -48,7 +49,7 @@ type Container struct {
 }
 
 type Field struct {
-	Pos  int32
+	E    *plan.Expr
 	Type Direction
 }
 
@@ -65,7 +66,7 @@ var directionName = [...]string{
 }
 
 func (n Field) String() string {
-	s := fmt.Sprintf("%v", n.Pos)
+	s := fmt.Sprintf("%v", n.E)
 	if n.Type != DefaultDirection {
 		s += " " + n.Type.String()
 	}
@@ -80,8 +81,8 @@ func (i Direction) String() string {
 }
 
 func (ctr *Container) compare(vi, vj int, i, j int64) int {
-	for k := 0; k < ctr.n; k++ {
-		if r := ctr.cmps[k].Compare(vi, vj, i, j); r != 0 {
+	for _, pos := range ctr.poses {
+		if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
 			return r
 		}
 	}

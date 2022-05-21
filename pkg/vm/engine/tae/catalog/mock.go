@@ -17,6 +17,8 @@ package catalog
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -188,4 +190,8 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 	}
 	txn.Store.AddTxnEntry(0, entry)
 	return newMockDBHandle(txn.catalog, txn, entry), nil
+}
+
+func MockData(schema *Schema, rows uint32) *batch.Batch {
+	return compute.MockBatch(schema.Types(), uint64(rows), int(schema.PrimaryKey), nil)
 }

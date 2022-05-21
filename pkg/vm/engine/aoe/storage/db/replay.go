@@ -853,7 +853,7 @@ func (h *replayHandle) Cleanup() {
 }
 
 func (h *replayHandle) String() string {
-	s := fmt.Sprintf("[InfoFiles]:")
+	s := "[InfoFiles]:"
 	for tid, tbl := range h.files {
 		s = fmt.Sprintf("%s\nTable %d [Sorted]: %d", s, tid, len(tbl.sortedfiles))
 		for _, fs := range tbl.sortedfiles {

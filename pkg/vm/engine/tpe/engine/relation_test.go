@@ -35,10 +35,10 @@ func TestTpeRelation_Write(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		err = tpe.Create(0, "test", 0)
+		err = tpe.Create(0, "test", 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database("test")
+		dbDesc, err := tpe.Database("test", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
@@ -56,16 +56,16 @@ func TestTpeRelation_Write(t *testing.T) {
 			rawDefs = append(rawDefs, def)
 		}
 
-		err = dbDesc.Create(0, "A", defs)
+		err = dbDesc.Create(0, "A", defs, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		tableDesc, err := dbDesc.Relation("A")
+		tableDesc, err := dbDesc.Relation("A", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//make data
 		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
 
-		err = tableDesc.Write(0, bat)
+		err = tableDesc.Write(0, bat, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -76,10 +76,10 @@ func TestTpeRelation_Write(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		err = tpe.Create(0, "test", 0)
+		err = tpe.Create(0, "test", 0, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		dbDesc, err := tpe.Database("test")
+		dbDesc, err := tpe.Database("test", nil)
 		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
@@ -104,16 +104,16 @@ func TestTpeRelation_Write(t *testing.T) {
 
 		defs = append(defs, pkDef)
 
-		err = dbDesc.Create(0, "A", defs)
+		err = dbDesc.Create(0, "A", defs, nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		tableDesc, err := dbDesc.Relation("A")
+		tableDesc, err := dbDesc.Relation("A", nil)
 		convey.So(err, convey.ShouldBeNil)
 
-		convey.So(tableDesc.ID(), convey.ShouldEqual, "A")
+		convey.So(tableDesc.ID(nil), convey.ShouldEqual, "A")
 
-		convey.So(tableDesc.Nodes()[0].Addr, convey.ShouldEqual, "localhost:20000")
-		convey.So(tableDesc.Nodes()[0].Id, convey.ShouldEqual, "0")
+		convey.So(tableDesc.Nodes(nil)[0].Addr, convey.ShouldEqual, "localhost:20000")
+		convey.So(tableDesc.Nodes(nil)[0].Id, convey.ShouldEqual, "0")
 
 		dumpShards := &tuplecodec.CubeShards{
 			Shards: []metapb.Shard{
@@ -127,7 +127,7 @@ func TestTpeRelation_Write(t *testing.T) {
 		payload, err := json.Marshal(dumpShards)
 		convey.So(err, convey.ShouldBeNil)
 
-		readers := tableDesc.NewReader(10, nil, payload)
+		readers := tableDesc.NewReader(10, nil, payload, nil)
 		dumpReaderCnt := 0
 		for i := 0; i < 10; i++ {
 			rd := readers[i].(*TpeReader)
@@ -137,7 +137,7 @@ func TestTpeRelation_Write(t *testing.T) {
 		}
 		convey.So(dumpReaderCnt, convey.ShouldEqual, 9)
 
-		getDefs := tableDesc.TableDefs()
+		getDefs := tableDesc.TableDefs(nil)
 		for _, get := range getDefs {
 			if x, ok := get.(*engine.AttributeDef); ok {
 				found := false
@@ -163,7 +163,7 @@ func TestTpeRelation_Write(t *testing.T) {
 			vec0[i] = uint64(i)
 			vec1[i] = uint64(i)
 		}
-		err = tableDesc.Write(0, bat)
+		err = tableDesc.Write(0, bat, nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

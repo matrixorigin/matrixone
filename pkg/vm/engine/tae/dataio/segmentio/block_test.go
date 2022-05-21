@@ -19,6 +19,8 @@ import (
 	"path"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/compress"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -66,12 +68,16 @@ func TestBlock1(t *testing.T) {
 	dataFile, err := colBlk0.OpenDataFile()
 	assert.Nil(t, err)
 	size := dataFile.Stat().Size()
+	dsize := dataFile.Stat().OriginSize()
 	assert.Equal(t, int64(len(dataStr)), dataFile.Stat().OriginSize())
 	buf := make([]byte, size)
+	dbuf := make([]byte, dsize)
 	_, err = dataFile.Read(buf)
 	assert.Nil(t, err)
-	assert.Equal(t, dataStr, string(buf))
-	t.Log(string(buf))
+	dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
+	assert.Nil(t, err)
+	assert.Equal(t, dataStr, string(dbuf))
+	t.Log(string(dbuf))
 
 	dataFile.Unref()
 	colBlk0.Close()

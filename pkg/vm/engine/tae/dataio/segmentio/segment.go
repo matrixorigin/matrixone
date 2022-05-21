@@ -74,6 +74,12 @@ func (sf *segmentFile) close() {
 }
 func (sf *segmentFile) Destroy() {
 	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
+	sf.RLock()
+	blocks := sf.blocks
+	sf.RUnlock()
+	for _, block := range blocks {
+		block.Destroy()
+	}
 	sf.seg.Unmount()
 	sf.seg.Destroy()
 }

@@ -16,6 +16,9 @@ package plan
 
 import (
 	"fmt"
+	"go/constant"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go/constant"
-	"strconv"
 )
 
 func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
@@ -60,7 +61,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	orderAttr := make([]string, 0, 32)        // order relation's attribute names
 	{
 		count := 0
-		for _, def := range r.TableDefs() {
+		for _, def := range r.TableDefs(nil) {
 			if v, ok := def.(*engine.AttributeDef); ok {
 				attrType[v.Attr.Name] = v.Attr.Type
 				orderAttr = append(orderAttr, v.Attr.Name)

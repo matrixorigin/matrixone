@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/pierrec/lz4"
 	"os"
 	"sync"
 )
@@ -30,6 +31,7 @@ const LOG_START = 2 * 4096
 const DATA_START = LOG_START + BLOCK_SIZE*INODE_NUM
 const DATA_SIZE = SIZE - DATA_START
 const LOG_SIZE = DATA_START - LOG_START
+const MAGIC = 0xFFFFFFFF
 
 type SuperBlock struct {
 	version   uint64
@@ -59,6 +61,7 @@ func (s *Segment) Init(name string) error {
 		blockSize: BLOCK_SIZE,
 	}
 	log := &Inode{
+		magic: MAGIC,
 		inode: 1,
 		size:  0,
 		state: RESIDENT,
@@ -145,6 +148,26 @@ func (s *Segment) Destroy() {
 	s.segFile = nil
 }
 
+func (s *Segment) Replay(cache *bytes.Buffer) error {
+	s.super = SuperBlock{
+		version:   1,
+		blockSize: BLOCK_SIZE,
+	}
+	log := &Inode{
+		magic: MAGIC,
+		inode: 1,
+		size:  0,
+		state: RESIDENT,
+	}
+	s.super.lognode = log
+	s.Mount()
+	err := s.log.Replay(cache)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -152,11 +175,14 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	var ino *Inode
 	if file == nil {
 		ino = &Inode{
+			magic:      MAGIC,
 			inode:      s.lastInode + 1,
 			size:       0,
 			extents:    make([]Extent, 0),
 			logExtents: Extent{},
 			state:      RESIDENT,
+			algo:       compress.Lz4,
+			seq:        0,
 		}
 	}
 	file = &BlockFile{
@@ -169,13 +195,21 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	return file
 }
 
-func (s *Segment) Append(fd *BlockFile, pl []byte) error {
-	offset, allocated := s.allocator.Allocate(uint64(len(pl)))
+func (s *Segment) Append(fd *BlockFile, pl []byte) (err error) {
+	buf := pl
+	if fd.snode.algo == compress.Lz4 {
+		colSize := len(pl)
+		buf = make([]byte, lz4.CompressBlockBound(colSize))
+		if buf, err = compress.Compress(pl, buf, compress.Lz4); err != nil {
+			return err
+		}
+	}
+	offset, allocated := s.allocator.Allocate(uint64(len(buf)))
 	if allocated == 0 {
 		//panic(any("no space"))
 		panic(any("no space"))
 	}
-	err := fd.Append(DATA_START+offset, pl)
+	err = fd.Append(DATA_START+offset, buf, uint32(len(pl)))
 	if err != nil {
 		return err
 	}
@@ -203,8 +237,6 @@ func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 }
 
 func (s *Segment) ReleaseFile(fd *BlockFile) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
 	if s.segFile == nil {
 		return
 	}
@@ -212,17 +244,20 @@ func (s *Segment) ReleaseFile(fd *BlockFile) {
 	if err != nil {
 		panic(any(err.Error()))
 	}
+	s.mutex.Lock()
 	delete(s.nodes, fd.name)
+	s.mutex.Unlock()
 	s.Free(fd)
 	fd = nil
 }
 
 func (s *Segment) Free(fd *BlockFile) {
-	/*fd.snode.mutex.Lock()
+	fd.snode.mutex.Lock()
 	defer fd.snode.mutex.Unlock()
 	for _, ext := range fd.snode.extents {
 		s.allocator.Free(ext.offset-DATA_START, ext.length)
-	}*/
+	}
+	fd.snode.extents = []Extent{}
 }
 
 func (s *Segment) GetPageSize() uint32 {
