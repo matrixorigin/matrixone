@@ -121,6 +121,15 @@ func (n *nodeList) GetDBNode() *common.DLNode {
 	return n.GetNext().(*nameNode).GetDBNode()
 }
 
+func (n *nodeList) TxnGetTableNodeLocked(txn txnif.TxnReader) (dn *common.DLNode, err error) {
+	getter := func(nn *nameNode) (n *common.DLNode, entry *BaseEntry) {
+		n = nn.GetTableNode()
+		entry = n.GetPayload().(*TableEntry).BaseEntry
+		return
+	}
+	return n.TxnGetNodeLocked(txn, getter)
+}
+
 //          Create                  Deleted
 //            |                        |
 // --+------+-+------------+--+------+-+--+-------+--+----->
@@ -136,10 +145,12 @@ func (n *nodeList) GetDBNode() *common.DLNode {
 // 7. Txn3 commit
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
-func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) (dn *common.DLNode, err error) {
+func (n *nodeList) TxnGetNodeLocked(
+	txn txnif.TxnReader,
+	getter func(*nameNode) (*common.DLNode, *BaseEntry,
+	)) (dn *common.DLNode, err error) {
 	fn := func(nn *nameNode) (goNext bool) {
-		dlNode := nn.GetTableNode()
-		entry := dlNode.GetPayload().(*TableEntry)
+		dlNode, entry := getter(nn)
 		entry.RLock()
 		goNext = true
 		// A txn is writing the entry
@@ -147,7 +158,7 @@ func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) (dn *common.DLN
 			// If the same txn is writing the entry:
 			// 1. The entry is dropped uncommitted, stop looping and return nothing
 			// 2. Otherwise, return the entry and stop looping.
-			if entry.IsSameTxn(txnCtx) {
+			if entry.IsSameTxn(txn) {
 				if entry.IsDroppedUncommitted() {
 					goNext = false
 					entry.RUnlock()
@@ -172,7 +183,7 @@ func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) (dn *common.DLN
 			//    2.2. If the entry's delete ts is before the txn start time. Wait committing. If got committed, skip this entry and stop looping.
 			//         If got rollbacked, return this entry and stop looping
 			//    2.3. If the entry's delete ts is after the txn start time, return this entry and stop looping
-			if entry.CreateBefore(txnCtx.GetStartTS()) {
+			if entry.CreateBefore(txn.GetStartTS()) {
 				if !entry.IsCommitting() {
 					entry.RUnlock()
 					goNext = false
@@ -181,10 +192,10 @@ func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) (dn *common.DLN
 				}
 				if entry.CreateAndDropInSameTxn() {
 					entry.RUnlock()
-					goNext = true
+					goNext = false
 					return
 				}
-				if entry.DeleteAfter(txnCtx.GetStartTS()) {
+				if entry.DeleteAfter(txn.GetStartTS()) {
 					entry.RUnlock()
 					dn = dlNode
 					goNext = false
@@ -195,15 +206,17 @@ func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) (dn *common.DLN
 				state := txn.GetTxnState(true)
 				if state == txnif.TxnStateRollbacked {
 					dn = dlNode
+				} else if state == txnif.TxnStateUnknown {
+					err = txnif.TxnInternalErr
 				}
 				goNext = false
 				return
 			}
 		} else {
-			if entry.CreateAfter(txnCtx.GetStartTS()) {
+			if entry.CreateAfter(txn.GetStartTS()) {
 				entry.RUnlock()
 				return true
-			} else if entry.DeleteBefore(txnCtx.GetStartTS()) {
+			} else if entry.DeleteBefore(txn.GetStartTS()) {
 				entry.RUnlock()
 				return false
 			} else {
@@ -216,83 +229,19 @@ func (n *nodeList) TxnGetTableNodeLocked(txnCtx txnif.TxnReader) (dn *common.DLN
 		return true
 	}
 	n.ForEachNodes(fn)
-	if dn == nil {
+	if dn == nil && err == nil {
 		err = ErrNotFound
 	}
 	return
 }
 
-func (n *nodeList) TxnGetDBNodeLocked(txnCtx txnif.TxnReader) *common.DLNode {
-	var dn *common.DLNode
-	fn := func(nn *nameNode) (goNext bool) {
-		dlNode := nn.GetDBNode()
-		entry := dlNode.GetPayload().(*DBEntry)
-		entry.RLock()
-		goNext = true
-		if entry.HasActiveTxn() {
-			if entry.IsSameTxn(txnCtx) {
-				if entry.IsDroppedUncommitted() {
-					entry.RUnlock()
-					goNext = false
-					return
-				}
-				entry.RUnlock()
-				dn = dlNode
-				goNext = false
-				return
-			}
-
-			if !entry.HasCreated() && !entry.HasDropped() {
-				entry.RUnlock()
-				goNext = true
-				return
-			}
-
-			if entry.CreateBefore(txnCtx.GetStartTS()) {
-				if !entry.IsCommitting() {
-					entry.RUnlock()
-					goNext = false
-					dn = dlNode
-					return
-				}
-				if entry.CreateAndDropInSameTxn() {
-					entry.RUnlock()
-					goNext = false
-					return
-				}
-				if entry.DeleteAfter(txnCtx.GetStartTS()) {
-					entry.RUnlock()
-					dn = dlNode
-					goNext = false
-					return
-				}
-				txn := entry.Txn
-				entry.RUnlock()
-				state := txn.GetTxnState(true)
-				if state == txnif.TxnStateRollbacked {
-					dn = dlNode
-				}
-				goNext = false
-				return
-			}
-		} else {
-			if entry.CreateAfter(txnCtx.GetStartTS()) {
-				entry.RUnlock()
-				return true
-			} else if entry.DeleteBefore(txnCtx.GetStartTS()) {
-				entry.RUnlock()
-				return false
-			} else {
-				entry.RUnlock()
-				dn = dlNode
-				return false
-			}
-		}
-		entry.RUnlock()
-		return true
+func (n *nodeList) TxnGetDBNodeLocked(txn txnif.TxnReader) (*common.DLNode, error) {
+	getter := func(nn *nameNode) (n *common.DLNode, entry *BaseEntry) {
+		n = nn.GetDBNode()
+		entry = n.GetPayload().(*DBEntry).BaseEntry
+		return
 	}
-	n.ForEachNodes(fn)
-	return dn
+	return n.TxnGetNodeLocked(txn, getter)
 }
 
 func (n *nodeList) PString(level common.PPLevel) string {

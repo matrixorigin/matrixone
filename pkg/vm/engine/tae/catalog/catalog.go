@@ -574,20 +574,20 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) *common.DLNode {
+func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
 	node := catalog.nameNodes[name]
 	if node == nil {
-		return nil
+		return nil, ErrNotFound
 	}
 	return node.TxnGetDBNodeLocked(txnCtx)
 }
 
 func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
 	catalog.RLock()
-	n := catalog.txnGetNodeByNameLocked(name, txnCtx)
+	n, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
 	catalog.RUnlock()
-	if n == nil {
-		return nil, ErrNotFound
+	if err != nil {
+		return nil, err
 	}
 	return n.GetPayload().(*DBEntry), nil
 }
@@ -599,9 +599,8 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 	}
 	catalog.Lock()
 	defer catalog.Unlock()
-	dn := catalog.txnGetNodeByNameLocked(name, txnCtx)
-	if dn == nil {
-		err = ErrNotFound
+	dn, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
+	if err != nil {
 		return
 	}
 	entry := dn.GetPayload().(*DBEntry)
