@@ -211,7 +211,7 @@ func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {
 	return visible, err
 }
 
-func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64) bool {
+func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64) (bool, error) {
 	return n.deletes.IsDeleted(row, ts)
 }
 

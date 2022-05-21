@@ -76,7 +76,7 @@ func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, revers
 	chain.Loop(wrapped, reverse)
 }
 
-func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool) {
+func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool, err error) {
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Skip txn that started after ts
 		if n.GetStartTS() > ts {
@@ -99,10 +99,12 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool) {
 				state := txn.GetTxnState(true)
 				if state == txnif.TxnStateCommitted {
 					deleted = true
+				} else if state == txnif.TxnStateUnknown {
+					err = txnif.TxnInternalErr
 				}
 			}
 		}
-		if n.IsMerged() || deleted {
+		if n.IsMerged() || deleted || err != nil {
 			return false
 		}
 		return true

@@ -540,8 +540,11 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 	blk.mvcc.RLock()
 	deleteChain := blk.mvcc.GetDeleteChain()
 	deleteChain.RLock()
-	deleted := deleteChain.IsDeleted(row, ts)
+	deleted, err := deleteChain.IsDeleted(row, ts)
 	deleteChain.RUnlock()
+	if err != nil {
+		return
+	}
 	if !deleted {
 		chain := blk.mvcc.GetColumnChain(col)
 		chain.RLock()
@@ -607,10 +610,16 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 	if err != nil {
 		return
 	}
-	if blk.mvcc.IsDeletedLocked(offset, ts) {
+
+	deleted, err := blk.mvcc.IsDeletedLocked(offset, ts)
+	if err != nil {
+		return
+	}
+	if deleted {
 		err = txnbase.ErrNotFound
 		return
 	}
+
 	visible, err := blk.mvcc.IsVisibleLocked(offset, ts)
 	if err != nil {
 		return
@@ -641,7 +650,11 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 
 	readLock := blk.mvcc.GetSharedLock()
 	defer readLock.Unlock()
-	if blk.mvcc.IsDeletedLocked(offset, ts) {
+	deleted, err := blk.mvcc.IsDeletedLocked(offset, ts)
+	if err != nil {
+		return
+	}
+	if deleted {
 		err = txnbase.ErrNotFound
 	}
 	return
