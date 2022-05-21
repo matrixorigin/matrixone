@@ -204,13 +204,22 @@ func (mgr *TxnManager) onCommit(items ...interface{}) {
 	logutil.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
 }
 
-func (mgr *TxnManager) Stop() {
-	mgr.StateMachine.Stop()
-	exp := mgr.Execption.Load()
-	for exp == nil {
-		if mgr.Execption.CompareAndSwap(exp, common.ClosedErr) {
+func (mgr *TxnManager) TryStoreException(new error) (err error) {
+	old := mgr.Execption.Load()
+	for old == nil {
+		if mgr.Execption.CompareAndSwap(old, new) {
+			err = new
 			break
 		}
-		exp = mgr.Execption.Load()
+		old = mgr.Execption.Load()
+		if old != nil {
+			err = old.(error)
+		}
 	}
+	return
+}
+
+func (mgr *TxnManager) Stop() {
+	mgr.StateMachine.Stop()
+	_ = mgr.TryStoreException(common.ClosedErr)
 }
