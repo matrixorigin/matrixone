@@ -170,7 +170,7 @@ load data infile '/ssb-dbgen-path/date.tbl' into table dates FIELDS TERMINATED B
 
 load data infile '/ssb-dbgen-path/part.tbl' into table part FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 
-load data infile '/ssb-dbgen-path/lineorder.tbl  into table lineorder FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data infile '/ssb-dbgen-path/lineorder.tbl'  into table lineorder FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 ```
 
 接着你可以在MatrixOne中进行查询操作：  
