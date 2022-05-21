@@ -165,11 +165,6 @@ func (be *BaseEntry) IsTerminated(waitIfcommitting bool) bool {
 
 func (be *BaseEntry) IsCommitted() bool {
 	return be.Txn == nil && be.CreateAt > 0
-	// if be.Txn == nil {
-	// 	return true
-	// }
-	// state := be.Txn.GetTxnState(true)
-	// return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
 }
 
 func (be *BaseEntry) GetID() uint64 { return be.ID }

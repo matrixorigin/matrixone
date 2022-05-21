@@ -91,12 +91,16 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v interface{}, err
 				if state == txnif.TxnStateCommitted {
 					// 3.1 If committed. use this node
 					break
-				} else {
+				} else if state == txnif.TxnStateRollbacked {
 					// 3.2 If rollbacked. go to prev node
 					err = nil
 					v = nil
 					head = head.GetNext()
 					continue
+				} else if state == txnif.TxnStateUnknown {
+					err = txnif.TxnInternalErr
+					v = nil
+					break
 				}
 			}
 		}
@@ -110,7 +114,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v interface{}, err
 		node.RUnlock()
 		break
 	}
-	if v == nil {
+	if v == nil && err == nil {
 		err = txnbase.ErrNotFound
 	}
 	return
