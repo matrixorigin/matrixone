@@ -131,8 +131,10 @@ func (mgr *nodeManager) TryPin(node base.INode, timeout time.Duration) (h base.I
 	if h == nil {
 		times := 0
 		var ctx context.Context
+		var cancel context.CancelFunc
 		if timeout > 0 {
-			ctx, _ = context.WithTimeout(context.Background(), timeout)
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 		}
 		err = common.DoRetry(func() (err error) {
 			times++

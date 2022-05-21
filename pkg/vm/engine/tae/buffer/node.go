@@ -164,7 +164,8 @@ func (n *Node) prepareExpand(delta uint64) bool {
 
 func (n *Node) Expand(delta uint64, fn func() error) error {
 	if !n.prepareExpand(delta) {
-		ctx, _ := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 		err := common.DoRetry(func() error {
 			if !n.prepareExpand(delta) {
 				return base.ErrNoSpace
