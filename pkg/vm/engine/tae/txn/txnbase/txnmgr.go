@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -37,6 +38,7 @@ type TxnManager struct {
 	TxnStoreFactory  TxnStoreFactory
 	TxnFactory       TxnFactory
 	ActiveMask       *roaring64.Bitmap
+	Execption        *atomic.Value
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnManager {
@@ -50,6 +52,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		ActiveMask:      roaring64.New(),
+		Execption:       new(atomic.Value),
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
 	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
@@ -80,18 +83,18 @@ func (mgr *TxnManager) StatSafeTS() (ts uint64) {
 	return
 }
 
-func (mgr *TxnManager) StartTxn(info []byte) txnif.AsyncTxn {
+func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	mgr.Lock()
 	defer mgr.Unlock()
 	txnId := mgr.IdAlloc.Alloc()
 	startTs := mgr.TsAlloc.Alloc()
 
 	store := mgr.TxnStoreFactory()
-	txn := mgr.TxnFactory(mgr, store, txnId, startTs, info)
+	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
 	mgr.Active[txnId] = txn
 	mgr.ActiveMask.Add(startTs)
-	return txn
+	return
 }
 
 func (mgr *TxnManager) DeleteTxn(id uint64) {

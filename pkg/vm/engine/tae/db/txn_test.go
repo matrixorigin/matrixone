@@ -390,7 +390,7 @@ func (app1 *APP1) GetGoods() *APP1Goods {
 }
 
 func (app1 *APP1) Init(factor int) {
-	txn := app1.Mgr.StartTxn(nil)
+	txn, _ := app1.Mgr.StartTxn(nil)
 	defer func() {
 		err := txn.Commit()
 		if err != nil {
@@ -493,7 +493,7 @@ func TestApp1(t *testing.T) {
 	var wg sync.WaitGroup
 	buyTxn := func() {
 		defer wg.Done()
-		txn := mgr.StartTxn(nil)
+		txn, _ := mgr.StartTxn(nil)
 		client := app1.GetClient()
 		db, _ := txn.GetDatabase(app1.DBName)
 		client.Bind(db, txn)
@@ -530,14 +530,14 @@ func TestWarehouse(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
 
-	txn := db.StartTxn(nil)
+	txn, _ := db.StartTxn(nil)
 	err := MockWarehouses("test", 20, txn)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn = db.StartTxn(nil)
+		txn, _ = db.StartTxn(nil)
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
@@ -560,20 +560,20 @@ func TestTxn7(t *testing.T) {
 
 	bat := catalog.MockData(schema, 20)
 
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db")
 	assert.NoError(t, err)
 	_, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
 	err = rel.Append(bat)
 	assert.NoError(t, err)
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(bat)
