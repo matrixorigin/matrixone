@@ -1267,7 +1267,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	txnHandler := ses.GetTxnHandler()
 	ses.SetSql(sql)
 
-	var usePlan2 bool = ses.IsTaeEngine()
+	var usePlan2 = ses.IsTaeEngine()
 	if ses.Pu.SV.GetUsePlan2() {
 		usePlan2 = true
 	}
