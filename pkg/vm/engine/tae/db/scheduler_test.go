@@ -103,7 +103,7 @@ func TestCheckpoint1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
 	{
-		txn := db.StartTxn(nil)
+		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
@@ -111,7 +111,7 @@ func TestCheckpoint1(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	{
-		txn := db.StartTxn(nil)
+		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()
@@ -164,7 +164,7 @@ func TestCheckpoint2(t *testing.T) {
 		meta2 *catalog.TableEntry
 	)
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
 		rel1, _ := db.CreateRelation(schema1)
 		rel2, _ := db.CreateRelation(schema2)
@@ -175,7 +175,7 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	doAppend := func(data *gbat.Batch, name string) {
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(name)
 		err := rel.Append(data)
@@ -200,7 +200,7 @@ func TestCheckpoint2(t *testing.T) {
 	doAppend(bats[8], schema1.Name)
 	// t.Log(tae.MTBufMgr.String())
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, err := txn.GetDatabase("db")
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema1.Name)
@@ -241,7 +241,7 @@ func TestSchedule1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
 	{
-		txn := db.StartTxn(nil)
+		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
@@ -249,7 +249,7 @@ func TestSchedule1(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	{
-		txn := db.StartTxn(nil)
+		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()
