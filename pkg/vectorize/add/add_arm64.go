@@ -14,8 +14,6 @@
 
 package add
 /*
-#ifdef __ARM_NEON
-
 
 #include "arm_neon.h"
 typedef signed char GoInt8;
@@ -224,7 +222,6 @@ void float64AddScalarArm(GoFloat64* x, GoFloat64* y, GoFloat64* r, int len) {
 	int i = 0;
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *y;
 }
-#endif
 */
 import "C"
 import "unsafe"

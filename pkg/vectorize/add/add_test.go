@@ -18,7 +18,17 @@ import (
 	"fmt"
 	"testing"
 )
-
+func BenchmarkI32(b testing.B){
+	buf := make([]int32, 2050)
+	for i := range buf {
+		buf[i] = int32(i)
+	}
+	res := make([]int32, 2050)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		int32AddArm(buf,buf,res)
+	}
+}
 func makeIbuffer(l int) []int64 {
 	buf := make([]int64, l)
 	for i := range buf {
