@@ -470,9 +470,12 @@ func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (
 	if rwlocker != nil {
 		rwlocker.RUnlock()
 	}
-	eTxn.GetTxnState(true)
+	state := eTxn.GetTxnState(true)
 	if rwlocker != nil {
 		rwlocker.RLock()
+	}
+	if state == txnif.TxnStateUnknown {
+		err = txnif.TxnInternalErr
 	}
 	return
 }
