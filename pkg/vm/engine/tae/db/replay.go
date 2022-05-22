@@ -51,7 +51,6 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	if err != nil {
 		panic(err)
 	}
-	return
 }
 
 func (replayer *Replayer) GetMaxTS() uint64 {
@@ -159,7 +158,6 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 			panic(err)
 		}
 	}
-	return
 }
 
 func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap, start, end uint32) (*gbat.Batch, error) {

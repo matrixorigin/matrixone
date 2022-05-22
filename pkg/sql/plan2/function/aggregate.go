@@ -494,10 +494,7 @@ var aggregates = map[int][]Function{
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_int64,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				if len(inputTypes) == 1 {
-					return true
-				}
-				return false
+				return len(inputTypes) == 1
 			},
 			AggregateInfo: nil,
 		},

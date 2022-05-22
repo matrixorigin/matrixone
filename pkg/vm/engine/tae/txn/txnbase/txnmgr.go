@@ -38,7 +38,7 @@ type TxnManager struct {
 	TxnStoreFactory  TxnStoreFactory
 	TxnFactory       TxnFactory
 	ActiveMask       *roaring64.Bitmap
-	Execption        *atomic.Value
+	Exception        *atomic.Value
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnManager {
@@ -52,7 +52,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		ActiveMask:      roaring64.New(),
-		Execption:       new(atomic.Value),
+		Exception:       new(atomic.Value),
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
 	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
@@ -84,7 +84,7 @@ func (mgr *TxnManager) StatSafeTS() (ts uint64) {
 }
 
 func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
-	if exp := mgr.Execption.Load(); exp != nil {
+	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
 		return
@@ -205,13 +205,13 @@ func (mgr *TxnManager) onCommit(items ...interface{}) {
 }
 
 func (mgr *TxnManager) TryStoreException(new error) (err error) {
-	old := mgr.Execption.Load()
+	old := mgr.Exception.Load()
 	for old == nil {
-		if mgr.Execption.CompareAndSwap(old, new) {
+		if mgr.Exception.CompareAndSwap(old, new) {
 			err = new
 			break
 		}
-		old = mgr.Execption.Load()
+		old = mgr.Exception.Load()
 		if old != nil {
 			err = old.(error)
 		}

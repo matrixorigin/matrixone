@@ -225,7 +225,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 	}
 	if len(stmt.Names) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("support drop one table now"))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one table now")
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {
