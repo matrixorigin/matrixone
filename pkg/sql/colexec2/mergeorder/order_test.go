@@ -19,15 +19,16 @@ import (
 	"context"
 	"testing"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	order "github.com/matrixorigin/matrixone/pkg/sql/colexec2/order"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,11 +54,11 @@ func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	tcs = []orderTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []order.Field{{Pos: 0, Type: 0}}),
-		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []order.Field{{Pos: 0, Type: 2}}),
-		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []order.Field{{Pos: 1, Type: 0}}),
-		newTestCase(mheap.New(gm), []bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []order.Field{{Pos: 0, Type: 2}}),
-		newTestCase(mheap.New(gm), []bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []order.Field{{Pos: 0, Type: 2}, {Pos: 1, Type: 0}}),
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []order.Field{{E: newExpression(0), Type: 0}}),
+		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []order.Field{{E: newExpression(0), Type: 2}}),
+		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []order.Field{{E: newExpression(1), Type: 0}}),
+		newTestCase(mheap.New(gm), []bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []order.Field{{E: newExpression(0), Type: 2}}),
+		newTestCase(mheap.New(gm), []bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []order.Field{{E: newExpression(0), Type: 2}, {E: newExpression(1), Type: 0}}),
 	}
 }
 
@@ -86,7 +87,7 @@ func TestOrder(t *testing.T) {
 		for {
 			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
-					batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 				}
 				break
 			}
@@ -95,7 +96,7 @@ func TestOrder(t *testing.T) {
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 				if bat != nil {
-					batch.Clean(bat, tc.proc.Mp)
+					bat.Clean(tc.proc.Mp)
 				}
 			}
 		}
@@ -108,8 +109,8 @@ func BenchmarkOrder(b *testing.B) {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
 		tcs = []orderTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []order.Field{{Pos: 0, Type: 0}}),
-			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []order.Field{{Pos: 0, Type: 2}}),
+			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []order.Field{{E: newExpression(0), Type: 0}}),
+			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []order.Field{{E: newExpression(0), Type: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -123,7 +124,7 @@ func BenchmarkOrder(b *testing.B) {
 			for {
 				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
-						batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 					}
 					break
 				}
@@ -132,7 +133,7 @@ func BenchmarkOrder(b *testing.B) {
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 					if bat != nil {
-						batch.Clean(bat, tc.proc.Mp)
+						bat.Clean(tc.proc.Mp)
 					}
 				}
 			}
@@ -163,9 +164,19 @@ func newTestCase(m *mheap.Mheap, ds []bool, ts []types.Type, fs []order.Field) o
 	}
 }
 
+func newExpression(pos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
+		},
+	}
+}
+
 // create a new block based on the type information, ds[i] == true: in descending order
 func newBatch(t *testing.T, ds []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.New(len(ts))
+	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		flg := ds[i]

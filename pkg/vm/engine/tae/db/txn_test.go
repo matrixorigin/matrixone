@@ -390,7 +390,7 @@ func (app1 *APP1) GetGoods() *APP1Goods {
 }
 
 func (app1 *APP1) Init(factor int) {
-	txn := app1.Mgr.StartTxn(nil)
+	txn, _ := app1.Mgr.StartTxn(nil)
 	defer func() {
 		err := txn.Commit()
 		if err != nil {
@@ -493,7 +493,7 @@ func TestApp1(t *testing.T) {
 	var wg sync.WaitGroup
 	buyTxn := func() {
 		defer wg.Done()
-		txn := mgr.StartTxn(nil)
+		txn, _ := mgr.StartTxn(nil)
 		client := app1.GetClient()
 		db, _ := txn.GetDatabase(app1.DBName)
 		client.Bind(db, txn)
@@ -530,14 +530,14 @@ func TestWarehouse(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
 
-	txn := db.StartTxn(nil)
+	txn, _ := db.StartTxn(nil)
 	err := MockWarehouses("test", 20, txn)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn = db.StartTxn(nil)
+		txn, _ = db.StartTxn(nil)
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
@@ -548,4 +548,85 @@ func TestWarehouse(t *testing.T) {
 		t.Log(view.AppliedVec.String())
 	}
 
+}
+
+func TestTxn7(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 12
+
+	bat := catalog.MockData(schema, 20)
+
+	txn, _ := tae.StartTxn(nil)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ := db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	{
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bat)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit())
+	}
+	err = txn.Commit()
+	t.Log(err)
+	assert.Error(t, err)
+	t.Log(txn.String())
+}
+
+func TestTxn8(t *testing.T) {
+	tae := initDB(t, nil)
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows*10)
+	bats := compute.SplitBatch(bat, 2)
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.GetDatabase(catalog.SystemDBName)
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bats[0])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase(catalog.SystemDBName)
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	pkv := compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(pkv)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.Update(id, row, 3, int64(9999))
+	assert.NoError(t, err)
+
+	pkv = compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 3)
+	filter = handle.NewEQFilter(pkv)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+
+	tae.Close()
+
+	_, err = tae.StartTxn(nil)
+	assert.Error(t, err)
+
+	err = txn.Commit()
+	t.Log(err)
 }

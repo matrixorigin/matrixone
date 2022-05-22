@@ -17,8 +17,15 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
+
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
+
+var (
+	ErrNoSpace = errors.New("buffer: no space left")
 )
 
 type MemoryFreeFunc func(IMemoryNode)
@@ -71,6 +78,7 @@ type INodeManager interface {
 	RegisterNode(INode)
 	UnregisterNode(INode)
 	Pin(INode) INodeHandle
+	TryPin(INode, time.Duration) (INodeHandle, error)
 	Unpin(INode)
 	MakeRoom(uint64) bool
 }

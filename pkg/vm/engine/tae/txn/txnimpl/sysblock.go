@@ -14,21 +14,21 @@ import (
 
 type txnSysBlock struct {
 	*txnBlock
-	table   *catalog.TableEntry
+	table   *txnTable
 	catalog *catalog.Catalog
 }
 
-func newSysBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnSysBlock {
+func newSysBlock(table *txnTable, meta *catalog.BlockEntry) *txnSysBlock {
 	blk := &txnSysBlock{
-		txnBlock: newBlock(txn, meta),
-		table:    meta.GetSegment().GetTable(),
+		txnBlock: newBlock(table, meta),
+		table:    table,
 		catalog:  meta.GetSegment().GetTable().GetCatalog(),
 	}
 	return blk
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return sysTableNames[blk.table.GetSchema().Name]
+	return sysTableNames[blk.table.entry.GetSchema().Name]
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
@@ -214,9 +214,9 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 		case catalog.SystemRelAttr_Comment:
 			compute.AppendValue(colData, []byte(table.GetSchema().Comment))
 		case catalog.SystemRelAttr_Persistence:
-			compute.AppendValue(colData, catalog.SystemPersistRel)
+			compute.AppendValue(colData, []byte(catalog.SystemPersistRel))
 		case catalog.SystemRelAttr_Kind:
-			compute.AppendValue(colData, catalog.SystemOrdinaryRel)
+			compute.AppendValue(colData, []byte(catalog.SystemOrdinaryRel))
 		case catalog.SystemRelAttr_CreateSQL:
 			compute.AppendValue(colData, []byte("todosql"))
 		default:

@@ -72,19 +72,17 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, binderCt
 		return buildSelect(tbl, ctx, query, newCtx)
 
 	case *tree.TableName:
-		name := string(tbl.ObjectName)
-		if len(tbl.SchemaName) > 0 {
-			name = string(tbl.SchemaName) + "." + name
-		}
-		if strings.ToLower(name) == "dual" { //special table name
+		tblName := string(tbl.ObjectName)
+		dbName := string(tbl.SchemaName)
+		if strings.ToLower(tblName) == "dual" { //special table name
 			node := &Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}
 			nodeId = appendQueryNode(query, node)
 		} else {
-			obj, tableDef, isCte := getResolveTable(name, ctx, binderCtx)
+			obj, tableDef, isCte := getResolveTable(dbName, tblName, ctx, binderCtx)
 			if tableDef == nil {
-				return 0, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' does not exist", name))
+				return 0, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table '%v' does not exist", tblName))
 			}
 			node := &Node{
 				ObjRef:   obj,
@@ -181,48 +179,52 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 	case *tree.UsingJoinCond:
 		for _, colName := range cond.Cols {
 			name := string(colName)
-			leftColIndex := getColumnIndex(leftChild.ProjectList, name)
+			leftColIndex, leftColType := getColumnIndexAndType(leftChild.ProjectList, name)
 			if leftColIndex < 0 {
 				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
 			}
-			rightColIndex := getColumnIndex(rightChild.ProjectList, name)
+			rightColIndex, rightColType := getColumnIndexAndType(rightChild.ProjectList, name)
 			if rightColIndex < 0 {
 				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
 			}
-			funName := getFunctionObjRef("=")
-			node.OnList = append(node.OnList, &Expr{
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: funName,
-						Args: []*Expr{
-							{
-								ColName: name,
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										RelPos: 0,
-										ColPos: leftColIndex,
-									},
-								},
-							},
-							{
-								ColName: name,
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										RelPos: 1,
-										ColPos: rightColIndex,
-									},
-								},
-							},
-						},
+			leftColExpr := &Expr{
+				ColName: name,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: leftColIndex,
 					},
 				},
-			})
+				Typ: leftColType,
+			}
+			rigthColExpr := &Expr{
+				ColName: name,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 1,
+						ColPos: rightColIndex,
+					},
+				},
+				Typ: rightColType,
+			}
+
+			// append equal function expr to onlist
+			var equalFunctionExpr *Expr
+			equalFunctionExpr, err = getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rigthColExpr})
+			if err != nil {
+				return
+			}
+			node.OnList = append(node.OnList, equalFunctionExpr)
 		}
 
 	default:
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			// natural join.  the cond will be nil
-			columns := getColumnsWithSameName(leftChild.ProjectList, rightChild.ProjectList)
+			var columns []*Expr
+			columns, err = getColumnsWithSameName(leftChild.ProjectList, rightChild.ProjectList)
+			if err != nil {
+				return
+			}
 			node.OnList = columns
 		}
 	}

@@ -189,7 +189,7 @@ var functionIdRegister = map[string]int32{
 	"like":        LIKE,
 	"between":     BETWEEN,
 	"in":          IN,
-	"exist":       EXISTS,
+	"exists":      EXISTS,
 	"+":           PLUS,
 	"-":           MINUS,
 	"*":           MULTI,
@@ -212,4 +212,5 @@ var functionIdRegister = map[string]int32{
 	"year":      YEAR,
 	"substr":    SUBSTRING,
 	"substring": SUBSTRING,
+	"iff":       IFF,
 }

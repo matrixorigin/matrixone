@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -37,6 +38,7 @@ type TxnManager struct {
 	TxnStoreFactory  TxnStoreFactory
 	TxnFactory       TxnFactory
 	ActiveMask       *roaring64.Bitmap
+	Exception        *atomic.Value
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnManager {
@@ -50,6 +52,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		ActiveMask:      roaring64.New(),
+		Exception:       new(atomic.Value),
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
 	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
@@ -80,18 +83,23 @@ func (mgr *TxnManager) StatSafeTS() (ts uint64) {
 	return
 }
 
-func (mgr *TxnManager) StartTxn(info []byte) txnif.AsyncTxn {
+func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err = exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return
+	}
 	mgr.Lock()
 	defer mgr.Unlock()
 	txnId := mgr.IdAlloc.Alloc()
 	startTs := mgr.TsAlloc.Alloc()
 
 	store := mgr.TxnStoreFactory()
-	txn := mgr.TxnFactory(mgr, store, txnId, startTs, info)
+	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
 	mgr.Active[txnId] = txn
 	mgr.ActiveMask.Add(startTs)
-	return txn
+	return
 }
 
 func (mgr *TxnManager) DeleteTxn(id uint64) {
@@ -112,8 +120,9 @@ func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {
 	return mgr.Active[id]
 }
 
-func (mgr *TxnManager) OnOpTxn(op *OpTxn) {
-	_, _ = mgr.EnqueueRecevied(op)
+func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
+	_, err = mgr.EnqueueRecevied(op)
+	return
 }
 
 func (mgr *TxnManager) onPreCommit(txn txnif.AsyncTxn) {
@@ -157,7 +166,6 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 			mgr.onPreparCommit(op.Txn)
 			if op.Txn.GetError() != nil {
 				op.Op = OpRollback
-				op.Txn.SetError(txnif.TxnRollbacked)
 				op.Txn.Lock()
 				// Should not fail here
 				_ = op.Txn.ToRollbackingLocked(ts)
@@ -194,4 +202,24 @@ func (mgr *TxnManager) onCommit(items ...interface{}) {
 		logutil.Debugf("%s Done", op.Repr())
 	}
 	logutil.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
+}
+
+func (mgr *TxnManager) TryStoreException(new error) (err error) {
+	old := mgr.Exception.Load()
+	for old == nil {
+		if mgr.Exception.CompareAndSwap(old, new) {
+			err = new
+			break
+		}
+		old = mgr.Exception.Load()
+		if old != nil {
+			err = old.(error)
+		}
+	}
+	return
+}
+
+func (mgr *TxnManager) Stop() {
+	mgr.StateMachine.Stop()
+	_ = mgr.TryStoreException(common.ClosedErr)
 }

@@ -16,7 +16,8 @@ package colexec2
 
 import (
 	"fmt"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (

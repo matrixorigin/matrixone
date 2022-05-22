@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
@@ -32,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	compile1 "github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -529,25 +531,25 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	ses := mce.GetSession()
+	txnHandler := ses.GetTxnHandler()
 	var txnCtx []byte = nil
-	if !ses.IsInTaeTxn() {
-		err := ses.BeginAutocommitTaeTxn()
-		if err != nil {
-			return err
-		}
-		taeTxn := ses.GetTaeTxn()
-		if taeTxn != nil {
-			txnCtx = taeTxn.GetCtx()
-		}
+	var newTxn bool = false
+	var err error = nil
+	newTxn, err = txnHandler.StartByAutocommitIfNeeded()
+	if err != nil {
+		return err
 	}
+	txnCtx = txnHandler.GetTxn().GetCtx()
 	//TODO: check meta data
 	if _, err := ses.Pu.StorageEngine.Database(db, txnCtx); err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
-	err := ses.CommitTaeTxnAutocommitOnly()
-	if err != nil {
-		return err
+	if newTxn {
+		err = txnHandler.CommitAfterAutocommitOnly()
+		if err != nil {
+			return err
+		}
 	}
 	oldDB := ses.protocol.GetDatabaseName()
 	ses.protocol.SetDatabaseName(db)
@@ -741,8 +743,18 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 		loadDb = ses.protocol.GetDatabaseName()
 	}
 
-	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, nil)
+	txnHandler := ses.GetTxnHandler()
+	newTxn, err := txnHandler.StartByAutocommitIfNeeded()
 	if err != nil {
+		return err
+	}
+
+	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		err2 := txnHandler.RollbackAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
 	}
@@ -757,8 +769,12 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		check table
 	*/
-	tableHandler, err := dbHandler.Relation(loadTable, nil)
+	tableHandler, err := dbHandler.Relation(loadTable, txnHandler.GetTxn().GetCtx())
 	if err != nil {
+		err2 := txnHandler.RollbackAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 		//echo client. no such table
 		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
 	}
@@ -768,7 +784,18 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	*/
 	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
 	if err != nil {
+		err2 := txnHandler.RollbackAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 		return err
+	}
+
+	if newTxn {
+		err2 := txnHandler.CommitAfterAutocommitOnly()
+		if err2 != nil {
+			return err2
+		}
 	}
 
 	/*
@@ -1026,9 +1053,9 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 func GetExplainColumns(attrs []*plan.Attribute) ([]interface{}, error) {
 	//attrs := plan.BuildExplainResultColumns()
-	cols := make([]*compile.Col, len(attrs))
+	cols := make([]*compile1.Col, len(attrs))
 	for i, attr := range attrs {
-		cols[i] = &compile.Col{
+		cols[i] = &compile1.Col{
 			Name: attr.Name,
 			Typ:  attr.Type.Oid,
 		}
@@ -1073,10 +1100,10 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 //----------------------------------------------------------------------------------------------------
 
 type ComputationWrapperImpl struct {
-	exec *compile.Exec
+	exec *compile1.Exec
 }
 
-func NewComputationWrapperImpl(e *compile.Exec) *ComputationWrapperImpl {
+func NewComputationWrapperImpl(e *compile1.Exec) *ComputationWrapperImpl {
 	return &ComputationWrapperImpl{exec: e}
 }
 
@@ -1110,38 +1137,140 @@ func (cw *ComputationWrapperImpl) GetAffectedRows() uint64 {
 	return cw.exec.GetAffectedRows()
 }
 
-func (cw *ComputationWrapperImpl) Compile(u interface{},
-	fill func(interface{}, *batch.Batch) error) error {
-	return cw.exec.Compile(u, fill)
+func (cw *ComputationWrapperImpl) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	return cw.exec, cw.exec.Compile(u, fill)
 }
 
 func (cw *ComputationWrapperImpl) Run(ts uint64) error {
 	return cw.exec.Run(ts)
 }
 
-/*
-GetComputationWrapper gets the execs from the computation engine
-*/
-var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process) ([]ComputationWrapper, error) {
-	comp := compile.New(db, sql, user, eng, proc)
-	execs, err := comp.Build()
+var _ ComputationWrapper = &TxnComputationWrapper{}
+
+type TxnComputationWrapper struct {
+	stmt tree.Statement
+	plan *plan2.Plan
+	proc *process.Process
+	ses  *Session
+}
+
+func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
+	return &TxnComputationWrapper{
+		stmt: stmt,
+		proc: proc,
+		ses:  ses,
+	}
+}
+
+func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
+	return cwft.stmt
+}
+
+func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
+	return nil
+}
+
+func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
+	var err error
+	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	columns := make([]interface{}, len(cols))
+	for i, col := range cols {
+		c := new(MysqlColumn)
+		c.SetName(col.Name)
+		err = convertEngineTypeToMysqlType(types.T(col.Typ.Id), c)
+		if err != nil {
+			return nil, err
+		}
+		columns[i] = c
+	}
+	return columns, err
+}
+
+func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
+	return 0
+}
+
+func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+	var err error
+	cwft.plan, err = plan2.BuildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
 	if err != nil {
 		return nil, err
 	}
 
-	var cw []ComputationWrapper = nil
-	for _, e := range execs {
-		cw = append(cw, NewComputationWrapperImpl(e))
+	cwft.proc.UnixTime = time.Now().UnixNano()
+	txnHandler := cwft.ses.GetTxnHandler()
+	newTxn, err := txnHandler.StartByAutocommitIfNeeded()
+	if err != nil {
+		return nil, err
 	}
-	return cw, err
+	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
+	comp := compile2.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
+	err = comp.Compile(cwft.plan, cwft.ses, fill)
+	if err != nil {
+		if newTxn {
+			err2 := txnHandler.RollbackAfterAutocommitOnly()
+			if err2 != nil {
+				return nil, err2
+			}
+		}
+		return nil, err
+	}
+
+	if newTxn {
+		err2 := txnHandler.CommitAfterAutocommitOnly()
+		if err2 != nil {
+			return nil, err2
+		}
+	}
+	return comp, err
+}
+
+func (cwft *TxnComputationWrapper) Run(ts uint64) error {
+	return nil
+}
+
+/*
+GetComputationWrapper gets the execs from the computation engine
+*/
+var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process, ses *Session, usePlan2 bool) ([]ComputationWrapper, error) {
+	var cw []ComputationWrapper = nil
+	if usePlan2 {
+		stmts, err := parsers.Parse(dialect.MYSQL, sql)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, stmt := range stmts {
+			cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
+		}
+	} else {
+		comp := compile1.New(db, sql, user, eng, proc)
+		execs, err := comp.Build()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, e := range execs {
+			cw = append(cw, NewComputationWrapperImpl(e))
+		}
+	}
+
+	return cw, nil
 }
 
 //execute query
-func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
+func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
 	statementCount := uint64(1)
+	txnHandler := ses.GetTxnHandler()
+	ses.SetSql(sql)
+
+	usePlan2 := ses.IsTaeEngine()
+	if ses.Pu.SV.GetUsePlan2() {
+		usePlan2 = true
+	}
 
 	//pin the epoch with 1
 	epoch, _ := pdHook.IncQueryCountAtCurrentEpoch(statementCount)
@@ -1159,7 +1288,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		sql,
 		proto.GetUserName(),
 		ses.Pu.StorageEngine,
-		proc)
+		proc, ses, usePlan2)
 	if err != nil {
 		return NewMysqlError(ER_PARSE_ERROR, err,
 			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use")
@@ -1167,10 +1296,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	defer func() {
 		ses.Mrs = nil
-		err2 := ses.ClearTaeTxn()
-		if err2 != nil {
-			logutil.Errorf("reset tae txn failed. error:%v", err2)
-		}
 	}()
 
 	for _, cw := range cws {
@@ -1183,25 +1308,21 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
-			err = ses.BeginTaeTxn()
+			err = txnHandler.StartByBegin()
 			if err != nil {
 				return err
 			}
 		case *tree.CommitTransaction:
-			err = ses.CommitTaeTxnBegan()
+			err = txnHandler.CommitAfterBegin()
 			if err != nil {
 				return err
 			}
 		case *tree.RollbackTransaction:
-			err = ses.RollbackTaeTxn()
+			err = txnHandler.Rollback()
 			if err != nil {
 				return err
 			}
 		default:
-			err = ses.BeginAutocommitTaeTxn()
-			if err != nil {
-				return err
-			}
 		}
 
 		switch st := stmt.(type) {
@@ -1222,10 +1343,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 								}
 
 								//next statement
-								err = ses.CommitTaeTxnAutocommitOnly()
-								if err != nil {
-									return err
-								}
 								continue
 							}
 						}
@@ -1237,10 +1354,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
-							err = ses.CommitTaeTxnAutocommitOnly()
-							if err != nil {
-								return err
-							}
 							continue
 						} else if strings.ToLower(ve.Name) == "version_comment" {
 							err = mce.handleVersionComment()
@@ -1249,10 +1362,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
-							err = ses.CommitTaeTxnAutocommitOnly()
-							if err != nil {
-								return err
-							}
 							continue
 						} else if strings.ToLower(ve.Name) == "tx_isolation" {
 							err = mce.handleTxIsolation()
@@ -1261,10 +1370,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 							}
 
 							//next statement
-							err = ses.CommitTaeTxnAutocommitOnly()
-							if err != nil {
-								return err
-							}
 							continue
 						}
 					}
@@ -1345,10 +1450,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if selfHandle {
-			err = ses.CommitTaeTxnAutocommitOnly()
-			if err != nil {
-				return err
-			}
 			continue
 		}
 		if err = cw.SetDatabaseName(proto.GetDatabaseName()); err != nil {
@@ -1356,10 +1457,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		cmpBegin := time.Now()
-		if err = cw.Compile(ses, getDataFromPipeline); err != nil {
+		var ret interface{}
+		if ret, err = cw.Compile(ses, getDataFromPipeline); err != nil {
 			return err
 		}
 
+		var runner ComputationRunner = ret.(ComputationRunner)
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
@@ -1423,7 +1526,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return err
 				}
 			}
-			if er := cw.Run(epoch); er != nil {
+			if er := runner.Run(epoch); er != nil {
 				return er
 			}
 			if ses.ep.Outfile {
@@ -1463,7 +1566,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			/*
 				Step 1: Start
 			*/
-			if er := cw.Run(epoch); er != nil {
+			if er := runner.Run(epoch); er != nil {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -1496,11 +1599,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
-		}
-
-		err = ses.CommitTaeTxnAutocommitOnly()
-		if err != nil {
-			return err
 		}
 	}
 

@@ -44,7 +44,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	dbName := ctx.DefaultDatabase()
 	tblName := stmt.Name.Parts[0]
 
-	_, tableDef := ctx.Resolve(tblName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
@@ -126,13 +126,13 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
-	_, tableDef := ctx.Resolve(tblName)
+	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, if(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 
 	sql = fmt.Sprintf(sql, dbName, tblName)
 

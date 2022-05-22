@@ -19,16 +19,17 @@ import (
 	"strconv"
 	"testing"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,42 +54,42 @@ func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	tcs = []groupTestCase{
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
-		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
-		}, []int32{0, 1}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+		}, []*plan.Expr{newExpression(0), newExpression(1)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int8},
 			{Oid: types.T_int16},
 			{Oid: types.T_int32},
 			{Oid: types.T_int64},
-		}, []int32{1, 3}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+		}, []*plan.Expr{newExpression(0), newExpression(3)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
-		}, []int32{1, 3}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+		}, []*plan.Expr{newExpression(1), newExpression(3)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_decimal128},
-		}, []int32{1, 2, 3}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar, Width: 2},
 			{Oid: types.T_decimal128},
-		}, []int32{1, 2, 3}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 		newTestCase(mheap.New(gm), []bool{false, true, false, true}, []types.Type{
 			{Oid: types.T_int64},
 			{Oid: types.T_int64},
 			{Oid: types.T_varchar},
 			{Oid: types.T_decimal128},
-		}, []int32{1, 2, 3}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 	}
 }
 
@@ -107,21 +108,27 @@ func TestPrepare(t *testing.T) {
 
 func TestGroup(t *testing.T) {
 	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
+		err := Prepare(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = &batch.Batch{}
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		tc.proc.Reg.InputBatch = nil
-		Call(tc.proc, tc.arg)
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
 		if tc.proc.Reg.InputBatch != nil {
-			batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 		}
 		tc.proc.Reg.InputBatch = nil
-		Call(tc.proc, tc.arg)
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		_, err = Call(tc.proc, tc.arg)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
 
@@ -130,42 +137,57 @@ func BenchmarkGroup(b *testing.B) {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
 		tcs = []groupTestCase{
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
-			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0}, []aggregate.Aggregate{{Op: 0, Pos: 0}}),
+			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
+			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []*plan.Expr{newExpression(0)}, []aggregate.Aggregate{{Op: 0, E: newExpression(0)}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
-			Prepare(tc.proc, tc.arg)
+			err := Prepare(tc.proc, tc.arg)
+			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
-			Call(tc.proc, tc.arg)
+			_, err = Call(tc.proc, tc.arg)
+			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.flgs, tc.types, tc.proc, BenchmarkRows)
-			Call(tc.proc, tc.arg)
+			_, err = Call(tc.proc, tc.arg)
+			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = &batch.Batch{}
-			Call(tc.proc, tc.arg)
+			_, err = Call(tc.proc, tc.arg)
+			require.NoError(t, err)
 			tc.proc.Reg.InputBatch = nil
-			Call(tc.proc, tc.arg)
+			_, err = Call(tc.proc, tc.arg)
+			require.NoError(t, err)
 			if tc.proc.Reg.InputBatch != nil {
-				batch.Clean(tc.proc.Reg.InputBatch, tc.proc.Mp)
+				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 			}
 		}
 	}
 }
 
-func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, poses []int32, aggs []aggregate.Aggregate) groupTestCase {
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggregate.Aggregate) groupTestCase {
 	return groupTestCase{
 		types: ts,
 		flgs:  flgs,
 		proc:  process.New(m),
 		arg: &Argument{
 			Aggs:  aggs,
-			Poses: poses,
+			Exprs: exprs,
+		},
+	}
+}
+
+func newExpression(pos int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
 		},
 	}
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.New(len(ts))
+	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])

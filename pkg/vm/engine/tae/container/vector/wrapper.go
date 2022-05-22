@@ -316,16 +316,25 @@ func (vec *VectorWrapper) ReadWithBuffer(r io.Reader, compressed *bytes.Buffer, 
 	case compress.Lz4:
 		loadSize := stat.Size()
 		originSize := stat.OriginSize()
-		compressed.Reset()
-		deCompressed.Reset()
-		if int(loadSize) > compressed.Cap() {
-			compressed.Grow(int(loadSize))
+		var tmpBuf []byte
+
+		if compressed == nil {
+			tmpNode := common.GPool.Alloc(uint64(loadSize))
+			defer common.GPool.Free(tmpNode)
+			tmpBuf = tmpNode.Buf
+		} else {
+			compressed.Reset()
+			if int(loadSize) > compressed.Cap() {
+				compressed.Grow(int(loadSize))
+			}
+			tmpBuf = compressed.Bytes()
 		}
+		tmpBuf = tmpBuf[:loadSize]
+
+		deCompressed.Reset()
 		if int(originSize) > deCompressed.Cap() {
 			deCompressed.Grow(int(originSize))
 		}
-		tmpBuf := compressed.Bytes()
-		tmpBuf = tmpBuf[:loadSize]
 		buf := deCompressed.Bytes()
 		buf = buf[:originSize]
 		nr, err := r.Read(tmpBuf)

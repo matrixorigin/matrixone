@@ -53,8 +53,15 @@ func NewSimpleTableIndex() *simpleTableIndex {
 
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) *gvec.Vector {
 	vec := gvec.New(kType)
-	for k := range idx.tree {
-		compute.AppendValue(vec, k)
+	switch kType.Oid {
+	case types.T_char, types.T_varchar, types.T_json:
+		for k := range idx.tree {
+			compute.AppendValue(vec, []byte(k.(string)))
+		}
+	default:
+		for k := range idx.tree {
+			compute.AppendValue(vec, k)
+		}
 	}
 	return vec
 }

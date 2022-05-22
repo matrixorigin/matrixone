@@ -109,7 +109,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 
 		// cast value type
 		if column.Typ.Id != value.Typ.Id {
-			tmp, err := appendCastExpr(value, column.Typ.Id)
+			tmp, err := appendCastExpr(value, column.Typ)
 			if err != nil {
 				return nil, err
 			}

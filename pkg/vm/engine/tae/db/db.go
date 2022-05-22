@@ -59,7 +59,7 @@ type DB struct {
 	Closed *atomic.Value
 }
 
-func (db *DB) StartTxn(info []byte) txnif.AsyncTxn {
+func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
 }
 

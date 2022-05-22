@@ -16,10 +16,11 @@ package sm
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type State = int32
@@ -127,12 +128,12 @@ func (q *safeQueue) waitStop() {
 func (q *safeQueue) Enqueue(item interface{}) (interface{}, error) {
 	state := atomic.LoadInt32(&q.state)
 	if state != Running {
-		return item, errors.New("closed")
+		return item, common.ClosedErr
 	}
 	atomic.AddInt64(&q.pending, int64(1))
 	if atomic.LoadInt32(&q.state) != Running {
 		atomic.AddInt64(&q.pending, int64(-1))
-		return item, errors.New("closed")
+		return item, common.ClosedErr
 	}
 	q.queue <- item
 	return item, nil

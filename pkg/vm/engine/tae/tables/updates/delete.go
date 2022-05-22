@@ -172,7 +172,7 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.Lock()
 	defer node.Unlock()
 	if node.txn == nil {
-		panic("not expected")
+		panic("DeleteNode | ApplyCommit | LogicErr")
 	}
 	node.txn = nil
 	node.logIndex = index

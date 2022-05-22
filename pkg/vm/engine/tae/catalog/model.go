@@ -69,7 +69,7 @@ const (
 	SystemRelAttr_Comment     = "rel_comment"
 	SystemRelAttr_CreateSQL   = "rel_createsql"
 
-	SystemColAttr_Name            = "att_name"
+	SystemColAttr_Name            = "attname"
 	SystemColAttr_DBName          = "att_database"
 	SystemColAttr_RelName         = "att_relname"
 	SystemColAttr_Type            = "atttyp"

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -52,33 +52,35 @@ var (
 		types.T_uint8: {
 			types.T_uint16, types.T_uint32, types.T_uint64,
 			types.T_int16, types.T_int32, types.T_int64,
-			types.T_float64,
+			types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_uint16: {
 			types.T_uint32, types.T_uint64,
 			types.T_int32, types.T_int64,
-			types.T_float64,
+			types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_uint32: {
 			types.T_uint64,
 			types.T_int64,
-			types.T_float64,
+			types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
-		types.T_uint64: {types.T_float64},
+		types.T_uint64: {types.T_float64, types.T_decimal64, types.T_decimal128},
 		types.T_int8: {
-			types.T_int16, types.T_int32, types.T_int64, types.T_float64,
+			types.T_int16, types.T_int32, types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_int16: {
-			types.T_int32, types.T_int64, types.T_float64,
+			types.T_int32, types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_int32: {
-			types.T_int64, types.T_float64,
+			types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
-		types.T_int64:     {types.T_float64},
+		types.T_int64:     {types.T_float64, types.T_decimal64, types.T_decimal128},
 		types.T_float32:   {types.T_float64},
 		types.T_decimal64: {types.T_decimal128},
 		types.T_char:      {types.T_varchar},
 		types.T_varchar:   {types.T_char},
+
+		types.T_tuple: {types.T_float64},
 	}
 )
 
@@ -90,9 +92,9 @@ type Function struct {
 
 	Flag plan.Function_FuncFlag
 
-	// Kind adapt to plan2/function.go, used for explaining.
-	// TODO: combine Kind with SQLFn, or just make a map (from function_id to Kind) outside ?
-	Kind Kind
+	// Layout adapt to plan2/function.go, used for explaining.
+	// TODO: combine Layout with SQLFn, or just make a map (from function_id to Layout) outside ?
+	Layout FuncExplainLayout
 
 	Args      []types.T
 	ReturnTyp types.T
@@ -180,7 +182,7 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
-// return function structure and overload id
+// return function structure and encoded overload id
 // and final converted argument types(if it needs to do type level-up work, it will be nil if not).
 func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T, error) {
 	levelUpFunction, get, minCost := emptyFunction, false, math.MaxInt32 // store the best function which can be matched by type level-up

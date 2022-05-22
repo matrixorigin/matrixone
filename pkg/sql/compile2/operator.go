@@ -12,15 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package int64s
+package compile2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/restrict"
 )
 
-type compare struct {
-	xs [][]int64
-	ns []*nulls.Nulls
-	vs []*vector.Vector
+func constructRestrict(n *plan.Node) *restrict.Argument {
+	return &restrict.Argument{}
+}
+
+func constructProjection(n *plan.Node) *projection.Argument {
+	return &projection.Argument{
+		Es: n.ProjectList,
+	}
 }

@@ -393,11 +393,9 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool
 	// If this entry was written by the same txn as txn
 	if be.IsSameTxn(txn) {
 		// This entry was deleted by the same txn, skip this entry
-		if be.IsDroppedUncommitted() {
-			return false
-		}
 		// This entry was created by the same txn, use this entry
-		return true
+		return !be.IsDroppedUncommitted()
+
 	}
 	// This entry is not created, skip this entry
 	if !be.HasCreated() {

@@ -41,7 +41,7 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, n
 			return nil, err
 		}
 	case *tree.SelectClause:
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("support select statement: %T", subquery))
+		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement: %T", subquery))
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", subquery))
 	}
@@ -61,16 +61,9 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, n
 		},
 	}
 	if subquery.Exists {
-		returnExpr = &Expr{
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Func: getFunctionObjRef("EXISTS"),
-					Args: []*Expr{returnExpr},
-				},
-			},
-			Typ: &plan.Type{
-				Id: plan.Type_BOOL,
-			},
+		returnExpr, err = getFunctionExprByNameAndPlanExprs("EXISTS", []*Expr{returnExpr})
+		if err != nil {
+			return nil, err
 		}
 	}
 	return returnExpr, nil

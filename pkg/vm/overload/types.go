@@ -12,15 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package int64s
+package overload
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+const (
+	Top = iota
+	Join
+	Left
+	Limit
+	Merge
+	Order
+	Group
+	Output
+	Offset
+	Product
+	Restrict
+	Connector
+	Projection
+	Complement
+
+	MergeTop
+	MergeLimit
+	MergeOrder
+	MergeGroup
+	MergeOffset
 )
-
-type compare struct {
-	xs [][]int64
-	ns []*nulls.Nulls
-	vs []*vector.Vector
-}

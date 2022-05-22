@@ -410,9 +410,9 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 }
 
 func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompressed *bytes.Buffer, raw bool) (view *model.ColumnView, err error) {
-	h := blk.node.mgr.Pin(blk.node)
-	if h == nil {
-		panic("not expected")
+	var h base.INodeHandle
+	if h, err = blk.node.TryPin(); err != nil {
+		return
 	}
 	defer h.Close()
 
@@ -573,12 +573,10 @@ func (blk *dataBlock) getVectorWithBuffer(colIdx int, compressed, decompressed *
 
 	wrapper := vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
 	wrapper.File = dataFile
-	if compressed == nil || decompressed == nil {
-		_, err = wrapper.ReadFrom(dataFile)
-	} else {
-		_, err = wrapper.ReadWithBuffer(dataFile, compressed, decompressed)
+	if decompressed == nil {
+		decompressed = new(bytes.Buffer)
 	}
-	if err != nil {
+	if _, err = wrapper.ReadWithBuffer(dataFile, compressed, decompressed); err != nil {
 		return
 	}
 	vec = &wrapper.Vector

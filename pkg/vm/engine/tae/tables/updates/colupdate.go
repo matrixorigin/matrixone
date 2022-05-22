@@ -311,7 +311,7 @@ func (node *ColumnNode) ApplyCommit(index *wal.Index) (err error) {
 	node.Lock()
 	defer node.Unlock()
 	if node.txn == nil {
-		panic("not expected")
+		panic("ColumnNode | ApplyCommit | LogicErr")
 	}
 	node.txn = nil
 	node.logIndex = index

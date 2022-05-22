@@ -45,7 +45,10 @@ func (task *ScheduledTxnTask) Scope() *common.ID {
 }
 
 func (task *ScheduledTxnTask) Execute() (err error) {
-	txn := task.db.StartTxn(nil)
+	txn, err := task.db.StartTxn(nil)
+	if err != nil {
+		return
+	}
 	txnTask, err := task.factory(nil, txn)
 	if err != nil {
 		err2 := txn.Rollback()

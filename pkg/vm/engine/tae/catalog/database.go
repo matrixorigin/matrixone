@@ -154,20 +154,20 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	return
 }
 
-func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) *common.DLNode {
+func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
 	node := e.nameNodes[name]
 	if node == nil {
-		return nil
+		return nil, ErrNotFound
 	}
 	return node.TxnGetTableNodeLocked(txnCtx)
 }
 
 func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
 	e.RLock()
-	n := e.txnGetNodeByNameLocked(name, txnCtx)
+	n, err := e.txnGetNodeByNameLocked(name, txnCtx)
 	e.RUnlock()
-	if n == nil {
-		return nil, ErrNotFound
+	if err != nil {
+		return
 	}
 	entry = n.GetPayload().(*TableEntry)
 	return
@@ -176,9 +176,8 @@ func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *Tabl
 func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *TableEntry, err error) {
 	e.Lock()
 	defer e.Unlock()
-	dn := e.txnGetNodeByNameLocked(name, txnCtx)
-	if dn == nil {
-		err = ErrNotFound
+	dn, err := e.txnGetNodeByNameLocked(name, txnCtx)
+	if err != nil {
 		return
 	}
 	entry := dn.GetPayload().(*TableEntry)
@@ -194,7 +193,7 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
-	err = e.addEntryLocked(created)
+	err = e.AddEntryLocked(created)
 	e.Unlock()
 
 	return created, err
@@ -217,7 +216,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	return
 }
 
-func (e *DBEntry) addEntryLocked(table *TableEntry) error {
+func (e *DBEntry) AddEntryLocked(table *TableEntry) error {
 	nn := e.nameNodes[table.schema.Name]
 	if nn == nil {
 		n := e.link.Insert(table)

@@ -60,6 +60,22 @@ func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, 
 	return e
 }
 
+func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts uint64) *BlockEntry {
+	e := &BlockEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: ts,
+		},
+		segment: segment,
+		state:   ES_Appendable,
+	}
+	return e
+}
+
 func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 	e := &BlockEntry{
 		BaseEntry: &BaseEntry{
