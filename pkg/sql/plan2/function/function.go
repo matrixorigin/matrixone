@@ -290,6 +290,10 @@ func isNotScalarNull(t types.T) bool {
 }
 
 var (
+	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
+	// used to make an AndExpr
+	AndFunctionEncodedID = encodeOverloadID(AND, 0)
+
 	anyNumbers = map[types.T]struct{}{
 		types.T_uint8:      {},
 		types.T_uint16:     {},
