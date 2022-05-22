@@ -25,10 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type TxnClient interface {
-	StartTxn(info []byte) (AsyncTxn, error)
-}
-
 type Txn2PC interface {
 	PreCommit() error
 	PrepareRollback() error
@@ -69,6 +65,7 @@ type TxnChanger interface {
 	ToCommittingLocked(ts uint64) error
 	ToRollbackedLocked() error
 	ToRollbackingLocked(ts uint64) error
+	ToUnknownLocked()
 	Commit() error
 	Rollback() error
 	SetError(error)
@@ -80,7 +77,7 @@ type TxnWriter interface {
 }
 
 type TxnAsyncer interface {
-	WaitDone() error
+	WaitDone(error) error
 }
 
 type TxnTest interface {

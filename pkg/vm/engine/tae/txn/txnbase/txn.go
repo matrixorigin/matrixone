@@ -94,7 +94,7 @@ func (txn *Txn) Commit() (err error) {
 		txn.Unlock()
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.Done()
+		txn.DoneWithErr(err)
 	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
@@ -118,7 +118,7 @@ func (txn *Txn) Rollback() (err error) {
 	if err != nil {
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.Done()
+		txn.DoneWithErr(err)
 	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
@@ -126,15 +126,20 @@ func (txn *Txn) Rollback() (err error) {
 	return
 }
 
-func (txn *Txn) Done() {
+func (txn *Txn) DoneWithErr(err error) {
 	txn.DoneCond.L.Lock()
-	if txn.State == txnif.TxnStateCommitting {
-		if err := txn.ToCommittedLocked(); err != nil {
-			txn.SetError(err)
-		}
+	if err != nil {
+		txn.ToUnknownLocked()
+		txn.SetError(err)
 	} else {
-		if err := txn.ToRollbackedLocked(); err != nil {
-			txn.SetError(err)
+		if txn.State == txnif.TxnStateCommitting {
+			if err := txn.ToCommittedLocked(); err != nil {
+				txn.SetError(err)
+			}
+		} else {
+			if err := txn.ToRollbackedLocked(); err != nil {
+				txn.SetError(err)
+			}
 		}
 	}
 	txn.WaitGroup.Done()
@@ -179,7 +184,6 @@ func (txn *Txn) PrepareCommit() error {
 	if err != nil {
 		return err
 	}
-	// TODO: process data in store
 	err = txn.Store.PrepareCommit()
 	return err
 }
@@ -222,9 +226,9 @@ func (txn *Txn) String() string {
 	return fmt.Sprintf("%s: %v", str, txn.GetError())
 }
 
-func (txn *Txn) WaitDone() error {
+func (txn *Txn) WaitDone(err error) error {
 	// logutil.Infof("Wait %s Done", txn.String())
-	txn.Done()
+	txn.DoneWithErr(err)
 	return txn.Err
 }
 
