@@ -225,23 +225,6 @@ func init() {
 				return resultVector, nil
 			},
 		},
-		{ // T_float32
-			Typ:        types.T_float32,
-			ReturnType: types.T_uint8,
-			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
-				origVecCol := origVec.Col.([]float32)
-				resultVector, err := process.Get(proc, 1*int64(len(origVecCol)), types.Type{Oid: types.T_uint8, Size: 1})
-				if err != nil {
-					return nil, err
-				}
-				results := encoding.DecodeUint8Slice(resultVector.Data)
-				results = results[:len(origVecCol)]
-				resultVector.Col = results
-				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, ascii.AsciiFloat32(origVecCol, results))
-				return resultVector, nil
-			},
-		},
 		{ // T_char
 			Typ:        types.T_char,
 			ReturnType: types.T_uint8,
