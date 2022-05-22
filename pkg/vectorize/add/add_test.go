@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"testing"
 )
-func BenchmarkI32(b testing.B){
+func BenchmarkI32(b *testing.B){
 	buf := make([]int32, 2050)
 	for i := range buf {
 		buf[i] = int32(i)
