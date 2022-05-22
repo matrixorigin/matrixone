@@ -1323,10 +1323,7 @@ var operators = map[int][]Function{
 			Layout:    EXISTS_ANY_PREDICATE,
 			ReturnTyp: types.T_bool,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				if len(inputTypes) != 1 {
-					return false
-				}
-				return true
+				return len(inputTypes) == 1
 			},
 		},
 	},

@@ -16,8 +16,6 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"os"
 	"runtime/pprof"
 	"strconv"
@@ -25,7 +23,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
@@ -1267,7 +1267,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	txnHandler := ses.GetTxnHandler()
 	ses.SetSql(sql)
 
-	var usePlan2 bool = ses.IsTaeEngine()
+	usePlan2 := ses.IsTaeEngine()
 	if ses.Pu.SV.GetUsePlan2() {
 		usePlan2 = true
 	}

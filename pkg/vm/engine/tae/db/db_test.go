@@ -28,7 +28,6 @@ import (
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -1681,7 +1680,7 @@ func TestSystemDB1(t *testing.T) {
 	}
 	t.Log(rows)
 
-	for i := 0; i < movec.Length(bat.Vecs[0]); i++ {
+	for i := 0; i < vector.Length(bat.Vecs[0]); i++ {
 		dbName := compute.GetValue(bat.Vecs[0], uint32(i))
 		relName := compute.GetValue(bat.Vecs[1], uint32(i))
 		attrName := compute.GetValue(bat.Vecs[2], uint32(i))
@@ -1752,7 +1751,7 @@ func TestSystemDB2(t *testing.T) {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(0, nil, nil)
 		assert.NoError(t, err)
-		rows += movec.Length(view.GetColumnData())
+		rows += vector.Length(view.GetColumnData())
 		it.Next()
 	}
 	assert.Equal(t, 1000, rows)
@@ -1868,7 +1867,7 @@ func TestScan2(t *testing.T) {
 		actualRows += view.Length()
 		blkIt.Next()
 	}
-	assert.Equal(t, movec.Length(bats[0].Vecs[0]), actualRows)
+	assert.Equal(t, vector.Length(bats[0].Vecs[0]), actualRows)
 
 	err = rel.Append(bats[0])
 	assert.Error(t, err)

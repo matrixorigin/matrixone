@@ -452,7 +452,7 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 	// get isAllowNull setting
 	{
 		for _, attr := range column.Attributes {
-			if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is == false {
+			if nullAttr, ok := attr.(*tree.AttributeNull); ok && !nullAttr.Is {
 				allowNull = false
 				break
 			}
