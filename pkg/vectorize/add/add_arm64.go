@@ -229,28 +229,6 @@ void float64AddScalarArm(GoFloat64* x, GoFloat64* y, GoFloat64* r, int len) {
 import "C"
 import "unsafe"
 
-func int8AddArm(x[]int8, y[]int8, r[]int8)
-func int16AddArm(x[]int16, y[]int16, r[]int16)
-func int32AddArm(x[]int32, y[]int32, r[]int32)
-func int64AddArm(x[]int64, y[]int64, r[]int64)
-func uint8AddArm(x[]uint8, y[]uint8, r[]uint8)
-func uint16AddArm(x[]uint16, y[]uint16, r[]uint16)
-func uint32AddArm(x[]uint32, y[]uint32, r[]uint32)
-func uint64AddArm(x[]uint64, y[]uint64, r[]uint64)
-func float32AddArm(x[]float32, y[]float32, r[]float32)
-func float64AddArm(x[]float64, y[]float64, r[]float64)
-func int8AddScalarArm(x int8, y[]int8, r[]int8)
-func int16AddScalarArm(x int16, y[]int16, r[]int16)
-func int32AddScalarArm(x int32, y[]int32, r[]int32)
-func int64AddScalarArm(x int64, y[]int64, r[]int64)
-func uint8AddScalarArm(x uint8, y[]uint8, r[]uint8)
-func uint16AddScalarArm(x uint16, y[]uint16, r[]uint16)
-func uint32AddScalarArm(x uint32, y[]uint32, r[]uint32)
-func uint64AddScalarArm(x uint64, y[]uint64, r[]uint64)
-func float32AddScalarArm(x float32, y[]float32, r[]float32)
-func float64AddScalarArm(x float64, y[]float64, r[]float64)
-
-
 func init(){
 	Int8Add = int8AddArm
 	Int8AddScalar = int8AddScalarArm
