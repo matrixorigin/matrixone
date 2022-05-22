@@ -9,7 +9,7 @@ require (
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/bxcodec/faker/v3 v3.8.0
 	github.com/cespare/xxhash/v2 v2.1.2
-	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
+	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292
 	github.com/fagongzi/goetty v1.13.0
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
@@ -17,7 +17,8 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
-	github.com/lni/goutils v1.3.0
+	github.com/lni/dragonboat/v3 v3.1.1-0.20220517163206-e0cab9aaf83c
+	github.com/lni/goutils v1.3.1-0.20220404072553-ddb2075d2587
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220511071845-cfc4bac02bb4
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
@@ -35,16 +36,33 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-require github.com/golang/protobuf v1.5.2 // indirect
+require (
+	github.com/VictoriaMetrics/metrics v1.18.1 // indirect
+	github.com/armon/go-metrics v0.0.0-20180917152333-f0300d1749da // indirect
+	github.com/getsentry/sentry-go v0.12.0 // indirect
+	github.com/golang/protobuf v1.5.2 // indirect
+	github.com/hashicorp/errwrap v1.0.0 // indirect
+	github.com/hashicorp/go-immutable-radix v1.0.0 // indirect
+	github.com/hashicorp/go-msgpack v0.5.3 // indirect
+	github.com/hashicorp/go-multierror v1.0.0 // indirect
+	github.com/hashicorp/go-sockaddr v1.0.0 // indirect
+	github.com/hashicorp/golang-lru v0.5.1 // indirect
+	github.com/hashicorp/memberlist v0.3.1 // indirect
+	github.com/miekg/dns v1.1.26 // indirect
+	github.com/pierrec/lz4/v4 v4.1.14 // indirect
+	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
+	github.com/valyala/fastrand v1.1.0 // indirect
+	github.com/valyala/histogram v1.2.0 // indirect
+)
 
 require (
 	cloud.google.com/go v0.99.0 // indirect
 	github.com/DataDog/zstd v1.5.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.2.0 // indirect
-	github.com/cockroachdb/errors v1.8.2 // indirect
-	github.com/cockroachdb/logtags v0.0.0-20190617123548-eb05cc24525f // indirect
-	github.com/cockroachdb/redact v1.0.8 // indirect
+	github.com/cockroachdb/errors v1.9.0 // indirect
+	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect
+	github.com/cockroachdb/redact v1.1.3 // indirect
 	github.com/cockroachdb/sentry-go v0.6.1-cockroachdb.2 // indirect
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
@@ -64,12 +82,12 @@ require (
 	github.com/jonboulle/clockwork v0.2.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
-	github.com/juju/ratelimit v1.0.1 // indirect
+	github.com/juju/ratelimit v1.0.2-0.20191002062651-f60b32039441 // indirect
 	github.com/klauspost/compress v1.13.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.3 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f // indirect
+	github.com/lni/vfs v0.2.1-0.20220408085249-8be85be1c3c1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
