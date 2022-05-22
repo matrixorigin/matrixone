@@ -123,23 +123,6 @@ func init() {
 				return resultVector, nil
 			},
 		},
-		{ // T_int8
-			Typ:        types.T_int8,
-			ReturnType: types.T_uint8,
-			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
-				origVecCol := origVec.Col.([]int8)
-				resultVector, err := process.Get(proc, 1*int64(len(origVecCol)), types.Type{Oid: types.T_uint8, Size: 1})
-				if err != nil {
-					return nil, err
-				}
-				results := encoding.DecodeUint8Slice(resultVector.Data)
-				results = results[:len(origVecCol)]
-				resultVector.Col = results
-				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, ascii.AsciiInt8(origVecCol, results))
-				return resultVector, nil
-			},
-		},
 		{ // T_int16
 			Typ:        types.T_int16,
 			ReturnType: types.T_uint8,
