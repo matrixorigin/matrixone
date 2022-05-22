@@ -55,4 +55,5 @@ const (
 	BitLength
 	Bin
 	FindInSet
+	ASCII
 )
