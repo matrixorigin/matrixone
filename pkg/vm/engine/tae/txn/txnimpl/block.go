@@ -39,6 +39,7 @@ type blockIt struct {
 	linkIt *common.LinkIt
 	curr   *catalog.BlockEntry
 	table  *txnTable
+	err    error
 }
 
 type relBlockIt struct {
@@ -46,6 +47,7 @@ type relBlockIt struct {
 	rel       handle.Relation
 	segmentIt handle.SegmentIt
 	blockIt   handle.BlockIt
+	err       error
 }
 
 func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
@@ -53,10 +55,18 @@ func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 		table:  table,
 		linkIt: meta.MakeBlockIt(true),
 	}
+	var ok bool
+	var err error
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.table.store.txn, curr.RWMutex) {
+		ok, err = curr.TxnCanRead(it.table.store.txn, curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			break
+		}
+		if ok {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -69,9 +79,15 @@ func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 
 func (it *blockIt) Close() error { return nil }
 
-func (it *blockIt) Valid() bool { return it.linkIt.Valid() }
+func (it *blockIt) Valid() bool {
+	if it.err != nil {
+		return false
+	}
+	return it.linkIt.Valid()
+}
 
 func (it *blockIt) Next() {
+	var err error
 	valid := true
 	for {
 		it.linkIt.Next()
@@ -82,13 +98,21 @@ func (it *blockIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.BlockEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
 		if valid {
 			it.curr = entry
 			break
 		}
 	}
+}
+
+func (it *blockIt) GetError() error {
+	return it.err
 }
 
 func (it *blockIt) GetBlock() handle.Block {
@@ -185,42 +209,69 @@ func (blk *txnBlock) GetByFilter(filter *handle.Filter) (offset uint32, err erro
 
 // TODO: segmentit or tableit
 func newRelationBlockIt(rel handle.Relation) *relBlockIt {
+	it := new(relBlockIt)
 	segmentIt := rel.MakeSegmentIt()
 	if !segmentIt.Valid() {
-		return new(relBlockIt)
+		it.err = segmentIt.GetError()
+		return it
 	}
 	seg := segmentIt.GetSegment()
 	blockIt := seg.MakeBlockIt()
 	for !blockIt.Valid() {
 		segmentIt.Next()
 		if !segmentIt.Valid() {
-			return new(relBlockIt)
+			it.err = segmentIt.GetError()
+			return it
 		}
 		seg = segmentIt.GetSegment()
 		blockIt = seg.MakeBlockIt()
 	}
-	return &relBlockIt{
-		blockIt:   blockIt,
-		segmentIt: segmentIt,
-		rel:       rel,
-	}
+	it.blockIt = blockIt
+	it.segmentIt = segmentIt
+	it.rel = rel
+	it.err = blockIt.GetError()
+	return it
 }
 
-func (it *relBlockIt) Close() error { return nil }
+func (it *relBlockIt) Close() error    { return nil }
+func (it *relBlockIt) GetError() error { return it.err }
 func (it *relBlockIt) Valid() bool {
-	if it.segmentIt == nil || !it.segmentIt.Valid() {
+	var err error
+	if it.err != nil {
 		return false
 	}
-	if !it.blockIt.Valid() {
-		it.segmentIt.Next()
-		if !it.segmentIt.Valid() {
-			return false
-		}
-		seg := it.segmentIt.GetSegment()
-		it.blockIt = seg.MakeBlockIt()
-		return it.blockIt.Valid()
+	if it.segmentIt == nil {
+		return false
 	}
-	return true
+	if !it.segmentIt.Valid() {
+		if err = it.segmentIt.GetError(); err != nil {
+			it.err = err
+		}
+		return false
+	}
+	if it.blockIt.Valid() {
+		return true
+	}
+
+	if err = it.blockIt.GetError(); err != nil {
+		it.err = err
+	}
+	if it.err != nil {
+		return false
+	}
+	it.segmentIt.Next()
+	if !it.segmentIt.Valid() {
+		if err = it.segmentIt.GetError(); err != nil {
+			it.err = err
+		}
+		return false
+	}
+	seg := it.segmentIt.GetSegment()
+	it.blockIt = seg.MakeBlockIt()
+	if err = it.blockIt.GetError(); err != nil {
+		it.err = err
+	}
+	return it.blockIt.Valid()
 }
 
 func (it *relBlockIt) GetBlock() handle.Block {

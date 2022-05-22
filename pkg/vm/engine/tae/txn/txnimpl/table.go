@@ -109,11 +109,17 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 	if meta, err = tbl.entry.GetSegmentByID(id); err != nil {
 		return
 	}
+	var ok bool
 	meta.RLock()
-	if !meta.TxnCanRead(tbl.store.txn, meta.RWMutex) {
-		err = txnbase.ErrNotFound
-	}
+	ok, err = meta.TxnCanRead(tbl.store.txn, meta.RWMutex)
 	meta.RUnlock()
+	if err != nil {
+		return
+	}
+	if !ok {
+		err = txnbase.ErrNotFound
+		return
+	}
 	seg = newSegment(tbl, meta)
 	return
 }

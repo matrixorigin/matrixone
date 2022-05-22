@@ -78,7 +78,7 @@ func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry)) {
 	for dbIt.Valid() {
 		db := dbIt.Get().GetPayload().(*catalog.DBEntry)
 		db.RLock()
-		canRead = db.TxnCanRead(blk.Txn, db.RWMutex)
+		canRead, _ = db.TxnCanRead(blk.Txn, db.RWMutex)
 		db.RUnlock()
 		if canRead {
 			fn(db)
@@ -93,7 +93,7 @@ func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.Ta
 	for tableIt.Valid() {
 		table := tableIt.Get().GetPayload().(*catalog.TableEntry)
 		table.RLock()
-		canRead = table.TxnCanRead(blk.Txn, table.RWMutex)
+		canRead, _ = table.TxnCanRead(blk.Txn, table.RWMutex)
 		table.RUnlock()
 		if canRead {
 			fn(table)

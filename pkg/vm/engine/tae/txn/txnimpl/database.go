@@ -29,6 +29,7 @@ type txnDBIt struct {
 	txn    txnif.AsyncTxn
 	linkIt *common.LinkIt
 	curr   *catalog.DBEntry
+	err    error
 }
 
 func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
@@ -37,10 +38,18 @@ func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
 		txn:     txn,
 		linkIt:  c.MakeDBIt(true),
 	}
+	var err error
+	var ok bool
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.DBEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.txn, curr.RWMutex) {
+		ok, err = curr.TxnCanRead(it.txn, curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			break
+		}
+		if ok {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -51,10 +60,17 @@ func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
 	return it
 }
 
-func (it *txnDBIt) Close() error { return nil }
-func (it *txnDBIt) Valid() bool  { return it.linkIt.Valid() }
+func (it *txnDBIt) Close() error    { return nil }
+func (it *txnDBIt) GetError() error { return it.err }
+func (it *txnDBIt) Valid() bool {
+	if it.err != nil {
+		return false
+	}
+	return it.linkIt.Valid()
+}
 
 func (it *txnDBIt) Next() {
+	var err error
 	valid := true
 	for {
 		it.linkIt.Next()
@@ -65,8 +81,12 @@ func (it *txnDBIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.DBEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.txn, entry.RWMutex)
 		entry.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
 		if valid {
 			it.curr = entry
 			break

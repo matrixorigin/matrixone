@@ -370,9 +370,9 @@ func (be *BaseEntry) CreateAndDropInSameTxn() bool {
 	return false
 }
 
-func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool {
+func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (bool, error) {
 	if txn == nil {
-		return true
+		return true, nil
 	}
 	thisTxn := be.Txn
 	// No active txn is on this entry
@@ -380,46 +380,46 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool
 		// This entry is created after txn starts, skip this entry
 		// This entry is deleted before txn starts, skip this entry
 		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) {
-			return false
+			return false, nil
 		}
 		// Otherwise, use this entry
-		return true
+		return true, nil
 	}
 	// If this entry was written by the same txn as txn
 	if be.IsSameTxn(txn) {
 		// This entry was deleted by the same txn, skip this entry
 		if be.IsDroppedUncommitted() {
-			return false
+			return false, nil
 		}
 		// This entry was created by the same txn, use this entry
-		return true
+		return true, nil
 	}
 	// This entry is not created, skip this entry
 	if !be.HasCreated() {
-		return false
+		return false, nil
 	}
 	// This entry was created after txn start ts, skip this entry
 	if be.CreateAfter(txn.GetStartTS()) {
-		return false
+		return false, nil
 	}
 
 	// This entry was not dropped before or by any active tansactions, use this entry
 	if !be.HasDropped() {
-		return true
+		return true, nil
 	}
 
 	// This entry was dropped after txn starts, use this entry
 	if be.DeleteAfter(txn.GetStartTS()) {
-		return true
+		return true, nil
 	}
 
 	// This entry was deleted before txn start
 	// Delete is uncommitted by other txn, skip this entry
 	if !be.IsCommitting() {
-		return false
+		return false, nil
 	}
 	if be.CreateAndDropInSameTxn() {
-		return false
+		return false, nil
 	}
 	// The txn is committing, wait till committed
 	if rwlocker != nil {
@@ -430,10 +430,12 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool
 		rwlocker.RLock()
 	}
 	if state == txnif.TxnStateRollbacked {
-		return true
+		return true, nil
+	} else if state == txnif.TxnStateUnknown {
+		return false, txnif.TxnInternalErr
 	}
 
-	return false
+	return false, nil
 }
 
 func (be *BaseEntry) String() string {
