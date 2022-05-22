@@ -90,6 +90,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v interface{}, err
 				}
 				// 3. Node is committing and wait committed or rollbacked
 				state := nTxn.GetTxnState(true)
+				// logutil.Infof("%d -- wait --> %s: state", startTs, nTxn.Repr(), state)
 				if state == txnif.TxnStateCommitted {
 					// 3.1 If committed. use this node
 					break

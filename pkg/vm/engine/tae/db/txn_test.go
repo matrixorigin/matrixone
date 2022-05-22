@@ -639,7 +639,11 @@ func TestTxn9(t *testing.T) {
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(13)
-	// bat := catalog.MockData(schema, 100)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 4
+	expectRows := schema.BlockMaxRows * 5 / 2
+	bat := catalog.MockData(schema, expectRows)
+	bats := compute.SplitBatch(bat, 5)
 
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -662,6 +666,27 @@ func TestTxn9(t *testing.T) {
 		}
 		atomic.StoreUint32(&val, 2)
 		assert.Equal(t, 2, cnt)
+		assert.NoError(t, txn.Commit())
+	}
+
+	scanCol := func() {
+		defer wg.Done()
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		rows := 0
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			view, err := blk.GetColumnDataById(2, nil, nil)
+			assert.NoError(t, err)
+			t.Log(view.GetColumnData().String())
+			rows += blk.Rows()
+			it.Next()
+		}
+		atomic.StoreUint32(&val, 2)
+		assert.Equal(t, int(expectRows/5*2), rows)
+		assert.NoError(t, txn.Commit())
 	}
 
 	txn, _ = tae.StartTxn(nil)
@@ -669,13 +694,62 @@ func TestTxn9(t *testing.T) {
 	txn.SetApplyCommitFn(func(_ txnif.AsyncTxn) error {
 		wg.Add(1)
 		go scanNames()
-		time.Sleep(time.Millisecond * 5)
+		time.Sleep(time.Millisecond * 10)
 		atomic.StoreUint32(&val, 1)
 		return nil
 	})
 	schema2 := catalog.MockSchemaAll(13)
 	_, _ = db.CreateRelation(schema2)
+	rel, _ := db.GetRelationByName(schema.Name)
+	err := rel.Append(bats[0])
+	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
 	assert.Equal(t, uint32(2), atomic.LoadUint32(&val))
+
+	apply := func(_ txnif.AsyncTxn) error {
+		wg.Add(1)
+		go scanCol()
+		time.Sleep(time.Millisecond * 10)
+		atomic.StoreUint32(&val, 1)
+		return nil
+	}
+
+	val = uint32(0)
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	txn.SetApplyCommitFn(apply)
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	wg.Wait()
+
+	val = uint32(0)
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	txn.SetApplyCommitFn(apply)
+	rel, _ = db.GetRelationByName(schema.Name)
+	v := compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	wg.Wait()
+
+	val = uint32(0)
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	txn.SetApplyCommitFn(apply)
+	rel, _ = db.GetRelationByName(schema.Name)
+	v = compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 3)
+	filter = handle.NewEQFilter(v)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.Update(id, row, 2, int32(9999))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	wg.Wait()
 }

@@ -97,6 +97,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool, err er
 				deleted = true
 			} else {
 				state := txn.GetTxnState(true)
+				// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 				if state == txnif.TxnStateCommitted {
 					deleted = true
 				} else if state == txnif.TxnStateUnknown {
@@ -234,6 +235,7 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) (tx
 			// Wait committing txn with commit ts before ts
 			n.RUnlock()
 			state := txn.GetTxnState(true)
+			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			// If the txn is rollbacked. skip to the next
 			if state == txnif.TxnStateRollbacked {
 				return true
