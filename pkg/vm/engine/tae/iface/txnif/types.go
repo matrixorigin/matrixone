@@ -69,7 +69,6 @@ type TxnChanger interface {
 	Commit() error
 	Rollback() error
 	SetError(error)
-	SetPrepareCommitFn(func(interface{}) error)
 }
 
 type TxnWriter interface {
@@ -83,6 +82,10 @@ type TxnAsyncer interface {
 type TxnTest interface {
 	MockSetCommitTSLocked(ts uint64)
 	MockIncWriteCnt() int
+	SetPrepareCommitFn(func(AsyncTxn) error)
+	SetPrepareRollbackFn(func(AsyncTxn) error)
+	SetApplyCommitFn(func(AsyncTxn) error)
+	SetApplyRollbackFn(func(AsyncTxn) error)
 }
 
 type AsyncTxn interface {

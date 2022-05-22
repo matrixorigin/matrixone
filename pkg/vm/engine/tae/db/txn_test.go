@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -425,7 +427,7 @@ func (app1 *APP1) Init(factor int) {
 	for i := 0; i < conf.Users; i++ {
 		uid := compute.GetValue(userData.Vecs[0], uint32(i))
 		uname := compute.GetValue(userData.Vecs[1], uint32(i))
-		client := NewAPP1UserClient(uid.(uint64), uname.(string))
+		client := NewAPP1UserClient(uid.(uint64), string(uname.([]byte)))
 		app1.Clients = append(app1.Clients, client)
 		// logutil.Info(client.String())
 	}
@@ -458,7 +460,7 @@ func (app1 *APP1) Init(factor int) {
 		goodsName := compute.GetValue(goodsData.Vecs[1], uint32(i))
 		goods := new(APP1Goods)
 		goods.ID = goodsId.(uint64)
-		goods.Name = goodsName.(string)
+		goods.Name = string(goodsName.([]byte))
 		app1.Goods = append(app1.Goods, goods)
 	}
 	provider.Reset()
@@ -629,4 +631,51 @@ func TestTxn8(t *testing.T) {
 
 	err = txn.Commit()
 	t.Log(err)
+}
+
+// Test wait committing
+func TestTxn9(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(13)
+	// bat := catalog.MockData(schema, 100)
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	_, _ = db.CreateRelation(schema)
+	assert.NoError(t, txn.Commit())
+
+	var wg sync.WaitGroup
+
+	val := uint32(0)
+
+	scanNames := func() {
+		defer wg.Done()
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		it := db.MakeRelationIt()
+		cnt := 0
+		for it.Valid() {
+			cnt++
+			it.Next()
+		}
+		atomic.StoreUint32(&val, 2)
+		assert.Equal(t, 2, cnt)
+	}
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	txn.SetApplyCommitFn(func(_ txnif.AsyncTxn) error {
+		wg.Add(1)
+		go scanNames()
+		time.Sleep(time.Millisecond * 5)
+		atomic.StoreUint32(&val, 1)
+		return nil
+	})
+	schema2 := catalog.MockSchemaAll(13)
+	_, _ = db.CreateRelation(schema2)
+	assert.NoError(t, txn.Commit())
+	wg.Wait()
+	assert.Equal(t, uint32(2), atomic.LoadUint32(&val))
 }

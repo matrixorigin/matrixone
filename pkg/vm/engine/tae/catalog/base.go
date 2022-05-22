@@ -370,76 +370,76 @@ func (be *BaseEntry) CreateAndDropInSameTxn() bool {
 	return false
 }
 
-func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (bool, error) {
-	if txn == nil {
-		return true, nil
-	}
+func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok bool, err error) {
+	// defer func() {
+	// 	if ok {
+	// 		logutil.Infof("%s [Can Read] %s", txn.String(), be.String())
+	// 	} else {
+	// 		logutil.Infof("%s [Cannot Read] %s", txn.String(), be.String())
+	// 	}
+	// }()
 	thisTxn := be.Txn
+	if txn == nil {
+		ok, err = true, nil
+		return
+	}
 	// No active txn is on this entry
 	if !be.HasActiveTxn() {
 		// This entry is created after txn starts, skip this entry
 		// This entry is deleted before txn starts, skip this entry
 		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) {
-			return false, nil
+			ok, err = false, nil
+			return
 		}
 		// Otherwise, use this entry
-		return true, nil
+		ok, err = true, nil
+		return
 	}
 	// If this entry was written by the same txn as txn
 	if be.IsSameTxn(txn) {
 		// This entry was deleted by the same txn, skip this entry
 		if be.IsDroppedUncommitted() {
-			return false, nil
+			ok, err = false, nil
+			return
 		}
 		// This entry was created by the same txn, use this entry
-		return true, nil
-	}
-	// This entry is not created, skip this entry
-	if !be.HasCreated() {
-		return false, nil
-	}
-	// This entry was created after txn start ts, skip this entry
-	if be.CreateAfter(txn.GetStartTS()) {
-		return false, nil
+		ok, err = true, nil
+		return
 	}
 
-	// This entry was not dropped before or by any active tansactions, use this entry
-	if !be.HasDropped() {
-		return true, nil
+	// If this txn is uncommitted or committing after txn start ts
+	if thisTxn.GetCommitTS() > txn.GetStartTS() {
+		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
+			ok = false
+		} else {
+			ok = true
+		}
+		return
 	}
 
-	// This entry was dropped after txn starts, use this entry
-	if be.DeleteAfter(txn.GetStartTS()) {
-		return true, nil
-	}
-
-	// This entry was deleted before txn start
-	// Delete is uncommitted by other txn, skip this entry
-	if !be.IsCommitting() {
-		return false, nil
-	}
-	if be.CreateAndDropInSameTxn() {
-		return false, nil
-	}
-	// The txn is committing, wait till committed
+	// Txn is committing before txn start ts, wait till committed or rollbacked
 	if rwlocker != nil {
 		rwlocker.RUnlock()
 	}
 	state := thisTxn.GetTxnState(true)
+	// logutil.Infof("%s -- wait --> %s: %d", txn.Repr(), thisTxn.Repr(), state)
 	if rwlocker != nil {
 		rwlocker.RLock()
 	}
-	if state == txnif.TxnStateRollbacked {
-		return true, nil
-	} else if state == txnif.TxnStateUnknown {
-		return false, txnif.TxnInternalErr
+	if state == txnif.TxnStateUnknown {
+		ok, err = false, txnif.TxnInternalErr
+		return
 	}
-
-	return false, nil
+	if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
+		ok = false
+	} else {
+		ok = true
+	}
+	return
 }
 
 func (be *BaseEntry) String() string {
-	s := fmt.Sprintf("[Op=%s][ID=%d][%d,%d]%s", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt, be.LogIndex.String())
+	s := fmt.Sprintf("[Op=%s][ID=%d][%d=>%d]%s", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt, be.LogIndex.String())
 	if be.Txn != nil {
 		s = fmt.Sprintf("%s%s", s, be.Txn.Repr())
 	}

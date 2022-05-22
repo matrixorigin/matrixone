@@ -129,7 +129,8 @@ func GetValue(col *gvec.Vector, row uint32) interface{} {
 		data := vals.(*types.Bytes)
 		s := data.Offsets[row]
 		e := data.Lengths[row]
-		return string(data.Data[s : e+s])
+		// return string(data.Data[s : e+s])
+		return data.Data[s : e+s]
 	default:
 		return vector.ErrVecTypeNotSupport
 	}
