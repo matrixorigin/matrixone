@@ -1935,3 +1935,104 @@ func TestScan2(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 }
+
+func TestUpdatePrimaryKey(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	bat := catalog.MockData(schema, 100)
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.Update(id, row, uint16(schema.PrimaryKey), v)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
+func TestADA(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 1000
+	schema.PrimaryKey = 3
+	bat := catalog.MockData(schema, 1)
+
+	// Append to a block
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// Delete a row from the block
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// Append a row with the same primary key
+	// txn, _ = tae.StartTxn(nil)
+	// db, _ = txn.GetDatabase("db")
+	// rel, _ = db.GetRelationByName(schema.Name)
+	// id, row, err = rel.GetByFilter(filter)
+	// assert.Error(t, err)
+	// err = rel.Append(bat)
+	// assert.NoError(t, err)
+}
+
+func TestUpdateByFilter(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.PrimaryKey = 3
+	bat := catalog.MockData(schema, 100)
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(v)
+	err = rel.UpdateByFilter(filter, 2, int32(2222))
+	assert.NoError(t, err)
+
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	cv, err := rel.GetValue(id, row, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(2222), cv.(int32))
+
+	// v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
+	// filter = handle.NewEQFilter(v)
+	// err = rel.UpdateByFilter(filter, uint16(schema.PrimaryKey), int64(333333))
+	// assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit())
+}

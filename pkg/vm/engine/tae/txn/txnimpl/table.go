@@ -445,6 +445,10 @@ func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTx
 }
 
 func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}) (err error) {
+	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
+		err = data.ErrUpdateUniqueKey
+		return
+	}
 	if isLocalSegment(id) {
 		return tbl.UpdateLocalValue(row, col, v)
 	}
