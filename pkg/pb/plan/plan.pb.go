@@ -1843,9 +1843,9 @@ type DefaultExpr struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Exist  bool  `protobuf:"varint,1,opt,name=exist,proto3" json:"exist,omitempty"`
-	Value  *Expr `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	IsNull bool  `protobuf:"varint,3,opt,name=is_null,json=isNull,proto3" json:"is_null,omitempty"`
+	Exist  bool        `protobuf:"varint,1,opt,name=exist,proto3" json:"exist,omitempty"`
+	Value  interface{} `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	IsNull bool        `protobuf:"varint,3,opt,name=is_null,json=isNull,proto3" json:"is_null,omitempty"`
 }
 
 func (x *DefaultExpr) Reset() {
@@ -1887,7 +1887,7 @@ func (x *DefaultExpr) GetExist() bool {
 	return false
 }
 
-func (x *DefaultExpr) GetValue() *Expr {
+func (x *DefaultExpr) GetValue() interface{} {
 	if x != nil {
 		return x.Value
 	}
