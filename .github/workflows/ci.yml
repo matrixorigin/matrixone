@@ -18,7 +18,6 @@ jobs:
     name: Build on CentOS/x64
 
     steps:
-      # Checks-out matrixone under $GITHUB_WORKSPACE
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
