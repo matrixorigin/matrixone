@@ -285,7 +285,6 @@ func TestSegment_Replay(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 11, len(seg1.nodes))
 	level0_2 := seg1.allocator.(*BitmapAllocator).level0
-	fmt.Printf("%p - %p", level0_2, level0)
 	level1_2 := seg1.allocator.(*BitmapAllocator).level1
 	for i := range level0_2 {
 		assert.Equal(t, level0[i], level0_2[i])
