@@ -17,6 +17,7 @@ package frontend
 import (
 	goErrors "errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -160,6 +161,8 @@ type Session struct {
 	Mempool  *mempool.Mempool
 
 	Pu *config.ParameterUnit
+
+	IsInternal bool
 
 	ep *tree.ExportParam
 

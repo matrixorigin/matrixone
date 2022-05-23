@@ -16,11 +16,13 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 
 	"github.com/fagongzi/goetty"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 )
 
 //RelationName counter for the new connection
@@ -71,6 +73,11 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 		logutil.Panicf("start server failed with %+v", err)
 	}
 
+	logutil.Debug("---------------InitMetric-")
+	ieFactory := func() ie.InternalExecutor {
+		return NewIternalExecutor(pu, pdHook)
+	}
+	metric.InitMetric(ieFactory, int64(pdHook.Id))
 	return &MOServer{
 		addr: addr,
 		app:  app,
