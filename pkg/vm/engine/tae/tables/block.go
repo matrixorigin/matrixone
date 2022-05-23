@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
@@ -56,6 +55,7 @@ type dataBlock struct {
 	bufMgr      base.INodeManager
 	scheduler   tasks.TaskScheduler
 	indexHolder acif.IBlockIndexHolder
+	index       data.Index
 	mvcc        *updates.MVCCHandle
 	nice        uint32
 	ckpTs       uint64
@@ -95,8 +95,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		schema := meta.GetSchema()
-		block.indexHolder = impl.NewAppendableBlockIndexHolder(block, schema)
+		block.index = newMutableIndex(block.meta.GetSchema().GetPKType())
 	} else {
 		block.indexHolder = impl.NewEmptyNonAppendableBlockIndexHolder()
 	}
@@ -107,7 +106,7 @@ func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
 		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
 		defer common.GPool.Free(w.MNode)
-		err = blk.indexHolder.(acif.IAppendableBlockIndexHolder).BatchInsert(&w.Vector, 0, gvec.Length(&w.Vector), 0, false)
+		err = blk.index.BatchInsert(&w.Vector, 0, uint32(gvec.Length(&w.Vector)), 0, false)
 		return
 	}
 	return blk.indexHolder.(acif.INonAppendableBlockIndexHolder).InitFromHost(blk, blk.meta.GetSchema(), idxCommon.MockIndexBufferManager /* TODO: use dedicated index buffer manager */)
@@ -140,7 +139,12 @@ func (blk *dataBlock) Destroy() (err error) {
 	blk.colFiles = make(map[int]common.IRWFile)
 	if blk.indexHolder != nil {
 		if err = blk.indexHolder.Destroy(); err != nil {
-			return err
+			return
+		}
+	}
+	if blk.index != nil {
+		if err = blk.index.Destroy(); err != nil {
+			return
 		}
 	}
 	if blk.file != nil {
@@ -392,7 +396,7 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	if !blk.meta.IsAppendable() {
 		panic("can not create appender on non-appendable block")
 	}
-	appender = newAppender(blk.node, blk.indexHolder.(acif.IAppendableBlockIndexHolder))
+	appender = newAppender(blk.node)
 	return
 }
 
@@ -639,9 +643,9 @@ func (blk *dataBlock) getVectorWrapper(colIdx int) (wrapper *vector.VectorWrappe
 }
 
 func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset uint32, err error) {
-	readLock := blk.mvcc.GetSharedLock()
-	defer readLock.Unlock()
-	offset, err = blk.indexHolder.(acif.IAppendableBlockIndexHolder).Search(filter.Val)
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	offset, err = blk.index.Find(filter.Val)
 	if err != nil {
 		return
 	}
@@ -708,7 +712,6 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
 	var row uint32
 	err = blk.node.DoWithPin(func() (err error) {
-		index := blk.indexHolder.(acif.IAppendableBlockIndexHolder)
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
 		vec, err := blk.node.data.GetVectorByAttr(int(blk.meta.GetSchema().PrimaryKey))
@@ -718,7 +721,7 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
 		if gen.HasNext() {
 			row = gen.Next()
 			v, _ := vec.GetValue(int(row))
-			if err = index.Delete(v); err != nil {
+			if err = blk.index.Delete(v); err != nil {
 				return
 			}
 		}
@@ -729,15 +732,10 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err error) {
 	if blk.meta.IsAppendable() {
-		readLock := blk.mvcc.GetSharedLock()
-		defer readLock.Unlock()
-		if err = blk.indexHolder.(acif.IAppendableBlockIndexHolder).BatchDedup(pks); err != nil {
-			if err == errors.ErrKeyDuplicate {
-				return txnbase.ErrDuplicated
-			}
-			return err
-		}
-		return nil
+		blk.mvcc.RLock()
+		defer blk.mvcc.RUnlock()
+		_, err = blk.index.BatchDedup(pks)
+		return
 	}
 	if blk.indexHolder == nil {
 		return nil
