@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/substring"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -170,7 +169,7 @@ func FdsSubstrChar3Param(inputVecs []*vector.Vector, proc *process.Process) (*ve
 		columnStartType := inputVecs[1].Typ.Oid
 		columnLengthCol := inputVecs[2].Col
 		columnLengthType := inputVecs[2].Typ.Oid
-		cs := function.GetIsConstSliceFromVectors(inputVecs)
+		cs := GetIsConstSliceFromVectors(inputVecs)
 
 		// request new memory space for result column
 		resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_char, Size: 24})
@@ -337,7 +336,7 @@ func FdsSubstrVarchar3Param(inputVecs []*vector.Vector, proc *process.Process) (
 		columnStartType := inputVecs[1].Typ.Oid
 		columnLengthCol := inputVecs[2].Col
 		columnLengthType := inputVecs[2].Typ.Oid
-		cs := function.GetIsConstSliceFromVectors(inputVecs)
+		cs := GetIsConstSliceFromVectors(inputVecs)
 
 		// request new memory space for result column
 		resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})

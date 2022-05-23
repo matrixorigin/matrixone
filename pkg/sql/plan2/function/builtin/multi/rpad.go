@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/rpad"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,7 +27,7 @@ func FdsRpadVarchar(origVecs []*vector.Vector, proc *process.Process) (*vector.V
 	// gets all args
 	strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
-	isConst := function.GetIsConstSliceFromVectors(origVecs)
+	isConst := GetIsConstSliceFromVectors(origVecs)
 
 	// gets a new vector to store our result
 	resultVec, err := process.Get(proc, 24*int64(len(strs.Lengths)), types.Type{Oid: types.T_varchar, Size: 24})
@@ -49,7 +48,7 @@ func FdsRpadChar(origVecs []*vector.Vector, proc *process.Process) (*vector.Vect
 	// gets all args
 	strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
-	isConst := function.GetIsConstSliceFromVectors(origVecs)
+	isConst := GetIsConstSliceFromVectors(origVecs)
 	// gets a new vector to store our result
 	resultVec, err := process.Get(proc, 24*int64(len(strs.Lengths)), types.Type{Oid: types.T_char, Size: 24})
 	if err != nil {

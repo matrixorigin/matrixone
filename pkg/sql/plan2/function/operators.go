@@ -3354,6 +3354,24 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.FdsCastVarcharToChar,
 		},
+		{
+			Index:       158,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_char, types.T_interval},
+			ReturnTyp:   types.T_interval,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.FdsCastVarcharToChar,
+		},
+		{
+			Index:       159,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_varchar, types.T_interval},
+			ReturnTyp:   types.T_interval,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.FdsCastVarcharToChar,
+		},
 	},
 	CASE: {
 		{
@@ -3367,28 +3385,43 @@ var operators = map[int][]Function{
 				return nil, nil
 			},
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				l := len(inputTypes)
-				if l < 3 {
-					return false
-				}
-				caseType := inputTypes[0]
-				for i := 0; i < l-1; i += 2 { // when should be caseType
-					if inputTypes[i] != caseType && isNotScalarNull(inputTypes[i]) {
-						return false
-					}
-				}
-				for i := 1; i < l-1; i += 2 { // then should be int64
-					if inputTypes[i] != types.T_int64 && isNotScalarNull(inputTypes[i]) {
-						return false
-					}
-				}
-				if l%2 == 1 { // has else part
-					if inputTypes[l-1] != types.T_int64 && isNotScalarNull(inputTypes[l-1]) {
-						return false
-					}
-				}
+				return true
+				// TODO: need rewrite to deal with case is nil
+				// l := len(inputTypes)
+				// if l < 3 {
+				// 	return false
+				// }
+				// caseType := inputTypes[0]
+				// for i := 0; i < l-1; i += 2 { // when should be caseType
+				// 	if inputTypes[i] != caseType && isNotScalarNull(inputTypes[i]) {
+				// 		return false
+				// 	}
+				// }
+				// for i := 1; i < l-1; i += 2 { // then should be int64
+				// 	if inputTypes[i] != types.T_int64 && isNotScalarNull(inputTypes[i]) {
+				// 		return false
+				// 	}
+				// }
+				// if l%2 == 1 { // has else part
+				// 	if inputTypes[l-1] != types.T_int64 && isNotScalarNull(inputTypes[l-1]) {
+				// 		return false
+				// 	}
+				// }
+				// return true
+			},
+		},
+	},
+	IFF: {
+		{
+			Index:     0,
+			Flag:      plan.Function_STRICT,
+			Layout:    STANDARD_FUNCTION,
+			Args:      []types.T{types.T_any, types.T_any, types.T_any},
+			ReturnTyp: types.T_any,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				return true
 			},
+			Fn: nil,
 		},
 	},
 }

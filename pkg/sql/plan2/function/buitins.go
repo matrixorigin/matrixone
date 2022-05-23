@@ -25,6 +25,15 @@ import (
 func initBuiltIns() {
 	var err error
 
+	for name, fs := range builtins {
+		for _, f := range fs {
+			err = appendFunction(name, f)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+
 	for name, fs := range unaryBuiltins {
 		for _, f := range fs {
 			err = appendFunction(name, f)
@@ -393,7 +402,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 			Fn:          unary.FdsLnUInt64,
 		},
 		{
-			Index:       1,
+			Index:       2,
 			Flag:        plan.Function_STRICT,
 			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
@@ -502,7 +511,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 			Fn:          unary.FdsReverseVarchar,
 		},
 		{
-			Index:       0,
+			Index:       1,
 			Flag:        plan.Function_STRICT,
 			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
@@ -574,7 +583,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
 			Layout:      STANDARD_FUNCTION,
-			Args:        []types.T{types.T_int64},
+			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          unary.FdsSinhInt64,
@@ -676,7 +685,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 			Fn:          unary.FdsWeekDayDate,
 		},
 		{
-			Index:       0,
+			Index:       1,
 			Flag:        plan.Function_STRICT,
 			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_datetime},
@@ -4928,6 +4937,29 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 			ReturnTyp:   types.T_timestamp,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          multi.FdsUtctimestamp,
+		},
+	},
+	// interval correlation function
+	DATE_ADD: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_date,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+	},
+	DATE_SUB: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_date,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
 		},
 	},
 }
