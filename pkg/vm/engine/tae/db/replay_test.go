@@ -258,6 +258,7 @@ func TestReplay1(t *testing.T) {
 	schema := catalog.MockSchema(2)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 1
 	txn, _ := tae.StartTxn(nil)
 	assert.Nil(t, txn.Commit())
 
@@ -363,6 +364,7 @@ func TestReplay2(t *testing.T) {
 	schema := catalog.MockSchema(2)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 1
 	bat := compute.MockBatch(schema.Types(), 10000, int(schema.PrimaryKey), nil)
 	bats := compute.SplitBatch(bat, 2)
 

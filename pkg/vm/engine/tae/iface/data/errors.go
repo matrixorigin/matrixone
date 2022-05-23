@@ -20,6 +20,7 @@ var (
 	ErrAppendableSegmentNotFound = errors.New("tae: no appendable segment")
 	ErrAppendableBlockNotFound   = errors.New("tae: no appendable block")
 	ErrNotAppendable             = errors.New("tae: not appendable")
+	ErrUpdateUniqueKey           = errors.New("tae: update unique key")
 	ErrStaleRequest              = errors.New("tae: stale request")
 
 	ErrPossibleDuplicate = errors.New("tae: possible duplicate")

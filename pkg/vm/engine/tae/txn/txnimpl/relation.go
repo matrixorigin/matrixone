@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -183,6 +184,9 @@ func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, er
 }
 
 func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{}) error {
+	if h.table.GetSchema().IsPartOfPK(int(col)) {
+		return data.ErrUpdateUniqueKey
+	}
 	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
 }
 

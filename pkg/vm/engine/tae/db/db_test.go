@@ -469,7 +469,7 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			err = rel.RangeDelete(id, offset, offset)
 			assert.Nil(t, err)
-			err = rel.Update(id, offset+1, uint16(schema.PrimaryKey), int32(99))
+			err = rel.Update(id, offset+1, 3, int64(99))
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
