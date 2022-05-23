@@ -707,7 +707,11 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 
 func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset uint32, err error) {
 	err = blk.index.Dedup(filter.Val)
-	if err != nil && err != data.ErrPossibleDuplicate {
+	if err == nil {
+		err = data.ErrNotFound
+		return
+	}
+	if err != data.ErrPossibleDuplicate {
 		return
 	}
 	err = nil
