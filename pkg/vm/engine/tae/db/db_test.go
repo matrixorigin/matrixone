@@ -1998,6 +1998,58 @@ func TestADA(t *testing.T) {
 	assert.Error(t, err)
 	err = rel.Append(bat)
 	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	it := rel.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		vec := view.ApplyDeletes()
+		rows += vector.Length(vec)
+		it.Next()
+	}
+	assert.Equal(t, 1, rows)
+
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+
+	it = rel.MakeBlockIt()
+	rows = 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		vec := view.ApplyDeletes()
+		rows += vector.Length(vec)
+		it.Next()
+	}
+	assert.Equal(t, 1, rows)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.Error(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	// err = rel.Append(bat)
+	// assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit())
 }
 
 func TestUpdateByFilter(t *testing.T) {
