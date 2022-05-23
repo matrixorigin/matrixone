@@ -48,3 +48,25 @@ func (alloc *IDAlloctor) CurrDB() uint64      { return alloc.dbAlloc.Get() }
 func (alloc *IDAlloctor) CurrTable() uint64   { return alloc.tblAlloc.Get() }
 func (alloc *IDAlloctor) CurrSegment() uint64 { return alloc.segAlloc.Get() }
 func (alloc *IDAlloctor) CurrBlock() uint64   { return alloc.blkAlloc.Get() }
+
+func (alloc *IDAlloctor) OnReplayBlockID(id uint64) {
+	if alloc.CurrBlock() < id {
+		alloc.blkAlloc.SetStart(id)
+	}
+}
+
+func (alloc *IDAlloctor) OnReplaySegmentID(id uint64) {
+	if alloc.CurrSegment() < id {
+		alloc.segAlloc.SetStart(id)
+	}
+}
+func (alloc *IDAlloctor) OnReplayTableID(id uint64) {
+	if alloc.CurrTable() < id {
+		alloc.tblAlloc.SetStart(id)
+	}
+}
+func (alloc *IDAlloctor) OnReplayDBID(id uint64) {
+	if alloc.CurrDB() < id {
+		alloc.dbAlloc.SetStart(id)
+	}
+}

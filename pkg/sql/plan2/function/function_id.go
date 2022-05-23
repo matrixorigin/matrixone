@@ -174,7 +174,7 @@ const (
 )
 
 // functionIdRegister is what function we have registered already.
-var functionIdRegister = map[string]int{
+var functionIdRegister = map[string]int32{
 	// operators
 	"=":           EQUAL,
 	">":           GREAT_THAN,
@@ -189,7 +189,7 @@ var functionIdRegister = map[string]int{
 	"like":        LIKE,
 	"between":     BETWEEN,
 	"in":          IN,
-	"exist":       EXISTS,
+	"exists":      EXISTS,
 	"+":           PLUS,
 	"-":           MINUS,
 	"*":           MULTI,
@@ -212,4 +212,5 @@ var functionIdRegister = map[string]int{
 	"year":      YEAR,
 	"substr":    SUBSTRING,
 	"substring": SUBSTRING,
+	"iff":       IFF,
 }

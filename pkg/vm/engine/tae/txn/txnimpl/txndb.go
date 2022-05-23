@@ -15,18 +15,18 @@ import (
 
 type txnDB struct {
 	store       *txnStore
-	tables      map[uint64]Table
-	database    handle.Database
+	tables      map[uint64]*txnTable
+	entry       *catalog.DBEntry
 	createEntry txnif.TxnEntry
 	dropEntry   txnif.TxnEntry
 	ddlCSN      uint32
 }
 
-func newTxnDB(store *txnStore, handle handle.Database) *txnDB {
+func newTxnDB(store *txnStore, entry *catalog.DBEntry) *txnDB {
 	db := &txnDB{
-		store:    store,
-		tables:   make(map[uint64]Table),
-		database: handle,
+		store:  store,
+		tables: make(map[uint64]*txnTable),
+		entry:  entry,
 	}
 	return db
 }
@@ -77,7 +77,6 @@ func (db *txnDB) Close() error {
 	}
 	db.tables = nil
 	db.createEntry = nil
-	db.database = nil
 	db.dropEntry = nil
 	return err
 }
@@ -113,7 +112,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
 	if table.IsDeleted() {
 		return txnbase.ErrNotFound
 	}
-	return table.RangeDelete(id.PartID, id.SegmentID, id.BlockID, start, end)
+	return table.RangeDelete(id, start, end)
 }
 
 func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -148,18 +147,17 @@ func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v interface{})
 	if table.IsDeleted() {
 		return txnbase.ErrNotFound
 	}
-	return table.Update(id.PartID, id.SegmentID, id.BlockID, row, colIdx, v)
+	return table.Update(id, row, colIdx, v)
 }
 
 func (db *txnDB) CreateRelation(def interface{}) (relation handle.Relation, err error) {
 	db.store.IncreateWriteCnt()
 	schema := def.(*catalog.Schema)
-	dbMeta := db.database.GetMeta().(*catalog.DBEntry)
 	var factory catalog.TableDataFactory
 	if db.store.dataFactory != nil {
 		factory = db.store.dataFactory.MakeTableFactory()
 	}
-	meta, err := dbMeta.CreateTableEntry(schema, db.store.txn, factory)
+	meta, err := db.entry.CreateTableEntry(schema, db.store.txn, factory)
 	if err != nil {
 		return
 	}
@@ -167,15 +165,14 @@ func (db *txnDB) CreateRelation(def interface{}) (relation handle.Relation, err 
 	if err != nil {
 		return
 	}
-	relation = newRelation(db.store.txn, meta)
+	relation = newRelation(table)
 	table.SetCreateEntry(meta)
 	return
 }
 
 func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err error) {
 	db.store.IncreateWriteCnt()
-	dbMeta := db.database.GetMeta().(*catalog.DBEntry)
-	meta, err := dbMeta.DropTableEntry(name, db.store.txn)
+	meta, err := db.entry.DropTableEntry(name, db.store.txn)
 	if err != nil {
 		return nil, err
 	}
@@ -183,27 +180,26 @@ func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err 
 	if err != nil {
 		return nil, err
 	}
-	relation = newRelation(db.store.txn, meta)
+	relation = newRelation(table)
 	err = table.SetDropEntry(meta)
 	return
 }
 
 func (db *txnDB) GetRelationByName(name string) (relation handle.Relation, err error) {
-	dbMeta := db.database.GetMeta().(*catalog.DBEntry)
-	meta, err := dbMeta.GetTableEntry(name, db.store.txn)
+	meta, err := db.entry.GetTableEntry(name, db.store.txn)
 	if err != nil {
 		return
 	}
-	_, err = db.getOrSetTable(meta.GetID())
+	table, err := db.getOrSetTable(meta.GetID())
 	if err != nil {
 		return
 	}
-	relation = newRelation(db.store.txn, meta)
+	relation = newRelation(table)
 	return
 }
 
 func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
@@ -211,7 +207,7 @@ func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 }
 
 func (db *txnDB) CreateSegment(tid uint64) (seg handle.Segment, err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
@@ -219,32 +215,31 @@ func (db *txnDB) CreateSegment(tid uint64) (seg handle.Segment, err error) {
 }
 
 func (db *txnDB) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
 	return table.CreateNonAppendableSegment()
 }
 
-func (db *txnDB) getOrSetTable(id uint64) (table Table, err error) {
+func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	table = db.tables[id]
 	if table == nil {
 		var entry *catalog.TableEntry
-		if entry, err = db.database.GetMeta().(*catalog.DBEntry).GetTableEntryByID(id); err != nil {
+		if entry, err = db.entry.GetTableEntryByID(id); err != nil {
 			return
 		}
-		relation := newRelation(db.store.txn, entry)
 		if db.store.warChecker == nil {
 			db.store.warChecker = newWarChecker(db.store.txn, db.store.catalog)
 		}
-		table = newTxnTable(db.store, relation)
+		table = newTxnTable(db.store, entry)
 		db.tables[id] = table
 	}
 	return
 }
 
 func (db *txnDB) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
@@ -252,7 +247,7 @@ func (db *txnDB) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err 
 }
 
 func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
@@ -260,7 +255,7 @@ func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
 }
 
 func (db *txnDB) CreateBlock(tid, sid uint64) (blk handle.Block, err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
@@ -268,7 +263,7 @@ func (db *txnDB) CreateBlock(tid, sid uint64) (blk handle.Block, err error) {
 }
 
 func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
@@ -276,7 +271,7 @@ func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
 }
 
 func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
-	var table Table
+	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {
 		return
 	}
@@ -378,7 +373,7 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 	}
 	for _, table := range db.tables {
 		if err = table.CollectCmd(cmdMgr); err != nil {
-			panic(err)
+			return
 		}
 	}
 	if db.dropEntry != nil {

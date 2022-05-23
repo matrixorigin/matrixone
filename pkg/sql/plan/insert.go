@@ -83,7 +83,6 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	} else {
 		attrs = orderAttr // todo: need to use copy ?
 	}
-
 	// deal with default Expr
 	rows.Rows, attrs, err = rewriteInsertRows(stmt.Columns == nil, attrs, orderAttr, rows.Rows, attrDefault)
 	if err != nil {
@@ -95,6 +94,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column count doesn't match value count at row '%v'", i))
 		}
 	}
+
 	bat = batch.New(true, attrs)
 	for i, attr := range attrs {
 		typ, ok := attrType[attr]
@@ -104,6 +104,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 		bat.Vecs[i] = vector.New(typ)
 		delete(attrType, attr)
 	}
+
 	if len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
 		plan.Bat = bat
 		return nil

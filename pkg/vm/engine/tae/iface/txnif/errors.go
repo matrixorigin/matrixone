@@ -17,7 +17,7 @@ package txnif
 import "errors"
 
 var (
-	TxnRollbacked    = errors.New("tae: rollbacked")
+	TxnInternalErr   = errors.New("tae: internal error")
 	TxnRWConflictErr = errors.New("tae: r-w conflict error")
 	TxnWWConflictErr = errors.New("tae: w-w conflict error")
 )

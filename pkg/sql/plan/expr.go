@@ -688,7 +688,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 	case constant.Unknown:
 		return nil, nil
 	case constant.Bool:
-		return val, nil
+		return constant.BoolVal(val), nil
 	case constant.Int:
 		switch typ.Oid {
 		case types.T_bool:
@@ -803,8 +803,6 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case types.T_decimal128:
 			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
-		case types.T_bool:
-			return types.ParseStringToBool(str)
 		}
 		if !num.Negative() {
 			switch typ.Oid {

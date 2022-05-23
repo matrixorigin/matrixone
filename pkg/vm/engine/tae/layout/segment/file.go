@@ -17,9 +17,7 @@ package segment
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/pierrec/lz4"
 	"io"
 )
 
@@ -49,31 +47,32 @@ func (b *BlockFile) GetOriginSize() int64 {
 	return int64(b.snode.originSize)
 }
 
+func (b *BlockFile) GetAlgo() uint8 {
+	b.snode.mutex.RLock()
+	defer b.snode.mutex.RUnlock()
+	return b.snode.algo
+}
+
 func (b *BlockFile) GetName() string {
 	return b.name
 }
 
-func (b *BlockFile) Append(offset uint64, data []byte) (err error) {
-	colSize := len(data)
-	buf := make([]byte, lz4.CompressBlockBound(colSize))
-	if buf, err = compress.Compress(data, buf, compress.Lz4); err != nil {
-		return err
-	}
-	cbufLen := uint32(p2roundup(uint64(len(buf)), uint64(b.segment.super.blockSize)))
-	_, err = b.segment.segFile.WriteAt(buf, int64(offset))
+func (b *BlockFile) Append(offset uint64, data []byte, originSize uint32) (err error) {
+	cbufLen := uint32(p2roundup(uint64(len(data)), uint64(b.segment.super.blockSize)))
+	_, err = b.segment.segFile.WriteAt(data, int64(offset))
 	if err != nil {
 		return err
 	}
 	b.snode.mutex.Lock()
-	b.snode.algo = compress.Lz4
 	b.snode.extents = append(b.snode.extents, Extent{
 		typ:    APPEND,
 		offset: uint32(offset),
 		length: cbufLen,
-		data:   entry{offset: 0, length: uint32(len(buf))},
+		data:   entry{offset: 0, length: uint32(len(data))},
 	})
-	b.snode.size += uint64(len(buf))
-	b.snode.originSize += uint64(len(data))
+	b.snode.size += uint64(len(data))
+	b.snode.originSize += uint64(originSize)
+	b.snode.seq++
 	b.snode.mutex.Unlock()
 	return nil
 }
@@ -99,6 +98,7 @@ func (b *BlockFile) repairExtent(offset, fOffset, length uint32) []Extent {
 	num := 0
 	b.snode.mutex.Lock()
 	defer b.snode.mutex.Unlock()
+	b.snode.seq++
 	for _, extent := range b.snode.extents {
 		if fOffset >= extent.length {
 			fOffset -= extent.length

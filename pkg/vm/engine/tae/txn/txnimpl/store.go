@@ -202,7 +202,7 @@ func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
 	if db, err = store.getOrSetDB(meta.GetID()); err != nil {
 		return
 	}
-	h = db.database
+	h = buildDB(db)
 	return
 }
 
@@ -219,7 +219,8 @@ func (store *txnStore) CreateDatabase(name string) (h handle.Database, err error
 	if err = db.SetCreateEntry(meta); err != nil {
 		return
 	}
-	return db.database, nil
+	h = buildDB(db)
+	return
 }
 
 func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) {
@@ -235,7 +236,7 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	if err = db.SetDropEntry(meta); err != nil {
 		return
 	}
-	h = db.database
+	h = buildDB(db)
 	return
 }
 
@@ -298,8 +299,7 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 		if entry, err = store.catalog.GetDatabaseByID(id); err != nil {
 			return
 		}
-		handle := buildDB(store.txn, entry)
-		db = newTxnDB(store, handle)
+		db = newTxnDB(store, entry)
 		store.dbs[id] = db
 	}
 	return
@@ -401,7 +401,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 
 	logEntry, err := store.cmdMgr.ApplyTxnRecord()
 	if err != nil {
-		panic(err)
+		return
 	}
 	if logEntry != nil {
 		store.logs = append(store.logs, logEntry)
@@ -414,7 +414,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 func (store *txnStore) CollectCmd() (err error) {
 	for _, db := range store.dbs {
 		if err = db.CollectCmd(store.cmdMgr); err != nil {
-			panic(err)
+			return
 		}
 	}
 	return

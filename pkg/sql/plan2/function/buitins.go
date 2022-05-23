@@ -38,18 +38,18 @@ var builtins = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNKNOW_KIND_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_date},
-			ReturnTyp:   types.T_date,
+			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNKNOW_KIND_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_datetime},
-			ReturnTyp:   types.T_datetime,
+			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
@@ -58,7 +58,7 @@ var builtins = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_date},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -67,7 +67,7 @@ var builtins = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_datetime},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -78,7 +78,7 @@ var builtins = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -87,7 +87,7 @@ var builtins = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,

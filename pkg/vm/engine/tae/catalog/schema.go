@@ -360,5 +360,8 @@ func MockSchemaAll(colCnt int) *Schema {
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
+	if colCnt > 0 {
+		schema.PrimaryKey = int32(colCnt) - 1
+	}
 	return schema
 }

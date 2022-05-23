@@ -22,10 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type Reader interface {
-	Next(ctx interface{}, attrs []string) (*batch.Batch, error)
-}
-
 type Relation interface {
 	io.Closer
 	ID() uint64
@@ -36,7 +32,6 @@ type Relation interface {
 	GetCardinality(attr string) int64
 	Schema() interface{}
 	MakeSegmentIt() SegmentIt
-	MakeReader() Reader
 	MakeBlockIt() BlockIt
 
 	RangeDelete(id *common.ID, start, end uint32) error

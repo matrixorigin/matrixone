@@ -5165,11 +5165,11 @@ literal:
     }
 |   TRUE
     {
-        $$ = tree.NewNumVal(constant.MakeString($1), $1, false)
+        $$ = tree.NewNumVal(constant.MakeBool(true), "", false)
     }
 |   FALSE
     {
-        $$ = tree.NewNumVal(constant.MakeString($1), $1, false)
+        $$ = tree.NewNumVal(constant.MakeBool(false), "", false)
     }
 |   NULL
     {

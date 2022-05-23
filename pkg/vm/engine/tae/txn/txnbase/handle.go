@@ -66,7 +66,6 @@ func (rel *TxnRelation) GetCardinality(attr string) int64                       
 func (rel *TxnRelation) Schema() interface{}                                                  { return nil }
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                                      { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                          { return nil }
-func (rel *TxnRelation) MakeReader() handle.Reader                                            { return nil }
 func (rel *TxnRelation) BatchDedup(col *vector.Vector) error                                  { return nil }
 func (rel *TxnRelation) Append(data *batch.Batch) error                                       { return nil }
 func (rel *TxnRelation) GetMeta() interface{}                                                 { return nil }
@@ -82,12 +81,11 @@ func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (
 	return
 }
 
-func (seg *TxnSegment) GetMeta() interface{}               { return nil }
-func (seg *TxnSegment) String() string                     { return "" }
-func (seg *TxnSegment) Close() error                       { return nil }
-func (seg *TxnSegment) GetID() uint64                      { return 0 }
-func (seg *TxnSegment) MakeBlockIt() (it handle.BlockIt)   { return }
-func (seg *TxnSegment) MakeReader() (reader handle.Reader) { return }
+func (seg *TxnSegment) GetMeta() interface{}             { return nil }
+func (seg *TxnSegment) String() string                   { return "" }
+func (seg *TxnSegment) Close() error                     { return nil }
+func (seg *TxnSegment) GetID() uint64                    { return 0 }
+func (seg *TxnSegment) MakeBlockIt() (it handle.BlockIt) { return }
 
 // func (seg *TxnSegment) GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error) {
 // 	return
@@ -107,15 +105,15 @@ func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) 
 func (blk *TxnSegment) BatchDedup(*vector.Vector) (err error)                       { return }
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
-func (blk *TxnBlock) GetTotalChanges() int                                 { return 0 }
-func (blk *TxnBlock) IsAppendableBlock() bool                              { return true }
-func (blk *TxnBlock) Fingerprint() *common.ID                              { return &common.ID{} }
-func (blk *TxnBlock) Rows() int                                            { return 0 }
-func (blk *TxnBlock) ID() uint64                                           { return 0 }
-func (blk *TxnBlock) String() string                                       { return "" }
-func (blk *TxnBlock) Close() error                                         { return nil }
-func (blk *TxnBlock) GetMeta() interface{}                                 { return nil }
-func (blk *TxnBlock) GetByFilter(handle.Filter) (offset uint32, err error) { return }
+func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
+func (blk *TxnBlock) IsAppendableBlock() bool                               { return true }
+func (blk *TxnBlock) Fingerprint() *common.ID                               { return &common.ID{} }
+func (blk *TxnBlock) Rows() int                                             { return 0 }
+func (blk *TxnBlock) ID() uint64                                            { return 0 }
+func (blk *TxnBlock) String() string                                        { return "" }
+func (blk *TxnBlock) Close() error                                          { return nil }
+func (blk *TxnBlock) GetMeta() interface{}                                  { return nil }
+func (blk *TxnBlock) GetByFilter(*handle.Filter) (offset uint32, err error) { return }
 
 func (blk *TxnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return

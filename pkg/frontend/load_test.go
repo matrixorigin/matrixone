@@ -158,7 +158,7 @@ func Test_load(t *testing.T) {
 			}
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
-			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 
 			cws = append(cws, select_2)
@@ -181,7 +181,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -347,7 +347,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
 
 		mce := NewMysqlCmdExecutor()
 

@@ -29,6 +29,7 @@ type txnDBIt struct {
 	txn    txnif.AsyncTxn
 	linkIt *common.LinkIt
 	curr   *catalog.DBEntry
+	err    error
 }
 
 func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
@@ -37,10 +38,18 @@ func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
 		txn:     txn,
 		linkIt:  c.MakeDBIt(true),
 	}
+	var err error
+	var ok bool
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.DBEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.txn, curr.RWMutex) {
+		ok, err = curr.TxnCanRead(it.txn, curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			break
+		}
+		if ok {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -51,10 +60,17 @@ func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
 	return it
 }
 
-func (it *txnDBIt) Close() error { return nil }
-func (it *txnDBIt) Valid() bool  { return it.linkIt.Valid() }
+func (it *txnDBIt) Close() error    { return nil }
+func (it *txnDBIt) GetError() error { return it.err }
+func (it *txnDBIt) Valid() bool {
+	if it.err != nil {
+		return false
+	}
+	return it.linkIt.Valid()
+}
 
 func (it *txnDBIt) Next() {
+	var err error
 	valid := true
 	for {
 		it.linkIt.Next()
@@ -65,8 +81,12 @@ func (it *txnDBIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.DBEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.txn, entry.RWMutex)
 		entry.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
 		if valid {
 			it.curr = entry
 			break
@@ -78,40 +98,40 @@ func (it *txnDBIt) GetCurr() *catalog.DBEntry { return it.curr }
 
 type txnDatabase struct {
 	*txnbase.TxnDatabase
-	entry *catalog.DBEntry
+	txnDB *txnDB
 }
 
-func newDatabase(txn txnif.AsyncTxn, meta *catalog.DBEntry) *txnDatabase {
-	db := &txnDatabase{
+func newDatabase(db *txnDB) *txnDatabase {
+	dbase := &txnDatabase{
 		TxnDatabase: &txnbase.TxnDatabase{
-			Txn: txn,
+			Txn: db.store.txn,
 		},
-		entry: meta,
+		txnDB: db,
 	}
-	return db
+	return dbase
 
 }
-func (db *txnDatabase) GetID() uint64   { return db.entry.GetID() }
-func (db *txnDatabase) GetName() string { return db.entry.GetName() }
-func (db *txnDatabase) String() string  { return db.entry.String() }
+func (db *txnDatabase) GetID() uint64   { return db.txnDB.entry.GetID() }
+func (db *txnDatabase) GetName() string { return db.txnDB.entry.GetName() }
+func (db *txnDatabase) String() string  { return db.txnDB.entry.String() }
 
 func (db *txnDatabase) CreateRelation(def interface{}) (rel handle.Relation, err error) {
-	return db.Txn.GetStore().CreateRelation(db.entry.ID, def)
+	return db.Txn.GetStore().CreateRelation(db.txnDB.entry.ID, def)
 }
 
 func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err error) {
-	return db.Txn.GetStore().DropRelationByName(db.entry.ID, name)
+	return db.Txn.GetStore().DropRelationByName(db.txnDB.entry.ID, name)
 }
 
 func (db *txnDatabase) GetRelationByName(name string) (rel handle.Relation, err error) {
-	return db.Txn.GetStore().GetRelationByName(db.entry.ID, name)
+	return db.Txn.GetStore().GetRelationByName(db.txnDB.entry.ID, name)
 }
 
 func (db *txnDatabase) MakeRelationIt() (it handle.RelationIt) {
-	return newRelationIt(db.Txn, db.entry)
+	return newRelationIt(db.txnDB)
 }
 
 func (db *txnDatabase) RelationCnt() int64                  { return 0 }
 func (db *txnDatabase) Relations() (rels []handle.Relation) { return }
 func (db *txnDatabase) Close() error                        { return nil }
-func (db *txnDatabase) GetMeta() interface{}                { return db.entry }
+func (db *txnDatabase) GetMeta() interface{}                { return db.txnDB.entry }

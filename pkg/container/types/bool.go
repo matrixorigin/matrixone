@@ -36,12 +36,3 @@ func ParseValueToBool(num *tree.NumVal) (bool, error) {
 	}
 	return false, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", str))
 }
-
-func ParseStringToBool(s string) (result bool, err error) {
-	if s == "true" {
-		return true, nil
-	} else if s == "false" {
-		return false, nil
-	}
-	return false, errors.New("", "the bool type value is not correct")
-}

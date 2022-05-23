@@ -15,8 +15,13 @@
 package handle
 
 import (
+	"errors"
 	"io"
 	"sync"
+)
+
+var (
+	ErrIteratorEnd = errors.New("end of interator")
 )
 
 // TODO: this is not thread-safe
@@ -27,4 +32,5 @@ type Iterator interface {
 	io.Closer
 	Valid() bool
 	Next()
+	GetError() error
 }

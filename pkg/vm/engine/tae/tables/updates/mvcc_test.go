@@ -41,7 +41,7 @@ func TestMutationControllerAppend(t *testing.T) {
 
 	st := time.Now()
 	for i, qts := range queries {
-		row, ok := mc.GetMaxVisibleRowLocked(qts)
+		row, ok, _ := mc.GetMaxVisibleRowLocked(qts)
 		if i == 0 {
 			assert.False(t, ok)
 		} else {

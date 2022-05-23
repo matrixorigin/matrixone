@@ -85,6 +85,8 @@ func init() {
 
 	gob.Register(types.Date(0))
 	gob.Register(types.Datetime(0))
+	gob.Register(types.Decimal64(0))
+	gob.Register(types.Decimal128{})
 }
 
 func EncodeScope(s Scope, buf *bytes.Buffer) error {
@@ -1061,6 +1063,24 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
+	case *avg.DecimalRing:
+		buf.WriteByte(AvgDecimalRing)
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeDecimal128Slice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	case *count.CountRing:
 		buf.WriteByte(CountRing)
 		// Ns
@@ -1332,6 +1352,58 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
+	case *max.Decimal64Ring:
+		buf.WriteByte(MaxDecimal64Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeDecimal64Slice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.Decimal128Ring:
+		buf.WriteByte(MaxDecimal128Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeDecimal128Slice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	case *max.StrRing:
 		buf.WriteByte(MaxStrRing)
 		// Ns
@@ -1587,6 +1659,58 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
+	case *min.Decimal64Ring:
+		buf.WriteByte(MinDecimal64Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeDecimal64Slice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.Decimal128Ring:
+		buf.WriteByte(MinDecimal128Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeDecimal128Slice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	case *min.StrRing:
 		buf.WriteByte(MinStrRing)
 		// Ns
@@ -1664,6 +1788,58 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		}
 		// Vs
 		da := encoding.EncodeFloat64Slice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *sum.Decimal64Ring:
+		buf.WriteByte(SumDecimal64Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeDecimal64Slice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *sum.Decimal128Ring:
+		buf.WriteByte(SumDecimal128Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeDecimal128Slice(v.Vs)
 		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
 		if n > 0 {
@@ -1816,6 +1992,30 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		}
 		// Vs
 		r.Vs = encoding.DecodeFloat64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case AvgDecimalRing:
+		r := new(avg.DecimalRing)
+		data = data[1:]
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
 		// Typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
@@ -2178,6 +2378,70 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case MaxDecimal64Ring:
+		r := new(max.Decimal64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxDecimal128Ring:
+		r := new(max.Decimal128Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
 	case MaxStrRing:
 		r := new(max.StrRing)
 		data = data[1:]
@@ -2511,6 +2775,70 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case MinDecimal64Ring:
+		r := new(min.Decimal64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinDecimal128Ring:
+		r := new(min.Decimal128Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
 	case MinStrRing:
 		r := new(min.StrRing)
 		data = data[1:]
@@ -2615,6 +2943,70 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		}
 		// Vs
 		r.Vs = encoding.DecodeFloat64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case SumDecimal64Ring:
+		r := new(sum.Decimal64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case SumDecimal128Ring:
+		r := new(sum.Decimal128Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
 		// Typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
@@ -2796,6 +3188,36 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		}
 		// Vs
 		r.Vs = encoding.DecodeFloat64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case AvgDecimalRing:
+		r := new(avg.DecimalRing)
+		data = data[1:]
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = make([]int64, n)
+			copy(r.Ns, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Da, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Da, data[:n])
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
 		// Typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
@@ -3242,6 +3664,82 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case MaxDecimal64Ring:
+		r := new(max.Decimal64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = make([]int64, n)
+			copy(r.Ns, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Da, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Da, data[:n])
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxDecimal128Ring:
+		r := new(max.Decimal128Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = make([]int64, n)
+			copy(r.Ns, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Da, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Da, data[:n])
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
 	case MaxStrRing:
 		r := new(max.StrRing)
 		data = data[1:]
@@ -3654,6 +4152,82 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case MinDecimal64Ring:
+		r := new(min.Decimal64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = make([]int64, n)
+			copy(r.Ns, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Da, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Da, data[:n])
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinDecimal128Ring:
+		r := new(min.Decimal128Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = make([]int64, n)
+			copy(r.Ns, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Da, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Da, data[:n])
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
 	case MinStrRing:
 		r := new(min.StrRing)
 		data = data[1:]
@@ -3783,6 +4357,82 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		}
 		// Vs
 		r.Vs = encoding.DecodeFloat64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case SumDecimal64Ring:
+		r := new(sum.Decimal64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = make([]int64, n)
+			copy(r.Ns, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Da, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Da, data[:n])
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal64Slice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case SumDecimal128Ring:
+		r := new(sum.Decimal128Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = make([]int64, n)
+			copy(r.Ns, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Da, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Da, data[:n])
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeDecimal128Slice(r.Da)
 		// Typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]

@@ -29,21 +29,30 @@ import (
 
 type txnRelationIt struct {
 	*sync.RWMutex
-	txn    txnif.AsyncTxn
+	txnDB  *txnDB
 	linkIt *common.LinkIt
 	curr   *catalog.TableEntry
+	err    error
 }
 
-func newRelationIt(txn txnif.AsyncTxn, meta *catalog.DBEntry) *txnRelationIt {
+func newRelationIt(db *txnDB) *txnRelationIt {
 	it := &txnRelationIt{
-		RWMutex: meta.RWMutex,
-		txn:     txn,
-		linkIt:  meta.MakeTableIt(true),
+		RWMutex: db.entry.RWMutex,
+		linkIt:  db.entry.MakeTableIt(true),
+		txnDB:   db,
 	}
+	var err error
+	var ok bool
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.TableEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.txn, curr.RWMutex) {
+		ok, err = curr.TxnCanRead(it.txnDB.store.txn, curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			return it
+		}
+		if ok {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -56,9 +65,16 @@ func newRelationIt(txn txnif.AsyncTxn, meta *catalog.DBEntry) *txnRelationIt {
 
 func (it *txnRelationIt) Close() error { return nil }
 
-func (it *txnRelationIt) Valid() bool { return it.linkIt.Valid() }
+func (it *txnRelationIt) GetError() error { return it.err }
+func (it *txnRelationIt) Valid() bool {
+	if it.err != nil {
+		return false
+	}
+	return it.linkIt.Valid()
+}
 
 func (it *txnRelationIt) Next() {
+	var err error
 	valid := true
 	for {
 		it.linkIt.Next()
@@ -69,8 +85,12 @@ func (it *txnRelationIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.TableEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
 		if valid {
 			it.curr = entry
 			break
@@ -79,28 +99,29 @@ func (it *txnRelationIt) Next() {
 }
 
 func (it *txnRelationIt) GetRelation() handle.Relation {
-	return newRelation(it.txn, it.curr)
+	table, _ := it.txnDB.getOrSetTable(it.curr.ID)
+	return newRelation(table)
 }
 
 type txnRelation struct {
 	*txnbase.TxnRelation
-	entry *catalog.TableEntry
+	table *txnTable
 }
 
-func newRelation(txn txnif.AsyncTxn, meta *catalog.TableEntry) *txnRelation {
+func newRelation(table *txnTable) *txnRelation {
 	rel := &txnRelation{
 		TxnRelation: &txnbase.TxnRelation{
-			Txn: txn,
+			Txn: table.store.txn,
 		},
-		entry: meta,
+		table: table,
 	}
 	return rel
 }
 
-func (h *txnRelation) ID() uint64     { return h.entry.GetID() }
-func (h *txnRelation) String() string { return h.entry.String() }
+func (h *txnRelation) ID() uint64     { return h.table.entry.GetID() }
+func (h *txnRelation) String() string { return h.table.entry.String() }
 func (h *txnRelation) SimplePPString(level common.PPLevel) string {
-	s := h.entry.String()
+	s := h.table.entry.String()
 	if level < common.PPL1 {
 		return s
 	}
@@ -113,45 +134,44 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	return s
 }
 
-func (h *txnRelation) GetMeta() interface{}   { return h.entry }
-func (h *txnRelation) GetSchema() interface{} { return h.entry.GetSchema() }
+func (h *txnRelation) GetMeta() interface{}   { return h.table.entry }
+func (h *txnRelation) GetSchema() interface{} { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Close() error                     { return nil }
 func (h *txnRelation) Rows() int64                      { return 0 }
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
-func (h *txnRelation) MakeReader() handle.Reader        { return nil }
 
 func (h *txnRelation) BatchDedup(col *vector.Vector) error {
-	return h.Txn.GetStore().BatchDedup(h.entry.GetDB().ID, h.entry.GetID(), col)
+	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
 }
 
 func (h *txnRelation) Append(data *batch.Batch) error {
-	return h.Txn.GetStore().Append(h.entry.GetDB().ID, h.entry.GetID(), data)
+	return h.Txn.GetStore().Append(h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
 func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
-	fp := h.entry.AsCommonID()
+	fp := h.table.entry.AsCommonID()
 	fp.SegmentID = id
-	return h.Txn.GetStore().GetSegment(h.entry.GetDB().ID, fp)
+	return h.Txn.GetStore().GetSegment(h.table.entry.GetDB().ID, fp)
 }
 
 func (h *txnRelation) CreateSegment() (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateSegment(h.entry.GetDB().ID, h.entry.GetID())
+	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID())
 }
 
 func (h *txnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateNonAppendableSegment(h.entry.GetDB().ID, h.entry.GetID())
+	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID())
 }
 
 func (h *txnRelation) SoftDeleteSegment(id uint64) (err error) {
-	fp := h.entry.AsCommonID()
+	fp := h.table.entry.AsCommonID()
 	fp.SegmentID = id
-	return h.Txn.GetStore().SoftDeleteSegment(h.entry.GetDB().ID, fp)
+	return h.Txn.GetStore().SoftDeleteSegment(h.table.entry.GetDB().ID, fp)
 }
 
 func (h *txnRelation) MakeSegmentIt() handle.SegmentIt {
-	return newSegmentIt(h.Txn, h.entry)
+	return newSegmentIt(h.table)
 }
 
 func (h *txnRelation) MakeBlockIt() handle.BlockIt {
@@ -159,21 +179,21 @@ func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 }
 
 func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, error) {
-	return h.Txn.GetStore().GetByFilter(h.entry.GetDB().ID, h.entry.GetID(), filter)
+	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
 }
 
 func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{}) error {
-	return h.Txn.GetStore().Update(h.entry.GetDB().ID, id, row, col, v)
+	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
 }
 
 func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32) error {
-	return h.Txn.GetStore().RangeDelete(h.entry.GetDB().ID, id, start, end)
+	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end)
 }
 
 func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (interface{}, error) {
-	return h.Txn.GetStore().GetValue(h.entry.GetDB().ID, id, row, col)
+	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, col)
 }
 
 func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	return h.Txn.GetStore().LogTxnEntry(h.entry.GetDB().ID, h.entry.GetID(), entry, readed)
+	return h.Txn.GetStore().LogTxnEntry(h.table.entry.GetDB().ID, h.table.entry.GetID(), entry, readed)
 }

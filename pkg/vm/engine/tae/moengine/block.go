@@ -39,6 +39,7 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 		if err != nil {
 			return nil, err
 		}
+		view.ApplyDeletes()
 		view.AppliedVec.Ref = cs[i]
 		bat.Vecs[i] = view.AppliedVec
 	}

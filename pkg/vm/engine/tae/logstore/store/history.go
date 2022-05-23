@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	HistoryEntryNotFoundErr = errors.New("aoe: history not found")
+	HistoryEntryNotFoundErr = errors.New("tae: history not found")
 )
 
 type HistoryFactory func() History

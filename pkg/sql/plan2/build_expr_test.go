@@ -16,7 +16,6 @@ package plan2
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -48,7 +47,7 @@ func TestExpr_1(t *testing.T) {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
-			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "AND")
+			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
 			for j, arg := range exprF.F.Args {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
@@ -89,7 +88,7 @@ func TestExpr_2(t *testing.T) {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
-			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "OR")
+			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "or")
 			for j, arg := range exprF.F.Args {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
@@ -130,8 +129,7 @@ func TestExpr_3(t *testing.T) {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
-			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "NOT")
-			fmt.Println("wangjian test4 is", exprF.F.Args)
+			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "not")
 			for _, arg := range exprF.F.Args {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
@@ -154,8 +152,9 @@ func TestExpr_4(t *testing.T) {
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 = 1 from dual;",
 						"select 1 = 1 from dual;",
+						"select true = false from dual;",
 						"select true = 1 from dual;",
-						"select true = false from dual;"}
+						"select 0 = false from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -201,7 +200,6 @@ func TestExpr_5(t *testing.T) {
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<")
-			fmt.Println("wangjian test5 is", exprF)
 		}
 	})
 }
@@ -230,7 +228,6 @@ func TestExpr_6(t *testing.T) {
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<=")
-			fmt.Println("wangjian test5 is", exprF)
 		}
 	})
 }
@@ -259,7 +256,6 @@ func TestExpr_7(t *testing.T) {
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, ">")
-			fmt.Println("wangjian test5 is", exprF)
 		}
 	})
 }
@@ -288,7 +284,6 @@ func TestExpr_8(t *testing.T) {
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, ">=")
-			fmt.Println("wangjian test5 is", exprF)
 		}
 	})
 }
@@ -320,19 +315,18 @@ func TestExpr_9(t *testing.T) {
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<>")
-			fmt.Println("wangjian test5 is", exprF)
 		}
 	})
 }
 
-func TestExpr_10(t *testing.T) {
+func TestExpr_A(t *testing.T) {
 	convey.Convey("selectAndStmt succ", t, func() {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 < 1 and 1 > 0 from dual;",
 						"select 0 < 1 or 1 > 0 from dual;",
 						"select not 0 < 1 from dual;"}
-		name := []string{"AND", "OR", "NOT"}
+		name := []string{"and", "or", "not"}
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
 			if err != nil {
@@ -349,7 +343,34 @@ func TestExpr_10(t *testing.T) {
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, name[i])
-			fmt.Println("wangjian test6 is", exprF)
+			for _, arg := range exprF.F.Args {
+				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			}
+		}
+	})
+}
+
+func TestExpr_B(t *testing.T) {
+	convey.Convey("selectAndStmt succ", t, func() {
+		mock := NewMockOptimizer()
+		// var params []bool = []bool{false, false, true, true}
+		input := []string{"select 0 < 1 and 1 > 0 && not false from dual;"}
+		for i := 0; i < len(input); i++ {
+			pl, err := runOneExprStmt(mock, t, input[i])
+			if err != nil {
+				t.Fatalf("%+v", err)
+			}
+			query, ok := pl.Plan.(*plan.Plan_Query)
+			if !ok {
+				t.Fatalf("%+v", errors.New("return type is not right"))
+			}
+			expr := query.Query.Nodes[0].ProjectList[0]
+			exprF, ok := expr.Expr.(*plan.Expr_F)
+			if !ok {
+				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+			}
+			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
+			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
 			for _, arg := range exprF.F.Args {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
 			}

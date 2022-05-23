@@ -17,8 +17,6 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"io"
-
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	base "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/pierrec/lz4"
+	"io"
 	// log "github.com/sirupsen/logrus"
 )
 

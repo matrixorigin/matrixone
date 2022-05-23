@@ -325,8 +325,13 @@ func initTae() *taeHandler {
 		os.Exit(CreateTaeExit)
 	}
 
+	eng := moengine.NewEngine(tae)
+
+	//test storage aoe_storage
+	config.StorageEngine = eng
+
 	return &taeHandler{
-		eng: moengine.NewEngine(tae),
+		eng: eng,
 		tae: tae,
 	}
 }
@@ -419,7 +424,14 @@ func main() {
 		aoe = initAoe(configFilePath)
 		port = aoe.port
 	} else if engineName == "tae" {
+		fmt.Println("Initialize the TAE engine ...")
 		tae = initTae()
+		err := frontend.InitDB(tae.eng)
+		if err != nil {
+			logutil.Infof("Initialize catalog failed. error:%v", err)
+			os.Exit(InitCatalogExit)
+		}
+		fmt.Println("Initialize the TAE engine Done")
 	} else if engineName == "tpe" {
 		tpe = initTpe(configFilePath, args)
 		port = tpe.aoe.port

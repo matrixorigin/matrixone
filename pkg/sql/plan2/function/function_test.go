@@ -57,8 +57,8 @@ func mockFunctionRegister() [][]Function {
 	return mockRegister
 }
 
-func mockFunctionIdRegister() map[string]int {
-	mockIds := make(map[string]int)
+func mockFunctionIdRegister() map[string]int32 {
+	mockIds := make(map[string]int32)
 	mockIds["f1"] = 0
 	mockIds["f2"] = 1
 	return mockIds
@@ -134,33 +134,50 @@ func TestFunctionRegister(t *testing.T) {
 	for _, tc := range testCases {
 		msg := fmt.Sprintf("case id is %d", tc.id)
 
-		f1, _, err := GetFunctionByName(tc.fname, tc.args)
+		f1, fid, _, err := GetFunctionByName(tc.fname, tc.args)
 		if tc.index == notFound {
 			require.Equal(t, emptyFunction, f1, msg)
 		} else {
 			require.NoError(t, err)
-			id, err2 := getFunctionId(tc.fname)
+			f2, err2 := GetFunctionByID(fid)
 			require.NoError(t, err2, msg)
-			f2, err3 := GetFunctionByIndex(id, f1.Index)
-			require.NoError(t, err3, msg)
 			require.Equal(t, true, functionsEqual(f1, f2), msg)
 		}
 	}
 
 	// test errMsg
 	{
-		_, _, err := GetFunctionByName("testFunctionName", nil)
+		_, _, _, err := GetFunctionByName("testFunctionName", nil)
 		require.Equal(t, errors.New(errno.UndefinedFunction, "function 'testFunctionName' doesn't register, get id failed"), err)
 	}
 	{
-		_, _, err := GetFunctionByName("f1", []types.T{})
+		_, _, _, err := GetFunctionByName("f1", []types.T{})
 		require.Equal(t, errors.New(errno.UndefinedFunction, "undefined function f1[]"), err)
 	}
 	{
 		errMessage := "too much function matches:\n" +
 			"f1[BIGINT BIGINT]\n" +
 			"f1[BIGINT DOUBLE]"
-		_, _, err := GetFunctionByName("f1", []types.T{types.T_int64, ScalarNull})
+		_, _, _, err := GetFunctionByName("f1", []types.T{types.T_int64, ScalarNull})
 		require.Equal(t, errors.New(errno.SyntaxError, errMessage), err)
+	}
+}
+
+func TestFunctionOverloadID(t *testing.T) {
+	tcs := []struct {
+		fid        int32
+		overloadId int32
+	}{
+		{fid: 0, overloadId: 0},
+		{fid: 1, overloadId: 10},
+		{fid: 10, overloadId: 15},
+		{fid: 400, overloadId: 1165},
+		{fid: 3004, overloadId: 12345},
+	}
+	for _, tc := range tcs {
+		f := encodeOverloadID(tc.fid, tc.overloadId)
+		actualF, actualO := decodeOverloadID(f)
+		require.Equal(t, tc.fid, actualF)
+		require.Equal(t, tc.overloadId, actualO)
 	}
 }
