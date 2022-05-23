@@ -52,7 +52,7 @@ func (s *Scope) DropDatabase(ts uint64, snapshot engine.Snapshot, engine engine.
 	return engine.Delete(ts, dbName, snapshot)
 }
 
-func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine, dbName string) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -62,7 +62,10 @@ func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.E
 	planDefs := qry.GetTableDef().GetDefs()
 	exeDefs := planDefsToExeDefs(planDefs)
 
-	dbSource, err := engine.Database(qry.GetDatabase(), nil)
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	dbSource, err := engine.Database(dbName, nil)
 	if err != nil {
 		return err
 	}
@@ -91,7 +94,7 @@ func (s *Scope) DropIndex(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
-	exeDefs := make([]engine.TableDef, 0, len(planDefs))
+	exeDefs := make([]engine.TableDef, len(planDefs))
 	for i, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
 		case *plan.TableDef_DefType_Pk:
@@ -120,7 +123,7 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 }
 
 func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
-	exeCols := make([]engine.TableDef, 0, len(planCols))
+	exeCols := make([]engine.TableDef, len(planCols))
 	for i, col := range planCols {
 		var alg compress.T
 		switch col.Alg {
