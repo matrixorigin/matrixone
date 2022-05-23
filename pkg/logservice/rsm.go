@@ -39,6 +39,20 @@ type header struct {
 	tag uint16
 }
 
+func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
+	cmd := make([]byte, headerSize+8)
+	binaryEnc.PutUint16(cmd, leaseHolderIDTag)
+	binaryEnc.PutUint64(cmd, leaseHolderID)
+	return cmd
+}
+
+func getSetTruncatedIndexCmd(index uint64) []byte {
+	cmd := make([]byte, headerSize+8)
+	binaryEnc.PutUint16(cmd, truncatedIndexTag)
+	binaryEnc.PutUint64(cmd, index)
+	return cmd
+}
+
 func isSetLeaseHolderUpdate(cmd []byte) bool {
 	return tagMatch(cmd, leaseHolderIDTag)
 }
@@ -48,7 +62,7 @@ func isSetTruncatedIndexUpdate(cmd []byte) bool {
 }
 
 func isUserUpdate(cmd []byte) bool {
-	if len(cmd) < headerSize {
+	if len(cmd) < headerSize+8 {
 		return false
 	}
 	return binaryEnc.Uint16(cmd) == userEntryTag
@@ -62,11 +76,17 @@ func tagMatch(cmd []byte, expectedTag uint16) bool {
 }
 
 type stateMachine struct {
+	shardID        uint64
+	replicaID      uint64
 	leaseHolderID  uint64
 	truncatedIndex uint64
 }
 
 var _ (sm.IStateMachine) = (*stateMachine)(nil)
+
+func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
+	return &stateMachine{shardID: shardID, replicaID: replicaID}
+}
 
 func (s *stateMachine) setLeaseHolderID(cmd []byte) {
 	if !isSetLeaseHolderUpdate(cmd) {
@@ -75,11 +95,16 @@ func (s *stateMachine) setLeaseHolderID(cmd []byte) {
 	s.leaseHolderID = binaryEnc.Uint64(cmd[headerSize:])
 }
 
-func (s *stateMachine) setTruncatedIndex(cmd []byte) {
+func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
 	if !isSetTruncatedIndexUpdate(cmd) {
 		panic("not a setTruncatedIndex update")
 	}
-	s.truncatedIndex = binaryEnc.Uint64(cmd[headerSize:])
+	index := binaryEnc.Uint64(cmd[headerSize:])
+	if index > s.truncatedIndex {
+		s.truncatedIndex = index
+		return true
+	}
+	return false
 }
 
 // handleUserUpdate returns an empty sm.Result on success or it returns a
@@ -102,14 +127,16 @@ func (s *stateMachine) Close() error {
 func (s *stateMachine) Update(cmd []byte) (sm.Result, error) {
 	if isSetLeaseHolderUpdate(cmd) {
 		s.setLeaseHolderID(cmd)
+		return sm.Result{}, nil
 	} else if isSetTruncatedIndexUpdate(cmd) {
-		s.setTruncatedIndex(cmd)
+		if s.setTruncatedIndex(cmd) {
+			return sm.Result{}, nil
+		}
+		return sm.Result{Value: s.truncatedIndex}, nil
 	} else if isUserUpdate(cmd) {
 		return s.handleUserUpdate(cmd)
-	} else {
-		panic("corrupted entry")
 	}
-	return sm.Result{}, nil
+	panic("corrupted entry")
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
