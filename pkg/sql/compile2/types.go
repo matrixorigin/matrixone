@@ -75,6 +75,8 @@ type Scope struct {
 	Instructions vm.Instructions
 	// Proc contains the execution context.
 	Proc *process.Process
+
+	Reg *process.WaitRegister
 }
 
 // compile contains all the information needed for compilation.
