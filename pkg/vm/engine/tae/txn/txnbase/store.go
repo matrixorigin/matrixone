@@ -33,6 +33,7 @@ func (store *NoopTxnStore) PrepareRollback() error                          { re
 func (store *NoopTxnStore) PreCommit() error                                { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                            { return nil }
 func (store *NoopTxnStore) ApplyRollback() error                            { return nil }
+func (store *NoopTxnStore) PreApplyCommit() error                           { return nil }
 func (store *NoopTxnStore) ApplyCommit() error                              { return nil }
 
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}

@@ -1351,7 +1351,7 @@ func TestDelete1(t *testing.T) {
 		pkVal := compute.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Error(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -1991,13 +1991,13 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	// Append a row with the same primary key
-	// txn, _ = tae.StartTxn(nil)
-	// db, _ = txn.GetDatabase("db")
-	// rel, _ = db.GetRelationByName(schema.Name)
-	// id, row, err = rel.GetByFilter(filter)
-	// assert.Error(t, err)
-	// err = rel.Append(bat)
-	// assert.NoError(t, err)
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
 }
 
 func TestUpdateByFilter(t *testing.T) {
