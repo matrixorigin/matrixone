@@ -135,7 +135,13 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 		}
 		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
 		block := l.logFile.segment.nodes[file.name]
-		if block == nil || block.snode.seq < file.snode.seq {
+		if (block == nil || block.snode.seq < file.snode.seq) &&
+			file.snode.state == RESIDENT {
+			extents := file.GetExtents()
+			for _, extent := range *extents {
+				l.logFile.segment.allocator.CheckAllocations(
+					extent.offset-DATA_START, extent.length)
+			}
 			l.logFile.segment.nodes[file.name] = file
 		}
 		if block == nil {

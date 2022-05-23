@@ -17,4 +17,5 @@ package segment
 type Allocator interface {
 	Allocate(len uint64) (uint64, uint64)
 	Free(start uint32, len uint32)
+	CheckAllocations(start uint32, len uint32)
 }
