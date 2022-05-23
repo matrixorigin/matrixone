@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/like"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
@@ -61,9 +61,6 @@ func FdsOpLikeCharChar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 			}
 			vector.SetCol(vec, rs)
 		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
 	// 2. string Reg expr
 	case lc && rc: // in our design, this case should deal while pruning extends.
@@ -100,9 +97,6 @@ func FdsOpLikeCharChar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	// 4. []string Reg []expr
@@ -141,12 +135,6 @@ func FdsOpLikeCharChar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	}
@@ -184,9 +172,6 @@ func FdsOpLikeCharVarchar(vs []*vector.Vector, proc *process.Process) (*vector.V
 			}
 			vector.SetCol(vec, rs)
 		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
 	// 2. string Reg expr
 	case lc && rc: // in our design, this case should deal while pruning extends.
@@ -223,9 +208,6 @@ func FdsOpLikeCharVarchar(vs []*vector.Vector, proc *process.Process) (*vector.V
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	// 4. []string Reg []expr
@@ -264,12 +246,6 @@ func FdsOpLikeCharVarchar(vs []*vector.Vector, proc *process.Process) (*vector.V
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	}
@@ -307,9 +283,6 @@ func FdsOpLikeVarcharChar(vs []*vector.Vector, proc *process.Process) (*vector.V
 			}
 			vector.SetCol(vec, rs)
 		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
 	// 2. string Reg expr
 	case lc && rc: // in our design, this case should deal while pruning extends.
@@ -346,9 +319,6 @@ func FdsOpLikeVarcharChar(vs []*vector.Vector, proc *process.Process) (*vector.V
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	// 4. []string Reg []expr
@@ -387,12 +357,6 @@ func FdsOpLikeVarcharChar(vs []*vector.Vector, proc *process.Process) (*vector.V
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	}
@@ -430,9 +394,6 @@ func FdsOpLikeVarcharVarchar(vs []*vector.Vector, proc *process.Process) (*vecto
 			}
 			vector.SetCol(vec, rs)
 		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
 	// 2. string Reg expr
 	case lc && rc: // in our design, this case should deal while pruning extends.
@@ -469,9 +430,6 @@ func FdsOpLikeVarcharVarchar(vs []*vector.Vector, proc *process.Process) (*vecto
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	// 4. []string Reg []expr
@@ -510,12 +468,6 @@ func FdsOpLikeVarcharVarchar(vs []*vector.Vector, proc *process.Process) (*vecto
 				return nil, err
 			}
 			vector.SetCol(vec, rs)
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
 		}
 		return vec, nil
 	}

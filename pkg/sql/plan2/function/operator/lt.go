@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/gt"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"unsafe"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -50,9 +50,6 @@ func FdsOpLessThanInt8(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			vector.SetCol(vec, lt.Int8LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -65,9 +62,6 @@ func FdsOpLessThanInt8(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 			vector.SetCol(vec, gt.Int8GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Int8GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -86,12 +80,6 @@ func FdsOpLessThanInt8(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vector.SetCol(vec, lt.Int8LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Int8Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -117,9 +105,6 @@ func FdsOpLessThanInt16(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		} else {
 			vector.SetCol(vec, lt.Int16LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -132,9 +117,6 @@ func FdsOpLessThanInt16(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 			vector.SetCol(vec, gt.Int16GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Int16GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -153,12 +135,6 @@ func FdsOpLessThanInt16(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(vec, lt.Int16LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Int16Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -184,9 +160,6 @@ func FdsOpLessThanInt32(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		} else {
 			vector.SetCol(vec, lt.Int32LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -199,9 +172,6 @@ func FdsOpLessThanInt32(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 			vector.SetCol(vec, gt.Int32GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Int32GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -220,12 +190,6 @@ func FdsOpLessThanInt32(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(vec, lt.Int32LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Int32Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -251,9 +215,6 @@ func FdsOpLessThanInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		} else {
 			vector.SetCol(vec, lt.Int64LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -266,9 +227,6 @@ func FdsOpLessThanInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 			vector.SetCol(vec, gt.Int64GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Int64GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -287,12 +245,6 @@ func FdsOpLessThanInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(vec, lt.Int64LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Int64Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -318,9 +270,6 @@ func FdsOpLessThanUint8(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		} else {
 			vector.SetCol(vec, lt.Uint8LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -333,9 +282,6 @@ func FdsOpLessThanUint8(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 			vector.SetCol(vec, gt.Uint8GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Uint8GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -354,12 +300,6 @@ func FdsOpLessThanUint8(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(vec, lt.Uint8LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Uint8Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -385,9 +325,6 @@ func FdsOpLessThanUint16(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		} else {
 			vector.SetCol(vec, lt.Uint16LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -400,9 +337,6 @@ func FdsOpLessThanUint16(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 			vector.SetCol(vec, gt.Uint16GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Uint16GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -421,12 +355,6 @@ func FdsOpLessThanUint16(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(vec, lt.Uint16LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Uint16Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -452,9 +380,6 @@ func FdsOpLessThanUint32(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		} else {
 			vector.SetCol(vec, lt.Uint32LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -467,9 +392,6 @@ func FdsOpLessThanUint32(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 			vector.SetCol(vec, gt.Uint32GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Uint32GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -488,12 +410,6 @@ func FdsOpLessThanUint32(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(vec, lt.Uint32LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Uint32Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -519,9 +435,6 @@ func FdsOpLessThanUint64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		} else {
 			vector.SetCol(vec, lt.Uint64LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -534,9 +447,6 @@ func FdsOpLessThanUint64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 			vector.SetCol(vec, gt.Uint64GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Uint64GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -555,12 +465,6 @@ func FdsOpLessThanUint64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(vec, lt.Uint64LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Uint64Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -586,9 +490,6 @@ func FdsOpLessThanFloat32(vs []*vector.Vector, proc *process.Process) (*vector.V
 		} else {
 			vector.SetCol(vec, lt.Float32LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -601,9 +502,6 @@ func FdsOpLessThanFloat32(vs []*vector.Vector, proc *process.Process) (*vector.V
 			vector.SetCol(vec, gt.Float32GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Float32GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -622,12 +520,6 @@ func FdsOpLessThanFloat32(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, lt.Float32LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Float32Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -653,9 +545,6 @@ func FdsOpLessThanFloat64(vs []*vector.Vector, proc *process.Process) (*vector.V
 		} else {
 			vector.SetCol(vec, lt.Float64LtScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -668,9 +557,6 @@ func FdsOpLessThanFloat64(vs []*vector.Vector, proc *process.Process) (*vector.V
 			vector.SetCol(vec, gt.Float64GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Float64GtScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -689,12 +575,6 @@ func FdsOpLessThanFloat64(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, lt.Float64LtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Float64Lt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -720,9 +600,6 @@ func FdsOpLessThanChar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			vector.SetCol(vec, lt.StrLtScalar(lvs.Data, rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs.Lengths)), SelsType)
@@ -735,9 +612,6 @@ func FdsOpLessThanChar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 			vector.SetCol(vec, gt.StrGtNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.StrGtScalar(rvs.Data, lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -756,12 +630,6 @@ func FdsOpLessThanChar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vector.SetCol(vec, lt.StrLtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.StrLt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -787,9 +655,6 @@ func FdsOpLessThanVarchar(vs []*vector.Vector, proc *process.Process) (*vector.V
 		} else {
 			vector.SetCol(vec, lt.StrLtScalar(lvs.Data, rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs.Lengths)), SelsType)
@@ -802,9 +667,6 @@ func FdsOpLessThanVarchar(vs []*vector.Vector, proc *process.Process) (*vector.V
 			vector.SetCol(vec, gt.StrGtNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.StrGtScalar(rvs.Data, lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -823,12 +685,6 @@ func FdsOpLessThanVarchar(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, lt.StrLtNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.StrLt(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -855,9 +711,6 @@ func FdsOpLessThanDate(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			vector.SetCol(vec, lt.Int32LtScalar(int32(lvs[0]), rvsInInt32, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		lvsInInt32 := *(*[]int32)(unsafe.Pointer(&lvs))
@@ -871,9 +724,6 @@ func FdsOpLessThanDate(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 			vector.SetCol(vec, gt.Int32GtNullableScalar(int32(rvs[0]), lvsInInt32, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Int32GtScalar(int32(rvs[0]), lvsInInt32, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -894,12 +744,6 @@ func FdsOpLessThanDate(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vector.SetCol(vec, lt.Int32LtNullable(lvsInInt32, rvsInInt32, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Int32Lt(lvsInInt32, rvsInInt32, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -926,9 +770,6 @@ func FdsOpLessThanDatetime(vs []*vector.Vector, proc *process.Process) (*vector.
 		} else {
 			vector.SetCol(vec, lt.Int64LtScalar(int64(lvs[0]), rvsInInt64, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		lvsInInt64 := *(*[]int64)(unsafe.Pointer(&lvs))
@@ -942,9 +783,6 @@ func FdsOpLessThanDatetime(vs []*vector.Vector, proc *process.Process) (*vector.
 			vector.SetCol(vec, gt.Int64GtNullableScalar(int64(rvs[0]), lvsInInt64, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Int64GtScalar(int64(rvs[0]), lvsInInt64, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -965,12 +803,6 @@ func FdsOpLessThanDatetime(vs []*vector.Vector, proc *process.Process) (*vector.
 		vector.SetCol(vec, lt.Int64LtNullable(lvsInInt64, rvsInInt64, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Int64Lt(lvsInInt64, rvsInInt64, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -997,9 +829,6 @@ func FdsOpLessThanTimestamp(vs []*vector.Vector, proc *process.Process) (*vector
 		} else {
 			vector.SetCol(vec, lt.Int64LtScalar(int64(lvs[0]), rvsInInt64, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		lvsInInt64 := *(*[]int64)(unsafe.Pointer(&lvs))
@@ -1013,9 +842,6 @@ func FdsOpLessThanTimestamp(vs []*vector.Vector, proc *process.Process) (*vector
 			vector.SetCol(vec, gt.Int64GtNullableScalar(int64(rvs[0]), lvsInInt64, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Int64GtScalar(int64(rvs[0]), lvsInInt64, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -1036,12 +862,6 @@ func FdsOpLessThanTimestamp(vs []*vector.Vector, proc *process.Process) (*vector
 		vector.SetCol(vec, lt.Int64LtNullable(lvsInInt64, rvsInInt64, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Int64Lt(lvsInInt64, rvsInInt64, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -1067,9 +887,6 @@ func FdsOpLessThanDecimal64(vs []*vector.Vector, proc *process.Process) (*vector
 		} else {
 			vector.SetCol(vec, lt.Decimal64LtScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -1082,9 +899,6 @@ func FdsOpLessThanDecimal64(vs []*vector.Vector, proc *process.Process) (*vector
 			vector.SetCol(vec, gt.Decimal64GtNullableScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Decimal64GtScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -1103,12 +917,6 @@ func FdsOpLessThanDecimal64(vs []*vector.Vector, proc *process.Process) (*vector
 		vector.SetCol(vec, lt.Decimal64LtNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Decimal64Lt(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -1134,9 +942,6 @@ func FdsOpLessThanDecimal128(vs []*vector.Vector, proc *process.Process) (*vecto
 		} else {
 			vector.SetCol(vec, lt.Decimal128LtScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -1149,9 +954,6 @@ func FdsOpLessThanDecimal128(vs []*vector.Vector, proc *process.Process) (*vecto
 			vector.SetCol(vec, gt.Decimal128GtNullableScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, gt.Decimal128GtScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -1170,12 +972,6 @@ func FdsOpLessThanDecimal128(vs []*vector.Vector, proc *process.Process) (*vecto
 		vector.SetCol(vec, lt.Decimal128LtNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, lt.Decimal128Lt(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }

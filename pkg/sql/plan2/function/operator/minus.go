@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sub"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // minus operator's evaluation for arguments: [int8,int8]
@@ -35,11 +35,6 @@ func FdsOpMinusInt8Int8(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 	rtl := 1
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int8SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -50,11 +45,6 @@ func FdsOpMinusInt8Int8(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(vec, sub.Int8SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int8SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -64,22 +54,6 @@ func FdsOpMinusInt8Int8(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int8SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int8Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Int8Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -89,12 +63,6 @@ func FdsOpMinusInt8Int8(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int8Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -108,11 +76,6 @@ func FdsOpMinusInt16Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rtl := 2
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int16SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -123,11 +86,6 @@ func FdsOpMinusInt16Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, sub.Int16SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int16SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -137,22 +95,6 @@ func FdsOpMinusInt16Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int16SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int16Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Int16Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -162,12 +104,6 @@ func FdsOpMinusInt16Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int16Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -181,11 +117,6 @@ func FdsOpMinusInt32Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rtl := 4
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int32SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -196,11 +127,6 @@ func FdsOpMinusInt32Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, sub.Int32SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int32SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -210,22 +136,6 @@ func FdsOpMinusInt32Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int32SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int32Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Int32Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -235,12 +145,6 @@ func FdsOpMinusInt32Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int32Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -254,11 +158,6 @@ func FdsOpMinusInt64Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int64SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -269,11 +168,6 @@ func FdsOpMinusInt64Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, sub.Int64SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int64SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -283,22 +177,6 @@ func FdsOpMinusInt64Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int64SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Int64Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -308,12 +186,6 @@ func FdsOpMinusInt64Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int64Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -327,11 +199,6 @@ func FdsOpMinusUint8Uint8(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rtl := 1
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint8SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -342,11 +209,6 @@ func FdsOpMinusUint8Uint8(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, sub.Uint8SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint8SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -356,22 +218,6 @@ func FdsOpMinusUint8Uint8(vs []*vector.Vector, proc *process.Process) (*vector.V
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint8SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint8Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Uint8Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -381,12 +227,6 @@ func FdsOpMinusUint8Uint8(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint8Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -400,11 +240,6 @@ func FdsOpMinusUint16Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 	rtl := 2
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint16SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -415,11 +250,6 @@ func FdsOpMinusUint16Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 		vector.SetCol(vec, sub.Uint16SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint16SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -429,22 +259,6 @@ func FdsOpMinusUint16Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint16SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint16Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Uint16Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -454,12 +268,6 @@ func FdsOpMinusUint16Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint16Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -473,11 +281,6 @@ func FdsOpMinusUint32Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 	rtl := 4
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint32SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -488,11 +291,6 @@ func FdsOpMinusUint32Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 		vector.SetCol(vec, sub.Uint32SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint32SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -502,22 +300,6 @@ func FdsOpMinusUint32Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint32SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint32Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Uint32Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -527,12 +309,6 @@ func FdsOpMinusUint32Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint32Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -546,11 +322,6 @@ func FdsOpMinusUint64Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint64SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -561,11 +332,6 @@ func FdsOpMinusUint64Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 		vector.SetCol(vec, sub.Uint64SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint64SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -575,22 +341,6 @@ func FdsOpMinusUint64Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Uint64Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -600,12 +350,6 @@ func FdsOpMinusUint64Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint64Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -619,11 +363,6 @@ func FdsOpMinusFloat32Float32(vs []*vector.Vector, proc *process.Process) (*vect
 	rtl := 4
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Float32SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -634,11 +373,6 @@ func FdsOpMinusFloat32Float32(vs []*vector.Vector, proc *process.Process) (*vect
 		vector.SetCol(vec, sub.Float32SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Float32SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -648,22 +382,6 @@ func FdsOpMinusFloat32Float32(vs []*vector.Vector, proc *process.Process) (*vect
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Float32SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Float32Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Float32Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -673,12 +391,6 @@ func FdsOpMinusFloat32Float32(vs []*vector.Vector, proc *process.Process) (*vect
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Float32Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -692,11 +404,6 @@ func FdsOpMinusFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vect
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Float64SubScalar(lvs[0], rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -707,11 +414,6 @@ func FdsOpMinusFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vect
 		vector.SetCol(vec, sub.Float64SubScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Float64SubByScalar(rvs[0], lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -721,22 +423,6 @@ func FdsOpMinusFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vect
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Float64SubByScalar(rvs[0], lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Float64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Float64Sub(lvs, rvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -746,12 +432,6 @@ func FdsOpMinusFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vect
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Float64Sub(lvs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -770,12 +450,6 @@ func FdsOpMinusDecimal64Decimal64(vs []*vector.Vector, proc *process.Process) (*
 	resultTyp := types.Type{Oid: types.T_decimal64, Size: 8, Width: 18, Scale: resultScale}
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Decimal64SubScalar(lvs[0], rvs, lvScale, rvScale, rvs)
-			rv.Typ = resultTyp
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
 		if err != nil {
 			return nil, err
@@ -786,12 +460,6 @@ func FdsOpMinusDecimal64Decimal64(vs []*vector.Vector, proc *process.Process) (*
 		vector.SetCol(vec, sub.Decimal64SubScalar(lvs[0], rvs, lvScale, rvScale, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Decimal64SubByScalar(rvs[0], lvs, rvScale, lvScale, lvs)
-			lv.Typ = resultTyp
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
 		if err != nil {
 			return nil, err
@@ -801,24 +469,6 @@ func FdsOpMinusDecimal64Decimal64(vs []*vector.Vector, proc *process.Process) (*
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Decimal64SubScalar(rvs[0], lvs, rvScale, lvScale, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Decimal64Sub(lvs, rvs, lvScale, rvScale, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		lv.Typ = resultTyp
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Decimal64Sub(lvs, rvs, lvScale, rvScale, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		rv.Typ = resultTyp
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -828,12 +478,6 @@ func FdsOpMinusDecimal64Decimal64(vs []*vector.Vector, proc *process.Process) (*
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Decimal64Sub(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -853,12 +497,6 @@ func FdsOpMinusDecimal128Decimal128(vs []*vector.Vector, proc *process.Process) 
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Decimal128SubScalar(lvs[0], rvs, lvScale, rvScale, rvs)
-			rv.Typ = resultTyp
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
 		if err != nil {
 			return nil, err
@@ -869,12 +507,6 @@ func FdsOpMinusDecimal128Decimal128(vs []*vector.Vector, proc *process.Process) 
 		vector.SetCol(vec, sub.Decimal128SubScalar(lvs[0], rvs, lvScale, rvScale, rs))
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Decimal128SubByScalar(rvs[0], lvs, rvScale, lvScale, lvs)
-			lv.Typ = resultTyp
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
 		if err != nil {
 			return nil, err
@@ -884,24 +516,6 @@ func FdsOpMinusDecimal128Decimal128(vs []*vector.Vector, proc *process.Process) 
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Decimal128SubScalar(rvs[0], lvs, rvScale, lvScale, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Decimal128Sub(lvs, rvs, lvScale, rvScale, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		lv.Typ = resultTyp
-		return lv, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		sub.Decimal128Sub(lvs, rvs, lvScale, rvScale, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		rv.Typ = resultTyp
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
 	if err != nil {
@@ -911,12 +525,6 @@ func FdsOpMinusDecimal128Decimal128(vs []*vector.Vector, proc *process.Process) 
 	rs = rs[:len(rvs)]
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Decimal128Sub(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -930,11 +538,6 @@ func FdsOpMinusInt8Int16(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	rtl := 2
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int16SubScalar(int16(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -956,22 +559,7 @@ func FdsOpMinusInt8Int16(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int16SubByScalar(int16(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Int8Int16Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -984,12 +572,6 @@ func FdsOpMinusInt8Int16(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int16Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1003,11 +585,6 @@ func FdsOpMinusInt8Int32(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	rtl := 4
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int32SubScalar(int32(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1029,22 +606,7 @@ func FdsOpMinusInt8Int32(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int32SubByScalar(int32(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Int8Int32Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1057,12 +619,6 @@ func FdsOpMinusInt8Int32(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int32Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1076,11 +632,6 @@ func FdsOpMinusInt16Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rtl := 4
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int32SubScalar(int32(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1102,22 +653,7 @@ func FdsOpMinusInt16Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int32SubByScalar(int32(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Int16Int32Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1130,12 +666,6 @@ func FdsOpMinusInt16Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int32Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1149,11 +679,6 @@ func FdsOpMinusInt8Int64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int64SubScalar(int64(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1175,22 +700,7 @@ func FdsOpMinusInt8Int64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int64SubByScalar(int64(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Int8Int64Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1203,12 +713,6 @@ func FdsOpMinusInt8Int64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int64Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1222,11 +726,6 @@ func FdsOpMinusInt16Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int64SubScalar(int64(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1248,22 +747,7 @@ func FdsOpMinusInt16Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int64SubByScalar(int64(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Int16Int64Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1276,12 +760,6 @@ func FdsOpMinusInt16Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int64Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1295,11 +773,6 @@ func FdsOpMinusInt32Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Int64SubScalar(int64(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1321,22 +794,7 @@ func FdsOpMinusInt32Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int64SubByScalar(int64(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Int32Int64Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1349,12 +807,6 @@ func FdsOpMinusInt32Int64(vs []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int64Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1368,11 +820,6 @@ func FdsOpMinusUint8Uint16(vs []*vector.Vector, proc *process.Process) (*vector.
 	rtl := 2
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint16SubScalar(uint16(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1394,22 +841,7 @@ func FdsOpMinusUint8Uint16(vs []*vector.Vector, proc *process.Process) (*vector.
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint16SubByScalar(uint16(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Uint8Uint16Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1422,12 +854,6 @@ func FdsOpMinusUint8Uint16(vs []*vector.Vector, proc *process.Process) (*vector.
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint16Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1441,11 +867,6 @@ func FdsOpMinusUint8Uint32(vs []*vector.Vector, proc *process.Process) (*vector.
 	rtl := 4
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint32SubScalar(uint32(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1467,22 +888,7 @@ func FdsOpMinusUint8Uint32(vs []*vector.Vector, proc *process.Process) (*vector.
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint32SubByScalar(uint32(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Uint8Uint32Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1495,12 +901,6 @@ func FdsOpMinusUint8Uint32(vs []*vector.Vector, proc *process.Process) (*vector.
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint32Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1514,11 +914,6 @@ func FdsOpMinusUint16Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 	rtl := 4
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint32SubScalar(uint32(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1540,22 +935,7 @@ func FdsOpMinusUint16Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint32SubByScalar(uint32(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Uint16Uint32Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1568,12 +948,6 @@ func FdsOpMinusUint16Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint32Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1587,11 +961,6 @@ func FdsOpMinusUint8Uint64(vs []*vector.Vector, proc *process.Process) (*vector.
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint64SubScalar(uint64(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1613,22 +982,7 @@ func FdsOpMinusUint8Uint64(vs []*vector.Vector, proc *process.Process) (*vector.
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubByScalar(uint64(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Uint8Uint64Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1641,12 +995,6 @@ func FdsOpMinusUint8Uint64(vs []*vector.Vector, proc *process.Process) (*vector.
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint64Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1660,11 +1008,6 @@ func FdsOpMinusUint16Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint64SubScalar(uint64(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1686,22 +1029,7 @@ func FdsOpMinusUint16Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubByScalar(uint64(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Uint16Uint64Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1714,12 +1042,6 @@ func FdsOpMinusUint16Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint64Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1733,11 +1055,6 @@ func FdsOpMinusUint32Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Uint64SubScalar(uint64(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1759,22 +1076,7 @@ func FdsOpMinusUint32Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubByScalar(uint64(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Uint32Uint64Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1787,12 +1089,6 @@ func FdsOpMinusUint32Uint64(vs []*vector.Vector, proc *process.Process) (*vector
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint64Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1806,11 +1102,6 @@ func FdsOpMinusFloat32Float64(vs []*vector.Vector, proc *process.Process) (*vect
 	rtl := 8
 	switch {
 	case lc && !rc:
-		if rv.Ref == 1 || rv.Ref == 0 {
-			rv.Ref = 0
-			sub.Float64SubScalar(float64(lvs[0]), rvs, rvs)
-			return rv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 		if err != nil {
 			return nil, err
@@ -1832,22 +1123,7 @@ func FdsOpMinusFloat32Float64(vs []*vector.Vector, proc *process.Process) (*vect
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Float64SubByScalar(float64(rvs[0]), rs, rs))
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
 		return vec, nil
-	case rv.Ref == 1 || rv.Ref == 0:
-		rv.Ref = 0
-		// used rvs to sub lvs, and get neg then.
-		sub.Float32Float64Sub(rvs, lvs, rvs)
-		rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		for i, r := range rvs {
-			rvs[i] = -r
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
-		}
-		return rv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), rv.Typ)
 	if err != nil {
@@ -1860,12 +1136,6 @@ func FdsOpMinusFloat32Float64(vs []*vector.Vector, proc *process.Process) (*vect
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Float64Sub(rs, rvs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1890,16 +1160,8 @@ func FdsOpMinusInt16Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Int16SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int16SubByScalar(int16(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -1909,14 +1171,6 @@ func FdsOpMinusInt16Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int16SubByScalar(int16(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int8Int16Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -1929,12 +1183,6 @@ func FdsOpMinusInt16Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int16Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -1959,16 +1207,8 @@ func FdsOpMinusInt32Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Int32SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int32SubByScalar(int32(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -1978,14 +1218,6 @@ func FdsOpMinusInt32Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int32SubByScalar(int32(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int8Int32Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -1998,12 +1230,6 @@ func FdsOpMinusInt32Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int32Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2028,16 +1254,8 @@ func FdsOpMinusInt32Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Int32SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int32SubByScalar(int32(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2047,14 +1265,6 @@ func FdsOpMinusInt32Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int32SubByScalar(int32(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int16Int32Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2067,12 +1277,6 @@ func FdsOpMinusInt32Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int32Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2097,16 +1301,8 @@ func FdsOpMinusInt64Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Int64SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int64SubByScalar(int64(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2116,14 +1312,6 @@ func FdsOpMinusInt64Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int64SubByScalar(int64(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int8Int64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2136,12 +1324,6 @@ func FdsOpMinusInt64Int8(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int64Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2166,16 +1348,8 @@ func FdsOpMinusInt64Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Int64SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int64SubByScalar(int64(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2185,14 +1359,6 @@ func FdsOpMinusInt64Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int64SubByScalar(int64(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int16Int64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2205,12 +1371,6 @@ func FdsOpMinusInt64Int16(vs []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int64Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2235,16 +1395,8 @@ func FdsOpMinusInt64Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Int64SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Int64SubByScalar(int64(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2254,14 +1406,6 @@ func FdsOpMinusInt64Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Int64SubByScalar(int64(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Int32Int64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2274,12 +1418,6 @@ func FdsOpMinusInt64Int32(vs []*vector.Vector, proc *process.Process) (*vector.V
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Int64Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2304,16 +1442,8 @@ func FdsOpMinusUint16Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Uint16SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint16SubByScalar(uint16(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2323,14 +1453,6 @@ func FdsOpMinusUint16Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint16SubByScalar(uint16(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint8Uint16Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2343,12 +1465,6 @@ func FdsOpMinusUint16Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint16Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2373,16 +1489,8 @@ func FdsOpMinusUint32Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Uint32SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint32SubByScalar(uint32(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2392,14 +1500,6 @@ func FdsOpMinusUint32Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint32SubByScalar(uint32(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint8Uint32Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2412,12 +1512,6 @@ func FdsOpMinusUint32Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint32Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2442,16 +1536,8 @@ func FdsOpMinusUint32Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Uint32SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint32SubByScalar(uint32(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2461,14 +1547,6 @@ func FdsOpMinusUint32Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint32SubByScalar(uint32(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint16Uint32Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2481,12 +1559,6 @@ func FdsOpMinusUint32Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint32Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2511,16 +1583,8 @@ func FdsOpMinusUint64Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint64SubByScalar(uint64(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2530,14 +1594,6 @@ func FdsOpMinusUint64Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubByScalar(uint64(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint8Uint64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2550,12 +1606,6 @@ func FdsOpMinusUint64Uint8(vs []*vector.Vector, proc *process.Process) (*vector.
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint64Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2580,16 +1630,8 @@ func FdsOpMinusUint64Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint64SubByScalar(uint64(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2599,14 +1641,6 @@ func FdsOpMinusUint64Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubByScalar(uint64(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint16Uint64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2619,12 +1653,6 @@ func FdsOpMinusUint64Uint16(vs []*vector.Vector, proc *process.Process) (*vector
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint64Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2649,16 +1677,8 @@ func FdsOpMinusUint64Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Uint64SubByScalar(uint64(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2668,14 +1688,6 @@ func FdsOpMinusUint64Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Uint64SubByScalar(uint64(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Uint32Uint64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2688,12 +1700,6 @@ func FdsOpMinusUint64Uint32(vs []*vector.Vector, proc *process.Process) (*vector
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Uint64Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }
 
@@ -2718,16 +1724,8 @@ func FdsOpMinusFloat64Float32(vs []*vector.Vector, proc *process.Process) (*vect
 		}
 		nulls.Set(vec.Nsp, rv.Nsp)
 		vector.SetCol(vec, sub.Float64SubScalar(lvs[0], rs, rs))
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
-		if lv.Ref == 1 || lv.Ref == 0 {
-			lv.Ref = 0
-			sub.Float64SubByScalar(float64(rvs[0]), lvs, lvs)
-			return lv, nil
-		}
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 		if err != nil {
 			return nil, err
@@ -2737,14 +1735,6 @@ func FdsOpMinusFloat64Float32(vs []*vector.Vector, proc *process.Process) (*vect
 		nulls.Set(vec.Nsp, lv.Nsp)
 		vector.SetCol(vec, sub.Float64SubByScalar(float64(rvs[0]), lvs, rs))
 		return vec, nil
-	case lv.Ref == 1 || lv.Ref == 0:
-		lv.Ref = 0
-		sub.Float32Float64Sub(lvs, rvs, lvs)
-		lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
-		return lv, nil
 	}
 	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
 	if err != nil {
@@ -2757,11 +1747,5 @@ func FdsOpMinusFloat64Float32(vs []*vector.Vector, proc *process.Process) (*vect
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, sub.Float64Sub(lvs, rs, rs))
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
-	}
 	return vec, nil
 }

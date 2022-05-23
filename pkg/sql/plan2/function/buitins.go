@@ -94,7 +94,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 			Flag:        plan.Function_STRICT,
 			Kind:        STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
-			ReturnTyp:   types.T_int64,
+			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          unary.FdsAbsUInt64,
 		},

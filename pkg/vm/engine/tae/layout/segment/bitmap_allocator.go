@@ -130,17 +130,13 @@ func (b *BitmapAllocator) markAllocFree0(start, length uint64, free bool) {
 	}
 }
 
-func (b *BitmapAllocator) markLevel1(start, length uint64, free bool) {
-	if start%UNITSET_BYTES != 0 {
-		panic(any("start align error"))
-	} else if length%UNITSET_BYTES != 0 {
-		panic(any("length align error"))
-	}
+func (b *BitmapAllocator) markUnitLevel1(start, length uint64, free bool) {
 	clear := true
 	for idx := start / BITS_PER_UNIT; idx < length/BITS_PER_UNIT; idx++ {
 		val := &(b.level0[idx])
 		if *val != ALL_UNIT_CLEAR {
 			clear = false
+			break
 		}
 	}
 	pos := start / BITS_PER_UNIT
@@ -161,6 +157,23 @@ func (b *BitmapAllocator) markLevel1(start, length uint64, free bool) {
 			var bit uint64 = 1 << (l1pos % BITS_PER_UNIT)
 			*l1val |= bit
 		}
+	}
+}
+
+func (b *BitmapAllocator) markLevel1(start, length uint64, free bool) {
+	if start%UNITSET_BYTES != 0 {
+		panic(any("start align error"))
+	} else if length%UNITSET_BYTES != 0 {
+		panic(any("length align error"))
+	}
+	idx := uint64(0)
+	idxEnd := length / BITS_PER_UNITSET
+	for {
+		if idx >= idxEnd {
+			break
+		}
+		b.markUnitLevel1(start+idx*BITS_PER_UNITSET, start+(idx+1)*BITS_PER_UNITSET, free)
+		idx++
 	}
 }
 
@@ -208,6 +221,9 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 		}
 		// get level1 free start bit
 		l1freePos := b.getBitPos(l1bit, 0)
+		var startIdx uint32 = 0
+		var startPos uint32 = 0
+		var setStart bool = false
 		for {
 			l0pos := l1freePos*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT)
 			l0end := (l1freePos+1)*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT)
@@ -220,10 +236,19 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 				//TODO:Need to allocate huge pages to debug
 				l0freePos = b.getBitPos(*val, 0)
 				nextPos = l0freePos + 1
-				/*if idx == l0pos/BITS_PER_UNIT {
-					l0freePos = b.getBitPos(*val, 0)
-					nextPos = l0freePos + 1
-				}*/
+				if startIdx == 0 && !setStart {
+					startIdx = idx
+					startPos = l0freePos
+					setStart = true
+				}
+				if setStart &&
+					l0freePos > 0 && allocatedPage > 0 {
+					// Fragmented pages exist during allocation,
+					// we only need contiguous pages
+					allocatedPage = 0
+					startIdx = idx
+					startPos = l0freePos
+				}
 
 				for {
 					if nextPos >= BITS_PER_UNIT ||
@@ -246,9 +271,8 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 					continue
 				}
 				allocated += uint64(needPage * b.pageSize)
-				l0start := uint64(idx)*BITS_PER_UNIT + uint64(l0freePos)
-				b.lastPos = l0start*uint64(b.pageSize) +
-					uint64(l1freePos*BITS_PER_UNITSET+uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT))
+				l0start := uint64(startIdx)*BITS_PER_UNIT + uint64(startPos)
+				b.lastPos = l0start * uint64(b.pageSize)
 				l0end := l0start + uint64(needPage)
 				b.markAllocFree0(l0start, l0end, false)
 				l0start = p2align(l0start, BITS_PER_UNITSET)

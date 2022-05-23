@@ -22,24 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-//ceil function's evaluation for arguments: [uint64]
+// ceil function's evaluation for arguments: [uint64]
 func FdsCeilUInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vecs[0].Col.([]uint64)
-	//if len(vecs) > 1 {
-	//	if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-	//		return nil, errors.New("the second argument of the ceil function must be an int64 constant")
-	//	}
-	//	digits = vecs[1].Col.([]int64)[0]
-	//}
-	//if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
-	//	vecs[0].Ref = 0
-	//	ceil.CeilUint64(vs, vs, digits)
-	//	return vecs[0], nil
-	//}
 	vec, err := process.Get(proc, 8*int64(len(vs)), types.Type{Oid: types.T_uint64, Size: 8})
 	if err != nil {
 		return nil, err
@@ -52,21 +41,14 @@ func FdsCeilUInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 	return vec, nil
 }
 
-//ceil function's evaluation for arguments: [uint64, int64]
+// ceil function's evaluation for arguments: [uint64, int64]
 func FdsCeilUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vecs[0].Col.([]uint64)
-	//if len(vecs) > 1 {
 	if !vecs[1].IsConstant() || vecs[1].Typ.Oid != types.T_int64 {
 		return nil, errors.New("the second argument of the ceil function must be an int64 constant")
 	}
 	digits = vecs[1].Col.([]int64)[0]
-	//}
-	//if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
-	//	vecs[0].Ref = 0
-	//	ceil.CeilUint64(vs, vs, digits)
-	//	return vecs[0], nil
-	//}
 	vec, err := process.Get(proc, 8*int64(len(vs)), types.Type{Oid: types.T_uint64, Size: 8})
 	if err != nil {
 		return nil, err
@@ -79,21 +61,10 @@ func FdsCeilUInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.V
 	return vec, nil
 }
 
-//ceil function's evaluation for arguments: [int64]
+// ceil function's evaluation for arguments: [int64]
 func FdsCeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vecs[0].Col.([]int64)
-	//if len(vecs) > 1 {
-	//	if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-	//		return nil, errors.New("the second argument of the ceil function must be an int64 constant")
-	//	}
-	//	digits = vecs[1].Col.([]int64)[0]
-	//}
-	//if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
-	//	vecs[0].Ref = 0
-	//	ceil.CeilInt64(vs, vs, digits)
-	//	return vecs[0], nil
-	//}
 	vec, err := process.Get(proc, 8*int64(len(vs)), types.Type{Oid: types.T_int64, Size: 8})
 	if err != nil {
 		return nil, err
@@ -106,21 +77,14 @@ func FdsCeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 	return vec, nil
 }
 
-//ceil function's evaluation for arguments: [int64, int64]
+// ceil function's evaluation for arguments: [int64, int64]
 func FdsCeilInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vecs[0].Col.([]int64)
-	//if len(vecs) > 1 {
 	if !vecs[1].IsConstant() || vecs[1].Typ.Oid != types.T_int64 {
 		return nil, errors.New("the second argument of the ceil function must be an int64 constant")
 	}
 	digits = vecs[1].Col.([]int64)[0]
-	//}
-	//if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
-	//	vecs[0].Ref = 0
-	//	ceil.CeilInt64(vs, vs, digits)
-	//	return vecs[0], nil
-	//}
 	vec, err := process.Get(proc, 8*int64(len(vs)), types.Type{Oid: types.T_int64, Size: 8})
 	if err != nil {
 		return nil, err
@@ -133,21 +97,10 @@ func FdsCeilInt64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	return vec, nil
 }
 
-//ceil function's evaluation for arguments: [float64]
+// ceil function's evaluation for arguments: [float64]
 func FdsCeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vecs[0].Col.([]float64)
-	//if len(vecs) > 1 {
-	//	if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-	//		return nil, errors.New("the second argument of the ceil function must be an int64 constant")
-	//	}
-	//	digits = vecs[1].Col.([]int64)[0]
-	//}
-	//if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
-	//	vecs[0].Ref = 0
-	//	ceil.CeilFloat64(vs, vs, digits)
-	//	return vecs[0], nil
-	//}
 	vec, err := process.Get(proc, 8*int64(len(vs)), types.Type{Oid: types.T_float64, Size: 8})
 	if err != nil {
 		return nil, err
@@ -164,17 +117,10 @@ func FdsCeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vecto
 func FdsCeilFloat64Int64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	digits := int64(0)
 	vs := vecs[0].Col.([]float64)
-	//if len(vecs) > 1 {
 	if !vecs[1].IsConstant() || vecs[1].Typ.Oid != types.T_int64 {
 		return nil, errors.New("the second argument of the ceil function must be an int64 constant")
 	}
 	digits = vecs[1].Col.([]int64)[0]
-	//}
-	//if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
-	//	vecs[0].Ref = 0
-	//	ceil.CeilFloat64(vs, vs, digits)
-	//	return vecs[0], nil
-	//}
 	vec, err := process.Get(proc, 8*int64(len(vs)), types.Type{Oid: types.T_float64, Size: 8})
 	if err != nil {
 		return nil, err

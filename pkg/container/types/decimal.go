@@ -261,11 +261,20 @@ func Decimal64Decimal64Mul(a Decimal64, b Decimal64) (result Decimal128) {
 	return result
 }
 
+func Decimal64Int64Mul(a Decimal64, b int64) (result Decimal64) {
+	result = Decimal64(int64(a) * b)
+	return result
+}
+
 func Decimal128Decimal128Mul(a Decimal128, b Decimal128) (result Decimal128) {
 	C.mul_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
 	return result
 }
 
+func Decimal128Int64Mul(a Decimal128, b int64) (result Decimal128) {
+	C.mul_int128_int64(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	return result
+}
 func InitDecimal128(value int64) (result Decimal128) {
 	if value == 1 {
 		C.init_int128_as_1(unsafe.Pointer(&result))
@@ -628,4 +637,8 @@ func Decimal128Decimal128Div(a, b Decimal128, aScale, bScale int32) (result Deci
 func Decimal64ToDecimal128(a Decimal64) (result Decimal128) {
 	C.int64_to_int128(unsafe.Pointer(&a), unsafe.Pointer(&result))
 	return result
+}
+
+func (a Decimal64) String() string {
+	return string("hahaha")
 }

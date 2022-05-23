@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/power"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Power function's evaluation for arguments: [float64, float]
@@ -56,22 +56,6 @@ func FdsPowerFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vector
 		nulls.Set(vec.Nsp, vs[1].Nsp)
 		vector.SetCol(vec, power.PowerScalarRightConst(rvs[0], lvs, rs))
 		return vec, nil
-		//case lv.Ref == 1 || lv.Ref == 0:
-		//	lv.Ref = 0
-		//	power.Power(lvs, rvs, lvs)
-		//	lv.Nsp = lv.Nsp.Or(rv.Nsp)
-		//	if rv.Ref == 0 {
-		//		process.Put(proc, rv)
-		//	}
-		//	return lv, nil
-		//case rv.Ref == 1 || rv.Ref == 0:
-		//	rv.Ref = 0
-		//	power.Power(lvs, rvs, rvs)
-		//	rv.Nsp = rv.Nsp.Or(lv.Nsp)
-		//	if lv.Ref == 0 {
-		//		process.Put(proc, lv)
-		//	}
-		//	return rv, nil
 	}
 	vec, err := process.Get(proc, 8*int64(len(lvs)), vs[0].Typ)
 	if err != nil {
@@ -81,11 +65,5 @@ func FdsPowerFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vector
 	rs = rs[:len(rvs)]
 	nulls.Or(vs[0].Nsp, vs[1].Nsp, vec.Nsp)
 	vector.SetCol(vec, power.Power(lvs, rvs, rs))
-	//if lv.Ref == 0 {
-	//	process.Put(proc, lv)
-	//}
-	//if rv.Ref == 0 {
-	//	process.Put(proc, rv)
-	//}
 	return vec, nil
 }

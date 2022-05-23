@@ -17,45 +17,546 @@
 package operator
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // div operator's evaluation for arguments: [Float32,Float32]
 func FdsOpDivFloat32Float32(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	//lv := vs[0]
-	//rv := vs[1]
-	//lc := lv.IsConstant()
-	//rc := rv.IsConstant()
-	return nil, nil
+	lv := vs[0]
+	rv := vs[1]
+	lc := lv.IsConstant()
+	rc := rv.IsConstant()
+	lvs, rvs := lv.Col.([]float32), rv.Col.([]float32)
+	rtl := 4
+	switch {
+	case lc && !rc:
+		if !nulls.Any(rv.Nsp) {
+			for _, v := range rvs {
+				if v == 0 {
+					return nil, ErrDivByZero
+				}
+			}
+			vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
+			if err != nil {
+				return nil, err
+			}
+			rs := encoding.DecodeFloat32Slice(vec.Data)
+			rs = rs[:len(rvs)]
+			nulls.Set(vec.Nsp, rv.Nsp)
+			vector.SetCol(vec, div.Float32DivScalar(lvs[0], rvs, rs))
+			return vec, nil
+		}
+		sels := process.GetSels(proc)
+		defer process.PutSels(sels, proc)
+		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+			if nulls.Contains(rv.Nsp, i) {
+				continue
+			}
+			if rvs[i] == 0 {
+				return nil, ErrDivByZero
+			}
+			sels = append(sels, int64(i))
+		}
+		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeFloat32Slice(vec.Data)
+		rs = rs[:len(rvs)]
+		nulls.Set(vec.Nsp, rv.Nsp)
+		vector.SetCol(vec, div.Float32DivScalarSels(lvs[0], rvs, rs, sels))
+		return vec, nil
+	case !lc && rc:
+		if rvs[0] == 0 {
+			return nil, ErrDivByZero
+		}
+		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeFloat32Slice(vec.Data)
+		rs = rs[:len(lvs)]
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, div.Float32DivByScalar(rvs[0], lvs, rs))
+		return vec, nil
+	}
+	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat32Slice(vec.Data)
+	rs = rs[:len(rvs)]
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+	if !nulls.Any(rv.Nsp) {
+		for _, v := range rvs {
+			if v == 0 {
+				return nil, ErrDivByZero
+			}
+		}
+		vector.SetCol(vec, div.Float32Div(lvs, rvs, rs))
+		return vec, nil
+	}
+	sels := process.GetSels(proc)
+	defer process.PutSels(sels, proc)
+	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+		if nulls.Contains(rv.Nsp, i) {
+			continue
+		}
+		if rvs[i] == 0 {
+			return nil, ErrDivByZero
+		}
+		sels = append(sels, int64(i))
+	}
+	vector.SetCol(vec, div.Float32DivSels(lvs, rvs, rs, sels))
+	return vec, nil
 }
 
 // div operator's evaluation for arguments: [Float64,Float64]
 func FdsOpDivFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	//lv := vs[0]
-	//rv := vs[1]
-	//lc := lv.IsConstant()
-	//rc := rv.IsConstant()
-	return nil, nil
-
+	lv := vs[0]
+	rv := vs[1]
+	lc := lv.IsConstant()
+	rc := rv.IsConstant()
+	lvs, rvs := lv.Col.([]float64), rv.Col.([]float64)
+	rtl := 8
+	switch {
+	case lc && !rc:
+		if !nulls.Any(rv.Nsp) {
+			for _, v := range rvs {
+				if v == 0 {
+					return nil, ErrDivByZero
+				}
+			}
+			vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
+			if err != nil {
+				return nil, err
+			}
+			rs := encoding.DecodeFloat64Slice(vec.Data)
+			rs = rs[:len(rvs)]
+			nulls.Set(vec.Nsp, rv.Nsp)
+			vector.SetCol(vec, div.Float64DivScalar(lvs[0], rvs, rs))
+			return vec, nil
+		}
+		sels := process.GetSels(proc)
+		defer process.PutSels(sels, proc)
+		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+			if nulls.Contains(rv.Nsp, i) {
+				continue
+			}
+			if rvs[i] == 0 {
+				return nil, ErrDivByZero
+			}
+			sels = append(sels, int64(i))
+		}
+		vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), lv.Typ)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeFloat64Slice(vec.Data)
+		rs = rs[:len(rvs)]
+		nulls.Set(vec.Nsp, rv.Nsp)
+		vector.SetCol(vec, div.Float64DivScalarSels(lvs[0], rvs, rs, sels))
+		return vec, nil
+	case !lc && rc:
+		if rvs[0] == 0 {
+			return nil, ErrDivByZero
+		}
+		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeFloat64Slice(vec.Data)
+		rs = rs[:len(lvs)]
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, div.Float64DivByScalar(rvs[0], lvs, rs))
+		return vec, nil
+	}
+	vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), lv.Typ)
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat64Slice(vec.Data)
+	rs = rs[:len(rvs)]
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+	if !nulls.Any(rv.Nsp) {
+		for _, v := range rvs {
+			if v == 0 {
+				return nil, ErrDivByZero
+			}
+		}
+		vector.SetCol(vec, div.Float64Div(lvs, rvs, rs))
+		return vec, nil
+	}
+	sels := process.GetSels(proc)
+	defer process.PutSels(sels, proc)
+	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+		if nulls.Contains(rv.Nsp, i) {
+			continue
+		}
+		if rvs[i] == 0 {
+			return nil, ErrDivByZero
+		}
+		sels = append(sels, int64(i))
+	}
+	vector.SetCol(vec, div.Float64DivSels(lvs, rvs, rs, sels))
+	return vec, nil
 }
 
 // div operator's evaluation for arguments: [decimal64,decimal64]
 func FdsOpDivDecimal64Decimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	//lv := vs[0]
-	//rv := vs[1]
-	//lc := lv.IsConstant()
-	//rc := rv.IsConstant()
-	return nil, nil
-
+	lv := vs[0]
+	rv := vs[1]
+	lc := lv.IsConstant()
+	rc := rv.IsConstant()
+	lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+	resultScale := lv.Typ.Scale
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+	switch {
+	case lc && !rc:
+		if !nulls.Any(rv.Nsp) {
+			for _, v := range rvs {
+				if int64(v) != 0 {
+					return nil, ErrDivByZero
+				}
+			}
+		}
+		sels := process.GetSels(proc)
+		defer process.PutSels(sels, proc)
+		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+			if nulls.Contains(rv.Nsp, i) {
+				continue
+			}
+			if int64(rvs[i]) == 0 {
+				return nil, ErrDivByZero
+			}
+			sels = append(sels, int64(i))
+		}
+		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeDecimal128Slice(vec.Data)
+		rs = rs[:len(rvs)]
+		nulls.Set(vec.Nsp, rv.Nsp)
+		vector.SetCol(vec, div.Decimal64DivScalarSels(lvs[0], rvs, lvScale, rvScale, rs, sels))
+		vec.Typ = resultTyp
+		return vec, nil
+	case !lc && rc:
+		if int64(rvs[0]) == 0 {
+			return nil, ErrDivByZero
+		}
+		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeDecimal128Slice(vec.Data)
+		rs = rs[:len(lvs)]
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, div.Decimal64DivByScalar(rvs[0], lvs, rvScale, lvScale, rs))
+		vec.Typ = resultTyp
+		return vec, nil
+	}
+	vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs = rs[:len(rvs)]
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+	if !nulls.Any(rv.Nsp) {
+		for _, v := range rvs {
+			if int64(v) == 0 {
+				return nil, ErrDivByZero
+			}
+		}
+		vector.SetCol(vec, div.Decimal64Div(lvs, rvs, lvScale, rvScale, rs))
+		vec.Typ = resultTyp
+		return vec, nil
+	}
+	sels := process.GetSels(proc)
+	defer process.PutSels(sels, proc)
+	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+		if nulls.Contains(rv.Nsp, i) {
+			continue
+		}
+		if int64(rvs[i]) == 0 {
+			return nil, ErrDivByZero
+		}
+		sels = append(sels, int64(i))
+	}
+	vector.SetCol(vec, div.Decimal64DivSels(lvs, rvs, lvScale, rvScale, rs, sels))
+	vec.Typ = resultTyp
+	return vec, nil
 }
 
 // div operator's evaluation for arguments: [decimal128,decimal128]
 func FdsOpDivDecimal128Decimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	//lv := vs[0]
-	//rv := vs[1]
-	//lc := lv.IsConstant()
-	//rc := rv.IsConstant()
-	return nil, nil
+	lv := vs[0]
+	rv := vs[1]
+	lc := lv.IsConstant()
+	rc := rv.IsConstant()
+	lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+	resultScale := lv.Typ.Scale
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+	switch {
+	case lc && !rc:
+		if !nulls.Any(rv.Nsp) {
+			for _, v := range rvs {
+				if types.Decimal128IsZero(v) {
+					return nil, ErrDivByZero
+				}
+			}
+			vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), lv.Typ)
+			if err != nil {
+				return nil, err
+			}
+			rs := encoding.DecodeDecimal128Slice(vec.Data)
+			rs = rs[:len(rvs)]
+			nulls.Set(vec.Nsp, rv.Nsp)
+			vector.SetCol(vec, div.Decimal128DivScalar(lvs[0], rvs, lvScale, rvScale, rs))
+			vec.Typ = resultTyp
+			return vec, nil
+		}
+		sels := process.GetSels(proc)
+		defer process.PutSels(sels, proc)
+		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+			if nulls.Contains(rv.Nsp, i) {
+				continue
+			}
+			if types.Decimal128IsZero(rvs[i]) {
+				return nil, ErrDivByZero
+			}
+			sels = append(sels, int64(i))
+		}
+		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), lv.Typ)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeDecimal128Slice(vec.Data)
+		rs = rs[:len(rvs)]
+		nulls.Set(vec.Nsp, rv.Nsp)
+		vector.SetCol(vec, div.Decimal128DivScalarSels(lvs[0], rvs, lvScale, rvScale, rs, sels))
+		vec.Typ = resultTyp
+		return vec, nil
+	case !lc && rc:
+		if types.Decimal128IsZero(rvs[0]) {
+			return nil, ErrDivByZero
+		}
+		vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+		if err != nil {
+			return nil, err
+		}
+		rs := encoding.DecodeDecimal128Slice(vec.Data)
+		rs = rs[:len(lvs)]
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, div.Decimal128DivByScalar(rvs[0], lvs, rvScale, lvScale, rs))
+		vec.Typ = resultTyp
+		return vec, nil
+	}
+	vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs = rs[:len(rvs)]
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+	if !nulls.Any(rv.Nsp) {
+		for _, v := range rvs {
+			if types.Decimal128IsZero(v) {
+				return nil, ErrDivByZero
+			}
+		}
+		vector.SetCol(vec, div.Decimal128Div(lvs, rvs, lvScale, rvScale, rs))
+		vec.Typ = resultTyp
+		return vec, nil
+	}
+	sels := process.GetSels(proc)
+	defer process.PutSels(sels, proc)
+	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+		if nulls.Contains(rv.Nsp, i) {
+			continue
+		}
+		if types.Decimal128IsZero(rvs[i]) {
+			return nil, ErrDivByZero
+		}
+		sels = append(sels, int64(i))
+	}
+	vector.SetCol(vec, div.Decimal128DivSels(lvs, rvs, lvScale, rvScale, rs, sels))
+	vec.Typ = resultTyp
+	return vec, nil
+}
 
+// integer div operator's evaluation for arguments: [float32,float32]
+func FdsOpIntegerDivFloat32Float32(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lv := vs[0]
+	rv := vs[1]
+	lc := lv.IsConstant()
+	rc := rv.IsConstant()
+
+	lvs, rvs := lv.Col.([]float32), rv.Col.([]float32)
+	rtl := 8
+
+	// there is no need to check if we can reuse vec because return type is diff to left and right types.
+	resultLength := len(lvs)
+	if !rc {
+		resultLength = len(rvs)
+	}
+	vec, err := process.Get(proc, int64(rtl)*int64(resultLength), types.Type{
+		Oid:  types.T_int64,
+		Size: 8,
+	})
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeInt64Slice(vec.Data)
+	rs = rs[:resultLength]
+
+	switch {
+	case lc && !rc:
+		if !nulls.Any(rv.Nsp) {
+			for _, v := range rvs {
+				if v == 0 {
+					return nil, ErrDivByZero
+				}
+			}
+			nulls.Set(vec.Nsp, rv.Nsp)
+			vector.SetCol(vec, div.Float32IntegerDivScalar(lvs[0], rvs, rs))
+			return vec, nil
+		}
+		sels := process.GetSels(proc)
+		defer process.PutSels(sels, proc)
+		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+			if nulls.Contains(rv.Nsp, i) {
+				continue
+			}
+			if rvs[i] == 0 {
+				return nil, ErrDivByZero
+			}
+			sels = append(sels, int64(i))
+		}
+		vector.SetCol(vec, div.Float32IntegerDivSels(lvs, rvs, rs, sels))
+		nulls.Set(vec.Nsp, lv.Nsp.Or(rv.Nsp))
+		return vec, nil
+	case !lc && rc:
+		if rvs[0] == 0 {
+			return nil, ErrDivByZero
+		}
+		vector.SetCol(vec, div.Float32IntegerDivByScalar(rvs[0], lvs, rs))
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+	if !nulls.Any(rv.Nsp) {
+		for _, v := range rvs {
+			if v == 0 {
+				return nil, ErrDivByZero
+			}
+		}
+		vector.SetCol(vec, div.Float32IntegerDiv(lvs, rvs, rs))
+		return vec, nil
+	}
+	sels := process.GetSels(proc)
+	defer process.PutSels(sels, proc)
+	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+		if nulls.Contains(rv.Nsp, i) {
+			continue
+		}
+		if rvs[i] == 0 {
+			return nil, ErrDivByZero
+		}
+		sels = append(sels, int64(i))
+	}
+	vector.SetCol(vec, div.Float32IntegerDivSels(lvs, rvs, rs, sels))
+	return vec, nil
+}
+
+// integer div operator's evaluation for arguments: [float64,float64]
+func FdsOpIntegerDivFloat64Float64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lv := vs[0]
+	rv := vs[1]
+	lc := lv.IsConstant()
+	rc := rv.IsConstant()
+
+	lvs, rvs := lv.Col.([]float64), rv.Col.([]float64)
+	rtl := 8
+
+	// there is no need to check if we can reuse vec because return type is diff to left and right types.
+	resultLength := len(lvs)
+	if !rc {
+		resultLength = len(rvs)
+	}
+	vec, err := process.Get(proc, int64(rtl)*int64(resultLength), types.Type{
+		Oid:  types.T_int64,
+		Size: 8,
+	})
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeInt64Slice(vec.Data)
+	rs = rs[:resultLength]
+
+	switch {
+	case lc && !rc:
+		if !nulls.Any(rv.Nsp) {
+			for _, v := range rvs {
+				if v == 0 {
+					return nil, ErrDivByZero
+				}
+			}
+			nulls.Set(vec.Nsp, rv.Nsp)
+			vector.SetCol(vec, div.Float64IntegerDivScalar(lvs[0], rvs, rs))
+			return vec, nil
+		}
+		sels := process.GetSels(proc)
+		defer process.PutSels(sels, proc)
+		for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+			if nulls.Contains(rv.Nsp, i) {
+				continue
+			}
+			if rvs[i] == 0 {
+				return nil, ErrDivByZero
+			}
+			sels = append(sels, int64(i))
+		}
+		vector.SetCol(vec, div.Float64IntegerDivSels(lvs, rvs, rs, sels))
+		nulls.Set(vec.Nsp, lv.Nsp.Or(rv.Nsp))
+		return vec, nil
+	case !lc && rc:
+		if rvs[0] == 0 {
+			return nil, ErrDivByZero
+		}
+		vector.SetCol(vec, div.Float64IntegerDivByScalar(rvs[0], lvs, rs))
+		nulls.Set(vec.Nsp, lv.Nsp)
+		return vec, nil
+	}
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+	if !nulls.Any(rv.Nsp) {
+		for _, v := range rvs {
+			if v == 0 {
+				return nil, ErrDivByZero
+			}
+		}
+		vector.SetCol(vec, div.Float64IntegerDiv(lvs, rvs, rs))
+		return vec, nil
+	}
+	sels := process.GetSels(proc)
+	defer process.PutSels(sels, proc)
+	for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+		if nulls.Contains(rv.Nsp, i) {
+			continue
+		}
+		if rvs[i] == 0 {
+			return nil, ErrDivByZero
+		}
+		sels = append(sels, int64(i))
+	}
+	vector.SetCol(vec, div.Float64IntegerDivSels(lvs, rvs, rs, sels))
+	return vec, nil
 }

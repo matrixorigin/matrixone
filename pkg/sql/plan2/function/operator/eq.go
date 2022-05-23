@@ -22,19 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/eq"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"unsafe"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
-var SelsType = types.Type{Oid: types.T_bool, Size: 1}
-
-//lv := vs[0]
-//rv := vs[1]
-// lc := lv.IsConstant()
-// rc := rv.IsConstant()
-
+// equal operator's evaluation for arguments: [int8]
 func FdsOpEuqalInt8(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := vs[0]
 	rv := vs[1]
@@ -55,9 +49,6 @@ func FdsOpEuqalInt8(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		} else {
 			vector.SetCol(vec, eq.Int8EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -70,9 +61,6 @@ func FdsOpEuqalInt8(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			vector.SetCol(vec, eq.Int8EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Int8EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -91,12 +79,6 @@ func FdsOpEuqalInt8(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vector.SetCol(vec, eq.Int8EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Int8Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -122,9 +104,6 @@ func FdsOpEuqalInt16(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		} else {
 			vector.SetCol(vec, eq.Int16EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -137,9 +116,6 @@ func FdsOpEuqalInt16(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 			vector.SetCol(vec, eq.Int16EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Int16EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -158,12 +134,6 @@ func FdsOpEuqalInt16(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(vec, eq.Int16EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Int16Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -189,9 +159,6 @@ func FdsOpEuqalInt32(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		} else {
 			vector.SetCol(vec, eq.Int32EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -204,9 +171,6 @@ func FdsOpEuqalInt32(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 			vector.SetCol(vec, eq.Int32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Int32EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -225,12 +189,6 @@ func FdsOpEuqalInt32(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(vec, eq.Int32EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Int32Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -256,9 +214,6 @@ func FdsOpEuqalInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		} else {
 			vector.SetCol(vec, eq.Int64EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -271,9 +226,6 @@ func FdsOpEuqalInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 			vector.SetCol(vec, eq.Int64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Int64EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -292,12 +244,6 @@ func FdsOpEuqalInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(vec, eq.Int64EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Int64Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -323,9 +269,6 @@ func FdsOpEuqalUint8(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		} else {
 			vector.SetCol(vec, eq.Uint8EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -338,9 +281,6 @@ func FdsOpEuqalUint8(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 			vector.SetCol(vec, eq.Uint8EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Uint8EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -359,12 +299,6 @@ func FdsOpEuqalUint8(vs []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(vec, eq.Uint8EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Uint8Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -390,9 +324,6 @@ func FdsOpEuqalUint16(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		} else {
 			vector.SetCol(vec, eq.Uint16EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -405,9 +336,6 @@ func FdsOpEuqalUint16(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 			vector.SetCol(vec, eq.Uint16EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Uint16EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -426,12 +354,6 @@ func FdsOpEuqalUint16(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		vector.SetCol(vec, eq.Uint16EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Uint16Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -457,9 +379,6 @@ func FdsOpEuqalUint32(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		} else {
 			vector.SetCol(vec, eq.Uint32EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -472,9 +391,6 @@ func FdsOpEuqalUint32(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 			vector.SetCol(vec, eq.Uint32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Uint32EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -493,12 +409,6 @@ func FdsOpEuqalUint32(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		vector.SetCol(vec, eq.Uint32EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Uint32Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -524,9 +434,6 @@ func FdsOpEuqalUint64(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		} else {
 			vector.SetCol(vec, eq.Uint64EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -539,9 +446,6 @@ func FdsOpEuqalUint64(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 			vector.SetCol(vec, eq.Uint64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Uint64EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -560,12 +464,6 @@ func FdsOpEuqalUint64(vs []*vector.Vector, proc *process.Process) (*vector.Vecto
 		vector.SetCol(vec, eq.Uint64EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Uint64Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -591,9 +489,6 @@ func FdsOpEuqalFloat32(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			vector.SetCol(vec, eq.Float32EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -606,9 +501,6 @@ func FdsOpEuqalFloat32(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 			vector.SetCol(vec, eq.Float32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Float32EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -627,12 +519,6 @@ func FdsOpEuqalFloat32(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vector.SetCol(vec, eq.Float32EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Float32Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -658,9 +544,6 @@ func FdsOpEuqalFloat64(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			vector.SetCol(vec, eq.Float64EqScalar(lvs[0], rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -673,9 +556,6 @@ func FdsOpEuqalFloat64(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 			vector.SetCol(vec, eq.Float64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Float64EqScalar(rvs[0], lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -694,12 +574,6 @@ func FdsOpEuqalFloat64(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vector.SetCol(vec, eq.Float64EqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Float64Eq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -725,9 +599,6 @@ func FdsOpEuqalVarchar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			vector.SetCol(vec, eq.StrEqScalar(lvs.Data, rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs.Lengths)), SelsType)
@@ -740,9 +611,6 @@ func FdsOpEuqalVarchar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 			vector.SetCol(vec, eq.StrEqNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.StrEqScalar(rvs.Data, lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -761,12 +629,6 @@ func FdsOpEuqalVarchar(vs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vector.SetCol(vec, eq.StrEqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.StrEq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -792,9 +654,6 @@ func FdsOpEuqalChar(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		} else {
 			vector.SetCol(vec, eq.StrEqScalar(lvs.Data, rvs, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs.Lengths)), SelsType)
@@ -807,9 +666,6 @@ func FdsOpEuqalChar(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			vector.SetCol(vec, eq.StrEqNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.StrEqScalar(rvs.Data, lvs, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -828,12 +684,6 @@ func FdsOpEuqalChar(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vector.SetCol(vec, eq.StrEqNullable(lvs, rvs, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.StrEq(lvs, rvs, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -860,9 +710,6 @@ func FdsOpEuqalDate(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		} else {
 			vector.SetCol(vec, eq.Int32EqScalar(int32(lvs[0]), rvsInInt32, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		lvsInInt32 := *(*[]int32)(unsafe.Pointer(&lvs))
@@ -876,9 +723,6 @@ func FdsOpEuqalDate(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 			vector.SetCol(vec, eq.Int32EqNullableScalar(int32(rvs[0]), lvsInInt32, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Int32EqScalar(int32(rvs[0]), lvsInInt32, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -899,12 +743,6 @@ func FdsOpEuqalDate(vs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vector.SetCol(vec, eq.Int32EqNullable(lvsInInt32, rvsInInt32, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Int32Eq(lvsInInt32, rvsInInt32, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -931,9 +769,6 @@ func FdsOpEuqalDatetime(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		} else {
 			vector.SetCol(vec, eq.Int64EqScalar(int64(lvs[0]), rvsInInt64, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		lvsInInt64 := *(*[]int64)(unsafe.Pointer(&lvs))
@@ -947,9 +782,6 @@ func FdsOpEuqalDatetime(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 			vector.SetCol(vec, eq.Int64EqNullableScalar(int64(rvs[0]), lvsInInt64, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Int64EqScalar(int64(rvs[0]), lvsInInt64, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -970,12 +802,6 @@ func FdsOpEuqalDatetime(vs []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(vec, eq.Int64EqNullable(lvsInInt64, rvsInInt64, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Int64Eq(lvsInInt64, rvsInInt64, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -1002,9 +828,6 @@ func FdsOpEuqalTimestamp(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		} else {
 			vector.SetCol(vec, eq.Int64EqScalar(int64(lvs[0]), rvsInInt64, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		lvsInInt64 := *(*[]int64)(unsafe.Pointer(&lvs))
@@ -1018,9 +841,6 @@ func FdsOpEuqalTimestamp(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 			vector.SetCol(vec, eq.Int64EqNullableScalar(int64(rvs[0]), lvsInInt64, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Int64EqScalar(int64(rvs[0]), lvsInInt64, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -1041,12 +861,6 @@ func FdsOpEuqalTimestamp(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(vec, eq.Int64EqNullable(lvsInInt64, rvsInInt64, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Int64Eq(lvsInInt64, rvsInInt64, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -1072,9 +886,6 @@ func FdsOpEuqalDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		} else {
 			vector.SetCol(vec, eq.Decimal64EqScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -1087,9 +898,6 @@ func FdsOpEuqalDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 			vector.SetCol(vec, eq.Decimal64EqNullableScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Decimal64EqScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -1108,12 +916,6 @@ func FdsOpEuqalDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(vec, eq.Decimal64EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Decimal64Eq(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }
@@ -1139,9 +941,6 @@ func FdsOpEuqalDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.V
 		} else {
 			vector.SetCol(vec, eq.Decimal128EqScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
 		}
-		if rv.Ref == 0 {
-			process.Put(proc, rv)
-		}
 		return vec, nil
 	case !lc && rc:
 		vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
@@ -1154,9 +953,6 @@ func FdsOpEuqalDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.V
 			vector.SetCol(vec, eq.Decimal128EqNullableScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, lv.Nsp.Np, rs))
 		} else {
 			vector.SetCol(vec, eq.Decimal128EqScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, rs))
-		}
-		if lv.Ref == 0 {
-			process.Put(proc, lv)
 		}
 		return vec, nil
 	}
@@ -1175,12 +971,6 @@ func FdsOpEuqalDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(vec, eq.Decimal128EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, lv.Nsp.Np, rs))
 	default:
 		vector.SetCol(vec, eq.Decimal128Eq(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
-	}
-	if lv.Ref == 0 {
-		process.Put(proc, lv)
-	}
-	if rv.Ref == 0 {
-		process.Put(proc, rv)
 	}
 	return vec, nil
 }

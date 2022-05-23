@@ -54,7 +54,8 @@ type BlockReader interface {
 	io.Closer
 	ID() uint64
 	String() string
-	GetByFilter(filter Filter) (uint32, error)
+	IsUncommitted() bool
+	GetByFilter(filter *Filter) (uint32, error)
 	GetColumnDataByName(string, *bytes.Buffer, *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(int, *bytes.Buffer, *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() interface{}

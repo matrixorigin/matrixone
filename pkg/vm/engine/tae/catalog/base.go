@@ -82,6 +82,12 @@ type BaseEntry struct {
 	CreateAt, DeleteAt uint64
 }
 
+func NewReplayBaseEntry() *BaseEntry {
+	return &BaseEntry{
+		RWMutex: &sync.RWMutex{},
+	}
+}
+
 func (be *BaseEntry) MaxCommittedTS() uint64 {
 	if be.Txn == nil {
 		if be.DeleteAt != 0 {
@@ -266,6 +272,20 @@ func (be *BaseEntry) DeleteAfter(ts uint64) bool {
 
 func (be *BaseEntry) HasCreated() bool {
 	return be.CreateAt != 0
+}
+
+func (be *BaseEntry) ApplyDeleteCmd(ts uint64, index *wal.Index) error {
+	if be.HasDropped() || ts < be.CreateAt {
+		panic("logic error")
+	}
+	be.PrevCommit = &CommitInfo{
+		CurrOp:   be.CurrOp,
+		LogIndex: be.LogIndex,
+	}
+	be.DeleteAt = ts
+	be.CurrOp = OpSoftDelete
+	be.LogIndex = index
+	return nil
 }
 
 func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {

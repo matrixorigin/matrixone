@@ -20,10 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-//pi function's evaluation for arguments: []
+// pi function's evaluation for arguments: []
 func FdsPi(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vs) != 0 {
 		return nil, errors.New("pi() takes no arguments")

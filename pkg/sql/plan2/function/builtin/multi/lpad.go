@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lpad"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Lpad function's evaluation for arguments: [varchar, int64, varchar]
@@ -64,19 +64,6 @@ func FdsLpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 			return vec, nil
 		}
 	}
-	//use vecs[0] as return
-	//if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
-	//	vecs[0].Ref = 0
-	//	temp := lpad.LpadVarchar(vs, lens, padds)
-	//	vs.Data = make([]byte, len(temp.Data))
-	//	vs.Lengths = make([]uint32, len(temp.Lengths))
-	//	vs.Offsets = make([]uint32, len(temp.Offsets))
-	//	copy(vs.Data, temp.Data)
-	//	copy(vs.Lengths, temp.Lengths)
-	//	copy(vs.Offsets, temp.Offsets)
-	//	return vecs[0], nil
-	//}
-
 	vec, err := process.Get(proc, 24*int64(len(vs.Lengths)), types.Type{Oid: types.T_varchar, Size: 24})
 	if err != nil {
 		return nil, err

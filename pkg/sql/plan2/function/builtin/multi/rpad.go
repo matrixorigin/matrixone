@@ -20,27 +20,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/rpad"
-	"github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// Lpad function's evaluation for arguments: [varchar, int64, varchar]
+// Lpad function's evaluation for return varchar
 func FdsRpadVarchar(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// gets all args
 	strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
 	isConst := function.GetIsConstSliceFromVectors(origVecs)
 
-	//if origVecs[0].Ref == 1 || origVecs[1].Ref == 0 {
-	//	// uses the original vector to store our result if it isn't needed anymore
-	//	origVecs[0].Ref = 0
-	//	result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	origVecs[0].Nsp = nsp
-	//	vector.SetCol(origVecs[0], result)
-	//	return origVecs[0], nil
-	//}
 	// gets a new vector to store our result
 	resultVec, err := process.Get(proc, 24*int64(len(strs.Lengths)), types.Type{Oid: types.T_varchar, Size: 24})
 	if err != nil {
@@ -55,22 +44,12 @@ func FdsRpadVarchar(origVecs []*vector.Vector, proc *process.Process) (*vector.V
 	return resultVec, nil
 }
 
+// Lpad function's evaluation for return char
 func FdsRpadChar(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// gets all args
 	strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
 	isConst := function.GetIsConstSliceFromVectors(origVecs)
-	//if origVecs[0].Ref == 1 || origVecs[1].Ref == 0 {
-	//	// uses the original vector to store our result if it isn't needed anymore
-	//	origVecs[0].Ref = 0
-	//	result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	origVecs[0].Nsp = nsp
-	//	vector.SetCol(origVecs[0], result)
-	//	return origVecs[0], nil
-	//}
 	// gets a new vector to store our result
 	resultVec, err := process.Get(proc, 24*int64(len(strs.Lengths)), types.Type{Oid: types.T_char, Size: 24})
 	if err != nil {

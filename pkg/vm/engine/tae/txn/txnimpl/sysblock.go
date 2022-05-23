@@ -14,21 +14,21 @@ import (
 
 type txnSysBlock struct {
 	*txnBlock
-	table   *catalog.TableEntry
+	table   *txnTable
 	catalog *catalog.Catalog
 }
 
-func newSysBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnSysBlock {
+func newSysBlock(table *txnTable, meta *catalog.BlockEntry) *txnSysBlock {
 	blk := &txnSysBlock{
-		txnBlock: newBlock(txn, meta),
-		table:    meta.GetSegment().GetTable(),
+		txnBlock: newBlock(table, meta),
+		table:    table,
 		catalog:  meta.GetSegment().GetTable().GetCatalog(),
 	}
 	return blk
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return sysTableNames[blk.table.GetSchema().Name]
+	return sysTableNames[blk.table.entry.GetSchema().Name]
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
@@ -129,6 +129,19 @@ func (blk *txnSysBlock) Rows() int {
 	}
 }
 
+func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
+	attrName := schema.ColDefs[colIdx].Name
+	switch schema.Name {
+	case catalog.SystemTable_Columns_Name:
+		return attrName == catalog.SystemColAttr_Name || attrName == catalog.SystemColAttr_DBName || attrName == catalog.SystemColAttr_RelName
+	case catalog.SystemTable_Table_Name:
+		return attrName == catalog.SystemRelAttr_DBName || attrName == catalog.SystemRelAttr_Name
+	case catalog.SystemTable_DB_Name:
+		return attrName == catalog.SystemDBAttr_Name
+	}
+	return int(schema.PrimaryKey) == colIdx
+}
+
 func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
@@ -139,21 +152,21 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_Name:
 				compute.AppendValue(colData, []byte(colDef.Name))
 			case catalog.SystemColAttr_Num:
-				compute.AppendValue(colData, uint32(i+1))
+				compute.AppendValue(colData, int32(i+1))
 			case catalog.SystemColAttr_Type:
-				compute.AppendValue(colData, uint32(colDef.Type.Oid))
+				compute.AppendValue(colData, int32(colDef.Type.Oid))
 			case catalog.SystemColAttr_DBName:
 				compute.AppendValue(colData, []byte(table.GetDB().GetName()))
 			case catalog.SystemColAttr_RelName:
 				compute.AppendValue(colData, []byte(table.GetSchema().Name))
 			case catalog.SystemColAttr_ConstraintType:
-				if int(table.GetSchema().PrimaryKey) == colIdx {
+				if blk.isPrimaryKey(table.GetSchema(), i) {
 					compute.AppendValue(colData, []byte(catalog.SystemColPKConstraint))
 				} else {
 					compute.AppendValue(colData, []byte(catalog.SystemColNoConstraint))
 				}
 			case catalog.SystemColAttr_Length:
-				compute.AppendValue(colData, uint32(colDef.Type.Size))
+				compute.AppendValue(colData, int32(colDef.Type.Size))
 			case catalog.SystemColAttr_NullAbility:
 				compute.AppendValue(colData, colDef.NullAbility) // TODO
 			case catalog.SystemColAttr_HasExpr:
@@ -201,9 +214,9 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 		case catalog.SystemRelAttr_Comment:
 			compute.AppendValue(colData, []byte(table.GetSchema().Comment))
 		case catalog.SystemRelAttr_Persistence:
-			compute.AppendValue(colData, catalog.SystemPersistRel)
+			compute.AppendValue(colData, []byte(catalog.SystemPersistRel))
 		case catalog.SystemRelAttr_Kind:
-			compute.AppendValue(colData, catalog.SystemOrdinaryRel)
+			compute.AppendValue(colData, []byte(catalog.SystemOrdinaryRel))
 		case catalog.SystemRelAttr_CreateSQL:
 			compute.AppendValue(colData, []byte("todosql"))
 		default:
