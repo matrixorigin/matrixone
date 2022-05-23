@@ -22,3 +22,10 @@ type AvgRing struct {
 	Vs  []float64
 	Typ types.Type
 }
+
+type DecimalRing struct {
+	Da  []byte
+	Ns  []int64
+	Vs  []types.Decimal128
+	Typ types.Type
+}

@@ -625,6 +625,11 @@ func Decimal64Decimal64Div(a, b Decimal64, aScale, bScale int32) (result Decimal
 	return result
 }
 
+func Decimal128Int64Div(a Decimal128, b int64) (result Decimal128) {
+	aScaled := a
+	C.div_int128_int64(unsafe.Pointer(&aScaled), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	return result
+}
 func Decimal128Decimal128Div(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
 	aScaled := a
 	for i := 0; i < int(bScale); i++ {
@@ -637,8 +642,4 @@ func Decimal128Decimal128Div(a, b Decimal128, aScale, bScale int32) (result Deci
 func Decimal64ToDecimal128(a Decimal64) (result Decimal128) {
 	C.int64_to_int128(unsafe.Pointer(&a), unsafe.Pointer(&result))
 	return result
-}
-
-func (a Decimal64) String() string {
-	return string("hahaha")
 }
