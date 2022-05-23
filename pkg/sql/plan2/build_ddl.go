@@ -217,6 +217,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			},
 		})
 	}
+
 	return nil
 }
 
