@@ -88,14 +88,14 @@ func (seg *localSegment) ApplyAppend() {
 		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
 		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, seg.table.store.txn); err != nil {
-			return
+			panic(err)
 		}
 		ctx.driver.Close()
 		id := ctx.driver.GetID()
 		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
 		logutil.Debugf(info.String())
 		if err = appendNode.PrepareCommit(); err != nil {
-			return
+			panic(err)
 		}
 		seg.table.txnEntries = append(seg.table.txnEntries, appendNode)
 	}

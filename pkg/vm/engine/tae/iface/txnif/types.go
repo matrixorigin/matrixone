@@ -148,6 +148,8 @@ type DeleteNode interface {
 	GetChain() DeleteChain
 	RangeDeleteLocked(start, end uint32)
 	GetCardinalityLocked() uint32
+	IsDeletedLocked(row uint32) bool
+	OnApply() error
 }
 
 type UpdateNode interface {

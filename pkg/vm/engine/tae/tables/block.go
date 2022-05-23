@@ -92,6 +92,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:    bufMgr,
 	}
 	if meta.IsAppendable() {
+		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
 		node = newNode(bufMgr, block, file)
 		block.node = node
 		schema := meta.GetSchema()
@@ -705,6 +706,31 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 		return blk.ablkGetByFilter(txn.GetStartTS(), filter)
 	}
 	return blk.blkGetByFilter(txn.GetStartTS(), filter)
+}
+
+func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
+	var row uint32
+	h, err := blk.node.TryPin()
+	if err != nil {
+		return
+	}
+	defer h.Close()
+
+	index := blk.indexHolder.(acif.IAppendableBlockIndexHolder)
+	blk.mvcc.RLock()
+	defer blk.mvcc.RUnlock()
+	vec, err := blk.node.data.GetVectorByAttr(int(blk.meta.GetSchema().PrimaryKey))
+	if err != nil {
+		return err
+	}
+	if gen.HasNext() {
+		row = gen.Next()
+		v, _ := vec.GetValue(int(row))
+		if err = index.Delete(v); err != nil {
+			return
+		}
+	}
+	return
 }
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err error) {
