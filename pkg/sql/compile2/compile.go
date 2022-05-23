@@ -73,14 +73,59 @@ func (c *compile) Run(ts uint64) (err error) {
 	switch c.scope.Magic {
 	case Merge:
 		return nil
+	case CreateDatabase:
+		return c.scope.CreateDatabase(ts, c.proc.Snapshot, c.e)
+	case DropDatabase:
+		return c.scope.DropDatabase(ts, c.proc.Snapshot, c.e)
+	case CreateTable:
+		return c.scope.CreateTable(ts, c.proc.Snapshot, c.e)
+	case DropTable:
+		return c.scope.DropTable(ts, c.proc.Snapshot, c.e)
+	case CreateIndex:
+		return c.scope.CreateIndex(ts, c.proc.Snapshot, c.e)
+	case DropIndex:
+		return c.scope.DropIndex(ts, c.proc.Snapshot, c.e)
 	}
 	return nil
 }
 
 func (c *compile) compileScope(pn *plan.Plan) (*Scope, error) {
-	switch pn.Plan.(type) {
+	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
 		return nil, nil
+	case *plan.Plan_Ddl:
+		switch qry.Ddl.DdlType {
+		case plan.DataDefinition_CREATE_DATABASE:
+			return &Scope{
+				Magic: CreateDatabase,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_DROP_DATABASE:
+			return &Scope{
+				Magic: DropDatabase,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_CREATE_TABLE:
+			return &Scope{
+				Magic: CreateTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_DROP_TABLE:
+			return &Scope{
+				Magic: DropTable,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_CREATE_INDEX:
+			return &Scope{
+				Magic: CreateIndex,
+				Plan:  pn,
+			}, nil
+		case plan.DataDefinition_DROP_INDEX:
+			return &Scope{
+				Magic: DropIndex,
+				Plan:  pn,
+			}, nil
+		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }
@@ -127,7 +172,7 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 
 func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
-	case plan.Node_VALUE_SCAN:
+	//	case plan.Node_VALUE_SCAN:
 	case plan.Node_TABLE_SCAN:
 		snap := engine.Snapshot(c.proc.Snapshot)
 		db, err := c.e.Database(n.ObjRef.SchemaName, snap)
@@ -160,21 +205,34 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			ss[i].Proc.UnixTime = c.proc.UnixTime
 			ss[i].Proc.Snapshot = c.proc.Snapshot
 		}
-		return ss, nil
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_PROJECT:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err
 		}
-		return compileProjection(n, compileRestrict(n, ss)), nil
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_AGG:
-	case plan.Node_JOIN:
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileGroup(n, ss)
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+		//	case plan.Node_JOIN:
 	case plan.Node_SORT:
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		ss = c.compileSort(n, ss)
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	default:
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}
-	return nil, nil
 }
 
-func compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
+func (c *compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	if len(n.WhereList) == 0 {
 		return ss
 	}
@@ -187,7 +245,7 @@ func compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func compileProjection(n *plan.Node, ss []*Scope) []*Scope {
+func (c *compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Projection,
@@ -195,4 +253,236 @@ func compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 		})
 	}
 	return ss
+}
+
+func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
+	switch {
+	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
+		return c.compileTop(n, ss)
+	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
+		return c.compileOffset(n, c.compileOrder(n, ss))
+	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset and limit
+		return c.compileLimit(n, c.compileOffset(n, c.compileOrder(n, ss)))
+	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) == 0: // limit
+		return c.compileLimit(n, ss)
+	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) == 0: // offset
+		return c.compileOffset(n, ss)
+	default: // n.Limit != nil && n.Offset != nil && len(n.OrderBy) == 0
+		return c.compileLimit(n, c.compileOffset(n, ss))
+	}
+}
+
+func (c *compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op:  overload.Top,
+			Arg: constructTop(n, c.proc),
+		})
+	}
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = c.proc.Id
+	rs.Proc.Lim = c.proc.Lim
+	rs.Proc.UnixTime = c.proc.UnixTime
+	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:  overload.MergeTop,
+		Arg: constructMergeTop(n, c.proc),
+	})
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return []*Scope{rs}
+}
+
+func (c *compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op:  overload.Order,
+			Arg: constructOrder(n, c.proc),
+		})
+	}
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = c.proc.Id
+	rs.Proc.Lim = c.proc.Lim
+	rs.Proc.UnixTime = c.proc.UnixTime
+	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:  overload.MergeOrder,
+		Arg: constructMergeOrder(n, c.proc),
+	})
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return []*Scope{rs}
+}
+
+func (c *compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op:  overload.Offset,
+			Arg: constructOffset(n, c.proc),
+		})
+	}
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = c.proc.Id
+	rs.Proc.Lim = c.proc.Lim
+	rs.Proc.UnixTime = c.proc.UnixTime
+	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:  overload.MergeTop,
+		Arg: constructMergeTop(n, c.proc),
+	})
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return []*Scope{rs}
+}
+
+func (c *compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op:  overload.Limit,
+			Arg: constructLimit(n, c.proc),
+		})
+	}
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = c.proc.Id
+	rs.Proc.Lim = c.proc.Lim
+	rs.Proc.UnixTime = c.proc.UnixTime
+	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:  overload.MergeLimit,
+		Arg: constructMergeLimit(n, c.proc),
+	})
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return []*Scope{rs}
+}
+
+func (c *compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op:  overload.Group,
+			Arg: constructGroup(n),
+		})
+	}
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = c.proc.Id
+	rs.Proc.Lim = c.proc.Lim
+	rs.Proc.UnixTime = c.proc.UnixTime
+	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:  overload.MergeGroup,
+		Arg: constructMergeGroup(n, true),
+	})
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return []*Scope{rs}
 }

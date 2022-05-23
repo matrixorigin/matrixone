@@ -126,6 +126,7 @@ install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.45.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
 	@go install github.com/google/go-licenses@latest
+	@go install honnef.co/go/tools/cmd/staticcheck@latest
 
 # TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
 DIRS=pkg/... \
@@ -136,6 +137,7 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconv
 
 .PHONY: static-check
 static-check: generate
+	@staticcheck -checks SA9001,S1009,S1023,S1002,S1025,ST1017,ST1019,S1019,S1004,SA1030,S1011,S1008,SA1024,SA4003,S1039,S1028,SA6005 ./...
 	@go vet -vettool=$(which molint) ./...
 	@go-licenses check ./...
 	@for p in $(DIRS); do \

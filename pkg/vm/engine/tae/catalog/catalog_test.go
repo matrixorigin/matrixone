@@ -41,7 +41,7 @@ func TestCreateDB1(t *testing.T) {
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 
 	name := fmt.Sprintf("%s-%d", t.Name(), 1)
 	db1, err := txn1.CreateDatabase(name)
@@ -60,7 +60,7 @@ func TestCreateDB1(t *testing.T) {
 	_, err = txn1.CreateDatabase(name)
 	assert.Equal(t, ErrDuplicate, err)
 
-	txn2 := txnMgr.StartTxn(nil)
+	txn2, _ := txnMgr.StartTxn(nil)
 
 	_, err = txn2.CreateDatabase(name)
 	assert.Equal(t, txnif.TxnWWConflictErr, err)
@@ -80,7 +80,7 @@ func TestCreateDB1(t *testing.T) {
 	_, err = txn2.DropDatabase(name)
 	assert.Equal(t, ErrNotFound, err)
 
-	txn3 := txnMgr.StartTxn(nil)
+	txn3, _ := txnMgr.StartTxn(nil)
 	_, err = txn3.DropDatabase(name)
 	assert.Nil(t, err)
 	// assert.True(t, db1.(*mcokDBHandle).entry.IsDroppedUncommitted())
@@ -96,7 +96,7 @@ func TestCreateDB1(t *testing.T) {
 	}, true)
 	assert.Equal(t, 3, cnt)
 
-	txn4 := txnMgr.StartTxn(nil)
+	txn4, _ := txnMgr.StartTxn(nil)
 
 	h, err := txn4.GetDatabase(name)
 	assert.Nil(t, err)
@@ -127,7 +127,7 @@ func TestTableEntry1(t *testing.T) {
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 	name := "db1"
 	db1, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
@@ -145,7 +145,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = db1.CreateRelation(schema)
 	assert.Equal(t, ErrDuplicate, err)
 
-	txn2 := txnMgr.StartTxn(nil)
+	txn2, _ := txnMgr.StartTxn(nil)
 	_, err = txn2.GetDatabase(schema.Name)
 	assert.Equal(t, err, ErrNotFound)
 
@@ -161,7 +161,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = txn2.DropDatabase(name)
 	assert.Equal(t, err, ErrNotFound)
 
-	txn3 := txnMgr.StartTxn(nil)
+	txn3, _ := txnMgr.StartTxn(nil)
 	db, err := txn3.GetDatabase(name)
 	assert.Nil(t, err)
 
@@ -172,7 +172,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = db.GetRelationByName(schema.Name)
 	assert.Equal(t, ErrNotFound, err)
 
-	txn4 := txnMgr.StartTxn(nil)
+	txn4, _ := txnMgr.StartTxn(nil)
 	db, err = txn4.GetDatabase(name)
 	assert.Nil(t, err)
 	_, err = db.GetRelationByName(schema.Name)
@@ -186,7 +186,7 @@ func TestTableEntry1(t *testing.T) {
 
 	t.Log(tb1.String())
 
-	txn5 := txnMgr.StartTxn(nil)
+	txn5, _ := txnMgr.StartTxn(nil)
 	db, err = txn5.GetDatabase(name)
 	assert.Nil(t, err)
 	_, err = db.GetRelationByName(schema.Name)
@@ -202,7 +202,7 @@ func TestTableEntry2(t *testing.T) {
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 	name := "db1"
 	db, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
@@ -220,7 +220,7 @@ func TestTableEntry2(t *testing.T) {
 	err = txn1.Commit()
 	assert.Nil(t, err)
 
-	txn2 := txnMgr.StartTxn(nil)
+	txn2, _ := txnMgr.StartTxn(nil)
 	db, err = txn2.GetDatabase(name)
 	assert.Nil(t, err)
 	rel, err := db.DropRelationByName(schema.Name)
@@ -233,7 +233,7 @@ func TestTableEntry2(t *testing.T) {
 	var wg sync.WaitGroup
 	txns := []txnif.AsyncTxn{txn2}
 	for i := 0; i < 10; i++ {
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		txns = append(txns, txn)
 	}
 	now := time.Now()
@@ -271,7 +271,7 @@ func TestDB1(t *testing.T) {
 	var wg sync.WaitGroup
 	flow := func() {
 		defer wg.Done()
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.GetDatabase(name)
 		if err == ErrNotFound {
 			_, err = txn.CreateDatabase(name)
@@ -308,7 +308,7 @@ func TestTable1(t *testing.T) {
 	var wg sync.WaitGroup
 	flow := func() {
 		defer wg.Done()
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		db, err := txn.GetDatabase(name)
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(tbName)
@@ -329,7 +329,7 @@ func TestTable1(t *testing.T) {
 		// t.Log(rel.String())
 	}
 	{
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.CreateDatabase(name)
 		assert.Nil(t, err)
 		err = txn.Commit()
@@ -451,7 +451,7 @@ func TestSegment1(t *testing.T) {
 	defer txnMgr.Stop()
 	name := "db"
 	tbName := "tb"
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 	db, err := catalog.CreateDBEntry(name, txn1)
 	assert.Nil(t, err)
 	schema := MockSchema(1)

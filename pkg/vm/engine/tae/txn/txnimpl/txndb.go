@@ -373,7 +373,7 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 	}
 	for _, table := range db.tables {
 		if err = table.CollectCmd(cmdMgr); err != nil {
-			panic(err)
+			return
 		}
 	}
 	if db.dropEntry != nil {

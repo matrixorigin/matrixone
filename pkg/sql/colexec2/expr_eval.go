@@ -68,8 +68,8 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_Col:
 		return bat.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
-		fid, overloadIndex := int(t.F.Func.GetSchema()), int(t.F.Func.GetDb())
-		f, err := function.GetFunctionByIndex(fid, overloadIndex)
+		overloadId := t.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
 		if err != nil {
 			return nil, err
 		}
@@ -90,5 +90,31 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))
+	}
+}
+
+// RewriteFilterExprList will convert an expression list to be an AndExpr
+func RewriteFilterExprList(list []*plan.Expr) *plan.Expr {
+	l := len(list)
+	if l == 0 {
+		return nil
+	} else if l == 1 {
+		return list[0]
+	} else {
+		left := list[0]
+		right := RewriteFilterExprList(list[1:])
+		return &plan.Expr{
+			Typ:  left.Typ,
+			Expr: makeAndExpr(left, right),
+		}
+	}
+}
+
+func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
+	return &plan.Expr_F{
+		F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID},
+			Args: []*plan.Expr{left, right},
+		},
 	}
 }

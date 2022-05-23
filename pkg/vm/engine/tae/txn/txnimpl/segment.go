@@ -35,6 +35,7 @@ type segmentIt struct {
 	linkIt *common.LinkIt
 	curr   *catalog.SegmentEntry
 	table  *txnTable
+	err    error
 }
 
 type composedSegmentIt struct {
@@ -47,10 +48,18 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 		linkIt: table.entry.MakeSegmentIt(true),
 		table:  table,
 	}
+	var err error
+	var ok bool
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.SegmentEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.table.store.txn, curr.RWMutex) {
+		ok, err = curr.TxnCanRead(it.table.store.txn, curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			return it
+		}
+		if ok {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -70,9 +79,16 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 
 func (it *segmentIt) Close() error { return nil }
 
-func (it *segmentIt) Valid() bool { return it.linkIt.Valid() }
+func (it *segmentIt) GetError() error { return it.err }
+func (it *segmentIt) Valid() bool {
+	if it.err != nil {
+		return false
+	}
+	return it.linkIt.Valid()
+}
 
 func (it *segmentIt) Next() {
+	var err error
 	valid := true
 	for {
 		it.linkIt.Next()
@@ -83,8 +99,12 @@ func (it *segmentIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.SegmentEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
 		if valid {
 			it.curr = entry
 			break
@@ -104,6 +124,9 @@ func (cit *composedSegmentIt) GetSegment() handle.Segment {
 }
 
 func (cit *composedSegmentIt) Valid() bool {
+	if cit.err != nil {
+		return false
+	}
 	if cit.uncommitted != nil {
 		return true
 	}

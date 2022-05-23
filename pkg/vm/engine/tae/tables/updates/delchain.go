@@ -76,7 +76,7 @@ func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, revers
 	chain.Loop(wrapped, reverse)
 }
 
-func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool) {
+func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool, err error) {
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Skip txn that started after ts
 		if n.GetStartTS() > ts {
@@ -97,12 +97,15 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool) {
 				deleted = true
 			} else {
 				state := txn.GetTxnState(true)
+				// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 				if state == txnif.TxnStateCommitted {
 					deleted = true
+				} else if state == txnif.TxnStateUnknown {
+					err = txnif.TxnInternalErr
 				}
 			}
 		}
-		if n.IsMerged() || deleted {
+		if n.IsMerged() || deleted || err != nil {
 			return false
 		}
 		return true
@@ -175,9 +178,17 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 }
 
 // [startTs, endTs)
-func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap, indexes []*wal.Index) {
-	startNode := chain.CollectDeletesLocked(startTs, true).(*DeleteNode)
-	endNode := chain.CollectDeletesLocked(endTs-1, true).(*DeleteNode)
+func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap, indexes []*wal.Index, err error) {
+	n, err := chain.CollectDeletesLocked(startTs, true)
+	if err != nil {
+		return
+	}
+	startNode := n.(*DeleteNode)
+	n, err = chain.CollectDeletesLocked(endTs-1, true)
+	if err != nil {
+		return
+	}
+	endNode := n.(*DeleteNode)
 	if endNode == nil {
 		return
 	}
@@ -193,8 +204,9 @@ func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *ro
 	return
 }
 
-func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) txnif.DeleteNode {
+func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
+	var err error
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
 		if n.IsMerged() {
@@ -223,9 +235,13 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) txn
 			// Wait committing txn with commit ts before ts
 			n.RUnlock()
 			state := txn.GetTxnState(true)
+			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 			// If the txn is rollbacked. skip to the next
 			if state == txnif.TxnStateRollbacked {
 				return true
+			} else if state == txnif.TxnStateUnknown {
+				err = txnif.TxnInternalErr
+				return false
 			}
 			n.RLock()
 			if merged == nil {
@@ -241,5 +257,5 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) txn
 		n.RUnlock()
 		return true
 	}, false)
-	return merged
+	return merged, err
 }

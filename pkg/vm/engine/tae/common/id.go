@@ -23,9 +23,9 @@ import (
 )
 
 var (
-	ErrParseBlockFileName   = errors.New("aoe: parse block file name")
-	ErrParseTBlockFileName  = errors.New("aoe: parse tblock file name")
-	ErrParseSegmentFileName = errors.New("aoe: parse segment file name")
+	ErrParseBlockFileName   = errors.New("tae: parse block file name")
+	ErrParseTBlockFileName  = errors.New("tae: parse tblock file name")
+	ErrParseSegmentFileName = errors.New("tae: parse segment file name")
 )
 
 // ID is the general identifier type shared by different types like

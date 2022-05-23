@@ -32,7 +32,7 @@ func TestCatalog1(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
 
-	txn := db.StartTxn(nil)
+	txn, _ := db.StartTxn(nil)
 	schema := catalog.MockSchema(1)
 	database, _ := txn.CreateDatabase("db")
 	rel, _ := database.CreateRelation(schema)
@@ -43,7 +43,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
-	txn = db.StartTxn(nil)
+	txn, _ = db.StartTxn(nil)
 	database, _ = txn.GetDatabase("db")
 	rel, _ = database.GetRelationByName(schema.Name)
 	sseg, err := rel.GetSegment(seg.GetID())
@@ -60,7 +60,7 @@ func TestCatalog1(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn = db.StartTxn(nil)
+		txn, _ = db.StartTxn(nil)
 		database, _ = txn.GetDatabase("db")
 		rel, _ = database.GetRelationByName(schema.Name)
 		t.Log(txn.String())
@@ -81,7 +81,7 @@ func TestShowDatabaseNames(t *testing.T) {
 	defer tae.Close()
 
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		_, err := txn.CreateDatabase("db1")
 		assert.Nil(t, err)
 		names := txn.DatabaseNames()
@@ -90,7 +90,7 @@ func TestShowDatabaseNames(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		names := txn.DatabaseNames()
 		assert.Equal(t, 2, len(names))
 		assert.Equal(t, "db1", names[1])
@@ -102,7 +102,7 @@ func TestShowDatabaseNames(t *testing.T) {
 		assert.Equal(t, "db1", names[1])
 		assert.Equal(t, "db2", names[2])
 		{
-			txn := tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			names := txn.DatabaseNames()
 			assert.Equal(t, 2, len(names))
 			assert.Equal(t, "db1", names[1])
@@ -112,7 +112,7 @@ func TestShowDatabaseNames(t *testing.T) {
 			assert.Nil(t, err)
 		}
 		{
-			txn := tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			_, err := txn.CreateDatabase("db3")
 			assert.Nil(t, err)
 			names := txn.DatabaseNames()
@@ -121,7 +121,7 @@ func TestShowDatabaseNames(t *testing.T) {
 			assert.Nil(t, txn.Commit())
 		}
 		{
-			txn := tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			names := txn.DatabaseNames()
 			assert.Equal(t, 3, len(names))
 			assert.Equal(t, "db1", names[1])
@@ -147,7 +147,7 @@ func TestLogBlock(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2)
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	seg, _ := rel.CreateSegment()
@@ -179,7 +179,7 @@ func TestLogSegment(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2)
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	seg, _ := rel.CreateSegment()
@@ -211,7 +211,7 @@ func TestLogTable(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13)
 	schema.PrimaryKey = 3
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	meta := rel.GetMeta().(*catalog.TableEntry)
@@ -245,7 +245,7 @@ func TestLogTable(t *testing.T) {
 func TestLogDatabase(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	meta := db.GetMeta().(*catalog.DBEntry)
 	err := txn.Commit()
@@ -274,7 +274,7 @@ func TestLogDatabase(t *testing.T) {
 func TestCheckpointCatalog2(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(13)
 	db, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
@@ -287,7 +287,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	var wg sync.WaitGroup
 	mockRes := func() {
 		defer wg.Done()
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		seg, err := rel.CreateSegment()
@@ -303,7 +303,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		err = txn.Commit()
 		assert.Nil(t, err)
 
-		txn = tae.StartTxn(nil)
+		txn, _ = tae.StartTxn(nil)
 		db, _ = txn.GetDatabase("db")
 		rel, _ = db.GetRelationByName(schema.Name)
 		seg, _ = rel.GetSegment(id.SegmentID)
@@ -332,7 +332,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 func TestCheckpointCatalog(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(2)
 	db, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
@@ -345,7 +345,7 @@ func TestCheckpointCatalog(t *testing.T) {
 	var wg sync.WaitGroup
 	mockRes := func() {
 		defer wg.Done()
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		seg, err := rel.CreateSegment()
@@ -361,7 +361,7 @@ func TestCheckpointCatalog(t *testing.T) {
 		err = txn.Commit()
 		assert.Nil(t, err)
 
-		txn = tae.StartTxn(nil)
+		txn, _ = tae.StartTxn(nil)
 		db, err = txn.GetDatabase("db")
 		assert.Nil(t, err)
 		rel, err = db.GetRelationByName(schema.Name)

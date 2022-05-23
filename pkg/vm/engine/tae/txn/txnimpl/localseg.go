@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -63,16 +64,19 @@ func (seg *localSegment) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 	return npos, noffset
 }
 
-func (seg *localSegment) registerInsertNode() error {
+func (seg *localSegment) registerInsertNode() {
+	var err error
 	if seg.appendable != nil {
 		seg.appendable.Close()
 	}
 	meta := catalog.NewStandaloneBlock(seg.entry, uint64(len(seg.nodes)), seg.table.store.txn.GetStartTS())
 	seg.entry.AddEntryLocked(meta)
 	n := NewInsertNode(seg.table, seg.table.store.nodesMgr, meta.AsCommonID(), seg.table.store.driver)
-	seg.appendable = seg.table.store.nodesMgr.Pin(n)
+	seg.appendable, err = seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		panic(err)
+	}
 	seg.nodes = append(seg.nodes, n)
-	return nil
 }
 
 func (seg *localSegment) ApplyAppend() {
@@ -84,14 +88,14 @@ func (seg *localSegment) ApplyAppend() {
 		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
 		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, seg.table.store.txn); err != nil {
-			panic(err)
+			return
 		}
 		ctx.driver.Close()
 		id := ctx.driver.GetID()
 		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
 		logutil.Debugf(info.String())
 		if err = appendNode.PrepareCommit(); err != nil {
-			panic(err)
+			return
 		}
 		seg.table.txnEntries = append(seg.table.txnEntries, appendNode)
 	}
@@ -157,9 +161,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 
 func (seg *localSegment) Append(data *batch.Batch) (err error) {
 	if seg.appendable == nil {
-		if err = seg.registerInsertNode(); err != nil {
-			return err
-		}
+		seg.registerInsertNode()
 	}
 	appended := uint32(0)
 	offset := uint32(0)
@@ -176,7 +178,7 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		})
 		if err != nil {
 			logutil.Info(seg.table.store.nodesMgr.String())
-			panic(err)
+			break
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
@@ -187,9 +189,7 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		offset += appended
 		seg.rows += appended
 		if space == 0 {
-			if err = seg.registerInsertNode(); err != nil {
-				break
-			}
+			seg.registerInsertNode()
 		}
 		if offset >= length {
 			break
@@ -244,9 +244,9 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 
 func (seg *localSegment) CollectCmd(cmdMgr *commandManager) (err error) {
 	for i, node := range seg.nodes {
-		h := seg.table.store.nodesMgr.Pin(node)
-		if h == nil {
-			panic("not expected")
+		h, err := seg.table.store.nodesMgr.TryPin(node, time.Second)
+		if err != nil {
+			return err
 		}
 		forceFlush := i < len(seg.nodes)-1
 		csn := uint32(0xffff) // Special cmd
@@ -294,6 +294,11 @@ func (seg *localSegment) Update(row uint32, col uint16, value interface{}) error
 	if err = seg.index.Delete(v); err != nil {
 		panic(err)
 	}
+
+	vec := vector.New(window.Vecs[col].Typ)
+	compute.AppendValue(vec, value)
+	window.Vecs[col] = vec
+
 	err = seg.Append(window)
 	return err
 }
@@ -307,7 +312,11 @@ func (seg *localSegment) Rows() uint32 {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	offset, err = seg.index.Find(filter.Val)
+	if v, ok := filter.Val.([]byte); ok {
+		offset, err = seg.index.Find(string(v))
+	} else {
+		offset, err = seg.index.Find(filter.Val)
+	}
 	if err == nil {
 		id = seg.entry.AsCommonID()
 	}
@@ -327,13 +336,16 @@ func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, 
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
-	h := seg.table.store.nodesMgr.Pin(n)
+	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		return
+	}
 	err = n.FillColumnView(view, compressed, decompressed)
 	h.Close()
 	if err != nil {
 		return
 	}
-	view.ApplyDeletes()
+	// view.ApplyDeletes()
 	return
 }
 
@@ -346,7 +358,10 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 func (seg *localSegment) GetValue(row uint32, col uint16) (interface{}, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
-	h := seg.table.store.nodesMgr.Pin(n)
+	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)
+	if err != nil {
+		return nil, err
+	}
 	defer h.Close()
 	return n.GetValue(int(col), noffset)
 }

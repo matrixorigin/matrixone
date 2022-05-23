@@ -57,7 +57,8 @@ type BinderContext struct {
 
 	// use for build subquery
 	subqueryIsCorrelated bool
-	subqueryIsScalar     bool
+	// unused, commented out for now.
+	// subqueryIsScalar     bool
 
 	subqueryParentIds []int32
 }

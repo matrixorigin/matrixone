@@ -72,6 +72,7 @@ func (b *BlockFile) Append(offset uint64, data []byte, originSize uint32) (err e
 	})
 	b.snode.size += uint64(len(data))
 	b.snode.originSize += uint64(originSize)
+	b.snode.seq++
 	b.snode.mutex.Unlock()
 	return nil
 }
@@ -97,6 +98,7 @@ func (b *BlockFile) repairExtent(offset, fOffset, length uint32) []Extent {
 	num := 0
 	b.snode.mutex.Lock()
 	defer b.snode.mutex.Unlock()
+	b.snode.seq++
 	for _, extent := range b.snode.extents {
 		if fOffset >= extent.length {
 			fOffset -= extent.length

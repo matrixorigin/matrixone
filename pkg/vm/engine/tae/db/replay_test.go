@@ -21,20 +21,20 @@ func TestReplayCatalog1(t *testing.T) {
 		schemas[i] = catalog.MockSchema(2)
 	}
 
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	createTable := func(schema *catalog.Schema, wg *sync.WaitGroup, forceCkp bool) func() {
 		return func() {
 			defer wg.Done()
-			txn := tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			db, err := txn.GetDatabase("db")
 			assert.Nil(t, err)
 			_, err = db.CreateRelation(schema)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
-			txn = tae.StartTxn(nil)
+			txn, _ = tae.StartTxn(nil)
 			db, err = txn.GetDatabase("db")
 			assert.Nil(t, err)
 			rel, err := db.GetRelationByName(schema.Name)
@@ -94,12 +94,12 @@ func TestReplayCatalog2(t *testing.T) {
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2)
 	schema2 := catalog.MockSchema(2)
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db2")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
@@ -115,19 +115,19 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	_, err = txn.DropDatabase("db2")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	_, err = db.DropRelationByName(schema2.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -139,7 +139,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	ts := txn.GetCommitTS()
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -173,12 +173,12 @@ func TestReplayCatalog3(t *testing.T) {
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2)
 	schema2 := catalog.MockSchema(2)
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db2")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
@@ -194,19 +194,19 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	_, err = txn.DropDatabase("db2")
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	_, err = db.DropRelationByName(schema2.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -217,7 +217,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -226,7 +226,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -258,10 +258,10 @@ func TestReplay1(t *testing.T) {
 	schema := catalog.MockSchema(2)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
@@ -283,7 +283,7 @@ func TestReplay1(t *testing.T) {
 
 	bat := compute.MockBatch(schema.Types(), 10000, int(schema.PrimaryKey), nil)
 	// bats := compute.SplitBatch(bat, 2)
-	txn = tae2.StartTxn(nil)
+	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -292,7 +292,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae2.StartTxn(nil)
+	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -306,7 +306,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae2.StartTxn(nil)
+	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -324,7 +324,7 @@ func TestReplay1(t *testing.T) {
 	c3 := tae3.Catalog
 	t.Log(c3.SimplePPString(common.PPL1))
 
-	txn = tae3.StartTxn(nil)
+	txn, _ = tae3.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -366,7 +366,7 @@ func TestReplay2(t *testing.T) {
 	bat := compute.MockBatch(schema.Types(), 10000, int(schema.PrimaryKey), nil)
 	bats := compute.SplitBatch(bat, 2)
 
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
@@ -382,13 +382,13 @@ func TestReplay2(t *testing.T) {
 	filter.Val = int32(1500)
 	id, row, err := rel.GetByFilter(filter)
 	assert.Nil(t, err)
-	err = rel.Update(id, row-1, uint16(0), int32(33))
+	err = rel.Update(id, row-1, uint16(0), int32(33333))
 	assert.Nil(t, err)
 	err = rel.RangeDelete(id, row+1, row+100)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -405,7 +405,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn = tae.StartTxn(nil)
+	txn, _ = tae.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -427,7 +427,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 
-	txn = tae2.StartTxn(nil)
+	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -453,7 +453,7 @@ func TestReplay2(t *testing.T) {
 	err = tae2.Catalog.Checkpoint(ts)
 	assert.Nil(t, err)
 
-	txn = tae2.StartTxn(nil)
+	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -469,7 +469,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(tae3.Catalog.SimplePPString(common.PPL1))
 
-	txn = tae3.StartTxn(nil)
+	txn, _ = tae3.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)

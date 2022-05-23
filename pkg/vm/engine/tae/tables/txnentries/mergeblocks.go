@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -151,9 +152,13 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 		}
 		blks[i] = blk
 	}
+	var view *model.BlockView
 	for fromPos, dropped := range entry.droppedBlks {
 		dataBlock := dropped.GetBlockData()
-		view := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
+		view, err = dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
+		if err != nil {
+			break
+		}
 		if view == nil {
 			continue
 		}

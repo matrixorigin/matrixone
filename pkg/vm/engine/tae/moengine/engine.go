@@ -77,6 +77,5 @@ func (e *txnEngine) Node(ip string, _ engine.Snapshot) *engine.NodeInfo {
 }
 
 func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
-	txn = e.impl.StartTxn(info)
-	return
+	return e.impl.StartTxn(info)
 }

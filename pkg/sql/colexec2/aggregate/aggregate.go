@@ -80,6 +80,9 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case Sum:
 		return NewSum(typ)
 	case Avg:
+		if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+			return avg.NewDecimalRing(typ), nil
+		}
 		return avg.NewAvg(typ), nil
 	case Max:
 		return NewMax(typ)

@@ -32,6 +32,7 @@ type txnRelationIt struct {
 	txnDB  *txnDB
 	linkIt *common.LinkIt
 	curr   *catalog.TableEntry
+	err    error
 }
 
 func newRelationIt(db *txnDB) *txnRelationIt {
@@ -40,10 +41,18 @@ func newRelationIt(db *txnDB) *txnRelationIt {
 		linkIt:  db.entry.MakeTableIt(true),
 		txnDB:   db,
 	}
+	var err error
+	var ok bool
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.TableEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.txnDB.store.txn, curr.RWMutex) {
+		ok, err = curr.TxnCanRead(it.txnDB.store.txn, curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			return it
+		}
+		if ok {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -56,9 +65,16 @@ func newRelationIt(db *txnDB) *txnRelationIt {
 
 func (it *txnRelationIt) Close() error { return nil }
 
-func (it *txnRelationIt) Valid() bool { return it.linkIt.Valid() }
+func (it *txnRelationIt) GetError() error { return it.err }
+func (it *txnRelationIt) Valid() bool {
+	if it.err != nil {
+		return false
+	}
+	return it.linkIt.Valid()
+}
 
 func (it *txnRelationIt) Next() {
+	var err error
 	valid := true
 	for {
 		it.linkIt.Next()
@@ -69,8 +85,12 @@ func (it *txnRelationIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.TableEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.txnDB.store.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
 		if valid {
 			it.curr = entry
 			break
@@ -121,7 +141,6 @@ func (h *txnRelation) Close() error                     { return nil }
 func (h *txnRelation) Rows() int64                      { return 0 }
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
-func (h *txnRelation) MakeReader() handle.Reader        { return nil }
 
 func (h *txnRelation) BatchDedup(col *vector.Vector) error {
 	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)

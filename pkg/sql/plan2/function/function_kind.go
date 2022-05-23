@@ -14,24 +14,24 @@
 
 package function
 
-type Kind int32
+type FuncExplainLayout int32
 
 const (
-	STANDARD_FUNCTION          Kind = 0 //standard function
-	UNARY_ARITHMETIC_OPERATOR  Kind = 1 //unary arithmetic operator
-	BINARY_ARITHMETIC_OPERATOR Kind = 2 //binary arithmetic operator
-	UNARY_LOGICAL_OPERATOR     Kind = 3 // unary logical operator
-	BINARY_LOGICAL_OPERATOR    Kind = 4 // binary logical operator
-	COMPARISON_OPERATOR        Kind = 5 // comparison operator
-	CAST_EXPRESSION            Kind = 6 // cast expression
-	CASE_WHEN_EXPRESSION       Kind = 7 // case when expression
-	BETWEEN_AND_EXPRESSION     Kind = 8
-	IN_PREDICATE               Kind = 9  //query 'in' predicate
-	EXISTS_ANY_PREDICATE       Kind = 10 //query predicate,such as exist,all,any
-	IS_NULL_EXPRESSION         Kind = 11 // is null expression
-	NOPARAMETER_FUNCTION       Kind = 12 // noparameter function
-	DATE_INTERVAL_EXPRESSION   Kind = 13 // date expression,interval expression
-	EXTRACT_FUNCTION           Kind = 14 // extract function,such as extract(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
-	POSITION_FUNCTION          Kind = 15 // position function, such as POSITION(substr IN str)
-	UNKNOW_KIND_FUNCTION       Kind = 16
+	STANDARD_FUNCTION          FuncExplainLayout = 0 //standard function
+	UNARY_ARITHMETIC_OPERATOR  FuncExplainLayout = 1 //unary arithmetic operator
+	BINARY_ARITHMETIC_OPERATOR FuncExplainLayout = 2 //binary arithmetic operator
+	UNARY_LOGICAL_OPERATOR     FuncExplainLayout = 3 // unary logical operator
+	BINARY_LOGICAL_OPERATOR    FuncExplainLayout = 4 // binary logical operator
+	COMPARISON_OPERATOR        FuncExplainLayout = 5 // comparison operator
+	CAST_EXPRESSION            FuncExplainLayout = 6 // cast expression
+	CASE_WHEN_EXPRESSION       FuncExplainLayout = 7 // case when expression
+	BETWEEN_AND_EXPRESSION     FuncExplainLayout = 8
+	IN_PREDICATE               FuncExplainLayout = 9  //query 'in' predicate
+	EXISTS_ANY_PREDICATE       FuncExplainLayout = 10 //query predicate,such as exist,all,any
+	IS_NULL_EXPRESSION         FuncExplainLayout = 11 // is null expression
+	NOPARAMETER_FUNCTION       FuncExplainLayout = 12 // noparameter function
+	DATE_INTERVAL_EXPRESSION   FuncExplainLayout = 13 // date expression,interval expression
+	EXTRACT_FUNCTION           FuncExplainLayout = 14 // extract function,such as extract(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
+	POSITION_FUNCTION          FuncExplainLayout = 15 // position function, such as POSITION(substr IN str)
+	UNKNOW_KIND_FUNCTION       FuncExplainLayout = 16
 )

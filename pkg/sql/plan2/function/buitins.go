@@ -8,7 +8,7 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY Layout, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -59,7 +59,7 @@ var builtins = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNKNOW_KIND_FUNCTION,
+			Layout:      EXTRACT_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_date},
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
@@ -68,7 +68,7 @@ var builtins = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNKNOW_KIND_FUNCTION,
+			Layout:      EXTRACT_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_datetime},
 			ReturnTyp:   types.T_datetime,
 			TypeCheckFn: strictTypeCheck,
@@ -83,7 +83,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -92,7 +92,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -101,7 +101,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -112,7 +112,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -121,7 +121,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -130,7 +130,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -141,7 +141,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -150,7 +150,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -159,7 +159,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -170,7 +170,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -179,7 +179,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -188,7 +188,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -199,7 +199,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -208,7 +208,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -217,7 +217,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -228,7 +228,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -237,7 +237,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -246,7 +246,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -257,7 +257,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_date},
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
@@ -266,7 +266,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_datetime},
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
@@ -277,7 +277,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_date},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -288,7 +288,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -297,7 +297,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -308,7 +308,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -317,7 +317,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -326,7 +326,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -337,7 +337,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -346,7 +346,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -357,7 +357,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -366,7 +366,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -377,7 +377,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -386,7 +386,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -395,7 +395,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -406,7 +406,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -415,7 +415,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -424,7 +424,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -435,7 +435,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -444,7 +444,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -455,7 +455,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_date},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -464,7 +464,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_datetime},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -475,7 +475,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -484,7 +484,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -495,7 +495,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -504,7 +504,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -515,7 +515,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -524,7 +524,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -535,7 +535,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -544,7 +544,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -553,7 +553,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -564,7 +564,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -573,7 +573,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -582,7 +582,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -593,7 +593,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -602,7 +602,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -611,7 +611,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -620,7 +620,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -629,7 +629,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -640,7 +640,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -649,7 +649,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -658,7 +658,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -669,7 +669,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_date},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -678,7 +678,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_datetime},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -689,7 +689,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_date},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -698,7 +698,7 @@ var unaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_datetime},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -712,7 +712,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -721,7 +721,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -730,7 +730,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -739,7 +739,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -750,7 +750,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -759,7 +759,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -768,7 +768,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -777,7 +777,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -788,7 +788,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -799,7 +799,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -808,7 +808,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -817,7 +817,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -826,7 +826,7 @@ var binaryBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -841,7 +841,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -850,7 +850,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -859,7 +859,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -868,7 +868,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -877,7 +877,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -886,7 +886,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64, types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -897,7 +897,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -906,7 +906,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -915,7 +915,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -924,7 +924,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -933,7 +933,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -942,7 +942,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64, types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -953,7 +953,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -962,7 +962,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -971,7 +971,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -980,7 +980,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -989,7 +989,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -998,7 +998,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_float64, types.T_int64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1009,7 +1009,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1020,7 +1020,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1029,7 +1029,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1038,7 +1038,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1047,7 +1047,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1056,7 +1056,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1065,7 +1065,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1074,7 +1074,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1083,7 +1083,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1092,7 +1092,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1101,7 +1101,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1110,7 +1110,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1119,7 +1119,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1128,7 +1128,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1137,7 +1137,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1146,7 +1146,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1155,7 +1155,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1164,7 +1164,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1173,7 +1173,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       17,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1182,7 +1182,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       18,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1191,7 +1191,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       19,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1200,7 +1200,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       20,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1209,7 +1209,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       21,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1218,7 +1218,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       22,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1227,7 +1227,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       23,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1236,7 +1236,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       24,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1245,7 +1245,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       25,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1254,7 +1254,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       26,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1263,7 +1263,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       27,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1272,7 +1272,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       28,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1281,7 +1281,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       29,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1290,7 +1290,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       30,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1299,7 +1299,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       31,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1308,7 +1308,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       32,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1317,7 +1317,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       33,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1326,7 +1326,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       34,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1335,7 +1335,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       35,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1344,7 +1344,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       36,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1353,7 +1353,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       37,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1362,7 +1362,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       38,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1371,7 +1371,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       39,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1380,7 +1380,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       40,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1389,7 +1389,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       41,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1398,7 +1398,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       42,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1407,7 +1407,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       43,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1416,7 +1416,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       44,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1425,7 +1425,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       45,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1434,7 +1434,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       46,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1443,7 +1443,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       47,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1452,7 +1452,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       48,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1461,7 +1461,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       49,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1470,7 +1470,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       50,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1479,7 +1479,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       51,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1488,7 +1488,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       52,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1497,7 +1497,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       53,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1506,7 +1506,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       54,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1515,7 +1515,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       55,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1524,7 +1524,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       56,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1533,7 +1533,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       57,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1542,7 +1542,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       58,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1551,7 +1551,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       59,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1560,7 +1560,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       60,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1569,7 +1569,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       61,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1578,7 +1578,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       62,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1587,7 +1587,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       63,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1596,7 +1596,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       64,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1605,7 +1605,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       65,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1614,7 +1614,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       66,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1623,7 +1623,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       67,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1632,7 +1632,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       68,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1641,7 +1641,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       69,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1650,7 +1650,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       70,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1659,7 +1659,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       71,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1668,7 +1668,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       72,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1677,7 +1677,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       73,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1686,7 +1686,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       74,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1695,7 +1695,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       75,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1704,7 +1704,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       76,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1713,7 +1713,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       77,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1722,7 +1722,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       78,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1731,7 +1731,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       79,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1740,7 +1740,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       80,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1749,7 +1749,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       81,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1758,7 +1758,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       82,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1767,7 +1767,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       83,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1776,7 +1776,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       84,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1785,7 +1785,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       85,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1794,7 +1794,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       86,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1803,7 +1803,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       87,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1812,7 +1812,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       88,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1821,7 +1821,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       89,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1830,7 +1830,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       90,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1839,7 +1839,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       91,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1848,7 +1848,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       92,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1857,7 +1857,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       93,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1866,7 +1866,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       94,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1875,7 +1875,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       95,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1884,7 +1884,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       96,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1893,7 +1893,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       97,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1902,7 +1902,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       98,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1911,7 +1911,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       99,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1920,7 +1920,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       100,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1929,7 +1929,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       101,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1938,7 +1938,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       102,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1947,7 +1947,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       103,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1956,7 +1956,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       104,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1965,7 +1965,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       105,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1974,7 +1974,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       106,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1983,7 +1983,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       107,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float32, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -1992,7 +1992,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       108,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2001,7 +2001,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       109,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2010,7 +2010,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       110,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2019,7 +2019,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       111,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2028,7 +2028,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       112,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2037,7 +2037,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       113,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2046,7 +2046,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       114,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2055,7 +2055,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       115,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2064,7 +2064,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       116,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2073,7 +2073,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       117,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2082,7 +2082,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       118,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2091,7 +2091,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       119,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_float64, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2100,7 +2100,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       120,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2109,7 +2109,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       121,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2118,7 +2118,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       122,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2127,7 +2127,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       123,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2136,7 +2136,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       124,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2145,7 +2145,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       125,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2154,7 +2154,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       126,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2163,7 +2163,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       127,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2172,7 +2172,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       128,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2181,7 +2181,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       129,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2190,7 +2190,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       130,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2199,7 +2199,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       131,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_varchar, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2208,7 +2208,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       132,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2217,7 +2217,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       133,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2226,7 +2226,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       134,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2235,7 +2235,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       135,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2244,7 +2244,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       136,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2253,7 +2253,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       137,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2262,7 +2262,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       138,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2271,7 +2271,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       139,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2280,7 +2280,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       140,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_float32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2289,7 +2289,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       141,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_float64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2298,7 +2298,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       142,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2307,7 +2307,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       143,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_char, types.T_char},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2316,7 +2316,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       144,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2325,7 +2325,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       145,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2334,7 +2334,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       146,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2343,7 +2343,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       147,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2352,7 +2352,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       148,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2361,7 +2361,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       149,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2370,7 +2370,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       150,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2379,7 +2379,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       151,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2388,7 +2388,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       152,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2397,7 +2397,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       153,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2406,7 +2406,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       154,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2415,7 +2415,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       155,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2424,7 +2424,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       156,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2433,7 +2433,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       157,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2442,7 +2442,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       158,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2451,7 +2451,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       159,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2460,7 +2460,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       160,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2469,7 +2469,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       161,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2478,7 +2478,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       162,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2487,7 +2487,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       163,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2496,7 +2496,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       164,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2505,7 +2505,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       165,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2514,7 +2514,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       166,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2523,7 +2523,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       167,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2532,7 +2532,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       168,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2541,7 +2541,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       169,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2550,7 +2550,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       170,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2559,7 +2559,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       171,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2568,7 +2568,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       172,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2577,7 +2577,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       173,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2586,7 +2586,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       174,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2595,7 +2595,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       175,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2604,7 +2604,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       176,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2613,7 +2613,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       177,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2622,7 +2622,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       178,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2631,7 +2631,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       179,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2640,7 +2640,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       180,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2649,7 +2649,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       181,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2658,7 +2658,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       182,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2667,7 +2667,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       183,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2676,7 +2676,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       184,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2685,7 +2685,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       185,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2694,7 +2694,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       186,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2703,7 +2703,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       187,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2712,7 +2712,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       188,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2721,7 +2721,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       189,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2730,7 +2730,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       190,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2739,7 +2739,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       191,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2748,7 +2748,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       192,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2757,7 +2757,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       193,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2766,7 +2766,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       194,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2775,7 +2775,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       195,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2784,7 +2784,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       196,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2793,7 +2793,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       197,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2802,7 +2802,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       198,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2811,7 +2811,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       199,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2820,7 +2820,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       200,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2829,7 +2829,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       201,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2838,7 +2838,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       202,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2847,7 +2847,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       203,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2856,7 +2856,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       204,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2865,7 +2865,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       205,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2874,7 +2874,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       206,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2883,7 +2883,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       207,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2892,7 +2892,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       208,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2901,7 +2901,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       209,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2910,7 +2910,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       210,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2919,7 +2919,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       211,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2928,7 +2928,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       212,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2937,7 +2937,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       213,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2946,7 +2946,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       214,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2955,7 +2955,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       215,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2964,7 +2964,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       216,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2973,7 +2973,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       217,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2982,7 +2982,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       218,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2991,7 +2991,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       219,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3000,7 +3000,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       220,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3009,7 +3009,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       221,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3018,7 +3018,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       222,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3027,7 +3027,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       223,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3036,7 +3036,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       224,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3045,7 +3045,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       225,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3054,7 +3054,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       226,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3063,7 +3063,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       227,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3072,7 +3072,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       228,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3081,7 +3081,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       229,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3090,7 +3090,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       230,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3099,7 +3099,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       231,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3108,7 +3108,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       232,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3117,7 +3117,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       233,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3126,7 +3126,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       234,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3135,7 +3135,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       235,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3144,7 +3144,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       236,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3153,7 +3153,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       237,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3162,7 +3162,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       238,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3171,7 +3171,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       239,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3180,7 +3180,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       240,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3189,7 +3189,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       241,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3198,7 +3198,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       242,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3207,7 +3207,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       243,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3216,7 +3216,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       244,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3225,7 +3225,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       245,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3234,7 +3234,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       246,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3243,7 +3243,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       247,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3252,7 +3252,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       248,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3261,7 +3261,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       249,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3270,7 +3270,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       250,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3279,7 +3279,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       251,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float32, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3288,7 +3288,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       252,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3297,7 +3297,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       253,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3306,7 +3306,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       254,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3315,7 +3315,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       255,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3324,7 +3324,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       256,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3333,7 +3333,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       257,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3342,7 +3342,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       258,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3351,7 +3351,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       259,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3360,7 +3360,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       260,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3369,7 +3369,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       261,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3378,7 +3378,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       262,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3387,7 +3387,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       263,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_float64, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3396,7 +3396,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       264,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3405,7 +3405,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       265,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3414,7 +3414,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       266,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3423,7 +3423,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       267,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3432,7 +3432,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       268,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3441,7 +3441,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       269,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3450,7 +3450,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       270,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3459,7 +3459,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       271,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3468,7 +3468,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       272,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3477,7 +3477,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       273,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3486,7 +3486,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       274,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3495,7 +3495,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       275,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_varchar, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3504,7 +3504,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       276,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3513,7 +3513,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       277,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3522,7 +3522,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       278,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3531,7 +3531,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       279,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3540,7 +3540,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       280,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3549,7 +3549,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       281,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3558,7 +3558,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       282,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3567,7 +3567,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       283,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3576,7 +3576,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       284,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_float32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3585,7 +3585,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       285,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_float64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3594,7 +3594,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       286,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_varchar},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3603,7 +3603,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       287,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_char, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3614,7 +3614,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -3625,7 +3625,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3634,7 +3634,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3643,7 +3643,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3652,7 +3652,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3661,7 +3661,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3670,7 +3670,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3679,7 +3679,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3688,7 +3688,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3697,7 +3697,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3706,7 +3706,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3715,7 +3715,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3724,7 +3724,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3733,7 +3733,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3742,7 +3742,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3751,7 +3751,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3760,7 +3760,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3769,7 +3769,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3778,7 +3778,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       17,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3787,7 +3787,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       18,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3796,7 +3796,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       19,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3805,7 +3805,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       20,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3814,7 +3814,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       21,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3823,7 +3823,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       22,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3832,7 +3832,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       23,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int8, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3841,7 +3841,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       24,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3850,7 +3850,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       25,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3859,7 +3859,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       26,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3868,7 +3868,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       27,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3877,7 +3877,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       28,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3886,7 +3886,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       29,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3895,7 +3895,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       30,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3904,7 +3904,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       31,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int16, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3913,7 +3913,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       32,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3922,7 +3922,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       33,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3931,7 +3931,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       34,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3940,7 +3940,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       35,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3949,7 +3949,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       36,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3958,7 +3958,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       37,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3967,7 +3967,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       38,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3976,7 +3976,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       39,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int32, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3985,7 +3985,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       40,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3994,7 +3994,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       41,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4003,7 +4003,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       42,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4012,7 +4012,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       43,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4021,7 +4021,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       44,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4030,7 +4030,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       45,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4039,7 +4039,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       46,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4048,7 +4048,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       47,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_int64, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4057,7 +4057,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       48,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4066,7 +4066,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       49,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4075,7 +4075,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       50,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4084,7 +4084,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       51,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4093,7 +4093,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       52,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4102,7 +4102,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       53,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4111,7 +4111,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       54,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4120,7 +4120,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       55,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint8, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4129,7 +4129,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       56,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4138,7 +4138,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       57,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4147,7 +4147,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       58,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4156,7 +4156,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       59,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4165,7 +4165,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       60,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4174,7 +4174,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       61,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4183,7 +4183,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       62,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4192,7 +4192,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       63,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint16, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4201,7 +4201,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       64,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4210,7 +4210,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       65,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4219,7 +4219,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       66,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4228,7 +4228,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       67,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4237,7 +4237,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       68,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4246,7 +4246,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       69,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4255,7 +4255,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       70,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4264,7 +4264,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       71,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint32, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4273,7 +4273,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       72,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4282,7 +4282,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       73,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4291,7 +4291,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       74,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4300,7 +4300,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       75,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4309,7 +4309,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       76,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint8},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4318,7 +4318,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       77,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint16},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4327,7 +4327,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       78,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint32},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4336,7 +4336,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       79,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_varchar, types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -4345,7 +4345,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       80,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4354,7 +4354,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       81,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4363,7 +4363,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       82,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4372,7 +4372,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       83,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4381,7 +4381,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       84,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4390,7 +4390,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       85,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4399,7 +4399,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       86,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4408,7 +4408,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       87,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int8, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4417,7 +4417,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       88,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4426,7 +4426,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       89,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4435,7 +4435,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       90,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4444,7 +4444,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       91,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4453,7 +4453,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       92,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4462,7 +4462,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       93,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4471,7 +4471,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       94,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4480,7 +4480,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       95,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int16, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4489,7 +4489,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       96,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4498,7 +4498,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       97,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4507,7 +4507,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       98,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4516,7 +4516,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       99,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4525,7 +4525,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       100,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4534,7 +4534,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       101,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4543,7 +4543,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       102,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4552,7 +4552,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       103,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int32, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4561,7 +4561,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       104,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4570,7 +4570,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       105,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4579,7 +4579,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       106,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4588,7 +4588,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       107,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4597,7 +4597,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       108,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4606,7 +4606,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       109,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4615,7 +4615,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       110,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4624,7 +4624,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       111,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_int64, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4633,7 +4633,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       112,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4642,7 +4642,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       113,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4651,7 +4651,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       114,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4660,7 +4660,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       115,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4669,7 +4669,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       116,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4678,7 +4678,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       117,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4687,7 +4687,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       118,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4696,7 +4696,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       119,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint8, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4705,7 +4705,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       120,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4714,7 +4714,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       121,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4723,7 +4723,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       122,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4732,7 +4732,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       123,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4741,7 +4741,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       124,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4750,7 +4750,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       125,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4759,7 +4759,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       126,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4768,7 +4768,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       127,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint16, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4777,7 +4777,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       128,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4786,7 +4786,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       129,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4795,7 +4795,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       130,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4804,7 +4804,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       131,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4813,7 +4813,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       132,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4822,7 +4822,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       133,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4831,7 +4831,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       134,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4840,7 +4840,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       135,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint32, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4849,7 +4849,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       136,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4858,7 +4858,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       137,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4867,7 +4867,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       138,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4876,7 +4876,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       139,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4885,7 +4885,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       140,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint8},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4894,7 +4894,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       141,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint16},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4903,7 +4903,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       142,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint32},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4912,7 +4912,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       143,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{types.T_char, types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -4923,7 +4923,7 @@ var multiBuiltins map[int][]Function = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        STANDARD_FUNCTION,
+			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{},
 			ReturnTyp:   types.T_timestamp,
 			TypeCheckFn: strictTypeCheck,

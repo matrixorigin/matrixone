@@ -179,48 +179,52 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 	case *tree.UsingJoinCond:
 		for _, colName := range cond.Cols {
 			name := string(colName)
-			leftColIndex := getColumnIndex(leftChild.ProjectList, name)
+			leftColIndex, leftColType := getColumnIndexAndType(leftChild.ProjectList, name)
 			if leftColIndex < 0 {
 				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
 			}
-			rightColIndex := getColumnIndex(rightChild.ProjectList, name)
+			rightColIndex, rightColType := getColumnIndexAndType(rightChild.ProjectList, name)
 			if rightColIndex < 0 {
 				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
 			}
-			funName := getFunctionObjRef("=")
-			node.OnList = append(node.OnList, &Expr{
-				Expr: &plan.Expr_F{
-					F: &plan.Function{
-						Func: funName,
-						Args: []*Expr{
-							{
-								ColName: name,
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										RelPos: 0,
-										ColPos: leftColIndex,
-									},
-								},
-							},
-							{
-								ColName: name,
-								Expr: &plan.Expr_Col{
-									Col: &ColRef{
-										RelPos: 1,
-										ColPos: rightColIndex,
-									},
-								},
-							},
-						},
+			leftColExpr := &Expr{
+				ColName: name,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: leftColIndex,
 					},
 				},
-			})
+				Typ: leftColType,
+			}
+			rigthColExpr := &Expr{
+				ColName: name,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 1,
+						ColPos: rightColIndex,
+					},
+				},
+				Typ: rightColType,
+			}
+
+			// append equal function expr to onlist
+			var equalFunctionExpr *Expr
+			equalFunctionExpr, err = getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rigthColExpr})
+			if err != nil {
+				return
+			}
+			node.OnList = append(node.OnList, equalFunctionExpr)
 		}
 
 	default:
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			// natural join.  the cond will be nil
-			columns := getColumnsWithSameName(leftChild.ProjectList, rightChild.ProjectList)
+			var columns []*Expr
+			columns, err = getColumnsWithSameName(leftChild.ProjectList, rightChild.ProjectList)
+			if err != nil {
+				return
+			}
 			node.OnList = columns
 		}
 	}

@@ -8,7 +8,7 @@
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY Layout, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
@@ -42,7 +42,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -51,7 +51,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -60,7 +60,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -69,7 +69,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -78,7 +78,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -87,7 +87,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -96,7 +96,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -105,7 +105,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -114,7 +114,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -123,7 +123,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -132,7 +132,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -141,7 +141,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -150,7 +150,7 @@ var operators = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_datetime, types.T_datetime},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -159,7 +159,7 @@ var operators = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_date, types.T_date},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -168,7 +168,7 @@ var operators = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_timestamp, types.T_timestamp},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -177,7 +177,7 @@ var operators = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -186,7 +186,7 @@ var operators = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -197,7 +197,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -206,7 +206,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -215,7 +215,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -224,7 +224,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -233,7 +233,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -242,7 +242,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -251,7 +251,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -260,7 +260,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -269,7 +269,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -278,7 +278,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -287,7 +287,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -296,7 +296,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -305,7 +305,7 @@ var operators = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_datetime, types.T_datetime},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -314,7 +314,7 @@ var operators = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_date, types.T_date},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -323,7 +323,7 @@ var operators = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_timestamp, types.T_timestamp},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -332,7 +332,7 @@ var operators = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -341,7 +341,7 @@ var operators = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -352,7 +352,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -361,7 +361,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -370,7 +370,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -379,7 +379,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -388,7 +388,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -397,7 +397,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -406,7 +406,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -415,7 +415,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -424,7 +424,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -433,7 +433,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -442,7 +442,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -451,7 +451,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -460,7 +460,7 @@ var operators = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_datetime, types.T_datetime},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -469,7 +469,7 @@ var operators = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_date, types.T_date},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -478,7 +478,7 @@ var operators = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_timestamp, types.T_timestamp},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -487,7 +487,7 @@ var operators = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -496,7 +496,7 @@ var operators = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -507,7 +507,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -516,7 +516,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -525,7 +525,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -534,7 +534,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -543,7 +543,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -552,7 +552,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -561,7 +561,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -570,7 +570,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -579,7 +579,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -588,7 +588,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -597,7 +597,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -606,7 +606,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -615,7 +615,7 @@ var operators = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_datetime, types.T_datetime},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -624,7 +624,7 @@ var operators = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_date, types.T_date},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -633,7 +633,7 @@ var operators = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_timestamp, types.T_timestamp},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -642,7 +642,7 @@ var operators = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -651,7 +651,7 @@ var operators = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -662,7 +662,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -671,7 +671,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -680,7 +680,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -689,7 +689,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -698,7 +698,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -707,7 +707,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -716,7 +716,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -725,7 +725,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -734,7 +734,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -743,7 +743,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -752,7 +752,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -761,7 +761,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -770,7 +770,7 @@ var operators = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_datetime, types.T_datetime},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -779,7 +779,7 @@ var operators = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_date, types.T_date},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -788,7 +788,7 @@ var operators = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_timestamp, types.T_timestamp},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -797,7 +797,7 @@ var operators = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -806,7 +806,7 @@ var operators = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -817,7 +817,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -826,7 +826,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -835,7 +835,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -844,7 +844,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -853,7 +853,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -862,7 +862,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -871,7 +871,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -880,7 +880,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -889,7 +889,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -898,7 +898,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -907,7 +907,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -916,7 +916,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -925,7 +925,7 @@ var operators = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_datetime, types.T_datetime},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -934,7 +934,7 @@ var operators = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_date, types.T_date},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -943,7 +943,7 @@ var operators = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_timestamp, types.T_timestamp},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -952,7 +952,7 @@ var operators = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -961,7 +961,7 @@ var operators = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        COMPARISON_OPERATOR,
+			Layout:      COMPARISON_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -972,7 +972,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_LOGICAL_OPERATOR,
+			Layout:      BINARY_LOGICAL_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -981,7 +981,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_LOGICAL_OPERATOR,
+			Layout:      BINARY_LOGICAL_OPERATOR,
 			Args:        []types.T{types.T_char, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -990,7 +990,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_LOGICAL_OPERATOR,
+			Layout:      BINARY_LOGICAL_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_char},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -999,7 +999,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_LOGICAL_OPERATOR,
+			Layout:      BINARY_LOGICAL_OPERATOR,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -1008,9 +1008,9 @@ var operators = map[int][]Function{
 	},
 	BETWEEN: {
 		{
-			Index: 0,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_uint8,
 				types.T_uint8,
@@ -1020,9 +1020,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 1,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  1,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_uint16,
 				types.T_uint16,
@@ -1032,9 +1032,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 2,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  2,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_uint32,
 				types.T_uint32,
@@ -1044,9 +1044,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 3,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  3,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_uint64,
 				types.T_uint64,
@@ -1056,9 +1056,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 4,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  4,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_int8,
 				types.T_int8,
@@ -1068,9 +1068,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 5,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  5,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_int16,
 				types.T_int16,
@@ -1080,9 +1080,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 6,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  6,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_int32,
 				types.T_int32,
@@ -1092,9 +1092,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 7,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  7,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_int64,
 				types.T_int64,
@@ -1104,9 +1104,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 8,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  8,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_float32,
 				types.T_float32,
@@ -1116,9 +1116,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 9,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  9,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_float64,
 				types.T_float64,
@@ -1128,9 +1128,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 10,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  10,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_decimal64,
 				types.T_decimal64,
@@ -1140,9 +1140,9 @@ var operators = map[int][]Function{
 			Fn:          nil,
 		},
 		{
-			Index: 11,
-			Flag:  plan.Function_STRICT,
-			Kind:  BETWEEN_AND_EXPRESSION,
+			Index:  11,
+			Flag:   plan.Function_STRICT,
+			Layout: BETWEEN_AND_EXPRESSION,
 			Args: []types.T{
 				types.T_decimal128,
 				types.T_decimal128,
@@ -1156,7 +1156,7 @@ var operators = map[int][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_STRICT,
-			Kind:      IN_PREDICATE,
+			Layout:    IN_PREDICATE,
 			ReturnTyp: types.T_bool,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) == 2 && inputTypes[1] == types.T_tuple {
@@ -1171,7 +1171,7 @@ var operators = map[int][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_STRICT,
-			Kind:      EXISTS_ANY_PREDICATE,
+			Layout:    EXISTS_ANY_PREDICATE,
 			ReturnTyp: types.T_bool,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) != 1 {
@@ -1184,9 +1184,9 @@ var operators = map[int][]Function{
 	// logic operator
 	AND: {
 		{
-			Index: 0,
-			Flag:  plan.Function_STRICT,
-			Kind:  BINARY_LOGICAL_OPERATOR,
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: BINARY_LOGICAL_OPERATOR,
 			Args: []types.T{
 				types.T_bool,
 				types.T_bool,
@@ -1198,9 +1198,9 @@ var operators = map[int][]Function{
 	},
 	OR: {
 		{
-			Index: 0,
-			Flag:  plan.Function_STRICT,
-			Kind:  BINARY_LOGICAL_OPERATOR,
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: BINARY_LOGICAL_OPERATOR,
 			Args: []types.T{
 				types.T_bool,
 				types.T_bool,
@@ -1212,9 +1212,9 @@ var operators = map[int][]Function{
 	},
 	NOT: {
 		{
-			Index: 0,
-			Flag:  plan.Function_STRICT,
-			Kind:  UNARY_LOGICAL_OPERATOR,
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: UNARY_LOGICAL_OPERATOR,
 			Args: []types.T{
 				types.T_bool,
 			},
@@ -1228,7 +1228,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -1237,7 +1237,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -1246,7 +1246,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -1255,7 +1255,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1264,7 +1264,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -1273,7 +1273,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -1282,7 +1282,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -1291,7 +1291,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -1300,7 +1300,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -1309,7 +1309,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1318,7 +1318,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1327,7 +1327,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -1338,7 +1338,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -1347,7 +1347,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -1356,7 +1356,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -1365,7 +1365,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1374,7 +1374,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -1383,7 +1383,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -1392,7 +1392,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -1401,7 +1401,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -1410,7 +1410,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -1419,7 +1419,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1428,7 +1428,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1437,7 +1437,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -1448,7 +1448,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -1457,7 +1457,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -1466,7 +1466,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -1475,7 +1475,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1484,7 +1484,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -1493,7 +1493,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -1502,7 +1502,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -1511,7 +1511,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -1520,7 +1520,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -1529,7 +1529,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1538,7 +1538,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1547,7 +1547,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -1558,7 +1558,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -1567,7 +1567,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1576,7 +1576,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1585,7 +1585,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1596,7 +1596,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1605,7 +1605,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1616,7 +1616,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -1625,7 +1625,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -1634,7 +1634,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -1643,7 +1643,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1652,7 +1652,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -1661,7 +1661,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -1670,7 +1670,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -1679,7 +1679,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -1688,7 +1688,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -1697,7 +1697,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1706,7 +1706,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1715,7 +1715,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        BINARY_ARITHMETIC_OPERATOR,
+			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -1726,7 +1726,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -1737,7 +1737,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -1748,7 +1748,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -1759,7 +1759,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -1770,7 +1770,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -1781,7 +1781,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -1792,7 +1792,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -1803,7 +1803,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1814,7 +1814,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -1825,7 +1825,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1836,7 +1836,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1847,7 +1847,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -1860,7 +1860,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -1869,7 +1869,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -1878,7 +1878,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -1887,7 +1887,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1896,7 +1896,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -1905,7 +1905,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -1914,7 +1914,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -1923,7 +1923,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        UNARY_ARITHMETIC_OPERATOR,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -1935,7 +1935,7 @@ var operators = map[int][]Function{
 		{
 			Index:       0,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -1944,7 +1944,7 @@ var operators = map[int][]Function{
 		{
 			Index:       1,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -1953,7 +1953,7 @@ var operators = map[int][]Function{
 		{
 			Index:       2,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -1962,7 +1962,7 @@ var operators = map[int][]Function{
 		{
 			Index:       3,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -1971,7 +1971,7 @@ var operators = map[int][]Function{
 		{
 			Index:       4,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -1980,7 +1980,7 @@ var operators = map[int][]Function{
 		{
 			Index:       5,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -1989,7 +1989,7 @@ var operators = map[int][]Function{
 		{
 			Index:       6,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -1998,7 +1998,7 @@ var operators = map[int][]Function{
 		{
 			Index:       7,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2007,7 +2007,7 @@ var operators = map[int][]Function{
 		{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2016,7 +2016,7 @@ var operators = map[int][]Function{
 		{
 			Index:       9,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2025,7 +2025,7 @@ var operators = map[int][]Function{
 		{
 			Index:       10,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2034,7 +2034,7 @@ var operators = map[int][]Function{
 		{
 			Index:       11,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2043,7 +2043,7 @@ var operators = map[int][]Function{
 		{
 			Index:       12,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2052,7 +2052,7 @@ var operators = map[int][]Function{
 		{
 			Index:       13,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2061,7 +2061,7 @@ var operators = map[int][]Function{
 		{
 			Index:       14,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2070,7 +2070,7 @@ var operators = map[int][]Function{
 		{
 			Index:       15,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2079,7 +2079,7 @@ var operators = map[int][]Function{
 		{
 			Index:       16,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2088,7 +2088,7 @@ var operators = map[int][]Function{
 		{
 			Index:       17,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2097,7 +2097,7 @@ var operators = map[int][]Function{
 		{
 			Index:       18,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2106,7 +2106,7 @@ var operators = map[int][]Function{
 		{
 			Index:       19,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2115,7 +2115,7 @@ var operators = map[int][]Function{
 		{
 			Index:       20,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2124,7 +2124,7 @@ var operators = map[int][]Function{
 		{
 			Index:       21,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2133,7 +2133,7 @@ var operators = map[int][]Function{
 		{
 			Index:       22,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2142,7 +2142,7 @@ var operators = map[int][]Function{
 		{
 			Index:       23,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2151,7 +2151,7 @@ var operators = map[int][]Function{
 		{
 			Index:       24,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2160,7 +2160,7 @@ var operators = map[int][]Function{
 		{
 			Index:       25,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2169,7 +2169,7 @@ var operators = map[int][]Function{
 		{
 			Index:       26,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2178,7 +2178,7 @@ var operators = map[int][]Function{
 		{
 			Index:       27,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2187,7 +2187,7 @@ var operators = map[int][]Function{
 		{
 			Index:       28,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2196,7 +2196,7 @@ var operators = map[int][]Function{
 		{
 			Index:       29,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2205,7 +2205,7 @@ var operators = map[int][]Function{
 		{
 			Index:       30,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2214,7 +2214,7 @@ var operators = map[int][]Function{
 		{
 			Index:       31,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2223,7 +2223,7 @@ var operators = map[int][]Function{
 		{
 			Index:       32,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2232,7 +2232,7 @@ var operators = map[int][]Function{
 		{
 			Index:       33,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2241,7 +2241,7 @@ var operators = map[int][]Function{
 		{
 			Index:       34,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2250,7 +2250,7 @@ var operators = map[int][]Function{
 		{
 			Index:       35,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2259,7 +2259,7 @@ var operators = map[int][]Function{
 		{
 			Index:       36,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2268,7 +2268,7 @@ var operators = map[int][]Function{
 		{
 			Index:       37,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2277,7 +2277,7 @@ var operators = map[int][]Function{
 		{
 			Index:       38,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2286,7 +2286,7 @@ var operators = map[int][]Function{
 		{
 			Index:       39,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2295,7 +2295,7 @@ var operators = map[int][]Function{
 		{
 			Index:       40,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2304,7 +2304,7 @@ var operators = map[int][]Function{
 		{
 			Index:       41,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2313,7 +2313,7 @@ var operators = map[int][]Function{
 		{
 			Index:       42,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2322,7 +2322,7 @@ var operators = map[int][]Function{
 		{
 			Index:       43,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2331,7 +2331,7 @@ var operators = map[int][]Function{
 		{
 			Index:       44,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2340,7 +2340,7 @@ var operators = map[int][]Function{
 		{
 			Index:       45,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2349,7 +2349,7 @@ var operators = map[int][]Function{
 		{
 			Index:       46,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2358,7 +2358,7 @@ var operators = map[int][]Function{
 		{
 			Index:       47,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2367,7 +2367,7 @@ var operators = map[int][]Function{
 		{
 			Index:       48,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2376,7 +2376,7 @@ var operators = map[int][]Function{
 		{
 			Index:       49,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2385,7 +2385,7 @@ var operators = map[int][]Function{
 		{
 			Index:       50,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2394,7 +2394,7 @@ var operators = map[int][]Function{
 		{
 			Index:       51,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2403,7 +2403,7 @@ var operators = map[int][]Function{
 		{
 			Index:       52,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2412,7 +2412,7 @@ var operators = map[int][]Function{
 		{
 			Index:       53,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2421,7 +2421,7 @@ var operators = map[int][]Function{
 		{
 			Index:       54,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2430,7 +2430,7 @@ var operators = map[int][]Function{
 		{
 			Index:       55,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2439,7 +2439,7 @@ var operators = map[int][]Function{
 		{
 			Index:       56,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2448,7 +2448,7 @@ var operators = map[int][]Function{
 		{
 			Index:       57,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2457,7 +2457,7 @@ var operators = map[int][]Function{
 		{
 			Index:       58,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2466,7 +2466,7 @@ var operators = map[int][]Function{
 		{
 			Index:       59,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2475,7 +2475,7 @@ var operators = map[int][]Function{
 		{
 			Index:       60,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2484,7 +2484,7 @@ var operators = map[int][]Function{
 		{
 			Index:       61,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2493,7 +2493,7 @@ var operators = map[int][]Function{
 		{
 			Index:       62,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2502,7 +2502,7 @@ var operators = map[int][]Function{
 		{
 			Index:       63,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2511,7 +2511,7 @@ var operators = map[int][]Function{
 		{
 			Index:       64,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2520,7 +2520,7 @@ var operators = map[int][]Function{
 		{
 			Index:       65,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2529,7 +2529,7 @@ var operators = map[int][]Function{
 		{
 			Index:       66,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2538,7 +2538,7 @@ var operators = map[int][]Function{
 		{
 			Index:       67,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2547,7 +2547,7 @@ var operators = map[int][]Function{
 		{
 			Index:       68,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2556,7 +2556,7 @@ var operators = map[int][]Function{
 		{
 			Index:       69,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2565,7 +2565,7 @@ var operators = map[int][]Function{
 		{
 			Index:       70,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2574,7 +2574,7 @@ var operators = map[int][]Function{
 		{
 			Index:       71,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2583,7 +2583,7 @@ var operators = map[int][]Function{
 		{
 			Index:       72,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2592,7 +2592,7 @@ var operators = map[int][]Function{
 		{
 			Index:       73,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2601,7 +2601,7 @@ var operators = map[int][]Function{
 		{
 			Index:       74,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2610,7 +2610,7 @@ var operators = map[int][]Function{
 		{
 			Index:       75,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2619,7 +2619,7 @@ var operators = map[int][]Function{
 		{
 			Index:       76,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2628,7 +2628,7 @@ var operators = map[int][]Function{
 		{
 			Index:       77,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2637,7 +2637,7 @@ var operators = map[int][]Function{
 		{
 			Index:       78,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2646,7 +2646,7 @@ var operators = map[int][]Function{
 		{
 			Index:       79,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2655,7 +2655,7 @@ var operators = map[int][]Function{
 		{
 			Index:       80,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2664,7 +2664,7 @@ var operators = map[int][]Function{
 		{
 			Index:       81,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2673,7 +2673,7 @@ var operators = map[int][]Function{
 		{
 			Index:       82,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2682,7 +2682,7 @@ var operators = map[int][]Function{
 		{
 			Index:       83,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2691,7 +2691,7 @@ var operators = map[int][]Function{
 		{
 			Index:       84,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2700,7 +2700,7 @@ var operators = map[int][]Function{
 		{
 			Index:       85,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2709,7 +2709,7 @@ var operators = map[int][]Function{
 		{
 			Index:       86,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2718,7 +2718,7 @@ var operators = map[int][]Function{
 		{
 			Index:       87,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2727,7 +2727,7 @@ var operators = map[int][]Function{
 		{
 			Index:       88,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2736,7 +2736,7 @@ var operators = map[int][]Function{
 		{
 			Index:       89,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2745,7 +2745,7 @@ var operators = map[int][]Function{
 		{
 			Index:       90,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2754,7 +2754,7 @@ var operators = map[int][]Function{
 		{
 			Index:       91,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2763,7 +2763,7 @@ var operators = map[int][]Function{
 		{
 			Index:       92,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2772,7 +2772,7 @@ var operators = map[int][]Function{
 		{
 			Index:       93,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2781,7 +2781,7 @@ var operators = map[int][]Function{
 		{
 			Index:       94,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2790,7 +2790,7 @@ var operators = map[int][]Function{
 		{
 			Index:       95,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2799,7 +2799,7 @@ var operators = map[int][]Function{
 		{
 			Index:       96,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2808,7 +2808,7 @@ var operators = map[int][]Function{
 		{
 			Index:       97,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2817,7 +2817,7 @@ var operators = map[int][]Function{
 		{
 			Index:       98,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2826,7 +2826,7 @@ var operators = map[int][]Function{
 		{
 			Index:       99,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2835,7 +2835,7 @@ var operators = map[int][]Function{
 		{
 			Index:       100,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -2844,7 +2844,7 @@ var operators = map[int][]Function{
 		{
 			Index:       101,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -2853,7 +2853,7 @@ var operators = map[int][]Function{
 		{
 			Index:       102,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_date, types.T_date},
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
@@ -2862,7 +2862,7 @@ var operators = map[int][]Function{
 		{
 			Index:       103,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_datetime, types.T_datetime},
 			ReturnTyp:   types.T_datetime,
 			TypeCheckFn: strictTypeCheck,
@@ -2871,7 +2871,7 @@ var operators = map[int][]Function{
 		{
 			Index:       104,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_timestamp, types.T_timestamp},
 			ReturnTyp:   types.T_timestamp,
 			TypeCheckFn: strictTypeCheck,
@@ -2880,7 +2880,7 @@ var operators = map[int][]Function{
 		{
 			Index:       105,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
@@ -2889,7 +2889,7 @@ var operators = map[int][]Function{
 		{
 			Index:       106,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -2898,7 +2898,7 @@ var operators = map[int][]Function{
 		{
 			Index:       107,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2907,7 +2907,7 @@ var operators = map[int][]Function{
 		{
 			Index:       108,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -2916,7 +2916,7 @@ var operators = map[int][]Function{
 		{
 			Index:       109,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -2925,7 +2925,7 @@ var operators = map[int][]Function{
 		{
 			Index:       110,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -2934,7 +2934,7 @@ var operators = map[int][]Function{
 		{
 			Index:       111,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -2943,7 +2943,7 @@ var operators = map[int][]Function{
 		{
 			Index:       112,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -2952,7 +2952,7 @@ var operators = map[int][]Function{
 		{
 			Index:       113,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -2961,7 +2961,7 @@ var operators = map[int][]Function{
 		{
 			Index:       114,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -2970,7 +2970,7 @@ var operators = map[int][]Function{
 		{
 			Index:       115,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -2979,7 +2979,7 @@ var operators = map[int][]Function{
 		{
 			Index:       116,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -2988,7 +2988,7 @@ var operators = map[int][]Function{
 		{
 			Index:       117,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
@@ -2997,7 +2997,7 @@ var operators = map[int][]Function{
 		{
 			Index:       118,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
@@ -3006,7 +3006,7 @@ var operators = map[int][]Function{
 		{
 			Index:       119,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
@@ -3015,7 +3015,7 @@ var operators = map[int][]Function{
 		{
 			Index:       120,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
@@ -3024,7 +3024,7 @@ var operators = map[int][]Function{
 		{
 			Index:       121,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
@@ -3033,7 +3033,7 @@ var operators = map[int][]Function{
 		{
 			Index:       122,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
@@ -3042,7 +3042,7 @@ var operators = map[int][]Function{
 		{
 			Index:       123,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
@@ -3051,7 +3051,7 @@ var operators = map[int][]Function{
 		{
 			Index:       124,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
@@ -3060,7 +3060,7 @@ var operators = map[int][]Function{
 		{
 			Index:       125,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
@@ -3069,7 +3069,7 @@ var operators = map[int][]Function{
 		{
 			Index:       126,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
@@ -3078,7 +3078,7 @@ var operators = map[int][]Function{
 		{
 			Index:       127,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3087,7 +3087,7 @@ var operators = map[int][]Function{
 		{
 			Index:       128,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3096,7 +3096,7 @@ var operators = map[int][]Function{
 		{
 			Index:       129,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3105,7 +3105,7 @@ var operators = map[int][]Function{
 		{
 			Index:       130,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3114,7 +3114,7 @@ var operators = map[int][]Function{
 		{
 			Index:       131,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3123,7 +3123,7 @@ var operators = map[int][]Function{
 		{
 			Index:       132,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3132,7 +3132,7 @@ var operators = map[int][]Function{
 		{
 			Index:       133,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3141,7 +3141,7 @@ var operators = map[int][]Function{
 		{
 			Index:       134,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3150,7 +3150,7 @@ var operators = map[int][]Function{
 		{
 			Index:       135,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3159,7 +3159,7 @@ var operators = map[int][]Function{
 		{
 			Index:       136,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint8, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3168,7 +3168,7 @@ var operators = map[int][]Function{
 		{
 			Index:       137,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3177,7 +3177,7 @@ var operators = map[int][]Function{
 		{
 			Index:       138,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint16, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3186,7 +3186,7 @@ var operators = map[int][]Function{
 		{
 			Index:       139,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3195,7 +3195,7 @@ var operators = map[int][]Function{
 		{
 			Index:       140,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint32, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3204,7 +3204,7 @@ var operators = map[int][]Function{
 		{
 			Index:       141,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3213,7 +3213,7 @@ var operators = map[int][]Function{
 		{
 			Index:       142,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_uint64, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3222,7 +3222,7 @@ var operators = map[int][]Function{
 		{
 			Index:       143,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3231,7 +3231,7 @@ var operators = map[int][]Function{
 		{
 			Index:       144,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3240,7 +3240,7 @@ var operators = map[int][]Function{
 		{
 			Index:       145,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3249,7 +3249,7 @@ var operators = map[int][]Function{
 		{
 			Index:       146,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3258,7 +3258,7 @@ var operators = map[int][]Function{
 		{
 			Index:       147,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_date},
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
@@ -3267,7 +3267,7 @@ var operators = map[int][]Function{
 		{
 			Index:       148,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_datetime},
 			ReturnTyp:   types.T_datetime,
 			TypeCheckFn: strictTypeCheck,
@@ -3276,7 +3276,7 @@ var operators = map[int][]Function{
 		{
 			Index:       149,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_timestamp},
 			ReturnTyp:   types.T_timestamp,
 			TypeCheckFn: strictTypeCheck,
@@ -3285,7 +3285,7 @@ var operators = map[int][]Function{
 		{
 			Index:       150,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int8, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -3294,7 +3294,7 @@ var operators = map[int][]Function{
 		{
 			Index:       151,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int16, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -3303,7 +3303,7 @@ var operators = map[int][]Function{
 		{
 			Index:       152,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int32, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -3312,7 +3312,7 @@ var operators = map[int][]Function{
 		{
 			Index:       153,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_int64, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -3321,7 +3321,7 @@ var operators = map[int][]Function{
 		{
 			Index:       154,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_timestamp, types.T_datetime},
 			ReturnTyp:   types.T_datetime,
 			TypeCheckFn: strictTypeCheck,
@@ -3330,7 +3330,7 @@ var operators = map[int][]Function{
 		{
 			Index:       155,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_decimal64, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
@@ -3339,7 +3339,7 @@ var operators = map[int][]Function{
 		{
 			Index:       156,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_char, types.T_varchar},
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
@@ -3348,7 +3348,7 @@ var operators = map[int][]Function{
 		{
 			Index:       157,
 			Flag:        plan.Function_STRICT,
-			Kind:        CAST_EXPRESSION,
+			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_varchar, types.T_char},
 			ReturnTyp:   types.T_char,
 			TypeCheckFn: strictTypeCheck,
@@ -3359,7 +3359,7 @@ var operators = map[int][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_NONE,
-			Kind:      CASE_WHEN_EXPRESSION,
+			Layout:    CASE_WHEN_EXPRESSION,
 			Args:      nil,
 			ReturnTyp: types.T_int64,
 			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

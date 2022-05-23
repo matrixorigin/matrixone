@@ -38,7 +38,7 @@ type TxnCtx struct {
 	IDCtx             []byte
 	StartTS, CommitTS uint64
 	Info              []byte
-	State             int32
+	State             txnif.TxnState
 }
 
 func NewTxnCtx(rwlocker *sync.RWMutex, id, start uint64, info []byte) *TxnCtx {
@@ -125,6 +125,10 @@ func (ctx *TxnCtx) ToRollbackedLocked() error {
 	}
 	ctx.State = txnif.TxnStateRollbacked
 	return nil
+}
+
+func (ctx *TxnCtx) ToUnknownLocked() {
+	ctx.State = txnif.TxnStateUnknown
 }
 
 // For testing

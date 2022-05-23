@@ -261,3 +261,24 @@ func TestAlignDecimal128UsingScaleDiffBatch(t *testing.T) {
 	require.Equal(t, Decimal128{120000000, 0}, dst[4])
 	require.Equal(t, Decimal128{-1234000000, -1}, dst[5])
 }
+
+func TestDecimal128Int64Div(t *testing.T) {
+	src := make([]Decimal128, 6)
+	src[0], _ = ParseStringToDecimal128("12345.67890", 38, 5)
+	src[1], _ = ParseStringToDecimal128("54321.54321", 38, 5)
+	src[2], _ = ParseStringToDecimal128("54321.6789", 38, 5)
+	src[3], _ = ParseStringToDecimal128("54321", 38, 5)
+	src[4], _ = ParseStringToDecimal128("1.2", 38, 5)
+	src[5], _ = ParseStringToDecimal128("-12.34", 38, 5)
+	result := make([]Decimal128, 6)
+	for i := range src {
+		result[i] = Decimal128Int64Div(src[i], 10)
+	}
+	require.Equal(t, Decimal128{123456789, 0}, result[0])
+	require.Equal(t, Decimal128{543215432, 0}, result[1])
+	require.Equal(t, Decimal128{543216789, 0}, result[2])
+	require.Equal(t, Decimal128{543210000, 0}, result[3])
+	require.Equal(t, Decimal128{12000, 0}, result[4])
+	require.Equal(t, Decimal128{-123400, -1}, result[5])
+
+}
