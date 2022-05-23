@@ -176,11 +176,11 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.txn = nil
 	node.logIndex = index
-	if node.chain.controller != nil {
-		node.chain.controller.SetMaxVisible(node.commitTs)
+	if node.chain.mvcc != nil {
+		node.chain.mvcc.SetMaxVisible(node.commitTs)
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
-	node.chain.controller.IncChangeNodeCnt()
+	node.chain.mvcc.IncChangeNodeCnt()
 	return
 }
 
@@ -198,7 +198,7 @@ func (node *DeleteNode) StringLocked() string {
 }
 
 func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
-	cn, err := w.Write(txnbase.MarshalID(node.chain.controller.GetID()))
+	cn, err := w.Write(txnbase.MarshalID(node.chain.mvcc.GetID()))
 	if err != nil {
 		return
 	}
