@@ -193,6 +193,11 @@ func (txn *Txn) PrepareCommit() (err error) {
 	return err
 }
 
+func (txn *Txn) PreApplyCommit() (err error) {
+	err = txn.Store.PreApplyCommit()
+	return
+}
+
 func (txn *Txn) ApplyCommit() (err error) {
 	defer func() {
 		if err == nil {

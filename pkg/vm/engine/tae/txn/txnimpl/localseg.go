@@ -79,8 +79,7 @@ func (seg *localSegment) registerInsertNode() {
 	seg.nodes = append(seg.nodes, n)
 }
 
-func (seg *localSegment) ApplyAppend() {
-	var err error
+func (seg *localSegment) ApplyAppend() (err error) {
 	for _, ctx := range seg.appends {
 		var (
 			destOff    uint32
@@ -102,6 +101,7 @@ func (seg *localSegment) ApplyAppend() {
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
 	}
+	return
 }
 
 func (seg *localSegment) PrepareApply() (err error) {

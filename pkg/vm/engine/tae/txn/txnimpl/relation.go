@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -180,6 +181,31 @@ func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 
 func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, error) {
 	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
+}
+
+func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v interface{}) (err error) {
+	id, row, err := h.table.GetByFilter(filter)
+	if err != nil {
+		return
+	}
+	schema := h.table.entry.GetSchema()
+	if !schema.IsPartOfPK(int(col)) {
+		err = h.table.Update(id, row, col, v)
+		return
+	}
+	bat := catalog.MockData(schema, 0)
+	for i := range schema.ColDefs {
+		colVal, err := h.table.GetValue(id, row, uint16(i))
+		if err != nil {
+			return err
+		}
+		compute.AppendValue(bat.Vecs[i], colVal)
+	}
+	if err = h.table.RangeDelete(id, row, row); err != nil {
+		return
+	}
+	err = h.table.Append(bat)
+	return
 }
 
 func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{}) error {
