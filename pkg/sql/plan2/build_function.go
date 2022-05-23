@@ -27,13 +27,28 @@ import (
 )
 
 func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (*Expr, error) {
+	name = strings.ToLower(name)
+
+	// deal with special function
+	switch name {
+	case "+", "-":
+		if len(exprs) != 2 {
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "operator function need two args")
+		}
+		if exprs[0].Typ.Id == plan.Type_DATE && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			return getIntervalFunction(name, exprs[0], exprs[1])
+		}
+		if exprs[0].Typ.Id == plan.Type_INTERVAL && exprs[1].Typ.Id == plan.Type_DATE {
+			return getIntervalFunction(name, exprs[1], exprs[0])
+		}
+	}
+
 	// get args(exprs) & types
 	argsLength := len(exprs)
 	argsType := make([]types.T, argsLength)
 	for idx, expr := range exprs {
 		argsType[idx] = types.T(expr.Typ.Id)
 	}
-	name = strings.ToLower(name)
 
 	// get function definition
 	funcDef, funcId, argsCastType, err := function.GetFunctionByName(name, argsType)
@@ -131,4 +146,57 @@ func getFunctionObjRef(funcId int64, name string) *ObjectRef {
 		Obj:     funcId,
 		ObjName: name,
 	}
+}
+
+func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr, error) {
+	strExpr := intervalExpr.Expr.(*plan.Expr_F).F.Args[0].Expr
+	intervalStr := strExpr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+	intervalArray := strings.Split(intervalStr, " ")
+
+	intervalType, err := types.IntervalTypeOf(intervalArray[1])
+	if err != nil {
+		return nil, err
+	}
+	returnNum, returnType, err := types.NormalizeInterval(intervalArray[0], intervalType)
+	if err != nil {
+		return nil, err
+	}
+
+	// only support date operator now
+	namesMap := map[string]string{
+		"+": "date_add",
+		"-": "date_sub",
+	}
+
+	exprs := []*Expr{
+		dateExpr,
+		{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Value: &plan.Const_Ival{
+						Ival: returnNum,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:   plan.Type_INT64,
+				Size: 8,
+			},
+		},
+		{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Value: &plan.Const_Ival{
+						Ival: int64(returnType),
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:   plan.Type_INT64,
+				Size: 8,
+			},
+		},
+	}
+
+	return getFunctionExprByNameAndPlanExprs(namesMap[name], exprs)
 }
