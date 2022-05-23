@@ -39,11 +39,17 @@ jobs:
         with:
           go-version: 1.18
 
-
-
       - name: Build MatrixOne
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config && make build
+          
+          
+      - name: Clone test-tool repository
+        uses: actions/checkout@v2
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./
+          ref: main
 
 
       - uses: actions/upload-artifact@v2
