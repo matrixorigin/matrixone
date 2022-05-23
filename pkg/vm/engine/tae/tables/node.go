@@ -72,6 +72,16 @@ func (node *appendableNode) TryPin() (base.INodeHandle, error) {
 	return node.mgr.TryPin(node.Node, time.Second)
 }
 
+func (node *appendableNode) DoWithPin(do func() error) (err error) {
+	h, err := node.TryPin()
+	if err != nil {
+		return
+	}
+	defer h.Close()
+	err = do()
+	return
+}
+
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 	if coarse {
 		readLock := node.block.mvcc.GetSharedLock()

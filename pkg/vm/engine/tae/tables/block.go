@@ -444,55 +444,52 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 }
 
 func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompressed *bytes.Buffer, raw bool) (view *model.ColumnView, err error) {
-	var h base.INodeHandle
-	if h, err = blk.node.TryPin(); err != nil {
-		return
-	}
-	defer h.Close()
+	err = blk.node.DoWithPin(func() (err error) {
+		maxRow := uint32(0)
+		blk.mvcc.RLock()
+		maxRow, visible, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
+		blk.mvcc.RUnlock()
+		if !visible || err != nil {
+			return
+		}
 
-	maxRow := uint32(0)
-	blk.mvcc.RLock()
-	maxRow, visible, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
-	blk.mvcc.RUnlock()
-	if !visible || err != nil {
-		return
-	}
+		view = model.NewColumnView(ts, colIdx)
+		if raw {
+			view.RawVec, err = blk.node.GetVectorCopy(maxRow, colIdx, compressed, decompressed)
+			return
+		}
 
-	view = model.NewColumnView(ts, colIdx)
-	if raw {
-		view.RawVec, err = blk.node.GetVectorCopy(maxRow, colIdx, compressed, decompressed)
-		return
-	}
+		ivec, err := blk.node.GetVectorView(maxRow, colIdx)
+		if err != nil {
+			return
+		}
+		// TODO: performance optimization needed
+		var srcvec *gvec.Vector
+		if decompressed == nil {
+			srcvec, _ = ivec.CopyToVector()
+		} else {
+			srcvec, _ = ivec.CopyToVectorWithBuffer(compressed, decompressed)
+		}
+		if maxRow < uint32(gvec.Length(srcvec)) {
+			view.RawVec = gvec.New(srcvec.Typ)
+			gvec.Window(srcvec, 0, int(maxRow), view.RawVec)
+		} else {
+			view.RawVec = srcvec
+		}
 
-	ivec, err := blk.node.GetVectorView(maxRow, colIdx)
-	if err != nil {
-		return
-	}
-	// TODO: performance optimization needed
-	var srcvec *gvec.Vector
-	if decompressed == nil {
-		srcvec, _ = ivec.CopyToVector()
-	} else {
-		srcvec, _ = ivec.CopyToVectorWithBuffer(compressed, decompressed)
-	}
-	if maxRow < uint32(gvec.Length(srcvec)) {
-		view.RawVec = gvec.New(srcvec.Typ)
-		gvec.Window(srcvec, 0, int(maxRow), view.RawVec)
-	} else {
-		view.RawVec = srcvec
-	}
+		blk.mvcc.RLock()
+		err = blk.FillColumnUpdates(view)
+		if err == nil {
+			err = blk.FillColumnDeletes(view)
+		}
+		blk.mvcc.RUnlock()
+		if err != nil {
+			return
+		}
 
-	blk.mvcc.RLock()
-	err = blk.FillColumnUpdates(view)
-	if err == nil {
-		err = blk.FillColumnDeletes(view)
-	}
-	blk.mvcc.RUnlock()
-	if err != nil {
+		err = view.Eval(true)
 		return
-	}
-
-	err = view.Eval(true)
+	})
 
 	return
 }
@@ -710,26 +707,23 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 
 func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
 	var row uint32
-	h, err := blk.node.TryPin()
-	if err != nil {
-		return
-	}
-	defer h.Close()
-
-	index := blk.indexHolder.(acif.IAppendableBlockIndexHolder)
-	blk.mvcc.RLock()
-	defer blk.mvcc.RUnlock()
-	vec, err := blk.node.data.GetVectorByAttr(int(blk.meta.GetSchema().PrimaryKey))
-	if err != nil {
-		return err
-	}
-	if gen.HasNext() {
-		row = gen.Next()
-		v, _ := vec.GetValue(int(row))
-		if err = index.Delete(v); err != nil {
-			return
+	err = blk.node.DoWithPin(func() (err error) {
+		index := blk.indexHolder.(acif.IAppendableBlockIndexHolder)
+		blk.mvcc.RLock()
+		defer blk.mvcc.RUnlock()
+		vec, err := blk.node.data.GetVectorByAttr(int(blk.meta.GetSchema().PrimaryKey))
+		if err != nil {
+			return err
 		}
-	}
+		if gen.HasNext() {
+			row = gen.Next()
+			v, _ := vec.GetValue(int(row))
+			if err = index.Delete(v); err != nil {
+				return
+			}
+		}
+		return
+	})
 	return
 }
 
