@@ -140,6 +140,9 @@ func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
 
 func (blk *txnBlock) GetMeta() interface{} { return blk.entry }
 func (blk *txnBlock) String() string {
+	if blk.isUncommitted {
+		return blk.entry.String()
+	}
 	blkData := blk.entry.GetBlockData()
 	return blkData.PPString(common.PPL1, 0, "")
 	// return blk.entry.String()

@@ -315,8 +315,8 @@ func (node *ColumnNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.txn = nil
 	node.logIndex = index
-	node.chain.controller.SetMaxVisible(node.commitTs)
-	node.chain.controller.IncChangeNodeCnt()
+	node.chain.mvcc.SetMaxVisible(node.commitTs)
+	node.chain.mvcc.IncChangeNodeCnt()
 	return
 }
 

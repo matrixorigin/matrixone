@@ -26,10 +26,11 @@ import (
 )
 
 type Txn2PC interface {
-	PreCommit() error
 	PrepareRollback() error
-	PrepareCommit() error
 	ApplyRollback() error
+	PreCommit() error
+	PrepareCommit() error
+	PreApplyCommit() error
 	ApplyCommit() error
 }
 
@@ -148,6 +149,8 @@ type DeleteNode interface {
 	GetChain() DeleteChain
 	RangeDeleteLocked(start, end uint32)
 	GetCardinalityLocked() uint32
+	IsDeletedLocked(row uint32) bool
+	OnApply() error
 }
 
 type UpdateNode interface {

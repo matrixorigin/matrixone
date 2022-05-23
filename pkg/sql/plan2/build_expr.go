@@ -383,6 +383,7 @@ func buildNumVal(val constant.Value) (*Expr, error) {
 			Typ: &plan.Type{
 				Id:        plan.Type_BOOL,
 				Nullable:  false,
+				Size:      1,
 				Width:     0,
 				Precision: 0,
 			},

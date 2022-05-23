@@ -21,9 +21,7 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -149,6 +147,10 @@ func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) {
 func (node *DeleteNode) GetCommitTSLocked() uint64 { return node.commitTs }
 func (node *DeleteNode) GetStartTS() uint64        { return node.startTs }
 
+func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
+	return node.mask.Contains(row)
+}
+
 func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	node.mask.AddRange(uint64(start), uint64(end+1))
 }
@@ -176,11 +178,11 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.txn = nil
 	node.logIndex = index
-	if node.chain.controller != nil {
-		node.chain.controller.SetMaxVisible(node.commitTs)
+	if node.chain.mvcc != nil {
+		node.chain.mvcc.SetMaxVisible(node.commitTs)
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
-	node.chain.controller.IncChangeNodeCnt()
+	node.chain.mvcc.IncChangeNodeCnt()
 	return
 }
 
@@ -198,7 +200,7 @@ func (node *DeleteNode) StringLocked() string {
 }
 
 func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
-	cn, err := w.Write(txnbase.MarshalID(node.chain.controller.GetID()))
+	cn, err := w.Write(txnbase.MarshalID(node.chain.mvcc.GetID()))
 	if err != nil {
 		return
 	}
@@ -249,13 +251,6 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 
-func (node *DeleteNode) ApplyDeletes(vec *gvec.Vector) *gvec.Vector {
-	if node == nil {
-		return vec
-	}
-	return compute.ApplyDeleteToVector(vec, node.mask)
-}
-
 func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.Lock()
 	defer node.chain.Unlock()
@@ -264,3 +259,12 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 }
 
 func (node *DeleteNode) ApplyRollback() (err error) { return }
+
+func (node *DeleteNode) OnApply() (err error) {
+	listener := node.chain.mvcc.GetDeletesListener()
+	if listener == nil {
+		return
+	}
+	err = listener(node.mask.Iterator())
+	return
+}

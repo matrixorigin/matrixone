@@ -197,6 +197,10 @@ func (s *Schema) String() string {
 	return string(buf)
 }
 
+func (s *Schema) IsPartOfPK(idx int) bool {
+	return int32(idx) == s.PrimaryKey
+}
+
 func (s *Schema) GetPKType() types.Type {
 	return s.ColDefs[s.PrimaryKey].Type
 }

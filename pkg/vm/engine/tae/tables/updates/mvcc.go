@@ -45,12 +45,13 @@ func newSharedLock(locker *sync.RWMutex) *sharedLock {
 
 type MVCCHandle struct {
 	*sync.RWMutex
-	columns    map[uint16]*ColumnChain
-	deletes    *DeleteChain
-	meta       *catalog.BlockEntry
-	maxVisible uint64
-	appends    []*AppendNode
-	changes    uint32
+	columns         map[uint16]*ColumnChain
+	deletes         *DeleteChain
+	meta            *catalog.BlockEntry
+	maxVisible      uint64
+	appends         []*AppendNode
+	changes         uint32
+	deletesListener func(common.RowGen) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -69,6 +70,14 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MVCCHandle) SetDeletesListener(l func(common.RowGen) error) {
+	n.deletesListener = l
+}
+
+func (n *MVCCHandle) GetDeletesListener() func(common.RowGen) error {
+	return n.deletesListener
 }
 
 func (n *MVCCHandle) HasActiveAppendNode() bool {

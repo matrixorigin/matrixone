@@ -43,8 +43,8 @@ var operators = map[int][]Function{
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
-				types.T_uint8, // left part of +
-				types.T_uint8, // right part of +
+				types.T_uint8,
+				types.T_uint8,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -223,8 +223,8 @@ var operators = map[int][]Function{
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
-				types.T_bool, // left part of +
-				types.T_bool, // right part of +
+				types.T_bool,
+				types.T_bool,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,

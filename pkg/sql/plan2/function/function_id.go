@@ -168,6 +168,9 @@ const (
 	SUBSTRING // SUBSTRING
 	YEAR      // YEAR
 
+	DATE_ADD // DATE_ADD
+	DATE_SUB // DATE_SUB
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -213,4 +216,6 @@ var functionIdRegister = map[string]int32{
 	"substr":    SUBSTRING,
 	"substring": SUBSTRING,
 	"iff":       IFF,
+	"date_add":  DATE_ADD,
+	"date_sub":  DATE_SUB,
 }
