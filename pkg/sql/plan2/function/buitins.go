@@ -94,4 +94,26 @@ var builtins = map[int][]Function{
 			Fn:          nil,
 		},
 	},
+	DATE_ADD: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_date,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+	},
+	DATE_SUB: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_date,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+	},
 }

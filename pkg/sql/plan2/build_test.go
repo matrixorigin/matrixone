@@ -29,17 +29,7 @@ import (
 //only use in developing
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	sql := `
-	select
-	(case
-		when o_orderpriority = '1-URGENT' then 1 else 0
-	end) as high_line_count
-from
-	orders,
-	lineitem
-where
-	o_orderkey = l_orderkey
-	`
+	sql := `select date '1982' + interval '11 day'`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
