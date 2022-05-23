@@ -22,19 +22,12 @@ jobs:
     runs-on: ubuntu-latest
     name: Build on CentOS/x64
 
-    # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
 
-      - name: Clone test-tool repository
-        uses: actions/checkout@v2
-        with:
-          repository: matrixorigin/mo-tester
-          path: ./
-          ref: main
+
 
       - name: Set up Go
         uses: actions/setup-go@v2
