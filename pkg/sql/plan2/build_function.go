@@ -63,7 +63,7 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (*Expr, error
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(funcDef, funcId, name),
+				Func: getFunctionObjRef(funcId, name),
 				Args: exprs,
 			},
 		},
@@ -111,14 +111,14 @@ func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
 		types.T(expr.Typ.Id),
 		types.T(toType.Id),
 	}
-	funcDef, funcId, _, err := function.GetFunctionByName("cast", argsType)
+	_, funcId, _, err := function.GetFunctionByName("cast", argsType)
 	if err != nil {
 		return nil, err
 	}
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(funcDef, funcId, "cast"),
+				Func: getFunctionObjRef(funcId, "cast"),
 				Args: []*Expr{expr},
 			},
 		},
@@ -126,10 +126,9 @@ func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
 	}, nil
 }
 
-func getFunctionObjRef(funcDef function.Function, funcId int, name string) *ObjectRef {
+func getFunctionObjRef(funcId int64, name string) *ObjectRef {
 	return &ObjectRef{
-		Schema:  int64(funcId),
-		Obj:     int64(funcDef.Index),
+		Obj:     funcId,
 		ObjName: name,
 	}
 }

@@ -89,7 +89,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 	// 	return result, errors.New(errno.InvalidName, "invalid function or opreator name '"+funcName+"'")
 	// }
 
-	funcProtoType, err := function.GetFunctionByIndex(int(funcDef.Schema), int(funcDef.Obj))
+	funcProtoType, err := function.GetFunctionByID(funcDef.Obj)
 	if err != nil {
 		return result, errors.New(errno.InvalidName, "invalid function or opreator name '"+funcName+"'")
 	}
@@ -98,7 +98,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 	case function.STANDARD_FUNCTION:
 		result += funcExpr.F.Func.GetObjName() + "("
 		if len(funcExpr.F.Args) > 0 {
-			var first bool = true
+			var first = true
 			for _, v := range funcExpr.F.Args {
 				if !first {
 					result += ", "
