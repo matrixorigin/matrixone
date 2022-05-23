@@ -510,7 +510,7 @@ func TestTxnManager1(t *testing.T) {
 	lock := sync.Mutex{}
 	seqs := make([]int, 0)
 
-	txn.SetPrepareCommitFn(func(i interface{}) error {
+	txn.SetPrepareCommitFn(func(_ txnif.AsyncTxn) error {
 		time.Sleep(time.Millisecond * 100)
 		lock.Lock()
 		seqs = append(seqs, 2)
@@ -523,7 +523,7 @@ func TestTxnManager1(t *testing.T) {
 		defer wg.Done()
 		txn2, _ := mgr.StartTxn(nil)
 		txn2.MockIncWriteCnt()
-		txn2.SetPrepareCommitFn(func(i interface{}) error {
+		txn2.SetPrepareCommitFn(func(_ txnif.AsyncTxn) error {
 			lock.Lock()
 			seqs = append(seqs, 4)
 			lock.Unlock()

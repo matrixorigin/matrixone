@@ -401,7 +401,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 
 	logEntry, err := store.cmdMgr.ApplyTxnRecord()
 	if err != nil {
-		panic(err)
+		return
 	}
 	if logEntry != nil {
 		store.logs = append(store.logs, logEntry)
@@ -414,7 +414,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 func (store *txnStore) CollectCmd() (err error) {
 	for _, db := range store.dbs {
 		if err = db.CollectCmd(store.cmdMgr); err != nil {
-			panic(err)
+			return
 		}
 	}
 	return

@@ -162,11 +162,11 @@ func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v interface{}, 
 	return chain.view.GetValue(row, ts)
 }
 
-func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]interface{}) {
+func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]interface{}, error) {
 	return chain.view.CollectUpdates(ts)
 }
 
-func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, indexes []*wal.Index) {
+func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, indexes []*wal.Index, err error) {
 	var merged *ColumnNode
 	chain.LoopChainLocked(func(n *ColumnNode) bool {
 		n.RLock()
@@ -186,9 +186,13 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			txn := n.txn
 			n.RUnlock()
 			state := txn.GetTxnState(true)
+			// logutil.Infof("[%d, %d] -- wait --> %s: %d", startTs, endTs, txn.Repr(), state)
 			// 3.1.1. Rollbacked. Skip it and go to next
 			if state == txnif.TxnStateRollbacked {
 				return true
+			} else if state == txnif.TxnStateUnknown {
+				err = txnif.TxnInternalErr
+				return false
 			}
 			// 3.1.2. Committed
 			n.RLock()

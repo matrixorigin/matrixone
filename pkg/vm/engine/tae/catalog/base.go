@@ -165,11 +165,6 @@ func (be *BaseEntry) IsTerminated(waitIfcommitting bool) bool {
 
 func (be *BaseEntry) IsCommitted() bool {
 	return be.Txn == nil && be.CreateAt > 0
-	// if be.Txn == nil {
-	// 	return true
-	// }
-	// state := be.Txn.GetTxnState(true)
-	// return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
 }
 
 func (be *BaseEntry) GetID() uint64 { return be.ID }
@@ -375,72 +370,72 @@ func (be *BaseEntry) CreateAndDropInSameTxn() bool {
 	return false
 }
 
-func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool {
-	if txn == nil {
-		return true
-	}
+func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) (ok bool, err error) {
+	// defer func() {
+	// 	if ok {
+	// 		logutil.Infof("%s [Can Read] %s", txn.String(), be.String())
+	// 	} else {
+	// 		logutil.Infof("%s [Cannot Read] %s", txn.String(), be.String())
+	// 	}
+	// }()
 	thisTxn := be.Txn
+	if txn == nil {
+		ok, err = true, nil
+		return
+	}
 	// No active txn is on this entry
 	if !be.HasActiveTxn() {
 		// This entry is created after txn starts, skip this entry
 		// This entry is deleted before txn starts, skip this entry
 		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) {
-			return false
+			ok, err = false, nil
+			return
 		}
 		// Otherwise, use this entry
-		return true
+		ok, err = true, nil
+		return
 	}
 	// If this entry was written by the same txn as txn
 	if be.IsSameTxn(txn) {
 		// This entry was deleted by the same txn, skip this entry
 		// This entry was created by the same txn, use this entry
-		return !be.IsDroppedUncommitted()
-
-	}
-	// This entry is not created, skip this entry
-	if !be.HasCreated() {
-		return false
-	}
-	// This entry was created after txn start ts, skip this entry
-	if be.CreateAfter(txn.GetStartTS()) {
-		return false
+		ok = !be.IsDroppedUncommitted()
+		return
 	}
 
-	// This entry was not dropped before or by any active tansactions, use this entry
-	if !be.HasDropped() {
-		return true
+	// If this txn is uncommitted or committing after txn start ts
+	if thisTxn.GetCommitTS() > txn.GetStartTS() {
+		if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
+			ok = false
+		} else {
+			ok = true
+		}
+		return
 	}
 
-	// This entry was dropped after txn starts, use this entry
-	if be.DeleteAfter(txn.GetStartTS()) {
-		return true
-	}
-
-	// This entry was deleted before txn start
-	// Delete is uncommitted by other txn, skip this entry
-	if !be.IsCommitting() {
-		return false
-	}
-	if be.CreateAndDropInSameTxn() {
-		return false
-	}
-	// The txn is committing, wait till committed
+	// Txn is committing before txn start ts, wait till committed or rollbacked
 	if rwlocker != nil {
 		rwlocker.RUnlock()
 	}
 	state := thisTxn.GetTxnState(true)
+	// logutil.Infof("%s -- wait --> %s: %d", txn.Repr(), thisTxn.Repr(), state)
 	if rwlocker != nil {
 		rwlocker.RLock()
 	}
-	if state == txnif.TxnStateRollbacked {
-		return true
+	if state == txnif.TxnStateUnknown {
+		ok, err = false, txnif.TxnInternalErr
+		return
 	}
-
-	return false
+	if be.CreateAfter(txn.GetStartTS()) || be.DeleteBefore(txn.GetStartTS()) || be.InTxnOrRollbacked() {
+		ok = false
+	} else {
+		ok = true
+	}
+	return
 }
 
 func (be *BaseEntry) String() string {
-	s := fmt.Sprintf("[Op=%s][ID=%d][%d,%d]%s", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt, be.LogIndex.String())
+	s := fmt.Sprintf("[Op=%s][ID=%d][%d=>%d]%s", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt, be.LogIndex.String())
 	if be.Txn != nil {
 		s = fmt.Sprintf("%s%s", s, be.Txn.Repr())
 	}
@@ -473,9 +468,12 @@ func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (
 	if rwlocker != nil {
 		rwlocker.RUnlock()
 	}
-	eTxn.GetTxnState(true)
+	state := eTxn.GetTxnState(true)
 	if rwlocker != nil {
 		rwlocker.RLock()
+	}
+	if state == txnif.TxnStateUnknown {
+		err = txnif.TxnInternalErr
 	}
 	return
 }

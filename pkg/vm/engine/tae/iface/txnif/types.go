@@ -25,10 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type TxnClient interface {
-	StartTxn(info []byte) (AsyncTxn, error)
-}
-
 type Txn2PC interface {
 	PreCommit() error
 	PrepareRollback() error
@@ -69,10 +65,10 @@ type TxnChanger interface {
 	ToCommittingLocked(ts uint64) error
 	ToRollbackedLocked() error
 	ToRollbackingLocked(ts uint64) error
+	ToUnknownLocked()
 	Commit() error
 	Rollback() error
 	SetError(error)
-	SetPrepareCommitFn(func(interface{}) error)
 }
 
 type TxnWriter interface {
@@ -80,12 +76,16 @@ type TxnWriter interface {
 }
 
 type TxnAsyncer interface {
-	WaitDone() error
+	WaitDone(error) error
 }
 
 type TxnTest interface {
 	MockSetCommitTSLocked(ts uint64)
 	MockIncWriteCnt() int
+	SetPrepareCommitFn(func(AsyncTxn) error)
+	SetPrepareRollbackFn(func(AsyncTxn) error)
+	SetApplyCommitFn(func(AsyncTxn) error)
+	SetApplyRollbackFn(func(AsyncTxn) error)
 }
 
 type AsyncTxn interface {
@@ -135,7 +135,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts uint64) error
 	DepthLocked() int
-	CollectDeletesLocked(ts uint64, collectIndex bool) DeleteNode
+	CollectDeletesLocked(ts uint64, collectIndex bool) (DeleteNode, error)
 }
 
 type AppendNode interface {

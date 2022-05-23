@@ -61,7 +61,10 @@ func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
 	if endTs <= ckpTs {
 		return
 	}
-	view := blk.CollectChangesInRange(ckpTs+1, endTs)
+	view, err := blk.CollectChangesInRange(ckpTs+1, endTs)
+	if err != nil {
+		return
+	}
 	cnt := 0
 	for _, idxes := range view.ColLogIndexes {
 		cnt += len(idxes)
@@ -85,8 +88,14 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	if endTs <= ckpTs {
 		return
 	}
-	indexes := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
-	view := blk.CollectChangesInRange(ckpTs+1, endTs)
+	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
+	if err != nil {
+		return
+	}
+	view, err := blk.CollectChangesInRange(ckpTs+1, endTs)
+	if err != nil {
+		return
+	}
 	for _, idxes := range view.ColLogIndexes {
 		if err = blk.scheduler.Checkpoint(idxes); err != nil {
 			return
@@ -144,8 +153,11 @@ func (blk *dataBlock) ForceCompact() (err error) {
 		return
 	}
 	blk.mvcc.RLock()
-	maxRow, _ := blk.mvcc.GetMaxVisibleRowLocked(ts)
+	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
+	if err != nil {
+		return
+	}
 	view, err := blk.node.GetColumnsView(maxRow)
 	if err != nil {
 		return
