@@ -21,10 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,7 +49,6 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
-	idxCommon.MockIndexBufferManager = buffer.NewNodeManager(1024*1024*150, nil)
 	return db
 }
 
@@ -1392,7 +1388,7 @@ func TestDelete1(t *testing.T) {
 		v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Equal(t, data.ErrNotFound, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -1410,7 +1406,7 @@ func TestDelete1(t *testing.T) {
 		v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Equal(t, data.ErrNotFound, err)
 	}
 	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }

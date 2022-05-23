@@ -19,8 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
@@ -109,10 +107,4 @@ func MockVec(typ types.Type, rows int, offset int) *vector.Vector {
 		panic(errors.ErrTypeNotSupported)
 	}
 	return vec
-}
-
-var MockIndexBufferManager base.INodeManager
-
-func init() {
-	MockIndexBufferManager = buffer.NewNodeManager(1024*1024*150, nil)
 }

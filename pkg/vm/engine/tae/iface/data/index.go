@@ -11,7 +11,7 @@ type Index interface {
 	io.Closer
 	Destroy() error
 
-	// Dedup(any) error
+	Dedup(any) error
 	// Insert(any) error
 	BatchDedup(*movec.Vector) (*roaring.Bitmap, error)
 	BatchInsert(*movec.Vector, uint32, uint32, uint32, bool) error

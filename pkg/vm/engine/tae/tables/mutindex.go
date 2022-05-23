@@ -46,6 +46,7 @@ func (index *mutableIndex) Find(key interface{}) (row uint32, err error) {
 	return
 }
 
+func (index *mutableIndex) Dedup(any) error { panic("implement me") }
 func (index *mutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.Bitmap, err error) {
 	var exist bool
 	exist, visibility, err = index.zonemap.MayContainsAnyKeys(keys)
