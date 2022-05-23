@@ -761,7 +761,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 		}
 		return nil
 	}
-	if err = common.ProcessVector(pks, 0, -1, deduplicate, visibilityMap); err != nil {
+	if err = compute.ProcessVector(pks, 0, -1, deduplicate, visibilityMap); err != nil {
 		return err
 	}
 	return

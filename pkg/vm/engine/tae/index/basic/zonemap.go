@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
@@ -89,7 +90,7 @@ func (zm *ZoneMap) BatchUpdate(vec *vector.Vector, offset uint32, length int) er
 	}
 	zm.mu.Lock()
 	defer zm.mu.Unlock()
-	if err := common.ProcessVector(vec, offset, length, zm.UpdateLocked, nil); err != nil {
+	if err := compute.ProcessVector(vec, offset, length, zm.UpdateLocked, nil); err != nil {
 		return err
 	}
 	return nil
@@ -149,7 +150,7 @@ func (zm *ZoneMap) MayContainsAnyKeys(keys *vector.Vector) (bool, *roaring.Bitma
 		row++
 		return nil
 	}
-	if err := common.ProcessVector(keys, 0, -1, process, nil); err != nil {
+	if err := compute.ProcessVector(keys, 0, -1, process, nil); err != nil {
 		return false, ans, err
 	}
 	if ans.GetCardinality() != 0 {

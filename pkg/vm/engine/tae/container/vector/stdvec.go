@@ -436,7 +436,7 @@ func (v *StdVector) Window(start, end uint32) IVector {
 		if mask&container.ReadonlyMask == 0 {
 			var np *roaring64.Bitmap
 			if v.VMask != nil {
-				np = common.BitMap64Window(v.VMask.Np, int(start), int(end))
+				np = common.BM64Window(v.VMask.Np, int(start), int(end))
 			}
 			vec.VMask = &nulls.Nulls{Np: np}
 		}

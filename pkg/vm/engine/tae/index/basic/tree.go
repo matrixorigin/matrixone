@@ -21,7 +21,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
@@ -64,7 +64,7 @@ func (art *simpleARTMap) Insert(key interface{}, offset uint32) error {
 }
 
 func (art *simpleARTMap) InsertLocked(key interface{}, offset uint32) error {
-	ikey, err := common.EncodeKey(key, art.typ)
+	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func (art *simpleARTMap) BatchInsertLocked(keys *vector.Vector, start int, count
 	existence := make(map[interface{}]bool)
 
 	processor := func(v interface{}) error {
-		encoded, err := common.EncodeKey(v, art.typ)
+		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func (art *simpleARTMap) BatchInsertLocked(keys *vector.Vector, start int, count
 		return nil
 	}
 
-	if err := common.ProcessVector(keys, uint32(start), -1, processor, nil); err != nil {
+	if err := compute.ProcessVector(keys, uint32(start), -1, processor, nil); err != nil {
 		return err
 	}
 	return nil
@@ -118,7 +118,7 @@ func (art *simpleARTMap) Update(key interface{}, offset uint32) error {
 }
 
 func (art *simpleARTMap) UpdateLocked(key interface{}, offset uint32) error {
-	ikey, err := common.EncodeKey(key, art.typ)
+	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (art *simpleARTMap) BatchUpdateLocked(keys *vector.Vector, offsets []uint32
 	idx := 0
 
 	processor := func(v interface{}) error {
-		encoded, err := common.EncodeKey(v, art.typ)
+		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
 		}
@@ -153,7 +153,7 @@ func (art *simpleARTMap) BatchUpdateLocked(keys *vector.Vector, offsets []uint32
 		return nil
 	}
 
-	if err := common.ProcessVector(keys, 0, -1, processor, nil); err != nil {
+	if err := compute.ProcessVector(keys, 0, -1, processor, nil); err != nil {
 		return err
 	}
 	return nil
@@ -166,7 +166,7 @@ func (art *simpleARTMap) Delete(key interface{}) error {
 }
 
 func (art *simpleARTMap) DeleteLocked(key interface{}) error {
-	ikey, err := common.EncodeKey(key, art.typ)
+	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func (art *simpleARTMap) Search(key interface{}) (uint32, error) {
 }
 
 func (art *simpleARTMap) SearchLocked(key interface{}) (uint32, error) {
-	ikey, err := common.EncodeKey(key, art.typ)
+	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return 0, err
 	}
@@ -202,7 +202,7 @@ func (art *simpleARTMap) ContainsKey(key interface{}) (bool, error) {
 }
 
 func (art *simpleARTMap) ContainsKeyLocked(key interface{}) (bool, error) {
-	ikey, err := common.EncodeKey(key, art.typ)
+	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return false, err
 	}
@@ -221,7 +221,7 @@ func (art *simpleARTMap) ContainsAnyKeys(keys *vector.Vector, visibility *roarin
 
 func (art *simpleARTMap) ContainsAnyKeysLocked(keys *vector.Vector, visibility *roaring.Bitmap) (bool, error) {
 	processor := func(v interface{}) error {
-		encoded, err := common.EncodeKey(v, art.typ)
+		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
 		}
@@ -230,7 +230,7 @@ func (art *simpleARTMap) ContainsAnyKeysLocked(keys *vector.Vector, visibility *
 		}
 		return nil
 	}
-	if err := common.ProcessVector(keys, 0, -1, processor, visibility); err != nil {
+	if err := compute.ProcessVector(keys, 0, -1, processor, visibility); err != nil {
 		if err == errors.ErrKeyDuplicate {
 			return true, nil
 		} else {
@@ -260,7 +260,7 @@ func (art *simpleARTMap) Freeze() *vector.Vector {
 		if err != nil {
 			panic(err)
 		}
-		key := common.DecodeKey(node.Key(), art.typ).(int32)
+		key := compute.DecodeKey(node.Key(), art.typ).(int32)
 		//err = vector.Append(vec, key)
 		//if err != nil {
 		//	panic(err)

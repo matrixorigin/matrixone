@@ -495,7 +495,7 @@ func (n *insertNode) Window(start, end uint32) (*gbat.Batch, error) {
 			return nil, err
 		}
 		srcVec, _ := src.Window(start, end+1).CopyToVector()
-		deletes := common.BitMapWindow(n.deletes, int(start), int(end))
+		deletes := common.BM32Window(n.deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
 		ret.Vecs[i] = srcVec
 	}

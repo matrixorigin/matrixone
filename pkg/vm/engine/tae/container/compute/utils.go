@@ -11,16 +11,14 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 
-package common
+package compute
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
 func Hash(v interface{}, typ types.Type) (uint64, error) {
@@ -147,7 +145,7 @@ func EncodeKey(key interface{}, typ types.Type) ([]byte, error) {
 			panic("unsupported type")
 		}
 	default:
-		return nil, errors.ErrTypeNotSupported
+		panic("unsupported type")
 	}
 }
 
@@ -372,40 +370,4 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v in
 		panic("unsupported type")
 	}
 	return nil
-}
-
-func BitMapWindow(b *roaring.Bitmap, start, end int) *roaring.Bitmap {
-	new := roaring.NewBitmap()
-	if b == nil || b.GetCardinality() == 0 {
-		return new
-	}
-	iterator := b.Iterator()
-	for iterator.HasNext() {
-		n := iterator.Next()
-		if uint32(start) <= n {
-			if n >= uint32(end) {
-				break
-			}
-			new.Add(n - uint32(start))
-		}
-	}
-	return new
-}
-
-func BitMap64Window(b *roaring64.Bitmap, start, end int) *roaring64.Bitmap {
-	new := roaring64.NewBitmap()
-	if b == nil || b.GetCardinality() == 0 {
-		return new
-	}
-	iterator := b.Iterator()
-	for iterator.HasNext() {
-		n := iterator.Next()
-		if uint64(start) <= n {
-			if n >= uint64(end) {
-				break
-			}
-			new.Add(n - uint64(start))
-		}
-	}
-	return new
 }
