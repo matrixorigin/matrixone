@@ -551,8 +551,8 @@ func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 			return err
 		}
 	}
-	oldDB := ses.protocol.GetDatabaseName()
-	ses.protocol.SetDatabaseName(db)
+	oldDB := ses.GetDatabaseName()
+	ses.SetDatabaseName(db)
 
 	logutil.Infof("User %s change database from [%s] to [%s]\n", ses.protocol.GetUserName(), oldDB, ses.protocol.GetDatabaseName())
 
@@ -1563,12 +1563,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
 			*tree.Delete:
 			runBegin := time.Now()
+
 			/*
 				Step 1: Start
 			*/
 			if er := runner.Run(epoch); er != nil {
 				return er
 			}
+
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
