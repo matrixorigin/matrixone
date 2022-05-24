@@ -7,14 +7,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type staticFilterIndexNode struct {
 	*buffer.Node
 	mgr   base.INodeManager
 	host  common.IVFile
-	inner basic.StaticFilter
+	inner index.StaticFilter
 }
 
 func newStaticFilterIndexNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *staticFilterIndexNode {
@@ -48,7 +48,7 @@ func (n *staticFilterIndexNode) OnLoad() {
 	buf := make([]byte, rawSize)
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 	}
-	n.inner, err = basic.NewBinaryFuseFilterFromSource(buf)
+	n.inner, err = index.NewBinaryFuseFilterFromSource(buf)
 	if err != nil {
 		panic(err)
 	}
@@ -109,7 +109,7 @@ func (reader *StaticFilterIndexReader) MayContainsAnyKeys(keys *vector.Vector, v
 type StaticFilterIndexWriter struct {
 	cType       CompressType
 	host        common.IRWFile
-	inner       basic.StaticFilter
+	inner       index.StaticFilter
 	data        *vector.Vector
 	colIdx      uint16
 	internalIdx uint16
@@ -131,7 +131,7 @@ func (writer *StaticFilterIndexWriter) Finalize() (*IndexMeta, error) {
 	if writer.inner != nil {
 		panic("formerly finalized filter not cleared yet")
 	}
-	sf, err := basic.NewBinaryFuseFilter(writer.data)
+	sf, err := index.NewBinaryFuseFilter(writer.data)
 	if err != nil {
 		return nil, err
 	}

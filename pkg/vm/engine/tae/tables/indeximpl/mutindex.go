@@ -5,18 +5,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type mutableIndex struct {
-	art     basic.ARTMap
-	zonemap *basic.ZoneMap
+	art     index.ARTMap
+	zonemap *index.ZoneMap
 }
 
 func NewMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
-		art:     basic.NewSimpleARTMap(keyT),
-		zonemap: basic.NewZoneMap(keyT),
+		art:     index.NewSimpleARTMap(keyT),
+		zonemap: index.NewZoneMap(keyT),
 	}
 }
 

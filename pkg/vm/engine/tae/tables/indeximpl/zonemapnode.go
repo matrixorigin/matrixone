@@ -8,14 +8,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type blockZoneMapIndexNode struct {
 	*buffer.Node
 	mgr     base.INodeManager
 	host    common.IVFile
-	zonemap *basic.ZoneMap
+	zonemap *index.ZoneMap
 }
 
 func newBlockZoneMapIndexNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *blockZoneMapIndexNode {
@@ -49,7 +49,7 @@ func (n *blockZoneMapIndexNode) OnLoad() {
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
-	n.zonemap, err = basic.LoadZoneMapFrom(buf)
+	n.zonemap, err = index.LoadZoneMapFrom(buf)
 	if err != nil {
 		panic(err)
 	}
@@ -110,7 +110,7 @@ func (reader *BlockZoneMapIndexReader) Contains(key any) bool {
 type BlockZoneMapIndexWriter struct {
 	cType       CompressType
 	host        common.IRWFile
-	zonemap     *basic.ZoneMap
+	zonemap     *index.ZoneMap
 	colIdx      uint16
 	internalIdx uint16
 }
@@ -158,7 +158,7 @@ func (writer *BlockZoneMapIndexWriter) Finalize() (*IndexMeta, error) {
 func (writer *BlockZoneMapIndexWriter) AddValues(values *vector.Vector) (err error) {
 	typ := values.Typ
 	if writer.zonemap == nil {
-		writer.zonemap = basic.NewZoneMap(typ)
+		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
 			err = data.ErrWrongType
@@ -171,7 +171,7 @@ func (writer *BlockZoneMapIndexWriter) AddValues(values *vector.Vector) (err err
 
 func (writer *BlockZoneMapIndexWriter) SetMinMax(min, max any, typ types.Type) (err error) {
 	if writer.zonemap == nil {
-		writer.zonemap = basic.NewZoneMap(typ)
+		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
 			err = data.ErrWrongType
