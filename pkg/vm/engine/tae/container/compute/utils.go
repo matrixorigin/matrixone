@@ -149,17 +149,17 @@ func EncodeKey(key any, typ types.Type) ([]byte, error) {
 	}
 }
 
-func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v any) error, visibility *roaring.Bitmap) error {
+func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v any) error, keyselects *roaring.Bitmap) error {
 	var idxes []uint32
-	if visibility != nil {
-		idxes = visibility.ToArray()
+	if keyselects != nil {
+		idxes = keyselects.ToArray()
 	}
 	// TODO: if length == -1, means process till the end, otherwise
 	// process [offset, offset + length] only
 	switch vec.Typ.Oid {
 	case types.T_int8:
 		vs := vec.Col.([]int8)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -175,7 +175,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_int16:
 		vs := vec.Col.([]int16)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -191,7 +191,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_int32:
 		vs := vec.Col.([]int32)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -207,7 +207,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_int64:
 		vs := vec.Col.([]int64)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -223,7 +223,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_uint8:
 		vs := vec.Col.([]uint8)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -239,7 +239,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_uint16:
 		vs := vec.Col.([]uint16)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -255,7 +255,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_uint32:
 		vs := vec.Col.([]uint32)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -271,7 +271,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_uint64:
 		vs := vec.Col.([]uint64)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -287,7 +287,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_float32:
 		vs := vec.Col.([]float32)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -303,7 +303,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_float64:
 		vs := vec.Col.([]float64)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -319,7 +319,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_date:
 		vs := vec.Col.([]types.Date)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -335,7 +335,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_datetime:
 		vs := vec.Col.([]types.Datetime)[offset:]
-		if visibility == nil {
+		if keyselects == nil {
 			for _, v := range vs {
 				if err := task(v); err != nil {
 					return err
@@ -351,7 +351,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v an
 		}
 	case types.T_char, types.T_varchar:
 		vs := vec.Col.(*types.Bytes)
-		if visibility == nil {
+		if keyselects == nil {
 			for i := range vs.Offsets[offset:] {
 				v := vs.Get(int64(i))
 				if err := task(v); err != nil {

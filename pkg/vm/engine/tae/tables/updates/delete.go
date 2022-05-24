@@ -269,6 +269,6 @@ func (node *DeleteNode) OnApply() (err error) {
 	return
 }
 
-func (node *DeleteNode) GetInvisibilityMapRefLocked() *roaring.Bitmap {
+func (node *DeleteNode) GetRowMaskRefLocked() *roaring.Bitmap {
 	return node.mask
 }

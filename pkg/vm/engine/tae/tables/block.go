@@ -735,21 +735,21 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
 	return
 }
 
-func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector, invisibility *roaring.Bitmap) (err error) {
+func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector, rowmask *roaring.Bitmap) (err error) {
 	if blk.meta.IsAppendable() {
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		_, err = blk.index.BatchDedup(pks, invisibility)
+		_, err = blk.index.BatchDedup(pks, rowmask)
 		return
 	}
 	if blk.index == nil {
 		panic("index not found")
 	}
-	visibility, err := blk.index.BatchDedup(pks, invisibility)
+	keyselects, err := blk.index.BatchDedup(pks, rowmask)
 	if err == nil {
 		return
 	}
-	if visibility == nil {
+	if keyselects == nil {
 		panic("unexpected error")
 	}
 	view, err := blk.GetPKColumnDataOptimized(txn.GetStartTS())
@@ -763,7 +763,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector, invisibil
 		}
 		return nil
 	}
-	if err = compute.ProcessVector(pks, 0, -1, deduplicate, visibility); err != nil {
+	if err = compute.ProcessVector(pks, 0, -1, deduplicate, keyselects); err != nil {
 		return err
 	}
 	return

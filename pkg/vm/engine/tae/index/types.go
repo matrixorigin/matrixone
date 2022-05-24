@@ -21,6 +21,6 @@ type SecondaryIndex interface {
 	Delete(key any) error
 	Search(key any) (uint32, error)
 	Contains(key any) bool
-	ContainsAny(keys *vector.Vector, visibility, mask *roaring.Bitmap) bool
+	ContainsAny(keys *vector.Vector, keyselects, rowmask *roaring.Bitmap) bool
 	String() string
 }

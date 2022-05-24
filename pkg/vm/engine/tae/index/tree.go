@@ -147,27 +147,34 @@ func (art *simpleARTMap) Contains(key any) bool {
 	return exists
 }
 
-// 1. keys: keys to check
-// 2. visibility: specify which key in keys to check
-// 3. mask: row mask
-func (art *simpleARTMap) ContainsAny(keys *vector.Vector, visibility, mask *roaring.Bitmap) bool {
+// ContainsAny returns whether at least one of the specified keys exists.
+//
+// If the keyselects is not nil, only the keys indicated by the keyselects bitmap will
+// participate in the calculation.
+// When deduplication occurs, the corresponding row number will be taken out. If the row
+// number is included in the rowmask, the error will be ignored
+func (art *simpleARTMap) ContainsAny(keys *vector.Vector, keyselects, rowmask *roaring.Bitmap) bool {
 	processor := func(v any) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
 		}
+		// 1. If duplication found
 		if v, found := art.tree.Search(encoded); found {
-			if mask == nil {
+			// 1.1 If no rowmask, quick return with duplication error
+			if rowmask == nil {
 				return ErrDuplicate
 			}
-			if mask.Contains(v.(uint32)) {
+			// 1.2 If duplicated row is marked, ignore this duplication error
+			if rowmask.Contains(v.(uint32)) {
 				return nil
 			}
+			// 1.3 If duplicated row is not marked, return with duplication error
 			return ErrDuplicate
 		}
 		return nil
 	}
-	if err := compute.ProcessVector(keys, 0, -1, processor, visibility); err != nil {
+	if err := compute.ProcessVector(keys, 0, -1, processor, keyselects); err != nil {
 		if err == ErrDuplicate {
 			return true
 		} else {
