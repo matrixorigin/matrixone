@@ -86,12 +86,15 @@ func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, ca
 	for name, file := range nodes {
 		tmpName := strings.Split(name, ".blk")
 		fileName := strings.Split(tmpName[0], "_")
+		if len(fileName) < 2 {
+			continue
+		}
 		id, err := strconv.ParseUint(fileName[1], 10, 32)
 		if err != nil {
 			return err
 		}
 		bf := sf.blocks[id]
-		if bf != nil {
+		if bf == nil {
 			panic(any("segment Replay err"))
 		}
 		col, err := strconv.ParseUint(fileName[0], 10, 32)
@@ -99,7 +102,11 @@ func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, ca
 			return err
 		}
 		bf.columns[col].data.file = append(bf.columns[col].data.file, file)
-		if len(fileName) > 1 {
+		bf.columns[col].data.stat.size = file.GetFileSize()
+		bf.columns[col].data.stat.originSize = file.GetOriginSize()
+		bf.columns[col].data.stat.algo = file.GetAlgo()
+		bf.columns[col].data.stat.name = file.GetName()
+		if len(fileName) > 2 {
 			ts, err := strconv.ParseUint(fileName[2], 10, 64)
 			if err != nil {
 				return err
@@ -151,8 +158,6 @@ func (sf *segmentFile) Destroy() {
 }
 
 func (sf *segmentFile) rebuildBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
-	sf.Lock()
-	defer sf.Unlock()
 	bf := sf.blocks[id]
 	if bf != nil {
 		panic(any("block rebuild err"))
