@@ -15,6 +15,10 @@
 package metric
 
 import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -23,10 +27,45 @@ import (
 
 var (
 	// full buffer approximately cost (56[Sample struct] + 8[pointer]) x 4096 = 256K
-	configRawHistBufLimit int32 = 4096
-	configGatherInternal  int64 = 15000 // 15s
-	configExportToProm    int32 = 1
+	configRawHistBufLimit int32 = envOrDefaultInt[int32]("MO_METRIC_RAWHIST_BUF_LIMIT", 4096)
+	configGatherInterval  int64 = envOrDefaultInt[int64]("MO_METRIC_GATHER_INTERVAL", 15000) // 15s
+	configExportToProm    int32 = envOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
 )
+
+func envOrDefaultBool(key string, defaultValue int32) int32 {
+	val, ok := os.LookupEnv(key)
+	fmt.Printf("[Metric] to prom: %s\n", val)
+	if !ok {
+		return defaultValue
+	}
+	switch strings.ToLower(val) {
+	case "0", "false", "f":
+		return 0
+	case "1", "true", "t":
+		return 1
+	default:
+		return defaultValue
+	}
+}
+
+func envOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return defaultValue
+	}
+	var size int
+	switch any(&defaultValue).(type) {
+	case int32:
+		size = 32
+	case int64:
+		size = 64
+	}
+	i, err := strconv.ParseInt(val, 10, size)
+	if err != nil {
+		return defaultValue
+	}
+	return T(i)
+}
 
 func getRawHistBufLimit() int32 {
 	return atomic.LoadInt32(&configRawHistBufLimit)
@@ -36,8 +75,8 @@ func getExportToProm() bool {
 	return atomic.LoadInt32(&configExportToProm) != 0
 }
 
-func getGatherInternal() time.Duration {
-	return time.Duration(atomic.LoadInt64(&configGatherInternal)) * time.Millisecond
+func getGatherInterval() time.Duration {
+	return time.Duration(atomic.LoadInt64(&configGatherInterval)) * time.Millisecond
 }
 
 // for tests
@@ -53,8 +92,8 @@ func setExportToProm(new bool) bool {
 	return atomic.SwapInt32(&configExportToProm, val) != 0
 }
 
-func setGatherInternal(new time.Duration) time.Duration {
-	return time.Duration(atomic.SwapInt64(&configGatherInternal, int64(new/time.Millisecond))) * time.Millisecond
+func setGatherInterval(new time.Duration) time.Duration {
+	return time.Duration(atomic.SwapInt64(&configGatherInterval, int64(new/time.Millisecond))) * time.Millisecond
 }
 
 func isFullBatchRawHist(mf *pb.MetricFamily) bool {

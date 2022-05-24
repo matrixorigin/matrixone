@@ -84,7 +84,7 @@ func (e *metricExporter) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
 	go func() {
-		ticker := time.NewTicker(getGatherInternal())
+		ticker := time.NewTicker(getGatherInterval())
 		defer ticker.Stop()
 		for {
 			select {

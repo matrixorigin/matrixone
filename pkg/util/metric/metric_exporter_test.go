@@ -94,7 +94,7 @@ func TestExporter(t *testing.T) {
 	var exp *metricExporter
 
 	withModifiedConfig(func() {
-		defer setGatherInternal(setGatherInternal(20 * time.Millisecond))
+		defer setGatherInterval(setGatherInterval(20 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		defer setExportToProm(setExportToProm(false))
 		reg := prom.NewRegistry()

@@ -27,6 +27,7 @@ import (
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
 )
 
 const (
@@ -104,7 +105,7 @@ func registerAllMetrics() {
 func initTables(exec ie.InternalExecutor) {
 	mustExec := func(sql string) {
 		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
-			panic(fmt.Sprintf("[Metric] init Table error: %v, sql: %s", err, sql))
+			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}
 	mustExec(SQL_CREATE_DB)
@@ -115,33 +116,39 @@ func initTables(exec ie.InternalExecutor) {
 	instant := time.Now()
 	mfs, err := registry.Gather()
 	if err != nil {
-		logutil.Errorf("[Metric] init metric tables error: %v", err)
+		panic(fmt.Sprintf("[Metric] init metric tables error: %v", err))
 	}
 	gatherCost = time.Since(instant)
 	instant = time.Now()
 
 	buf := new(bytes.Buffer)
 	for _, mf := range mfs {
-		buf.Reset()
-		buf.WriteString(fmt.Sprintf(
-			"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20)",
-			METRIC_DB, mf.GetName(), LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
-		))
-		for _, lbl := range mf.Metric[0].Label {
-			buf.WriteString(", `")
-			buf.WriteString(lbl.GetName())
-			buf.WriteString("` varchar(20)")
-		}
-		buf.WriteRune(')')
-		mustExec(buf.String())
+		sql := createTableSqlFromMetricFamily(mf, buf)
+		mustExec(sql)
 	}
 	createCost = time.Since(instant)
+}
+
+func createTableSqlFromMetricFamily(mf *dto.MetricFamily, buf *bytes.Buffer) string {
+	buf.Reset()
+	buf.WriteString(fmt.Sprintf(
+		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20)",
+		METRIC_DB, mf.GetName(), LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
+	))
+	// Metric must exists, thus MetricFamily can be created
+	for _, lbl := range mf.Metric[0].Label {
+		buf.WriteString(", `")
+		buf.WriteString(lbl.GetName())
+		buf.WriteString("` varchar(20)")
+	}
+	buf.WriteRune(')')
+	return buf.String()
 }
 
 func makeDebugHandleFunc(exec ie.InternalExecutor) func(w http.ResponseWriter, r *http.Request) {
 	tryExec := func(sql string) {
 		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
-			logutil.Errorf("[Metric] init Table error: %v, sql: %s", err, sql)
+			logutil.Errorf("[Metric] debug sql err: %v, sql: %s", err, sql)
 		}
 	}
 
@@ -170,10 +177,6 @@ func makeDebugHandleFunc(exec ie.InternalExecutor) func(w http.ResponseWriter, r
 			// tryExec("create database if not exists " + METRIC_DB)
 			StatementCounter(SQLTypeOther, true).Inc()
 			return
-		case "select":
-			StatementCounter(SQLTypeSelect, true).Inc()
-		case "insert":
-			StatementCounter(SQLTypeInsert, true).Inc()
 		}
 		tryExec(sql)
 	}
