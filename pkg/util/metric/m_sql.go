@@ -14,27 +14,23 @@
 
 package metric
 
-import (
-	prom "github.com/prometheus/client_golang/prometheus"
-)
-
 var (
 	StatementCounterFactory = NewCounterVec(
-		prom.CounterOpts{
+		CounterOpts{
 			Subsystem: "sql",
 			Name:      "statement_total",
 			Help:      "Counter of executed sql statement",
 		},
 		[]string{"type", "internal"},
 	)
-	statementCounters = []prom.Counter{
+	statementCounters = []Counter{
 		StatementCounterFactory.WithLabelValues("select", "0"),
 		StatementCounterFactory.WithLabelValues("insert", "0"),
 		StatementCounterFactory.WithLabelValues("delete", "0"),
 		StatementCounterFactory.WithLabelValues("update", "0"),
 		StatementCounterFactory.WithLabelValues("other", "0"),
 	}
-	internalStatementCounters = []prom.Counter{
+	internalStatementCounters = []Counter{
 		StatementCounterFactory.WithLabelValues("select", "1"),
 		StatementCounterFactory.WithLabelValues("insert", "1"),
 		StatementCounterFactory.WithLabelValues("delete", "1"),
@@ -43,24 +39,24 @@ var (
 	}
 
 	SQLLatencyObserverFactory = NewRawHistVec(
-		prom.HistogramOpts{
+		HistogramOpts{
 			Subsystem: "sql",
 			Name:      "latency_seconds",
 			Help:      "Processing time in seconds of handled sql statement",
 			// these buckets are defined for compatible purpose
-			Buckets: prom.ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 1.5days
+			Buckets: ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 1.5days
 		},
 		[]string{"type", "internal"},
 	)
 
-	sqlLatencyObservers = []prom.Observer{
+	sqlLatencyObservers = []Observer{
 		SQLLatencyObserverFactory.WithLabelValues("select", "0"),
 		SQLLatencyObserverFactory.WithLabelValues("insert", "0"),
 		SQLLatencyObserverFactory.WithLabelValues("delete", "0"),
 		SQLLatencyObserverFactory.WithLabelValues("update", "0"),
 		SQLLatencyObserverFactory.WithLabelValues("other", "0"),
 	}
-	internalSQLLatencyObservers = []prom.Observer{
+	internalSQLLatencyObservers = []Observer{
 		SQLLatencyObserverFactory.WithLabelValues("select", "1"),
 		SQLLatencyObserverFactory.WithLabelValues("insert", "1"),
 		SQLLatencyObserverFactory.WithLabelValues("delete", "1"),
@@ -79,7 +75,7 @@ const (
 	SQLTypeOther
 )
 
-func StatementCounter(t SQLType, isInternal bool) prom.Counter {
+func StatementCounter(t SQLType, isInternal bool) Counter {
 	if isInternal {
 		return internalStatementCounters[t]
 	} else {
@@ -87,7 +83,7 @@ func StatementCounter(t SQLType, isInternal bool) prom.Counter {
 	}
 }
 
-func SQLLatencyObserver(t SQLType, isInternal bool) prom.Observer {
+func SQLLatencyObserver(t SQLType, isInternal bool) Observer {
 	if isInternal {
 		return internalSQLLatencyObservers[t]
 	} else {

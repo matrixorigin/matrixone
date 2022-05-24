@@ -182,26 +182,6 @@ func makeDebugHandleFunc(exec ie.InternalExecutor) func(w http.ResponseWriter, r
 	}
 }
 
-func NewCounter(opts prom.CounterOpts) prom.Counter {
-	mustValidLbls(opts.Name, opts.ConstLabels, nil)
-	return prom.NewCounter(opts)
-}
-
-func NewCounterVec(opts prom.CounterOpts, lvs []string) *prom.CounterVec {
-	mustValidLbls(opts.Name, opts.ConstLabels, lvs)
-	return prom.NewCounterVec(opts, lvs)
-}
-
-func NewGauge(opts prom.GaugeOpts) prom.Gauge {
-	mustValidLbls(opts.Name, opts.ConstLabels, nil)
-	return prom.NewGauge(opts)
-}
-
-func NewGaugeVec(opts prom.GaugeOpts, lvs []string) *prom.GaugeVec {
-	mustValidLbls(opts.Name, opts.ConstLabels, lvs)
-	return prom.NewGaugeVec(opts, lvs)
-}
-
 func mustValidLbls(name string, consts prom.Labels, vars []string) {
 	mustNotOccupied := func(lblName string) {
 		if _, ok := occupiedLbls[strings.ToLower(lblName)]; ok {

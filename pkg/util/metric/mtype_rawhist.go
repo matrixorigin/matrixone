@@ -26,6 +26,17 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+type Observer interface {
+	prom.Observer
+}
+
+type HistogramOpts = prom.HistogramOpts
+
+// ExponentialBuckets produces list like `[start, start * factor, start * factor^2, ..., start * factor^(count-1)]`
+func ExponentialBuckets(start, factor float64, count int) []float64 {
+	return prom.ExponentialBuckets(start, factor, count)
+}
+
 // record appends a new RawHist.Sample into the inner buffer.
 // if the length of the buffer exceeds limit, a new buffer will be created
 // and all existed samples will be added to MetricExporter.
@@ -84,10 +95,7 @@ type rawHist struct {
 
 func NewRawHist(opts prom.HistogramOpts) prom.Histogram {
 	mustValidLbls(opts.Name, opts.ConstLabels, nil)
-	var compat prom.Histogram
-	if getExportToProm() {
-		compat = prom.NewHistogram(opts)
-	}
+	compat := prom.NewHistogram(opts)
 	return newRawHist(
 		prom.NewDesc(
 			prom.BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
@@ -164,6 +172,10 @@ func (r *rawHist) Observe(value float64) {
 		r.compat_inner.Observe(value)
 	}
 	r.record(r.now(), value)
+}
+
+func (r *rawHist) SetCompat() {
+
 }
 
 // RawHistVec is a Collector that bundles a set of RawHist that all share the
