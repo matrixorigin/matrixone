@@ -13,7 +13,7 @@ type Index interface {
 	Destroy() error
 
 	Dedup(any) error
-	BatchDedup(*movec.Vector) (*roaring.Bitmap, error)
+	BatchDedup(keys *movec.Vector, invisibility *roaring.Bitmap) (visibility *roaring.Bitmap, err error)
 	BatchInsert(*movec.Vector, uint32, uint32, uint32, bool) error
 	Delete(any) error
 	Find(any) (uint32, error)

@@ -552,7 +552,7 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 			// logutil.Infof("%s: %d-%d, %d-%d: %s", tbl.txn.String(), tbl.maxSegId, tbl.maxBlkId, seg.GetID(), blk.GetID(), pks.String())
 			blkData := blk.GetBlockData()
 			// TODO: Add a new batch dedup method later
-			if err = blkData.BatchDedup(tbl.store.txn, pks); err != nil {
+			if err = blkData.BatchDedup(tbl.store.txn, pks, nil); err != nil {
 				return
 			}
 			blkIt.Next()
@@ -585,7 +585,7 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 			blkIt := seg.MakeBlockIt()
 			for blkIt.Valid() {
 				block := blkIt.GetBlock()
-				if err = block.BatchDedup(pks); err != nil {
+				if err = block.BatchDedup(pks, nil); err != nil {
 					break
 				}
 				blkIt.Next()

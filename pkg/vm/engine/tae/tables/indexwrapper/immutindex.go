@@ -39,11 +39,14 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (index *immutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.Bitmap, err error) {
+func (index *immutableIndex) BatchDedup(keys *vector.Vector, invisibility *roaring.Bitmap) (visibility *roaring.Bitmap, err error) {
 	visibility, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
 		return
+	}
+	if invisibility != nil {
+		visibility.AndNot(invisibility)
 	}
 	exist, visibility, err = index.bfReader.MayContainsAnyKeys(keys, visibility)
 	// 3. check bloomfilter has some unknown error. return err

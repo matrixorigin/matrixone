@@ -46,11 +46,14 @@ func (index *mutableIndex) Find(key any) (row uint32, err error) {
 }
 
 func (index *mutableIndex) Dedup(any) error { panic("implement me") }
-func (index *mutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.Bitmap, err error) {
+func (index *mutableIndex) BatchDedup(keys *vector.Vector, invisibility *roaring.Bitmap) (visibility *roaring.Bitmap, err error) {
 	visibility, exist := index.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
 		return
+	}
+	if invisibility != nil {
+		visibility.AndNot(invisibility)
 	}
 	exist = index.art.ContainsAny(keys, visibility)
 	if exist {

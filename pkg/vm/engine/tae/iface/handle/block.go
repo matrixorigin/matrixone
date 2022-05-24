@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"io"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -61,7 +62,7 @@ type BlockReader interface {
 	GetMeta() any
 	Fingerprint() *common.ID
 	Rows() int
-	BatchDedup(col *vector.Vector) error
+	BatchDedup(col *vector.Vector, invisibility *roaring.Bitmap) error
 
 	IsAppendableBlock() bool
 

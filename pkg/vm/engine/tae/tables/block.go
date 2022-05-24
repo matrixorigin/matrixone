@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
@@ -729,17 +730,17 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
 	return
 }
 
-func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err error) {
+func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector, invisibility *roaring.Bitmap) (err error) {
 	if blk.meta.IsAppendable() {
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		_, err = blk.index.BatchDedup(pks)
+		_, err = blk.index.BatchDedup(pks, invisibility)
 		return
 	}
 	if blk.index == nil {
 		panic("index not found")
 	}
-	visibility, err := blk.index.BatchDedup(pks)
+	visibility, err := blk.index.BatchDedup(pks, invisibility)
 	if err == nil {
 		return
 	}
