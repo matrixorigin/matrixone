@@ -30,14 +30,14 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", stmt.Name))
 	}
 
-	sql := fmt.Sprintf("SELECT md.datname as `Database` FROM mo_database md WHERE md.datname = '%s'", stmt.Name)
+	sql := fmt.Sprintf("SELECT md.datname as `Database` FROM mo_catalog.mo_database md WHERE md.datname = '%s'", stmt.Name)
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
 	sql := `
 		SELECT mc.* 
-			FROM mo_tables mt JOIN mo_columns mc 
+			FROM mo_catalog.mo_tables mt JOIN mo_catalog.mo_columns mc 
 				ON mt.relname = mc.att_relname 
 		WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
 	`
@@ -60,7 +60,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := "SELECT datname `Database` FROM mo_database"
+	sql := "SELECT datname `Database` FROM mo_catalog.mo_database"
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
@@ -93,7 +93,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TABLES
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM mo_tables WHERE reldatabase = '%s'", dbName, dbName)
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM mo_catalog.mo_tables WHERE reldatabase = '%s'", dbName, dbName)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
@@ -132,7 +132,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM mo_catalog.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 
 	sql = fmt.Sprintf(sql, dbName, tblName)
 
