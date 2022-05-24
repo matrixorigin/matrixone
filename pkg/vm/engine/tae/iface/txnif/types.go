@@ -18,6 +18,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -150,6 +151,7 @@ type DeleteNode interface {
 	RangeDeleteLocked(start, end uint32)
 	GetCardinalityLocked() uint32
 	IsDeletedLocked(row uint32) bool
+	GetInvisibilityMapRefLocked() *roaring.Bitmap
 	OnApply() error
 }
 

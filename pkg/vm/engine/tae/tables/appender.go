@@ -92,7 +92,7 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 		})
 
 		pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
-		// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
+		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())
 		err = appender.node.block.index.BatchInsert(pks, offset, length, from, false)
 		if err != nil {
 			panic(err)

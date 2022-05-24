@@ -25,7 +25,9 @@ func (index *mutableIndex) BatchInsert(keys *vector.Vector, start uint32, count 
 	if err = index.zonemap.BatchUpdate(keys, start, -1); err != nil {
 		return
 	}
-	err = index.art.BatchInsert(keys, int(start), int(count), offset, verify)
+	// logutil.Infof("Pre: %s", index.art.String())
+	err = index.art.BatchInsert(keys, int(start), int(count), offset, verify, true)
+	// logutil.Infof("Post: %s", index.art.String())
 	return
 }
 
@@ -52,10 +54,7 @@ func (index *mutableIndex) BatchDedup(keys *vector.Vector, invisibility *roaring
 	if !exist {
 		return
 	}
-	if invisibility != nil {
-		visibility.AndNot(invisibility)
-	}
-	exist = index.art.ContainsAny(keys, visibility)
+	exist = index.art.ContainsAny(keys, visibility, invisibility)
 	if exist {
 		err = data.ErrDuplicate
 	}

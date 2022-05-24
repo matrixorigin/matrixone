@@ -46,7 +46,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	err = idx.Delete(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false)
+	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false, false)
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(55))
@@ -62,10 +62,10 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
+	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false, false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
-	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false)
+	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false, false)
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(123))
@@ -123,7 +123,7 @@ func TestArtIndexString(t *testing.T) {
 	err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false)
+	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false, false)
 	require.NoError(t, err)
 
 	row, err = idx.Search([]byte(strconv.Itoa(55)))
@@ -139,10 +139,10 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
+	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false, false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
-	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false)
+	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false, false)
 	require.NoError(t, err)
 
 	row, err = idx.Search([]byte(strconv.Itoa(123)))

@@ -641,6 +641,7 @@ func (blk *dataBlock) getVectorWrapper(colIdx int) (wrapper *vector.VectorWrappe
 func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset uint32, err error) {
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
+	// logutil.Infof("yyyyyyyy-%s,v=%v", blk.meta.Repr(), filter.Val)
 	offset, err = blk.index.Find(filter.Val)
 	if err != nil {
 		return
@@ -718,11 +719,15 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen) (err error) {
 		if err != nil {
 			return err
 		}
+		var currRow uint32
 		if gen.HasNext() {
 			row = gen.Next()
 			v, _ := vec.GetValue(int(row))
-			if err = blk.index.Delete(v); err != nil {
-				return
+			currRow, err = blk.index.Find(v)
+			if err != nil || currRow == row {
+				if err = blk.index.Delete(v); err != nil {
+					return
+				}
 			}
 		}
 		return

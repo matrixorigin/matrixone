@@ -15,7 +15,7 @@
 package index
 
 import (
-	"strconv"
+	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,7 +51,7 @@ func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	return
 }
 
-func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify bool) (err error) {
+func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (err error) {
 	existence := make(map[any]bool)
 
 	processor := func(v any) error {
@@ -68,7 +68,9 @@ func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, 
 		old, _ := art.tree.Insert(encoded, offset)
 		if old != nil {
 			// TODO: rollback previous insertion if duplication comes up
-			return ErrDuplicate
+			if !upsert {
+				return ErrDuplicate
+			}
 		}
 		offset++
 		return nil
@@ -145,13 +147,22 @@ func (art *simpleARTMap) Contains(key any) bool {
 	return exists
 }
 
-func (art *simpleARTMap) ContainsAny(keys *vector.Vector, visibility *roaring.Bitmap) bool {
+// 1. keys: keys to check
+// 2. visibility: specify which key in keys to check
+// 3. mask: row mask
+func (art *simpleARTMap) ContainsAny(keys *vector.Vector, visibility, mask *roaring.Bitmap) bool {
 	processor := func(v any) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
 		}
-		if _, found := art.tree.Search(encoded); found {
+		if v, found := art.tree.Search(encoded); found {
+			if mask == nil {
+				return ErrDuplicate
+			}
+			if mask.Contains(v.(uint32)) {
+				return nil
+			}
 			return ErrDuplicate
 		}
 		return nil
@@ -167,9 +178,18 @@ func (art *simpleARTMap) ContainsAny(keys *vector.Vector, visibility *roaring.Bi
 }
 
 func (art *simpleARTMap) String() string {
-	min, _ := art.tree.Minimum()
-	max, _ := art.tree.Maximum() // TODO: seems not accurate here
-	return "<ART>\n" + "[" + strconv.Itoa(int(min.(uint32))) + ", " + strconv.Itoa(int(max.(uint32))) + "]" + "(" + strconv.Itoa(art.tree.Size()) + ")"
+	s := fmt.Sprintf("<ART>[Size=%d](\n", art.tree.Size())
+	it := art.tree.Iterator()
+	for it.HasNext() {
+		n, err := it.Next()
+		if err != nil {
+			break
+		}
+		// key, _ := compute.EncodeKey(n.Key(), art.typ)
+		s = fmt.Sprintf("%sNode: %v:%v\n", s, n.Key(), n.Value())
+	}
+	s = fmt.Sprintf("%s)", s)
+	return s
 }
 
 // func (art *simpleARTMap) Freeze() *vector.Vector {

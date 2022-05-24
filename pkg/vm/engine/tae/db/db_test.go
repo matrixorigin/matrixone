@@ -2040,11 +2040,55 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, row, row)
 	assert.NoError(t, err)
-	id, row, err = rel.GetByFilter(filter)
+	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
-	// err = rel.Append(bat)
-	// assert.NoError(t, err)
 
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+
+	err = rel.Append(bat)
+	assert.Error(t, err)
+
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.Error(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	it = rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 4, view.Length())
+		assert.Equal(t, uint64(3), view.DeleteMask.GetCardinality())
+		it.Next()
+	}
 	assert.NoError(t, txn.Commit())
 }
 
@@ -2077,10 +2121,10 @@ func TestUpdateByFilter(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int32(2222), cv.(int32))
 
-	// v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
-	// filter = handle.NewEQFilter(v)
-	// err = rel.UpdateByFilter(filter, uint16(schema.PrimaryKey), int64(333333))
-	// assert.NoError(t, err)
+	v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
+	filter = handle.NewEQFilter(v)
+	err = rel.UpdateByFilter(filter, uint16(schema.PrimaryKey), int64(333333))
+	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
 }

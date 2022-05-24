@@ -15,12 +15,12 @@ var (
 
 type SecondaryIndex interface {
 	Insert(key any, row uint32) error
-	BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify bool) error
+	BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) error
 	Update(key any, row uint32) error
 	BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) error
 	Delete(key any) error
 	Search(key any) (uint32, error)
 	Contains(key any) bool
-	ContainsAny(keys *vector.Vector, visibility *roaring.Bitmap) bool
+	ContainsAny(keys *vector.Vector, visibility, mask *roaring.Bitmap) bool
 	String() string
 }
