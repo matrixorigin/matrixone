@@ -514,7 +514,8 @@ func Test_mce(t *testing.T) {
 
 		resp, err = mce.ExecRequest(req)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(resp.category, convey.ShouldEqual, OkResponse)
+		//COM_INIT_DB replaced by changeDB()
+		//convey.So(resp.category, convey.ShouldEqual, OkResponse)
 
 		req = &Request{
 			cmd:  int(COM_PING),

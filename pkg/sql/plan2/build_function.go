@@ -120,10 +120,17 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 		if err != nil {
 			return
 		}
+		expr, err = convertValueIntoBool(name, expr)
+		if err != nil {
+			return
+		}
 		isAgg = isAgg && paramIsAgg
 		args[idx] = expr
 	}
 
+	if err = convertValueIntoBool2(name, args); err != nil {
+		return
+	}
 	// deal with special function
 	switch name {
 	case "date":
