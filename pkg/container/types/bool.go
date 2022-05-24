@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,23 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package types
 
 import (
-	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+	"fmt"
+	"go/constant"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-type SegmentFileFactory = func(dir string, id uint64) Segment
-
-type Segment interface {
-	Base
-	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
-	WriteTS(ts uint64) error
-	ReadTS() uint64
-	String() string
-	RemoveBlock(id uint64)
-	GetSegmentFile() *segment.Segment
-	Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error
-	// IsAppendable() bool
+func ParseValueToBool(num *tree.NumVal) (bool, error) {
+	val := num.Value
+	str := num.String()
+	if !num.Negative() {
+		v, _ := constant.Uint64Val(val)
+		if v == 0 {
+			return false, nil
+		} else if v == 1 {
+			return true, nil
+		}
+	}
+	return false, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", str))
 }

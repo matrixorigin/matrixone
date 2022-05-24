@@ -47,8 +47,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 	moSchema := make(map[string][]col)
 
 	schemas := map[string]map[string][]col{
-		"tpch": tpchSchema,
-		"mo":   moSchema,
+		"tpch":       tpchSchema,
+		"mo_catalog": moSchema,
 	}
 
 	tpchSchema["nation"] = []col{

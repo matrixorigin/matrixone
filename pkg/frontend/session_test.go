@@ -52,7 +52,6 @@ func TestTxnHandler(t *testing.T) {
 
 		tae := mock_frontend.NewMockTxnEngine(ctrl)
 		tae.EXPECT().StartTxn(gomock.Any()).Return(txnImpl, nil)
-
 		txn := InitTxnHandler(tae)
 		convey.So(txn.IsInTaeTxn(), convey.ShouldBeFalse)
 		convey.So(txn.IsTaeEngine(), convey.ShouldBeTrue)

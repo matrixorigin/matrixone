@@ -269,6 +269,18 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		//begin1 := time.Now()
 		for i, vec := range bat.Vecs { //col index
 			switch vec.Typ.Oid { //get col
+			case types.T_bool:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]bool)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]bool)
+						row[i] = vs[rowIndex]
+					}
+				}
 			case types.T_int8:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]int8)
@@ -538,7 +550,6 @@ func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
-
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
@@ -1528,19 +1539,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			*tree.Delete:
 			runBegin := time.Now()
 
-			//use aoe and plan2
-			//if !ses.IsTaeEngine() && usePlan2 {
-			//	if err = mce.handleDDl(ses, cw.GetAst(), epoch); err != nil {
-			//		goto handleFailed
-			//	}
-			//} else {
 			/*
 				Step 1: Start
 			*/
 			if err = runner.Run(epoch); err != nil {
 				goto handleFailed
 			}
-			//}
 
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
@@ -1753,6 +1757,8 @@ convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	switch engineType {
+	case types.T_bool:
+		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
 	case types.T_int8:
 		col.SetColumnType(defines.MYSQL_TYPE_TINY)
 	case types.T_uint8:

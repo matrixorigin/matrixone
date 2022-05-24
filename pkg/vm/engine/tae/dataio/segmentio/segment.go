@@ -15,16 +15,23 @@
 package segmentio
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+	"strconv"
+	"strings"
 	"sync"
 )
 
 var SegmentFileIOFactory = func(name string, id uint64) file.Segment {
 	return newSegmentFile(name, id)
+}
+
+var SegmentFileIOOpenFactory = func(name string, id uint64) file.Segment {
+	return openSegment(name, id)
 }
 
 type segmentFile struct {
@@ -37,6 +44,24 @@ type segmentFile struct {
 	seg    *segment.Segment
 }
 
+func openSegment(name string, id uint64) *segmentFile {
+	sf := &segmentFile{
+		blocks: make(map[uint64]*blockFile),
+		name:   name,
+	}
+	sf.seg = &segment.Segment{}
+	err := sf.seg.Open(sf.name)
+	if err != nil {
+		return nil
+	}
+	sf.id = &common.ID{
+		SegmentID: id,
+	}
+	sf.Ref()
+	sf.OnZeroCB = sf.close
+	return sf
+}
+
 func (sf *segmentFile) RemoveBlock(id uint64) {
 	sf.Lock()
 	defer sf.Unlock()
@@ -45,6 +70,54 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 		return
 	}
 	delete(sf.blocks, id)
+}
+
+func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+	err := sf.seg.Replay(cache)
+	if err != nil {
+		return err
+	}
+	nodes := sf.seg.GetNodes()
+	sf.Lock()
+	defer sf.Unlock()
+	for _, id := range ids {
+		sf.rebuildBlock(id, colCnt, indexCnt)
+	}
+	for name, file := range nodes {
+		tmpName := strings.Split(name, ".blk")
+		fileName := strings.Split(tmpName[0], "_")
+		if len(fileName) < 2 {
+			continue
+		}
+		id, err := strconv.ParseUint(fileName[1], 10, 32)
+		if err != nil {
+			return err
+		}
+		bf := sf.blocks[id]
+		if bf == nil {
+			panic(any("segment Replay err"))
+		}
+		col, err := strconv.ParseUint(fileName[0], 10, 32)
+		if err != nil {
+			return err
+		}
+		bf.columns[col].data.file = append(bf.columns[col].data.file, file)
+		bf.columns[col].data.stat.size = file.GetFileSize()
+		bf.columns[col].data.stat.originSize = file.GetOriginSize()
+		bf.columns[col].data.stat.algo = file.GetAlgo()
+		bf.columns[col].data.stat.name = file.GetName()
+		if len(fileName) > 2 {
+			ts, err := strconv.ParseUint(fileName[2], 10, 64)
+			if err != nil {
+				return err
+			}
+			if bf.columns[col].ts < ts {
+				bf.columns[col].ts = ts
+			}
+		}
+
+	}
+	return nil
 }
 
 func newSegmentFile(name string, id uint64) *segmentFile {
@@ -82,6 +155,17 @@ func (sf *segmentFile) Destroy() {
 	}
 	sf.seg.Unmount()
 	sf.seg.Destroy()
+}
+
+func (sf *segmentFile) rebuildBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
+	bf := sf.blocks[id]
+	if bf != nil {
+		panic(any("block rebuild err"))
+	}
+	bf = replayBlock(id, sf, colCnt, indexCnt)
+	sf.blocks[id] = bf
+	block = bf
+	return
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {

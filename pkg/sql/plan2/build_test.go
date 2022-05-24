@@ -29,7 +29,7 @@ import (
 //only use in developing
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	sql := `select date '1982' + interval '11 day'`
+	sql := `show create table tpch.nation`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -596,6 +596,7 @@ func TestShow(t *testing.T) {
 		"show variables",
 		"show create database tpch",
 		"show create table nation",
+		"show create table tpch.nation",
 		"show databases",
 		"show databases like '%d'",
 		"show databases where `Database` = '11'",
@@ -613,6 +614,7 @@ func TestShow(t *testing.T) {
 	// should error
 	sqls = []string{
 		"show create database db_not_exist",                    //db no exist
+		"show create table tpch.nation22",                      //table not exist
 		"show databases where d ='a'",                          //Column not exist,  show databases only have one column named 'Database'
 		"show databases where `Databaseddddd` = '11'",          //column not exist
 		"show tables from tpch22222",                           //database not exist

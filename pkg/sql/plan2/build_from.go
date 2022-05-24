@@ -170,7 +170,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
-		exprs, err := splitAndBuildExpr(cond.Expr, ctx, query, node, binderCtx)
+		exprs, err := splitAndBuildExpr(cond.Expr, ctx, query, node, binderCtx, false)
 		if err != nil {
 			return 0, err
 		}
@@ -210,7 +210,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 
 			// append equal function expr to onlist
 			var equalFunctionExpr *Expr
-			equalFunctionExpr, err = getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rigthColExpr})
+			equalFunctionExpr, _, err = getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rigthColExpr})
 			if err != nil {
 				return
 			}

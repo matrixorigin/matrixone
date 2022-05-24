@@ -58,7 +58,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
 		for _, order := range stmt.OrderBy {
 			orderBy := &plan.OrderBySpec{}
-			expr, err := buildExpr(order.Expr, ctx, query, sortNode, binderCtx)
+			expr, _, err := buildExpr(order.Expr, ctx, query, sortNode, binderCtx, false)
 			if err != nil {
 				return 0, err
 			}
@@ -103,7 +103,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 
 		// offset
 		if stmt.Limit.Offset != nil {
-			expr, err := buildExpr(stmt.Limit.Offset, ctx, query, node, binderCtx)
+			expr, _, err := buildExpr(stmt.Limit.Offset, ctx, query, node, binderCtx, false)
 			if err != nil {
 				return 0, err
 			}
@@ -112,7 +112,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 
 		// limit
 		if stmt.Limit.Count != nil {
-			expr, err := buildExpr(stmt.Limit.Count, ctx, query, node, binderCtx)
+			expr, _, err := buildExpr(stmt.Limit.Count, ctx, query, node, binderCtx, false)
 			if err != nil {
 				return 0, err
 			}
@@ -216,7 +216,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 	// filter
 	if stmt.Where != nil {
-		node.WhereList, err = splitAndBuildExpr(stmt.Where.Expr, ctx, query, node, binderCtx)
+		node.WhereList, err = splitAndBuildExpr(stmt.Where.Expr, ctx, query, node, binderCtx, false)
 		if err != nil {
 			return
 		}
@@ -233,7 +233,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		if stmt.GroupBy != nil {
 			exprs := make([]*Expr, 0, len(stmt.GroupBy))
 			for _, groupByExpr := range stmt.GroupBy {
-				expr, err := buildExpr(groupByExpr, ctx, query, aggNode, binderCtx)
+				expr, _, err := buildExpr(groupByExpr, ctx, query, aggNode, binderCtx, false)
 				if err != nil {
 					return 0, nil, err
 				}
@@ -244,7 +244,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 		// having
 		if stmt.Having != nil {
-			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, aggNode, binderCtx)
+			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, aggNode, binderCtx, true)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -274,8 +274,9 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 	}
 
 	// FIXME: projection
+	needAgg := node.NodeType == plan.Node_AGG
 	for _, selectExpr := range stmt.Exprs {
-		expr, err := buildExpr(selectExpr.Expr, ctx, query, node, binderCtx)
+		expr, _, err := buildExpr(selectExpr.Expr, ctx, query, node, binderCtx, needAgg)
 		if err != nil {
 			return 0, nil, err
 		}
