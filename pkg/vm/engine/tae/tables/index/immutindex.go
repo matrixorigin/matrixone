@@ -5,7 +5,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 )
 
 type immutableIndex struct {
@@ -74,10 +73,11 @@ func (index *immutableIndex) Destroy() (err error) {
 
 func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 	file := blk.GetBlockFile()
-	metas, err := file.LoadIndexMeta()
+	idxMeta, err := file.LoadIndexMeta()
 	if err != nil {
 		return
 	}
+	metas := idxMeta.(*IndicesMeta)
 	entry := blk.GetMeta().(*catalog.BlockEntry)
 	colFile, err := file.OpenColumn(int(entry.GetSchema().PrimaryKey))
 	if err != nil {
@@ -92,7 +92,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 		id.PartID = uint32(meta.InternalIdx) + 1000
 		id.Idx = meta.ColIdx
 		switch meta.IdxType {
-		case common.BlockZoneMapIndex:
+		case BlockZoneMapIndex:
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
@@ -103,7 +103,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 				return err
 			}
 			index.zonemap = reader
-		case common.StaticFilterIndex:
+		case StaticFilterIndex:
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {

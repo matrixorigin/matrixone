@@ -17,6 +17,8 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
+	"sync"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,8 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"sync"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/index"
 )
 
 type blockFile struct {
@@ -111,14 +112,14 @@ func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
 	return
 }
 
-func (bf *blockFile) LoadIndexMeta() (*idxCommon.IndicesMeta, error) {
+func (bf *blockFile) LoadIndexMeta() (any, error) {
 	size := bf.indexMeta.Stat().Size()
 	buf := make([]byte, size)
 	_, err := bf.indexMeta.Read(buf)
 	if err != nil {
 		return nil, err
 	}
-	indices := idxCommon.NewEmptyIndicesMeta()
+	indices := index.NewEmptyIndicesMeta()
 	if err = indices.Unmarshal(buf); err != nil {
 		return nil, err
 	}

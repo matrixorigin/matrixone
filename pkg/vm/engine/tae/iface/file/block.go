@@ -23,7 +23,6 @@ import (
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 )
 
 type Block interface {
@@ -39,7 +38,7 @@ type Block interface {
 	WriteDeletes(buf []byte) error
 	ReadDeletes(buf []byte) error
 
-	LoadIndexMeta() (*idxCommon.IndicesMeta, error)
+	LoadIndexMeta() (any, error)
 	WriteIndexMeta(buf []byte) (err error)
 
 	OpenColumn(colIdx int) (ColumnBlock, error)
