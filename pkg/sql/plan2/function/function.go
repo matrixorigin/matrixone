@@ -159,6 +159,8 @@ func fromNameToFunctionId(name string) (int32, error) {
 	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function '%s' doesn't register, get id failed", name))
 }
 
+// EncodeOverloadID convert function-id and overload-index to be an overloadID
+// the high 32-bit is function-id, the low 32-bit is overload-index
 func EncodeOverloadID(fid int32, index int32) (overloadID int64) {
 	overloadID = int64(fid)
 	overloadID = overloadID << 32
@@ -166,6 +168,7 @@ func EncodeOverloadID(fid int32, index int32) (overloadID int64) {
 	return overloadID
 }
 
+// DecodeOverloadID convert overload id to be function-id and overload-index
 func DecodeOverloadID(overloadID int64) (fid int32, index int32) {
 	base := overloadID
 	index = int32(overloadID)

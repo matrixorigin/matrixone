@@ -169,8 +169,8 @@ const (
 	SUBSTRING // SUBSTRING
 	YEAR      // YEAR
 
-	DATE_ADD // DATE_ADD
-	DATE_SUB // DATE_SUB
+	DATE_ADD              // DATE_ADD
+	DATE_SUB              // DATE_SUB
 	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
