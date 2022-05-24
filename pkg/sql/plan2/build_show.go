@@ -43,15 +43,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 				ON mt.relname = mc.att_relname 
 		WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
 	`
-	dbName := MO_CATALOG_DB_NAME
 	tblName := stmt.Name.Parts[0]
+	dbName := ctx.DefaultDatabase()
+	if stmt.Name.NumParts == 2 {
+		dbName = stmt.Name.Parts[1]
+	}
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
 
-	sql = fmt.Sprintf(sql, dbName, dbName, dbName, tblName)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// log.Println(sql)
 
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
