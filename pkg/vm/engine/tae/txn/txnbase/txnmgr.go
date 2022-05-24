@@ -135,6 +135,12 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 	txn.SetError(txn.PrepareCommit())
 }
 
+func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
+	if err := txn.PreApplyCommit(); err != nil {
+		mgr.OnException(err)
+	}
+}
+
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 	_ = txn.PrepareRollback()
 }
@@ -171,6 +177,8 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 				_ = op.Txn.ToRollbackingLocked(ts)
 				op.Txn.Unlock()
 				mgr.onPreparRollback(op.Txn)
+			} else {
+				mgr.onPreApplyCommit(op.Txn)
 			}
 		} else {
 			mgr.onPreparRollback(op.Txn)

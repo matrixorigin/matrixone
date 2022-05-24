@@ -127,18 +127,16 @@ func (tti *TaeTxnDumpImpl) GetError() error {
 }
 
 type TxnHandler struct {
-	//tae txn
-	//TODO: add aoe dump impl of Txn interface for unifying the logic of txn
 	storage  engine.Engine
 	taeTxn   moengine.Txn
 	txnState *TxnState
 }
 
-func InitTxnHandler() *TxnHandler {
+func InitTxnHandler(storage engine.Engine) *TxnHandler {
 	return &TxnHandler{
 		taeTxn:   InitTaeTxnImpl(),
 		txnState: InitTxnState(),
-		storage:  config.StorageEngine,
+		storage:  storage,
 	}
 }
 
@@ -170,7 +168,7 @@ type Session struct {
 }
 
 func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit) *Session {
-	txnHandler := InitTxnHandler()
+	txnHandler := InitTxnHandler(config.StorageEngine)
 	return &Session{
 		protocol: proto,
 		pdHook:   pdHook,
@@ -220,6 +218,11 @@ func (ses *Session) GetStorage() engine.Engine {
 
 func (ses *Session) GetDatabaseName() string {
 	return ses.protocol.GetDatabaseName()
+}
+
+func (ses *Session) SetDatabaseName(db string) {
+	ses.protocol.SetDatabaseName(db)
+	ses.txnCompileCtx.SetDatabase(db)
 }
 
 func (ses *Session) GetUserName() string {
@@ -487,6 +490,10 @@ func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	return &TxnCompilerContext{txnHandler: txn, dbName: db}
 }
 
+func (tcc *TxnCompilerContext) SetDatabase(db string) {
+	tcc.dbName = db
+}
+
 func (tcc *TxnCompilerContext) DefaultDatabase() string {
 	return tcc.dbName
 }
@@ -540,6 +547,9 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		}
 		return nil, nil
 	}
+
+	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
+	logutil.Infof("tableNames %v", tableNames)
 
 	//open table
 	table, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())

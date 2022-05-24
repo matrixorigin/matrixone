@@ -14,7 +14,10 @@
 
 package file
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+import (
+	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+)
 
 type SegmentFileFactory = func(dir string, id uint64) Segment
 
@@ -26,5 +29,6 @@ type Segment interface {
 	String() string
 	RemoveBlock(id uint64)
 	GetSegmentFile() *segment.Segment
+	Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error
 	// IsAppendable() bool
 }

@@ -383,7 +383,6 @@ func (store *txnStore) PreCommit() (err error) {
 }
 
 func (store *txnStore) PrepareCommit() (err error) {
-	now := time.Now()
 	if store.warChecker != nil {
 		if err = store.warChecker.check(); err != nil {
 			return err
@@ -395,6 +394,16 @@ func (store *txnStore) PrepareCommit() (err error) {
 		}
 	}
 
+	return
+}
+
+func (store *txnStore) PreApplyCommit() (err error) {
+	now := time.Now()
+	for _, db := range store.dbs {
+		if err = db.PreApplyCommit(); err != nil {
+			return
+		}
+	}
 	if err = store.CollectCmd(); err != nil {
 		return
 	}
@@ -407,7 +416,6 @@ func (store *txnStore) PrepareCommit() (err error) {
 		store.logs = append(store.logs, logEntry)
 	}
 	logutil.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
-
 	return
 }
 

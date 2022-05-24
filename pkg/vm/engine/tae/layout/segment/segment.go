@@ -38,6 +38,7 @@ type SuperBlock struct {
 	blockSize uint32
 	colCnt    uint32
 	lognode   *Inode
+	state     StateType
 }
 
 type Segment struct {
@@ -107,6 +108,14 @@ func (s *Segment) Init(name string) error {
 		return err
 	}
 
+	return nil
+}
+
+func (s *Segment) Open(name string) (err error) {
+	s.segFile, err = os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -270,4 +279,10 @@ func (s *Segment) Sync() error {
 
 func (s *Segment) GetName() string {
 	return s.name
+}
+
+func (s *Segment) GetNodes() map[string]*BlockFile {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.nodes
 }

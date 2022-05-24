@@ -206,6 +206,15 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 		lines = append(lines, groupByInfo)
 	}
 
+	// Get Aggregate function info
+	if ndesc.Node.AggList != nil {
+		aggListInfo, err := ndesc.GetAggregationInfo(options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, aggListInfo)
+	}
+
 	// Get Filter list info
 	if ndesc.Node.WhereList != nil {
 		filterInfo, err := ndesc.GetWhereConditionInfo(options)
@@ -296,6 +305,29 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
 		for _, v := range ndesc.Node.GetGroupBy() {
+			if !first {
+				result += ", "
+			}
+			first = false
+			descV, err := describeExpr(v, options)
+			if err != nil {
+				return result, err
+			}
+			result += descV
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+	}
+	return result, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (string, error) {
+	var result string = "Aggregate Functions:"
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		var first bool = true
+		for _, v := range ndesc.Node.GetAggList() {
 			if !first {
 				result += ", "
 			}

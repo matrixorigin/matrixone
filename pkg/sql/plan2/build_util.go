@@ -16,11 +16,12 @@ package plan2
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"go/constant"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -88,7 +89,7 @@ func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) ([]*Exp
 				Typ: leftProjList[leftIdx].Typ,
 			}
 
-			equalFunctionExpr, err := getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rightColExpr})
+			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rightColExpr})
 			if err != nil {
 				return nil, err
 			}
@@ -485,9 +486,10 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 			if err != nil {
 				return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 			}
+			constantValue := convertToPlanValue(value)
 			return &plan.DefaultExpr{
 				Exist:  true,
-				Value:  value,
+				Value:  constantValue,
 				IsNull: false,
 			}, nil
 		}
@@ -495,6 +497,57 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 	return &plan.DefaultExpr{
 		Exist: false,
 	}, nil
+}
+
+func convertToPlanValue(value interface{}) *plan.ConstantValue {
+	switch v := value.(type) {
+	case int64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Int64V{Int64V: v},
+		}
+	case uint64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Uint64V{Uint64V: v},
+		}
+	case float32:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Float32V{Float32V: v},
+		}
+	case float64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Float64V{Float64V: v},
+		}
+	case string:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_StringV{StringV: v},
+		}
+	case types.Date:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_DateV{DateV: int32(v)},
+		}
+	case types.Datetime:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_DateTimeV{DateTimeV: int64(v)},
+		}
+	case types.Timestamp:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_TimeStampV{TimeStampV: int64(v)},
+		}
+	case types.Decimal64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Decimal64V{Decimal64V: int64(v)},
+		}
+	case types.Decimal128:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Decimal128V{Decimal128V: &plan.Decimal128{
+				Lo: v.Lo,
+				Hi: v.Hi,
+			}},
+		}
+	}
+	return &plan.ConstantValue{
+		ConstantValue: &plan.ConstantValue_UnknownV{UnknownV: 1},
+	}
 }
 
 // rangeCheck do range check for value, and do type conversion.
@@ -506,15 +559,15 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 		switch typ.GetId() {
 		case plan.Type_INT8:
 			if v <= math.MaxInt8 && v >= math.MinInt8 {
-				return int8(v), nil
+				return v, nil
 			}
 		case plan.Type_INT16:
 			if v <= math.MaxInt16 && v >= math.MinInt16 {
-				return int16(v), nil
+				return v, nil
 			}
 		case plan.Type_INT32:
 			if v <= math.MaxInt32 && v >= math.MinInt32 {
-				return int32(v), nil
+				return v, nil
 			}
 		case plan.Type_INT64:
 			return v, nil
@@ -526,15 +579,15 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 		switch typ.GetId() {
 		case plan.Type_UINT8:
 			if v <= math.MaxUint8 {
-				return uint8(v), nil
+				return v, nil
 			}
 		case plan.Type_UINT16:
 			if v <= math.MaxUint16 {
-				return uint16(v), nil
+				return v, nil
 			}
 		case plan.Type_UINT32:
 			if v <= math.MaxUint32 {
-				return uint32(v), nil
+				return v, nil
 			}
 		case plan.Type_UINT64:
 			return v, nil
@@ -551,7 +604,7 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 		switch typ.GetId() {
 		case plan.Type_FLOAT32:
 			if v <= math.MaxFloat32 && v >= -math.MaxFloat32 {
-				return float32(v), nil
+				return v, nil
 			}
 		case plan.Type_FLOAT64:
 			return v, nil

@@ -445,6 +445,10 @@ func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTx
 }
 
 func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}) (err error) {
+	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
+		err = data.ErrUpdateUniqueKey
+		return
+	}
 	if isLocalSegment(id) {
 		return tbl.UpdateLocalValue(row, col, v)
 	}
@@ -612,10 +616,11 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 	return
 }
 
-func (tbl *txnTable) ApplyAppend() {
+func (tbl *txnTable) ApplyAppend() (err error) {
 	if tbl.localSegment != nil {
-		tbl.localSegment.ApplyAppend()
+		err = tbl.localSegment.ApplyAppend()
 	}
+	return
 }
 
 func (tbl *txnTable) PreCommit() (err error) {
@@ -629,6 +634,18 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	for _, node := range tbl.txnEntries {
 		if err = node.PrepareCommit(); err != nil {
 			break
+		}
+	}
+	return
+}
+
+func (tbl *txnTable) PreApplyCommit() (err error) {
+	if err = tbl.ApplyAppend(); err != nil {
+		return
+	}
+	for _, dn := range tbl.deleteNodes {
+		if err = dn.OnApply(); err != nil {
+			return
 		}
 	}
 	return

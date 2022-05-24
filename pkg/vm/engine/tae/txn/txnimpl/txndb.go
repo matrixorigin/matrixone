@@ -347,9 +347,6 @@ func (db *txnDB) PrepareCommit() (err error) {
 			break
 		}
 	}
-	for _, table := range db.tables {
-		table.ApplyAppend()
-	}
 	if db.dropEntry != nil {
 		if err = db.dropEntry.PrepareCommit(); err != nil {
 			return
@@ -358,6 +355,16 @@ func (db *txnDB) PrepareCommit() (err error) {
 
 	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 
+	return
+}
+
+func (db *txnDB) PreApplyCommit() (err error) {
+	for _, table := range db.tables {
+		// table.ApplyAppend()
+		if err = table.PreApplyCommit(); err != nil {
+			return
+		}
+	}
 	return
 }
 
