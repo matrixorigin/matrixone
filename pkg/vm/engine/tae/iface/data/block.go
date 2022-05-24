@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -57,6 +58,8 @@ type Block interface {
 	Rows(txn txnif.AsyncTxn, coarse bool) int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error)
+	GetMeta() any
+	GetBufMgr() base.INodeManager
 
 	MakeAppender() (BlockAppender, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32) (txnif.DeleteNode, error)

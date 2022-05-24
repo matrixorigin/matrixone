@@ -1,4 +1,4 @@
-package tables
+package index
 
 import (
 	"github.com/RoaringBitmap/roaring"
@@ -13,7 +13,7 @@ type mutableIndex struct {
 	zonemap *basic.ZoneMap
 }
 
-func newMutableIndex(keyT types.Type) *mutableIndex {
+func NewMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     basic.NewSimpleARTMap(keyT),
 		zonemap: basic.NewZoneMap(keyT),
@@ -71,3 +71,6 @@ func (index *mutableIndex) Close() error {
 	index.zonemap = nil
 	return nil
 }
+
+func (index *mutableIndex) ReadFrom(data.Block) error { panic("not supported") }
+func (index *mutableIndex) WriteTo(data.Block) error  { panic("not supported") }

@@ -27,8 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	icom "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/io"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -52,7 +51,7 @@ type dataBlock struct {
 	colFiles  map[int]common.IRWFile
 	bufMgr    base.INodeManager
 	scheduler tasks.TaskScheduler
-	index     data.Index
+	index     data.BlockIndex
 	mvcc      *updates.MVCCHandle
 	nice      uint32
 	ckpTs     uint64
@@ -92,9 +91,9 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		block.index = newMutableIndex(block.meta.GetSchema().GetPKType())
+		block.index = index.NewMutableIndex(block.meta.GetSchema().GetPKType())
 	} else {
-		block.index = new(immutableIndex)
+		block.index = index.NewImmutableIndex()
 	}
 	return block
 }
@@ -106,52 +105,12 @@ func (blk *dataBlock) ReplayData() (err error) {
 		err = blk.index.BatchInsert(&w.Vector, 0, uint32(gvec.Length(&w.Vector)), 0, false)
 		return
 	}
-	metas, err := blk.file.LoadIndexMeta()
-	if err != nil {
-		return
-	}
-	colFile, err := blk.file.OpenColumn(int(blk.meta.GetSchema().PrimaryKey))
-	if err != nil {
-		return
-	}
-	index := blk.index.(*immutableIndex)
-	for _, meta := range metas.Metas {
-		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
-		if err != nil {
-			return err
-		}
-		id := blk.meta.AsCommonID()
-		id.PartID = uint32(meta.InternalIdx) + 1000
-		id.Idx = meta.ColIdx
-		switch meta.IdxType {
-		case icom.BlockZoneMapIndex:
-			size := idxFile.Stat().Size()
-			buf := make([]byte, size)
-			if _, err = idxFile.Read(buf); err != nil {
-				return err
-			}
-			reader := io.NewBlockZoneMapIndexReader()
-			if err = reader.Init(blk.bufMgr, idxFile, id); err != nil {
-				return err
-			}
-			index.zonemap = reader
-		case icom.StaticFilterIndex:
-			size := idxFile.Stat().Size()
-			buf := make([]byte, size)
-			if _, err = idxFile.Read(buf); err != nil {
-				return err
-			}
-			reader := io.NewStaticFilterIndexReader()
-			if err = reader.Init(blk.bufMgr, idxFile, id); err != nil {
-				return err
-			}
-			index.filter = reader
-		default:
-			panic("unsupported index type")
-		}
-	}
+	err = blk.index.ReadFrom(blk)
 	return
 }
+
+func (blk *dataBlock) GetMeta() any                 { return blk.meta }
+func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts uint64) {
 	atomic.StoreUint64(&blk.ckpTs, ts)

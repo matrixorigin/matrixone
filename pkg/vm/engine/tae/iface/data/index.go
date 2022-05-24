@@ -18,3 +18,9 @@ type Index interface {
 	Delete(any) error
 	Find(any) (uint32, error)
 }
+
+type BlockIndex interface {
+	Index
+	ReadFrom(Block) error
+	WriteTo(Block) error
+}

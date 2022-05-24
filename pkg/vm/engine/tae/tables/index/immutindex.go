@@ -1,15 +1,21 @@
-package tables
+package index
 
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/io"
 )
 
 type immutableIndex struct {
 	zonemap *io.BlockZoneMapIndexReader
 	filter  *io.StaticFilterIndexReader
+}
+
+func NewImmutableIndex() *immutableIndex {
+	return new(immutableIndex)
 }
 
 func (index *immutableIndex) Find(any) (uint32, error) { panic("not supported") }
@@ -66,3 +72,54 @@ func (index *immutableIndex) Destroy() (err error) {
 	err = index.filter.Destroy()
 	return
 }
+
+func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
+	file := blk.GetBlockFile()
+	metas, err := file.LoadIndexMeta()
+	if err != nil {
+		return
+	}
+	entry := blk.GetMeta().(*catalog.BlockEntry)
+	colFile, err := file.OpenColumn(int(entry.GetSchema().PrimaryKey))
+	if err != nil {
+		return
+	}
+	for _, meta := range metas.Metas {
+		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
+		if err != nil {
+			return err
+		}
+		id := entry.AsCommonID()
+		id.PartID = uint32(meta.InternalIdx) + 1000
+		id.Idx = meta.ColIdx
+		switch meta.IdxType {
+		case common.BlockZoneMapIndex:
+			size := idxFile.Stat().Size()
+			buf := make([]byte, size)
+			if _, err = idxFile.Read(buf); err != nil {
+				return err
+			}
+			reader := io.NewBlockZoneMapIndexReader()
+			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
+				return err
+			}
+			index.zonemap = reader
+		case common.StaticFilterIndex:
+			size := idxFile.Stat().Size()
+			buf := make([]byte, size)
+			if _, err = idxFile.Read(buf); err != nil {
+				return err
+			}
+			reader := io.NewStaticFilterIndexReader()
+			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
+				return err
+			}
+			index.filter = reader
+		default:
+			panic("unsupported index type")
+		}
+	}
+	return
+}
+
+func (index *immutableIndex) WriteTo(data.Block) error { panic("not supported") }
