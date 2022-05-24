@@ -1,0 +1,151 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package logservice
+
+import (
+	"bytes"
+	"testing"
+
+	sm "github.com/lni/dragonboat/v3/statemachine"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestGetSetLeaseHolderCmd(t *testing.T) {
+	cmd := getSetLeaseHolderCmd(100)
+	assert.True(t, isSetLeaseHolderUpdate(cmd))
+	cmd2 := getSetTruncatedIndexCmd(200)
+	assert.False(t, isSetLeaseHolderUpdate(cmd2))
+}
+
+func TestGetSetTruncatedIndexCmd(t *testing.T) {
+	cmd := getSetTruncatedIndexCmd(1234)
+	assert.True(t, isSetTruncatedIndexUpdate(cmd))
+	cmd2 := getSetLeaseHolderCmd(1234)
+	assert.False(t, isSetTruncatedIndexUpdate(cmd2))
+}
+
+func TestIsUserUpdate(t *testing.T) {
+	cmd := make([]byte, headerSize+8+1)
+	binaryEnc.PutUint16(cmd, userEntryTag)
+	assert.True(t, isUserUpdate(cmd))
+	cmd2 := getSetLeaseHolderCmd(1234)
+	cmd3 := getSetTruncatedIndexCmd(200)
+	assert.False(t, isUserUpdate(cmd2))
+	assert.False(t, isUserUpdate(cmd3))
+}
+
+func TestNewStateMachine(t *testing.T) {
+	tsm := newStateMachine(100, 200).(*stateMachine)
+	assert.Equal(t, uint64(100), tsm.shardID)
+	assert.Equal(t, uint64(200), tsm.replicaID)
+}
+
+func TestStateMachineCanBeClosed(t *testing.T) {
+	tsm := newStateMachine(100, 200)
+	assert.Nil(t, tsm.Close())
+}
+
+func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
+	cmd := getSetLeaseHolderCmd(500)
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	assert.Equal(t, uint64(0), tsm.leaseHolderID)
+	result, err := tsm.Update(cmd)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(500), tsm.leaseHolderID)
+}
+
+func TestTruncatedIndexCanBeUpdated(t *testing.T) {
+	cmd := getSetTruncatedIndexCmd(200)
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	result, err := tsm.Update(cmd)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Nil(t, err)
+
+	cmd2 := getSetTruncatedIndexCmd(220)
+	result, err = tsm.Update(cmd2)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Nil(t, err)
+
+	cmd3 := getSetTruncatedIndexCmd(100)
+	result, err = tsm.Update(cmd3)
+	assert.Equal(t, sm.Result{Value: 220}, result)
+	assert.Nil(t, err)
+}
+
+func TestStateMachineUserUpdate(t *testing.T) {
+	cmd := make([]byte, headerSize+8+1)
+	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint64(cmd[headerSize:], uint64(1234))
+
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.leaseHolderID = 1234
+	result, err := tsm.Update(cmd)
+	assert.Nil(t, err)
+	assert.Equal(t, sm.Result{}, result)
+
+	tsm.leaseHolderID = 2345
+	result, err = tsm.Update(cmd)
+	assert.Nil(t, err)
+	assert.Equal(t, sm.Result{Value: 2345}, result)
+}
+
+func TestStateMachineSnapshot(t *testing.T) {
+	buf := bytes.NewBuffer(nil)
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.leaseHolderID = 123456
+	tsm.truncatedIndex = 456789
+	assert.Nil(t, tsm.SaveSnapshot(buf, nil, nil))
+
+	tsm2 := newStateMachine(3, 4).(*stateMachine)
+	assert.Nil(t, tsm2.RecoverFromSnapshot(buf, nil, nil))
+	assert.Equal(t, tsm.leaseHolderID, tsm2.leaseHolderID)
+	assert.Equal(t, tsm.truncatedIndex, tsm2.truncatedIndex)
+	assert.Equal(t, uint64(3), tsm2.shardID)
+	assert.Equal(t, uint64(4), tsm2.replicaID)
+}
+
+func TestStateMachineLookup(t *testing.T) {
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.leaseHolderID = 123456
+	tsm.truncatedIndex = 456789
+	v, err := tsm.Lookup(leaseHolderIDTag)
+	assert.Nil(t, err)
+	assert.Equal(t, tsm.leaseHolderID, v.(uint64))
+
+	v2, err := tsm.Lookup(truncatedIndexTag)
+	assert.Nil(t, err)
+	assert.Equal(t, tsm.truncatedIndex, v2.(uint64))
+}
+
+func TestStateMachineLookupPanicOnUnexpectedInputValue(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("failed to panic")
+		}
+	}()
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.Lookup(uint16(1234))
+}
+
+func TestStateMachineLookupPanicOnUnexpectedInputType(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatalf("failed to panic")
+		}
+	}()
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.Lookup(uint64(1234))
+}

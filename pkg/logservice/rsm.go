@@ -35,21 +35,17 @@ const (
 	userEntryTag      uint16 = 0xBF03
 )
 
-type header struct {
-	tag uint16
-}
-
 func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint16(cmd, leaseHolderIDTag)
-	binaryEnc.PutUint64(cmd, leaseHolderID)
+	binaryEnc.PutUint64(cmd[headerSize:], leaseHolderID)
 	return cmd
 }
 
 func getSetTruncatedIndexCmd(index uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint16(cmd, truncatedIndexTag)
-	binaryEnc.PutUint64(cmd, index)
+	binaryEnc.PutUint64(cmd[headerSize:], index)
 	return cmd
 }
 
@@ -156,7 +152,7 @@ func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	ss := make([]byte, 16)
 	binaryEnc.PutUint64(ss, s.leaseHolderID)
-	binaryEnc.PutUint64(ss, s.truncatedIndex)
+	binaryEnc.PutUint64(ss[8:], s.truncatedIndex)
 	if _, err := w.Write(ss); err != nil {
 		return err
 	}

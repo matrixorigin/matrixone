@@ -60,11 +60,11 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 	}
 }
 
-type LogShardManager struct {
+type ShardManager struct {
 	nh *dragonboat.NodeHost
 }
 
-func NewLogShardManager(cfg Config) (*LogShardManager, error) {
+func NewShardManager(cfg Config) (*ShardManager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -74,21 +74,29 @@ func NewLogShardManager(cfg Config) (*LogShardManager, error) {
 		return nil, err
 	}
 
-	return &LogShardManager{nh: nh}, nil
+	return &ShardManager{nh: nh}, nil
 }
 
-func (l *LogShardManager) Close() error {
+func (l *ShardManager) Close() error {
 	l.nh.Close()
 	return nil
 }
 
-func (l *LogShardManager) StartReplica(shardID uint64, replicaID uint64,
+func (l *ShardManager) StartHAKeeperReplica(replicaID uint64,
+	initialReplicas map[uint64]dragonboat.Target) error {
+	raftConfig := getRaftConfig(defaultHAKeeperShardID, replicaID)
+	// FIXME: why join is always true
+	return l.nh.StartCluster(initialReplicas, true, newHAKeeperStateMachine, raftConfig)
+}
+
+func (l *ShardManager) StartReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(shardID, replicaID)
+	// FIXME: why join is always true
 	return l.nh.StartCluster(initialReplicas, true, newStateMachine, raftConfig)
 }
 
-func (l *LogShardManager) GetOrExtendLease(ctx context.Context,
+func (l *ShardManager) GetOrExtendDNLease(ctx context.Context,
 	shardID uint64, dnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetLeaseHolderCmd(dnID)
@@ -96,7 +104,7 @@ func (l *LogShardManager) GetOrExtendLease(ctx context.Context,
 	return err
 }
 
-func (l *LogShardManager) TruncateLog(ctx context.Context,
+func (l *ShardManager) TruncateLog(ctx context.Context,
 	shardID uint64, index uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetTruncatedIndexCmd(index)
@@ -110,7 +118,7 @@ func (l *LogShardManager) TruncateLog(ctx context.Context,
 	return nil
 }
 
-func (l *LogShardManager) Append(ctx context.Context,
+func (l *ShardManager) Append(ctx context.Context,
 	shardID uint64, cmd []byte) error {
 	if !isUserUpdate(cmd) {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not user update"))
@@ -126,7 +134,7 @@ func (l *LogShardManager) Append(ctx context.Context,
 	return nil
 }
 
-func (l *LogShardManager) GetTruncatedIndex(ctx context.Context,
+func (l *ShardManager) GetTruncatedIndex(ctx context.Context,
 	shardID uint64) (uint64, error) {
 	v, err := l.nh.SyncRead(ctx, shardID, truncatedIndexTag)
 	if err != nil {
@@ -137,7 +145,7 @@ func (l *LogShardManager) GetTruncatedIndex(ctx context.Context,
 
 // TODO: update QueryLog to provide clear indication whether there is any more
 // log to recover.
-func (l *LogShardManager) QueryLog(ctx context.Context, shardID uint64,
+func (l *ShardManager) QueryLog(ctx context.Context, shardID uint64,
 	firstIndex uint64, lastIndex uint64, maxSize uint64) ([]pb.Entry, error) {
 	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex, maxSize)
 	if err != nil {
