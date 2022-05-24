@@ -31,14 +31,11 @@ type TableIndex interface {
 	BatchInsert(*gvec.Vector, int, int, uint32, bool) error
 	Insert(any, uint32) error
 	Delete(any) error
-	Find(any) (uint32, error)
+	Search(any) (uint32, error)
 	Name() string
 	Count() int
 	KeyToVector(types.Type) *gvec.Vector
 }
-
-//TODO: commented due to static check
-//type artTableIndex struct{}
 
 type simpleTableIndex struct {
 	sync.RWMutex
@@ -107,7 +104,7 @@ func (idx *simpleTableIndex) Delete(vv any) error {
 	return nil
 }
 
-func (idx *simpleTableIndex) Find(v any) (uint32, error) {
+func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 	idx.RLock()
 	defer idx.RUnlock()
 	row, ok := idx.tree[v]

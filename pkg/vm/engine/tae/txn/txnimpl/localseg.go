@@ -313,9 +313,9 @@ func (seg *localSegment) Rows() uint32 {
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	if v, ok := filter.Val.([]byte); ok {
-		offset, err = seg.index.Find(string(v))
+		offset, err = seg.index.Search(string(v))
 	} else {
-		offset, err = seg.index.Find(filter.Val)
+		offset, err = seg.index.Search(filter.Val)
 	}
 	if err == nil {
 		id = seg.entry.AsCommonID()
