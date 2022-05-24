@@ -46,7 +46,7 @@ type SimpleEvictHolderCtx struct {
 	QCapacity uint64
 }
 
-func NewSimpleEvictHolder(ctx ...interface{}) IEvictHolder {
+func NewSimpleEvictHolder(ctx ...any) IEvictHolder {
 	c := EVICT_HOLDER_CAPACITY
 	if len(ctx) > 0 {
 		context := ctx[0].(*SimpleEvictHolderCtx)

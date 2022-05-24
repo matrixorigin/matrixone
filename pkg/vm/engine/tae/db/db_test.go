@@ -21,10 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,7 +49,6 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
-	idxCommon.MockIndexBufferManager = buffer.NewNodeManager(1024*1024*150, nil)
 	return db
 }
 
@@ -1392,7 +1388,7 @@ func TestDelete1(t *testing.T) {
 		v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Equal(t, data.ErrNotFound, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -1410,7 +1406,7 @@ func TestDelete1(t *testing.T) {
 		v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Equal(t, data.ErrNotFound, err)
 	}
 	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }
@@ -2044,11 +2040,55 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, row, row)
 	assert.NoError(t, err)
-	id, row, err = rel.GetByFilter(filter)
+	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
-	// err = rel.Append(bat)
-	// assert.NoError(t, err)
 
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+
+	err = rel.Append(bat)
+	assert.Error(t, err)
+
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.Error(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	it = rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 4, view.Length())
+		assert.Equal(t, uint64(3), view.DeleteMask.GetCardinality())
+		it.Next()
+	}
 	assert.NoError(t, txn.Commit())
 }
 
@@ -2081,10 +2121,10 @@ func TestUpdateByFilter(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int32(2222), cv.(int32))
 
-	// v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
-	// filter = handle.NewEQFilter(v)
-	// err = rel.UpdateByFilter(filter, uint16(schema.PrimaryKey), int64(333333))
-	// assert.NoError(t, err)
+	v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
+	filter = handle.NewEQFilter(v)
+	err = rel.UpdateByFilter(filter, uint16(schema.PrimaryKey), int64(333333))
+	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
 }

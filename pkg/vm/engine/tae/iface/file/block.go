@@ -23,7 +23,6 @@ import (
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 )
 
 type Block interface {
@@ -39,7 +38,7 @@ type Block interface {
 	WriteDeletes(buf []byte) error
 	ReadDeletes(buf []byte) error
 
-	LoadIndexMeta() (*idxCommon.IndicesMeta, error)
+	LoadIndexMeta() (any, error)
 	WriteIndexMeta(buf []byte) (err error)
 
 	OpenColumn(colIdx int) (ColumnBlock, error)
@@ -47,7 +46,7 @@ type Block interface {
 
 	// TODO: Remove later
 	LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch.IBatch, err error)
-	WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) error
+	WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
 	WriteBatch(bat *gbat.Batch, ts uint64) error
 	LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error)
 	WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) error

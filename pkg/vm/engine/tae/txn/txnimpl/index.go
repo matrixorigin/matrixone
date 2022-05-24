@@ -29,25 +29,22 @@ type TableIndex interface {
 	io.Closer
 	BatchDedup(*gvec.Vector) error
 	BatchInsert(*gvec.Vector, int, int, uint32, bool) error
-	Insert(interface{}, uint32) error
-	Delete(interface{}) error
-	Find(interface{}) (uint32, error)
+	Insert(any, uint32) error
+	Delete(any) error
+	Search(any) (uint32, error)
 	Name() string
 	Count() int
 	KeyToVector(types.Type) *gvec.Vector
 }
 
-//TODO: commented due to static check
-//type artTableIndex struct{}
-
 type simpleTableIndex struct {
 	sync.RWMutex
-	tree map[interface{}]uint32
+	tree map[any]uint32
 }
 
 func NewSimpleTableIndex() *simpleTableIndex {
 	return &simpleTableIndex{
-		tree: make(map[interface{}]uint32),
+		tree: make(map[any]uint32),
 	}
 }
 
@@ -78,7 +75,7 @@ func (idx *simpleTableIndex) Count() int {
 	return cnt
 }
 
-func (idx *simpleTableIndex) Insert(v interface{}, row uint32) error {
+func (idx *simpleTableIndex) Insert(v any, row uint32) error {
 	idx.Lock()
 	defer idx.Unlock()
 	_, ok := idx.tree[v]
@@ -89,10 +86,10 @@ func (idx *simpleTableIndex) Insert(v interface{}, row uint32) error {
 	return nil
 }
 
-func (idx *simpleTableIndex) Delete(vv interface{}) error {
+func (idx *simpleTableIndex) Delete(vv any) error {
 	idx.Lock()
 	defer idx.Unlock()
-	var v interface{}
+	var v any
 	switch vv.(type) {
 	case []uint8:
 		v = string(vv.([]uint8))
@@ -107,7 +104,7 @@ func (idx *simpleTableIndex) Delete(vv interface{}) error {
 	return nil
 }
 
-func (idx *simpleTableIndex) Find(v interface{}) (uint32, error) {
+func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 	idx.RLock()
 	defer idx.RUnlock()
 	row, ok := idx.tree[v]

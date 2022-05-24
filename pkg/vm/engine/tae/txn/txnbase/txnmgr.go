@@ -146,7 +146,7 @@ func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 }
 
 // TODO
-func (mgr *TxnManager) onPreparing(items ...interface{}) {
+func (mgr *TxnManager) onPreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
@@ -191,7 +191,7 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 }
 
 // TODO
-func (mgr *TxnManager) onCommit(items ...interface{}) {
+func (mgr *TxnManager) onCommit(items ...any) {
 	var err error
 	now := time.Now()
 	for _, item := range items {

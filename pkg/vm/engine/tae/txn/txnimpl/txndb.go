@@ -127,7 +127,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 	return table.GetByFilter(filter)
 }
 
-func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v interface{}, err error) {
+func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return
@@ -139,7 +139,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v interface
 	return table.GetValue(id, row, colIdx)
 }
 
-func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
+func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
@@ -150,7 +150,7 @@ func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v interface{})
 	return table.Update(id, row, colIdx, v)
 }
 
-func (db *txnDB) CreateRelation(def interface{}) (relation handle.Relation, err error) {
+func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	db.store.IncreateWriteCnt()
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory

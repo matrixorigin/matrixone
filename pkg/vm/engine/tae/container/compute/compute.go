@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 )
 
-func AppendValue(vec *gvec.Vector, v interface{}) {
+func AppendValue(vec *gvec.Vector, v any) {
 	switch vec.Typ.Oid {
 	case types.T_int8:
 		vvals := vec.Col.([]int8)
@@ -83,7 +83,7 @@ func AppendValue(vec *gvec.Vector, v interface{}) {
 	}
 }
 
-func GetValue(col *gvec.Vector, row uint32) interface{} {
+func GetValue(col *gvec.Vector, row uint32) any {
 	vals := col.Col
 	switch col.Typ.Oid {
 	case types.T_int8:
@@ -136,7 +136,7 @@ func GetValue(col *gvec.Vector, row uint32) interface{} {
 	}
 }
 
-func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val interface{}) error {
+func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 	vals := col.Col
 	switch col.Typ.Oid {
 	case types.T_int8:
@@ -452,7 +452,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 	return vec
 }
 
-func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32]interface{}) *gvec.Vector {
+func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32]any) *gvec.Vector {
 	if mask == nil || mask.GetCardinality() == 0 {
 		return vec
 	}
@@ -497,7 +497,7 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 	return vec
 }
 
-func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uint32]interface{}) vector.IVector {
+func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uint32]any) vector.IVector {
 	if mask == nil || mask.GetCardinality() == 0 {
 		return vec
 	}
@@ -630,7 +630,7 @@ func findDeleteRange(pos uint32, ranges []*deleteRange) *deleteRange {
 	return ranges[mid]
 }
 
-func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]interface{}, deletes *roaring.Bitmap) (*roaring.Bitmap, map[uint32]interface{}, *roaring.Bitmap) {
+func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes *roaring.Bitmap) (*roaring.Bitmap, map[uint32]any, *roaring.Bitmap) {
 	if deletes == nil {
 		return origMask, origVals, deletes
 	}
@@ -650,7 +650,7 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]interface{},
 
 	ranges = append(ranges, &deleteRange{pos: math.MaxUint32, deleted: deletedCnt})
 	destMask := roaring.New()
-	destVals := make(map[uint32]interface{})
+	destVals := make(map[uint32]any)
 	origIt := origMask.Iterator()
 	for origIt.HasNext() {
 		pos := origIt.Next()
@@ -664,7 +664,7 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]interface{},
 	return destMask, destVals, destDelets
 }
 
-func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) (offset uint32, exist bool) {
+func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset uint32, exist bool) {
 	switch data.Typ.Oid {
 	case types.T_int8:
 		column := data.Col.([]int8)

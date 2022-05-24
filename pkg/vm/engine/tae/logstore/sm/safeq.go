@@ -34,7 +34,7 @@ const (
 )
 
 type safeQueue struct {
-	queue     chan interface{}
+	queue     chan any
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -46,7 +46,7 @@ type safeQueue struct {
 
 func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 	q := &safeQueue{
-		queue:     make(chan interface{}, queueSize),
+		queue:     make(chan any, queueSize),
 		state:     Created,
 		batchSize: batchSize,
 		onItemsCB: onItem,
@@ -58,7 +58,7 @@ func NewSafeQueue(queueSize, batchSize int, onItem OnItemsCB) *safeQueue {
 func (q *safeQueue) Start() {
 	q.state = Running
 	q.wg.Add(1)
-	items := make([]interface{}, 0, q.batchSize)
+	items := make([]any, 0, q.batchSize)
 	go func() {
 		defer q.wg.Done()
 		for {
@@ -125,7 +125,7 @@ func (q *safeQueue) waitStop() {
 	q.wg.Wait()
 }
 
-func (q *safeQueue) Enqueue(item interface{}) (interface{}, error) {
+func (q *safeQueue) Enqueue(item any) (any, error) {
 	state := atomic.LoadInt32(&q.state)
 	if state != Running {
 		return item, common.ClosedErr

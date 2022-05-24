@@ -87,7 +87,7 @@ func (dispatcher *asyncJobDispatcher) TryDispatch(task tasks.Task) (err error) {
 	return
 }
 
-func (dispatcher *asyncJobDispatcher) OnExecDone(v interface{}) {
+func (dispatcher *asyncJobDispatcher) OnExecDone(v any) {
 	task := v.(tasks.MScopedTask)
 	scopes := task.Scopes()
 	dispatcher.Lock()

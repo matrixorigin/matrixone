@@ -3,6 +3,7 @@ package txnimpl
 import (
 	"bytes"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -38,11 +39,11 @@ func (blk *txnSysBlock) GetTotalChanges() int {
 	return blk.txnBlock.GetTotalChanges()
 }
 
-func (blk *txnSysBlock) BatchDedup(pks *movec.Vector) (err error) {
+func (blk *txnSysBlock) BatchDedup(pks *movec.Vector, invisibility *roaring.Bitmap) (err error) {
 	if blk.isSysTable() {
 		panic("not supported")
 	}
-	return blk.txnBlock.BatchDedup(pks)
+	return blk.txnBlock.BatchDedup(pks, invisibility)
 }
 
 func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) {
@@ -52,7 +53,7 @@ func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.txnBlock.RangeDelete(start, end)
 }
 
-func (blk *txnSysBlock) Update(row uint32, col uint16, v interface{}) (err error) {
+func (blk *txnSysBlock) Update(row uint32, col uint16, v any) (err error) {
 	if blk.isSysTable() {
 		panic("not supported")
 	}

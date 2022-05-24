@@ -152,10 +152,10 @@ func newSegment(table *txnTable, meta *catalog.SegmentEntry) *txnSegment {
 	return seg
 }
 
-func (seg *txnSegment) GetMeta() interface{} { return seg.entry }
-func (seg *txnSegment) String() string       { return seg.entry.String() }
-func (seg *txnSegment) GetID() uint64        { return seg.entry.GetID() }
-func (seg *txnSegment) getDBID() uint64      { return seg.entry.GetTable().GetDB().ID }
+func (seg *txnSegment) GetMeta() any    { return seg.entry }
+func (seg *txnSegment) String() string  { return seg.entry.String() }
+func (seg *txnSegment) GetID() uint64   { return seg.entry.GetID() }
+func (seg *txnSegment) getDBID() uint64 { return seg.entry.GetTable().GetDB().ID }
 func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.table, seg.entry)
 }

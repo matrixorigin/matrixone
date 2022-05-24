@@ -115,7 +115,7 @@ func (db *txnDatabase) GetID() uint64   { return db.txnDB.entry.GetID() }
 func (db *txnDatabase) GetName() string { return db.txnDB.entry.GetName() }
 func (db *txnDatabase) String() string  { return db.txnDB.entry.String() }
 
-func (db *txnDatabase) CreateRelation(def interface{}) (rel handle.Relation, err error) {
+func (db *txnDatabase) CreateRelation(def any) (rel handle.Relation, err error) {
 	return db.Txn.GetStore().CreateRelation(db.txnDB.entry.ID, def)
 }
 
@@ -134,4 +134,4 @@ func (db *txnDatabase) MakeRelationIt() (it handle.RelationIt) {
 func (db *txnDatabase) RelationCnt() int64                  { return 0 }
 func (db *txnDatabase) Relations() (rels []handle.Relation) { return }
 func (db *txnDatabase) Close() error                        { return nil }
-func (db *txnDatabase) GetMeta() interface{}                { return db.txnDB.entry }
+func (db *txnDatabase) GetMeta() any                        { return db.txnDB.entry }

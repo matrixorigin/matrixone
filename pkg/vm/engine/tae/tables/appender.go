@@ -18,33 +18,26 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
 )
 
 type blockAppender struct {
-	node          *appendableNode
-	indexAppender acif.IAppendableBlockIndexHolder
-	placeholder   uint32
-	rows          uint32
+	node        *appendableNode
+	placeholder uint32
+	rows        uint32
 }
 
-func newAppender(node *appendableNode, idxApd acif.IAppendableBlockIndexHolder) *blockAppender {
+func newAppender(node *appendableNode) *blockAppender {
 	appender := new(blockAppender)
 	appender.node = node
-	appender.indexAppender = idxApd
 	appender.rows = node.Rows(nil, true)
 	return appender
 }
 
 func (appender *blockAppender) Close() error {
-	// if appender.handle != nil {
-	// 	appender.handle.Close()
-	// 	appender.handle = nil
-	// }
 	return nil
 }
 
-func (appender *blockAppender) GetMeta() interface{} {
+func (appender *blockAppender) GetMeta() any {
 	return appender.node.block.meta
 }
 
@@ -81,7 +74,7 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 
 	pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
 	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-	err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
+	err = appender.node.block.index.BatchInsert(pks, offset, length, from, false)
 	if err != nil {
 		panic(err)
 	}
@@ -99,8 +92,8 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 		})
 
 		pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
-		// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-		err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
+		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())
+		err = appender.node.block.index.BatchInsert(pks, offset, length, from, false)
 		if err != nil {
 			panic(err)
 		}

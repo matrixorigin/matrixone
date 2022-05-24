@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -408,14 +409,14 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	return
 }
 
-func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v interface{}, err error) {
+func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, err error) {
 	if tbl.localSegment == nil {
 		return
 	}
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interface{}, err error) {
+func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err error) {
 	if isLocalSegment(id) {
 		return tbl.localSegment.GetValue(row, col)
 	}
@@ -431,7 +432,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interfac
 	return block.GetValue(tbl.store.txn, row, col)
 }
 
-func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v interface{}) (err error) {
+func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v any) (err error) {
 	chain := node.GetChain().(*updates.ColumnChain)
 	controller := chain.GetController()
 	sharedLock := controller.GetSharedLock()
@@ -444,7 +445,7 @@ func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTx
 	return
 }
 
-func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}) (err error) {
+func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err error) {
 	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
 		err = data.ErrUpdateUniqueKey
 		return
@@ -488,7 +489,7 @@ func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}
 // 3. Build a new row
 // 4. Delete the row in the node
 // 5. Append the new row
-func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value interface{}) (err error) {
+func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value any) (err error) {
 	if tbl.localSegment != nil {
 		err = tbl.localSegment.Update(row, col, value)
 	}
@@ -551,8 +552,15 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 			}
 			// logutil.Infof("%s: %d-%d, %d-%d: %s", tbl.txn.String(), tbl.maxSegId, tbl.maxBlkId, seg.GetID(), blk.GetID(), pks.String())
 			blkData := blk.GetBlockData()
-			// TODO: Add a new batch dedup method later
-			if err = blkData.BatchDedup(tbl.store.txn, pks); err != nil {
+			var invisibility *roaring.Bitmap
+			if len(tbl.deleteNodes) > 0 {
+				fp := blk.AsCommonID()
+				dn := tbl.deleteNodes[*fp]
+				if dn != nil {
+					invisibility = dn.GetInvisibilityMapRefLocked()
+				}
+			}
+			if err = blkData.BatchDedup(tbl.store.txn, pks, invisibility); err != nil {
 				return
 			}
 			blkIt.Next()
@@ -585,8 +593,17 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 			blkIt := seg.MakeBlockIt()
 			for blkIt.Valid() {
 				block := blkIt.GetBlock()
-				if err = block.BatchDedup(pks); err != nil {
-					break
+				fp := block.Fingerprint()
+				dn := tbl.deleteNodes[*fp]
+				if dn != nil {
+					invisibility := dn.GetInvisibilityMapRefLocked()
+					if err = block.BatchDedup(pks, invisibility); err != nil {
+						break
+					}
+				} else {
+					if err = block.BatchDedup(pks, nil); err != nil {
+						break
+					}
 				}
 				blkIt.Next()
 			}

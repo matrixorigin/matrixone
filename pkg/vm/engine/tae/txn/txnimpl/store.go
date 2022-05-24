@@ -156,7 +156,7 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	return db.GetByFilter(tid, filter)
 }
 
-func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v interface{}, err error) {
+func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -168,7 +168,7 @@ func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx u
 	return db.GetValue(id, row, colIdx)
 }
 
-func (store *txnStore) Update(dbId uint64, id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
+func (store *txnStore) Update(dbId uint64, id *common.ID, row uint32, colIdx uint16, v any) (err error) {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -240,7 +240,7 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	return
 }
 
-func (store *txnStore) CreateRelation(dbId uint64, def interface{}) (relation handle.Relation, err error) {
+func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Relation, err error) {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {

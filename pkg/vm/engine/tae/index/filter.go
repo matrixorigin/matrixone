@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package basic
+package index
 
 import (
 	"bytes"
@@ -23,11 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 )
 
 type StaticFilter interface {
-	MayContainsKey(key interface{}) (bool, error)
+	MayContainsKey(key any) (bool, error)
 	MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
@@ -43,8 +43,8 @@ type binaryFuseFilter struct {
 func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{typ: data.Typ}
 	hashes := make([]uint64, 0)
-	collector := func(v interface{}) error {
-		hash, err := common.Hash(v, sf.typ)
+	collector := func(v any) error {
+		hash, err := compute.Hash(v, sf.typ)
 		if err != nil {
 			return err
 		}
@@ -52,7 +52,7 @@ func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	if err = common.ProcessVector(data, 0, -1, collector, nil); err != nil {
+	if err = compute.ProcessVector(data, 0, -1, collector, nil); err != nil {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -69,8 +69,8 @@ func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
 	return &sf, nil
 }
 
-func (filter *binaryFuseFilter) MayContainsKey(key interface{}) (bool, error) {
-	hash, err := common.Hash(key, filter.typ)
+func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
+	hash, err := compute.Hash(key, filter.typ)
 	if err != nil {
 		return false, err
 	}
@@ -85,8 +85,8 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 	row := uint32(0)
 	exist := false
 
-	collector := func(v interface{}) error {
-		hash, err := common.Hash(v, filter.typ)
+	collector := func(v any) error {
+		hash, err := compute.Hash(v, filter.typ)
 		if err != nil {
 			return err
 		}
@@ -97,7 +97,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 		return nil
 	}
 
-	if err := common.ProcessVector(keys, 0, -1, collector, visibility); err != nil {
+	if err := compute.ProcessVector(keys, 0, -1, collector, visibility); err != nil {
 		return false, nil, err
 	}
 	if positive.GetCardinality() != 0 {

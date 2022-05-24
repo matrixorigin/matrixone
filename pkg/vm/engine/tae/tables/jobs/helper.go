@@ -18,8 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/io"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
 func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumnData *vector.Vector) (err error) {
@@ -31,14 +30,14 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	}
 	zmIdx := uint16(0)
 	sfIdx := uint16(1)
-	metas := idxCommon.NewEmptyIndicesMeta()
+	metas := indexwrapper.NewEmptyIndicesMeta()
 
-	zoneMapWriter := io.NewBlockZoneMapIndexWriter()
+	zoneMapWriter := indexwrapper.NewZMWriter()
 	zmFile, err := pkColumn.OpenIndexFile(int(zmIdx))
 	if err != nil {
 		return err
 	}
-	err = zoneMapWriter.Init(zmFile, idxCommon.Plain, uint16(schema.PrimaryKey), zmIdx)
+	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.PrimaryKey), zmIdx)
 	if err != nil {
 		return err
 	}
@@ -52,20 +51,20 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	}
 	metas.AddIndex(*zmMeta)
 
-	staticFilterWriter := io.NewStaticFilterIndexWriter()
+	bfWriter := indexwrapper.NewBFWriter()
 	sfFile, err := pkColumn.OpenIndexFile(int(sfIdx))
 	if err != nil {
 		return err
 	}
-	err = staticFilterWriter.Init(sfFile, idxCommon.Plain, uint16(schema.PrimaryKey), sfIdx)
+	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.PrimaryKey), sfIdx)
 	if err != nil {
 		return err
 	}
-	err = staticFilterWriter.AddValues(pkColumnData)
+	err = bfWriter.AddValues(pkColumnData)
 	if err != nil {
 		return err
 	}
-	sfMeta, err := staticFilterWriter.Finalize()
+	sfMeta, err := bfWriter.Finalize()
 	if err != nil {
 		return err
 	}

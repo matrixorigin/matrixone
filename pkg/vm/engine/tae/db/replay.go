@@ -37,7 +37,7 @@ func (replayer *Replayer) Replay() {
 	}
 }
 
-func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 	if group != wal.GroupC {
 		return
 	}
@@ -171,7 +171,7 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 		if err != nil {
 			return nil, err
 		}
-		deletes := common.BitMapWindow(deletes, int(start), int(end))
+		deletes := common.BM32Window(deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
 		ret.Vecs[i] = srcVec
 	}

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package basic
+package index
 
 import (
 	"strconv"
@@ -20,13 +20,13 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStaticFilterNumeric(t *testing.T) {
 	typ := types.Type{Oid: types.T_int32}
-	data := common.MockVec(typ, 40000, 0)
+	data := compute.MockVec(typ, 40000, 0)
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
 	var positive *roaring.Bitmap
@@ -49,7 +49,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 		res, err = sf.MayContainsKey(int16(0))
 	})
 
-	query := common.MockVec(typ, 2000, 1000)
+	query := compute.MockVec(typ, 2000, 1000)
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
@@ -62,7 +62,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.Equal(t, uint64(1000), positive.GetCardinality())
 	require.True(t, exist)
 
-	query = common.MockVec(typ, 20000, 40000)
+	query = compute.MockVec(typ, 20000, 40000)
 	_, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
@@ -72,12 +72,12 @@ func TestStaticFilterNumeric(t *testing.T) {
 	buf, err = sf.Marshal()
 	require.NoError(t, err)
 
-	sf1, err := NewBinaryFuseFilter(common.MockVec(typ, 0, 0))
+	sf1, err := NewBinaryFuseFilter(compute.MockVec(typ, 0, 0))
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
 
-	query = common.MockVec(typ, 40000, 0)
+	query = compute.MockVec(typ, 40000, 0)
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
@@ -86,7 +86,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 
 func TestStaticFilterString(t *testing.T) {
 	typ := types.Type{Oid: types.T_varchar}
-	data := common.MockVec(typ, 40000, 0)
+	data := compute.MockVec(typ, 40000, 0)
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
 	var positive *roaring.Bitmap
@@ -101,13 +101,13 @@ func TestStaticFilterString(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res)
 
-	query := common.MockVec(typ, 2000, 1000)
+	query := compute.MockVec(typ, 2000, 1000)
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
 	require.True(t, exist)
 
-	query = common.MockVec(typ, 20000, 40000)
+	query = compute.MockVec(typ, 20000, 40000)
 	_, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
@@ -117,12 +117,12 @@ func TestStaticFilterString(t *testing.T) {
 	buf, err = sf.Marshal()
 	require.NoError(t, err)
 
-	sf1, err := NewBinaryFuseFilter(common.MockVec(typ, 0, 0))
+	sf1, err := NewBinaryFuseFilter(compute.MockVec(typ, 0, 0))
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
 
-	query = common.MockVec(typ, 40000, 0)
+	query = compute.MockVec(typ, 40000, 0)
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())

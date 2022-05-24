@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -138,7 +139,7 @@ func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
 	return blk
 }
 
-func (blk *txnBlock) GetMeta() interface{} { return blk.entry }
+func (blk *txnBlock) GetMeta() any { return blk.entry }
 func (blk *txnBlock) String() string {
 	if blk.isUncommitted {
 		return blk.entry.String()
@@ -157,10 +158,10 @@ func (blk *txnBlock) GetTotalChanges() int {
 func (blk *txnBlock) IsAppendableBlock() bool { return blk.entry.IsAppendable() }
 func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
-func (blk *txnBlock) BatchDedup(pks *gvec.Vector) (err error) {
+func (blk *txnBlock) BatchDedup(pks *gvec.Vector, invisibility *roaring.Bitmap) (err error) {
 	blkData := blk.entry.GetBlockData()
 	blk.Txn.GetStore().LogBlockID(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
-	return blkData.BatchDedup(blk.Txn, pks)
+	return blkData.BatchDedup(blk.Txn, pks, invisibility)
 }
 
 func (blk *txnBlock) getDBID() uint64 {
@@ -171,7 +172,7 @@ func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end)
 }
 
-func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
+func (blk *txnBlock) Update(row uint32, col uint16, v any) (err error) {
 	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)
 }
 

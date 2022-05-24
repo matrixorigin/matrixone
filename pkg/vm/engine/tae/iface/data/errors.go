@@ -17,12 +17,14 @@ package data
 import "errors"
 
 var (
-	ErrAppendableSegmentNotFound = errors.New("tae: no appendable segment")
-	ErrAppendableBlockNotFound   = errors.New("tae: no appendable block")
-	ErrNotAppendable             = errors.New("tae: not appendable")
-	ErrUpdateUniqueKey           = errors.New("tae: update unique key")
-	ErrStaleRequest              = errors.New("tae: stale request")
+	ErrAppendableSegmentNotFound = errors.New("tae data: no appendable segment")
+	ErrAppendableBlockNotFound   = errors.New("tae data: no appendable block")
+	ErrNotAppendable             = errors.New("tae data: not appendable")
+	ErrUpdateUniqueKey           = errors.New("tae data: update unique key")
+	ErrStaleRequest              = errors.New("tae data: stale request")
 
-	ErrPossibleDuplicate = errors.New("tae: possible duplicate")
-	ErrDuplicate         = errors.New("tae: duplicate")
+	ErrPossibleDuplicate = errors.New("tae data: possible duplicate")
+	ErrDuplicate         = errors.New("tae data: duplicate")
+	ErrNotFound          = errors.New("tae data: not found")
+	ErrWrongType         = errors.New("tae data: wrong data type")
 )
