@@ -101,22 +101,14 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := NewZMReader()
-			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
-				return err
-			}
-			index.zmReader = reader
+			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id)
 		case StaticFilterIndex:
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := NewBFReader()
-			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
-				return err
-			}
-			index.bfReader = reader
+			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)
 		default:
 			panic("unsupported index type")
 		}
