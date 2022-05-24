@@ -65,7 +65,7 @@ func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.E
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
-	dbSource, err := engine.Database(dbName, nil)
+	dbSource, err := engine.Database(dbName, snapshot)
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := engine.Database(dbName, nil)
+	dbSource, err := engine.Database(dbName, snapshot)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				},
 				Default: engine.DefaultExpr{
 					Exist:  col.GetDefault().GetExist(),
-					Value:  col.GetDefault().GetValue(),
+					Value:  planValToExeVal(col.GetDefault().GetValue(), colTyp.GetId()),
 					IsNull: col.GetDefault().GetIsNull(),
 				},
 				Primary: col.GetPrimary(),
@@ -154,6 +154,58 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		}
 	}
 	return exeCols
+}
+
+func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
+	switch v := value.GetConstantValue().(type) {
+	case *plan.ConstantValue_Int64V:
+		switch typ {
+		case plan.Type_INT8:
+			return int8(v.Int64V)
+		case plan.Type_INT16:
+			return int16(v.Int64V)
+		case plan.Type_INT32:
+			return int32(v.Int64V)
+		case plan.Type_INT64:
+			return v.Int64V
+		}
+	case *plan.ConstantValue_Uint64V:
+		switch typ {
+		case plan.Type_UINT8:
+			return uint8(v.Uint64V)
+		case plan.Type_UINT16:
+			return uint16(v.Uint64V)
+		case plan.Type_UINT32:
+			return uint32(v.Uint64V)
+		case plan.Type_UINT64:
+			return v.Uint64V
+		}
+	case *plan.ConstantValue_Float32V:
+		return v.Float32V
+	case *plan.ConstantValue_Float64V:
+		switch typ {
+		case plan.Type_FLOAT32:
+			return float32(v.Float64V)
+		case plan.Type_FLOAT64:
+			return v.Float64V
+		}
+	case *plan.ConstantValue_StringV:
+		return v.StringV
+	case *plan.ConstantValue_DateV:
+		return types.Date(v.DateV)
+	case *plan.ConstantValue_DateTimeV:
+		return types.Datetime(v.DateTimeV)
+	case *plan.ConstantValue_TimeStampV:
+		return types.Timestamp(v.TimeStampV)
+	case *plan.ConstantValue_Decimal64V:
+		return types.Decimal64(v.Decimal64V)
+	case *plan.ConstantValue_Decimal128V:
+		return types.Decimal128{
+			Lo: v.Decimal128V.Lo,
+			Hi: v.Decimal128V.Hi,
+		}
+	}
+	return nil
 }
 
 // Get the number of cpu's available for the current scope
