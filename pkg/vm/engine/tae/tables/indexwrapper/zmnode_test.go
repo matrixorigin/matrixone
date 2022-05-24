@@ -36,7 +36,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	var res bool
 	var visibility *roaring.Bitmap
 
-	writer := NewBlockZoneMapIndexWriter()
+	writer := NewZMWriter()
 	err = writer.Init(file, cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
@@ -47,7 +47,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewBlockZoneMapIndexReader()
+	reader := NewZMReader()
 	err = reader.Init(bufManager, file, &common.ID{})
 	require.NoError(t, err)
 

@@ -32,7 +32,7 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	sfIdx := uint16(1)
 	metas := indexwrapper.NewEmptyIndicesMeta()
 
-	zoneMapWriter := indexwrapper.NewBlockZoneMapIndexWriter()
+	zoneMapWriter := indexwrapper.NewZMWriter()
 	zmFile, err := pkColumn.OpenIndexFile(int(zmIdx))
 	if err != nil {
 		return err
@@ -51,20 +51,20 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	}
 	metas.AddIndex(*zmMeta)
 
-	staticFilterWriter := indexwrapper.NewStaticFilterIndexWriter()
+	bfWriter := indexwrapper.NewBFWriter()
 	sfFile, err := pkColumn.OpenIndexFile(int(sfIdx))
 	if err != nil {
 		return err
 	}
-	err = staticFilterWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.PrimaryKey), sfIdx)
+	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.PrimaryKey), sfIdx)
 	if err != nil {
 		return err
 	}
-	err = staticFilterWriter.AddValues(pkColumnData)
+	err = bfWriter.AddValues(pkColumnData)
 	if err != nil {
 		return err
 	}
-	sfMeta, err := staticFilterWriter.Finalize()
+	sfMeta, err := bfWriter.Finalize()
 	if err != nil {
 		return err
 	}

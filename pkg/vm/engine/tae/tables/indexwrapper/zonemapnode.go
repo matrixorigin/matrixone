@@ -11,15 +11,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type blockZoneMapIndexNode struct {
+type zonemapNode struct {
 	*buffer.Node
 	mgr     base.INodeManager
 	host    common.IVFile
 	zonemap *index.ZoneMap
 }
 
-func newBlockZoneMapIndexNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *blockZoneMapIndexNode {
-	impl := new(blockZoneMapIndexNode)
+func newZonemapNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *zonemapNode {
+	impl := new(zonemapNode)
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(host.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadFunc = impl.OnUnload
@@ -31,7 +31,7 @@ func newBlockZoneMapIndexNode(mgr base.INodeManager, host common.IVFile, id *com
 	return impl
 }
 
-func (n *blockZoneMapIndexNode) OnLoad() {
+func (n *zonemapNode) OnLoad() {
 	if n.zonemap != nil {
 		// no-op
 		return
@@ -55,7 +55,7 @@ func (n *blockZoneMapIndexNode) OnLoad() {
 	}
 }
 
-func (n *blockZoneMapIndexNode) OnUnload() {
+func (n *zonemapNode) OnUnload() {
 	if n.zonemap == nil {
 		// no-op
 		return
@@ -63,11 +63,11 @@ func (n *blockZoneMapIndexNode) OnUnload() {
 	n.zonemap = nil
 }
 
-func (n *blockZoneMapIndexNode) OnDestroy() {
+func (n *zonemapNode) OnDestroy() {
 	n.host.Unref()
 }
 
-func (n *blockZoneMapIndexNode) Close() (err error) {
+func (n *zonemapNode) Close() (err error) {
 	if err = n.Node.Close(); err != nil {
 		return err
 	}
@@ -75,39 +75,39 @@ func (n *blockZoneMapIndexNode) Close() (err error) {
 	return nil
 }
 
-type BlockZoneMapIndexReader struct {
-	node *blockZoneMapIndexNode
+type ZMReader struct {
+	node *zonemapNode
 }
 
-func NewBlockZoneMapIndexReader() *BlockZoneMapIndexReader {
-	return &BlockZoneMapIndexReader{}
+func NewZMReader() *ZMReader {
+	return &ZMReader{}
 }
 
-func (reader *BlockZoneMapIndexReader) Init(mgr base.INodeManager, host common.IVFile, id *common.ID) error {
-	reader.node = newBlockZoneMapIndexNode(mgr, host, id)
+func (reader *ZMReader) Init(mgr base.INodeManager, host common.IVFile, id *common.ID) error {
+	reader.node = newZonemapNode(mgr, host, id)
 	return nil
 }
 
-func (reader *BlockZoneMapIndexReader) Destroy() (err error) {
+func (reader *ZMReader) Destroy() (err error) {
 	if err = reader.node.Close(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (reader *BlockZoneMapIndexReader) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap, ok bool) {
+func (reader *ZMReader) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap, ok bool) {
 	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
 	return reader.node.zonemap.ContainsAny(keys)
 }
 
-func (reader *BlockZoneMapIndexReader) Contains(key any) bool {
+func (reader *ZMReader) Contains(key any) bool {
 	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
 	return reader.node.zonemap.Contains(key)
 }
 
-type BlockZoneMapIndexWriter struct {
+type ZMWriter struct {
 	cType       CompressType
 	host        common.IRWFile
 	zonemap     *index.ZoneMap
@@ -115,11 +115,11 @@ type BlockZoneMapIndexWriter struct {
 	internalIdx uint16
 }
 
-func NewBlockZoneMapIndexWriter() *BlockZoneMapIndexWriter {
-	return &BlockZoneMapIndexWriter{}
+func NewZMWriter() *ZMWriter {
+	return &ZMWriter{}
 }
 
-func (writer *BlockZoneMapIndexWriter) Init(host common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *ZMWriter) Init(host common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.host = host
 	writer.cType = cType
 	writer.colIdx = colIdx
@@ -127,7 +127,7 @@ func (writer *BlockZoneMapIndexWriter) Init(host common.IRWFile, cType CompressT
 	return nil
 }
 
-func (writer *BlockZoneMapIndexWriter) Finalize() (*IndexMeta, error) {
+func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if writer.zonemap == nil {
 		panic("unexpected error")
 	}
@@ -155,7 +155,7 @@ func (writer *BlockZoneMapIndexWriter) Finalize() (*IndexMeta, error) {
 	return meta, nil
 }
 
-func (writer *BlockZoneMapIndexWriter) AddValues(values *vector.Vector) (err error) {
+func (writer *ZMWriter) AddValues(values *vector.Vector) (err error) {
 	typ := values.Typ
 	if writer.zonemap == nil {
 		writer.zonemap = index.NewZoneMap(typ)
@@ -169,7 +169,7 @@ func (writer *BlockZoneMapIndexWriter) AddValues(values *vector.Vector) (err err
 	return
 }
 
-func (writer *BlockZoneMapIndexWriter) SetMinMax(min, max any, typ types.Type) (err error) {
+func (writer *ZMWriter) SetMinMax(min, max any, typ types.Type) (err error) {
 	if writer.zonemap == nil {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {

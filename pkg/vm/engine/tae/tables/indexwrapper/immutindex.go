@@ -8,8 +8,8 @@ import (
 )
 
 type immutableIndex struct {
-	zonemap *BlockZoneMapIndexReader
-	filter  *StaticFilterIndexReader
+	zmReader *ZMReader
+	bfReader *BFReader
 }
 
 func NewImmutableIndex() *immutableIndex {
@@ -23,12 +23,12 @@ func (index *immutableIndex) BatchInsert(*vector.Vector, uint32, uint32, uint32,
 }
 
 func (index *immutableIndex) Dedup(key any) (err error) {
-	exist := index.zonemap.Contains(key)
+	exist := index.zmReader.Contains(key)
 	// 2. if not in [min, max], key is definitely not found
 	if !exist {
 		return
 	}
-	exist, err = index.filter.MayContainsKey(key)
+	exist, err = index.bfReader.MayContainsKey(key)
 	// 3. check bloomfilter has some error. return err
 	if err != nil {
 		return
@@ -40,12 +40,12 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 }
 
 func (index *immutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.Bitmap, err error) {
-	visibility, exist := index.zonemap.ContainsAny(keys)
+	visibility, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
 		return
 	}
-	exist, visibility, err = index.filter.MayContainsAnyKeys(keys, visibility)
+	exist, visibility, err = index.bfReader.MayContainsAnyKeys(keys, visibility)
 	// 3. check bloomfilter has some unknown error. return err
 	if err != nil {
 		return
@@ -64,10 +64,10 @@ func (index *immutableIndex) Close() (err error) {
 }
 
 func (index *immutableIndex) Destroy() (err error) {
-	if err = index.zonemap.Destroy(); err != nil {
+	if err = index.zmReader.Destroy(); err != nil {
 		return
 	}
-	err = index.filter.Destroy()
+	err = index.bfReader.Destroy()
 	return
 }
 
@@ -98,22 +98,22 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := NewBlockZoneMapIndexReader()
+			reader := NewZMReader()
 			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
 				return err
 			}
-			index.zonemap = reader
+			index.zmReader = reader
 		case StaticFilterIndex:
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := NewStaticFilterIndexReader()
+			reader := NewBFReader()
 			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
 				return err
 			}
-			index.filter = reader
+			index.bfReader = reader
 		default:
 			panic("unsupported index type")
 		}

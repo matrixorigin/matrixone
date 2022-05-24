@@ -37,7 +37,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	colIdx := uint16(0)
 	interIdx := uint16(0)
 
-	writer := NewStaticFilterIndexWriter()
+	writer := NewBFWriter()
 	err = writer.Init(file, cType, colIdx, interIdx)
 	require.NoError(t, err)
 
@@ -48,7 +48,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewStaticFilterIndexReader()
+	reader := NewBFReader()
 	err = reader.Init(bufManager, file, &common.ID{})
 	require.NoError(t, err)
 

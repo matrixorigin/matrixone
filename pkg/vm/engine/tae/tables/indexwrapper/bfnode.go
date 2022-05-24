@@ -10,135 +10,135 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type staticFilterIndexNode struct {
+type bloomFilterNode struct {
 	*buffer.Node
-	mgr   base.INodeManager
-	host  common.IVFile
-	inner index.StaticFilter
+	mgr  base.INodeManager
+	file common.IVFile
+	impl index.StaticFilter
 }
 
-func newStaticFilterIndexNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *staticFilterIndexNode {
-	impl := new(staticFilterIndexNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(host.Stat().Size()))
+func newBloomFilterNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *bloomFilterNode {
+	impl := new(bloomFilterNode)
+	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadFunc = impl.OnUnload
 	impl.DestroyFunc = impl.OnDestroy
-	impl.host = host
+	impl.file = file
 	//impl.meta = meta
 	impl.mgr = mgr
 	mgr.RegisterNode(impl)
 	return impl
 }
 
-func (n *staticFilterIndexNode) OnLoad() {
-	if n.inner != nil {
+func (n *bloomFilterNode) OnLoad() {
+	if n.impl != nil {
 		// no-op
 		return
 	}
 	var err error
 	//startOffset := n.meta.StartOffset
-	stat := n.host.Stat()
+	stat := n.file.Stat()
 	size := stat.Size()
 	compressTyp := stat.CompressAlgo()
 	data := make([]byte, size)
-	if _, err := n.host.Read(data); err != nil {
+	if _, err := n.file.Read(data); err != nil {
 		panic(err)
 	}
 	rawSize := stat.OriginSize()
 	buf := make([]byte, rawSize)
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 	}
-	n.inner, err = index.NewBinaryFuseFilterFromSource(buf)
+	n.impl, err = index.NewBinaryFuseFilterFromSource(buf)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (n *staticFilterIndexNode) OnUnload() {
-	if n.inner == nil {
+func (n *bloomFilterNode) OnUnload() {
+	if n.impl == nil {
 		// no-op
 		return
 	}
-	n.inner = nil
+	n.impl = nil
 }
 
-func (n *staticFilterIndexNode) OnDestroy() {
-	n.host.Unref()
+func (n *bloomFilterNode) OnDestroy() {
+	n.file.Unref()
 }
 
-func (n *staticFilterIndexNode) Close() (err error) {
+func (n *bloomFilterNode) Close() (err error) {
 	if err = n.Node.Close(); err != nil {
 		return err
 	}
-	n.inner = nil
+	n.impl = nil
 	return nil
 }
 
-type StaticFilterIndexReader struct {
-	inode *staticFilterIndexNode
+type BFReader struct {
+	node *bloomFilterNode
 }
 
-func NewStaticFilterIndexReader() *StaticFilterIndexReader {
-	return &StaticFilterIndexReader{}
+func NewBFReader() *BFReader {
+	return &BFReader{}
 }
 
-func (reader *StaticFilterIndexReader) Init(mgr base.INodeManager, host common.IVFile, id *common.ID) error {
-	reader.inode = newStaticFilterIndexNode(mgr, host, id)
+func (reader *BFReader) Init(mgr base.INodeManager, file common.IVFile, id *common.ID) error {
+	reader.node = newBloomFilterNode(mgr, file, id)
 	return nil
 }
 
-func (reader *StaticFilterIndexReader) Destroy() (err error) {
-	if err = reader.inode.Close(); err != nil {
+func (reader *BFReader) Destroy() (err error) {
+	if err = reader.node.Close(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (reader *StaticFilterIndexReader) MayContainsKey(key any) (bool, error) {
-	handle := reader.inode.mgr.Pin(reader.inode)
+func (reader *BFReader) MayContainsKey(key any) (bool, error) {
+	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
-	return handle.GetNode().(*staticFilterIndexNode).inner.MayContainsKey(key)
+	return handle.GetNode().(*bloomFilterNode).impl.MayContainsKey(key)
 }
 
-func (reader *StaticFilterIndexReader) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
-	handle := reader.inode.mgr.Pin(reader.inode)
+func (reader *BFReader) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
+	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
-	return handle.GetNode().(*staticFilterIndexNode).inner.MayContainsAnyKeys(keys, visibility)
+	return handle.GetNode().(*bloomFilterNode).impl.MayContainsAnyKeys(keys, visibility)
 }
 
-type StaticFilterIndexWriter struct {
+type BFWriter struct {
 	cType       CompressType
-	host        common.IRWFile
-	inner       index.StaticFilter
+	file        common.IRWFile
+	impl        index.StaticFilter
 	data        *vector.Vector
 	colIdx      uint16
 	internalIdx uint16
 }
 
-func NewStaticFilterIndexWriter() *StaticFilterIndexWriter {
-	return &StaticFilterIndexWriter{}
+func NewBFWriter() *BFWriter {
+	return &BFWriter{}
 }
 
-func (writer *StaticFilterIndexWriter) Init(host common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.host = host
+func (writer *BFWriter) Init(file common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
+	writer.file = file
 	writer.cType = cType
 	writer.colIdx = colIdx
 	writer.internalIdx = internalIdx
 	return nil
 }
 
-func (writer *StaticFilterIndexWriter) Finalize() (*IndexMeta, error) {
-	if writer.inner != nil {
+func (writer *BFWriter) Finalize() (*IndexMeta, error) {
+	if writer.impl != nil {
 		panic("formerly finalized filter not cleared yet")
 	}
 	sf, err := index.NewBinaryFuseFilter(writer.data)
 	if err != nil {
 		return nil, err
 	}
-	writer.inner = sf
+	writer.impl = sf
 	writer.data = nil
 
-	appender := writer.host
+	appender := writer.file
 	meta := NewEmptyIndexMeta()
 	meta.SetIndexType(StaticFilterIndex)
 	meta.SetCompressType(writer.cType)
@@ -146,7 +146,7 @@ func (writer *StaticFilterIndexWriter) Finalize() (*IndexMeta, error) {
 	meta.SetInternalIndex(writer.internalIdx)
 
 	//var startOffset uint32
-	iBuf, err := writer.inner.Marshal()
+	iBuf, err := writer.impl.Marshal()
 	if err != nil {
 		return nil, err
 	}
@@ -159,11 +159,11 @@ func (writer *StaticFilterIndexWriter) Finalize() (*IndexMeta, error) {
 		return nil, err
 	}
 	//meta.SetStartOffset(startOffset)
-	writer.inner = nil
+	writer.impl = nil
 	return meta, nil
 }
 
-func (writer *StaticFilterIndexWriter) AddValues(values *vector.Vector) error {
+func (writer *BFWriter) AddValues(values *vector.Vector) error {
 	if writer.data == nil {
 		writer.data = values
 		return nil
@@ -178,6 +178,6 @@ func (writer *StaticFilterIndexWriter) AddValues(values *vector.Vector) error {
 }
 
 // Query is only used for testing or debugging
-func (writer *StaticFilterIndexWriter) Query(key any) (bool, error) {
-	return writer.inner.MayContainsKey(key)
+func (writer *BFWriter) Query(key any) (bool, error) {
+	return writer.impl.MayContainsKey(key)
 }
