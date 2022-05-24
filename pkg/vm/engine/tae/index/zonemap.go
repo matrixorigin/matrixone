@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
 type ZoneMap struct {
@@ -64,7 +63,7 @@ func (zm *ZoneMap) Update(v any) (err error) {
 
 func (zm *ZoneMap) BatchUpdate(vec *vector.Vector, offset uint32, length int) error {
 	if !zm.typ.Eq(vec.Typ) {
-		return data.ErrWrongType
+		return ErrWrongType
 	}
 	if err := compute.ProcessVector(vec, offset, length, zm.Update, nil); err != nil {
 		return err

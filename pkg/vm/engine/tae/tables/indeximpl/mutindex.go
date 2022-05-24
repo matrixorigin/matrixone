@@ -9,7 +9,7 @@ import (
 )
 
 type mutableIndex struct {
-	art     index.ARTMap
+	art     index.SecondaryIndex
 	zonemap *index.ZoneMap
 }
 
@@ -52,10 +52,7 @@ func (index *mutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.
 	if !exist {
 		return
 	}
-	exist, err = index.art.ContainsAny(keys, visibility)
-	if err != nil {
-		return
-	}
+	exist = index.art.ContainsAny(keys, visibility)
 	if exist {
 		err = data.ErrDuplicate
 	}

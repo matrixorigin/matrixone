@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,8 +31,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	var res bool
 	var err error
 	var row uint32
-	res, err = idx.Contains(int32(0))
-	require.NoError(t, err)
+	res = idx.Contains(int32(0))
 	require.False(t, res)
 
 	var batches []*vector.Vector
@@ -43,10 +41,10 @@ func TestARTIndexNumeric(t *testing.T) {
 	}
 
 	_, err = idx.Search(int32(55))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.Delete(int32(55))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false)
 	require.NoError(t, err)
@@ -56,16 +54,16 @@ func TestARTIndexNumeric(t *testing.T) {
 	require.Equal(t, uint32(55), row)
 
 	_, err = idx.Search(int32(100))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.Delete(int32(55))
 	require.NoError(t, err)
 
 	_, err = idx.Search(int32(55))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
-	require.ErrorIs(t, err, data.ErrDuplicate)
+	require.ErrorIs(t, err, ErrDuplicate)
 
 	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false)
 	require.NoError(t, err)
@@ -75,7 +73,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	require.Equal(t, uint32(123), row)
 
 	_, err = idx.Search(int32(233))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.Insert(int32(55), uint32(55))
 	require.NoError(t, err)
@@ -110,8 +108,7 @@ func TestArtIndexString(t *testing.T) {
 	var res bool
 	var err error
 	var row uint32
-	res, err = idx.Contains([]byte(strconv.Itoa(0)))
-	require.NoError(t, err)
+	res = idx.Contains([]byte(strconv.Itoa(0)))
 	require.False(t, res)
 
 	var batches []*vector.Vector
@@ -121,10 +118,10 @@ func TestArtIndexString(t *testing.T) {
 	}
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.Delete([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false)
 	require.NoError(t, err)
@@ -134,16 +131,16 @@ func TestArtIndexString(t *testing.T) {
 	require.Equal(t, uint32(55), row)
 
 	_, err = idx.Search([]byte(strconv.Itoa(100)))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
-	require.ErrorIs(t, err, data.ErrDuplicate)
+	require.ErrorIs(t, err, ErrDuplicate)
 
 	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false)
 	require.NoError(t, err)
@@ -153,5 +150,5 @@ func TestArtIndexString(t *testing.T) {
 	require.Equal(t, uint32(123), row)
 
 	_, err = idx.Search([]byte(strconv.Itoa(233)))
-	require.ErrorIs(t, err, data.ErrNotFound)
+	require.ErrorIs(t, err, ErrNotFound)
 }
