@@ -102,7 +102,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 			return nil, errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", expr.Names[0].Parts[0]))
 		}
 
-		value, err := buildExpr(expr.Expr, ctx, query, node, binderCtx)
+		value, _, err := buildExpr(expr.Expr, ctx, query, node, binderCtx, false)
 		if err != nil {
 			return nil, err
 		}
