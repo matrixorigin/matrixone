@@ -447,6 +447,25 @@ func buildBinaryExpr(astExpr *tree.BinaryExpr, ctx CompilerContext, query *Query
 
 func buildNumVal(val constant.Value) (*Expr, error) {
 	switch val.Kind() {
+	case constant.Bool:
+		boolValue := constant.BoolVal(val)
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Bval{
+						Bval: boolValue,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:        plan.Type_BOOL,
+				Nullable:  false,
+				Size:      1,
+				Width:     0,
+				Precision: 0,
+			},
+		}, nil
 	case constant.Int:
 		intValue, _ := constant.Int64Val(val)
 		return &Expr{
