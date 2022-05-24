@@ -42,7 +42,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	case *plan.Expr_C:
 		var vec *vector.Vector
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.Id)})
+			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.Id)})
 			nulls.Add(vec.Nsp, 0)
 		} else {
 			switch t.C.GetValue().(type) {

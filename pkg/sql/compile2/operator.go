@@ -16,6 +16,7 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -152,17 +153,19 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 
 func constructGroup(n *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
-	/*
-		for i, expr := range n.AggList {
-			switch f := expr.Expr.(type) {
-			case *plan.Expr_F:
-				fun, err := function.GetFunctionByIndex(int(f.F.Func.Schema), int(f.F.Func.Obj))
-				if err != nil {
-				}
-				fun.Flag
+	for i, expr := range n.AggList {
+		if f, ok := expr.Expr.(*plan.Expr_F); ok {
+			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
+			if err != nil {
+				panic(err)
+			}
+			aggs[i] = aggregate.Aggregate{
+				Op: fun.AggregateInfo,
+				E:  f.F.Args[0],
 			}
 		}
-	*/
+	}
+
 	return &group.Argument{
 		Aggs:  aggs,
 		Exprs: n.GroupBy,
