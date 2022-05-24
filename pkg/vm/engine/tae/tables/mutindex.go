@@ -52,7 +52,7 @@ func (index *mutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.
 	if !exist {
 		return
 	}
-	exist, err = index.art.ContainsAnyKeys(keys, visibility)
+	exist, err = index.art.ContainsAny(keys, visibility)
 	if err != nil {
 		return
 	}

@@ -26,14 +26,14 @@ import (
 )
 
 type ARTMap interface {
-	Insert(key interface{}, offset uint32) error
+	Insert(key any, offset uint32) error
 	BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify bool) error
-	Update(key interface{}, offset uint32) error
+	Update(key any, offset uint32) error
 	BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) error
-	Delete(key interface{}) error
-	Search(key interface{}) (uint32, error)
-	ContainsKey(key interface{}) (bool, error)
-	ContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, error)
+	Delete(key any) error
+	Search(key any) (uint32, error)
+	Contains(key any) (bool, error)
+	ContainsAny(keys *vector.Vector, visibility *roaring.Bitmap) (bool, error)
 	Print() string
 	Freeze() *vector.Vector
 }
@@ -50,7 +50,7 @@ func NewSimpleARTMap(typ types.Type) ARTMap {
 	}
 }
 
-func (art *simpleARTMap) Insert(key interface{}, offset uint32) (err error) {
+func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return
@@ -64,9 +64,9 @@ func (art *simpleARTMap) Insert(key interface{}, offset uint32) (err error) {
 }
 
 func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify bool) (err error) {
-	existence := make(map[interface{}]bool)
+	existence := make(map[any]bool)
 
-	processor := func(v interface{}) error {
+	processor := func(v any) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
@@ -106,7 +106,7 @@ func (art *simpleARTMap) Update(key any, offset uint32) (err error) {
 func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) (err error) {
 	idx := 0
 
-	processor := func(v interface{}) error {
+	processor := func(v any) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
@@ -148,7 +148,7 @@ func (art *simpleARTMap) Search(key any) (uint32, error) {
 	return offset.(uint32), nil
 }
 
-func (art *simpleARTMap) ContainsKey(key any) (bool, error) {
+func (art *simpleARTMap) Contains(key any) (bool, error) {
 	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return false, err
@@ -160,8 +160,8 @@ func (art *simpleARTMap) ContainsKey(key any) (bool, error) {
 	return false, nil
 }
 
-func (art *simpleARTMap) ContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, error) {
-	processor := func(v interface{}) error {
+func (art *simpleARTMap) ContainsAny(keys *vector.Vector, visibility *roaring.Bitmap) (bool, error) {
+	processor := func(v any) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err

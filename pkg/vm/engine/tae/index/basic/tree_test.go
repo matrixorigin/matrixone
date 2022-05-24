@@ -32,7 +32,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	var res bool
 	var err error
 	var row uint32
-	res, err = idx.ContainsKey(int32(0))
+	res, err = idx.Contains(int32(0))
 	require.NoError(t, err)
 	require.False(t, res)
 
@@ -110,7 +110,7 @@ func TestArtIndexString(t *testing.T) {
 	var res bool
 	var err error
 	var row uint32
-	res, err = idx.ContainsKey([]byte(strconv.Itoa(0)))
+	res, err = idx.Contains([]byte(strconv.Itoa(0)))
 	require.NoError(t, err)
 	require.False(t, res)
 
