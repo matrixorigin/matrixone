@@ -1079,6 +1079,7 @@ type Const struct {
 	//	*Const_Ival
 	//	*Const_Dval
 	//	*Const_Sval
+	//	*Const_Bval
 	Value isConst_Value `protobuf_oneof:"value"`
 }
 
@@ -1149,6 +1150,13 @@ func (x *Const) GetSval() string {
 	return ""
 }
 
+func (x *Const) GetBval() bool {
+	if x, ok := x.GetValue().(*Const_Bval); ok {
+		return x.Bval
+	}
+	return false
+}
+
 type isConst_Value interface {
 	isConst_Value()
 }
@@ -1165,11 +1173,17 @@ type Const_Sval struct {
 	Sval string `protobuf:"bytes,4,opt,name=sval,proto3,oneof"`
 }
 
+type Const_Bval struct {
+	Bval bool `protobuf:"varint,5,opt,name=bval,proto3,oneof"`
+}
+
 func (*Const_Ival) isConst_Value() {}
 
 func (*Const_Dval) isConst_Value() {}
 
 func (*Const_Sval) isConst_Value() {}
+
+func (*Const_Bval) isConst_Value() {}
 
 // Bounded param for prepared statement.  User fill on execution.
 type ParamRef struct {
@@ -5759,6 +5773,7 @@ func file_plan_proto_init() {
 		(*Const_Ival)(nil),
 		(*Const_Dval)(nil),
 		(*Const_Sval)(nil),
+		(*Const_Bval)(nil),
 	}
 	file_plan_proto_msgTypes[10].OneofWrappers = []interface{}{
 		(*Expr_C)(nil),

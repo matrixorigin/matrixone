@@ -82,6 +82,7 @@ message Const {
 		int64 ival		= 2;
 		double dval 	= 3;
 		string sval		= 4;
+		bool bval 		= 5;
 	}
 }
 

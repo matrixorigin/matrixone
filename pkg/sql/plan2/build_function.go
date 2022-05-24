@@ -43,6 +43,14 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *
 			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
 			return
 		}
+	case "and", "or", "not":
+		if err := convertValueIntoBool(name, exprs, true); err != nil {
+			return nil, false, err
+		}
+	case "=", "<", "<=", ">", ">=", "<>":
+		if err := convertValueIntoBool(name, exprs, false); err != nil {
+			return nil, false, err
+		}
 	}
 
 	// get args(exprs) & types
@@ -226,4 +234,30 @@ func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr
 	resultExpr, _, err := getFunctionExprByNameAndPlanExprs(namesMap[name], exprs)
 
 	return resultExpr, err
+}
+
+func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
+	if !isLogic && (len(args) != 2 || (args[0].Typ.Id != plan.Type_BOOL && args[1].Typ.Id != plan.Type_BOOL)) {
+		return nil
+	}
+	for _, arg := range args {
+		if arg.Typ.Id == plan.Type_BOOL {
+			continue
+		}
+		switch ex := arg.Expr.(type) {
+		case *plan.Expr_C:
+			arg.Typ.Id = plan.Type_BOOL
+			switch value := ex.C.Value.(type) {
+			case *plan.Const_Ival:
+				if value.Ival == 0 {
+					ex.C.Value = &plan.Const_Bval{Bval: false}
+				} else if value.Ival == 1 {
+					ex.C.Value = &plan.Const_Bval{Bval: true}
+				} else {
+					return errors.New("", "the params type is not right")
+				}
+			}
+		}
+	}
+	return nil
 }
