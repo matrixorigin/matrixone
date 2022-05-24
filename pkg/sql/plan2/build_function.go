@@ -112,10 +112,17 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 		if err != nil {
 			return
 		}
+		expr, err = convertValueIntoBool(name, expr)
+		if err != nil {
+			return
+		}
 		isAgg = isAgg && paramIsAgg
 		args[idx] = expr
 	}
 
+	if err = convertValueIntoBool2(name, args); err != nil {
+		return
+	}
 	// deal with special function
 	switch name {
 	case "date":
@@ -226,4 +233,58 @@ func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr
 	resultExpr, _, err := getFunctionExprByNameAndPlanExprs(namesMap[name], exprs)
 
 	return resultExpr, err
+}
+
+func convertValueIntoBool(name string, expr *plan.Expr) (*plan.Expr, error) {
+	if name != "and" && name != "or" && name != "not" {
+		return expr, nil
+	}
+
+	if expr.Typ.Id == plan.Type_BOOL {
+		return expr, nil
+	}
+	switch ex := expr.Expr.(type) {
+	case *plan.Expr_C:
+		expr.Typ.Id = plan.Type_BOOL
+		switch value := ex.C.Value.(type) {
+		case *plan.Const_Ival:
+			if value.Ival == 0 {
+				ex.C.Value = &plan.Const_Bval{Bval: false}
+			} else if value.Ival == 1 {
+				ex.C.Value = &plan.Const_Bval{Bval: true}
+			} else {
+				return nil, errors.New("", "the params type is not right")
+			}
+		}
+	default:
+		return nil, errors.New("", "the expr type is not right")
+	}
+	return expr, nil
+}
+
+func convertValueIntoBool2(name string, args []*Expr) error {
+	if name != "=" && name != "<" && name != "<=" && name != ">" && name != ">=" && name != "<>" {
+		return nil
+	}
+	if len(args) != 2 || (args[0].Typ.Id != plan.Type_BOOL && args[1].Typ.Id != plan.Type_BOOL) {
+		return nil
+	}
+	for _, arg := range args {
+		switch ex := arg.Expr.(type) {
+		case *plan.Expr_C:
+			switch value := ex.C.Value.(type) {
+			case *plan.Const_Ival:
+				if value.Ival == 0 {
+					arg.Typ.Id = plan.Type_BOOL
+					ex.C.Value = &plan.Const_Bval{Bval: false}
+				} else if value.Ival == 1 {
+					arg.Typ.Id = plan.Type_BOOL
+					ex.C.Value = &plan.Const_Bval{Bval: true}
+				} else {
+					return errors.New("", "the params type is not right")
+				}
+			}
+		}
+	}
+	return nil
 }

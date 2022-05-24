@@ -43,8 +43,8 @@ var operators = map[int][]Function{
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
-				types.T_uint8, // left part of +
-				types.T_uint8, // right part of +
+				types.T_uint8,
+				types.T_uint8,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -213,6 +213,18 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_date,
 				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -400,6 +412,18 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	GREAT_EQUAL: {
 		{
@@ -577,6 +601,18 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_date,
 				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -764,6 +800,18 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	LESS_EQUAL: {
 		{
@@ -946,6 +994,18 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	NOT_EQUAL: {
 		{
@@ -1123,6 +1183,18 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_date,
 				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
