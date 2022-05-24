@@ -69,6 +69,10 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 		return
 	}
 	n += int(unsafe.Sizeof(file.snode.size))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.originSize); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.originSize))
 	if err = binary.Read(cache, binary.BigEndian, &extentLen); err != nil {
 		return
 	}
@@ -191,6 +195,9 @@ func (l *Log) Append(file *BlockFile) error {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.size); err != nil {
+		return err
+	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.originSize); err != nil {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, uint64(len(file.snode.extents))); err != nil {

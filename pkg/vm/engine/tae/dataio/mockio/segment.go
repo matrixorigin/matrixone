@@ -15,6 +15,7 @@
 package mockio
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
@@ -35,6 +36,10 @@ type segmentFile struct {
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
+}
+
+func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+	panic(any("implement me"))
 }
 
 func (sf *segmentFile) GetSegmentFile() *segment.Segment {
