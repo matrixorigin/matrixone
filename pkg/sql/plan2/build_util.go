@@ -16,11 +16,12 @@ package plan2
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"go/constant"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -88,7 +89,7 @@ func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) ([]*Exp
 				Typ: leftProjList[leftIdx].Typ,
 			}
 
-			equalFunctionExpr, err := getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rightColExpr})
+			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rightColExpr})
 			if err != nil {
 				return nil, err
 			}

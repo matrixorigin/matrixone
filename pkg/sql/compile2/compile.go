@@ -59,6 +59,12 @@ func (c *compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 
 	c.u = u
 	c.fill = fill
+	// build scope for a single sql
+	s, err := c.compileScope(pn)
+	if err != nil {
+		return err
+	}
+	c.scope = s
 	return nil
 }
 
@@ -78,7 +84,7 @@ func (c *compile) Run(ts uint64) (err error) {
 	case DropDatabase:
 		return c.scope.DropDatabase(ts, c.proc.Snapshot, c.e)
 	case CreateTable:
-		return c.scope.CreateTable(ts, c.proc.Snapshot, c.e)
+		return c.scope.CreateTable(ts, c.proc.Snapshot, c.e, c.db)
 	case DropTable:
 		return c.scope.DropTable(ts, c.proc.Snapshot, c.e)
 	case CreateIndex:

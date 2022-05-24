@@ -163,14 +163,14 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 		Global: stmt.Global,
 	}
 	if stmt.Like != nil {
-		expr, err := buildComparisonExpr(stmt.Like, ctx, nil, nil, nil)
+		expr, _, err := buildComparisonExpr(stmt.Like, ctx, nil, nil, nil, false)
 		if err != nil {
 			return nil, err
 		}
 		showVariables.Where = append(showVariables.Where, expr)
 	}
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil, nil)
+		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil, nil, false)
 		if err != nil {
 			return nil, err
 		}

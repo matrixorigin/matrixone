@@ -28,9 +28,9 @@ func TestExpr_1(t *testing.T) {
 		mock := NewMockOptimizer()
 		var params []bool = []bool{false, true}
 		input := []string{"select 0 and 1 from dual;",
-						"select false and 1 from dual;",
-						"select false and true from dual;",
-						"select 0 and true from dual;"}
+			"select false and 1 from dual;",
+			"select false and true from dual;",
+			"select 0 and true from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -69,9 +69,9 @@ func TestExpr_2(t *testing.T) {
 		mock := NewMockOptimizer()
 		var params []bool = []bool{false, true}
 		input := []string{"select 0 or 1 from dual;",
-						"select false or 1 from dual;",
-						"select false or true from dual;",
-						"select 0 or true from dual;"}
+			"select false or 1 from dual;",
+			"select false or true from dual;",
+			"select 0 or true from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -110,9 +110,9 @@ func TestExpr_3(t *testing.T) {
 		mock := NewMockOptimizer()
 		var params []bool = []bool{false, false, true, true}
 		input := []string{"select not 0 from dual;",
-						"select not false from dual;",
-						"select not 1 from dual;",
-						"select not true from dual;"}
+			"select not false from dual;",
+			"select not 1 from dual;",
+			"select not true from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -151,10 +151,10 @@ func TestExpr_4(t *testing.T) {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 = 1 from dual;",
-						"select 1 = 1 from dual;",
-						"select true = false from dual;",
-						"select true = 1 from dual;",
-						"select 0 = false from dual;"}
+			"select 1 = 1 from dual;",
+			"select true = false from dual;",
+			"select true = 1 from dual;",
+			"select 0 = false from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -181,8 +181,8 @@ func TestExpr_5(t *testing.T) {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 < 1 from dual;",
-						"select 1 < 1 from dual;",
-						"select 1 < 0 from dual;"}
+			"select 1 < 1 from dual;",
+			"select 1 < 0 from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -209,8 +209,8 @@ func TestExpr_6(t *testing.T) {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 <= 1 from dual;",
-						"select 1 <= 1 from dual;",
-						"select 1 <= 0 from dual;"}
+			"select 1 <= 1 from dual;",
+			"select 1 <= 0 from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -237,8 +237,8 @@ func TestExpr_7(t *testing.T) {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 > 1 from dual;",
-						"select 1 > 1 from dual;",
-						"select 1 > 0 from dual;"}
+			"select 1 > 1 from dual;",
+			"select 1 > 0 from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -265,8 +265,8 @@ func TestExpr_8(t *testing.T) {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 >= 1 from dual;",
-						"select 1 >= 1 from dual;",
-						"select 1 >= 0 from dual;"}
+			"select 1 >= 1 from dual;",
+			"select 1 >= 0 from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -293,11 +293,11 @@ func TestExpr_9(t *testing.T) {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 != 1 from dual;",
-						"select 1 != 1 from dual;",
-						"select 1 != 0 from dual;",
-						"select 0 <> 1 from dual;",
-						"select 1 <> 1 from dual;",
-						"select 1 <> 0 from dual;"}
+			"select 1 != 1 from dual;",
+			"select 1 != 0 from dual;",
+			"select 0 <> 1 from dual;",
+			"select 1 <> 1 from dual;",
+			"select 1 <> 0 from dual;"}
 
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
@@ -324,8 +324,8 @@ func TestExpr_A(t *testing.T) {
 		mock := NewMockOptimizer()
 		// var params []bool = []bool{false, false, true, true}
 		input := []string{"select 0 < 1 and 1 > 0 from dual;",
-						"select 0 < 1 or 1 > 0 from dual;",
-						"select not 0 < 1 from dual;"}
+			"select 0 < 1 or 1 > 0 from dual;",
+			"select not 0 < 1 from dual;"}
 		name := []string{"and", "or", "not"}
 		for i := 0; i < len(input); i++ {
 			pl, err := runOneExprStmt(mock, t, input[i])
