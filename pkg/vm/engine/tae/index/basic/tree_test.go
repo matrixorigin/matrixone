@@ -20,14 +20,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 	"github.com/stretchr/testify/require"
 )
 
 func TestARTIndexNumeric(t *testing.T) {
 	typ := types.Type{Oid: types.T_int32}
-	idx := NewSimpleARTMap(typ, nil)
+	idx := NewSimpleARTMap(typ)
 
 	var res bool
 	var err error
@@ -43,10 +43,10 @@ func TestARTIndexNumeric(t *testing.T) {
 	}
 
 	_, err = idx.Search(int32(55))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.Delete(int32(55))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false)
 	require.NoError(t, err)
@@ -56,16 +56,16 @@ func TestARTIndexNumeric(t *testing.T) {
 	require.Equal(t, uint32(55), row)
 
 	_, err = idx.Search(int32(100))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.Delete(int32(55))
 	require.NoError(t, err)
 
 	_, err = idx.Search(int32(55))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
-	require.ErrorIs(t, err, errors.ErrKeyDuplicate)
+	require.ErrorIs(t, err, data.ErrDuplicate)
 
 	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false)
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	require.Equal(t, uint32(123), row)
 
 	_, err = idx.Search(int32(233))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.Insert(int32(55), uint32(55))
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestARTIndexNumeric(t *testing.T) {
 
 func TestArtIndexString(t *testing.T) {
 	typ := types.Type{Oid: types.T_varchar}
-	idx := NewSimpleARTMap(typ, nil)
+	idx := NewSimpleARTMap(typ)
 
 	var res bool
 	var err error
@@ -121,10 +121,10 @@ func TestArtIndexString(t *testing.T) {
 	}
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.Delete([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false)
 	require.NoError(t, err)
@@ -134,16 +134,16 @@ func TestArtIndexString(t *testing.T) {
 	require.Equal(t, uint32(55), row)
 
 	_, err = idx.Search([]byte(strconv.Itoa(100)))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 
 	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false)
-	require.ErrorIs(t, err, errors.ErrKeyDuplicate)
+	require.ErrorIs(t, err, data.ErrDuplicate)
 
 	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false)
 	require.NoError(t, err)
@@ -153,5 +153,5 @@ func TestArtIndexString(t *testing.T) {
 	require.Equal(t, uint32(123), row)
 
 	_, err = idx.Search([]byte(strconv.Itoa(233)))
-	require.ErrorIs(t, err, errors.ErrKeyNotFound)
+	require.ErrorIs(t, err, data.ErrNotFound)
 }

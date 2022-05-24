@@ -15,7 +15,7 @@ type mutableIndex struct {
 
 func newMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
-		art:     basic.NewSimpleARTMap(keyT, nil),
+		art:     basic.NewSimpleARTMap(keyT),
 		zonemap: basic.NewZoneMap(keyT),
 	}
 }
