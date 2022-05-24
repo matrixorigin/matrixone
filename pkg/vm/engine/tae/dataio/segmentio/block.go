@@ -63,6 +63,26 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 	return bf
 }
 
+func replayBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+	bf := &blockFile{
+		seg:     seg,
+		id:      id,
+		columns: make([]*columnBlock, colCnt),
+	}
+	bf.deletes = newDeletes(bf)
+	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.OnZeroCB = bf.close
+	for i := range bf.columns {
+		cnt := 0
+		if indexCnt != nil {
+			cnt = indexCnt[i]
+		}
+		bf.columns[i] = openColumnBlock(bf, cnt, i)
+	}
+	bf.Ref()
+	return bf
+}
+
 func (bf *blockFile) Fingerprint() *common.ID {
 	return &common.ID{
 		BlockID: bf.id,

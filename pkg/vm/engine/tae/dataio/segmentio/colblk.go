@@ -53,6 +53,23 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	return cb
 }
 
+func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
+	cb := &columnBlock{
+		block:   block,
+		indexes: make([]*indexFile, indexCnt),
+		col:     col,
+	}
+	for i := range cb.indexes {
+		cb.indexes[i] = newIndex(cb)
+	}
+	cb.updates = newUpdates(cb)
+	cb.data = newData(cb)
+	cb.data.file = make([]*segment.BlockFile, 0)
+	cb.OnZeroCB = cb.close
+	cb.Ref()
+	return cb
+}
+
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
 	if cb.data.file != nil {
