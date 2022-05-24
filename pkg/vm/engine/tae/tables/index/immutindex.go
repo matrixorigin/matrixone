@@ -6,12 +6,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/io"
 )
 
 type immutableIndex struct {
-	zonemap *io.BlockZoneMapIndexReader
-	filter  *io.StaticFilterIndexReader
+	zonemap *BlockZoneMapIndexReader
+	filter  *StaticFilterIndexReader
 }
 
 func NewImmutableIndex() *immutableIndex {
@@ -99,7 +98,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := io.NewBlockZoneMapIndexReader()
+			reader := NewBlockZoneMapIndexReader()
 			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
 				return err
 			}
@@ -110,7 +109,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := io.NewStaticFilterIndexReader()
+			reader := NewStaticFilterIndexReader()
 			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
 				return err
 			}

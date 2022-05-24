@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package io
+package index
 
 import (
 	"testing"
@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +32,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	var res bool
 	var exist bool
 	var ans *roaring.Bitmap
-	cType := idxCommon.Plain
+	cType := Plain
 	typ := types.Type{Oid: types.T_int32}
 	colIdx := uint16(0)
 	interIdx := uint16(0)

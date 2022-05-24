@@ -1,18 +1,4 @@
-// Copyright 2021 Matrix Origin
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-package io
+package index
 
 import (
 	"github.com/RoaringBitmap/roaring"
@@ -20,20 +6,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	gCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 )
 
 type blockZoneMapIndexNode struct {
 	*buffer.Node
 	mgr     base.INodeManager
-	host    gCommon.IVFile
+	host    common.IVFile
 	zonemap *basic.ZoneMap
 }
 
-func newBlockZoneMapIndexNode(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) *blockZoneMapIndexNode {
+func newBlockZoneMapIndexNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *blockZoneMapIndexNode {
 	impl := new(blockZoneMapIndexNode)
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(host.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
@@ -61,7 +46,7 @@ func (n *blockZoneMapIndexNode) OnLoad() {
 	}
 	rawSize := stat.OriginSize()
 	buf := make([]byte, rawSize)
-	if err = common.Decompress(data, buf, common.CompressType(compressTyp)); err != nil {
+	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
 	n.zonemap, err = basic.LoadZoneMapFrom(buf)
@@ -98,7 +83,7 @@ func NewBlockZoneMapIndexReader() *BlockZoneMapIndexReader {
 	return &BlockZoneMapIndexReader{}
 }
 
-func (reader *BlockZoneMapIndexReader) Init(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) error {
+func (reader *BlockZoneMapIndexReader) Init(mgr base.INodeManager, host common.IVFile, id *common.ID) error {
 	reader.node = newBlockZoneMapIndexNode(mgr, host, id)
 	return nil
 }
@@ -123,8 +108,8 @@ func (reader *BlockZoneMapIndexReader) Contains(key any) bool {
 }
 
 type BlockZoneMapIndexWriter struct {
-	cType       common.CompressType
-	host        gCommon.IRWFile
+	cType       CompressType
+	host        common.IRWFile
 	zonemap     *basic.ZoneMap
 	colIdx      uint16
 	internalIdx uint16
@@ -134,7 +119,7 @@ func NewBlockZoneMapIndexWriter() *BlockZoneMapIndexWriter {
 	return &BlockZoneMapIndexWriter{}
 }
 
-func (writer *BlockZoneMapIndexWriter) Init(host gCommon.IRWFile, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *BlockZoneMapIndexWriter) Init(host common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.host = host
 	writer.cType = cType
 	writer.colIdx = colIdx
@@ -142,13 +127,13 @@ func (writer *BlockZoneMapIndexWriter) Init(host gCommon.IRWFile, cType common.C
 	return nil
 }
 
-func (writer *BlockZoneMapIndexWriter) Finalize() (*common.IndexMeta, error) {
+func (writer *BlockZoneMapIndexWriter) Finalize() (*IndexMeta, error) {
 	if writer.zonemap == nil {
 		panic("unexpected error")
 	}
 	appender := writer.host
-	meta := common.NewEmptyIndexMeta()
-	meta.SetIndexType(common.BlockZoneMapIndex)
+	meta := NewEmptyIndexMeta()
+	meta.SetIndexType(BlockZoneMapIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
 	meta.SetInternalIndex(writer.internalIdx)
@@ -159,7 +144,7 @@ func (writer *BlockZoneMapIndexWriter) Finalize() (*common.IndexMeta, error) {
 		return nil, err
 	}
 	rawSize := uint32(len(iBuf))
-	compressed := common.Compress(iBuf, writer.cType)
+	compressed := Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
 	_, err = appender.Write(compressed)

@@ -1,40 +1,23 @@
-// Copyright 2021 Matrix Origin
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-package io
+package index
 
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	gCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 )
 
 type staticFilterIndexNode struct {
 	*buffer.Node
-	mgr base.INodeManager
-	//host  dataio.IndexFile
-	//meta  *common.IndexMeta
-	host  gCommon.IVFile
+	mgr   base.INodeManager
+	host  common.IVFile
 	inner basic.StaticFilter
 }
 
-func newStaticFilterIndexNode(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) *staticFilterIndexNode {
+func newStaticFilterIndexNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *staticFilterIndexNode {
 	impl := new(staticFilterIndexNode)
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(host.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
@@ -63,7 +46,7 @@ func (n *staticFilterIndexNode) OnLoad() {
 	}
 	rawSize := stat.OriginSize()
 	buf := make([]byte, rawSize)
-	if err = common.Decompress(data, buf, common.CompressType(compressTyp)); err != nil {
+	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 	}
 	n.inner, err = basic.NewBinaryFuseFilterFromSource(buf)
 	if err != nil {
@@ -99,7 +82,7 @@ func NewStaticFilterIndexReader() *StaticFilterIndexReader {
 	return &StaticFilterIndexReader{}
 }
 
-func (reader *StaticFilterIndexReader) Init(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) error {
+func (reader *StaticFilterIndexReader) Init(mgr base.INodeManager, host common.IVFile, id *common.ID) error {
 	reader.inode = newStaticFilterIndexNode(mgr, host, id)
 	return nil
 }
@@ -124,8 +107,8 @@ func (reader *StaticFilterIndexReader) MayContainsAnyKeys(keys *vector.Vector, v
 }
 
 type StaticFilterIndexWriter struct {
-	cType       common.CompressType
-	host        gCommon.IRWFile
+	cType       CompressType
+	host        common.IRWFile
 	inner       basic.StaticFilter
 	data        *vector.Vector
 	colIdx      uint16
@@ -136,7 +119,7 @@ func NewStaticFilterIndexWriter() *StaticFilterIndexWriter {
 	return &StaticFilterIndexWriter{}
 }
 
-func (writer *StaticFilterIndexWriter) Init(host gCommon.IRWFile, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *StaticFilterIndexWriter) Init(host common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.host = host
 	writer.cType = cType
 	writer.colIdx = colIdx
@@ -144,7 +127,7 @@ func (writer *StaticFilterIndexWriter) Init(host gCommon.IRWFile, cType common.C
 	return nil
 }
 
-func (writer *StaticFilterIndexWriter) Finalize() (*common.IndexMeta, error) {
+func (writer *StaticFilterIndexWriter) Finalize() (*IndexMeta, error) {
 	if writer.inner != nil {
 		panic("formerly finalized filter not cleared yet")
 	}
@@ -156,8 +139,8 @@ func (writer *StaticFilterIndexWriter) Finalize() (*common.IndexMeta, error) {
 	writer.data = nil
 
 	appender := writer.host
-	meta := common.NewEmptyIndexMeta()
-	meta.SetIndexType(common.StaticFilterIndex)
+	meta := NewEmptyIndexMeta()
+	meta.SetIndexType(StaticFilterIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
 	meta.SetInternalIndex(writer.internalIdx)
@@ -168,7 +151,7 @@ func (writer *StaticFilterIndexWriter) Finalize() (*common.IndexMeta, error) {
 		return nil, err
 	}
 	rawSize := uint32(len(iBuf))
-	compressed := common.Compress(iBuf, writer.cType)
+	compressed := Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
 	_, err = appender.Write(compressed)
