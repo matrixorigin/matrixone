@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -66,17 +64,6 @@ func mockData(size uint32) []byte {
 	}
 	return info
 }*/
-
-func TestSplit(t *testing.T)  {
-	test := "3_4_34.blk"
-	tmpName := strings.Split(test, ".blk")
-	testName := strings.Split(tmpName[0], "_")
-	col , err := strconv.ParseUint(testName[0], 10 , 32)
-	assert.Nil(t, err)
-	id, err := strconv.ParseUint(testName[0], 10 , 32)
-	assert.Nil(t, err)
-	logutil.Infof("col is %d, id is %d", col, id)
-}
 
 func TestBitmapAllocator_Allocate(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)

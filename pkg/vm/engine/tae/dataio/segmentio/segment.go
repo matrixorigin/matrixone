@@ -54,7 +54,6 @@ func openSegment(name string, id uint64) *segmentFile {
 	if err != nil {
 		return nil
 	}
-	sf.seg.Mount()
 	sf.id = &common.ID{
 		SegmentID: id,
 	}
@@ -73,7 +72,7 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	delete(sf.blocks, id)
 }
 
-func (sf *segmentFile) Replay(ids []uint64 , colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
 	err := sf.seg.Replay(cache)
 	if err != nil {
 		return err
@@ -87,22 +86,22 @@ func (sf *segmentFile) Replay(ids []uint64 , colCnt int, indexCnt map[int]int, c
 	for name, file := range nodes {
 		tmpName := strings.Split(name, ".blk")
 		fileName := strings.Split(tmpName[0], "_")
-		id, err := strconv.ParseUint(fileName[1], 10 , 32)
-		if err != nil{
+		id, err := strconv.ParseUint(fileName[1], 10, 32)
+		if err != nil {
 			return err
 		}
 		bf := sf.blocks[id]
 		if bf != nil {
 			panic(any("segment Replay err"))
 		}
-		col , err := strconv.ParseUint(fileName[0], 10 , 32)
-		if err != nil{
+		col, err := strconv.ParseUint(fileName[0], 10, 32)
+		if err != nil {
 			return err
 		}
 		bf.columns[col].data.file = append(bf.columns[col].data.file, file)
 		if len(fileName) > 1 {
-			ts , err := strconv.ParseUint(fileName[2], 10 , 64)
-			if err != nil{
+			ts, err := strconv.ParseUint(fileName[2], 10, 64)
+			if err != nil {
 				return err
 			}
 			if bf.columns[col].ts < ts {
@@ -151,11 +150,11 @@ func (sf *segmentFile) Destroy() {
 	sf.seg.Destroy()
 }
 
-func (sf *segmentFile) rebuildBlock (id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error){
+func (sf *segmentFile) rebuildBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
 	sf.Lock()
 	defer sf.Unlock()
 	bf := sf.blocks[id]
-	if bf != nil{
+	if bf != nil {
 		panic(any("block rebuild err"))
 	}
 	bf = replayBlock(id, sf, colCnt, indexCnt)
