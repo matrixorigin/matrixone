@@ -72,7 +72,7 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	delete(sf.blocks, id)
 }
 
-func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
 	err := sf.seg.Replay(cache)
 	if err != nil {
 		return err
@@ -80,9 +80,6 @@ func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, ca
 	nodes := sf.seg.GetNodes()
 	sf.Lock()
 	defer sf.Unlock()
-	for _, id := range ids {
-		sf.rebuildBlock(id, colCnt, indexCnt)
-	}
 	for name, file := range nodes {
 		tmpName := strings.Split(name, ".blk")
 		fileName := strings.Split(tmpName[0], "_")
@@ -95,7 +92,8 @@ func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, ca
 		}
 		bf := sf.blocks[id]
 		if bf == nil {
-			panic(any("segment Replay err"))
+			bf = replayBlock(id, sf, colCnt, indexCnt)
+			sf.blocks[id] = bf
 		}
 		col, err := strconv.ParseUint(fileName[0], 10, 32)
 		if err != nil {
@@ -155,17 +153,6 @@ func (sf *segmentFile) Destroy() {
 	}
 	sf.seg.Unmount()
 	sf.seg.Destroy()
-}
-
-func (sf *segmentFile) rebuildBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
-	bf := sf.blocks[id]
-	if bf != nil {
-		panic(any("block rebuild err"))
-	}
-	bf = replayBlock(id, sf, colCnt, indexCnt)
-	sf.blocks[id] = bf
-	block = bf
-	return
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
