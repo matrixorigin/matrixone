@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indeximpl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -51,7 +51,7 @@ type dataBlock struct {
 	colFiles  map[int]common.IRWFile
 	bufMgr    base.INodeManager
 	scheduler tasks.TaskScheduler
-	index     data.BlockIndex
+	index     indexwrapper.Index
 	mvcc      *updates.MVCCHandle
 	nice      uint32
 	ckpTs     uint64
@@ -91,9 +91,9 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		block.index = indeximpl.NewMutableIndex(block.meta.GetSchema().GetPKType())
+		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetPKType())
 	} else {
-		block.index = indeximpl.NewImmutableIndex()
+		block.index = indexwrapper.NewImmutableIndex()
 	}
 	return block
 }

@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indeximpl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
 func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumnData *vector.Vector) (err error) {
@@ -30,14 +30,14 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	}
 	zmIdx := uint16(0)
 	sfIdx := uint16(1)
-	metas := indeximpl.NewEmptyIndicesMeta()
+	metas := indexwrapper.NewEmptyIndicesMeta()
 
-	zoneMapWriter := indeximpl.NewBlockZoneMapIndexWriter()
+	zoneMapWriter := indexwrapper.NewBlockZoneMapIndexWriter()
 	zmFile, err := pkColumn.OpenIndexFile(int(zmIdx))
 	if err != nil {
 		return err
 	}
-	err = zoneMapWriter.Init(zmFile, indeximpl.Plain, uint16(schema.PrimaryKey), zmIdx)
+	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.PrimaryKey), zmIdx)
 	if err != nil {
 		return err
 	}
@@ -51,12 +51,12 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	}
 	metas.AddIndex(*zmMeta)
 
-	staticFilterWriter := indeximpl.NewStaticFilterIndexWriter()
+	staticFilterWriter := indexwrapper.NewStaticFilterIndexWriter()
 	sfFile, err := pkColumn.OpenIndexFile(int(sfIdx))
 	if err != nil {
 		return err
 	}
-	err = staticFilterWriter.Init(sfFile, indeximpl.Plain, uint16(schema.PrimaryKey), sfIdx)
+	err = staticFilterWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.PrimaryKey), sfIdx)
 	if err != nil {
 		return err
 	}

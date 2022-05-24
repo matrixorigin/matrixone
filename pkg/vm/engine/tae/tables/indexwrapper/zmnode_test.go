@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package indeximpl
+package indexwrapper
 
 import (
 	"testing"
@@ -25,20 +25,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStaticFilterIndex(t *testing.T) {
+func TestBlockZoneMapIndex(t *testing.T) {
 	bufManager := buffer.NewNodeManager(1024*1024, nil)
 	file := common.MockRWFile()
-	var err error
-	var res bool
-	var exist bool
-	var ans *roaring.Bitmap
 	cType := Plain
 	typ := types.Type{Oid: types.T_int32}
-	colIdx := uint16(0)
+	pkColIdx := uint16(0)
 	interIdx := uint16(0)
+	var err error
+	var res bool
+	var visibility *roaring.Bitmap
 
-	writer := NewStaticFilterIndexWriter()
-	err = writer.Init(file, cType, colIdx, interIdx)
+	writer := NewBlockZoneMapIndexWriter()
+	err = writer.Init(file, cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
 	keys := compute.MockVec(typ, 1000, 0)
@@ -48,25 +47,23 @@ func TestStaticFilterIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewStaticFilterIndexReader()
+	reader := NewBlockZoneMapIndexReader()
 	err = reader.Init(bufManager, file, &common.ID{})
 	require.NoError(t, err)
 
-	//t.Log(bufManager.String())
-
-	res, err = reader.MayContainsKey(int32(500))
-	require.NoError(t, err)
+	res = reader.Contains(int32(500))
 	require.True(t, res)
 
-	res, err = reader.MayContainsKey(int32(2000))
-	require.NoError(t, err)
+	res = reader.Contains(int32(1000))
 	require.False(t, res)
 
-	query := compute.MockVec(typ, 1000, 1500)
-	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
-	require.NoError(t, err)
-	require.True(t, ans.GetCardinality() < uint64(10))
-	require.True(t, exist)
+	keys = compute.MockVec(typ, 100, 1000)
+	visibility, res = reader.ContainsAny(keys)
+	require.False(t, res)
+	require.Equal(t, uint64(0), visibility.GetCardinality())
 
-	//t.Log(bufManager.String())
+	keys = compute.MockVec(typ, 100, 0)
+	visibility, res = reader.ContainsAny(keys)
+	require.True(t, res)
+	require.Equal(t, uint64(100), visibility.GetCardinality())
 }

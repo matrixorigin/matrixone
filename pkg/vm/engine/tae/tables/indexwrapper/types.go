@@ -1,10 +1,11 @@
-package data
+package indexwrapper
 
 import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
 type Index interface {
@@ -12,15 +13,10 @@ type Index interface {
 	Destroy() error
 
 	Dedup(any) error
-	// Insert(any) error
 	BatchDedup(*movec.Vector) (*roaring.Bitmap, error)
 	BatchInsert(*movec.Vector, uint32, uint32, uint32, bool) error
 	Delete(any) error
 	Find(any) (uint32, error)
-}
-
-type BlockIndex interface {
-	Index
-	ReadFrom(Block) error
-	WriteTo(Block) error
+	ReadFrom(data.Block) error
+	WriteTo(data.Block) error
 }

@@ -1,4 +1,4 @@
-package indeximpl
+package indexwrapper
 
 import (
 	"bytes"

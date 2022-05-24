@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package indeximpl
+package indexwrapper
 
 import (
 	"testing"
@@ -25,19 +25,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBlockZoneMapIndex(t *testing.T) {
+func TestStaticFilterIndex(t *testing.T) {
 	bufManager := buffer.NewNodeManager(1024*1024, nil)
 	file := common.MockRWFile()
-	cType := Plain
-	typ := types.Type{Oid: types.T_int32}
-	pkColIdx := uint16(0)
-	interIdx := uint16(0)
 	var err error
 	var res bool
-	var visibility *roaring.Bitmap
+	var exist bool
+	var ans *roaring.Bitmap
+	cType := Plain
+	typ := types.Type{Oid: types.T_int32}
+	colIdx := uint16(0)
+	interIdx := uint16(0)
 
-	writer := NewBlockZoneMapIndexWriter()
-	err = writer.Init(file, cType, pkColIdx, interIdx)
+	writer := NewStaticFilterIndexWriter()
+	err = writer.Init(file, cType, colIdx, interIdx)
 	require.NoError(t, err)
 
 	keys := compute.MockVec(typ, 1000, 0)
@@ -47,23 +48,25 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewBlockZoneMapIndexReader()
+	reader := NewStaticFilterIndexReader()
 	err = reader.Init(bufManager, file, &common.ID{})
 	require.NoError(t, err)
 
-	res = reader.Contains(int32(500))
+	//t.Log(bufManager.String())
+
+	res, err = reader.MayContainsKey(int32(500))
+	require.NoError(t, err)
 	require.True(t, res)
 
-	res = reader.Contains(int32(1000))
+	res, err = reader.MayContainsKey(int32(2000))
+	require.NoError(t, err)
 	require.False(t, res)
 
-	keys = compute.MockVec(typ, 100, 1000)
-	visibility, res = reader.ContainsAny(keys)
-	require.False(t, res)
-	require.Equal(t, uint64(0), visibility.GetCardinality())
+	query := compute.MockVec(typ, 1000, 1500)
+	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
+	require.NoError(t, err)
+	require.True(t, ans.GetCardinality() < uint64(10))
+	require.True(t, exist)
 
-	keys = compute.MockVec(typ, 100, 0)
-	visibility, res = reader.ContainsAny(keys)
-	require.True(t, res)
-	require.Equal(t, uint64(100), visibility.GetCardinality())
+	//t.Log(bufManager.String())
 }
