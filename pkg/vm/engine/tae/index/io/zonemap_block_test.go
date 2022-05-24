@@ -34,7 +34,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	interIdx := uint16(0)
 	var err error
 	var res bool
-	var ans *roaring.Bitmap
+	var visibility *roaring.Bitmap
 
 	writer := NewBlockZoneMapIndexWriter()
 	err = writer.Init(file, cType, pkColIdx, interIdx)
@@ -51,27 +51,19 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	err = reader.Init(bufManager, file, &common.ID{})
 	require.NoError(t, err)
 
-	//t.Log(bufManager.String())
-
-	res, err = reader.MayContainsKey(int32(500))
-	require.NoError(t, err)
+	res = reader.Contains(int32(500))
 	require.True(t, res)
 
-	res, err = reader.MayContainsKey(int32(1000))
-	require.NoError(t, err)
+	res = reader.Contains(int32(1000))
 	require.False(t, res)
 
 	keys = idxCommon.MockVec(typ, 100, 1000)
-	res, ans, err = reader.MayContainsAnyKeys(keys)
-	require.NoError(t, err)
+	visibility, res = reader.ContainsAny(keys)
 	require.False(t, res)
-	require.Equal(t, uint64(0), ans.GetCardinality())
+	require.Equal(t, uint64(0), visibility.GetCardinality())
 
 	keys = idxCommon.MockVec(typ, 100, 0)
-	res, ans, err = reader.MayContainsAnyKeys(keys)
-	require.NoError(t, err)
+	visibility, res = reader.ContainsAny(keys)
 	require.True(t, res)
-	require.Equal(t, uint64(100), ans.GetCardinality())
-
-	//t.Log(bufManager.String())
+	require.Equal(t, uint64(100), visibility.GetCardinality())
 }

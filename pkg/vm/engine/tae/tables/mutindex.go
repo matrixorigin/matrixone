@@ -16,7 +16,7 @@ type mutableIndex struct {
 func newMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     basic.NewSimpleARTMap(keyT, nil),
-		zonemap: basic.NewZoneMap(keyT, nil),
+		zonemap: basic.NewZoneMap(keyT),
 	}
 }
 
@@ -34,23 +34,22 @@ func (index *mutableIndex) Delete(key interface{}) error {
 }
 
 func (index *mutableIndex) Find(key interface{}) (row uint32, err error) {
-	var exist bool
-	if exist, err = index.zonemap.MayContainsKey(key); err != nil {
-		return
-	}
+	exist := index.zonemap.Contains(key)
+	// 1. key is definitely not existed
 	if !exist {
-		err = data.ErrDuplicate
+		err = data.ErrNotFound
 		return
 	}
+	// 2. search art tree for key
 	row, err = index.art.Search(key)
 	return
 }
 
 func (index *mutableIndex) Dedup(any) error { panic("implement me") }
 func (index *mutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.Bitmap, err error) {
-	var exist bool
-	exist, visibility, err = index.zonemap.MayContainsAnyKeys(keys)
-	if err != nil || !exist {
+	visibility, exist := index.zonemap.ContainsAny(keys)
+	// 1. all keys are definitely not existed
+	if !exist {
 		return
 	}
 	exist, err = index.art.ContainsAnyKeys(keys, visibility)

@@ -16,8 +16,6 @@ package basic
 
 import (
 	"bytes"
-	"strconv"
-	"sync"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,153 +23,93 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
 type ZoneMap struct {
-	mu          *sync.RWMutex
-	typ         types.Type
-	min         interface{}
-	max         interface{}
-	initialized bool
+	typ      types.Type
+	min, max any
+	inited   bool
 }
 
-func NewZoneMap(typ types.Type, mutex *sync.RWMutex) *ZoneMap {
-	if mutex == nil {
-		mutex = new(sync.RWMutex)
-	}
-	zm := &ZoneMap{typ: typ, mu: mutex, initialized: false}
+func NewZoneMap(typ types.Type) *ZoneMap {
+	zm := &ZoneMap{typ: typ}
 	return zm
 }
 
-func NewZoneMapFromSource(data []byte) (*ZoneMap, error) {
-	zm := ZoneMap{}
-	if err := zm.Unmarshal(data); err != nil {
-		return nil, err
-	}
-	return &zm, nil
+func LoadZoneMapFrom(data []byte) (zm *ZoneMap, err error) {
+	zm = new(ZoneMap)
+	err = zm.Unmarshal(data)
+	return
 }
 
 func (zm *ZoneMap) GetType() types.Type {
 	return zm.typ
 }
 
-func (zm *ZoneMap) Initialized() bool {
-	zm.mu.RLock()
-	defer zm.mu.RUnlock()
-	return zm.initialized
-}
-
-func (zm *ZoneMap) Update(v interface{}) error {
-	zm.mu.Lock()
-	defer zm.mu.Unlock()
-	return zm.UpdateLocked(v)
-}
-
-func (zm *ZoneMap) UpdateLocked(v interface{}) error {
-	if !zm.initialized {
+func (zm *ZoneMap) Update(v any) (err error) {
+	if !zm.inited {
 		zm.min = v
 		zm.max = v
-		zm.initialized = true
-		return nil
+		zm.inited = true
+		return
 	}
 	if common.CompareGeneric(v, zm.max, zm.typ) > 0 {
 		zm.max = v
-	}
-	if common.CompareGeneric(v, zm.min, zm.typ) < 0 {
+	} else if common.CompareGeneric(v, zm.min, zm.typ) < 0 {
 		zm.min = v
 	}
-	return nil
+	return
 }
 
 func (zm *ZoneMap) BatchUpdate(vec *vector.Vector, offset uint32, length int) error {
 	if !zm.typ.Eq(vec.Typ) {
-		return errors.ErrTypeMismatch
+		return data.ErrWrongType
 	}
-	zm.mu.Lock()
-	defer zm.mu.Unlock()
-	if err := compute.ProcessVector(vec, offset, length, zm.UpdateLocked, nil); err != nil {
+	if err := compute.ProcessVector(vec, offset, length, zm.Update, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (zm *ZoneMap) Query(key interface{}) (int, error) {
-	// TODO: mismatch error
-	zm.mu.RLock()
-	defer zm.mu.RUnlock()
-	if !zm.initialized {
-		return 1, nil
+func (zm *ZoneMap) Contains(key any) (ok bool) {
+	if !zm.inited {
+		return
 	}
-	max := zm.GetMaxLocked()
-	min := zm.GetMinLocked()
-	gt := common.CompareGeneric(key, max, zm.typ) > 0
-	lt := common.CompareGeneric(key, min, zm.typ) < 0
-	if gt {
-		return 1, nil
+	if common.CompareGeneric(key, zm.max, zm.typ) > 0 || common.CompareGeneric(key, zm.min, zm.typ) < 0 {
+		return
 	}
-	if lt {
-		return -1, nil
-	}
-	return 0, nil
+	ok = true
+	return
 }
 
-func (zm *ZoneMap) MayContainsKey(key interface{}) (bool, error) {
-	// TODO: mismatch error
-	zm.mu.RLock()
-	defer zm.mu.RUnlock()
-	if !zm.initialized {
-		return false, nil
+func (zm *ZoneMap) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap, ok bool) {
+	if !zm.inited {
+		return
 	}
-	max := zm.GetMaxLocked()
-	min := zm.GetMinLocked()
-	if common.CompareGeneric(key, max, zm.typ) > 0 || common.CompareGeneric(key, min, zm.typ) < 0 {
-		return false, nil
-	}
-	return true, nil
-}
-
-func (zm *ZoneMap) MayContainsAnyKeys(keys *vector.Vector) (bool, *roaring.Bitmap, error) {
-	// TODO: mismatch error
-	zm.mu.RLock()
-	defer zm.mu.RUnlock()
-	ans := roaring.NewBitmap()
-	res := false
-	if !zm.initialized {
-		return false, ans, nil
-	}
-	max := zm.GetMaxLocked()
-	min := zm.GetMinLocked()
+	visibility = roaring.NewBitmap()
 	row := uint32(0)
-	process := func(key interface{}) error {
-		if common.CompareGeneric(key, max, zm.typ) <= 0 && common.CompareGeneric(key, min, zm.typ) >= 0 {
-			ans.Add(row)
+	process := func(key any) (err error) {
+		if common.CompareGeneric(key, zm.max, zm.typ) <= 0 && common.CompareGeneric(key, zm.min, zm.typ) >= 0 {
+			visibility.Add(row)
 		}
 		row++
-		return nil
+		return
 	}
 	if err := compute.ProcessVector(keys, 0, -1, process, nil); err != nil {
-		return false, ans, err
+		panic(err)
 	}
-	if ans.GetCardinality() != 0 {
-		res = true
+	if visibility.GetCardinality() != 0 {
+		ok = true
 	}
-	return res, ans, nil
+	return
 }
 
-func (zm *ZoneMap) GetMax() interface{} {
-	zm.mu.RLock()
-	defer zm.mu.RUnlock()
-	return zm.GetMaxLocked()
-}
-
-func (zm *ZoneMap) SetMax(v interface{}) {
-	zm.mu.Lock()
-	defer zm.mu.Unlock()
-	if !zm.initialized {
+func (zm *ZoneMap) SetMax(v any) {
+	if !zm.inited {
 		zm.min = v
 		zm.max = v
-		zm.initialized = true
+		zm.inited = true
 		return
 	}
 	if common.CompareGeneric(v, zm.max, zm.typ) > 0 {
@@ -179,23 +117,15 @@ func (zm *ZoneMap) SetMax(v interface{}) {
 	}
 }
 
-func (zm *ZoneMap) GetMaxLocked() interface{} {
+func (zm *ZoneMap) GetMax() any {
 	return zm.max
 }
 
-func (zm *ZoneMap) GetMin() interface{} {
-	zm.mu.RLock()
-	defer zm.mu.RUnlock()
-	return zm.GetMinLocked()
-}
-
-func (zm *ZoneMap) SetMin(v interface{}) {
-	zm.mu.Lock()
-	defer zm.mu.Unlock()
-	if !zm.initialized {
+func (zm *ZoneMap) SetMin(v any) {
+	if !zm.inited {
 		zm.min = v
 		zm.max = v
-		zm.initialized = true
+		zm.inited = true
 		return
 	}
 	if common.CompareGeneric(v, zm.min, zm.typ) < 0 {
@@ -203,89 +133,162 @@ func (zm *ZoneMap) SetMin(v interface{}) {
 	}
 }
 
-func (zm *ZoneMap) GetMinLocked() interface{} {
+func (zm *ZoneMap) GetMin() interface{} {
 	return zm.min
 }
 
-func (zm *ZoneMap) Print() string {
-	// TODO: support all types
-	zm.mu.RLock()
-	defer zm.mu.RUnlock()
-	// default int32
-	s := "<ZM>\n["
-	s += strconv.Itoa(int(zm.min.(int32)))
-	s += ","
-	s += strconv.Itoa(int(zm.max.(int32)))
-	s += "]\n"
-	s += "</ZM>"
-	return s
-}
+// func (zm *ZoneMap) Print() string {
+// 	// default int32
+// 	s := "<ZM>\n["
+// 	s += strconv.Itoa(int(zm.min.(int32)))
+// 	s += ","
+// 	s += strconv.Itoa(int(zm.max.(int32)))
+// 	s += "]\n"
+// 	s += "</ZM>"
+// 	return s
+// }
 
-func (zm *ZoneMap) Marshal() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.Write(encoding.EncodeType(zm.typ))
-	if !zm.initialized {
-		buf.Write(encoding.EncodeInt8(0))
-		return buf.Bytes(), nil
+func (zm *ZoneMap) Marshal() (buf []byte, err error) {
+	var w bytes.Buffer
+	if _, err = w.Write(encoding.EncodeType(zm.typ)); err != nil {
+		return
 	}
-	buf.Write(encoding.EncodeInt8(1))
+	if !zm.inited {
+		if _, err = w.Write(encoding.EncodeInt8(0)); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
+	}
+	if _, err = w.Write(encoding.EncodeInt8(1)); err != nil {
+		return
+	}
 	switch zm.typ.Oid {
 	case types.T_int8:
-		buf.Write(encoding.EncodeInt8(zm.min.(int8)))
-		buf.Write(encoding.EncodeInt8(zm.max.(int8)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeInt8(zm.min.(int8))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeInt8(zm.max.(int8))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_int16:
-		buf.Write(encoding.EncodeInt16(zm.min.(int16)))
-		buf.Write(encoding.EncodeInt16(zm.max.(int16)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeInt16(zm.min.(int16))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeInt16(zm.max.(int16))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_int32:
-		buf.Write(encoding.EncodeInt32(zm.min.(int32)))
-		buf.Write(encoding.EncodeInt32(zm.max.(int32)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeInt32(zm.min.(int32))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeInt32(zm.max.(int32))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_int64:
-		buf.Write(encoding.EncodeInt64(zm.min.(int64)))
-		buf.Write(encoding.EncodeInt64(zm.max.(int64)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeInt64(zm.min.(int64))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeInt64(zm.max.(int64))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_uint8:
-		buf.Write(encoding.EncodeUint8(zm.min.(uint8)))
-		buf.Write(encoding.EncodeUint8(zm.max.(uint8)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeUint8(zm.min.(uint8))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeUint8(zm.max.(uint8))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_uint16:
-		buf.Write(encoding.EncodeUint16(zm.min.(uint16)))
-		buf.Write(encoding.EncodeUint16(zm.max.(uint16)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeUint16(zm.min.(uint16))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeUint16(zm.max.(uint16))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_uint32:
-		buf.Write(encoding.EncodeUint32(zm.min.(uint32)))
-		buf.Write(encoding.EncodeUint32(zm.max.(uint32)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeUint32(zm.min.(uint32))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeUint32(zm.max.(uint32))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_uint64:
-		buf.Write(encoding.EncodeUint64(zm.min.(uint64)))
-		buf.Write(encoding.EncodeUint64(zm.max.(uint64)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeUint64(zm.min.(uint64))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeUint64(zm.max.(uint64))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_float32:
-		buf.Write(encoding.EncodeFloat32(zm.min.(float32)))
-		buf.Write(encoding.EncodeFloat32(zm.max.(float32)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeFloat32(zm.min.(float32))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeFloat32(zm.max.(float32))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_float64:
-		buf.Write(encoding.EncodeFloat64(zm.min.(float64)))
-		buf.Write(encoding.EncodeFloat64(zm.max.(float64)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeFloat64(zm.min.(float64))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeFloat64(zm.max.(float64))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_date:
-		buf.Write(encoding.EncodeDate(zm.min.(types.Date)))
-		buf.Write(encoding.EncodeDate(zm.max.(types.Date)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeDate(zm.min.(types.Date))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeDate(zm.max.(types.Date))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_datetime:
-		buf.Write(encoding.EncodeDatetime(zm.min.(types.Datetime)))
-		buf.Write(encoding.EncodeDatetime(zm.max.(types.Datetime)))
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeDatetime(zm.min.(types.Datetime))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeDatetime(zm.max.(types.Datetime))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_char, types.T_varchar, types.T_json:
 		minv := zm.min.([]byte)
 		maxv := zm.max.([]byte)
-		buf.Write(encoding.EncodeInt16(int16(len(minv))))
-		buf.Write(minv)
-		buf.Write(encoding.EncodeInt16(int16(len(maxv))))
-		buf.Write(maxv)
-		return buf.Bytes(), nil
+		if _, err = w.Write(encoding.EncodeInt16(int16(len(minv)))); err != nil {
+			return
+		}
+		if _, err = w.Write(minv); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeInt16(int16(len(maxv)))); err != nil {
+			return
+		}
+		if _, err = w.Write(maxv); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	}
 	panic("unsupported")
 }
@@ -295,12 +298,11 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 	buf = buf[encoding.TypeSize:]
 	init := encoding.DecodeInt8(buf[:1])
 	buf = buf[1:]
-	zm.mu = new(sync.RWMutex)
 	if init == 0 {
-		zm.initialized = false
+		zm.inited = false
 		return nil
 	}
-	zm.initialized = true
+	zm.inited = true
 	switch zm.typ.Oid {
 	case types.T_int8:
 		zm.min = encoding.DecodeInt8(buf[:1])

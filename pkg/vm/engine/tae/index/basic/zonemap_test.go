@@ -26,68 +26,57 @@ import (
 
 func TestZoneMapNumeric(t *testing.T) {
 	typ := types.Type{Oid: types.T_int32}
-	zm := NewZoneMap(typ, nil)
-	var res bool
+	zm := NewZoneMap(typ)
+	var yes bool
 	var err error
-	var ans *roaring.Bitmap
-	res, err = zm.MayContainsKey(int32(0))
-	require.NoError(t, err)
-	require.False(t, res)
+	var visibility *roaring.Bitmap
+	yes = zm.Contains(int32(0))
+	require.False(t, yes)
 
 	rows := 1000
 	vec := common.MockVec(typ, rows, 0)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 
-	res, err = zm.MayContainsKey(int32(0))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains(int32(0))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey(int32(999))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains(int32(999))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey(int32(555))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains(int32(555))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey(int32(1000))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains(int32(1000))
+	require.False(t, yes)
 
-	res, err = zm.MayContainsKey(int32(-1))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains(int32(-1))
+	require.False(t, yes)
 
 	rows = 500
 	vec = common.MockVec(typ, rows, 700)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 
-	res, err = zm.MayContainsKey(int32(1001))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains(int32(1001))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey(int32(1199))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains(int32(1199))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey(int32(1200))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains(int32(1200))
+	require.False(t, yes)
 
 	rows = 500
 	vec = common.MockVec(typ, rows, -200)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 
-	res, err = zm.MayContainsKey(int32(-201))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains(int32(-201))
+	require.False(t, yes)
 
-	res, err = zm.MayContainsKey(int32(-100))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains(int32(-100))
+	require.True(t, yes)
 
 	buf, err := zm.Marshal()
 	require.NoError(t, err)
@@ -102,79 +91,66 @@ func TestZoneMapNumeric(t *testing.T) {
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.Error(t, err)
 
-	res, err = zm1.MayContainsKey(int32(1234))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm1.Contains(int32(1234))
+	require.False(t, yes)
 
-	res, err = zm1.MayContainsKey(int32(1199))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm1.Contains(int32(1199))
+	require.True(t, yes)
 
 	typ1.Oid = types.T_int32
 	vec = common.MockVec(typ1, rows, 3000)
-	res, ans, err = zm1.MayContainsAnyKeys(vec)
-	require.NoError(t, err)
-	require.False(t, res)
-	require.Equal(t, uint64(0), ans.GetCardinality())
+	visibility, yes = zm1.ContainsAny(vec)
+	require.False(t, yes)
+	require.Equal(t, uint64(0), visibility.GetCardinality())
 
 	vec = common.MockVec(typ1, rows, 0)
-	res, ans, err = zm1.MayContainsAnyKeys(vec)
-	require.NoError(t, err)
-	require.True(t, res)
-	require.Equal(t, uint64(rows), ans.GetCardinality())
+	visibility, yes = zm1.ContainsAny(vec)
+	require.True(t, yes)
+	require.Equal(t, uint64(rows), visibility.GetCardinality())
 
 	err = zm1.Update(int32(999999))
 	require.NoError(t, err)
 
-	res, err = zm1.MayContainsKey(int32(99999))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm1.Contains(int32(99999))
+	require.True(t, yes)
 }
 
 func TestZoneMapString(t *testing.T) {
 	typ := types.Type{Oid: types.T_char}
-	zm := NewZoneMap(typ, nil)
-	var res bool
+	zm := NewZoneMap(typ)
+	var yes bool
 	var err error
-	res, err = zm.MayContainsKey([]byte(strconv.Itoa(0)))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains([]byte(strconv.Itoa(0)))
+	require.False(t, yes)
 
 	rows := 1000
 	vec := common.MockVec(typ, rows, 0)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 
-	res, err = zm.MayContainsKey([]byte(strconv.Itoa(500)))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains([]byte(strconv.Itoa(500)))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey([]byte(strconv.Itoa(9999)))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains([]byte(strconv.Itoa(9999)))
+	require.False(t, yes)
 
-	res, err = zm.MayContainsKey([]byte("/"))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains([]byte("/"))
+	require.False(t, yes)
 
 	err = zm.Update([]byte("z"))
 	require.NoError(t, err)
 
-	res, err = zm.MayContainsKey([]byte(strconv.Itoa(999999)))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains([]byte(strconv.Itoa(999999)))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey([]byte("abcdefghijklmn"))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains([]byte("abcdefghijklmn"))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey([]byte("ydasdasda"))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains([]byte("ydasdasda"))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey([]byte("z1"))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains([]byte("z1"))
+	require.False(t, yes)
 
 	buf, err := zm.Marshal()
 	require.NoError(t, err)
@@ -182,15 +158,12 @@ func TestZoneMapString(t *testing.T) {
 	err = zm1.Unmarshal(buf)
 	require.NoError(t, err)
 
-	res, err = zm.MayContainsKey([]byte("z1"))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains([]byte("z1"))
+	require.False(t, yes)
 
-	res, err = zm.MayContainsKey([]byte("z"))
-	require.NoError(t, err)
-	require.True(t, res)
+	yes = zm.Contains([]byte("z"))
+	require.True(t, yes)
 
-	res, err = zm.MayContainsKey([]byte("/"))
-	require.NoError(t, err)
-	require.False(t, res)
+	yes = zm.Contains([]byte("/"))
+	require.False(t, yes)
 }

@@ -19,12 +19,7 @@ func (index *immutableIndex) BatchInsert(*vector.Vector, uint32, uint32, uint32,
 }
 
 func (index *immutableIndex) Dedup(key interface{}) (err error) {
-	var exist bool
-	exist, err = index.zonemap.MayContainsKey(key)
-	// 1. check zm has some error. return err
-	if err != nil {
-		return
-	}
+	exist := index.zonemap.Contains(key)
 	// 2. if not in [min, max], key is definitely not found
 	if !exist {
 		return
@@ -41,13 +36,8 @@ func (index *immutableIndex) Dedup(key interface{}) (err error) {
 }
 
 func (index *immutableIndex) BatchDedup(keys *vector.Vector) (visibility *roaring.Bitmap, err error) {
-	var exist bool
-	exist, visibility, err = index.zonemap.MayContainsAnyKeys(keys)
-	// 1. check zonemap has some unknown error. return err
-	if err != nil {
-		return
-	}
-	// 2. all keys are not in [min, max]. definitely not
+	visibility, exist := index.zonemap.ContainsAny(keys)
+	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
 		return
 	}

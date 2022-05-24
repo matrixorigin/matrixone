@@ -28,9 +28,9 @@ import (
 
 type blockZoneMapIndexNode struct {
 	*buffer.Node
-	mgr   base.INodeManager
-	host  gCommon.IVFile
-	inner *basic.ZoneMap
+	mgr     base.INodeManager
+	host    gCommon.IVFile
+	zonemap *basic.ZoneMap
 }
 
 func newBlockZoneMapIndexNode(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) *blockZoneMapIndexNode {
@@ -47,7 +47,7 @@ func newBlockZoneMapIndexNode(mgr base.INodeManager, host gCommon.IVFile, id *gC
 }
 
 func (n *blockZoneMapIndexNode) OnLoad() {
-	if n.inner != nil {
+	if n.zonemap != nil {
 		// no-op
 		return
 	}
@@ -64,18 +64,18 @@ func (n *blockZoneMapIndexNode) OnLoad() {
 	if err = common.Decompress(data, buf, common.CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
-	n.inner, err = basic.NewZoneMapFromSource(buf)
+	n.zonemap, err = basic.LoadZoneMapFrom(buf)
 	if err != nil {
 		panic(err)
 	}
 }
 
 func (n *blockZoneMapIndexNode) OnUnload() {
-	if n.inner == nil {
+	if n.zonemap == nil {
 		// no-op
 		return
 	}
-	n.inner = nil
+	n.zonemap = nil
 }
 
 func (n *blockZoneMapIndexNode) OnDestroy() {
@@ -86,12 +86,12 @@ func (n *blockZoneMapIndexNode) Close() (err error) {
 	if err = n.Node.Close(); err != nil {
 		return err
 	}
-	n.inner = nil
+	n.zonemap = nil
 	return nil
 }
 
 type BlockZoneMapIndexReader struct {
-	inode *blockZoneMapIndexNode
+	node *blockZoneMapIndexNode
 }
 
 func NewBlockZoneMapIndexReader() *BlockZoneMapIndexReader {
@@ -99,33 +99,33 @@ func NewBlockZoneMapIndexReader() *BlockZoneMapIndexReader {
 }
 
 func (reader *BlockZoneMapIndexReader) Init(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) error {
-	reader.inode = newBlockZoneMapIndexNode(mgr, host, id)
+	reader.node = newBlockZoneMapIndexNode(mgr, host, id)
 	return nil
 }
 
 func (reader *BlockZoneMapIndexReader) Destroy() (err error) {
-	if err = reader.inode.Close(); err != nil {
+	if err = reader.node.Close(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (reader *BlockZoneMapIndexReader) MayContainsAnyKeys(keys *vector.Vector) (bool, *roaring.Bitmap, error) {
-	handle := reader.inode.mgr.Pin(reader.inode)
+func (reader *BlockZoneMapIndexReader) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap, ok bool) {
+	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
-	return handle.GetNode().(*blockZoneMapIndexNode).inner.MayContainsAnyKeys(keys)
+	return reader.node.zonemap.ContainsAny(keys)
 }
 
-func (reader *BlockZoneMapIndexReader) MayContainsKey(key interface{}) (bool, error) {
-	handle := reader.inode.mgr.Pin(reader.inode)
+func (reader *BlockZoneMapIndexReader) Contains(key any) bool {
+	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
-	return handle.GetNode().(*blockZoneMapIndexNode).inner.MayContainsKey(key)
+	return reader.node.zonemap.Contains(key)
 }
 
 type BlockZoneMapIndexWriter struct {
 	cType       common.CompressType
 	host        gCommon.IRWFile
-	inner       *basic.ZoneMap
+	zonemap     *basic.ZoneMap
 	colIdx      uint16
 	internalIdx uint16
 }
@@ -143,7 +143,7 @@ func (writer *BlockZoneMapIndexWriter) Init(host gCommon.IRWFile, cType common.C
 }
 
 func (writer *BlockZoneMapIndexWriter) Finalize() (*common.IndexMeta, error) {
-	if writer.inner == nil {
+	if writer.zonemap == nil {
 		panic("unexpected error")
 	}
 	appender := writer.host
@@ -154,7 +154,7 @@ func (writer *BlockZoneMapIndexWriter) Finalize() (*common.IndexMeta, error) {
 	meta.SetInternalIndex(writer.internalIdx)
 
 	//var startOffset uint32
-	iBuf, err := writer.inner.Marshal()
+	iBuf, err := writer.zonemap.Marshal()
 	if err != nil {
 		return nil, err
 	}
@@ -172,28 +172,28 @@ func (writer *BlockZoneMapIndexWriter) Finalize() (*common.IndexMeta, error) {
 
 func (writer *BlockZoneMapIndexWriter) AddValues(values *vector.Vector) error {
 	typ := values.Typ
-	if writer.inner == nil {
-		writer.inner = basic.NewZoneMap(typ, nil)
+	if writer.zonemap == nil {
+		writer.zonemap = basic.NewZoneMap(typ)
 	} else {
-		if writer.inner.GetType() != typ {
+		if writer.zonemap.GetType() != typ {
 			return errors.ErrTypeMismatch
 		}
 	}
-	if err := writer.inner.BatchUpdate(values, 0, -1); err != nil {
+	if err := writer.zonemap.BatchUpdate(values, 0, -1); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (writer *BlockZoneMapIndexWriter) SetMinMax(min, max interface{}, typ types.Type) error {
-	if writer.inner == nil {
-		writer.inner = basic.NewZoneMap(typ, nil)
+	if writer.zonemap == nil {
+		writer.zonemap = basic.NewZoneMap(typ)
 	} else {
-		if writer.inner.GetType() != typ {
+		if writer.zonemap.GetType() != typ {
 			return errors.ErrTypeMismatch
 		}
 	}
-	writer.inner.SetMin(min)
-	writer.inner.SetMax(max)
+	writer.zonemap.SetMin(min)
+	writer.zonemap.SetMax(max)
 	return nil
 }

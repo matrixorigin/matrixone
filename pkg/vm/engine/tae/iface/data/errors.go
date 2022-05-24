@@ -26,4 +26,5 @@ var (
 	ErrPossibleDuplicate = errors.New("tae data: possible duplicate")
 	ErrDuplicate         = errors.New("tae data: duplicate")
 	ErrNotFound          = errors.New("tae data: not found")
+	ErrWrongType         = errors.New("tae data: wrong data type")
 )
