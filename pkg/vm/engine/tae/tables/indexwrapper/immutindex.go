@@ -45,9 +45,6 @@ func (index *immutableIndex) BatchDedup(keys *vector.Vector, invisibility *roari
 	if !exist {
 		return
 	}
-	if invisibility != nil {
-		visibility.AndNot(invisibility)
-	}
 	exist, visibility, err = index.bfReader.MayContainsAnyKeys(keys, visibility)
 	// 3. check bloomfilter has some unknown error. return err
 	if err != nil {
