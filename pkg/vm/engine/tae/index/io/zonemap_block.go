@@ -21,9 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	gCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
 type blockZoneMapIndexNode struct {
@@ -170,30 +170,30 @@ func (writer *BlockZoneMapIndexWriter) Finalize() (*common.IndexMeta, error) {
 	return meta, nil
 }
 
-func (writer *BlockZoneMapIndexWriter) AddValues(values *vector.Vector) error {
+func (writer *BlockZoneMapIndexWriter) AddValues(values *vector.Vector) (err error) {
 	typ := values.Typ
 	if writer.zonemap == nil {
 		writer.zonemap = basic.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			return errors.ErrTypeMismatch
+			err = data.ErrWrongType
+			return
 		}
 	}
-	if err := writer.zonemap.BatchUpdate(values, 0, -1); err != nil {
-		return err
-	}
-	return nil
+	err = writer.zonemap.BatchUpdate(values, 0, -1)
+	return
 }
 
-func (writer *BlockZoneMapIndexWriter) SetMinMax(min, max interface{}, typ types.Type) error {
+func (writer *BlockZoneMapIndexWriter) SetMinMax(min, max any, typ types.Type) (err error) {
 	if writer.zonemap == nil {
 		writer.zonemap = basic.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			return errors.ErrTypeMismatch
+			err = data.ErrWrongType
+			return
 		}
 	}
 	writer.zonemap.SetMin(min)
 	writer.zonemap.SetMax(max)
-	return nil
+	return
 }

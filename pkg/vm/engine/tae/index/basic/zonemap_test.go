@@ -20,7 +20,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +34,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows := 1000
-	vec := common.MockVec(typ, rows, 0)
+	vec := compute.MockVec(typ, rows, 0)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 
@@ -54,7 +54,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows = 500
-	vec = common.MockVec(typ, rows, 700)
+	vec = compute.MockVec(typ, rows, 700)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 
@@ -68,7 +68,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows = 500
-	vec = common.MockVec(typ, rows, -200)
+	vec = compute.MockVec(typ, rows, -200)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 
@@ -87,7 +87,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	rows = 500
 	typ1 := typ
 	typ1.Oid = types.T_int64
-	vec = common.MockVec(typ1, rows, 2000)
+	vec = compute.MockVec(typ1, rows, 2000)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.Error(t, err)
 
@@ -98,12 +98,12 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.True(t, yes)
 
 	typ1.Oid = types.T_int32
-	vec = common.MockVec(typ1, rows, 3000)
+	vec = compute.MockVec(typ1, rows, 3000)
 	visibility, yes = zm1.ContainsAny(vec)
 	require.False(t, yes)
 	require.Equal(t, uint64(0), visibility.GetCardinality())
 
-	vec = common.MockVec(typ1, rows, 0)
+	vec = compute.MockVec(typ1, rows, 0)
 	visibility, yes = zm1.ContainsAny(vec)
 	require.True(t, yes)
 	require.Equal(t, uint64(rows), visibility.GetCardinality())
@@ -124,7 +124,7 @@ func TestZoneMapString(t *testing.T) {
 	require.False(t, yes)
 
 	rows := 1000
-	vec := common.MockVec(typ, rows, 0)
+	vec := compute.MockVec(typ, rows, 0)
 	err = zm.BatchUpdate(vec, 0, -1)
 	require.NoError(t, err)
 

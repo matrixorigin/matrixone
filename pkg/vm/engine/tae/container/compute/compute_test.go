@@ -17,7 +17,6 @@ package compute
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/stretchr/testify/require"
 
 	"github.com/RoaringBitmap/roaring"
@@ -113,7 +112,7 @@ func TestCheckRowExists(t *testing.T) {
 		Size:  4,
 		Width: 32,
 	}
-	vec := common.MockVec(typ, 100, 0)
+	vec := MockVec(typ, 100, 0)
 	_, exist := CheckRowExists(vec, int32(55), nil)
 	require.True(t, exist)
 	_, exist = CheckRowExists(vec, int32(0), nil)

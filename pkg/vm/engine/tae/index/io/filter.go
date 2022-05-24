@@ -20,9 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	gCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
 type staticFilterIndexNode struct {
@@ -186,7 +186,7 @@ func (writer *StaticFilterIndexWriter) AddValues(values *vector.Vector) error {
 		return nil
 	}
 	if writer.data.Typ != values.Typ {
-		return errors.ErrTypeMismatch
+		return data.ErrWrongType
 	}
 	if err := vector.Append(writer.data, values.Col); err != nil {
 		return err

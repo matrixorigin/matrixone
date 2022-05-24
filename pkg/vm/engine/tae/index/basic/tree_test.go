@@ -20,8 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,7 +38,7 @@ func TestARTIndexNumeric(t *testing.T) {
 
 	var batches []*vector.Vector
 	for i := 0; i < 10; i++ {
-		batch := common.MockVec(typ, 100, i*100)
+		batch := compute.MockVec(typ, 100, i*100)
 		batches = append(batches, batch)
 	}
 
@@ -116,7 +116,7 @@ func TestArtIndexString(t *testing.T) {
 
 	var batches []*vector.Vector
 	for i := 0; i < 10; i++ {
-		batch := common.MockVec(typ, 100, i*100)
+		batch := compute.MockVec(typ, 100, i*100)
 		batches = append(batches, batch)
 	}
 

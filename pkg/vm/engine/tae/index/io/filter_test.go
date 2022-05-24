@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +42,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	err = writer.Init(file, cType, colIdx, interIdx)
 	require.NoError(t, err)
 
-	keys := idxCommon.MockVec(typ, 1000, 0)
+	keys := compute.MockVec(typ, 1000, 0)
 	err = writer.AddValues(keys)
 	require.NoError(t, err)
 
@@ -62,7 +63,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res)
 
-	query := idxCommon.MockVec(typ, 1000, 1500)
+	query := compute.MockVec(typ, 1000, 1500)
 	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.True(t, ans.GetCardinality() < uint64(10))
