@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indeximpl"
 )
 
 type blockFile struct {
@@ -112,7 +112,7 @@ func (bf *blockFile) LoadIndexMeta() (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	indices := index.NewEmptyIndicesMeta()
+	indices := indeximpl.NewEmptyIndicesMeta()
 	if err = indices.Unmarshal(buf); err != nil {
 		return nil, err
 	}

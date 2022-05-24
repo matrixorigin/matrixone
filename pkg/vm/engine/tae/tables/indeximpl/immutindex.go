@@ -1,4 +1,4 @@
-package index
+package indeximpl
 
 import (
 	"github.com/RoaringBitmap/roaring"
