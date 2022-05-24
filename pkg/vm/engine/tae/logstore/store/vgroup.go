@@ -23,8 +23,8 @@ import (
 )
 
 type VGroup interface { //append(vfile) ckp(by what) compact/iscovered
-	Log(interface{}) error
-	OnCheckpoint(interface{}) //ckp info
+	Log(any) error
+	OnCheckpoint(any) //ckp info
 	IsCovered(c *compactor) bool
 	MergeCheckpointInfo(c *compactor) //only commit group
 	PrepareMerge(c *compactor)
@@ -132,7 +132,7 @@ func (g *commitGroup) String() string {
 	return s
 }
 
-func (g *commitGroup) Log(info interface{}) error {
+func (g *commitGroup) Log(info any) error {
 	commitInfo := info.(*entry.Info)
 	if g.Commits == nil {
 		g.Commits = &common.ClosedInterval{}
@@ -215,7 +215,7 @@ func (g *commitGroup) IsCheckpointGroup() bool {
 func (g *commitGroup) IsUncommitGroup() bool {
 	return false
 }
-func (g *commitGroup) OnCheckpoint(info interface{}) {
+func (g *commitGroup) OnCheckpoint(info any) {
 	ranges := info.(*entry.CkpRanges)
 	if ranges.Ranges != nil {
 		g.ckps.TryMerge(*ranges.Ranges)
@@ -252,7 +252,7 @@ func (g *uncommitGroup) String() string {
 	s = fmt.Sprintf("%s]", s)
 	return s
 }
-func (g *uncommitGroup) OnCheckpoint(interface{}) {} //calculate ckp when compact
+func (g *uncommitGroup) OnCheckpoint(any) {} //calculate ckp when compact
 func (g *uncommitGroup) IsCovered(c *compactor) bool {
 	for group, tids := range g.UncommitTxn {
 		tidMap, ok := c.tidCidMap[group]
@@ -288,7 +288,7 @@ func (g *uncommitGroup) IsUncommitGroup() bool {
 func (g *uncommitGroup) IsCommitGroup() bool {
 	return false
 }
-func (g *uncommitGroup) Log(info interface{}) error {
+func (g *uncommitGroup) Log(info any) error {
 	uncommitInfo := info.(*entry.Info)
 	for _, uncommit := range uncommitInfo.Uncommits {
 		tids, ok := g.UncommitTxn[uncommit.Group]
@@ -321,7 +321,7 @@ func newcheckpointGroup(v *vInfo, gid uint32) *checkpointGroup {
 		baseGroup: newbaseGroup(v, gid),
 	}
 }
-func (g *checkpointGroup) OnCheckpoint(interface{})         {} //ckp info
+func (g *checkpointGroup) OnCheckpoint(any)                 {} //ckp info
 func (g *checkpointGroup) IsCovered(c *compactor) bool      { return false }
 func (g *checkpointGroup) MergeCheckpointInfo(c *compactor) {}
 func (g *checkpointGroup) IsCheckpointGroup() bool {
@@ -332,7 +332,7 @@ func (g *checkpointGroup) IsCommitGroup() bool {
 }
 func (g *checkpointGroup) IsUncommitGroup() bool { return false }
 
-func (g *checkpointGroup) Log(info interface{}) error {
+func (g *checkpointGroup) Log(info any) error {
 	checkpointInfo := info.(*entry.Info)
 	for _, interval := range checkpointInfo.Checkpoints {
 		group := g.vInfo.getGroupById(interval.Group) //todo new group if not exist

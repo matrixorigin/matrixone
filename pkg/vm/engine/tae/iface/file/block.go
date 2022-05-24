@@ -47,7 +47,7 @@ type Block interface {
 
 	// TODO: Remove later
 	LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch.IBatch, err error)
-	WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) error
+	WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
 	WriteBatch(bat *gbat.Batch, ts uint64) error
 	LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error)
 	WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) error

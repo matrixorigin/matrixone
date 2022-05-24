@@ -276,7 +276,7 @@ func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
 	return
 }
 
-func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) (err error) {
+func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
 	attrs := bat.GetAttrs()
 	var w bytes.Buffer
 	if deletes != nil {

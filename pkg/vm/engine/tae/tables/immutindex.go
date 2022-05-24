@@ -18,7 +18,7 @@ func (index *immutableIndex) BatchInsert(*vector.Vector, uint32, uint32, uint32,
 	panic("not supported")
 }
 
-func (index *immutableIndex) Dedup(key interface{}) (err error) {
+func (index *immutableIndex) Dedup(key any) (err error) {
 	exist := index.zonemap.Contains(key)
 	// 2. if not in [min, max], key is definitely not found
 	if !exist {

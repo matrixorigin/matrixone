@@ -35,7 +35,7 @@ type ColumnNode struct {
 	*common.DLNode
 	*sync.RWMutex
 	txnMask  *roaring.Bitmap
-	txnVals  map[uint32]interface{}
+	txnVals  map[uint32]any
 	chain    *ColumnChain
 	startTs  uint64
 	commitTs uint64
@@ -47,7 +47,7 @@ type ColumnNode struct {
 func NewSimpleColumnNode() *ColumnNode {
 	node := &ColumnNode{
 		txnMask: roaring.NewBitmap(),
-		txnVals: make(map[uint32]interface{}),
+		txnVals: make(map[uint32]any),
 	}
 	return node
 }
@@ -58,7 +58,7 @@ func NewCommittedColumnNode(startTs, commitTs uint64, id *common.ID, rwlocker *s
 	node := &ColumnNode{
 		RWMutex:  rwlocker,
 		txnMask:  roaring.NewBitmap(),
-		txnVals:  make(map[uint32]interface{}),
+		txnVals:  make(map[uint32]any),
 		startTs:  startTs,
 		commitTs: commitTs,
 		id:       id,
@@ -72,7 +72,7 @@ func NewColumnNode(txn txnif.AsyncTxn, id *common.ID, rwlocker *sync.RWMutex) *C
 	node := &ColumnNode{
 		RWMutex: rwlocker,
 		txnMask: roaring.NewBitmap(),
-		txnVals: make(map[uint32]interface{}),
+		txnVals: make(map[uint32]any),
 		txn:     txn,
 		id:      id,
 	}
@@ -108,7 +108,7 @@ func (node *ColumnNode) GetDLNode() *common.DLNode {
 func (node *ColumnNode) GetMask() *roaring.Bitmap {
 	return node.txnMask
 }
-func (node *ColumnNode) GetValues() map[uint32]interface{} {
+func (node *ColumnNode) GetValues() map[uint32]any {
 	return node.txnVals
 }
 func (node *ColumnNode) Compare(o common.NodePayload) int {
@@ -133,7 +133,7 @@ func (node *ColumnNode) Compare(o common.NodePayload) int {
 	return 0
 }
 
-func (node *ColumnNode) GetValueLocked(row uint32) (v interface{}, err error) {
+func (node *ColumnNode) GetValueLocked(row uint32) (v any, err error) {
 	v = node.txnVals[row]
 	if v == nil {
 		err = txnbase.ErrNotFound
@@ -249,7 +249,7 @@ func (node *ColumnNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (node *ColumnNode) UpdateLocked(row uint32, v interface{}) error {
+func (node *ColumnNode) UpdateLocked(row uint32, v any) error {
 	node.txnMask.Add(row)
 	node.txnVals[row] = v
 	return nil

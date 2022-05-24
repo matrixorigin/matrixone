@@ -37,7 +37,7 @@ func (appender *blockAppender) Close() error {
 	return nil
 }
 
-func (appender *blockAppender) GetMeta() interface{} {
+func (appender *blockAppender) GetMeta() any {
 	return appender.node.block.meta
 }
 

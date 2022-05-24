@@ -280,7 +280,7 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 	return n.IsRowDeleted(noffset)
 }
 
-func (seg *localSegment) Update(row uint32, col uint16, value interface{}) error {
+func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	window, err := n.Window(uint32(noffset), uint32(noffset))
@@ -355,7 +355,7 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 	return int(n.Rows())
 }
 
-func (seg *localSegment) GetValue(row uint32, col uint16) (interface{}, error) {
+func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)

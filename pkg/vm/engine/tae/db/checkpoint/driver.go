@@ -52,7 +52,7 @@ func (f *ckpDriver) String() string {
 	return ""
 }
 
-func (f *ckpDriver) onCheckpoint(items ...interface{}) {
+func (f *ckpDriver) onCheckpoint(items ...any) {
 	start := time.Now()
 	for _, item := range items {
 		ckpEntry := item.(wal.LogEntry)
@@ -65,7 +65,7 @@ func (f *ckpDriver) onCheckpoint(items ...interface{}) {
 	logutil.Infof("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
-func (f *ckpDriver) onRequests(items ...interface{}) {
+func (f *ckpDriver) onRequests(items ...any) {
 	for _, item := range items {
 		unit := item.(data.CheckpointUnit)
 		f.units.AddUnit(unit)

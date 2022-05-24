@@ -34,5 +34,5 @@ func mockTestRelation(id uint64, schema *catalog.Schema) *mockRelation {
 	}
 }
 
-func (rel *mockRelation) GetID() uint64        { return rel.id }
-func (rel *mockRelation) GetMeta() interface{} { return rel.entry }
+func (rel *mockRelation) GetID() uint64 { return rel.id }
+func (rel *mockRelation) GetMeta() any  { return rel.entry }

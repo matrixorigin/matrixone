@@ -123,7 +123,7 @@ func (v *StdVector) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *StdVector) SetValue(idx int, val interface{}) error {
+func (v *StdVector) SetValue(idx int, val any) error {
 	if idx >= v.Length() || idx < 0 {
 		return ErrVecInvalidOffset
 	}
@@ -193,7 +193,7 @@ func (v *StdVector) SetValue(idx int, val interface{}) error {
 	}
 }
 
-func (v *StdVector) GetValue(idx int) (interface{}, error) {
+func (v *StdVector) GetValue(idx int) (any, error) {
 	if idx >= v.Length() || idx < 0 {
 		return nil, ErrVecInvalidOffset
 	}
@@ -236,7 +236,7 @@ func (v *StdVector) GetValue(idx int) (interface{}, error) {
 	}
 }
 
-func (v *StdVector) Append(n int, vals interface{}) error {
+func (v *StdVector) Append(n int, vals any) error {
 	if v.IsReadonly() {
 		return ErrVecWriteRo
 	}
@@ -257,7 +257,7 @@ func (v *StdVector) Append(n int, vals interface{}) error {
 	return nil
 }
 
-func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
+func (v *StdVector) appendWithOffset(offset, n int, vals any) error {
 	var data []byte
 	switch v.Type.Oid {
 	case types.T_int8:

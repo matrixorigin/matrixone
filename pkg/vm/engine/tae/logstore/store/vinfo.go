@@ -225,7 +225,7 @@ func (info *vInfo) close() {
 	info.flushCancel()
 }
 
-func (info *vInfo) Log(v interface{}) error {
+func (info *vInfo) Log(v any) error {
 	if v == nil {
 		return nil
 	}

@@ -408,14 +408,14 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	return
 }
 
-func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v interface{}, err error) {
+func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, err error) {
 	if tbl.localSegment == nil {
 		return
 	}
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interface{}, err error) {
+func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err error) {
 	if isLocalSegment(id) {
 		return tbl.localSegment.GetValue(row, col)
 	}
@@ -431,7 +431,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interfac
 	return block.GetValue(tbl.store.txn, row, col)
 }
 
-func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v interface{}) (err error) {
+func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v any) (err error) {
 	chain := node.GetChain().(*updates.ColumnChain)
 	controller := chain.GetController()
 	sharedLock := controller.GetSharedLock()
@@ -444,7 +444,7 @@ func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTx
 	return
 }
 
-func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}) (err error) {
+func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err error) {
 	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
 		err = data.ErrUpdateUniqueKey
 		return
@@ -488,7 +488,7 @@ func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}
 // 3. Build a new row
 // 4. Delete the row in the node
 // 5. Append the new row
-func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value interface{}) (err error) {
+func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value any) (err error) {
 	if tbl.localSegment != nil {
 		err = tbl.localSegment.Update(row, col, value)
 	}

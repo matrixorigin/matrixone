@@ -52,7 +52,7 @@ func (blk *txnSysBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.txnBlock.RangeDelete(start, end)
 }
 
-func (blk *txnSysBlock) Update(row uint32, col uint16, v interface{}) (err error) {
+func (blk *txnSysBlock) Update(row uint32, col uint16, v any) (err error) {
 	if blk.isSysTable() {
 		panic("not supported")
 	}

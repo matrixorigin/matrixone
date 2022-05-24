@@ -111,7 +111,7 @@ func (reader *StaticFilterIndexReader) Destroy() (err error) {
 	return nil
 }
 
-func (reader *StaticFilterIndexReader) MayContainsKey(key interface{}) (bool, error) {
+func (reader *StaticFilterIndexReader) MayContainsKey(key any) (bool, error) {
 	handle := reader.inode.mgr.Pin(reader.inode)
 	defer handle.Close()
 	return handle.GetNode().(*staticFilterIndexNode).inner.MayContainsKey(key)
@@ -195,6 +195,6 @@ func (writer *StaticFilterIndexWriter) AddValues(values *vector.Vector) error {
 }
 
 // Query is only used for testing or debugging
-func (writer *StaticFilterIndexWriter) Query(key interface{}) (bool, error) {
+func (writer *StaticFilterIndexWriter) Query(key any) (bool, error) {
 	return writer.inner.MayContainsKey(key)
 }

@@ -61,7 +61,7 @@ type InsertNode interface {
 	Window(start, end uint32) (*gbat.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
-	GetValue(col int, row uint32) (interface{}, error)
+	GetValue(col int, row uint32) (any, error)
 	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
 	ToTransient()
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
@@ -451,7 +451,7 @@ func (n *insertNode) offsetWithDeletes(count uint32) uint32 {
 	return offset
 }
 
-func (n *insertNode) GetValue(col int, row uint32) (interface{}, error) {
+func (n *insertNode) GetValue(col int, row uint32) (any, error) {
 	vec, err := n.data.GetVectorByAttr(col)
 	if err != nil {
 		return nil, err

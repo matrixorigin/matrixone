@@ -27,7 +27,7 @@ import (
 )
 
 type StaticFilter interface {
-	MayContainsKey(key interface{}) (bool, error)
+	MayContainsKey(key any) (bool, error)
 	MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
@@ -43,7 +43,7 @@ type binaryFuseFilter struct {
 func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{typ: data.Typ}
 	hashes := make([]uint64, 0)
-	collector := func(v interface{}) error {
+	collector := func(v any) error {
 		hash, err := compute.Hash(v, sf.typ)
 		if err != nil {
 			return err
@@ -69,7 +69,7 @@ func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
 	return &sf, nil
 }
 
-func (filter *binaryFuseFilter) MayContainsKey(key interface{}) (bool, error) {
+func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
 	hash, err := compute.Hash(key, filter.typ)
 	if err != nil {
 		return false, err
@@ -85,7 +85,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 	row := uint32(0)
 	exist := false
 
-	collector := func(v interface{}) error {
+	collector := func(v any) error {
 		hash, err := compute.Hash(v, filter.typ)
 		if err != nil {
 			return err

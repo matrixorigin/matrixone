@@ -21,7 +21,7 @@ type RowGen interface {
 	Next() uint32
 }
 
-func InplaceDeleteRows(orig interface{}, rowGen RowGen) interface{} {
+func InplaceDeleteRows(orig any, rowGen RowGen) any {
 	if !rowGen.HasNext() {
 		return orig
 	}

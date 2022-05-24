@@ -57,7 +57,7 @@ type VFile interface {
 }
 
 type FileAppender interface {
-	Prepare(int, interface{}) error
+	Prepare(int, any) error
 	Write([]byte) (int, error)
 	Commit() error
 	Rollback()
@@ -65,10 +65,10 @@ type FileAppender interface {
 	Revert()
 }
 
-type FileReader interface {
-	// io.Reader
-	// ReadAt([]byte, FileAppender) (int, error)
-}
+type FileReader any
+
+// io.Reader
+// ReadAt([]byte, FileAppender) (int, error)
 
 type ReplayObserver interface {
 	OnNewEntry(int)
@@ -94,7 +94,7 @@ type History interface {
 	TryTruncate() error
 }
 
-type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{})
+type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any)
 
 type File interface {
 	io.Closer

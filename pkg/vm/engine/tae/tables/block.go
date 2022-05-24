@@ -534,11 +534,11 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 	return
 }
 
-func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (node txnif.UpdateNode, err error) {
+func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
 	return blk.updateWithFineLock(txn, row, colIdx, v)
 }
 
-func (blk *dataBlock) OnReplayUpdate(row uint32, colIdx uint16, v interface{}) (err error) {
+func (blk *dataBlock) OnReplayUpdate(row uint32, colIdx uint16, v any) (err error) {
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
 	if err == nil {
@@ -553,7 +553,7 @@ func (blk *dataBlock) OnReplayUpdate(row uint32, colIdx uint16, v interface{}) (
 	return
 }
 
-func (blk *dataBlock) updateWithCoarseLock(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (node txnif.UpdateNode, err error) {
+func (blk *dataBlock) updateWithCoarseLock(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
 	blk.mvcc.Lock()
 	defer blk.mvcc.Unlock()
 	err = blk.mvcc.CheckNotDeleted(row, row, txn.GetStartTS())
@@ -572,7 +572,7 @@ func (blk *dataBlock) updateWithCoarseLock(txn txnif.AsyncTxn, row uint32, colId
 	return
 }
 
-func (blk *dataBlock) updateWithFineLock(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (node txnif.UpdateNode, err error) {
+func (blk *dataBlock) updateWithFineLock(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
 	err = blk.mvcc.CheckNotDeleted(row, row, txn.GetStartTS())
@@ -607,7 +607,7 @@ func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node t
 	return
 }
 
-func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v interface{}, err error) {
+func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v any, err error) {
 	ts := txn.GetStartTS()
 	blk.mvcc.RLock()
 	deleteChain := blk.mvcc.GetDeleteChain()
@@ -792,7 +792,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 		return err
 	}
 	defer view.Free()
-	deduplicate := func(v interface{}) error {
+	deduplicate := func(v any) error {
 		if _, exist := compute.CheckRowExists(view.AppliedVec, v, view.DeleteMask); exist {
 			return txnbase.ErrDuplicated
 		}

@@ -36,11 +36,11 @@ func NewStateMachine(wg *sync.WaitGroup, closed common.Closable, rQueue, ckpQueu
 	}
 }
 
-func (sm *stateMachine) EnqueueRecevied(item interface{}) (interface{}, error) {
+func (sm *stateMachine) EnqueueRecevied(item any) (any, error) {
 	return sm.receiveQueue.Enqueue(item)
 }
 
-func (sm *stateMachine) EnqueueCheckpoint(item interface{}) (interface{}, error) {
+func (sm *stateMachine) EnqueueCheckpoint(item any) (any, error) {
 	return sm.checkpointQueue.Enqueue(item)
 }
 

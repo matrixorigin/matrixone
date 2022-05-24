@@ -37,7 +37,7 @@ func (replayer *Replayer) Replay() {
 	}
 }
 
-func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 	if group != wal.GroupC {
 		return
 	}

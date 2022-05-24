@@ -25,12 +25,12 @@ import (
 
 type nodeList struct {
 	common.SSLLNode
-	host     interface{}
+	host     any
 	rwlocker *sync.RWMutex
 	name     string
 }
 
-func newNodeList(host interface{}, rwlocker *sync.RWMutex, name string) *nodeList {
+func newNodeList(host any, rwlocker *sync.RWMutex, name string) *nodeList {
 	return &nodeList{
 		SSLLNode: *common.NewSSLLNode(),
 		host:     host,
@@ -269,10 +269,10 @@ func (n *nodeList) PString(level common.PPLevel) string {
 type nameNode struct {
 	common.SSLLNode
 	Id   uint64
-	host interface{}
+	host any
 }
 
-func newNameNode(host interface{}, id uint64) *nameNode {
+func newNameNode(host any, id uint64) *nameNode {
 	return &nameNode{
 		Id:       id,
 		SSLLNode: *common.NewSSLLNode(),

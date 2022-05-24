@@ -178,7 +178,7 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 		return data.ErrStaleRequest
 	}
 	masks := make(map[uint16]*roaring.Bitmap)
-	vals := make(map[uint16]map[uint32]interface{})
+	vals := make(map[uint16]map[uint32]any)
 	readLock := mvcc.GetSharedLock()
 	for i := range node.block.meta.GetSchema().ColDefs {
 		chain := mvcc.GetColumnChain(uint16(i))

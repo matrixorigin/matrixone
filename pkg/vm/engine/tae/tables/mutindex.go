@@ -29,11 +29,11 @@ func (index *mutableIndex) BatchInsert(keys *vector.Vector, start uint32, count 
 	return
 }
 
-func (index *mutableIndex) Delete(key interface{}) error {
+func (index *mutableIndex) Delete(key any) error {
 	return index.art.Delete(key)
 }
 
-func (index *mutableIndex) Find(key interface{}) (row uint32, err error) {
+func (index *mutableIndex) Find(key any) (row uint32, err error) {
 	exist := index.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {

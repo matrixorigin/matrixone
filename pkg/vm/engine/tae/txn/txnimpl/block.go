@@ -138,7 +138,7 @@ func newBlock(table *txnTable, meta *catalog.BlockEntry) *txnBlock {
 	return blk
 }
 
-func (blk *txnBlock) GetMeta() interface{} { return blk.entry }
+func (blk *txnBlock) GetMeta() any { return blk.entry }
 func (blk *txnBlock) String() string {
 	if blk.isUncommitted {
 		return blk.entry.String()
@@ -171,7 +171,7 @@ func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end)
 }
 
-func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
+func (blk *txnBlock) Update(row uint32, col uint16, v any) (err error) {
 	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)
 }
 

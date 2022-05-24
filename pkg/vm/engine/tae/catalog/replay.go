@@ -26,7 +26,7 @@ func NewReplayer(dataFactory DataFactory, catalog *Catalog) *Replayer {
 	}
 }
 
-func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+func (replayer *Replayer) ReplayerHandle(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 	if typ != ETCatalogCheckpoint {
 		return
 	}

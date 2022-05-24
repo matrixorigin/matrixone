@@ -39,7 +39,7 @@ type CheckpointUnit interface {
 type BlockAppender interface {
 	io.Closer
 	GetID() *common.ID
-	GetMeta() interface{}
+	GetMeta() any
 	PrepareAppend(rows uint32) (n uint32, err error)
 	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (txnif.AppendNode, uint32, error)
 	OnReplayInsertNode(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error)
@@ -51,7 +51,7 @@ type Block interface {
 	CheckpointUnit
 
 	OnReplayDelete(start, end uint32) (err error)
-	OnReplayUpdate(row uint32, colIdx uint16, v interface{}) (err error)
+	OnReplayUpdate(row uint32, colIdx uint16, v any) (err error)
 	GetID() *common.ID
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
@@ -60,7 +60,7 @@ type Block interface {
 
 	MakeAppender() (BlockAppender, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32) (txnif.DeleteNode, error)
-	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (txnif.UpdateNode, error)
+	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (txnif.UpdateNode, error)
 
 	GetTotalChanges() int
 	CollectChangesInRange(startTs, endTs uint64) (*model.BlockView, error)
@@ -68,7 +68,7 @@ type Block interface {
 
 	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (interface{}, error)
+	GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 	GetBlockFile() file.Block
 

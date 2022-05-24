@@ -78,7 +78,7 @@ func (chain *ColumnChain) GetColumnName() string {
 	return chain.mvcc.meta.GetSchema().ColDefs[chain.id.Idx].Name
 }
 
-func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v interface{}, n txnif.UpdateNode) (err error) {
+func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v any, n txnif.UpdateNode) (err error) {
 	if err = chain.PrepareUpdate(row, n); err != nil {
 		return
 	}
@@ -158,15 +158,15 @@ func (chain *ColumnChain) StringLocked() string {
 	// return msg
 }
 
-func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v interface{}, err error) {
+func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v any, err error) {
 	return chain.view.GetValue(row, ts)
 }
 
-func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]interface{}, error) {
+func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]any, error) {
 	return chain.view.CollectUpdates(ts)
 }
 
-func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, indexes []*wal.Index, err error) {
+func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]any, indexes []*wal.Index, err error) {
 	var merged *ColumnNode
 	chain.LoopChainLocked(func(n *ColumnNode) bool {
 		n.RLock()

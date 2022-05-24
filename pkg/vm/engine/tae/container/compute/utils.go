@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
-func Hash(v interface{}, typ types.Type) (uint64, error) {
+func Hash(v any, typ types.Type) (uint64, error) {
 	data, err := EncodeKey(v, typ)
 	if err != nil {
 		return 0, err
@@ -31,7 +31,7 @@ func Hash(v interface{}, typ types.Type) (uint64, error) {
 	return xx, nil
 }
 
-func DecodeKey(key []byte, typ types.Type) interface{} {
+func DecodeKey(key []byte, typ types.Type) any {
 	switch typ.Oid {
 	case types.T_int8:
 		return encoding.DecodeInt8(key)
@@ -64,7 +64,7 @@ func DecodeKey(key []byte, typ types.Type) interface{} {
 	}
 }
 
-func EncodeKey(key interface{}, typ types.Type) ([]byte, error) {
+func EncodeKey(key any, typ types.Type) ([]byte, error) {
 	switch typ.Oid {
 	case types.T_int8:
 		if v, ok := key.(int8); ok {
@@ -149,7 +149,7 @@ func EncodeKey(key interface{}, typ types.Type) ([]byte, error) {
 	}
 }
 
-func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v interface{}) error, visibility *roaring.Bitmap) error {
+func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v any) error, visibility *roaring.Bitmap) error {
 	var idxes []uint32
 	if visibility != nil {
 		idxes = visibility.ToArray()

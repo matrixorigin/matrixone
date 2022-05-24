@@ -57,8 +57,8 @@ type Desc interface {
 type Entry interface {
 	Desc
 	GetPayload() []byte
-	SetInfo(interface{})
-	GetInfo() interface{}
+	SetInfo(any)
+	GetInfo() any
 	GetInfoBuf() []byte
 	SetInfoBuf(buf []byte)
 

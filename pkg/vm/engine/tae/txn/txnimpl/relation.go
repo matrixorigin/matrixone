@@ -135,8 +135,8 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	return s
 }
 
-func (h *txnRelation) GetMeta() interface{}   { return h.table.entry }
-func (h *txnRelation) GetSchema() interface{} { return h.table.entry.GetSchema() }
+func (h *txnRelation) GetMeta() any   { return h.table.entry }
+func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Close() error                     { return nil }
 func (h *txnRelation) Rows() int64                      { return 0 }
@@ -183,7 +183,7 @@ func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, er
 	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
 }
 
-func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v interface{}) (err error) {
+func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error) {
 	id, row, err := h.table.GetByFilter(filter)
 	if err != nil {
 		return
@@ -208,7 +208,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v interf
 	return
 }
 
-func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{}) error {
+func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v any) error {
 	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
 }
 
@@ -216,7 +216,7 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32) error {
 	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end)
 }
 
-func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (interface{}, error) {
+func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, error) {
 	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, col)
 }
 

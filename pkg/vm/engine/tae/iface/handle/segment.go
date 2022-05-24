@@ -33,7 +33,7 @@ type SegmentReader interface {
 	MakeBlockIt() BlockIt
 	// GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
 	String() string
-	GetMeta() interface{}
+	GetMeta() any
 
 	GetBlock(id uint64) (Block, error)
 	GetRelation() Relation
@@ -45,11 +45,11 @@ type SegmentWriter interface {
 	io.Closer
 	String() string
 	Append(data *batch.Batch, offset uint32) (uint32, error)
-	Update(blk uint64, row uint32, col uint16, v interface{}) error
+	Update(blk uint64, row uint32, col uint16, v any) error
 	RangeDelete(blk uint64, start, end uint32) error
 
 	PushDeleteOp(filter Filter) error
-	PushUpdateOp(filter Filter, attr string, val interface{}) error
+	PushUpdateOp(filter Filter, attr string, val any) error
 
 	CreateBlock() (Block, error)
 	CreateNonAppendableBlock() (Block, error)

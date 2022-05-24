@@ -140,11 +140,11 @@ func (v *StrVector) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *StrVector) SetValue(idx int, val interface{}) error {
+func (v *StrVector) SetValue(idx int, val any) error {
 	return errors.New("not supported")
 }
 
-func (v *StrVector) GetValue(idx int) (interface{}, error) {
+func (v *StrVector) GetValue(idx int) (any, error) {
 	if idx >= v.Length() || idx < 0 {
 		return nil, ErrVecInvalidOffset
 	}
@@ -158,7 +158,7 @@ func (v *StrVector) GetValue(idx int) (interface{}, error) {
 	return data, nil
 }
 
-func (v *StrVector) Append(n int, vals interface{}) error {
+func (v *StrVector) Append(n int, vals any) error {
 	if v.IsReadonly() {
 		return ErrVecWriteRo
 	}
@@ -179,7 +179,7 @@ func (v *StrVector) Append(n int, vals interface{}) error {
 	return nil
 }
 
-func (v *StrVector) appendWithOffset(offset, n int, vals interface{}) error {
+func (v *StrVector) appendWithOffset(offset, n int, vals any) error {
 	var data [][]byte
 	switch v.Type.Oid {
 	case types.T_char, types.T_varchar, types.T_json:

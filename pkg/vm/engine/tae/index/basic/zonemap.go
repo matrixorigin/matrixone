@@ -133,7 +133,7 @@ func (zm *ZoneMap) SetMin(v any) {
 	}
 }
 
-func (zm *ZoneMap) GetMin() interface{} {
+func (zm *ZoneMap) GetMin() any {
 	return zm.min
 }
 
