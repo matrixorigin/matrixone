@@ -955,8 +955,10 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	mockOptimizer := plan2.NewMockOptimizer()
-	qry, err := mockOptimizer.Optimize(stmt.Statement)
+	buildPlan, err := plan2.BuildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	if err != nil {
+		return err
+	}
 
 	if err != nil {
 		logutil.Errorf("build query plan and optimize failed, error: %v", err)
@@ -966,7 +968,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(qry)
+	explainQuery := explain.NewExplainQueryImpl(buildPlan.GetQuery())
 	err = explainQuery.ExplainPlan(buffer, es)
 	if err != nil {
 		logutil.Errorf("explain Query statement error: %v", err)
