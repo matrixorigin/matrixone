@@ -63,6 +63,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			return false, ctr.build(ap, bat, proc)
 		case Eval:
 			ctr.state = End
+			if ctr.bat == nil {
+				return true, nil
+			}
 			return true, ctr.eval(ap.Limit, proc)
 		default:
 			proc.Reg.InputBatch = nil
