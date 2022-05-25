@@ -46,9 +46,12 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, binderCt
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, rightChildId},
 		}
-
-		fillJoinProjectList(node, leftChild, rightChild)
 		nodeId = appendQueryNode(query, node)
+
+		usingCols := make(map[string]int)
+		projectNodeWhere := []*Expr{}
+		projectNode := fillJoinProjectList(binderCtx, usingCols, node, leftChild, rightChild, projectNodeWhere)
+		nodeId = appendQueryNode(query, projectNode)
 	}
 
 	return
@@ -65,6 +68,7 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, binderCt
 		}
 		newCtx := &BinderContext{
 			columnAlias:          make(map[string]*Expr),
+			usingCols:            make(map[string]string),
 			subqueryIsCorrelated: false,
 			subqueryParentIds:    subqueryParentIds,
 			cteTables:            binderCtx.cteTables,
@@ -165,8 +169,10 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 	rightChild := query.Nodes[rightChildId]
 	leftChild.JoinType = leftJoinType
 	rightChild.JoinType = rightJoinType
-	fillJoinProjectList(node, leftChild, rightChild)
 	nodeId = appendQueryNode(query, node)
+
+	usingCols := make(map[string]int)
+	var projectNodeWhere []*Expr
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
@@ -174,19 +180,23 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 		if err != nil {
 			return 0, err
 		}
-		node.OnList = exprs
+		node.OnList, projectNodeWhere, err = pushOnListExprDown(query, node, exprs)
+		if err != nil {
+			return 0, err
+		}
 
 	case *tree.UsingJoinCond:
-		for _, colName := range cond.Cols {
+		for idx, colName := range cond.Cols {
 			name := string(colName)
 			leftColIndex, leftColType := getColumnIndexAndType(leftChild.ProjectList, name)
 			if leftColIndex < 0 {
-				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
+				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist in left table", name))
 			}
 			rightColIndex, rightColType := getColumnIndexAndType(rightChild.ProjectList, name)
 			if rightColIndex < 0 {
-				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", name))
+				return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist in right table", name))
 			}
+			usingCols[name] = idx
 			leftColExpr := &Expr{
 				ColName: name,
 				Expr: &plan.Expr_Col{
@@ -221,7 +231,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
 			// natural join.  the cond will be nil
 			var columns []*Expr
-			columns, err = getColumnsWithSameName(leftChild.ProjectList, rightChild.ProjectList)
+			columns, usingCols, err = getColumnsWithSameName(leftChild.ProjectList, rightChild.ProjectList)
 			if err != nil {
 				return
 			}
@@ -229,5 +239,82 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 		}
 	}
 
+	projectNode := fillJoinProjectList(binderCtx, usingCols, node, leftChild, rightChild, projectNodeWhere)
+	nodeId = appendQueryNode(query, projectNode)
+
 	return
+}
+
+//pushOnListExprDown
+// select * from a join b on a.k = b.k and a.s1 > b.s2 and a.s1 > 10
+// we will push [a.s1 > b.s2] to the projectNode(after joinNode)'s wherelist
+// and push [a.s1 > 10] to tableScanNode(name=a)'s wherelist
+func pushOnListExprDown(query *Query, node *Node, onList []*Expr) ([]*Expr, []*Expr, error) {
+	var pushToLeft []*Expr
+	var pushToRight []*Expr
+	var projectNodeWhere []*Expr
+	var newOnListExpr []*Expr
+	for _, expr := range onList {
+
+		hasLeftCol, hasRightCol := getOnListExprSide(expr)
+
+		if hasLeftCol && hasRightCol {
+			if expr.Expr.(*plan.Expr_F).F.Func.GetObjName() == "=" {
+				newOnListExpr = append(newOnListExpr, expr)
+			} else {
+				projectNodeWhere = append(projectNodeWhere, expr)
+			}
+			continue
+		}
+
+		if hasLeftCol {
+			pushToLeft = append(pushToLeft, expr)
+		}
+
+		if hasRightCol {
+			pushToRight = append(pushToRight, expr)
+		}
+	}
+
+	if len(pushToLeft) > 0 {
+		leftNode := query.Nodes[node.Children[0]]
+		leftNode.WhereList = append(leftNode.WhereList, pushToLeft...)
+	}
+
+	if len(pushToRight) > 0 {
+		rightNode := query.Nodes[node.Children[1]]
+		rightNode.WhereList = append(rightNode.WhereList, pushToRight...)
+	}
+
+	return newOnListExpr, projectNodeWhere, nil
+}
+
+func getOnListExprSide(onExpr *Expr) (bool, bool) {
+	leftFlag := false
+	rightFlag := false
+	switch item := onExpr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			left, right := getOnListExprSide(arg)
+			if !leftFlag {
+				leftFlag = left
+			}
+			if !rightFlag {
+				rightFlag = right
+			}
+			if leftFlag && rightFlag {
+				return leftFlag, rightFlag
+			}
+		}
+	case *plan.Expr_Col:
+		if item.Col.RelPos == 0 {
+			leftFlag = true
+		}
+		if item.Col.RelPos == 1 {
+			rightFlag = true
+		}
+	default:
+	}
+
+	return leftFlag, rightFlag
 }
