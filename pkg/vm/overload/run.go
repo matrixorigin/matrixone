@@ -42,10 +42,8 @@ func Prepare(ins vm.Instructions, proc *process.Process) error {
 	return nil
 }
 
-func Run(ins vm.Instructions, proc *process.Process) (bool, error) {
+func Run(ins vm.Instructions, proc *process.Process) (end bool, err error) {
 	var ok bool
-	var end bool
-	var err error
 
 	defer func() {
 		if e := recover(); e != nil {
