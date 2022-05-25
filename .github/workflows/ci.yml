@@ -19,7 +19,7 @@ jobs:
   tae-build:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
-    name: Build TAE on CentOS/x64
+    name: Build Plan2-TAE on CentOS/x64
 
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
@@ -74,7 +74,7 @@ jobs:
   aoe-build:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
-    name: Build AOE on CentOS/x64
+    name: Build Plan2-AOE on CentOS/x64
 
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
