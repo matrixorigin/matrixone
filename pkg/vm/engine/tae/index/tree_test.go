@@ -43,7 +43,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete(int32(55))
+	_, err = idx.Delete(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
 	_, _, err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false, false)
@@ -56,7 +56,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(100))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete(int32(55))
+	_, err = idx.Delete(int32(55))
 	require.NoError(t, err)
 
 	_, err = idx.Search(int32(55))
@@ -120,7 +120,7 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete([]byte(strconv.Itoa(55)))
+	_, err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
 	_, _, err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false, false)
@@ -133,7 +133,7 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(100)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete([]byte(strconv.Itoa(55)))
+	_, err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))

@@ -120,14 +120,16 @@ func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, star
 	return
 }
 
-func (art *simpleARTMap) Delete(key any) (err error) {
+func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
 	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return
 	}
-	_, found := art.tree.Delete(ikey)
+	v, found := art.tree.Delete(ikey)
 	if !found {
 		err = ErrNotFound
+	} else {
+		old = v.(uint32)
 	}
 	return
 }

@@ -16,9 +16,10 @@ func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
 
-func (index *immutableIndex) Find(any) (uint32, error) { panic("not supported") }
-func (index *immutableIndex) Delete(any) error         { panic("not supported") }
-func (index *immutableIndex) BatchInsert(*vector.Vector, uint32, uint32, uint32, bool) (*roaring.Bitmap, *roaring.Bitmap, error) {
+func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool) { panic("not supported") }
+func (index *immutableIndex) GetActiveRow(any) (uint32, error)      { panic("not supported") }
+func (index *immutableIndex) Delete(any, uint64) error              { panic("not supported") }
+func (index *immutableIndex) BatchUpsert(*vector.Vector, uint32, uint32, uint32, uint64) error {
 	panic("not supported")
 }
 

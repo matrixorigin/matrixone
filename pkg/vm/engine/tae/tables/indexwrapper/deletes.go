@@ -17,7 +17,7 @@ func NewDeletesMap(typ types.Type) *DeletesMap {
 	}
 }
 
-func (m *DeletesMap) Upsert(key any, row uint32, ts uint64) (err error) {
+func (m *DeletesMap) LogDeletedKey(key any, row uint32, ts uint64) (err error) {
 	err = m.impl.Insert(key, row)
 	if err != nil {
 		err = TranslateError(err)
@@ -27,7 +27,7 @@ func (m *DeletesMap) Upsert(key any, row uint32, ts uint64) (err error) {
 	return
 }
 
-func (m *DeletesMap) DeleteOne(key any, row uint32) (err error) {
+func (m *DeletesMap) CleanOneDelete(key any, row uint32) (err error) {
 	pos, err := m.impl.DeleteOne(key, row)
 	if err != nil {
 		err = TranslateError(err)
@@ -37,13 +37,17 @@ func (m *DeletesMap) DeleteOne(key any, row uint32) (err error) {
 	return
 }
 
-func (m *DeletesMap) GetDeletedRows(key any) (rows []uint32, tss []uint64, exist bool) {
-	n, exist := m.impl.GetRowsNode(key)
-	if !exist {
+func (m *DeletesMap) IsKeyDeleted(key any, ts uint64) (deleted bool, existed bool) {
+	existed = m.impl.Contains(key)
+	if !existed {
 		return
 	}
-	rows = n.Ids
-	tss = m.tss
+	for i := len(m.tss) - 1; i >= 0; i-- {
+		rowTs := m.tss[i]
+		if rowTs <= ts {
+			deleted = true
+		}
+	}
 	return
 }
 

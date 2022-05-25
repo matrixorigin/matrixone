@@ -31,9 +31,12 @@ type Index interface {
 
 	Dedup(any) error
 	BatchDedup(keys *movec.Vector, invisibility *roaring.Bitmap) (visibility *roaring.Bitmap, err error)
-	BatchInsert(*movec.Vector, uint32, uint32, uint32, bool) (updatedpos, updatedrow *roaring.Bitmap, err error)
-	Delete(any) error
-	Find(any) (uint32, error)
+	BatchUpsert(*movec.Vector, uint32, uint32, uint32, uint64) error
+	Delete(any, uint64) error
+	GetActiveRow(any) (uint32, error)
+
+	IsKeyDeleted(any, uint64) (deleted, existed bool)
+
 	ReadFrom(data.Block) error
 	WriteTo(data.Block) error
 }

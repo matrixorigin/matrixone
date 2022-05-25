@@ -18,7 +18,7 @@ type SecondaryIndex interface {
 	BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (updatedpos, updatedrow *roaring.Bitmap, err error)
 	Update(key any, row uint32) error
 	BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) error
-	Delete(key any) error
+	Delete(key any) (old uint32, err error)
 	Search(key any) (uint32, error)
 	Contains(key any) bool
 	ContainsAny(keys *vector.Vector, keyselects, rowmask *roaring.Bitmap) bool
