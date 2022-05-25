@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/overload"
@@ -54,9 +55,22 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 
 	defer func() {
 		for i, in := range p.instructions {
-			if in.Op == vm.Connector {
+			if in.Op == overload.Connector {
 				arg := p.instructions[i].Arg.(*connector.Argument)
-				arg.Reg.Ch <- nil
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
+				break
+			}
+			if in.Op == overload.Dispatch {
+				arg := p.instructions[i].Arg.(*dispatch.Argument)
+				for _, reg := range arg.Regs {
+					select {
+					case <-reg.Ctx.Done():
+					case reg.Ch <- nil:
+					}
+				}
 				break
 			}
 		}
@@ -90,9 +104,22 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 
 	defer func() {
 		for i, in := range p.instructions {
-			if in.Op == vm.Connector {
+			if in.Op == overload.Connector {
 				arg := p.instructions[i].Arg.(*connector.Argument)
-				arg.Reg.Ch <- nil
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
+				break
+			}
+			if in.Op == overload.Dispatch {
+				arg := p.instructions[i].Arg.(*dispatch.Argument)
+				for _, reg := range arg.Regs {
+					select {
+					case <-reg.Ctx.Done():
+					case reg.Ch <- nil:
+					}
+				}
 				break
 			}
 		}
@@ -118,9 +145,22 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 
 	defer func() {
 		for i, in := range p.instructions {
-			if in.Op == vm.Connector {
+			if in.Op == overload.Connector {
 				arg := p.instructions[i].Arg.(*connector.Argument)
-				arg.Reg.Ch <- nil
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
+				break
+			}
+			if in.Op == overload.Dispatch {
+				arg := p.instructions[i].Arg.(*dispatch.Argument)
+				for _, reg := range arg.Regs {
+					select {
+					case <-reg.Ctx.Done():
+					case reg.Ch <- nil:
+					}
+				}
 				break
 			}
 		}
