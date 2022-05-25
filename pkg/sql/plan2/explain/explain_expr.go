@@ -78,16 +78,12 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 	return result, nil
 }
 
+// generator function expression(Expr_F) explain infomation
 func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOptions) (string, error) {
 	// SysFunsAndOperatorsMap
 	var result string
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcDef := funcExpr.F.GetFunc()
-	// Get function explain type
-	// funcProtoType, ok := plan2.BuiltinFunctionsMap[funcName]
-	// if !ok {
-	// 	return result, errors.New(errno.InvalidName, "invalid function or opreator name '"+funcName+"'")
-	// }
 
 	funcProtoType, err := function.GetFunctionByID(funcDef.Obj)
 	if err != nil {

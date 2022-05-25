@@ -333,7 +333,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 }
 
 func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (string, error) {
-	var result string = "Aggregate Functions:"
+	var result string = "Aggregate Functions: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
 		for _, v := range ndesc.Node.GetAggList() {
@@ -403,6 +403,7 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 			" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
 			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64)
 	}
+
 	return result, nil
 }
 
