@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -54,7 +53,7 @@ func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, 
 	initConfigByParamaterUnit(pu)
 	registry = prom.NewRegistry()
 	moCollector = newMetricCollector(ieFactory)
-	moExporter = newMetricExporter(registry, moCollector, strconv.Itoa(nodeId), role)
+	moExporter = newMetricExporter(registry, moCollector, int32(nodeId), role)
 
 	// register metrics and create tables
 	registerAllMetrics()

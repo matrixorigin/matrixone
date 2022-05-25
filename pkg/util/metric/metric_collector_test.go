@@ -134,31 +134,30 @@ func TestCollector(t *testing.T) {
 	collector.Start()
 	defer collector.Stop()
 	names := []string{"m1", "m2"}
+	nodes := []int32{1, 2}
+	roles := []string{"ping", "pong"}
 	ts := int64(types.Now())
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
-			{Name: &names[0], Type: pb.MetricType_COUNTER.Enum(), Metric: []*pb.Metric{
+			{Name: &names[0], Type: pb.MetricType_COUNTER.Enum(), Node: &nodes[0], Role: &roles[0], Metric: []*pb.Metric{
 				{
-					Label:   []*pb.LabelPair{{Name: LBL_NODE, Value: "0"}, {Name: LBL_ROLE, Value: "log"}},
 					Counter: &pb.Counter{Value: 12.0}, Collecttime: &ts,
 				},
 			}},
 			{Name: &names[1], Type: pb.MetricType_RAWHIST.Enum().Enum(), Metric: []*pb.Metric{
 				{
-					Label:   []*pb.LabelPair{{Name: LBL_NODE, Value: "0"}, {Name: LBL_ROLE, Value: "log"}},
+					Label:   []*pb.LabelPair{{Name: "sqltype", Value: "select"}, {Name: "internal", Value: "false"}},
 					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
 				},
 			}},
 		})
 
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
-			{Name: &names[0], Type: pb.MetricType_COUNTER.Enum(), Metric: []*pb.Metric{
+			{Name: &names[0], Type: pb.MetricType_COUNTER.Enum(), Node: &nodes[1], Role: &roles[1], Metric: []*pb.Metric{
 				{
-					Label:   []*pb.LabelPair{{Name: LBL_NODE, Value: "1"}, {Name: LBL_ROLE, Value: "dn"}},
 					Counter: &pb.Counter{Value: 21.0}, Collecttime: &ts,
 				},
 				{
-					Label:   []*pb.LabelPair{{Name: LBL_NODE, Value: "2"}, {Name: LBL_ROLE, Value: "dn"}},
 					Counter: &pb.Counter{Value: 66.0}, Collecttime: &ts,
 				},
 			}},

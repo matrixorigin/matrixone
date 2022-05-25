@@ -149,15 +149,15 @@ func (c *metricCollector) startMergeWorker() {
 }
 
 func (c *metricCollector) mergeWorker(ctx context.Context) {
-	mfByNames := make(map[string]*pb.MetricFamily)
+	mfByNames := make(map[string]*mfset)
 	sqlbuf := new(bytes.Buffer)
 	reminder := newReminder()
 	defer reminder.CleanAll()
 
-	doFlush := func(mf *pb.MetricFamily) {
-		c.pushToSqlCh(mf, sqlbuf)
-		mf.Metric = mf.Metric[:0]
-		reminder.Reset(mf.GetName(), c.opts.flushInterval)
+	doFlush := func(name string, set *mfset) {
+		c.pushToSqlCh(set, sqlbuf)
+		set.reset()
+		reminder.Reset(name, c.opts.flushInterval)
 	}
 
 	for {
@@ -166,47 +166,32 @@ func (c *metricCollector) mergeWorker(ctx context.Context) {
 			return
 		case mf := <-c.mf_ch:
 			if isFullBatchRawHist(mf) {
-				c.pushToSqlCh(mf, sqlbuf)
+				c.pushToSqlCh(newMfset(mf), sqlbuf)
 				continue
 			}
 			name := mf.GetName()
-			entryMf := mfByNames[name]
-			if entryMf != nil {
-				entryMf.Metric = append(entryMf.Metric, mf.Metric...)
+			entryMfs := mfByNames[name]
+			if entryMfs != nil {
+				entryMfs.add(mf)
 			} else {
-				mfByNames[name] = mf
-				entryMf = mf
+				entryMfs = newMfset(mf)
+				mfByNames[name] = entryMfs
 				reminder.Register(name, c.opts.flushInterval)
 			}
-			if c.shouldFlush(entryMf) {
-				doFlush(entryMf)
+			if entryMfs.shouldFlush(&c.opts) {
+				doFlush(name, entryMfs)
 			}
 		case name := <-reminder.C:
-			if entryMf := mfByNames[name]; entryMf != nil && len(entryMf.Metric) > 0 {
-				doFlush(entryMf)
+			if entryMfs := mfByNames[name]; entryMfs != nil && entryMfs.rows > 0 {
+				doFlush(name, entryMfs)
 			}
 		}
 	}
 }
 
-func (c *metricCollector) pushToSqlCh(mf *pb.MetricFamily, buf *bytes.Buffer) {
-	if sql := c.sqlFromMetricFamily(mf, buf); sql != "" {
+func (c *metricCollector) pushToSqlCh(set *mfset, buf *bytes.Buffer) {
+	if sql := set.getSql(buf); sql != "" {
 		c.sql_ch <- sql
-	}
-}
-
-func (c *metricCollector) shouldFlush(mf *pb.MetricFamily) bool {
-	switch mf.GetType() {
-	case pb.MetricType_COUNTER, pb.MetricType_GAUGE:
-		return len(mf.Metric) > c.opts.metricThreshold
-	case pb.MetricType_RAWHIST:
-		cnt := 0
-		for _, m := range mf.Metric {
-			cnt += len(m.RawHist.Samples)
-		}
-		return cnt > c.opts.sampleThreshold
-	default:
-		return false
 	}
 }
 
@@ -221,55 +206,6 @@ func (c *metricCollector) sqlWorker(ctx context.Context, exec ie.InternalExecuto
 			}
 		}
 	}
-}
-
-// sqlFromMetricFamily extracts a insert sql from a MetricFamily and the bytes.Buffer is
-// used to mitigate memory allocation
-func (c *metricCollector) sqlFromMetricFamily(mf *pb.MetricFamily, buf *bytes.Buffer) string {
-
-	buf.Reset()
-	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", METRIC_DB, mf.GetName()))
-	lblsBuf := new(bytes.Buffer)
-	writeValues := func(t string, v float64, lbls string) {
-		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%q, %f", t, v))
-		buf.WriteString(lbls)
-		buf.WriteString("),")
-	}
-
-	for _, metric := range mf.Metric {
-		for _, lbl := range metric.Label {
-			if lbl.GetName() == LBL_NODE { // Node type is int
-				lblsBuf.WriteString("," + lbl.GetValue())
-				continue
-			}
-			lblsBuf.WriteString(",\"")
-			lblsBuf.WriteString(lbl.GetValue())
-			lblsBuf.WriteRune('"')
-		}
-		lbls := lblsBuf.String()
-		lblsBuf.Reset()
-
-		switch mf.GetType() {
-		case pb.MetricType_COUNTER:
-			time := types.Datetime(metric.GetCollecttime()).String()
-			writeValues(time, metric.Counter.GetValue(), lbls)
-		case pb.MetricType_GAUGE:
-			time := types.Datetime(metric.GetCollecttime()).String()
-			writeValues(time, metric.Gauge.GetValue(), lbls)
-		case pb.MetricType_RAWHIST:
-			for _, sample := range metric.RawHist.Samples {
-				time := types.Datetime(sample.GetDatetime()).String()
-				writeValues(time, sample.GetValue(), lbls)
-			}
-		default:
-			panic(fmt.Sprintf("unsupported metric type %v", mf.GetType()))
-		}
-	}
-	sql := buf.String()
-	// metric has at least one row, so we can remove the tail comma safely
-	sql = sql[:len(sql)-1]
-	return sql
 }
 
 type reminder struct {
@@ -301,4 +237,98 @@ func (r *reminder) CleanAll() {
 	for _, timer := range r.registry {
 		timer.Stop()
 	}
+}
+
+type mfset struct {
+	mfs  []*pb.MetricFamily
+	typ  *pb.MetricType
+	rows int // how many rows it would take when flushing to db
+}
+
+func newMfset(mfs ...*pb.MetricFamily) *mfset {
+	set := &mfset{}
+	for _, mf := range mfs {
+		set.add(mf)
+	}
+	return set
+}
+
+func (s *mfset) add(mf *pb.MetricFamily) {
+	if s.typ == nil {
+		s.typ = mf.GetType().Enum()
+	}
+	switch *s.typ {
+	case pb.MetricType_COUNTER, pb.MetricType_GAUGE:
+		s.rows += len(mf.Metric)
+	case pb.MetricType_RAWHIST:
+		for _, m := range mf.Metric {
+			s.rows += len(m.RawHist.Samples)
+		}
+	}
+	s.mfs = append(s.mfs, mf)
+}
+
+func (s *mfset) shouldFlush(opts *collectorOpts) bool {
+	switch *s.typ {
+	case pb.MetricType_COUNTER, pb.MetricType_GAUGE:
+		return s.rows > opts.metricThreshold
+	case pb.MetricType_RAWHIST:
+		return s.rows > opts.sampleThreshold
+	default:
+		return false
+	}
+}
+
+func (s *mfset) reset() {
+	s.mfs = s.mfs[:0]
+	s.typ = nil
+	s.rows = 0
+}
+
+// getSql extracts a insert sql from a set of MetricFamily. the bytes.Buffer is
+// used to mitigate memory allocation
+func (s *mfset) getSql(buf *bytes.Buffer) string {
+	buf.Reset()
+	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", METRIC_DB, s.mfs[0].GetName()))
+	lblsBuf := new(bytes.Buffer)
+	writeValues := func(t string, v float64, lbls string) {
+		buf.WriteString("(")
+		buf.WriteString(fmt.Sprintf("%q, %f", t, v))
+		buf.WriteString(lbls)
+		buf.WriteString("),")
+	}
+	for _, mf := range s.mfs {
+		for _, metric := range mf.Metric {
+			// reserved labels
+			lblsBuf.WriteString(fmt.Sprintf(",%d,%q", mf.GetNode(), mf.GetRole()))
+			// custom labels
+			for _, lbl := range metric.Label {
+				lblsBuf.WriteString(",\"")
+				lblsBuf.WriteString(lbl.GetValue())
+				lblsBuf.WriteRune('"')
+			}
+			lbls := lblsBuf.String()
+			lblsBuf.Reset()
+
+			switch mf.GetType() {
+			case pb.MetricType_COUNTER:
+				time := types.Datetime(metric.GetCollecttime()).String()
+				writeValues(time, metric.Counter.GetValue(), lbls)
+			case pb.MetricType_GAUGE:
+				time := types.Datetime(metric.GetCollecttime()).String()
+				writeValues(time, metric.Gauge.GetValue(), lbls)
+			case pb.MetricType_RAWHIST:
+				for _, sample := range metric.RawHist.Samples {
+					time := types.Datetime(sample.GetDatetime()).String()
+					writeValues(time, sample.GetValue(), lbls)
+				}
+			default:
+				panic(fmt.Sprintf("unsupported metric type %v", mf.GetType()))
+			}
+		}
+	}
+	sql := buf.String()
+	// metric has at least one row, so we can remove the tail comma safely
+	sql = sql[:len(sql)-1]
+	return sql
 }

@@ -35,7 +35,8 @@ type MetricExporter interface {
 
 type metricExporter struct {
 	localCollector MetricCollector
-	internalLbls   []*pb.LabelPair
+	nodeid         int32
+	role           string
 	gather         prom.Gatherer
 	isRunning      int32
 	cancel         context.CancelFunc
@@ -44,14 +45,11 @@ type metricExporter struct {
 	now          func() int64
 }
 
-func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, role string) MetricExporter {
-	lbls := []*pb.LabelPair{
-		{Name: LBL_NODE, Value: node},
-		{Name: LBL_ROLE, Value: role},
-	}
+func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node int32, role string) MetricExporter {
 	m := &metricExporter{
 		localCollector: collector,
-		internalLbls:   lbls,
+		nodeid:         node,
+		role:           role,
 		gather:         gather,
 		now:            func() int64 { return int64(types.Now()) },
 	}
@@ -110,14 +108,10 @@ func (e *metricExporter) send(mfs []*pb.MetricFamily) {
 func (e *metricExporter) addCommonInfo(mfs []*pb.MetricFamily) {
 	now := e.now()
 	for _, mf := range mfs {
+		mf.Role = &e.role
+		mf.Node = &e.nodeid
 		for _, m := range mf.Metric {
 			m.Collecttime = &now
-			m.Label = append(m.Label, e.internalLbls...)
-			// keep the label order with the create table sql
-			// insert internal labels first, and leave the custom labels ordered
-			n := len(e.internalLbls)
-			m.Label = append(m.Label[:n], m.Label[:len(m.Label)-n]...)
-			copy(m.Label[:n], e.internalLbls)
 		}
 	}
 }

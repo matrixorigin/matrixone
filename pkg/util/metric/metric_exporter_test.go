@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
 	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/assert"
 )
 
 type dummyCollect struct {
@@ -43,7 +44,7 @@ func (e *dummyCollect) sendCnt() int {
 }
 
 func TestExporterCommonInfo(t *testing.T) {
-	exp := newMetricExporter(nil, nil, "0", "monolithic").(*metricExporter)
+	exp := newMetricExporter(nil, nil, 42, "monolithic").(*metricExporter)
 	mfs := []*pb.MetricFamily{
 		{Metric: []*pb.Metric{{}}},
 		{Metric: []*pb.Metric{{Label: []*pb.LabelPair{{Name: "color", Value: "blue"}}}}},
@@ -63,13 +64,15 @@ func TestExporterCommonInfo(t *testing.T) {
 	}
 	exp.addCommonInfo(mfs)
 	if mfs[0].Metric[0].Collecttime == nil {
-		t.Error("addCommonInfo adds not collecttime")
+		t.Error("addCommonInfo adds no collecttime")
 	}
 	time := mfs[0].Metric[0].GetCollecttime()
 
-	names := []string{LBL_NODE, LBL_ROLE, "color", "zaxis", "env"}
-	lblCnt := 2
+	names := []string{"color", "zaxis", "env"}
+	lblCnt := 0
 	for i, mf := range mfs {
+		assert.Equal(t, mf.GetNode(), int(42))
+		assert.Equal(t, mf.GetRole(), "monolithic")
 		name := names[:lblCnt]
 		for _, m := range mf.Metric {
 			if m.GetCollecttime() != time {
@@ -98,7 +101,7 @@ func TestExporter(t *testing.T) {
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		defer setExportToProm(setExportToProm(false))
 		reg := prom.NewRegistry()
-		iexp := newMetricExporter(reg, dumCollect, "0", "monolithic")
+		iexp := newMetricExporter(reg, dumCollect, 0, "monolithic")
 		exp = iexp.(*metricExporter)
 		exp.Start()
 		defer exp.Stop()

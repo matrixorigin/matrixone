@@ -1758,7 +1758,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 						//next statement
 						goto handleSucceeded
-					} else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok {
+					} else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok && nv.Value.String() == "1" {
 						err = mce.handleSelect1(nv)
 						if err != nil {
 							goto handleFailed
