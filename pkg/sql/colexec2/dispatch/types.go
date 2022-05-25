@@ -12,28 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package overload
+package dispatch
 
-const (
-	Top = iota
-	Join
-	Left
-	Limit
-	Merge
-	Order
-	Group
-	Output
-	Offset
-	Product
-	Restrict
-	Dispatch
-	Connector
-	Projection
-	Complement
-
-	MergeTop
-	MergeLimit
-	MergeOrder
-	MergeGroup
-	MergeOffset
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type Container struct {
+	i int
+}
+
+type Argument struct {
+	ctr  *Container
+	All  bool // dispatch batch to each consumer
+	Mmu  *guest.Mmu
+	vecs []*vector.Vector
+	Regs []*process.WaitRegister
+}

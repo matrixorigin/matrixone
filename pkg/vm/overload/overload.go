@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/left"
@@ -51,6 +52,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Offset:     offset.String,
 	Product:    product.String,
 	Restrict:   restrict.String,
+	Dispatch:   dispatch.String,
 	Connector:  connector.String,
 	Projection: projection.String,
 	Complement: complement.String,
@@ -74,6 +76,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Offset:     offset.Prepare,
 	Product:    product.Prepare,
 	Restrict:   restrict.Prepare,
+	Dispatch:   dispatch.Prepare,
 	Connector:  connector.Prepare,
 	Projection: projection.Prepare,
 	Complement: complement.Prepare,
@@ -97,6 +100,7 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Offset:     offset.Call,
 	Product:    product.Call,
 	Restrict:   restrict.Call,
+	Dispatch:   dispatch.Call,
 	Connector:  connector.Call,
 	Projection: projection.Call,
 	Complement: complement.Call,

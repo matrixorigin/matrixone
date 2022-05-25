@@ -53,17 +53,12 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	var bat *batch.Batch
 
 	defer func() {
-		if err != nil {
-			for i, in := range p.instructions {
-				if in.Op == vm.Connector {
-					arg := p.instructions[i].Arg.(*connector.Argument)
-					arg.Reg.Ch <- nil
-					break
-				}
+		for i, in := range p.instructions {
+			if in.Op == vm.Connector {
+				arg := p.instructions[i].Arg.(*connector.Argument)
+				arg.Reg.Ch <- nil
+				break
 			}
-		} else {
-			proc.Reg.InputBatch = nil
-			_, err = overload.Run(p.instructions, proc)
 		}
 	}()
 	if p.reg != nil { // used to handle some push-down request
@@ -94,17 +89,12 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	var err error
 
 	defer func() {
-		if err != nil {
-			for i, in := range p.instructions {
-				if in.Op == vm.Connector {
-					arg := p.instructions[i].Arg.(*connector.Argument)
-					arg.Reg.Ch <- nil
-					break
-				}
+		for i, in := range p.instructions {
+			if in.Op == vm.Connector {
+				arg := p.instructions[i].Arg.(*connector.Argument)
+				arg.Reg.Ch <- nil
+				break
 			}
-		} else {
-			proc.Reg.InputBatch = nil
-			_, err = overload.Run(p.instructions, proc)
 		}
 	}()
 	if p.reg != nil { // used to handle some push-down request
@@ -122,22 +112,17 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	return end, err
 }
 
-func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
+func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
 	defer func() {
-		if err != nil {
-			for i, in := range p.instructions {
-				if in.Op == vm.Connector {
-					arg := p.instructions[i].Arg.(*connector.Argument)
-					arg.Reg.Ch <- nil
-					break
-				}
+		for i, in := range p.instructions {
+			if in.Op == vm.Connector {
+				arg := p.instructions[i].Arg.(*connector.Argument)
+				arg.Reg.Ch <- nil
+				break
 			}
-		} else {
-			proc.Reg.InputBatch = nil
-			_, err = overload.Run(p.instructions, proc)
 		}
 		for i := 0; i < len(proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 			for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
