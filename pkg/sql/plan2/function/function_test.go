@@ -175,8 +175,8 @@ func TestFunctionOverloadID(t *testing.T) {
 		{fid: 3004, overloadId: 12345},
 	}
 	for _, tc := range tcs {
-		f := encodeOverloadID(tc.fid, tc.overloadId)
-		actualF, actualO := decodeOverloadID(f)
+		f := EncodeOverloadID(tc.fid, tc.overloadId)
+		actualF, actualO := DecodeOverloadID(f)
 		require.Equal(t, tc.fid, actualF)
 		require.Equal(t, tc.overloadId, actualO)
 	}
