@@ -73,11 +73,10 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 		logutil.Panicf("start server failed with %+v", err)
 	}
 
-	logutil.Debug("---------------InitMetric-")
 	ieFactory := func() ie.InternalExecutor {
 		return NewIternalExecutor(pu, pdHook)
 	}
-	metric.InitMetric(ieFactory, int64(pdHook.Id))
+	metric.InitMetric(ieFactory, pu, pdHook.Id, metric.ALL_IN_ONE_MODE)
 	return &MOServer{
 		addr: addr,
 		app:  app,

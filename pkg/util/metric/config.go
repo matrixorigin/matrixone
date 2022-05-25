@@ -15,13 +15,13 @@
 package metric
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
 )
 
@@ -32,9 +32,12 @@ var (
 	configExportToProm    int32 = envOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
 )
 
+func initConfigByParamaterUnit(pu *config.ParameterUnit) {
+	setExportToProm(pu.SV.GetMetricToProm())
+}
+
 func envOrDefaultBool(key string, defaultValue int32) int32 {
 	val, ok := os.LookupEnv(key)
-	fmt.Printf("[Metric] to prom: %s\n", val)
 	if !ok {
 		return defaultValue
 	}
@@ -80,6 +83,7 @@ func getGatherInterval() time.Duration {
 }
 
 // for tests
+
 func setRawHistBufLimit(new int32) int32 {
 	return atomic.SwapInt32(&configRawHistBufLimit, new)
 }

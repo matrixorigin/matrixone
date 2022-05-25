@@ -81,15 +81,20 @@ func (r *rawHist) assembleAndSend(buf []*pb.Sample) {
 
 type rawHist struct {
 	// Meta
-	compat_inner prom.Observer
-	desc         *prom.Desc
+
+	compat_inner prom.Observer       // a prometheus histogram struct
+	desc         *prom.Desc          // Used for Collector interface
 	opts         *prom.HistogramOpts // Desc has nothing in public, we have to hold the origin opts
 	labelPairs   []*dto.LabelPair
+
 	// For buf write
+
 	buf      []*pb.Sample
 	mutex    *sync.Mutex
 	exporter *MetricExporter // store a pointer to interface because newRawHist can be called before creating exporter
+
 	// For tests
+
 	now func() int64
 }
 
@@ -174,8 +179,15 @@ func (r *rawHist) Observe(value float64) {
 	r.record(r.now(), value)
 }
 
-func (r *rawHist) SetCompat() {
-
+// CancelToProm stops recording samples to prometheus.
+// rawHist is born with a innner prometheus histogram struct, CancelToProm can be used to remove the inner one when init metric
+func (r *rawHist) CancelToProm() {
+	if r.compat_inner == nil {
+		return
+	}
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.compat_inner = nil
 }
 
 // RawHistVec is a Collector that bundles a set of RawHist that all share the
@@ -190,25 +202,33 @@ type RawHistVec struct {
 // partitioned by the given label names.
 func NewRawHistVec(opts prom.HistogramOpts, labelNames []string) *RawHistVec {
 	mustValidLbls(opts.Name, opts.ConstLabels, labelNames)
-	var compat *prom.HistogramVec
-	if getExportToProm() {
-		compat = prom.NewHistogramVec(opts, labelNames)
-	}
 	desc := prom.NewDesc(
 		prom.BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
 		opts.Help,
 		labelNames,
 		opts.ConstLabels,
 	)
-	return &RawHistVec{
-		compat: compat,
-		inner: prom.NewMetricVec(desc, func(lvs ...string) prom.Metric {
-			var compat_observer prom.Observer
-			if compat != nil {
-				compat_observer = compat.WithLabelValues(lvs...)
-			}
-			return newRawHist(desc, compat_observer, &opts, lvs...)
-		}),
+	r := &RawHistVec{compat: prom.NewHistogramVec(opts, labelNames)}
+
+	inner := prom.NewMetricVec(desc, func(lvs ...string) prom.Metric {
+		var compat_observer prom.Observer
+		if r.compat != nil {
+			compat_observer = r.compat.WithLabelValues(lvs...)
+		}
+		return newRawHist(desc, compat_observer, &opts, lvs...)
+	})
+	r.inner = inner
+	return r
+}
+
+// at runtime, set if rawHist should record samples for prometheus histogram
+func (r *RawHistVec) CancelToProm() {
+	r.compat = nil
+
+	ch := make(chan prom.Metric, 100)
+	go func() { r.Collect(ch); close(ch) }()
+	for m := range ch {
+		m.(*rawHist).CancelToProm()
 	}
 }
 
@@ -220,7 +240,7 @@ func (v *RawHistVec) Describe(ch chan<- *prom.Desc) {
 	v.inner.Describe(ch)
 }
 
-func (v *RawHistVec) GetMetricWithLabelValues(lvs ...string) (prom.Observer, error) {
+func (v *RawHistVec) GetMetricWithLabelValues(lvs ...string) (Observer, error) {
 	metric, err := v.inner.GetMetricWithLabelValues(lvs...)
 	if metric != nil {
 		return metric.(prom.Observer), err

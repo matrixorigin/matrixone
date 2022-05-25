@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
@@ -48,11 +49,12 @@ var registry *prom.Registry
 var moExporter MetricExporter
 var moCollector MetricCollector
 
-func InitMetric(ieFactory func() ie.InternalExecutor, nodeId int64) {
+func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, nodeId int, role string) {
 	// init global variables
+	initConfigByParamaterUnit(pu)
 	registry = prom.NewRegistry()
 	moCollector = newMetricCollector(ieFactory)
-	moExporter = newMetricExporter(registry, moCollector, strconv.FormatInt(nodeId, 10), ALL_IN_ONE_MODE)
+	moExporter = newMetricExporter(registry, moCollector, strconv.Itoa(nodeId), role)
 
 	// register metrics and create tables
 	registerAllMetrics()
@@ -64,41 +66,49 @@ func InitMetric(ieFactory func() ie.InternalExecutor, nodeId int64) {
 	moCollector.Start()
 	moExporter.Start()
 
-	http.HandleFunc("/query", makeDebugHandleFunc(exec))
 	if getExportToProm() {
+		http.HandleFunc("/query", makeDebugHandleFunc(exec))
 		http.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
-	}
-	go func() {
-		if err := http.ListenAndServe("0.0.0.0:7777", nil); err != nil {
-			panic(fmt.Sprintf("debug server error: %v", err))
-		}
-	}()
-}
-
-func mustRegister(metric prom.Collector) {
-	toProm := metric
-	switch t := metric.(type) {
-	case *rawHist:
-		toProm = t.compat_inner.(prom.Collector)
-	case *RawHistVec:
-		toProm = t.compat
-	}
-	if getExportToProm() {
-		if err := prom.Register(toProm); err != nil {
-			// ignore duplicate register error
-			if _, ok := err.(prom.AlreadyRegisteredError); !ok {
-				panic(err)
+		addr := fmt.Sprintf("%s:%d", pu.SV.GetHost(), pu.SV.GetStatusPort())
+		go func() {
+			if err := http.ListenAndServe(addr, nil); err != nil {
+				panic(fmt.Sprintf("status server error: %v", err))
 			}
-		}
+		}()
+		logutil.Infof("[Metric] metrics scrape endpoint is ready at %s/metrics", addr)
 	}
-	registry.MustRegister(metric)
 }
 
-func registerAllMetrics() {
-	mustRegister(SQLLatencyObserverFactory)
-	mustRegister(StatementCounterFactory)
-	mustRegister(ProcessCollector)
-	mustRegister(HardwareStatsCollector)
+func mustRegiterToProm(collector prom.Collector) {
+	if err := prom.Register(collector); err != nil {
+		// ignore duplicate register error
+		if _, ok := err.(prom.AlreadyRegisteredError); !ok {
+			panic(err)
+		}
+	}
+}
+
+func mustRegister(collector prom.Collector) {
+	registry.MustRegister(collector)
+	toPromConfig := getExportToProm()
+	toPromCollector := collector
+	switch t := collector.(type) {
+	case *rawHist:
+		if !toPromConfig {
+			t.CancelToProm()
+		} else {
+			toPromCollector = t.compat_inner.(prom.Collector)
+		}
+	case *RawHistVec:
+		if !toPromConfig {
+			t.CancelToProm()
+		} else {
+			toPromCollector = t.compat
+		}
+	}
+	if toPromConfig {
+		mustRegiterToProm(toPromCollector)
+	}
 }
 
 // initTables gathers all metrics and extract metadata to format create table sql
@@ -145,6 +155,7 @@ func createTableSqlFromMetricFamily(mf *dto.MetricFamily, buf *bytes.Buffer) str
 	return buf.String()
 }
 
+// TODO: remove this debug handler
 func makeDebugHandleFunc(exec ie.InternalExecutor) func(w http.ResponseWriter, r *http.Request) {
 	tryExec := func(sql string) {
 		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {

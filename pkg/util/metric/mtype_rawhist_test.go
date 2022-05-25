@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/stretchr/testify/assert"
 )
 
 type dummyExp struct {
@@ -38,6 +39,24 @@ func (e *dummyExp) ExportMetricFamily(ctx context.Context, mf *pb.MetricFamily) 
 	e.mfs = append(e.mfs, mf)
 	e.Done()
 	return nil
+}
+
+func TestRawHistCancel(t *testing.T) {
+	rawFactory := NewRawHistVec(prom.HistogramOpts{
+		Subsystem: "test",
+		Name:      "test_raw",
+		Help:      "test raw hist metric",
+	}, []string{"d1"})
+	x := rawFactory.WithLabelValues("d1-x").(*rawHist)
+	y := rawFactory.WithLabelValues("d1-y").(*rawHist)
+	z := rawFactory.WithLabelValues("d1-z").(*rawHist)
+	assert.NotNil(t, x.compat_inner)
+	assert.NotNil(t, y.compat_inner)
+	assert.NotNil(t, z.compat_inner)
+	rawFactory.CancelToProm()
+	assert.Nil(t, x.compat_inner)
+	assert.Nil(t, y.compat_inner)
+	assert.Nil(t, z.compat_inner)
 }
 
 func TestRawHistVec(t *testing.T) {
@@ -129,26 +148,21 @@ func TestRawHistVec(t *testing.T) {
 }
 
 func TestRawHistVecPanic(t *testing.T) {
+	// contains occuppied lables
+	assert.Panics(t, func() {
+		NewRawHistVec(HistogramOpts{ConstLabels: prom.Labels{"node": "77"}}, nil)
+	})
 	rawFactory := NewRawHistVec(prom.HistogramOpts{}, []string{"d1", "d2"})
 
+	// wrong number of labels
 	for _, lvs := range [][]string{
 		{},
 		{"1"},
 		{"1", "2", "3"},
 	} {
 		_, err := rawFactory.GetMetricWithLabelValues(lvs...)
-		if err == nil {
-			t.Errorf("mismatched label values was accepted")
-		}
-
-		func() {
-			defer func() {
-				if r := recover(); r == nil {
-					t.Errorf("mismatched label values was accepted")
-				}
-			}()
-			var _ = rawFactory.WithLabelValues(lvs...)
-		}()
+		assert.NotNil(t, err, "mismatched labels are accepted")
+		assert.Panics(t, func() { rawFactory.WithLabelValues(lvs...) })
 	}
 }
 
