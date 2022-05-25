@@ -19,6 +19,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"math"
 	"os"
 	"runtime"
@@ -106,9 +107,10 @@ type SharePart struct {
 	simdCsvLineArray [][]string
 
 	//storage
-	dbHandler    engine.Database
-	tableHandler engine.Relation
-	txnHandler   *TxnHandler
+	dbHandler      engine.Database
+	tableHandler   engine.Relation
+	txnHandler     *TxnHandler
+	oneTxnPerBatch bool
 
 	//result of load
 	result *LoadResult
@@ -502,6 +504,7 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.dbHandler = handler.dbHandler
 	wHandler.tableHandler = handler.tableHandler
 	wHandler.txnHandler = handler.txnHandler
+	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
@@ -1331,8 +1334,22 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
+		txnHandler := handler.txnHandler
 		if !handler.skipWriteBatch {
-			err = handler.tableHandler.Write(handler.timestamp, handler.batchData, handler.txnHandler.GetTxn().GetCtx())
+			if handler.oneTxnPerBatch {
+				txnHandler = InitTxnHandler(config.StorageEngine)
+				_, err = txnHandler.StartByAutocommitIfNeeded()
+				if err != nil {
+					return err
+				}
+			}
+			err = handler.tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+			if handler.oneTxnPerBatch {
+				err = txnHandler.CommitAfterAutocommitOnly()
+				if err != nil {
+					return err
+				}
+			}
 		}
 		handler.ThreadInfo.SetCnt(0)
 		if err == nil {
@@ -1431,8 +1448,22 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				wait_a := time.Now()
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
+				txnHandler := handler.txnHandler
 				if !handler.skipWriteBatch {
-					err = handler.tableHandler.Write(handler.timestamp, handler.batchData, handler.txnHandler.GetTxn().GetCtx())
+					if handler.oneTxnPerBatch {
+						txnHandler = InitTxnHandler(config.StorageEngine)
+						_, err = txnHandler.StartByAutocommitIfNeeded()
+						if err != nil {
+							return err
+						}
+					}
+					err = handler.tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+					if handler.oneTxnPerBatch {
+						err = txnHandler.CommitAfterAutocommitOnly()
+						if err != nil {
+							return err
+						}
+					}
 				}
 				handler.ThreadInfo.SetCnt(0)
 				if err == nil {
@@ -1555,6 +1586,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			dbHandler:            dbHandler,
 			tableHandler:         tableHandler,
 			txnHandler:           ses.GetTxnHandler(),
+			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
 			lineCount:            0,
 			batchSize:            curBatchSize,
 			result:               result,
