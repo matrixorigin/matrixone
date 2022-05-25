@@ -89,6 +89,7 @@ func TestParseStringToDecimal64(t *testing.T) {
 	d39, _ := ParseStringToDecimal64("-0.12345678999", 10, 10)
 	d40, _ := ParseStringToDecimal64("-12.345678999e-2", 10, 10)
 	d41, _ := ParseStringToDecimal64("12.345678999e-2", 10, 10)
+	d42, _ := ParseStringToDecimal64("0.12345E-3", 10, 5)
 
 	require.Equal(t, Decimal64(1234), d0)
 	require.Equal(t, Decimal64(12340), d1)
@@ -140,6 +141,7 @@ func TestParseStringToDecimal64(t *testing.T) {
 	require.Equal(t, Decimal64(-1234567900), d39)
 	require.Equal(t, Decimal64(-1234567900), d40)
 	require.Equal(t, Decimal64(1234567900), d41)
+	require.Equal(t, Decimal64(12), d42)
 	require.Error(t, err8)
 	require.Error(t, err9)
 }

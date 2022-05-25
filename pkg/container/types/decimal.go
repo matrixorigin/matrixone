@@ -328,7 +328,7 @@ func NegDecimal128(a Decimal128) (result Decimal128) {
 }
 
 // this implementation is bad, tangling, but it works,
-// wrote 50+ test cases, hoping to mitigate the pain of  my conscience, but it didn't
+// wrote 50+ test cases, hoping to mitigate the pain of  my conscience, it didn't
 // I failed to find an elegant approach to support scientific notation, what a pathetic loser...
 // decimalStringPreprocess convert input decimal string to its internal representation form,
 // for example:  			Decimal(10, 5)    --------> 	converted result
@@ -340,6 +340,7 @@ func NegDecimal128(a Decimal128) (result Decimal128) {
 // 							"0.12345e5"							"1234500000"
 //							"0.12345e6"							err == "out of range"
 // 							"0.12345e-3"						"12"
+// 							"0.12345E-3"						"12"
 //							"0.126"								"12" carry == true
 func decimalStringPreprocess(s string, precision, scale int32) (result []byte, carry bool, neg bool, err error) {
 	if s == "" {
@@ -352,11 +353,11 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 	if strings.Contains(s, "e") {
 		s2 := strings.Split(s, "e")
 		if len(s2) > 2 {
-			return result, carry, neg, errors.New("invalid decimal string")
+			return []byte(""), false, false, errors.New("invalid decimal string")
 		}
 		exponent, err = strconv.Atoi(s2[1])
 		if err != nil {
-			return result, carry, neg, errors.New("invalid decimal string")
+			return []byte(""), false, false, errors.New("invalid decimal string")
 		}
 		s = s2[0]
 	}
@@ -422,7 +423,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 			}
 		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123.45" is invalid for Decimal(5, 3)
-			return result, carry, neg, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
+			return []byte(""), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
 		}
 		if len(part1Bytes) > int(scale) {
 			for i := int(scale); i < len(part1Bytes); i++ {
