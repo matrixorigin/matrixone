@@ -526,8 +526,8 @@ func (c *compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Proc.UnixTime = c.proc.UnixTime
 	rs.Proc.Snapshot = c.proc.Snapshot
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op:  overload.MergeTop,
-		Arg: constructMergeTop(n, c.proc),
+		Op:  overload.MergeOffset,
+		Arg: constructMergeOffset(n, c.proc),
 	})
 	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
