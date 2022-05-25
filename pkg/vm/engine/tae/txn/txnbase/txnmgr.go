@@ -135,12 +135,18 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 	txn.SetError(txn.PrepareCommit())
 }
 
+func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
+	if err := txn.PreApplyCommit(); err != nil {
+		mgr.OnException(err)
+	}
+}
+
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 	_ = txn.PrepareRollback()
 }
 
 // TODO
-func (mgr *TxnManager) onPreparing(items ...interface{}) {
+func (mgr *TxnManager) onPreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
@@ -171,6 +177,8 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 				_ = op.Txn.ToRollbackingLocked(ts)
 				op.Txn.Unlock()
 				mgr.onPreparRollback(op.Txn)
+			} else {
+				mgr.onPreApplyCommit(op.Txn)
 			}
 		} else {
 			mgr.onPreparRollback(op.Txn)
@@ -183,7 +191,7 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 }
 
 // TODO
-func (mgr *TxnManager) onCommit(items ...interface{}) {
+func (mgr *TxnManager) onCommit(items ...any) {
 	var err error
 	now := time.Now()
 	for _, item := range items {

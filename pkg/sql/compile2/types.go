@@ -64,6 +64,9 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic int
 
+	// used for dispatch
+	DispatchAll bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source

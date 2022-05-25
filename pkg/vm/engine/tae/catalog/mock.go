@@ -120,7 +120,7 @@ func (it *mockSegIt) Next()                      {}
 func (it *mockSegIt) Close() error               { return nil }
 func (it *mockSegIt) GetSegment() handle.Segment { return nil }
 
-func (h *mockDBHandle) CreateRelation(def interface{}) (rel handle.Relation, err error) {
+func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) {
 	schema := def.(*Schema)
 	tbl, err := h.entry.CreateTableEntry(schema, h.Txn, nil)
 	if err != nil {

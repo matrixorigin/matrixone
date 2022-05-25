@@ -12,13 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package errors
+package dispatch
 
-import "errors"
-
-var (
-	ErrTypeNotSupported = errors.New("index: invalid column type")
-	ErrKeyNotFound      = errors.New("index: key not found")
-	ErrKeyDuplicate     = errors.New("index: duplicate key occurred")
-	ErrTypeMismatch     = errors.New("index: type mismatch")
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type Container struct {
+	i int
+}
+
+type Argument struct {
+	ctr  *Container
+	All  bool // dispatch batch to each consumer
+	Mmu  *guest.Mmu
+	vecs []*vector.Vector
+	Regs []*process.WaitRegister
+}

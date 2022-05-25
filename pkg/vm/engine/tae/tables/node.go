@@ -72,6 +72,16 @@ func (node *appendableNode) TryPin() (base.INodeHandle, error) {
 	return node.mgr.TryPin(node.Node, time.Second)
 }
 
+func (node *appendableNode) DoWithPin(do func() error) (err error) {
+	h, err := node.TryPin()
+	if err != nil {
+		return
+	}
+	defer h.Close()
+	err = do()
+	return
+}
+
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 	if coarse {
 		readLock := node.block.mvcc.GetSharedLock()
@@ -168,7 +178,7 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 		return data.ErrStaleRequest
 	}
 	masks := make(map[uint16]*roaring.Bitmap)
-	vals := make(map[uint16]map[uint32]interface{})
+	vals := make(map[uint16]map[uint32]any)
 	readLock := mvcc.GetSharedLock()
 	for i := range node.block.meta.GetSchema().ColDefs {
 		chain := mvcc.GetColumnChain(uint16(i))

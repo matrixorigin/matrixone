@@ -26,6 +26,7 @@ const (
 	Offset
 	Product
 	Restrict
+	Dispatch
 	Connector
 	Projection
 	Complement

@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func CompareGeneric(a, b interface{}, t types.Type) int {
+func CompareGeneric(a, b any, t types.Type) int {
 	switch t.Oid {
 	case types.T_int8:
 		if a.(int8) > b.(int8) {

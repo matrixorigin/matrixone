@@ -454,7 +454,7 @@ func TestReplay(t *testing.T) {
 	s.Close()
 
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		t.Logf("%s", payload)
 	}
 	r := newReplayer(a)
@@ -663,7 +663,7 @@ func TestLoad(t *testing.T) {
 
 	fmt.Printf("\n***********replay***********\n\n")
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		fmt.Printf("%s", payload)
 	}
 	err = s.Replay(a)

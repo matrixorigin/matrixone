@@ -91,7 +91,7 @@ func (table *taskTable) UnregisterTask(task tasks.Task) error {
 	return nil
 }
 
-func (table *taskTable) OnExecDone(v interface{}) {
+func (table *taskTable) OnExecDone(v any) {
 	task := v.(tasks.Task)
 	err := table.UnregisterTask(task)
 	if err != nil {

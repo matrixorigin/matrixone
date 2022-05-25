@@ -50,7 +50,7 @@ type IBatchReader interface {
 type IVectorReader interface {
 	io.Closer
 	GetType() VectorType
-	GetValue(int) (interface{}, error)
+	GetValue(int) (any, error)
 	IsNull(int) (bool, error)
 	HasNull() bool
 	NullCnt() int

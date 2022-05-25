@@ -57,7 +57,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		if n.ctr.seen >= n.Limit {
 			proc.Reg.InputBatch = nil
 			bat.Clean(proc.Mp)
-			return false, nil
+			return true, nil
 		}
 		newSeen := n.ctr.seen + uint64(len(bat.Zs))
 		if newSeen < n.Limit {

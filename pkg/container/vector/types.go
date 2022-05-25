@@ -61,9 +61,8 @@ type Vector struct {
 	Nsp  *nulls.Nulls // nulls list
 
 	// some attributes for const vector (a vector with a lot of rows of a same const value)
-	IsConst     bool
-	IsConstNull bool
-	Length      int
+	IsConst bool
+	Length  int
 }
 
 // emptyInterface is the header for an interface{} value.

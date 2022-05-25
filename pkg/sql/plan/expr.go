@@ -687,8 +687,12 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 	switch val.Kind() {
 	case constant.Unknown:
 		return nil, nil
+	case constant.Bool:
+		return constant.BoolVal(val), nil
 	case constant.Int:
 		switch typ.Oid {
+		case types.T_bool:
+			return types.ParseValueToBool(num)
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			if num.Negative() {
 				v, _ := constant.Uint64Val(val)

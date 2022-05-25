@@ -56,7 +56,7 @@ func (mgr *nodeManager) String() string {
 	for _, node := range mgr.nodes {
 		id := node.GetID()
 		node.RLock()
-		s = fmt.Sprintf("%s\n\t%s | %s | Size: %d ", s, id.BlockString(), base.NodeStateString(mgr.nodes[node.GetID()].GetState()), mgr.nodes[node.GetID()].Size())
+		s = fmt.Sprintf("%s\n\t%s | %s | Size: %d ", s, id.String(), base.NodeStateString(mgr.nodes[node.GetID()].GetState()), mgr.nodes[node.GetID()].Size())
 		if node.GetState() == base.NODE_LOADED {
 			loaded++
 		}

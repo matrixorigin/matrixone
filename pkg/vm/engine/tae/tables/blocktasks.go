@@ -43,7 +43,7 @@ func (blk *dataBlock) FlushColumnDataClosure(ts uint64, colIdx int, colData *gve
 	}
 }
 
-func (blk *dataBlock) ABlkFlushDataClosure(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) tasks.FuncT {
+func (blk *dataBlock) ABlkFlushDataClosure(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) tasks.FuncT {
 	return func() error {
 		return blk.ABlkFlushData(ts, bat, masks, vals, deletes)
 	}
@@ -177,7 +177,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	return
 }
 
-func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) (err error) {
+func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
 	flushTs := blk.node.GetBlockMaxFlushTS()
 	if ts <= flushTs {
 		logutil.Infof("FLUSH ABLK | [%s] | CANCELLED | (Stale Request: Already Flushed)", blk.meta.String())

@@ -82,6 +82,7 @@ message Const {
 		int64 ival		= 2;
 		double dval 	= 3;
 		string sval		= 4;
+		bool bval 		= 5;
 	}
 }
 
@@ -183,8 +184,29 @@ enum CompressType {
 
 message DefaultExpr {
 	bool exist 		= 1;
-	Expr value 		= 2;
+	ConstantValue value 		= 2;
 	bool is_null 	= 3;
+}
+
+message ConstantValue {
+	oneof constantValue {
+		int32 unknown_v = 1;
+		int64 int64_v = 2;
+		int64 decimal64_v = 3;
+		decimal128 decimal128_v = 4;
+		uint64 uint64_v = 5;
+		float float32_v = 6;
+		double float64_v = 7;
+		int32 date_v = 8;
+		int64 dateTime_v = 9;
+		int64 timeStamp_v = 10;
+		string string_v = 11;
+	}
+}
+
+message decimal128 {
+	int64 Lo = 1;
+	int64 Hi = 2;
 }
 
 message ColDef {

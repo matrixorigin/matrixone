@@ -18,11 +18,16 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/mergelimit"
@@ -32,10 +37,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -60,6 +67,28 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &limit.Argument{
 			Limit: arg.Limit,
 		}
+	case *join.Argument:
+		rin.Arg = &join.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *left.Argument:
+		rin.Arg = &left.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *product.Argument:
+		rin.Arg = &product.Argument{
+			Result: arg.Result,
+		}
+	case *complement.Argument:
+		rin.Arg = &complement.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
 	case *offset.Argument:
 		rin.Arg = &offset.Argument{
 			Offset: arg.Offset,
@@ -81,6 +110,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Data: arg.Data,
 			Func: arg.Func,
 		}
+	case *connector.Argument:
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
 	}
@@ -115,6 +145,88 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 		Fs:    fs,
 		Limit: vec.Col.([]int64)[0],
 	}
+}
+
+func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
+	result := make([]join.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	conds := make([][]join.Condition, 2)
+	{
+		conds[0] = make([]join.Condition, len(n.OnList))
+		conds[1] = make([]join.Condition, len(n.OnList))
+	}
+	for i, expr := range n.OnList {
+		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
+		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
+		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
+		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+	}
+	return &join.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
+	}
+}
+
+func constructLeft(n *plan.Node, proc *process.Process) *left.Argument {
+	result := make([]left.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	conds := make([][]left.Condition, 2)
+	{
+		conds[0] = make([]left.Condition, len(n.OnList))
+		conds[1] = make([]left.Condition, len(n.OnList))
+	}
+	for i, expr := range n.OnList {
+		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
+		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
+		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
+		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+	}
+	return &left.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
+	}
+}
+
+func constructProduct(n *plan.Node, proc *process.Process) *product.Argument {
+	result := make([]product.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &product.Argument{Result: result}
+}
+
+func constructComplement(n *plan.Node, proc *process.Process) *complement.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	conds := make([][]complement.Condition, 2)
+	{
+		conds[0] = make([]complement.Condition, len(n.OnList))
+		conds[1] = make([]complement.Condition, len(n.OnList))
+	}
+	for i, expr := range n.OnList {
+		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
+		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
+		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
+		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+	}
+	return &complement.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
+	}
+
 }
 
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
@@ -152,17 +264,19 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 
 func constructGroup(n *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
-	/*
-		for i, expr := range n.AggList {
-			switch f := expr.Expr.(type) {
-			case *plan.Expr_F:
-				fun, err := function.GetFunctionByIndex(int(f.F.Func.Schema), int(f.F.Func.Obj))
-				if err != nil {
-				}
-				fun.Flag
+	for i, expr := range n.AggList {
+		if f, ok := expr.Expr.(*plan.Expr_F); ok {
+			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
+			if err != nil {
+				panic(err)
+			}
+			aggs[i] = aggregate.Aggregate{
+				Op: fun.AggregateInfo,
+				E:  f.F.Args[0],
 			}
 		}
-	*/
+	}
+
 	return &group.Argument{
 		Aggs:  aggs,
 		Exprs: n.GroupBy,
@@ -224,4 +338,55 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 	return &mergeorder.Argument{
 		Fs: fs,
 	}
+}
+
+func constructJoinResult(expr *plan.Expr) (int32, int32) {
+	e, ok := expr.Expr.(*plan.Expr_Col)
+	if !ok {
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
+	}
+	return e.Col.RelPos, e.Col.ColPos
+}
+
+func constructJoinCondition(expr *plan.Expr) (int32, types.Type, int32, types.Type) {
+	e, ok := expr.Expr.(*plan.Expr_F)
+	if !ok {
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+	}
+	left, ok := e.F.Args[0].Expr.(*plan.Expr_Col)
+	if !ok {
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
+	}
+	right, ok := e.F.Args[1].Expr.(*plan.Expr_Col)
+	if !ok {
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
+	}
+	if left.Col.RelPos == 0 {
+		return left.Col.ColPos, types.Type{
+				Oid:       types.T(e.F.Args[0].Typ.Id),
+				Size:      e.F.Args[0].Typ.Size,
+				Width:     e.F.Args[0].Typ.Width,
+				Scale:     e.F.Args[0].Typ.Scale,
+				Precision: e.F.Args[0].Typ.Precision,
+			}, right.Col.ColPos, types.Type{
+				Oid:       types.T(e.F.Args[1].Typ.Id),
+				Size:      e.F.Args[1].Typ.Size,
+				Width:     e.F.Args[1].Typ.Width,
+				Scale:     e.F.Args[1].Typ.Scale,
+				Precision: e.F.Args[1].Typ.Precision,
+			}
+	}
+	return right.Col.ColPos, types.Type{
+			Oid:       types.T(e.F.Args[1].Typ.Id),
+			Size:      e.F.Args[1].Typ.Size,
+			Width:     e.F.Args[1].Typ.Width,
+			Scale:     e.F.Args[1].Typ.Scale,
+			Precision: e.F.Args[1].Typ.Precision,
+		}, left.Col.ColPos, types.Type{
+			Oid:       types.T(e.F.Args[0].Typ.Id),
+			Size:      e.F.Args[0].Typ.Size,
+			Width:     e.F.Args[0].Typ.Width,
+			Scale:     e.F.Args[0].Typ.Scale,
+			Precision: e.F.Args[0].Typ.Precision,
+		}
 }

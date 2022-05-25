@@ -70,6 +70,14 @@ func DecodeFixed[T any](v []byte) T {
 	return *(*T)(unsafe.Pointer(&v[0]))
 }
 
+func DecodeBool(v []byte) bool {
+	return *(*bool)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeBool(v bool) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
+}
+
 func EncodeInt8(v int8) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
 }
@@ -204,8 +212,16 @@ func DecodeFixedSlice[T any](v []byte, sz int) (ret []T) {
 	return
 }
 
+func EncodeBoolSlice(v []bool) []byte {
+	return *(*[]byte)(unsafe.Pointer(&v))
+}
+
 func EncodeInt8Slice(v []int8) []byte {
 	return *(*[]byte)(unsafe.Pointer(&v))
+}
+
+func DecodeBoolSlice(v []byte) []bool {
+	return *(*[]bool)(unsafe.Pointer(&v))
 }
 
 func DecodeInt8Slice(v []byte) []int8 {

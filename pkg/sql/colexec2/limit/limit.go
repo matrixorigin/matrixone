@@ -34,7 +34,10 @@ func Prepare(_ *process.Process, _ interface{}) error {
 // returning only the first n tuples from its input
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
 	n := arg.(*Argument)

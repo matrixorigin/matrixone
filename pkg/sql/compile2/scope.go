@@ -16,16 +16,18 @@ package compile2
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/mergeoffset"
@@ -52,7 +54,7 @@ func (s *Scope) DropDatabase(ts uint64, snapshot engine.Snapshot, engine engine.
 	return engine.Delete(ts, dbName, snapshot)
 }
 
-func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
+func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine, dbName string) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -62,7 +64,10 @@ func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.E
 	planDefs := qry.GetTableDef().GetDefs()
 	exeDefs := planDefsToExeDefs(planDefs)
 
-	dbSource, err := engine.Database(qry.GetDatabase(), nil)
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	dbSource, err := engine.Database(dbName, snapshot)
 	if err != nil {
 		return err
 	}
@@ -73,7 +78,7 @@ func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := engine.Database(dbName, nil)
+	dbSource, err := engine.Database(dbName, snapshot)
 	if err != nil {
 		return err
 	}
@@ -91,7 +96,7 @@ func (s *Scope) DropIndex(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
-	exeDefs := make([]engine.TableDef, 0, len(planDefs))
+	exeDefs := make([]engine.TableDef, len(planDefs))
 	for i, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
 		case *plan.TableDef_DefType_Pk:
@@ -120,7 +125,7 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 }
 
 func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
-	exeCols := make([]engine.TableDef, 0, len(planCols))
+	exeCols := make([]engine.TableDef, len(planCols))
 	for i, col := range planCols {
 		var alg compress.T
 		switch col.Alg {
@@ -143,7 +148,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 				},
 				Default: engine.DefaultExpr{
 					Exist:  col.GetDefault().GetExist(),
-					Value:  col.GetDefault().GetValue(),
+					Value:  planValToExeVal(col.GetDefault().GetValue(), colTyp.GetId()),
 					IsNull: col.GetDefault().GetIsNull(),
 				},
 				Primary: col.GetPrimary(),
@@ -151,6 +156,69 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 		}
 	}
 	return exeCols
+}
+
+func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
+	switch v := value.GetConstantValue().(type) {
+	case *plan.ConstantValue_Int64V:
+		switch typ {
+		case plan.Type_INT8:
+			return int8(v.Int64V)
+		case plan.Type_INT16:
+			return int16(v.Int64V)
+		case plan.Type_INT32:
+			return int32(v.Int64V)
+		case plan.Type_INT64:
+			return v.Int64V
+		}
+	case *plan.ConstantValue_Uint64V:
+		switch typ {
+		case plan.Type_UINT8:
+			return uint8(v.Uint64V)
+		case plan.Type_UINT16:
+			return uint16(v.Uint64V)
+		case plan.Type_UINT32:
+			return uint32(v.Uint64V)
+		case plan.Type_UINT64:
+			return v.Uint64V
+		}
+	case *plan.ConstantValue_Float32V:
+		return v.Float32V
+	case *plan.ConstantValue_Float64V:
+		switch typ {
+		case plan.Type_FLOAT32:
+			return float32(v.Float64V)
+		case plan.Type_FLOAT64:
+			return v.Float64V
+		}
+	case *plan.ConstantValue_StringV:
+		return v.StringV
+	case *plan.ConstantValue_DateV:
+		return types.Date(v.DateV)
+	case *plan.ConstantValue_DateTimeV:
+		return types.Datetime(v.DateTimeV)
+	case *plan.ConstantValue_TimeStampV:
+		return types.Timestamp(v.TimeStampV)
+	case *plan.ConstantValue_Decimal64V:
+		return types.Decimal64(v.Decimal64V)
+	case *plan.ConstantValue_Decimal128V:
+		return types.Decimal128{
+			Lo: v.Decimal128V.Lo,
+			Hi: v.Decimal128V.Hi,
+		}
+	}
+	return nil
+}
+
+// Print is to format scope list
+func PrintScope(prefix []byte, ss []*Scope) {
+	for _, s := range ss {
+		if s.Magic == Merge || s.Magic == Remote {
+			PrintScope(append(prefix, '\t'), s.PreScopes)
+		}
+		p := pipeline2.NewMerge(s.Instructions, nil)
+		fmt.Printf("%s:%v %v\n", prefix, s.Magic, p)
+	}
 }
 
 // Get the number of cpu's available for the current scope
@@ -213,7 +281,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 		}
 	}
 	p := pipeline2.NewMerge(s.Instructions, s.Reg)
-	if _, err := p.RunMerge(s.Proc); err != nil {
+	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
 	// check sub-goroutine's error
@@ -225,6 +293,71 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	return nil
 }
 
+func (s *Scope) DispatchRun(e engine.Engine) error {
+	mcpu := s.NumCPU()
+	ss := make([]*Scope, mcpu)
+	regs := make([][]*process.WaitRegister, len(s.PreScopes))
+	{
+		for i := range regs {
+			regs[i] = make([]*process.WaitRegister, mcpu)
+		}
+	}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Merge,
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
+		ss[i].Proc.UnixTime = s.Proc.UnixTime
+		ss[i].Proc.Snapshot = s.Proc.Snapshot
+		ss[i].Proc.Cancel = cancel
+		ss[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(s.PreScopes))
+		for j := 0; j < len(s.PreScopes); j++ {
+			reg := &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+			regs[j][i] = reg
+			ss[i].Proc.Reg.MergeReceivers[j] = reg
+		}
+		ss[i].Instructions = append(ss[i].Instructions, dupInstruction(s.Instructions[0]))
+	}
+	for i := range s.PreScopes {
+		s.PreScopes[i].Instructions[len(s.PreScopes[i].Instructions)-1] = vm.Instruction{
+			Op: overload.Dispatch,
+			Arg: &dispatch.Argument{
+				Regs: regs[i],
+				Mmu:  s.Proc.Mp.Gm,
+				All:  s.PreScopes[i].DispatchAll,
+			},
+		}
+	}
+	s.PreScopes = append(s.PreScopes, ss...)
+	s.Instructions[0] = vm.Instruction{
+		Op:  overload.Merge,
+		Arg: &merge.Argument{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	for i := range ss {
+		s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+			Ctx: ctx,
+			Ch:  make(chan *batch.Batch, 1),
+		}
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: overload.Connector,
+			Arg: &connector.Argument{
+				Mmu: s.Proc.Mp.Gm,
+				Reg: s.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return s.MergeRun(e)
+}
+
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
 func (s *Scope) RemoteRun(e engine.Engine) error {
 	return s.ParallelRun(e)
@@ -234,6 +367,9 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 func (s *Scope) ParallelRun(e engine.Engine) error {
 	var rds []engine.Reader
 
+	if s.DataSource == nil {
+		return s.DispatchRun(e)
+	}
 	mcpu := s.NumCPU()
 	snap := engine.Snapshot(s.Proc.Snapshot)
 	{
@@ -365,9 +501,6 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 						},
 					})
 				}
-			//case overload.Join:
-			//case overload.Left:
-			//case overload.Complement:
 			default:
 				for i := range ss {
 					ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
@@ -401,7 +534,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 	}
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op: vm.Connector,
+			Op: overload.Connector,
 			Arg: &connector.Argument{
 				Mmu: s.Proc.Mp.Gm,
 				Reg: s.Proc.Reg.MergeReceivers[i],

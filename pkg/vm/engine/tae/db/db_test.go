@@ -21,10 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,7 +49,6 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
-	idxCommon.MockIndexBufferManager = buffer.NewNodeManager(1024*1024*150, nil)
 	return db
 }
 
@@ -469,7 +465,7 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			err = rel.RangeDelete(id, offset, offset)
 			assert.Nil(t, err)
-			err = rel.Update(id, offset+1, uint16(schema.PrimaryKey), int32(99))
+			err = rel.Update(id, offset+1, 3, int64(99))
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
@@ -1351,7 +1347,7 @@ func TestDelete1(t *testing.T) {
 		pkVal := compute.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Error(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -1392,7 +1388,7 @@ func TestDelete1(t *testing.T) {
 		v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Equal(t, data.ErrNotFound, err)
 		assert.Nil(t, txn.Commit())
 	}
 	{
@@ -1410,7 +1406,7 @@ func TestDelete1(t *testing.T) {
 		v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, txnbase.ErrNotFound, err)
+		assert.Equal(t, data.ErrNotFound, err)
 	}
 	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }
@@ -1932,6 +1928,203 @@ func TestScan2(t *testing.T) {
 	}
 	t.Log(actualRows)
 	assert.Equal(t, int(rows)-1, actualRows)
+
+	assert.NoError(t, txn.Commit())
+}
+
+func TestUpdatePrimaryKey(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	bat := catalog.MockData(schema, 100)
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.Update(id, row, uint16(schema.PrimaryKey), v)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
+func TestADA(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 1000
+	schema.PrimaryKey = 3
+	bat := catalog.MockData(schema, 1)
+
+	// Append to a block
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// Delete a row from the block
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
+	filter := handle.NewEQFilter(v)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// Append a row with the same primary key
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	it := rel.MakeBlockIt()
+	rows := 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		vec := view.ApplyDeletes()
+		rows += vector.Length(vec)
+		it.Next()
+	}
+	assert.Equal(t, 1, rows)
+
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+
+	it = rel.MakeBlockIt()
+	rows = 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		vec := view.ApplyDeletes()
+		rows += vector.Length(vec)
+		it.Next()
+	}
+	assert.Equal(t, 1, rows)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.Error(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+
+	err = rel.Append(bat)
+	assert.Error(t, err)
+
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.Error(t, err)
+	id, row, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	err = rel.RangeDelete(id, row, row)
+	assert.NoError(t, err)
+	_, _, err = rel.GetByFilter(filter)
+	assert.Error(t, err)
+
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	it = rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+		assert.NoError(t, err)
+		assert.Equal(t, 4, view.Length())
+		assert.Equal(t, uint64(3), view.DeleteMask.GetCardinality())
+		it.Next()
+	}
+	assert.NoError(t, txn.Commit())
+}
+
+func TestUpdateByFilter(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.PrimaryKey = 3
+	bat := catalog.MockData(schema, 100)
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(v)
+	err = rel.UpdateByFilter(filter, 2, int32(2222))
+	assert.NoError(t, err)
+
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	cv, err := rel.GetValue(id, row, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(2222), cv.(int32))
+
+	v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
+	filter = handle.NewEQFilter(v)
+	err = rel.UpdateByFilter(filter, uint16(schema.PrimaryKey), int64(333333))
+	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
 }

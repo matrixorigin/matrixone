@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	_basePool = sync.Pool{New: func() interface{} {
+	_basePool = sync.Pool{New: func() any {
 		return &Base{
 			descriptor: newDescriptor(),
 		}
@@ -38,7 +38,7 @@ type Base struct {
 	*descriptor
 	node      *common.MemNode
 	payload   []byte
-	info      interface{}
+	info      any
 	infobuf   []byte
 	wg        sync.WaitGroup
 	t0        time.Time
@@ -55,7 +55,7 @@ type Info struct {
 
 	GroupLSN uint64
 
-	Info interface{}
+	Info any
 }
 
 func (info *Info) Marshal() []byte {
@@ -353,11 +353,11 @@ func (b *Base) GetPayload() []byte {
 	return b.payload
 }
 
-func (b *Base) SetInfo(info interface{}) {
+func (b *Base) SetInfo(info any) {
 	b.info = info
 }
 
-func (b *Base) GetInfo() interface{} {
+func (b *Base) GetInfo() any {
 	return b.info
 }
 

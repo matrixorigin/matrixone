@@ -108,7 +108,7 @@ type Function struct {
 	TypeCheckFn func(inputTypes []types.T, requiredTypes []types.T) (match bool)
 
 	// AggregateInfo is related information about aggregate function.
-	AggregateInfo interface{}
+	AggregateInfo int
 
 	// SQLFn returns the sql string of the function. Maybe useful.
 	// TODO(cms): if useless, just remove it.
@@ -152,21 +152,24 @@ var functionRegister = [][]Function{nil}
 var levelUp [][]int
 
 // get function id from map functionIdRegister, see functionIds.go
-func getFunctionId(name string) (int32, error) {
+func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
 	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function '%s' doesn't register, get id failed", name))
 }
 
-func encodeOverloadID(fid int32, index int32) (overloadID int64) {
+// EncodeOverloadID convert function-id and overload-index to be an overloadID
+// the high 32-bit is function-id, the low 32-bit is overload-index
+func EncodeOverloadID(fid int32, index int32) (overloadID int64) {
 	overloadID = int64(fid)
 	overloadID = overloadID << 32
 	overloadID |= int64(index)
 	return overloadID
 }
 
-func decodeOverloadID(overloadID int64) (fid int32, index int32) {
+// DecodeOverloadID convert overload id to be function-id and overload-index
+func DecodeOverloadID(overloadID int64) (fid int32, index int32) {
 	base := overloadID
 	index = int32(overloadID)
 	fid = int32(base >> 32)
@@ -175,7 +178,7 @@ func decodeOverloadID(overloadID int64) (fid int32, index int32) {
 
 // GetFunctionByID get function structure by its index id.
 func GetFunctionByID(overloadID int64) (Function, error) {
-	fid, overloadIndex := decodeOverloadID(overloadID)
+	fid, overloadIndex := DecodeOverloadID(overloadID)
 	fs := functionRegister[fid]
 	return fs[overloadIndex], nil
 }
@@ -188,7 +191,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	levelUpFunction, get, minCost := emptyFunction, false, math.MaxInt32 // store the best function which can be matched by type level-up
 	matches := make([]Function, 0, 4)                                    // functions can be matched directly
 
-	fid, err := getFunctionId(name)
+	fid, err := fromNameToFunctionId(name)
 	if err != nil {
 		return emptyFunction, -1, nil, err
 	}
@@ -213,7 +216,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	}
 
 	if len(matches) == 1 {
-		return matches[0], encodeOverloadID(fid, matches[0].Index), nil, nil
+		return matches[0], EncodeOverloadID(fid, matches[0].Index), nil, nil
 	} else if len(matches) > 1 {
 		errMessage := "too much function matches:"
 		for i := range matches {
@@ -225,7 +228,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	} else {
 		// len(matches) == 0
 		if get {
-			return levelUpFunction, encodeOverloadID(fid, levelUpFunction.Index), levelUpFunction.Args, nil
+			return levelUpFunction, EncodeOverloadID(fid, levelUpFunction.Index), levelUpFunction.Args, nil
 		}
 	}
 	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
@@ -292,7 +295,7 @@ func isNotScalarNull(t types.T) bool {
 var (
 	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
 	// used to make an AndExpr
-	AndFunctionEncodedID = encodeOverloadID(AND, 0)
+	AndFunctionEncodedID = EncodeOverloadID(AND, 0)
 
 	anyNumbers = map[types.T]struct{}{
 		types.T_uint8:      {},

@@ -36,14 +36,14 @@ func NewColumnView() *ColumnView {
 	}
 }
 
-func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, err error) {
+func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]any, err error) {
 	if len(view.links) == 0 {
 		return
 	}
 	mask = roaring.New()
-	vals = make(map[uint32]interface{})
+	vals = make(map[uint32]any)
 	it := view.mask.Iterator()
-	var v interface{}
+	var v any
 	for it.HasNext() {
 		row := it.Next()
 		v, err = view.GetValue(row, ts)
@@ -58,7 +58,7 @@ func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals ma
 	return
 }
 
-func (view *ColumnView) GetValue(key uint32, startTs uint64) (v interface{}, err error) {
+func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) {
 	link := view.links[key]
 	if link == nil {
 		err = txnbase.ErrNotFound

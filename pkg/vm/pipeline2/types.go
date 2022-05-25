@@ -82,6 +82,5 @@ type Pipeline struct {
 	attrs []string
 	// orders to be executed
 	instructions vm.Instructions
-	// instructions, stores ordered instruction list that to be executed.
-	reg *process.WaitRegister
+	reg          *process.WaitRegister
 }
