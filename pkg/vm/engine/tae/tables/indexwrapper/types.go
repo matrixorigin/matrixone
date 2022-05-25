@@ -6,7 +6,24 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
+
+func TranslateError(err error) error {
+	if err == nil {
+		return err
+	}
+	if err == index.ErrDuplicate {
+		return data.ErrDuplicate
+	}
+	if err == index.ErrNotFound {
+		return data.ErrNotFound
+	}
+	if err == index.ErrWrongType {
+		return data.ErrWrongType
+	}
+	return err
+}
 
 type Index interface {
 	io.Closer
@@ -14,7 +31,7 @@ type Index interface {
 
 	Dedup(any) error
 	BatchDedup(keys *movec.Vector, invisibility *roaring.Bitmap) (visibility *roaring.Bitmap, err error)
-	BatchInsert(*movec.Vector, uint32, uint32, uint32, bool) error
+	BatchInsert(*movec.Vector, uint32, uint32, uint32, bool) (updatedpos, updatedrow *roaring.Bitmap, err error)
 	Delete(any) error
 	Find(any) (uint32, error)
 	ReadFrom(data.Block) error

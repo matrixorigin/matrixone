@@ -15,7 +15,7 @@ var (
 
 type SecondaryIndex interface {
 	Insert(key any, row uint32) error
-	BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) error
+	BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (updatedpos, updatedrow *roaring.Bitmap, err error)
 	Update(key any, row uint32) error
 	BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) error
 	Delete(key any) error
@@ -23,4 +23,15 @@ type SecondaryIndex interface {
 	Contains(key any) bool
 	ContainsAny(keys *vector.Vector, keyselects, rowmask *roaring.Bitmap) bool
 	String() string
+}
+
+type MutipleRowsIndex interface {
+	Insert(key any, row uint32) error
+	DeleteOne(key any, row uint32) (int, error)
+	DeleteAll(key any) error
+	GetRowsNode(key any) (*RowsNode, bool)
+	Contains(key any) bool
+	ContainsRow(key any, row uint32) bool
+	Size() int
+	RowCount(key any) int
 }

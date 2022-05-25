@@ -20,22 +20,31 @@ func NewMutableIndex(keyT types.Type) *mutableIndex {
 	}
 }
 
-func (index *mutableIndex) BatchInsert(keys *vector.Vector, start uint32, count uint32, offset uint32, verify bool) (err error) {
+func (index *mutableIndex) BatchInsert(keys *vector.Vector, start uint32, count uint32, offset uint32, verify bool) (updatedpos, updatedrow *roaring.Bitmap, err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
 	// TODO: consume `count` when needed
 	if err = index.zonemap.BatchUpdate(keys, start, -1); err != nil {
 		return
 	}
 	// logutil.Infof("Pre: %s", index.art.String())
-	err = index.art.BatchInsert(keys, int(start), int(count), offset, verify, true)
+	updatedpos, updatedrow, err = index.art.BatchInsert(keys, int(start), int(count), offset, verify, true)
 	// logutil.Infof("Post: %s", index.art.String())
 	return
 }
 
-func (index *mutableIndex) Delete(key any) error {
+func (index *mutableIndex) Delete(key any) (err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
 	return index.art.Delete(key)
 }
 
 func (index *mutableIndex) Find(key any) (row uint32, err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
 	exist := index.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {
@@ -44,6 +53,7 @@ func (index *mutableIndex) Find(key any) (row uint32, err error) {
 	}
 	// 2. search art tree for key
 	row, err = index.art.Search(key)
+	err = TranslateError(err)
 	return
 }
 

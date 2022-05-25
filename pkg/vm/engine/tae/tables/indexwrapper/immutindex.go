@@ -18,7 +18,7 @@ func NewImmutableIndex() *immutableIndex {
 
 func (index *immutableIndex) Find(any) (uint32, error) { panic("not supported") }
 func (index *immutableIndex) Delete(any) error         { panic("not supported") }
-func (index *immutableIndex) BatchInsert(*vector.Vector, uint32, uint32, uint32, bool) error {
+func (index *immutableIndex) BatchInsert(*vector.Vector, uint32, uint32, uint32, bool) (*roaring.Bitmap, *roaring.Bitmap, error) {
 	panic("not supported")
 }
 
@@ -31,6 +31,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	exist, err = index.bfReader.MayContainsKey(key)
 	// 3. check bloomfilter has some error. return err
 	if err != nil {
+		err = TranslateError(err)
 		return
 	}
 	if exist {
@@ -48,6 +49,7 @@ func (index *immutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bi
 	exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, keyselects)
 	// 3. check bloomfilter has some unknown error. return err
 	if err != nil {
+		err = TranslateError(err)
 		return
 	}
 	// 4. all keys were checked. definitely not

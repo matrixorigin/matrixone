@@ -65,7 +65,10 @@ func (zm *ZoneMap) BatchUpdate(vec *vector.Vector, offset uint32, length int) er
 	if !zm.typ.Eq(vec.Typ) {
 		return ErrWrongType
 	}
-	if err := compute.ProcessVector(vec, offset, length, zm.Update, nil); err != nil {
+	update := func(v any, _ uint32) error {
+		return zm.Update(v)
+	}
+	if err := compute.ProcessVector(vec, offset, length, update, nil); err != nil {
 		return err
 	}
 	return nil
@@ -88,7 +91,7 @@ func (zm *ZoneMap) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap,
 	}
 	visibility = roaring.NewBitmap()
 	row := uint32(0)
-	process := func(key any) (err error) {
+	process := func(key any, _ uint32) (err error) {
 		if common.CompareGeneric(key, zm.max, zm.typ) <= 0 && common.CompareGeneric(key, zm.min, zm.typ) >= 0 {
 			visibility.Add(row)
 		}

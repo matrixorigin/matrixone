@@ -51,10 +51,10 @@ func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	return
 }
 
-func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (err error) {
+func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (updatedpos, updatedrow *roaring.Bitmap, err error) {
 	existence := make(map[any]bool)
 
-	processor := func(v any) error {
+	processor := func(v any, i uint32) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
@@ -71,6 +71,12 @@ func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, 
 			if !upsert {
 				return ErrDuplicate
 			}
+			if updatedpos == nil {
+				updatedpos = roaring.New()
+				updatedrow = roaring.New()
+			}
+			updatedrow.Add(old.(uint32))
+			updatedpos.Add(i)
 		}
 		offset++
 		return nil
@@ -96,7 +102,7 @@ func (art *simpleARTMap) Update(key any, offset uint32) (err error) {
 func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) (err error) {
 	idx := 0
 
-	processor := func(v any) error {
+	processor := func(v any, _ uint32) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
@@ -154,7 +160,7 @@ func (art *simpleARTMap) Contains(key any) bool {
 // When deduplication occurs, the corresponding row number will be taken out. If the row
 // number is included in the rowmask, the error will be ignored
 func (art *simpleARTMap) ContainsAny(keys *vector.Vector, keyselects, rowmask *roaring.Bitmap) bool {
-	processor := func(v any) error {
+	processor := func(v any, _ uint32) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err

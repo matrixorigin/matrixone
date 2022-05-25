@@ -2061,8 +2061,10 @@ func TestADA(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(bat)
 	assert.Error(t, err)
@@ -2127,4 +2129,48 @@ func TestUpdateByFilter(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
+}
+
+// Test Steps
+// 1. Create DB|Relation and append 10 rows. Commit
+// 2. Make a equal filter with value of the pk of the second inserted row
+// 3. Start Txn1. GetByFilter return PASS
+// 4. Start Txn2. Delete row 2. Commit.
+// 5. Txn1 call GetByFilter and should return PASS
+func TestGetByFilter(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	bat := catalog.MockData(schema, 10)
+
+	// Step 1
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// Step 2
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(v)
+
+	// Step 3
+	txn1, _ := tae.StartTxn(nil)
+	db, _ = txn1.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+
+	// Step 4
+	{
+		txn2, _ := tae.StartTxn(nil)
+		db, _ := txn2.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.RangeDelete(id, row, row)
+		assert.NoError(t, err)
+		assert.NoError(t, txn2.Commit())
+	}
+	_, _, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
 }

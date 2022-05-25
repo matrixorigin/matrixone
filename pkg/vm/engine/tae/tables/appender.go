@@ -17,6 +17,7 @@ package tables
 import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -74,7 +75,7 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 
 	pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
 	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-	err = appender.node.block.index.BatchInsert(pks, offset, length, from, false)
+	_, _, err = appender.node.block.index.BatchInsert(pks, offset, length, from, false)
 	if err != nil {
 		panic(err)
 	}
@@ -93,13 +94,23 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 
 		pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
 		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())
-		err = appender.node.block.index.BatchInsert(pks, offset, length, from, false)
+		postions, rows, err := appender.node.block.index.BatchInsert(pks, offset, length, from, false)
 		if err != nil {
 			panic(err)
+		}
+		if postions != nil {
+			ts := txn.GetCommitTS()
+			posArr := postions.ToArray()
+			rowArr := rows.ToArray()
+			for i := 0; i < len(posArr); i++ {
+				key := compute.GetValue(pks, posArr[i])
+				if err = appender.node.block.delIndex.Upsert(key, rowArr[i], ts); err != nil {
+					panic(err)
+				}
+			}
 		}
 		node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
 		return
 	})
-
 	return
 }
