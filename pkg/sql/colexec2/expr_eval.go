@@ -21,12 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -46,21 +44,20 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			nulls.Add(vec.Nsp, 0)
 		} else {
 			switch t.C.GetValue().(type) {
-			case *plan.Const_Dval:
-				vec = vector.NewConst(constIType)
-				data := mempool.Alloc(proc.Mp.Mp, 8)
-				cs := encoding.DecodeInt64Slice(data)
-				cs = cs[:1]
-				cs[0] = t.C.GetIval()
 			case *plan.Const_Ival:
+				vec = vector.NewConst(constIType)
+				vec.Col = []int64{t.C.GetIval()}
+			case *plan.Const_Dval:
 				vec = vector.NewConst(constDType)
-				data := mempool.Alloc(proc.Mp.Mp, 8)
-				cs := encoding.DecodeFloat64Slice(data)
-				cs = cs[:1]
-				cs[0] = t.C.GetDval()
+				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Sval:
 				vec = vector.NewConst(constSType)
-				vec.Col = []string{t.C.GetSval()}
+				sval := t.C.GetSval()
+				vec.Col = &types.Bytes{
+					Data:    []byte(sval),
+					Offsets: []uint32{0},
+					Lengths: []uint32{uint32(len(sval))},
+				}
 			}
 		}
 		vec.Length = len(bat.Zs)

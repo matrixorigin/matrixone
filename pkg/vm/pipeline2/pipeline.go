@@ -56,8 +56,10 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		for i, in := range p.instructions {
 			if in.Op == vm.Connector {
 				arg := p.instructions[i].Arg.(*connector.Argument)
-				arg.Reg.Ch <- nil
-				break
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
 			}
 		}
 	}()
@@ -92,7 +94,10 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 		for i, in := range p.instructions {
 			if in.Op == vm.Connector {
 				arg := p.instructions[i].Arg.(*connector.Argument)
-				arg.Reg.Ch <- nil
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
 				break
 			}
 		}
@@ -120,8 +125,10 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 		for i, in := range p.instructions {
 			if in.Op == vm.Connector {
 				arg := p.instructions[i].Arg.(*connector.Argument)
-				arg.Reg.Ch <- nil
-				break
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
 			}
 		}
 		for i := 0; i < len(proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
