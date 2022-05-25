@@ -20,11 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
-	"sync"
 )
 
 type columnBlock struct {
-	mutex sync.RWMutex
 	common.RefHelper
 	block   *blockFile
 	ts      uint64
@@ -44,6 +42,9 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 		cb.indexes[i] = newIndex(cb)
 	}
 	cb.updates = newUpdates(cb)
+	cb.updates.file = make([]*segment.BlockFile, 1)
+	cb.updates.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
+		fmt.Sprintf("%d_%d.update", cb.col, cb.block.id))
 	cb.data = newData(cb)
 	cb.data.file = make([]*segment.BlockFile, 1)
 	cb.data.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
@@ -73,10 +74,16 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
 	if cb.data.file != nil {
-		cb.mutex.Lock()
-		defer cb.mutex.Unlock()
+		cb.data.mutex.Lock()
+		defer cb.data.mutex.Unlock()
 		cb.data.file = append(cb.data.file,
 			cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
+	}
+	if cb.updates.file != nil {
+		cb.updates.mutex.Lock()
+		defer cb.updates.mutex.Unlock()
+		cb.updates.file = append(cb.updates.file,
+			cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)))
 	}
 	return
 }
@@ -165,9 +172,9 @@ func (cb *columnBlock) close() {
 
 func (cb *columnBlock) Destroy() {
 	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
-	cb.mutex.RLock()
+	cb.data.mutex.RLock()
 	files := cb.data.file
-	cb.mutex.RUnlock()
+	cb.data.mutex.RUnlock()
 	if files != nil {
 		for _, file := range files {
 			cb.block.seg.GetSegmentFile().ReleaseFile(file)

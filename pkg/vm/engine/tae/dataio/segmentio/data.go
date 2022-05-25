@@ -17,9 +17,11 @@ package segmentio
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+	"sync"
 )
 
 type dataFile struct {
+	mutex  sync.RWMutex
 	colBlk *columnBlock
 	file   []*segment.BlockFile
 	buf    []byte
@@ -85,9 +87,9 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 		df.stat.originSize = int64(len(df.buf))
 		return
 	}
-	df.colBlk.mutex.RLock()
+	df.mutex.RLock()
 	file := df.file[len(df.file)-1]
-	df.colBlk.mutex.RUnlock()
+	df.mutex.RUnlock()
 	err = file.GetSegement().Append(file, buf)
 	df.stat.algo = file.GetAlgo()
 	df.stat.originSize = file.GetOriginSize()
@@ -105,9 +107,9 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	if bufLen == 0 {
 		return 0, nil
 	}
-	df.colBlk.mutex.RLock()
+	df.mutex.RLock()
 	file := df.file[len(df.file)-1]
-	df.colBlk.mutex.RUnlock()
+	df.mutex.RUnlock()
 	n, err = file.Read(buf)
 	return n, nil
 }
