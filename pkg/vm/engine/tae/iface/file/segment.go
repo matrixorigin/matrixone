@@ -29,6 +29,6 @@ type Segment interface {
 	String() string
 	RemoveBlock(id uint64)
 	GetSegmentFile() *segment.Segment
-	Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error
+	Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error
 	// IsAppendable() bool
 }

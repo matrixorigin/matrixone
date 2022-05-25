@@ -38,7 +38,7 @@ type segmentFile struct {
 	name   string
 }
 
-func (sf *segmentFile) Replay(ids []uint64, colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
 	panic(any("implement me"))
 }
 
