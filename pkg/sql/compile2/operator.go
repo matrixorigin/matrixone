@@ -16,7 +16,6 @@ package compile2
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

@@ -48,6 +48,7 @@ func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
 			Ch:  make(chan *batch.Batch, 1),
 		}
 	}
+	return proc
 }
 
 func GetSels(proc *Process) []int64 {
