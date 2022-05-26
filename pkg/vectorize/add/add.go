@@ -22,46 +22,46 @@ import (
 )
 
 var (
-	Int8Add              = numericAdd[int8]
-	Int8AddScalar        = numericAddScalar[int8]
-	Int16Add             = numericAdd[int16]
-	Int16AddScalar       = numericAddScalar[int16]
-	Int32Add             = numericAdd[int32]
-	Int32AddScalar       = numericAddScalar[int32]
-	Int64Add             = numericAdd[int64]
-	Int64AddScalar       = numericAddScalar[int64]
-	Uint8Add             = numericAdd[uint8]
-	Uint8AddScalar       = numericAddScalar[uint8]
-	Uint16Add            = numericAdd[uint16]
-	Uint16AddScalar      = numericAddScalar[uint16]
-	Uint32Add            = numericAdd[uint32]
-	Uint32AddScalar      = numericAddScalar[uint32]
-	Uint64Add            = numericAdd[uint64]
-	Uint64AddScalar      = numericAddScalar[uint64]
-	Float32Add           = numericAdd[float32]
-	Float32AddScalar     = numericAddScalar[float32]
-	Float64Add           = numericAdd[float64]
-	Float64AddScalar     = numericAddScalar[float64]
-	Int8AddSels          = numericAddSels[int8]
-	Int8AddScalarSels    = numericAddScalarSels[int8]
-	Int16AddSels         = numericAddSels[int16]
-	Int16AddScalarSels   = numericAddScalarSels[int16]
-	Int32AddSels         = numericAddSels[int32]
-	Int32AddScalarSels   = numericAddScalarSels[int32]
-	Int64AddSels         = numericAddSels[int64]
-	Int64AddScalarSels   = numericAddScalarSels[int64]
-	Uint8AddSels         = numericAddSels[uint8]
-	Uint8AddScalarSels   = numericAddScalarSels[uint8]
-	Uint16AddSels        = numericAddSels[uint16]
-	Uint16AddScalarSels  = numericAddScalarSels[uint16]
-	Uint32AddSels        = numericAddSels[uint32]
-	Uint32AddScalarSels  = numericAddScalarSels[uint32]
-	Uint64AddSels        = numericAddSels[uint64]
-	Uint64AddScalarSels  = numericAddScalarSels[uint64]
-	Float32AddSels       = numericAddSels[float32]
-	Float32AddScalarSels = numericAddScalarSels[float32]
-	Float64AddSels       = numericAddSels[float64]
-	Float64AddScalarSels = numericAddScalarSels[float64]
+	Int8Add              = NumericAdd[int8]
+	Int8AddScalar        = NumericAddScalar[int8]
+	Int16Add             = NumericAdd[int16]
+	Int16AddScalar       = NumericAddScalar[int16]
+	Int32Add             = NumericAdd[int32]
+	Int32AddScalar       = NumericAddScalar[int32]
+	Int64Add             = NumericAdd[int64]
+	Int64AddScalar       = NumericAddScalar[int64]
+	Uint8Add             = NumericAdd[uint8]
+	Uint8AddScalar       = NumericAddScalar[uint8]
+	Uint16Add            = NumericAdd[uint16]
+	Uint16AddScalar      = NumericAddScalar[uint16]
+	Uint32Add            = NumericAdd[uint32]
+	Uint32AddScalar      = NumericAddScalar[uint32]
+	Uint64Add            = NumericAdd[uint64]
+	Uint64AddScalar      = NumericAddScalar[uint64]
+	Float32Add           = NumericAdd[float32]
+	Float32AddScalar     = NumericAddScalar[float32]
+	Float64Add           = NumericAdd[float64]
+	Float64AddScalar     = NumericAddScalar[float64]
+	Int8AddSels          = NumericAddSels[int8]
+	Int8AddScalarSels    = NumericAddScalarSels[int8]
+	Int16AddSels         = NumericAddSels[int16]
+	Int16AddScalarSels   = NumericAddScalarSels[int16]
+	Int32AddSels         = NumericAddSels[int32]
+	Int32AddScalarSels   = NumericAddScalarSels[int32]
+	Int64AddSels         = NumericAddSels[int64]
+	Int64AddScalarSels   = NumericAddScalarSels[int64]
+	Uint8AddSels         = NumericAddSels[uint8]
+	Uint8AddScalarSels   = NumericAddScalarSels[uint8]
+	Uint16AddSels        = NumericAddSels[uint16]
+	Uint16AddScalarSels  = NumericAddScalarSels[uint16]
+	Uint32AddSels        = NumericAddSels[uint32]
+	Uint32AddScalarSels  = NumericAddScalarSels[uint32]
+	Uint64AddSels        = NumericAddSels[uint64]
+	Uint64AddScalarSels  = NumericAddScalarSels[uint64]
+	Float32AddSels       = NumericAddSels[float32]
+	Float32AddScalarSels = NumericAddScalarSels[float32]
+	Float64AddSels       = NumericAddSels[float64]
+	Float64AddScalarSels = NumericAddScalarSels[float64]
 
 	Int32Int64Add               = numericAdd2[int32, int64]
 	Int32Int64AddScalar         = numericAddScalar2[int32, int64]
@@ -126,28 +126,28 @@ var (
 	Decimal128AddScalarSels = decimal128AddScalarSels
 )
 
-func numericAdd[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
+func NumericAdd[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
-func numericAddSels[T constraints.Integer | constraints.Float](xs, ys, rs []T, sels []int64) []T {
+func NumericAddSels[T constraints.Integer | constraints.Float](xs, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = xs[sel] + ys[sel]
 	}
 	return rs
 }
 
-func numericAddScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
+func NumericAddScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = x + y
 	}
 	return rs
 }
 
-func numericAddScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
+func NumericAddScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = x + ys[sel]
 	}
