@@ -56,8 +56,8 @@ type Rule interface {
 // BaseOptimizer is base optimizer, capable of handling only a few simple rules
 type BaseOptimizer struct {
 	qry   *Query
+	rules []Rule
 	ctx   CompilerContext
-	rules map[plan.Node_NodeType][]Rule
 }
 
 //use for build select

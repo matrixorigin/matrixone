@@ -15,8 +15,6 @@
 package plan2
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -24,22 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/rule"
 )
 
-var defaultRules = map[plan.Node_NodeType][]Rule{}
+var defaultRules = []Rule{}
 
 func init() {
-	defaultRules[plan.Node_TABLE_SCAN] = []Rule{
-		rule.NewConstantFlod(),
-	}
-	defaultRules[plan.Node_PROJECT] = []Rule{
-		rule.NewConstantFlod(),
-	}
-	defaultRules[plan.Node_AGG] = []Rule{
-		rule.NewConstantFlod(),
-	}
-	defaultRules[plan.Node_JOIN] = []Rule{
-		rule.NewConstantFlod(),
-	}
-	defaultRules[plan.Node_SORT] = []Rule{
+	defaultRules = []Rule{
 		rule.NewConstantFlod(),
 	}
 }
@@ -64,29 +50,27 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	if !ok {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, pn.String()))
 	}
-	return opt.optimize(qry.Query)
+	opt.qry = qry.Query
+	return opt.optimize()
 }
 
-func (opt *BaseOptimizer) optimize(qry *Query) (*Query, error) {
-	if len(qry.Steps) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", qry))
+func (opt *BaseOptimizer) optimize() (*Query, error) {
+	if len(opt.qry.Steps) == 0 {
+		return opt.qry, nil
 	}
-	n := qry.Nodes[qry.Steps[0]]
-	opt.exploreNode(n)
-	return qry, nil
+	for _, step := range opt.qry.Steps {
+		opt.exploreNode(opt.qry.Nodes[step])
+	}
+	return opt.qry, nil
 }
 
 func (opt *BaseOptimizer) exploreNode(n *Node) {
-	rules, ok := opt.rules[n.NodeType]
-	if !ok {
-		return
+	for i := range n.Children {
+		opt.exploreNode(opt.qry.Nodes[n.Children[i]])
 	}
-	for _, rule := range rules {
+	for _, rule := range opt.rules {
 		if rule.Match(n) {
 			rule.Apply(n, opt.qry)
 		}
-	}
-	for i := range n.Children {
-		opt.exploreNode(opt.qry.Nodes[n.Children[i]])
 	}
 }
