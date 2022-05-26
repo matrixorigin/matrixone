@@ -1660,7 +1660,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
 			ReturnTyp:   types.T_decimal64,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.MinusDecimal64,
 		},
 		{
 			Index:       11,
@@ -1669,7 +1669,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
 			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.MinusDecimal128,
 		},
 		{
 			Index:       12,
