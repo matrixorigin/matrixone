@@ -25,78 +25,78 @@ import (
 )
 
 var (
-	Int8Eq                      = numericEq[int8]
-	Int8EqNullable              = numericEqNullable[int8]
-	Int8EqSels                  = numericEqSels[int8]
-	Int8EqNullableSels          = numericEqNullableSels[int8]
-	Int8EqScalar                = numericEqScalar[int8]
-	Int8EqNullableScalar        = numericEqNullableScalar[int8]
-	Int8EqScalarSels            = numericEqScalarSels[int8]
-	Int8EqNullableScalarSels    = numericEqNullableScalarSels[int8]
-	Int16Eq                     = numericEq[int16]
-	Int16EqNullable             = numericEqNullable[int16]
-	Int16EqSels                 = numericEqSels[int16]
-	Int16EqNullableSels         = numericEqNullableSels[int16]
-	Int16EqScalar               = numericEqScalar[int16]
-	Int16EqNullableScalar       = numericEqNullableScalar[int16]
-	Int16EqScalarSels           = numericEqScalarSels[int16]
-	Int16EqNullableScalarSels   = numericEqNullableScalarSels[int16]
-	Int32Eq                     = numericEq[int32]
-	Int32EqNullable             = numericEqNullable[int32]
-	Int32EqSels                 = numericEqSels[int32]
-	Int32EqNullableSels         = numericEqNullableSels[int32]
-	Int32EqScalar               = numericEqScalar[int32]
-	Int32EqNullableScalar       = numericEqNullableScalar[int32]
-	Int32EqScalarSels           = numericEqScalarSels[int32]
-	Int32EqNullableScalarSels   = numericEqNullableScalarSels[int32]
-	Int64Eq                     = numericEq[int64]
-	Int64EqNullable             = numericEqNullable[int64]
-	Int64EqSels                 = numericEqSels[int64]
-	Int64EqNullableSels         = numericEqNullableSels[int64]
-	Int64EqScalar               = numericEqScalar[int64]
-	Int64EqNullableScalar       = numericEqNullableScalar[int64]
-	Int64EqScalarSels           = numericEqScalarSels[int64]
-	Int64EqNullableScalarSels   = numericEqNullableScalarSels[int64]
-	Uint8Eq                     = numericEq[uint8]
-	Uint8EqNullable             = numericEqNullable[uint8]
-	Uint8EqSels                 = numericEqSels[uint8]
-	Uint8EqNullableSels         = numericEqNullableSels[uint8]
-	Uint8EqScalar               = numericEqScalar[uint8]
-	Uint8EqNullableScalar       = numericEqNullableScalar[uint8]
-	Uint8EqScalarSels           = numericEqScalarSels[uint8]
-	Uint8EqNullableScalarSels   = numericEqNullableScalarSels[uint8]
-	Uint16Eq                    = numericEq[uint16]
-	Uint16EqNullable            = numericEqNullable[uint16]
-	Uint16EqSels                = numericEqSels[uint16]
-	Uint16EqNullableSels        = numericEqNullableSels[uint16]
-	Uint16EqScalar              = numericEqScalar[uint16]
-	Uint16EqNullableScalar      = numericEqNullableScalar[uint16]
-	Uint16EqScalarSels          = numericEqScalarSels[uint16]
-	Uint16EqNullableScalarSels  = numericEqNullableScalarSels[uint16]
-	Uint32Eq                    = numericEq[uint32]
-	Uint32EqNullable            = numericEqNullable[uint32]
-	Uint32EqSels                = numericEqSels[uint32]
-	Uint32EqNullableSels        = numericEqNullableSels[uint32]
-	Uint32EqScalar              = numericEqScalar[uint32]
-	Uint32EqNullableScalar      = numericEqNullableScalar[uint32]
-	Uint32EqScalarSels          = numericEqScalarSels[uint32]
-	Uint32EqNullableScalarSels  = numericEqNullableScalarSels[uint32]
-	Uint64Eq                    = numericEq[uint64]
-	Uint64EqNullable            = numericEqNullable[uint64]
-	Uint64EqSels                = numericEqSels[uint64]
-	Uint64EqNullableSels        = numericEqNullableSels[uint64]
-	Uint64EqScalar              = numericEqScalar[uint64]
-	Uint64EqNullableScalar      = numericEqNullableScalar[uint64]
-	Uint64EqScalarSels          = numericEqScalarSels[uint64]
-	Uint64EqNullableScalarSels  = numericEqNullableScalarSels[uint64]
-	Float32Eq                   = numericEq[float32]
-	Float32EqNullable           = numericEqNullable[float32]
-	Float32EqSels               = numericEqSels[float32]
-	Float32EqNullableSels       = numericEqNullableSels[float32]
-	Float32EqScalar             = numericEqScalar[float32]
-	Float32EqNullableScalar     = numericEqNullableScalar[float32]
-	Float32EqScalarSels         = numericEqScalarSels[float32]
-	Float32EqNullableScalarSels = numericEqNullableScalarSels[float32]
+	Int8Eq                      = NumericEq[int8]
+	Int8EqNullable              = NumericEqNullable[int8]
+	Int8EqSels                  = NumericEqSels[int8]
+	Int8EqNullableSels          = NumericEqNullableSels[int8]
+	Int8EqScalar                = NumericEqScalar[int8]
+	Int8EqNullableScalar        = NumericEqNullableScalar[int8]
+	Int8EqScalarSels            = NumericEqScalarSels[int8]
+	Int8EqNullableScalarSels    = NumericEqNullableScalarSels[int8]
+	Int16Eq                     = NumericEq[int16]
+	Int16EqNullable             = NumericEqNullable[int16]
+	Int16EqSels                 = NumericEqSels[int16]
+	Int16EqNullableSels         = NumericEqNullableSels[int16]
+	Int16EqScalar               = NumericEqScalar[int16]
+	Int16EqNullableScalar       = NumericEqNullableScalar[int16]
+	Int16EqScalarSels           = NumericEqScalarSels[int16]
+	Int16EqNullableScalarSels   = NumericEqNullableScalarSels[int16]
+	Int32Eq                     = NumericEq[int32]
+	Int32EqNullable             = NumericEqNullable[int32]
+	Int32EqSels                 = NumericEqSels[int32]
+	Int32EqNullableSels         = NumericEqNullableSels[int32]
+	Int32EqScalar               = NumericEqScalar[int32]
+	Int32EqNullableScalar       = NumericEqNullableScalar[int32]
+	Int32EqScalarSels           = NumericEqScalarSels[int32]
+	Int32EqNullableScalarSels   = NumericEqNullableScalarSels[int32]
+	Int64Eq                     = NumericEq[int64]
+	Int64EqNullable             = NumericEqNullable[int64]
+	Int64EqSels                 = NumericEqSels[int64]
+	Int64EqNullableSels         = NumericEqNullableSels[int64]
+	Int64EqScalar               = NumericEqScalar[int64]
+	Int64EqNullableScalar       = NumericEqNullableScalar[int64]
+	Int64EqScalarSels           = NumericEqScalarSels[int64]
+	Int64EqNullableScalarSels   = NumericEqNullableScalarSels[int64]
+	Uint8Eq                     = NumericEq[uint8]
+	Uint8EqNullable             = NumericEqNullable[uint8]
+	Uint8EqSels                 = NumericEqSels[uint8]
+	Uint8EqNullableSels         = NumericEqNullableSels[uint8]
+	Uint8EqScalar               = NumericEqScalar[uint8]
+	Uint8EqNullableScalar       = NumericEqNullableScalar[uint8]
+	Uint8EqScalarSels           = NumericEqScalarSels[uint8]
+	Uint8EqNullableScalarSels   = NumericEqNullableScalarSels[uint8]
+	Uint16Eq                    = NumericEq[uint16]
+	Uint16EqNullable            = NumericEqNullable[uint16]
+	Uint16EqSels                = NumericEqSels[uint16]
+	Uint16EqNullableSels        = NumericEqNullableSels[uint16]
+	Uint16EqScalar              = NumericEqScalar[uint16]
+	Uint16EqNullableScalar      = NumericEqNullableScalar[uint16]
+	Uint16EqScalarSels          = NumericEqScalarSels[uint16]
+	Uint16EqNullableScalarSels  = NumericEqNullableScalarSels[uint16]
+	Uint32Eq                    = NumericEq[uint32]
+	Uint32EqNullable            = NumericEqNullable[uint32]
+	Uint32EqSels                = NumericEqSels[uint32]
+	Uint32EqNullableSels        = NumericEqNullableSels[uint32]
+	Uint32EqScalar              = NumericEqScalar[uint32]
+	Uint32EqNullableScalar      = NumericEqNullableScalar[uint32]
+	Uint32EqScalarSels          = NumericEqScalarSels[uint32]
+	Uint32EqNullableScalarSels  = NumericEqNullableScalarSels[uint32]
+	Uint64Eq                    = NumericEq[uint64]
+	Uint64EqNullable            = NumericEqNullable[uint64]
+	Uint64EqSels                = NumericEqSels[uint64]
+	Uint64EqNullableSels        = NumericEqNullableSels[uint64]
+	Uint64EqScalar              = NumericEqScalar[uint64]
+	Uint64EqNullableScalar      = NumericEqNullableScalar[uint64]
+	Uint64EqScalarSels          = NumericEqScalarSels[uint64]
+	Uint64EqNullableScalarSels  = NumericEqNullableScalarSels[uint64]
+	Float32Eq                   = NumericEq[float32]
+	Float32EqNullable           = NumericEqNullable[float32]
+	Float32EqSels               = NumericEqSels[float32]
+	Float32EqNullableSels       = NumericEqNullableSels[float32]
+	Float32EqScalar             = NumericEqScalar[float32]
+	Float32EqNullableScalar     = NumericEqNullableScalar[float32]
+	Float32EqScalarSels         = NumericEqScalarSels[float32]
+	Float32EqNullableScalarSels = NumericEqNullableScalarSels[float32]
 
 	Float64Eq                   = float64Eq
 	Float64EqNullable           = float64EqNullable
@@ -134,7 +134,7 @@ var (
 	Decimal128EqNullableScalarSels = decimal128EqNullableScalarSels
 )
 
-func numericEq[T constraints.Integer | constraints.Float](xs, ys []T, rs []int64) []int64 {
+func NumericEq[T constraints.Integer | constraints.Float](xs, ys []T, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x == ys[i] {
@@ -145,7 +145,7 @@ func numericEq[T constraints.Integer | constraints.Float](xs, ys []T, rs []int64
 	return rs[:rsi]
 }
 
-func numericEqNullable[T constraints.Integer | constraints.Float](xs, ys []T, nulls *roaring.Bitmap, rs []int64) []int64 {
+func NumericEqNullable[T constraints.Integer | constraints.Float](xs, ys []T, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -171,7 +171,7 @@ func numericEqNullable[T constraints.Integer | constraints.Float](xs, ys []T, nu
 	return rs[:rsi]
 }
 
-func numericEqSels[T constraints.Integer | constraints.Float](xs, ys []T, rs, sels []int64) []int64 {
+func NumericEqSels[T constraints.Integer | constraints.Float](xs, ys []T, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] == ys[sel] {
@@ -182,7 +182,7 @@ func numericEqSels[T constraints.Integer | constraints.Float](xs, ys []T, rs, se
 	return rs[:rsi]
 }
 
-func numericEqNullableSels[T constraints.Integer | constraints.Float](xs, ys []T, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func NumericEqNullableSels[T constraints.Integer | constraints.Float](xs, ys []T, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && xs[sel] == ys[sel] {
@@ -193,7 +193,7 @@ func numericEqNullableSels[T constraints.Integer | constraints.Float](xs, ys []T
 	return rs[:rsi]
 }
 
-func numericEqScalar[T constraints.Integer | constraints.Float](x T, ys []T, rs []int64) []int64 {
+func NumericEqScalar[T constraints.Integer | constraints.Float](x T, ys []T, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x == y {
@@ -204,7 +204,7 @@ func numericEqScalar[T constraints.Integer | constraints.Float](x T, ys []T, rs 
 	return rs[:rsi]
 }
 
-func numericEqNullableScalar[T constraints.Integer | constraints.Float](x T, ys []T, nulls *roaring.Bitmap, rs []int64) []int64 {
+func NumericEqNullableScalar[T constraints.Integer | constraints.Float](x T, ys []T, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -230,7 +230,7 @@ func numericEqNullableScalar[T constraints.Integer | constraints.Float](x T, ys 
 	return rs[:rsi]
 }
 
-func numericEqScalarSels[T constraints.Integer | constraints.Float](x T, ys []T, rs, sels []int64) []int64 {
+func NumericEqScalarSels[T constraints.Integer | constraints.Float](x T, ys []T, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x == ys[sel] {
@@ -241,7 +241,7 @@ func numericEqScalarSels[T constraints.Integer | constraints.Float](x T, ys []T,
 	return rs[:rsi]
 }
 
-func numericEqNullableScalarSels[T constraints.Integer | constraints.Float](x T, ys []T, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func NumericEqNullableScalarSels[T constraints.Integer | constraints.Float](x T, ys []T, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && x == ys[sel] {

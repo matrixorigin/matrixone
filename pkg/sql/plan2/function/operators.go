@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1569,7 +1570,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_uint8, types.T_uint8},
 			ReturnTyp:   types.T_uint8,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[uint8],
 		},
 		{
 			Index:       1,
@@ -1578,7 +1579,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_uint16, types.T_uint16},
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[uint16],
 		},
 		{
 			Index:       2,
@@ -1587,7 +1588,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_uint32, types.T_uint32},
 			ReturnTyp:   types.T_uint32,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[uint32],
 		},
 		{
 			Index:       3,
@@ -1596,7 +1597,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_uint64, types.T_uint64},
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[uint64],
 		},
 		{
 			Index:       4,
@@ -1605,7 +1606,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int8],
 		},
 		{
 			Index:       5,
@@ -1614,7 +1615,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int16, types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int16],
 		},
 		{
 			Index:       6,
@@ -1623,7 +1624,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int32, types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int32],
 		},
 		{
 			Index:       7,
@@ -1632,7 +1633,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int64],
 		},
 		{
 			Index:       8,
@@ -1640,7 +1641,7 @@ var operators = map[int][]Function{
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float64},
 			ReturnTyp:   types.T_float32,
-			TypeCheckFn: strictTypeCheck,
+			TypeCheckFn: operator.Minus[float32],
 			Fn:          nil,
 		},
 		{
@@ -1650,7 +1651,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_float64, types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[float64],
 		},
 		{
 			Index:       10,
