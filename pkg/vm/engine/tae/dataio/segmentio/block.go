@@ -75,6 +75,7 @@ func replayBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) 
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
+	bf.deletes.file = make([]*segment.BlockFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -168,14 +169,6 @@ func (bf *blockFile) OpenColumn(colIdx int) (colBlk file.ColumnBlock, err error)
 
 func (bf *blockFile) Close() error {
 	return nil
-}
-
-func (bf *blockFile) removeData(data *dataFile) {
-	if data.file != nil {
-		for _, file := range data.file {
-			bf.seg.GetSegmentFile().ReleaseFile(file)
-		}
-	}
 }
 
 func (bf *blockFile) Destroy() error {

@@ -64,8 +64,9 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 		cb.indexes[i] = newIndex(cb)
 	}
 	cb.updates = newUpdates(cb)
+	cb.updates.file = make([]*segment.BlockFile, 1)
 	cb.data = newData(cb)
-	cb.data.file = make([]*segment.BlockFile, 0)
+	cb.data.file = make([]*segment.BlockFile, 1)
 	cb.OnZeroCB = cb.close
 	cb.Ref()
 	return cb
@@ -172,11 +173,15 @@ func (cb *columnBlock) close() {
 
 func (cb *columnBlock) Destroy() {
 	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
-	cb.data.mutex.RLock()
+	cb.data.mutex.Lock()
 	files := cb.data.file
-	cb.data.mutex.RUnlock()
+	cb.data.file = nil
+	cb.data.mutex.Unlock()
 	if files != nil {
 		for _, file := range files {
+			if file == nil {
+				continue
+			}
 			cb.block.seg.GetSegmentFile().ReleaseFile(file)
 		}
 	}

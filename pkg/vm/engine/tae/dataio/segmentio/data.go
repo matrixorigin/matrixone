@@ -20,6 +20,8 @@ import (
 	"sync"
 )
 
+const UPGRADE_FILE_NUM = 10
+
 type dataFile struct {
 	mutex  sync.RWMutex
 	colBlk *columnBlock
@@ -94,6 +96,7 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 	df.stat.algo = file.GetAlgo()
 	df.stat.originSize = file.GetOriginSize()
 	df.stat.size = file.GetFileSize()
+	df.upgradeFile()
 	return
 }
 
@@ -112,6 +115,21 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	df.mutex.RUnlock()
 	n, err = file.Read(buf)
 	return n, nil
+}
+
+func (df *dataFile) upgradeFile() {
+	if len(df.file) < UPGRADE_FILE_NUM {
+		return
+	}
+	go func() {
+		df.mutex.Lock()
+		releaseFile := df.file[:len(df.file)-1]
+		df.file = df.file[len(df.file)-1 : len(df.file)]
+		df.mutex.Unlock()
+		for _, file := range releaseFile {
+			df.colBlk.block.seg.GetSegmentFile().ReleaseFile(file)
+		}
+	}()
 }
 
 func (df *dataFile) GetFileType() common.FileType {

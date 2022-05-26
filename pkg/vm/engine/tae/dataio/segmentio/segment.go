@@ -72,6 +72,13 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	delete(sf.blocks, id)
 }
 
+func (sf *segmentFile) replayInfo(stat *fileStat, file *segment.BlockFile) {
+	stat.size = file.GetFileSize()
+	stat.originSize = file.GetOriginSize()
+	stat.algo = file.GetAlgo()
+	stat.name = file.GetName()
+}
+
 func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
 	err := sf.seg.Replay(cache)
 	if err != nil {
@@ -81,7 +88,7 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 	sf.Lock()
 	defer sf.Unlock()
 	for name, file := range nodes {
-		tmpName := strings.Split(name, ".blk")
+		tmpName := strings.Split(name, ".")
 		fileName := strings.Split(tmpName[0], "_")
 		if len(fileName) < 2 {
 			continue
@@ -99,19 +106,50 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 		if err != nil {
 			return err
 		}
-		bf.columns[col].data.file = append(bf.columns[col].data.file, file)
-		bf.columns[col].data.stat.size = file.GetFileSize()
-		bf.columns[col].data.stat.originSize = file.GetOriginSize()
-		bf.columns[col].data.stat.algo = file.GetAlgo()
-		bf.columns[col].data.stat.name = file.GetName()
+		var ts uint64 = 0
 		if len(fileName) > 2 {
-			ts, err := strconv.ParseUint(fileName[2], 10, 64)
+			ts, err = strconv.ParseUint(fileName[2], 10, 64)
 			if err != nil {
 				return err
 			}
+		}
+		switch tmpName[1] {
+		case "blk":
+			sf.replayInfo(bf.columns[col].data.stat, file)
+			if ts == 0 {
+				bf.columns[col].ts = 0
+				bf.columns[col].data.file[0] = file
+				break
+			}
 			if bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
+				bf.columns[col].data.file[0] = file
 			}
+			break
+		case "update":
+			sf.replayInfo(bf.columns[col].updates.stat, file)
+			if ts == 0 {
+				bf.columns[col].ts = 0
+				bf.columns[col].updates.file[0] = file
+				break
+			}
+			if bf.columns[col].ts < ts {
+				bf.columns[col].ts = ts
+				bf.columns[col].updates.file[0] = file
+			}
+			break
+		case "del":
+			sf.replayInfo(bf.deletes.stat, file)
+			if ts == 0 {
+				bf.ts = 0
+				bf.deletes.file[0] = file
+				break
+			}
+			if bf.ts < ts {
+				bf.ts = ts
+				bf.deletes.file[0] = file
+			}
+			break
 		}
 
 	}
