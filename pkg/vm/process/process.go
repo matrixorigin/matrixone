@@ -15,6 +15,8 @@
 package process
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,6 +28,25 @@ import (
 func New(m *mheap.Mheap) *Process {
 	return &Process{
 		Mp: m,
+	}
+}
+
+// NewFromProc create a new Process based on another process.
+func NewFromProc(m *mheap.Mheap, p *Process, regNumber int) *Process {
+	proc := &Process{Mp: m}
+	ctx, cancel := context.WithCancel(context.Background())
+	proc.Id = p.Id
+	proc.Lim = p.Lim
+	proc.UnixTime = p.UnixTime
+	proc.Snapshot = p.Snapshot
+	// reg and cancel
+	proc.Cancel = cancel
+	proc.Reg.MergeReceivers = make([]*WaitRegister, regNumber)
+	for i := 0; i < regNumber; i++ {
+		proc.Reg.MergeReceivers[i] = &WaitRegister{
+			Ctx: ctx,
+			Ch:  make(chan *batch.Batch, 1),
+		}
 	}
 }
 

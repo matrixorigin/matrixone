@@ -16,6 +16,7 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -263,17 +264,19 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 
 func constructGroup(n *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
-	/*
-		for i, expr := range n.AggList {
-			switch f := expr.Expr.(type) {
-			case *plan.Expr_F:
-				fun, err := function.GetFunctionByIndex(int(f.F.Func.Schema), int(f.F.Func.Obj))
-				if err != nil {
-				}
-				fun.Flag
+	for i, expr := range n.AggList {
+		if f, ok := expr.Expr.(*plan.Expr_F); ok {
+			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
+			if err != nil {
+				panic(err)
+			}
+			aggs[i] = aggregate.Aggregate{
+				Op: fun.AggregateInfo,
+				E:  f.F.Args[0],
 			}
 		}
-	*/
+	}
+
 	return &group.Argument{
 		Aggs:  aggs,
 		Exprs: n.GroupBy,
@@ -347,7 +350,7 @@ func constructJoinResult(expr *plan.Expr) (int32, int32) {
 
 func constructJoinCondition(expr *plan.Expr) (int32, types.Type, int32, types.Type) {
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok {
+	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
 	}
 	left, ok := e.F.Args[0].Expr.(*plan.Expr_Col)
@@ -386,4 +389,12 @@ func constructJoinCondition(expr *plan.Expr) (int32, types.Type, int32, types.Ty
 			Scale:     e.F.Args[0].Typ.Scale,
 			Precision: e.F.Args[0].Typ.Precision,
 		}
+}
+
+func supportedJoinCondition(id int64) bool {
+	fid, _ := function.DecodeOverloadID(id)
+	if fid == function.EQUAL {
+		return true
+	}
+	return false
 }
