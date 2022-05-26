@@ -5,6 +5,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type immutableIndex struct {
@@ -16,9 +17,10 @@ func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
 
-func (index *immutableIndex) Find(any) (uint32, error) { panic("not supported") }
-func (index *immutableIndex) Delete(any) error         { panic("not supported") }
-func (index *immutableIndex) BatchInsert(*vector.Vector, uint32, uint32, uint32, bool) error {
+func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool) { panic("not supported") }
+func (index *immutableIndex) GetActiveRow(any) (uint32, error)      { panic("not supported") }
+func (index *immutableIndex) Delete(any, uint64) error              { panic("not supported") }
+func (index *immutableIndex) BatchUpsert(*index.KeysCtx, uint32, uint64) error {
 	panic("not supported")
 }
 
@@ -31,6 +33,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	exist, err = index.bfReader.MayContainsKey(key)
 	// 3. check bloomfilter has some error. return err
 	if err != nil {
+		err = TranslateError(err)
 		return
 	}
 	if exist {
@@ -39,18 +42,16 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (index *immutableIndex) BatchDedup(keys *vector.Vector, invisibility *roaring.Bitmap) (visibility *roaring.Bitmap, err error) {
-	visibility, exist := index.zmReader.ContainsAny(keys)
+func (index *immutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+	keyselects, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
 		return
 	}
-	if invisibility != nil {
-		visibility.AndNot(invisibility)
-	}
-	exist, visibility, err = index.bfReader.MayContainsAnyKeys(keys, visibility)
+	exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, keyselects)
 	// 3. check bloomfilter has some unknown error. return err
 	if err != nil {
+		err = TranslateError(err)
 		return
 	}
 	// 4. all keys were checked. definitely not
@@ -101,22 +102,14 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := NewZMReader()
-			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
-				return err
-			}
-			index.zmReader = reader
+			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id)
 		case StaticFilterIndex:
 			size := idxFile.Stat().Size()
 			buf := make([]byte, size)
 			if _, err = idxFile.Read(buf); err != nil {
 				return err
 			}
-			reader := NewBFReader()
-			if err = reader.Init(blk.GetBufMgr(), idxFile, id); err != nil {
-				return err
-			}
-			index.bfReader = reader
+			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)
 		default:
 			panic("unsupported index type")
 		}
