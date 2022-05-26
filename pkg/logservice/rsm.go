@@ -17,6 +17,7 @@ package logservice
 import (
 	"encoding/binary"
 	"io"
+	"sync"
 
 	sm "github.com/lni/dragonboat/v3/statemachine"
 )
@@ -72,24 +73,40 @@ func tagMatch(cmd []byte, expectedTag uint16) bool {
 }
 
 type stateMachine struct {
-	shardID         uint64
-	replicaID       uint64
-	LeaseHolderID   uint64
-	TruncatedIndex  uint64
-	TruncateHistory map[uint64]uint64 // log index -> truncate index
+	shardID        uint64
+	replicaID      uint64
+	mu             sync.RWMutex
+	LeaseHolderID  uint64
+	TruncatedIndex uint64
+	LeaseHistory   map[uint64]uint64 // log index -> truncate index
 }
 
-var _ (sm.IStateMachine) = (*stateMachine)(nil)
+var _ (sm.IConcurrentStateMachine) = (*stateMachine)(nil)
 
-func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
-	return &stateMachine{shardID: shardID, replicaID: replicaID}
+// making this a IConcurrentStateMachine for now, IStateMachine need to be updated
+// to provide raft entry index to its Update() method
+func newStateMachine(shardID uint64, replicaID uint64) sm.IConcurrentStateMachine {
+	return &stateMachine{
+		shardID:      shardID,
+		replicaID:    replicaID,
+		LeaseHistory: make(map[uint64]uint64),
+	}
 }
 
-func (s *stateMachine) setLeaseHolderID(cmd []byte) {
+func (s *stateMachine) setLeaseHolderID(index uint64, cmd []byte) {
 	if !isSetLeaseHolderUpdate(cmd) {
 		panic("not a setLeaseHolder update")
 	}
 	s.LeaseHolderID = binaryEnc.Uint64(cmd[headerSize:])
+	s.LeaseHistory[index] = s.LeaseHolderID
+}
+
+func (s *stateMachine) truncateLeaseHistory(index uint64) {
+	for key := range s.LeaseHistory {
+		if key < index {
+			delete(s.LeaseHistory, key)
+		}
+	}
 }
 
 func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
@@ -99,6 +116,7 @@ func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
 	index := binaryEnc.Uint64(cmd[headerSize:])
 	if index > s.TruncatedIndex {
 		s.TruncatedIndex = index
+		s.truncateLeaseHistory(index)
 		return true
 	}
 	return false
@@ -107,36 +125,48 @@ func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
 // handleUserUpdate returns an empty sm.Result on success or it returns a
 // sm.Result value with the Value field set to the current lease holder ID
 // to indicate rejection by mismatched lease holder ID.
-func (s *stateMachine) handleUserUpdate(cmd []byte) (sm.Result, error) {
+func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
 	if !isUserUpdate(cmd) {
 		panic("not user update")
 	}
 	if s.LeaseHolderID != binaryEnc.Uint64(cmd[headerSize:]) {
-		return sm.Result{Value: s.LeaseHolderID}, nil
+		return sm.Result{Value: s.LeaseHolderID}
 	}
-	return sm.Result{}, nil
+	return sm.Result{}
 }
 
 func (s *stateMachine) Close() error {
 	return nil
 }
 
-func (s *stateMachine) Update(cmd []byte) (sm.Result, error) {
-	if isSetLeaseHolderUpdate(cmd) {
-		s.setLeaseHolderID(cmd)
-		return sm.Result{}, nil
-	} else if isSetTruncatedIndexUpdate(cmd) {
-		if s.setTruncatedIndex(cmd) {
-			return sm.Result{}, nil
+func (s *stateMachine) Update(entries []sm.Entry) ([]sm.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for idx, e := range entries {
+		cmd := e.Cmd
+		if isSetLeaseHolderUpdate(cmd) {
+			s.setLeaseHolderID(e.Index, cmd)
+			entries[idx].Result = sm.Result{}
+		} else if isSetTruncatedIndexUpdate(cmd) {
+			if s.setTruncatedIndex(cmd) {
+				entries[idx].Result = sm.Result{}
+			} else {
+				entries[idx].Result = sm.Result{Value: s.TruncatedIndex}
+			}
+		} else if isUserUpdate(cmd) {
+			entries[idx].Result = s.handleUserUpdate(cmd)
+		} else {
+			panic("corrupted entry")
 		}
-		return sm.Result{Value: s.TruncatedIndex}, nil
-	} else if isUserUpdate(cmd) {
-		return s.handleUserUpdate(cmd)
 	}
-	panic("corrupted entry")
+	return entries, nil
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	v, ok := query.(uint16)
 	if !ok {
 		panic("unknown query type")
@@ -149,12 +179,30 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	panic("unknown lookup command type")
 }
 
-func (s *stateMachine) SaveSnapshot(w io.Writer,
-	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	return gobMarshalTo(w, s)
+func (s *stateMachine) PrepareSnapshot() (interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	v := &stateMachine{
+		LeaseHolderID:  s.LeaseHolderID,
+		TruncatedIndex: s.TruncatedIndex,
+		LeaseHistory:   make(map[uint64]uint64),
+	}
+	for key, val := range s.LeaseHistory {
+		v.LeaseHistory[key] = val
+	}
+	return v, nil
+}
+
+func (s *stateMachine) SaveSnapshot(sess interface{},
+	w io.Writer, _ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
+	return gobMarshalTo(w, sess.(*stateMachine))
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	return gobUnmarshalFrom(r, s)
 }

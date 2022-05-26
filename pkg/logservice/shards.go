@@ -93,7 +93,7 @@ func (l *ShardManager) StartReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(shardID, replicaID)
 	// FIXME: why join is always true
-	return l.nh.StartCluster(initialReplicas, true, newStateMachine, raftConfig)
+	return l.nh.StartConcurrentCluster(initialReplicas, true, newStateMachine, raftConfig)
 }
 
 func (l *ShardManager) GetOrExtendDNLease(ctx context.Context,
