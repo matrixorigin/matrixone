@@ -38,7 +38,8 @@ CREATE TABLE PARTSUPP ( PS_PARTKEY     INTEGER NOT NULL,
                              PS_AVAILQTY    INTEGER NOT NULL,
                              PS_SUPPLYCOST  DOUBLE /* PRECISION */ /*DECIMAL(15,2)*/  NOT NULL,
                              PS_COMMENT     VARCHAR(199) NOT NULL,
-                        PRIMARY KEY (PS_PARTKEY, PS_SUPPKEY)
+                         /*PRIMARY KEY (PS_PARTKEY, PS_SUPPKEY)*/
+                         PRIMARY KEY (PS_SUPPLYCOST)
                         );
 
 CREATE TABLE CUSTOMER ( C_CUSTKEY     INTEGER NOT NULL,
@@ -80,5 +81,6 @@ CREATE TABLE LINEITEM ( L_ORDERKEY    BIGINT NOT NULL,
                              L_SHIPINSTRUCT VARCHAR(25) /*CHAR(25)*/ NOT NULL,
                              L_SHIPMODE     VARCHAR(10) /*CHAR(10)*/ NOT NULL,
                              L_COMMENT      VARCHAR(44) NOT NULL,
-                        PRIMARY KEY (L_ORDERKEY, L_LINENUMBER)
+                         /*PRIMARY KEY (L_ORDERKEY, L_LINENUMBER)*/
+                         PRIMARY KEY (L_EXTENDEDPRICE)
                         );
