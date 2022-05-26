@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/extend2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1486,7 +1487,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int8, types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          extend2.Plus[int8],
 		},
 		{
 			Index:       5,
