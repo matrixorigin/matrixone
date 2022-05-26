@@ -2259,7 +2259,7 @@ func TestChaos1(t *testing.T) {
 	blk := it.GetBlock()
 	view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 	assert.Equal(t, int(appendCnt), view.Length())
-	// view.ApplyDeletes()
+	view.ApplyDeletes()
 	t.Log(view.DeleteMask.String())
 	t.Log(view.String())
 }
