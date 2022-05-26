@@ -116,8 +116,12 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 	settings.level++
 	// Recursive traversal Query Plan
 	if len(node.Children) > 0 {
-		for _, childIndex := range node.Children {
-			err = traversalPlan(Nodes[childIndex], Nodes, settings, options)
+		for _, childNodeId := range node.Children {
+			index, err := serachNodeIndex(childNodeId, Nodes)
+			if err != nil {
+				return err
+			}
+			err = traversalPlan(Nodes[index], Nodes, settings, options)
 			if err != nil {
 				return err
 			}
@@ -125,4 +129,14 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 	}
 	settings.level--
 	return nil
+}
+
+// serach target node's index in Nodes slice
+func serachNodeIndex(nodeId int32, Nodes []*plan.Node) (int32, error) {
+	for i, node := range Nodes {
+		if node.NodeId == nodeId {
+			return int32(i), nil
+		}
+	}
+	return -1, errors.New(errno.InternalError, "Invalid Plan nodeId")
 }
