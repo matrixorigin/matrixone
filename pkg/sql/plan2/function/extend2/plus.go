@@ -45,7 +45,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, add.NumericAddScalar[T](leftValues[0], rightValues, resultValues))
+		vector.SetCol(resultVector, add.NumericAddScalar[T](rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
 	resultVector, err := process.Get(proc, int64(resultElementSize*len(leftValues)), left.Typ)
