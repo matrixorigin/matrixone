@@ -61,11 +61,14 @@ func (zm *ZoneMap) Update(v any) (err error) {
 	return
 }
 
-func (zm *ZoneMap) BatchUpdate(vec *vector.Vector, offset uint32, length int) error {
-	if !zm.typ.Eq(vec.Typ) {
+func (zm *ZoneMap) BatchUpdate(KeysCtx *KeysCtx) error {
+	if !zm.typ.Eq(KeysCtx.Keys.Typ) {
 		return ErrWrongType
 	}
-	if err := compute.ProcessVector(vec, offset, length, zm.Update, nil); err != nil {
+	update := func(v any, _ uint32) error {
+		return zm.Update(v)
+	}
+	if err := compute.ProcessVector(KeysCtx.Keys, KeysCtx.Start, KeysCtx.Count, update, nil); err != nil {
 		return err
 	}
 	return nil
@@ -88,14 +91,14 @@ func (zm *ZoneMap) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap,
 	}
 	visibility = roaring.NewBitmap()
 	row := uint32(0)
-	process := func(key any) (err error) {
+	process := func(key any, _ uint32) (err error) {
 		if common.CompareGeneric(key, zm.max, zm.typ) <= 0 && common.CompareGeneric(key, zm.min, zm.typ) >= 0 {
 			visibility.Add(row)
 		}
 		row++
 		return
 	}
-	if err := compute.ProcessVector(keys, 0, -1, process, nil); err != nil {
+	if err := compute.ProcessVector(keys, 0, uint32(vector.Length(keys)), process, nil); err != nil {
 		panic(err)
 	}
 	if visibility.GetCardinality() != 0 {

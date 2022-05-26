@@ -215,20 +215,20 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			}
 			ss[i].Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
 		}
-		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_PROJECT:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err
 		}
-		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_AGG:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err
 		}
 		ss = c.compileGroup(n, ss)
-		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
@@ -238,7 +238,7 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		if err != nil {
 			return nil, err
 		}
-		return c.compileJoin(n, ss, children), nil
+		return c.compileSort(n, c.compileJoin(n, ss, children)), nil
 	case plan.Node_SORT:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
@@ -363,8 +363,10 @@ func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 		return c.compileLimit(n, ss)
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) == 0: // offset
 		return c.compileOffset(n, ss)
-	default: // n.Limit != nil && n.Offset != nil && len(n.OrderBy) == 0
+	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) == 0: // limit and offset
 		return c.compileLimit(n, c.compileOffset(n, ss))
+	default:
+		return ss
 	}
 }
 

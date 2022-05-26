@@ -34,8 +34,10 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows := 1000
-	vec := compute.MockVec(typ, rows, 0)
-	err = zm.BatchUpdate(vec, 0, -1)
+	ctx := new(KeysCtx)
+	ctx.Keys = compute.MockVec(typ, rows, 0)
+	ctx.Count = uint32(rows)
+	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 
 	yes = zm.Contains(int32(0))
@@ -54,8 +56,9 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows = 500
-	vec = compute.MockVec(typ, rows, 700)
-	err = zm.BatchUpdate(vec, 0, -1)
+	ctx.Keys = compute.MockVec(typ, rows, 700)
+	ctx.Count = uint32(rows)
+	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 
 	yes = zm.Contains(int32(1001))
@@ -68,8 +71,9 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows = 500
-	vec = compute.MockVec(typ, rows, -200)
-	err = zm.BatchUpdate(vec, 0, -1)
+	ctx.Keys = compute.MockVec(typ, rows, -200)
+	ctx.Count = uint32(rows)
+	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 
 	yes = zm.Contains(int32(-201))
@@ -87,8 +91,9 @@ func TestZoneMapNumeric(t *testing.T) {
 	rows = 500
 	typ1 := typ
 	typ1.Oid = types.T_int64
-	vec = compute.MockVec(typ1, rows, 2000)
-	err = zm.BatchUpdate(vec, 0, -1)
+	ctx.Keys = compute.MockVec(typ1, rows, 2000)
+	ctx.Count = uint32(rows)
+	err = zm.BatchUpdate(ctx)
 	require.Error(t, err)
 
 	yes = zm1.Contains(int32(1234))
@@ -98,7 +103,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.True(t, yes)
 
 	typ1.Oid = types.T_int32
-	vec = compute.MockVec(typ1, rows, 3000)
+	vec := compute.MockVec(typ1, rows, 3000)
 	visibility, yes = zm1.ContainsAny(vec)
 	require.False(t, yes)
 	require.Equal(t, uint64(0), visibility.GetCardinality())
@@ -124,8 +129,10 @@ func TestZoneMapString(t *testing.T) {
 	require.False(t, yes)
 
 	rows := 1000
-	vec := compute.MockVec(typ, rows, 0)
-	err = zm.BatchUpdate(vec, 0, -1)
+	ctx := new(KeysCtx)
+	ctx.Keys = compute.MockVec(typ, rows, 0)
+	ctx.Count = uint32(rows)
+	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 
 	yes = zm.Contains([]byte(strconv.Itoa(500)))

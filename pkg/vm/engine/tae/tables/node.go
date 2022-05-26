@@ -84,8 +84,8 @@ func (node *appendableNode) DoWithPin(do func() error) (err error) {
 
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 	if coarse {
-		readLock := node.block.mvcc.GetSharedLock()
-		defer readLock.Unlock()
+		node.block.mvcc.RLock()
+		defer node.block.mvcc.RUnlock()
 		return node.rows
 	}
 	// TODO: fine row count
@@ -179,7 +179,7 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 	}
 	masks := make(map[uint16]*roaring.Bitmap)
 	vals := make(map[uint16]map[uint32]any)
-	readLock := mvcc.GetSharedLock()
+	mvcc.RLock()
 	for i := range node.block.meta.GetSchema().ColDefs {
 		chain := mvcc.GetColumnChain(uint16(i))
 
@@ -195,12 +195,12 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 		}
 	}
 	if err != nil {
-		readLock.Unlock()
+		mvcc.RUnlock()
 		return
 	}
 	deleteChain := mvcc.GetDeleteChain()
 	n, err := deleteChain.CollectDeletesLocked(ts, false)
-	readLock.Unlock()
+	mvcc.RUnlock()
 	if err != nil {
 		return
 	}

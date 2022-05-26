@@ -32,11 +32,11 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 		return
 	}
 
-	var projList []*Expr
+	var selectExprs tree.SelectExprs
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
-		nodeId, projList, err = buildSelectClause(selectClause, ctx, query, binderCtx)
+		nodeId, selectExprs, err = buildSelectClause(selectClause, ctx, query, binderCtx)
 		if err != nil {
 			return
 		}
@@ -46,22 +46,91 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 		return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
 
+	node := query.Nodes[nodeId]
+
+	var selectList []*Expr
+
+	needAgg := node.NodeType == plan.Node_AGG
+	for _, selectExpr := range selectExprs {
+		expr, isAgg, err := buildExpr(selectExpr.Expr, ctx, query, node, binderCtx, needAgg)
+		if err != nil {
+			return 0, err
+		}
+		if isAgg {
+			node.ProjectList = append(node.ProjectList, expr)
+		}
+		switch listExpr := expr.Expr.(type) {
+		case *plan.Expr_List:
+			// select a.* from tbl a or select * from tbl,   buildExpr() will return plan.ExprList
+			selectList = append(selectList, listExpr.List.List...)
+		default:
+			alias := string(selectExpr.As)
+			if alias == "" {
+				expr.ColName = tree.String(&selectExpr, dialect.MYSQL)
+			} else {
+				binderCtx.columnAlias[alias] = &plan.Expr{
+					Typ:     expr.Typ,
+					ColName: alias,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(len(node.ProjectList)),
+						},
+					},
+				}
+				expr.TableName = ""
+				expr.ColName = alias
+				node.ProjectList = append(node.ProjectList, expr)
+			}
+			selectList = append(selectList, expr)
+		}
+	}
+
 	// Build ORDER BY clause
 	if stmt.OrderBy != nil {
-		node := query.Nodes[nodeId]
+		preNode := query.Nodes[nodeId]
 		sortNode := &Node{
 			NodeType:    plan.Node_SORT,
 			Children:    []int32{nodeId},
-			ProjectList: node.ProjectList,
+			ProjectList: preNode.ProjectList,
 		}
 
 		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+		var expr *Expr
+		var isAgg bool
 		for _, order := range stmt.OrderBy {
-			orderBy := &plan.OrderBySpec{}
-			expr, _, err := buildExpr(order.Expr, ctx, query, sortNode, binderCtx, false)
-			if err != nil {
-				return 0, err
+			if preNode.NodeType != plan.Node_AGG {
+				expr, _, err = buildExpr(order.Expr, ctx, query, sortNode, binderCtx, false)
+				if err != nil {
+					return
+				}
+			} else {
+				expr, isAgg, err = buildExpr(order.Expr, ctx, query, sortNode, binderCtx, false)
+				if err != nil || isAgg {
+					expr, isAgg, err = buildExpr(order.Expr, ctx, query, preNode, binderCtx, true)
+					if err != nil {
+						return
+					}
+					if !isAgg {
+						err = errors.New(errno.GroupingError, fmt.Sprintf("'%v' contains column(s) not in the GROUP BY clause or be used in an aggregate function", tree.String(order.Expr, dialect.MYSQL)))
+						return
+					}
+					preNode.ProjectList = append(preNode.ProjectList, expr)
+					expr = &plan.Expr{
+						Typ:       expr.Typ,
+						TableName: expr.TableName,
+						ColName:   expr.ColName,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: 0,
+								ColPos: int32(len(preNode.ProjectList) - 1),
+							},
+						},
+					}
+				}
 			}
+
+			orderBy := &plan.OrderBySpec{}
 			orderBy.Expr = expr
 
 			switch order.Direction {
@@ -76,30 +145,35 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 		}
 		sortNode.OrderBy = orderBys
 
-		sortNode.ProjectList = make([]*Expr, len(projList))
-		for i, expr := range node.ProjectList {
-			if expr == nil {
-				panic(i)
+		// Re-bind projection list for SELECT clause
+		sortNode.ProjectList = make([]*Expr, 0, len(selectList))
+		for _, selectExpr := range selectExprs {
+			alias := string(selectExpr.As)
+			if len(alias) != 0 {
+				sortNode.ProjectList = append(sortNode.ProjectList, binderCtx.columnAlias[alias])
+				continue
 			}
-			node.ProjectList[i] = &Expr{
-				Typ:       expr.Typ,
-				TableName: expr.TableName,
-				ColName:   expr.ColName,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
-					},
-				},
+			expr, _, err := buildExpr(selectExpr.Expr, ctx, query, sortNode, binderCtx, false)
+			if err != nil {
+				return 0, err
+			}
+			switch listExpr := expr.Expr.(type) {
+			case *plan.Expr_List:
+				// select a.* from tbl a or select * from tbl,   buildExpr() will return plan.ExprList
+				sortNode.ProjectList = append(sortNode.ProjectList, listExpr.List.List...)
+			default:
+				sortNode.ProjectList = append(sortNode.ProjectList, expr)
 			}
 		}
 
 		nodeId = appendQueryNode(query, sortNode)
+		node = query.Nodes[nodeId]
+	} else {
+		node.ProjectList = selectList
 	}
 
 	// Build LIMIT clause
 	if stmt.Limit != nil {
-		node := query.Nodes[nodeId]
 
 		// offset
 		if stmt.Limit.Offset != nil {
@@ -119,8 +193,6 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 			node.Limit = expr
 		}
 	}
-
-	query.Nodes[nodeId].ProjectList = projList
 
 	return
 }
@@ -205,7 +277,7 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, binderCtx 
 	return nil
 }
 
-func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, binderCtx *BinderContext) (nodeId int32, projList []*Expr, err error) {
+func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, binderCtx *BinderContext) (nodeId int32, selectExprs tree.SelectExprs, err error) {
 	// from
 	nodeId, err = buildFrom(stmt.From.Tables, ctx, query, binderCtx)
 	if err != nil {
@@ -222,8 +294,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		}
 	}
 
-	// FIXME: Agg (group by && having)
-	if stmt.GroupBy != nil || stmt.Having != nil {
+	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
 		aggNode := &Node{
 			NodeType: plan.Node_AGG,
 			Children: []int32{nodeId},
@@ -231,85 +302,79 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 		// group_by
 		if stmt.GroupBy != nil {
-			exprs := make([]*Expr, 0, len(stmt.GroupBy))
-			for _, groupByExpr := range stmt.GroupBy {
-				expr, _, err := buildExpr(groupByExpr, ctx, query, aggNode, binderCtx, false)
-				if err != nil {
-					return 0, nil, err
-				}
-				exprs = append(exprs, expr)
+			if stmt.Distinct {
+				err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement(DISTINCT with GROUP BY): %T", stmt))
+				return
 			}
-			aggNode.GroupBy = exprs
+
+			aggNode.GroupBy = make([]*Expr, len(stmt.GroupBy))
+			for i, groupByExpr := range stmt.GroupBy {
+				aggNode.GroupBy[i], _, err = buildExpr(groupByExpr, ctx, query, aggNode, binderCtx, false)
+				if err != nil {
+					return
+				}
+			}
+		} else if stmt.Distinct {
+			aggNode.GroupBy = make([]*Expr, len(stmt.Exprs))
+			for i, selectExpr := range stmt.Exprs {
+				aggNode.GroupBy[i], _, err = buildExpr(selectExpr.Expr, ctx, query, aggNode, binderCtx, false)
+				if err != nil {
+					return
+				}
+			}
 		}
 
 		// having
 		if stmt.Having != nil {
-			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, aggNode, binderCtx, true)
-			if err != nil {
-				return 0, nil, err
+			if stmt.Distinct {
+				err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement(DISTINCT with HAVING): %T", stmt))
+				return
 			}
-			aggNode.WhereList = append(aggNode.WhereList, exprs...)
+
+			aggNode.WhereList, err = splitAndBuildExpr(stmt.Having.Expr, ctx, query, aggNode, binderCtx, true)
+			if err != nil {
+				return
+			}
 		}
 
-		aggNode.ProjectList = make([]*Expr, len(node.ProjectList))
-		for i, expr := range node.ProjectList {
-			if expr == nil {
-				panic(i)
-			}
-			aggNode.ProjectList[i] = &Expr{
+		aggNode.ProjectList = make([]*Expr, len(aggNode.GroupBy)+len(aggNode.AggList))
+		var idx int32
+
+		for _, expr := range aggNode.GroupBy {
+			aggNode.ProjectList[idx] = &Expr{
 				Typ:       expr.Typ,
 				TableName: expr.TableName,
 				ColName:   expr.ColName,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
-						RelPos: 0,
-						ColPos: int32(i),
+						RelPos: -1,
+						ColPos: idx,
 					},
 				},
 			}
+			idx++
+		}
+
+		for _, expr := range aggNode.AggList {
+			aggNode.ProjectList[idx] = &Expr{
+				Typ:       expr.Typ,
+				TableName: expr.TableName,
+				ColName:   expr.ColName,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -2,
+						ColPos: idx,
+					},
+				},
+			}
+			idx++
 		}
 
 		nodeId = appendQueryNode(query, aggNode)
 		node = query.Nodes[nodeId]
 	}
 
-	// FIXME: projection
-	needAgg := node.NodeType == plan.Node_AGG
-	for _, selectExpr := range stmt.Exprs {
-		expr, _, err := buildExpr(selectExpr.Expr, ctx, query, node, binderCtx, needAgg)
-		if err != nil {
-			return 0, nil, err
-		}
-		switch listExpr := expr.Expr.(type) {
-		case *plan.Expr_List:
-			// select a.* from tbl a or select * from tbl,   buildExpr() will return plan.ExprList
-			projList = append(projList, listExpr.List.List...)
-		default:
-			alias := string(selectExpr.As)
-			if alias == "" {
-				expr.ColName = tree.String(&selectExpr, dialect.MYSQL)
-			} else {
-				expr.TableName = ""
-				expr.ColName = alias
-				binderCtx.columnAlias[alias] = expr
-			}
-			projList = append(projList, expr)
-		}
-	}
-
-	// FIXME: distinct
-	if stmt.Distinct {
-		if stmt.GroupBy != nil {
-			return 0, nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement(distinct with group by): %T", stmt))
-		}
-		distinctNode := &Node{
-			NodeType: plan.Node_AGG,
-			Children: []int32{nodeId},
-		}
-		distinctNode.GroupBy = projList
-		distinctNode.ProjectList = projList
-		nodeId = appendQueryNode(query, distinctNode)
-	}
+	selectExprs = stmt.Exprs
 
 	return
 }

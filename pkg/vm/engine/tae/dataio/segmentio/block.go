@@ -17,6 +17,7 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -51,6 +52,9 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
+	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
+		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -71,6 +75,7 @@ func replayBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) 
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
+	bf.deletes.file = make([]*segment.BlockFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -109,6 +114,12 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
+	if bf.deletes.file != nil {
+		bf.deletes.mutex.Lock()
+		defer bf.deletes.mutex.Unlock()
+		bf.deletes.file = append(bf.deletes.file,
+			bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)))
+	}
 	return
 }
 
@@ -158,14 +169,6 @@ func (bf *blockFile) OpenColumn(colIdx int) (colBlk file.ColumnBlock, err error)
 
 func (bf *blockFile) Close() error {
 	return nil
-}
-
-func (bf *blockFile) removeData(data *dataFile) {
-	if data.file != nil {
-		for _, file := range data.file {
-			bf.seg.GetSegmentFile().ReleaseFile(file)
-		}
-	}
 }
 
 func (bf *blockFile) Destroy() error {

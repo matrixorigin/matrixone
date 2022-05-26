@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "SELECT md.datname as `Database` FROM TT md",
-		output: "select md.datname as Database from tt as md",
+		input:  "select date_sub(now(), interval 1 day) from t1;",
+		output: "select date_sub(now(), interval(1 day)) from t1",
 	}
 )
 
@@ -56,6 +56,15 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select date_sub(now(), interval 1 day) from t1;",
+		output: "select date_sub(now(), interval(1 day)) from t1",
+	}, {
+		input:  "select date_sub(now(), interval '1 day') from t1;",
+		output: "select date_sub(now(), interval(1 day)) from t1",
+	}, {
+		input:  "select date_add(now(), interval '1 day') from t1;",
+		output: "select date_add(now(), interval(1 day)) from t1",
+	}, {
 		input:  "SELECT md.datname as `Database` FROM TT md",
 		output: "select md.datname as Database from tt as md",
 	}, {
@@ -349,7 +358,7 @@ var (
 		input: "select sum(distinct s) from tbl where 1",
 	}, {
 		input:  "select u.a, interval 1 second from t",
-		output: "select u.a, interval(1, second) from t",
+		output: "select u.a, interval(1 second) from t",
 	}, {
 		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 	}, {

@@ -16,6 +16,7 @@ package segmentio
 
 import (
 	"bytes"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"path"
 	"testing"
@@ -67,9 +68,21 @@ func TestSegmentFile_Replay(t *testing.T) {
 	var w bytes.Buffer
 	dataStr := "hello tae"
 	w.WriteString(dataStr)
+	deletes := roaring.New()
+	deletes.Add(10)
+	deletes.Add(20)
+	deletesBuf, _ := deletes.ToBytes()
 	for i := 0; i < 20; i++ {
 		blkId1 := common.NextGlobalSeqNum()
 		block, err := seg.OpenBlock(blkId1, colCnt, indexCnt)
+		assert.Nil(t, err)
+		blockTs := common.NextGlobalSeqNum()
+		err = block.WriteTS(blockTs)
+		assert.Nil(t, err)
+		readTs, _ := block.ReadTS()
+		assert.Equal(t, blockTs, readTs)
+
+		err = block.WriteDeletes(deletesBuf)
 		assert.Nil(t, err)
 		ids = append(ids, blkId1)
 
