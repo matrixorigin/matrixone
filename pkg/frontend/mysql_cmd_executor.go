@@ -743,6 +743,9 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	txnHandler := ses.GetTxnHandler()
+	if txnHandler.isTxnState(TxnBegan) {
+		return fmt.Errorf("Do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
+	}
 	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb, txnHandler.GetTxn().GetCtx())
 	if err != nil {
 		//echo client. no such database

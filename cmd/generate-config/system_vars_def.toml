@@ -528,6 +528,16 @@ values = []
 comment = "default is false. true : use plan2/compile2 false : use stuff in v0.4.0"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "oneTxnPerBatchDuringLoad"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true"]
+comment = "default is false. true : one txn for an independent batch false : only one txn during loading data"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
