@@ -83,7 +83,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 		return nil
 	}
 
-	err = compute.ProcessVector(keys.Keys, uint32(keys.Start), -1, processor, nil)
+	err = compute.ProcessVector(keys.Keys, keys.Start, keys.Count, processor, nil)
 	return
 }
 
@@ -117,7 +117,7 @@ func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, star
 		return nil
 	}
 
-	err = compute.ProcessVector(keys, 0, -1, processor, nil)
+	err = compute.ProcessVector(keys, 0, uint32(vector.Length(keys)), processor, nil)
 	return
 }
 
@@ -158,11 +158,11 @@ func (art *simpleARTMap) Contains(key any) bool {
 
 // ContainsAny returns whether at least one of the specified keys exists.
 //
-// If the keyselects is not nil, only the keys indicated by the keyselects bitmap will
+// If the keysCtx.Selects is not nil, only the keys indicated by the keyselects bitmap will
 // participate in the calculation.
 // When deduplication occurs, the corresponding row number will be taken out. If the row
 // number is included in the rowmask, the error will be ignored
-func (art *simpleARTMap) ContainsAny(keys *vector.Vector, keyselects, rowmask *roaring.Bitmap) bool {
+func (art *simpleARTMap) ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool {
 	processor := func(v any, _ uint32) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
@@ -183,7 +183,7 @@ func (art *simpleARTMap) ContainsAny(keys *vector.Vector, keyselects, rowmask *r
 		}
 		return nil
 	}
-	if err := compute.ProcessVector(keys, 0, -1, processor, keyselects); err != nil {
+	if err := compute.ProcessVector(keysCtx.Keys, keysCtx.Start, keysCtx.Count, processor, keysCtx.Selects); err != nil {
 		if err == ErrDuplicate {
 			return true
 		} else {

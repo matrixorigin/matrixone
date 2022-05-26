@@ -18,7 +18,7 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type blockAppender struct {
@@ -73,10 +73,10 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 		return err
 	})
 
-	keysCtx := new(indexwrapper.KeysCtx)
+	keysCtx := new(index.KeysCtx)
 	keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
-	keysCtx.Start = int(offset)
-	keysCtx.Count = int(length)
+	keysCtx.Start = offset
+	keysCtx.Count = length
 	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
 	err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
 	if err != nil {
@@ -95,10 +95,10 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 			return err
 		})
 
-		keysCtx := new(indexwrapper.KeysCtx)
+		keysCtx := new(index.KeysCtx)
 		keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
-		keysCtx.Start = int(offset)
-		keysCtx.Count = int(length)
+		keysCtx.Start = offset
+		keysCtx.Count = length
 		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())
 		err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
 		if err != nil {

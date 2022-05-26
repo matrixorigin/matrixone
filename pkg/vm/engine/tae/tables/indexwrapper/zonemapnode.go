@@ -161,7 +161,10 @@ func (writer *ZMWriter) AddValues(values *vector.Vector) (err error) {
 			return
 		}
 	}
-	err = writer.zonemap.BatchUpdate(values, 0, -1)
+	ctx := new(index.KeysCtx)
+	ctx.Keys = values
+	ctx.Count = uint32(vector.Length(values))
+	err = writer.zonemap.BatchUpdate(ctx)
 	return
 }
 

@@ -14,10 +14,20 @@ var (
 )
 
 type KeysCtx struct {
-	Keys         *vector.Vector
-	Selects      *roaring.Bitmap
-	Start, Count int
-	NeedVerify   bool
+	Keys *vector.Vector
+
+	// Select the key where this bitmap indicates.
+	// Nil to select all
+	Selects *roaring.Bitmap
+	// Select a continous interval [Start, Start+Count) from keys
+	Start, Count uint32
+
+	// Whether need to verify Keys
+	NeedVerify bool
+}
+
+func (ctx *KeysCtx) SelectAll() {
+	ctx.Count = uint32(vector.Length(ctx.Keys))
 }
 
 type BatchResp struct {
@@ -27,14 +37,13 @@ type BatchResp struct {
 
 type SecondaryIndex interface {
 	Insert(key any, row uint32) error
-	// BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (updatedpos, updatedrow *roaring.Bitmap, err error)
 	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (resp *BatchResp, err error)
 	Update(key any, row uint32) error
 	BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) error
 	Delete(key any) (old uint32, err error)
 	Search(key any) (uint32, error)
 	Contains(key any) bool
-	ContainsAny(keys *vector.Vector, keyselects, rowmask *roaring.Bitmap) bool
+	ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool
 	String() string
 }
 

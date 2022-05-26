@@ -9,8 +9,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type KeysCtx = index.KeysCtx
-
 func TranslateError(err error) error {
 	if err == nil {
 		return err
@@ -42,7 +40,7 @@ type Index interface {
 	// BatchUpsert batch insert the specific keys
 	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
 	// If any other unknown error hanppens, return error
-	BatchUpsert(keysCtx *KeysCtx, offset uint32, ts uint64) error
+	BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts uint64) error
 
 	// Delete delete the specific key
 	// If the specified key not found in active map, return ErrNotFound

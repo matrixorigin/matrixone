@@ -52,7 +52,7 @@ func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	if err = compute.ProcessVector(data, 0, -1, collector, nil); err != nil {
+	if err = compute.ProcessVector(data, 0, uint32(vector.Length(data)), collector, nil); err != nil {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -97,7 +97,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 		return nil
 	}
 
-	if err := compute.ProcessVector(keys, 0, -1, collector, visibility); err != nil {
+	if err := compute.ProcessVector(keys, 0, uint32(vector.Length(keys)), collector, visibility); err != nil {
 		return false, nil, err
 	}
 	if positive.GetCardinality() != 0 {

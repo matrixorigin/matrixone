@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
@@ -103,10 +104,10 @@ func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
 		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
 		defer common.GPool.Free(w.MNode)
-		keysCtx := new(indexwrapper.KeysCtx)
+		keysCtx := new(index.KeysCtx)
 		keysCtx.Keys = &w.Vector
 		keysCtx.Start = 0
-		keysCtx.Count = movec.Length(&w.Vector)
+		keysCtx.Count = uint32(movec.Length(&w.Vector))
 		err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}
@@ -800,7 +801,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 		}
 		return nil
 	}
-	if err = compute.ProcessVector(pks, 0, -1, deduplicate, keyselects); err != nil {
+	if err = compute.ProcessVector(pks, 0, uint32(movec.Length(pks)), deduplicate, keyselects); err != nil {
 		return err
 	}
 	return

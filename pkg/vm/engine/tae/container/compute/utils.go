@@ -149,13 +149,11 @@ func EncodeKey(key any, typ types.Type) ([]byte, error) {
 	}
 }
 
-func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v any, pos uint32) error, keyselects *roaring.Bitmap) error {
+func ProcessVector(vec *vector.Vector, offset uint32, length uint32, task func(v any, pos uint32) error, keyselects *roaring.Bitmap) error {
 	var idxes []uint32
 	if keyselects != nil {
 		idxes = keyselects.ToArray()
 	}
-	// TODO: if length == -1, means process till the end, otherwise
-	// process [offset, offset + length] only
 	switch vec.Typ.Oid {
 	case types.T_int8:
 		vs := vec.Col.([]int8)[offset:]

@@ -23,23 +23,22 @@ func NewMutableIndex(keyT types.Type) *mutableIndex {
 	}
 }
 
-func (index *mutableIndex) BatchUpsert(keysCtx *KeysCtx, offset uint32, ts uint64) (err error) {
+func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts uint64) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-	if err = index.zonemap.BatchUpdate(keysCtx.Keys, uint32(keysCtx.Start), -1); err != nil {
+	if err = idx.zonemap.BatchUpdate(keysCtx); err != nil {
 		return
 	}
-	// logutil.Infof("Pre: %s", index.art.String())
-	// logutil.Infof("Post: %s", index.art.String())
-	// keyspos, rows, err := index.art.BatchInsert(keys, int(start), int(count), offset, false, true)
-	resp, err := index.art.BatchInsert(keysCtx, offset, true)
+	// logutil.Infof("Pre: %s", idx.art.String())
+	// logutil.Infof("Post: %s", idx.art.String())
+	resp, err := idx.art.BatchInsert(keysCtx, offset, true)
 	if resp != nil {
 		posArr := resp.UpdatedKeys.ToArray()
 		rowArr := resp.UpdatedRows.ToArray()
 		for i := 0; i < len(posArr); i++ {
 			key := compute.GetValue(keysCtx.Keys, posArr[i])
-			if err = index.deletes.LogDeletedKey(key, rowArr[i], ts); err != nil {
+			if err = idx.deletes.LogDeletedKey(key, rowArr[i], ts); err != nil {
 				return
 			}
 		}
@@ -47,61 +46,65 @@ func (index *mutableIndex) BatchUpsert(keysCtx *KeysCtx, offset uint32, ts uint6
 	return
 }
 
-func (index *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted, existed bool) {
-	return index.deletes.IsKeyDeleted(key, ts)
+func (idx *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted, existed bool) {
+	return idx.deletes.IsKeyDeleted(key, ts)
 }
 
-func (index *mutableIndex) Delete(key any, ts uint64) (err error) {
+func (idx *mutableIndex) Delete(key any, ts uint64) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
 	var old uint32
-	if old, err = index.art.Delete(key); err != nil {
+	if old, err = idx.art.Delete(key); err != nil {
 		return
 	}
-	err = index.deletes.LogDeletedKey(key, old, ts)
+	err = idx.deletes.LogDeletedKey(key, old, ts)
 	return
 }
 
-func (index *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
+func (idx *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-	exist := index.zonemap.Contains(key)
+	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {
 		err = data.ErrNotFound
 		return
 	}
 	// 2. search art tree for key
-	row, err = index.art.Search(key)
+	row, err = idx.art.Search(key)
 	err = TranslateError(err)
 	return
 }
 
-func (index *mutableIndex) Dedup(any) error { panic("implement me") }
-func (index *mutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
-	keyselects, exist := index.zonemap.ContainsAny(keys)
+func (idx *mutableIndex) Dedup(any) error { panic("implement me") }
+func (idx *mutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
 		return
 	}
-	exist = index.art.ContainsAny(keys, keyselects, rowmask)
+	ctx := new(index.KeysCtx)
+	ctx.Keys = keys
+	ctx.Selects = keyselects
+	ctx.SelectAll()
+	exist = idx.art.ContainsAny(ctx, rowmask)
 	if exist {
 		err = data.ErrDuplicate
 	}
 	return
 }
 
-func (index *mutableIndex) Destroy() error {
-	return index.Close()
+func (idx *mutableIndex) Destroy() error {
+	return idx.Close()
 }
 
-func (index *mutableIndex) Close() error {
-	index.art = nil
-	index.zonemap = nil
+func (idx *mutableIndex) Close() error {
+	idx.art = nil
+	idx.zonemap = nil
 	return nil
 }
 
-func (index *mutableIndex) ReadFrom(data.Block) error { panic("not supported") }
-func (index *mutableIndex) WriteTo(data.Block) error  { panic("not supported") }
+func (idx *mutableIndex) ReadFrom(data.Block) error { panic("not supported") }
+func (idx *mutableIndex) WriteTo(data.Block) error  { panic("not supported") }
