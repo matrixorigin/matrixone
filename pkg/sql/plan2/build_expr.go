@@ -37,7 +37,7 @@ func splitAndBuildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *
 			return nil, err
 		}
 		if needAgg != isAgg {
-			return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' contains column(s) not in the GROUP BY clause or be used in an aggregate function", stmt))
+			return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' contains column(s) not in the GROUP BY clause or be used in an aggregate function", tree.String(*cond, dialect.MYSQL)))
 		}
 		exprs[i] = expr
 	}
@@ -48,6 +48,7 @@ func splitAndBuildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *
 //buildExpr
 func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (resultExpr *Expr, isAgg bool, err error) {
 	colName := tree.String(stmt, dialect.MYSQL)
+
 	if needAgg {
 		colPos := int32(-1)
 		for i, col := range node.GroupBy {
@@ -87,6 +88,25 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 					},
 				},
 			}, true, nil
+		}
+	} else {
+		for i, child := range node.Children {
+			for j, proj := range query.Nodes[child].ProjectList {
+				if len(proj.TableName) == 0 && colName == proj.ColName {
+					resultExpr = &plan.Expr{
+						Typ:     proj.Typ,
+						ColName: proj.ColName,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: int32(i),
+								ColPos: int32(j),
+							},
+						},
+					}
+
+					return
+				}
+			}
 		}
 	}
 
