@@ -125,7 +125,6 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				bf.columns[col].ts = ts
 				bf.columns[col].data.file[0] = file
 			}
-			break
 		case "update":
 			sf.replayInfo(bf.columns[col].updates.stat, file)
 			if ts == 0 {
@@ -137,7 +136,6 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				bf.columns[col].ts = ts
 				bf.columns[col].updates.file[0] = file
 			}
-			break
 		case "del":
 			sf.replayInfo(bf.deletes.stat, file)
 			if ts == 0 {
@@ -149,7 +147,8 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				bf.ts = ts
 				bf.deletes.file[0] = file
 			}
-			break
+		default:
+			panic(any("No Support"))
 		}
 
 	}
