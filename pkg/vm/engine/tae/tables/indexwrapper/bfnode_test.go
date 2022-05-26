@@ -48,11 +48,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewBFReader()
-	err = reader.Init(bufManager, file, &common.ID{})
-	require.NoError(t, err)
-
-	//t.Log(bufManager.String())
+	reader := NewBFReader(bufManager, file, new(common.ID))
 
 	res, err = reader.MayContainsKey(int32(500))
 	require.NoError(t, err)

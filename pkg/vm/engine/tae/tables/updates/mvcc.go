@@ -25,24 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type sharedLock struct {
-	locker *sync.RWMutex
-}
-
-func (lock *sharedLock) Lock() {
-	lock.locker.RLock()
-}
-
-func (lock *sharedLock) Unlock() {
-	lock.locker.RUnlock()
-}
-
-func newSharedLock(locker *sync.RWMutex) *sharedLock {
-	return &sharedLock{
-		locker: locker,
-	}
-}
-
 type MVCCHandle struct {
 	*sync.RWMutex
 	columns         map[uint16]*ColumnChain
@@ -51,7 +33,7 @@ type MVCCHandle struct {
 	maxVisible      uint64
 	appends         []*AppendNode
 	changes         uint32
-	deletesListener func(common.RowGen) error
+	deletesListener func(common.RowGen, uint64) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -72,11 +54,11 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	return node
 }
 
-func (n *MVCCHandle) SetDeletesListener(l func(common.RowGen) error) {
+func (n *MVCCHandle) SetDeletesListener(l func(common.RowGen, uint64) error) {
 	n.deletesListener = l
 }
 
-func (n *MVCCHandle) GetDeletesListener() func(common.RowGen) error {
+func (n *MVCCHandle) GetDeletesListener() func(common.RowGen, uint64) error {
 	return n.deletesListener
 }
 
@@ -136,24 +118,6 @@ func (n *MVCCHandle) StringLocked() string {
 		chain.RUnlock()
 	}
 	return s
-}
-
-func (n *MVCCHandle) GetSharedLock() sync.Locker {
-	locker := newSharedLock(n.RWMutex)
-	locker.Lock()
-	return locker
-}
-
-func (n *MVCCHandle) GetExclusiveLock() sync.Locker {
-	n.Lock()
-	return n.RWMutex
-}
-
-func (n *MVCCHandle) GetColumnSharedLock(idx uint16) sync.Locker {
-	col := n.columns[idx]
-	locker := newSharedLock(col.RWMutex)
-	locker.Lock()
-	return locker
 }
 
 func (n *MVCCHandle) GetColumnExclusiveLock(idx uint16) sync.Locker {
@@ -220,8 +184,8 @@ func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {
 	return visible, err
 }
 
-func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64) (bool, error) {
-	return n.deletes.IsDeleted(row, ts)
+func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64, rwlocker *sync.RWMutex) (bool, error) {
+	return n.deletes.IsDeleted(row, ts, rwlocker)
 }
 
 func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (indexes []*wal.Index, err error) {

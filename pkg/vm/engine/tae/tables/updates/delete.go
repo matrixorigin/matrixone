@@ -157,14 +157,11 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
 func (node *DeleteNode) PrepareCommit() (err error) {
-	node.chain.Lock()
-	defer node.chain.Unlock()
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
 	if node.commitTs != txnif.UncommitTS {
 		return
 	}
-	// if node.commitTs != txnif.UncommitTS {
-	// 	panic("logic error")
-	// }
 	node.commitTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	return
@@ -252,8 +249,8 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 }
 
 func (node *DeleteNode) PrepareRollback() (err error) {
-	node.chain.Lock()
-	defer node.chain.Unlock()
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
 	node.chain.RemoveNodeLocked(node)
 	return
 }
@@ -265,10 +262,10 @@ func (node *DeleteNode) OnApply() (err error) {
 	if listener == nil {
 		return
 	}
-	err = listener(node.mask.Iterator())
+	err = listener(node.mask.Iterator(), node.commitTs)
 	return
 }
 
-func (node *DeleteNode) GetInvisibilityMapRefLocked() *roaring.Bitmap {
+func (node *DeleteNode) GetRowMaskRefLocked() *roaring.Bitmap {
 	return node.mask
 }

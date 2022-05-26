@@ -62,6 +62,12 @@ type BlockReader interface {
 	GetMeta() any
 	Fingerprint() *common.ID
 	Rows() int
+
+	// Why need rowmask?
+	// We don't update the index until committing the transaction. Before that, even if we deleted a row
+	// from a block, the index would not change. If then we insert a row with the same primary key as the
+	// previously deleted row, there will be an deduplication error (unexpected!).
+	// Here we use the rowmask to ingore any deduplication error on those deleted rows.
 	BatchDedup(col *vector.Vector, invisibility *roaring.Bitmap) error
 
 	IsAppendableBlock() bool

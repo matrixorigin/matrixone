@@ -51,32 +51,39 @@ func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	return
 }
 
-func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (err error) {
+func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (resp *BatchResp, err error) {
 	existence := make(map[any]bool)
 
-	processor := func(v any) error {
+	processor := func(v any, i uint32) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
 		}
-		if verify {
+		if keys.NeedVerify {
 			if _, found := existence[string(encoded)]; found {
 				return ErrDuplicate
 			}
 			existence[string(encoded)] = true
 		}
-		old, _ := art.tree.Insert(encoded, offset)
+		old, _ := art.tree.Insert(encoded, startRow)
 		if old != nil {
 			// TODO: rollback previous insertion if duplication comes up
 			if !upsert {
 				return ErrDuplicate
 			}
+			if resp == nil {
+				resp = new(BatchResp)
+				resp.UpdatedKeys = roaring.New()
+				resp.UpdatedRows = roaring.New()
+			}
+			resp.UpdatedRows.Add(old.(uint32))
+			resp.UpdatedKeys.Add(i)
 		}
-		offset++
+		startRow++
 		return nil
 	}
 
-	err = compute.ProcessVector(keys, uint32(start), -1, processor, nil)
+	err = compute.ProcessVector(keys.Keys, keys.Start, keys.Count, processor, nil)
 	return
 }
 
@@ -96,7 +103,7 @@ func (art *simpleARTMap) Update(key any, offset uint32) (err error) {
 func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) (err error) {
 	idx := 0
 
-	processor := func(v any) error {
+	processor := func(v any, _ uint32) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
@@ -110,18 +117,20 @@ func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, star
 		return nil
 	}
 
-	err = compute.ProcessVector(keys, 0, -1, processor, nil)
+	err = compute.ProcessVector(keys, 0, uint32(vector.Length(keys)), processor, nil)
 	return
 }
 
-func (art *simpleARTMap) Delete(key any) (err error) {
+func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
 	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {
 		return
 	}
-	_, found := art.tree.Delete(ikey)
+	v, found := art.tree.Delete(ikey)
 	if !found {
 		err = ErrNotFound
+	} else {
+		old = v.(uint32)
 	}
 	return
 }
@@ -147,27 +156,34 @@ func (art *simpleARTMap) Contains(key any) bool {
 	return exists
 }
 
-// 1. keys: keys to check
-// 2. visibility: specify which key in keys to check
-// 3. mask: row mask
-func (art *simpleARTMap) ContainsAny(keys *vector.Vector, visibility, mask *roaring.Bitmap) bool {
-	processor := func(v any) error {
+// ContainsAny returns whether at least one of the specified keys exists.
+//
+// If the keysCtx.Selects is not nil, only the keys indicated by the keyselects bitmap will
+// participate in the calculation.
+// When deduplication occurs, the corresponding row number will be taken out. If the row
+// number is included in the rowmask, the error will be ignored
+func (art *simpleARTMap) ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool {
+	processor := func(v any, _ uint32) error {
 		encoded, err := compute.EncodeKey(v, art.typ)
 		if err != nil {
 			return err
 		}
+		// 1. If duplication found
 		if v, found := art.tree.Search(encoded); found {
-			if mask == nil {
+			// 1.1 If no rowmask, quick return with duplication error
+			if rowmask == nil {
 				return ErrDuplicate
 			}
-			if mask.Contains(v.(uint32)) {
+			// 1.2 If duplicated row is marked, ignore this duplication error
+			if rowmask.Contains(v.(uint32)) {
 				return nil
 			}
+			// 1.3 If duplicated row is not marked, return with duplication error
 			return ErrDuplicate
 		}
 		return nil
 	}
-	if err := compute.ProcessVector(keys, 0, -1, processor, visibility); err != nil {
+	if err := compute.ProcessVector(keysCtx.Keys, keysCtx.Start, keysCtx.Count, processor, keysCtx.Selects); err != nil {
 		if err == ErrDuplicate {
 			return true
 		} else {

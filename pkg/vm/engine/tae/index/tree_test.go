@@ -43,10 +43,13 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete(int32(55))
+	_, err = idx.Delete(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false, false)
+	ctx := new(KeysCtx)
+	ctx.Count = 100
+	ctx.Keys = batches[0]
+	_, err = idx.BatchInsert(ctx, uint32(0), false)
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(55))
@@ -56,16 +59,20 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(100))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete(int32(55))
+	_, err = idx.Delete(int32(55))
 	require.NoError(t, err)
 
 	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false, false)
+	ctx = new(KeysCtx)
+	ctx.Count = 100
+	ctx.Keys = batches[0]
+	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
-	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false, false)
+	ctx.Keys = batches[1]
+	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(123))
@@ -120,10 +127,13 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete([]byte(strconv.Itoa(55)))
+	_, err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(0), false, false)
+	ctx := new(KeysCtx)
+	ctx.Keys = batches[0]
+	ctx.Count = 100
+	_, err = idx.BatchInsert(ctx, uint32(0), false)
 	require.NoError(t, err)
 
 	row, err = idx.Search([]byte(strconv.Itoa(55)))
@@ -133,16 +143,17 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(100)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.Delete([]byte(strconv.Itoa(55)))
+	_, err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	err = idx.BatchInsert(batches[0], 0, 100, uint32(100), false, false)
+	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
-	err = idx.BatchInsert(batches[1], 0, 100, uint32(100), false, false)
+	ctx.Keys = batches[1]
+	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.NoError(t, err)
 
 	row, err = idx.Search([]byte(strconv.Itoa(123)))
@@ -151,4 +162,41 @@ func TestArtIndexString(t *testing.T) {
 
 	_, err = idx.Search([]byte(strconv.Itoa(233)))
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestMVART(t *testing.T) {
+	typ := types.Type{Oid: types.T_int32}
+	m := NewMultiplRowsART(typ)
+	require.Equal(t, 0, m.Size())
+	keys := []int32{2, 4, 12, 9}
+	rows := []uint32{2, 4, 12, 9}
+	for i, row := range rows {
+		err := m.Insert(keys[i], row)
+		require.NoError(t, err)
+	}
+
+	require.True(t, m.Contains(int32(12)))
+	require.False(t, m.ContainsRow(int32(12), uint32(13)))
+	require.True(t, m.ContainsRow(int32(12), uint32(12)))
+
+	err := m.Insert(int32(12), uint32(12))
+	require.Error(t, err)
+	err = m.Insert(int32(12), uint32(13))
+	require.NoError(t, err)
+	require.True(t, m.ContainsRow(int32(12), uint32(13)))
+	require.Equal(t, 2, m.RowCount(int32(12)))
+
+	err = m.Insert(int32(12), uint32(14))
+	require.NoError(t, err)
+	require.Equal(t, 3, m.RowCount(int32(12)))
+
+	_, err = m.DeleteOne(int32(12), uint32(100))
+	require.Error(t, err)
+	require.Equal(t, 3, m.RowCount(int32(12)))
+	_, err = m.DeleteOne(int32(12), uint32(13))
+	require.NoError(t, err)
+	require.Equal(t, 2, m.RowCount(int32(12)))
+	err = m.DeleteAll(int32(12))
+	require.NoError(t, err)
+	require.Equal(t, 0, m.RowCount(int32(12)))
 }

@@ -47,8 +47,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewZMReader()
-	err = reader.Init(bufManager, file, &common.ID{})
+	reader := NewZMReader(bufManager, file, new(common.ID))
 	require.NoError(t, err)
 
 	res = reader.Contains(int32(500))

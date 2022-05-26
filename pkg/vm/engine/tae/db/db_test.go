@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2061,8 +2062,10 @@ func TestADA(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(bat)
 	assert.Error(t, err)
@@ -2127,4 +2130,136 @@ func TestUpdateByFilter(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
+}
+
+// Test Steps
+// 1. Create DB|Relation and append 10 rows. Commit
+// 2. Make a equal filter with value of the pk of the second inserted row
+// 3. Start Txn1. GetByFilter return PASS
+// 4. Start Txn2. Delete row 2. Commit.
+// 5. Txn1 call GetByFilter and should return PASS
+func TestGetByFilter(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	bat := catalog.MockData(schema, 10)
+
+	// Step 1
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// Step 2
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 2)
+	filter := handle.NewEQFilter(v)
+
+	// Step 3
+	txn1, _ := tae.StartTxn(nil)
+	db, _ = txn1.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+
+	// Step 4
+	{
+		txn2, _ := tae.StartTxn(nil)
+		db, _ := txn2.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.RangeDelete(id, row, row)
+		assert.NoError(t, err)
+		assert.NoError(t, txn2.Commit())
+	}
+
+	// Step 5
+	_, _, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn1.Commit())
+}
+
+// 1. Set a big BlockMaxRows
+// 2. Mock one row batch
+// 3. Start tones of workers. Each work execute below routines:
+//    3.1 GetByFilter a pk val
+//        3.1.1 If found, go to 3.5
+//    3.2 Append a row
+//    3.3 err should not be duplicated(TODO: now is duplicated, should be W-W conflict)
+//        (why not duplicated: previous GetByFilter had checked that there was no duplicate key)
+//    3.4 If no error. try commit. If commit ok, inc appendedcnt. If error, rollback
+//    3.5 Delete the row
+//        3.5.1 If no error. try commit. commit should always pass
+//        3.5.2 If error, should always be w-w conflict
+// 4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
+func TestChaos1(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100000
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockData(schema, 1)
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	_, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
+	filter := handle.NewEQFilter(v)
+	var wg sync.WaitGroup
+	appendCnt := uint32(0)
+	deleteCnt := uint32(0)
+	worker := func() {
+		defer wg.Done()
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		id, row, err := rel.GetByFilter(filter)
+		// logutil.Infof("id=%v,row=%d,err=%v", id, row, err)
+		if err == nil {
+			err = rel.RangeDelete(id, row, row)
+			if err != nil {
+				// assert.Equal(t, txnif.TxnWWConflictErr, err)
+				assert.NoError(t, txn.Rollback())
+				return
+			}
+			assert.NoError(t, txn.Commit())
+			atomic.AddUint32(&deleteCnt, uint32(1))
+			return
+		}
+		assert.Equal(t, data.ErrNotFound, err)
+		err = rel.Append(bat)
+		// TODO: enable below check later
+		// assert.NotEqual(t, data.ErrDuplicate, err)
+		if err == nil {
+			err = txn.Commit()
+			// TODO: enable below check later
+			// assert.NotEqual(t, data.ErrDuplicate, err)
+			if err == nil {
+				atomic.AddUint32(&appendCnt, uint32(1))
+			}
+			return
+		}
+		_ = txn.Rollback()
+	}
+	pool, _ := ants.NewPool(2)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		pool.Submit(worker)
+	}
+	wg.Wait()
+	t.Logf("AppendCnt: %d", appendCnt)
+	t.Logf("DeleteCnt: %d", deleteCnt)
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ := db.GetRelationByName(schema.Name)
+	it := rel.MakeBlockIt()
+	blk := it.GetBlock()
+	view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+	assert.Equal(t, int(appendCnt), view.Length())
+	// view.ApplyDeletes()
+	t.Log(view.DeleteMask.String())
+	t.Log(view.String())
 }
