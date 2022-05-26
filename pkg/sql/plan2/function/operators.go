@@ -49,7 +49,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[uint8],
 		},
 		{
 			Index:  1,
@@ -61,7 +61,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[uint16],
 		},
 		{
 			Index:  2,
@@ -73,7 +73,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[uint32],
 		},
 		{
 			Index:  3,
@@ -85,7 +85,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[uint64],
 		},
 		{
 			Index:  4,
@@ -97,7 +97,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[int8],
 		},
 		{
 			Index:  5,
@@ -109,7 +109,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[int16],
 		},
 		{
 			Index:  6,
@@ -121,7 +121,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[int32],
 		},
 		{
 			Index:  7,
@@ -133,7 +133,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Equal[int64],
 		},
 		{
 			Index:  8,
@@ -1641,8 +1641,8 @@ var operators = map[int][]Function{
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_float32, types.T_float64},
 			ReturnTyp:   types.T_float32,
-			TypeCheckFn: operator.Minus[float32],
-			Fn:          nil,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Minus[float32],
 		},
 		{
 			Index:       9,
