@@ -73,9 +73,6 @@ func (opt *BaseOptimizer) optimize(qry *Query) (*Query, error) {
 	}
 	n := qry.Nodes[qry.Steps[0]]
 	opt.exploreNode(n)
-	for i := range n.Children {
-		opt.exploreNode(qry.Nodes[n.Children[i]])
-	}
 	return qry, nil
 }
 
@@ -88,5 +85,8 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 		if rule.Match(n) {
 			rule.Apply(n, opt.qry)
 		}
+	}
+	for i := range n.Children {
+		opt.exploreNode(opt.qry.Nodes[n.Children[i]])
 	}
 }
