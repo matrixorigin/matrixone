@@ -1377,7 +1377,7 @@ var operators = map[int][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_STRICT,
-			Layout:    EXISTS_ANY_PREDICATE,
+			Layout:    IN_PREDICATE,
 			ReturnTyp: types.T_bool,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) == 2 && inputTypes[1] == types.T_tuple {

@@ -14,18 +14,17 @@ import (
 type zonemapNode struct {
 	*buffer.Node
 	mgr     base.INodeManager
-	host    common.IVFile
+	file    common.IVFile
 	zonemap *index.ZoneMap
 }
 
-func newZonemapNode(mgr base.INodeManager, host common.IVFile, id *common.ID) *zonemapNode {
+func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *zonemapNode {
 	impl := new(zonemapNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(host.Stat().Size()))
+	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadFunc = impl.OnUnload
 	impl.DestroyFunc = impl.OnDestroy
-	impl.host = host
-	//impl.meta = meta
+	impl.file = file
 	impl.mgr = mgr
 	mgr.RegisterNode(impl)
 	return impl
@@ -37,11 +36,11 @@ func (n *zonemapNode) OnLoad() {
 		return
 	}
 	var err error
-	stat := n.host.Stat()
+	stat := n.file.Stat()
 	size := stat.Size()
 	compressTyp := stat.CompressAlgo()
 	data := make([]byte, size)
-	if _, err := n.host.Read(data); err != nil {
+	if _, err := n.file.Read(data); err != nil {
 		panic(err)
 	}
 	rawSize := stat.OriginSize()
@@ -64,7 +63,7 @@ func (n *zonemapNode) OnUnload() {
 }
 
 func (n *zonemapNode) OnDestroy() {
-	n.host.Unref()
+	n.file.Unref()
 }
 
 func (n *zonemapNode) Close() (err error) {
@@ -79,13 +78,10 @@ type ZMReader struct {
 	node *zonemapNode
 }
 
-func NewZMReader() *ZMReader {
-	return &ZMReader{}
-}
-
-func (reader *ZMReader) Init(mgr base.INodeManager, host common.IVFile, id *common.ID) error {
-	reader.node = newZonemapNode(mgr, host, id)
-	return nil
+func NewZMReader(mgr base.INodeManager, file common.IVFile, id *common.ID) *ZMReader {
+	return &ZMReader{
+		node: newZonemapNode(mgr, file, id),
+	}
 }
 
 func (reader *ZMReader) Destroy() (err error) {
@@ -109,7 +105,7 @@ func (reader *ZMReader) Contains(key any) bool {
 
 type ZMWriter struct {
 	cType       CompressType
-	host        common.IRWFile
+	file        common.IRWFile
 	zonemap     *index.ZoneMap
 	colIdx      uint16
 	internalIdx uint16
@@ -119,8 +115,8 @@ func NewZMWriter() *ZMWriter {
 	return &ZMWriter{}
 }
 
-func (writer *ZMWriter) Init(host common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.host = host
+func (writer *ZMWriter) Init(file common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
+	writer.file = file
 	writer.cType = cType
 	writer.colIdx = colIdx
 	writer.internalIdx = internalIdx
@@ -131,7 +127,7 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if writer.zonemap == nil {
 		panic("unexpected error")
 	}
-	appender := writer.host
+	appender := writer.file
 	meta := NewEmptyIndexMeta()
 	meta.SetIndexType(BlockZoneMapIndex)
 	meta.SetCompressType(writer.cType)
@@ -165,7 +161,10 @@ func (writer *ZMWriter) AddValues(values *vector.Vector) (err error) {
 			return
 		}
 	}
-	err = writer.zonemap.BatchUpdate(values, 0, -1)
+	ctx := new(index.KeysCtx)
+	ctx.Keys = values
+	ctx.Count = uint32(vector.Length(values))
+	err = writer.zonemap.BatchUpdate(ctx)
 	return
 }
 

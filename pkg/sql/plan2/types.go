@@ -48,6 +48,18 @@ type Optimizer interface {
 	CurrentContext() CompilerContext
 }
 
+type Rule interface {
+	Match(*Node) bool    // rule match?
+	Apply(*Node, *Query) // apply the rule
+}
+
+// BaseOptimizer is base optimizer, capable of handling only a few simple rules
+type BaseOptimizer struct {
+	qry   *Query
+	rules []Rule
+	ctx   CompilerContext
+}
+
 //use for build select
 type BinderContext struct {
 	// when build_projection we may set columnAlias and then use in build_orderby

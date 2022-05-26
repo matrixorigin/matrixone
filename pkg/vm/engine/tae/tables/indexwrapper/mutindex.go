@@ -4,6 +4,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -11,65 +12,99 @@ import (
 type mutableIndex struct {
 	art     index.SecondaryIndex
 	zonemap *index.ZoneMap
+	deletes *DeletesMap
 }
 
 func NewMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     index.NewSimpleARTMap(keyT),
 		zonemap: index.NewZoneMap(keyT),
+		deletes: NewDeletesMap(keyT),
 	}
 }
 
-func (index *mutableIndex) BatchInsert(keys *vector.Vector, start uint32, count uint32, offset uint32, verify bool) (err error) {
-	// TODO: consume `count` when needed
-	if err = index.zonemap.BatchUpdate(keys, start, -1); err != nil {
+func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts uint64) (err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
+	if err = idx.zonemap.BatchUpdate(keysCtx); err != nil {
 		return
 	}
-	// logutil.Infof("Pre: %s", index.art.String())
-	err = index.art.BatchInsert(keys, int(start), int(count), offset, verify, true)
-	// logutil.Infof("Post: %s", index.art.String())
+	// logutil.Infof("Pre: %s", idx.art.String())
+	// logutil.Infof("Post: %s", idx.art.String())
+	resp, err := idx.art.BatchInsert(keysCtx, offset, true)
+	if resp != nil {
+		posArr := resp.UpdatedKeys.ToArray()
+		rowArr := resp.UpdatedRows.ToArray()
+		for i := 0; i < len(posArr); i++ {
+			key := compute.GetValue(keysCtx.Keys, posArr[i])
+			if err = idx.deletes.LogDeletedKey(key, rowArr[i], ts); err != nil {
+				return
+			}
+		}
+	}
 	return
 }
 
-func (index *mutableIndex) Delete(key any) error {
-	return index.art.Delete(key)
+func (idx *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted, existed bool) {
+	return idx.deletes.IsKeyDeleted(key, ts)
 }
 
-func (index *mutableIndex) Find(key any) (row uint32, err error) {
-	exist := index.zonemap.Contains(key)
+func (idx *mutableIndex) Delete(key any, ts uint64) (err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
+	var old uint32
+	if old, err = idx.art.Delete(key); err != nil {
+		return
+	}
+	err = idx.deletes.LogDeletedKey(key, old, ts)
+	return
+}
+
+func (idx *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
+	defer func() {
+		err = TranslateError(err)
+	}()
+	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {
 		err = data.ErrNotFound
 		return
 	}
 	// 2. search art tree for key
-	row, err = index.art.Search(key)
+	row, err = idx.art.Search(key)
+	err = TranslateError(err)
 	return
 }
 
-func (index *mutableIndex) Dedup(any) error { panic("implement me") }
-func (index *mutableIndex) BatchDedup(keys *vector.Vector, invisibility *roaring.Bitmap) (visibility *roaring.Bitmap, err error) {
-	visibility, exist := index.zonemap.ContainsAny(keys)
+func (idx *mutableIndex) Dedup(any) error { panic("implement me") }
+func (idx *mutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {
 		return
 	}
-	exist = index.art.ContainsAny(keys, visibility, invisibility)
+	ctx := new(index.KeysCtx)
+	ctx.Keys = keys
+	ctx.Selects = keyselects
+	ctx.SelectAll()
+	exist = idx.art.ContainsAny(ctx, rowmask)
 	if exist {
 		err = data.ErrDuplicate
 	}
 	return
 }
 
-func (index *mutableIndex) Destroy() error {
-	return index.Close()
+func (idx *mutableIndex) Destroy() error {
+	return idx.Close()
 }
 
-func (index *mutableIndex) Close() error {
-	index.art = nil
-	index.zonemap = nil
+func (idx *mutableIndex) Close() error {
+	idx.art = nil
+	idx.zonemap = nil
 	return nil
 }
 
-func (index *mutableIndex) ReadFrom(data.Block) error { panic("not supported") }
-func (index *mutableIndex) WriteTo(data.Block) error  { panic("not supported") }
+func (idx *mutableIndex) ReadFrom(data.Block) error { panic("not supported") }
+func (idx *mutableIndex) WriteTo(data.Block) error  { panic("not supported") }

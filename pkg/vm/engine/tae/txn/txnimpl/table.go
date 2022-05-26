@@ -118,7 +118,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 		return
 	}
 	if !ok {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -345,15 +345,15 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
 	node := tbl.deleteNodes[*id]
 	if node != nil {
 		chain := node.GetChain().(*updates.DeleteChain)
-		controller := chain.GetController()
-		writeLock := controller.GetExclusiveLock()
-		err = controller.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
+		mvcc := chain.GetController()
+		mvcc.Lock()
+		err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
 		if err == nil {
-			if err = controller.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
+			if err = mvcc.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
 				node.RangeDeleteLocked(start, end)
 			}
 		}
-		writeLock.Unlock()
+		mvcc.Unlock()
 		if err != nil {
 			seg, _ := tbl.entry.GetSegmentByID(id.SegmentID)
 			blk, _ := seg.GetBlockEntryByID(id.BlockID)
@@ -406,6 +406,9 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 		}
 		blockIt.Next()
 	}
+	if err == nil && id == nil {
+		err = data.ErrNotFound
+	}
 	return
 }
 
@@ -434,14 +437,14 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 
 func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v any) (err error) {
 	chain := node.GetChain().(*updates.ColumnChain)
-	controller := chain.GetController()
-	sharedLock := controller.GetSharedLock()
-	if err = controller.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
+	mvcc := chain.GetController()
+	mvcc.RLock()
+	if err = mvcc.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
 		chain.Lock()
 		err = chain.TryUpdateNodeLocked(row, v, node)
 		chain.Unlock()
 	}
-	sharedLock.Unlock()
+	mvcc.RUnlock()
 	return
 }
 
@@ -552,15 +555,15 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 			}
 			// logutil.Infof("%s: %d-%d, %d-%d: %s", tbl.txn.String(), tbl.maxSegId, tbl.maxBlkId, seg.GetID(), blk.GetID(), pks.String())
 			blkData := blk.GetBlockData()
-			var invisibility *roaring.Bitmap
+			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
 				fp := blk.AsCommonID()
 				dn := tbl.deleteNodes[*fp]
 				if dn != nil {
-					invisibility = dn.GetInvisibilityMapRefLocked()
+					rowmask = dn.GetRowMaskRefLocked()
 				}
 			}
-			if err = blkData.BatchDedup(tbl.store.txn, pks, invisibility); err != nil {
+			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask); err != nil {
 				return
 			}
 			blkIt.Next()
@@ -576,11 +579,6 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 	if err != nil {
 		return
 	}
-	// if tbl.localSegment != nil {
-	// 	if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
-	// 		return
-	// 	}
-	// }
 	h := newRelation(tbl)
 	segIt := h.MakeSegmentIt()
 	for segIt.Valid() {
@@ -593,17 +591,18 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 			blkIt := seg.MakeBlockIt()
 			for blkIt.Valid() {
 				block := blkIt.GetBlock()
-				fp := block.Fingerprint()
-				dn := tbl.deleteNodes[*fp]
-				if dn != nil {
-					invisibility := dn.GetInvisibilityMapRefLocked()
-					if err = block.BatchDedup(pks, invisibility); err != nil {
-						break
+				var rowmask *roaring.Bitmap
+				// There were some deletes applied to state machine before. we need to check those delete nodes
+				if len(tbl.deleteNodes) > 0 {
+					fp := block.Fingerprint()
+					dn := tbl.deleteNodes[*fp]
+					// If a delete node was applied to this block, get the row mask
+					if dn != nil {
+						rowmask = dn.GetRowMaskRefLocked()
 					}
-				} else {
-					if err = block.BatchDedup(pks, nil); err != nil {
-						break
-					}
+				}
+				if err = block.BatchDedup(pks, rowmask); err != nil {
+					break
 				}
 				blkIt.Next()
 			}

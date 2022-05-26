@@ -75,6 +75,10 @@ func (view *ColumnView) Length() int {
 	return movec.Length(view.AppliedVec)
 }
 
+func (view *ColumnView) String() string {
+	return view.AppliedVec.String()
+}
+
 func (view *ColumnView) GetValue(row uint32) any {
 	return compute.GetValue(view.AppliedVec, row)
 }
