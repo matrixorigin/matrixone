@@ -22,6 +22,62 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestGetLeaseHistory(t *testing.T) {
+	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.LeaseHistory[100] = 1000
+	tsm.LeaseHistory[200] = 2000
+	tsm.LeaseHistory[300] = 3000
+	lease, index := tsm.getLeaseHistory(150)
+	assert.Equal(t, uint64(1000), lease)
+	assert.Equal(t, uint64(100), index)
+
+	lease, index = tsm.getLeaseHistory(200)
+	assert.Equal(t, uint64(1000), lease)
+	assert.Equal(t, uint64(100), index)
+
+	lease, index = tsm.getLeaseHistory(100)
+	assert.Equal(t, uint64(0), lease)
+	assert.Equal(t, uint64(0), index)
+
+	lease, index = tsm.getLeaseHistory(400)
+	assert.Equal(t, uint64(3000), lease)
+	assert.Equal(t, uint64(300), index)
+}
+
+func TestTruncateLeaseHistory(t *testing.T) {
+	getSM := func() *stateMachine {
+		tsm := newStateMachine(1, 2).(*stateMachine)
+		tsm.LeaseHistory[100] = 1000
+		tsm.LeaseHistory[200] = 2000
+		tsm.LeaseHistory[300] = 3000
+		return tsm
+	}
+
+	tsm := getSM()
+	tsm.truncateLeaseHistory(105)
+	assert.Equal(t, 3, len(tsm.LeaseHistory))
+	tsm.truncateLeaseHistory(200)
+	assert.Equal(t, 3, len(tsm.LeaseHistory))
+	tsm.truncateLeaseHistory(201)
+	assert.Equal(t, 2, len(tsm.LeaseHistory))
+	_, ok1 := tsm.LeaseHistory[200]
+	_, ok2 := tsm.LeaseHistory[300]
+	assert.True(t, ok1)
+	assert.True(t, ok2)
+
+	tsm = getSM()
+	tsm.truncateLeaseHistory(300)
+	assert.Equal(t, 2, len(tsm.LeaseHistory))
+	_, ok := tsm.LeaseHistory[100]
+	assert.False(t, ok)
+
+	tsm = getSM()
+	tsm.truncateLeaseHistory(301)
+	assert.Equal(t, 1, len(tsm.LeaseHistory))
+	_, ok = tsm.LeaseHistory[300]
+	assert.True(t, ok)
+}
+
 func TestGetSetLeaseHolderCmd(t *testing.T) {
 	cmd := getSetLeaseHolderCmd(100)
 	assert.True(t, isSetLeaseHolderUpdate(cmd))
@@ -87,13 +143,8 @@ func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 	result, err = tsm.Update(entries)
 	assert.Equal(t, sm.Result{}, result[0].Result)
 	assert.Nil(t, err)
-
-	assert.Equal(t, 1, len(tsm.LeaseHistory))
-	v, ok = tsm.LeaseHistory[100]
-	assert.False(t, ok)
-	v, ok = tsm.LeaseHistory[200]
-	assert.True(t, ok)
-	assert.Equal(t, uint64(1000), v)
+	// first lease history record won't be truncated
+	assert.Equal(t, 2, len(tsm.LeaseHistory))
 }
 
 func TestTruncatedIndexCanBeUpdated(t *testing.T) {

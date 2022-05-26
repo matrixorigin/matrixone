@@ -143,6 +143,53 @@ func (l *ShardManager) GetTruncatedIndex(ctx context.Context,
 	return v.(uint64), nil
 }
 
+func (l *ShardManager) getLeaseHolderID(ctx context.Context,
+	shardID uint64, entries []pb.Entry) (uint64, error) {
+	if len(entries) == 0 {
+		panic("empty entries")
+	}
+	// first entry is a update lease cmd
+	e := entries[0]
+	if isSetLeaseHolderUpdate(e.Cmd) {
+		return binaryEnc.Uint64(e.Cmd[headerSize:]), nil
+	}
+	v, err := l.nh.SyncRead(ctx, shardID, leaseHistoryQuery{index: e.Index})
+	if err != nil {
+		return 0, err
+	}
+	return v.(uint64), nil
+}
+
+func (l *ShardManager) filterEntries(ctx context.Context,
+	shardID uint64, entries []pb.Entry) ([]pb.Entry, error) {
+	if len(entries) == 0 {
+		return entries, nil
+	}
+	leaseHolderID, err := l.getLeaseHolderID(ctx, shardID, entries)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]pb.Entry, 0)
+	for _, e := range entries {
+		if e.Type == pb.ConfigChangeEntry || e.Type == pb.MetadataEntry || len(e.Cmd) == 0 {
+			// raft internal stuff
+			continue
+		}
+		if isSetLeaseHolderUpdate(e.Cmd) {
+			leaseHolderID = binaryEnc.Uint64(e.Cmd[headerSize:])
+			continue
+		}
+		if isUserUpdate(e.Cmd) {
+			if binaryEnc.Uint64(e.Cmd[headerSize:]) != leaseHolderID {
+				// lease not match, skip
+				continue
+			}
+			result = append(result, e)
+		}
+	}
+	return result, nil
+}
+
 // TODO: update QueryLog to provide clear indication whether there is any more
 // log to recover.
 func (l *ShardManager) QueryLog(ctx context.Context, shardID uint64,
@@ -155,6 +202,10 @@ func (l *ShardManager) QueryLog(ctx context.Context, shardID uint64,
 	case v := <-rs.CompletedC:
 		if v.Completed() {
 			entries, _ := v.RaftLogs()
+			entries, err := l.filterEntries(ctx, shardID, entries)
+			if err != nil {
+				return nil, err
+			}
 			return entries, nil
 		} else if v.RequestOutOfRange() {
 			return nil, ErrOutOfRange

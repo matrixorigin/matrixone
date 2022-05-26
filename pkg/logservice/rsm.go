@@ -36,6 +36,10 @@ const (
 	userEntryTag      uint16 = 0xBF03
 )
 
+type leaseHistoryQuery struct {
+	index uint64
+}
+
 func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint16(cmd, leaseHolderIDTag)
@@ -102,11 +106,27 @@ func (s *stateMachine) setLeaseHolderID(index uint64, cmd []byte) {
 }
 
 func (s *stateMachine) truncateLeaseHistory(index uint64) {
+	_, index = s.getLeaseHistory(index)
 	for key := range s.LeaseHistory {
 		if key < index {
 			delete(s.LeaseHistory, key)
 		}
 	}
+}
+
+func (s *stateMachine) getLeaseHistory(index uint64) (uint64, uint64) {
+	max := uint64(0)
+	lease := uint64(0)
+	for key, val := range s.LeaseHistory {
+		if key >= index {
+			continue
+		}
+		if key > max {
+			max = key
+			lease = val
+		}
+	}
+	return lease, max
 }
 
 func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
@@ -167,14 +187,18 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	v, ok := query.(uint16)
-	if !ok {
-		panic("unknown query type")
+	if v, ok := query.(uint16); ok {
+		if v == leaseHolderIDTag {
+			return s.LeaseHolderID, nil
+		} else if v == truncatedIndexTag {
+			return s.TruncatedIndex, nil
+		} else {
+			panic("unknown lookup command type")
+		}
 	}
-	if v == leaseHolderIDTag {
-		return s.LeaseHolderID, nil
-	} else if v == truncatedIndexTag {
-		return s.TruncatedIndex, nil
+	if v, ok := query.(leaseHistoryQuery); ok {
+		lease, _ := s.getLeaseHistory(v.index)
+		return lease, nil
 	}
 	panic("unknown lookup command type")
 }
