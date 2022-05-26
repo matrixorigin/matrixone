@@ -15,8 +15,6 @@
 package logservice
 
 import (
-	"bytes"
-	"encoding/gob"
 	"io"
 
 	sm "github.com/lni/dragonboat/v3/statemachine"
@@ -125,34 +123,10 @@ func (h *haKeeperSM) Lookup(query interface{}) (interface{}, error) {
 
 func (h *haKeeperSM) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(h); err != nil {
-		panic(err)
-	}
-	data := buf.Bytes()
-	length := make([]byte, 8)
-	binaryEnc.PutUint64(length, uint64(len(data)))
-	if _, err := w.Write(length); err != nil {
-		return err
-	}
-	if _, err := w.Write(data); err != nil {
-		return err
-	}
-	return nil
+	return gobMarshalTo(w, h)
 }
 
 func (h *haKeeperSM) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	length := make([]byte, 8)
-	if _, err := io.ReadFull(r, length); err != nil {
-		return err
-	}
-	data := make([]byte, binaryEnc.Uint64(length))
-	if _, err := io.ReadFull(r, data); err != nil {
-		return err
-	}
-	buf := bytes.NewBuffer(data)
-	dec := gob.NewDecoder(buf)
-	return dec.Decode(h)
+	return gobUnmarshalFrom(r, h)
 }

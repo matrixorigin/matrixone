@@ -60,11 +60,11 @@ func TestStateMachineCanBeClosed(t *testing.T) {
 func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 	cmd := getSetLeaseHolderCmd(500)
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	assert.Equal(t, uint64(0), tsm.leaseHolderID)
+	assert.Equal(t, uint64(0), tsm.LeaseHolderID)
 	result, err := tsm.Update(cmd)
 	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
-	assert.Equal(t, uint64(500), tsm.leaseHolderID)
+	assert.Equal(t, uint64(500), tsm.LeaseHolderID)
 }
 
 func TestTruncatedIndexCanBeUpdated(t *testing.T) {
@@ -91,12 +91,12 @@ func TestStateMachineUserUpdate(t *testing.T) {
 	binaryEnc.PutUint64(cmd[headerSize:], uint64(1234))
 
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	tsm.leaseHolderID = 1234
+	tsm.LeaseHolderID = 1234
 	result, err := tsm.Update(cmd)
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{}, result)
 
-	tsm.leaseHolderID = 2345
+	tsm.LeaseHolderID = 2345
 	result, err = tsm.Update(cmd)
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 2345}, result)
@@ -105,29 +105,29 @@ func TestStateMachineUserUpdate(t *testing.T) {
 func TestStateMachineSnapshot(t *testing.T) {
 	buf := bytes.NewBuffer(nil)
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	tsm.leaseHolderID = 123456
-	tsm.truncatedIndex = 456789
+	tsm.LeaseHolderID = 123456
+	tsm.TruncatedIndex = 456789
 	assert.Nil(t, tsm.SaveSnapshot(buf, nil, nil))
 
 	tsm2 := newStateMachine(3, 4).(*stateMachine)
 	assert.Nil(t, tsm2.RecoverFromSnapshot(buf, nil, nil))
-	assert.Equal(t, tsm.leaseHolderID, tsm2.leaseHolderID)
-	assert.Equal(t, tsm.truncatedIndex, tsm2.truncatedIndex)
+	assert.Equal(t, tsm.LeaseHolderID, tsm2.LeaseHolderID)
+	assert.Equal(t, tsm.TruncatedIndex, tsm2.TruncatedIndex)
 	assert.Equal(t, uint64(3), tsm2.shardID)
 	assert.Equal(t, uint64(4), tsm2.replicaID)
 }
 
 func TestStateMachineLookup(t *testing.T) {
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	tsm.leaseHolderID = 123456
-	tsm.truncatedIndex = 456789
+	tsm.LeaseHolderID = 123456
+	tsm.TruncatedIndex = 456789
 	v, err := tsm.Lookup(leaseHolderIDTag)
 	assert.Nil(t, err)
-	assert.Equal(t, tsm.leaseHolderID, v.(uint64))
+	assert.Equal(t, tsm.LeaseHolderID, v.(uint64))
 
 	v2, err := tsm.Lookup(truncatedIndexTag)
 	assert.Nil(t, err)
-	assert.Equal(t, tsm.truncatedIndex, v2.(uint64))
+	assert.Equal(t, tsm.TruncatedIndex, v2.(uint64))
 }
 
 func TestStateMachineLookupPanicOnUnexpectedInputValue(t *testing.T) {

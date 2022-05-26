@@ -72,10 +72,11 @@ func tagMatch(cmd []byte, expectedTag uint16) bool {
 }
 
 type stateMachine struct {
-	shardID        uint64
-	replicaID      uint64
-	leaseHolderID  uint64
-	truncatedIndex uint64
+	shardID         uint64
+	replicaID       uint64
+	LeaseHolderID   uint64
+	TruncatedIndex  uint64
+	TruncateHistory map[uint64]uint64 // log index -> truncate index
 }
 
 var _ (sm.IStateMachine) = (*stateMachine)(nil)
@@ -88,7 +89,7 @@ func (s *stateMachine) setLeaseHolderID(cmd []byte) {
 	if !isSetLeaseHolderUpdate(cmd) {
 		panic("not a setLeaseHolder update")
 	}
-	s.leaseHolderID = binaryEnc.Uint64(cmd[headerSize:])
+	s.LeaseHolderID = binaryEnc.Uint64(cmd[headerSize:])
 }
 
 func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
@@ -96,8 +97,8 @@ func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
 		panic("not a setTruncatedIndex update")
 	}
 	index := binaryEnc.Uint64(cmd[headerSize:])
-	if index > s.truncatedIndex {
-		s.truncatedIndex = index
+	if index > s.TruncatedIndex {
+		s.TruncatedIndex = index
 		return true
 	}
 	return false
@@ -110,8 +111,8 @@ func (s *stateMachine) handleUserUpdate(cmd []byte) (sm.Result, error) {
 	if !isUserUpdate(cmd) {
 		panic("not user update")
 	}
-	if s.leaseHolderID != binaryEnc.Uint64(cmd[headerSize:]) {
-		return sm.Result{Value: s.leaseHolderID}, nil
+	if s.LeaseHolderID != binaryEnc.Uint64(cmd[headerSize:]) {
+		return sm.Result{Value: s.LeaseHolderID}, nil
 	}
 	return sm.Result{}, nil
 }
@@ -128,7 +129,7 @@ func (s *stateMachine) Update(cmd []byte) (sm.Result, error) {
 		if s.setTruncatedIndex(cmd) {
 			return sm.Result{}, nil
 		}
-		return sm.Result{Value: s.truncatedIndex}, nil
+		return sm.Result{Value: s.TruncatedIndex}, nil
 	} else if isUserUpdate(cmd) {
 		return s.handleUserUpdate(cmd)
 	}
@@ -141,31 +142,19 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 		panic("unknown query type")
 	}
 	if v == leaseHolderIDTag {
-		return s.leaseHolderID, nil
+		return s.LeaseHolderID, nil
 	} else if v == truncatedIndexTag {
-		return s.truncatedIndex, nil
+		return s.TruncatedIndex, nil
 	}
 	panic("unknown lookup command type")
 }
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	ss := make([]byte, 16)
-	binaryEnc.PutUint64(ss, s.leaseHolderID)
-	binaryEnc.PutUint64(ss[8:], s.truncatedIndex)
-	if _, err := w.Write(ss); err != nil {
-		return err
-	}
-	return nil
+	return gobMarshalTo(w, s)
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	ss := make([]byte, 16)
-	if _, err := io.ReadFull(r, ss); err != nil {
-		return err
-	}
-	s.leaseHolderID = binaryEnc.Uint64(ss)
-	s.truncatedIndex = binaryEnc.Uint64(ss[8:])
-	return nil
+	return gobUnmarshalFrom(r, s)
 }
