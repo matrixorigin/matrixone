@@ -18,7 +18,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 	switch {
 	case left.IsConst && right.IsConst:
 		// in the case where the result is a const, I chose to return only one row containing the const,
-		// these may require corresponding changes in the frontend, is this okay?
+		// this may require corresponding changes in the frontend, is this okay?
 		resultVector, err := process.Get(proc, int64(resultElementSize), left.Typ)
 		if err != nil {
 			return nil, err
@@ -52,7 +52,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 	if err != nil {
 		return nil, err
 	}
-	resultValues := encoding.DecodeFixedSlice[T](resultVector.Data)
+	resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, add.NumericAdd[T](leftValues, rightValues, resultValues))
 	return resultVector, nil
