@@ -53,10 +53,9 @@ type dataBlock struct {
 	bufMgr    base.INodeManager
 	scheduler tasks.TaskScheduler
 	index     indexwrapper.Index
-	// delIndex  *indexwrapper.DeletesMap
-	mvcc  *updates.MVCCHandle
-	nice  uint32
-	ckpTs uint64
+	mvcc      *updates.MVCCHandle
+	nice      uint32
+	ckpTs     uint64
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -94,7 +93,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		node = newNode(bufMgr, block, file)
 		block.node = node
 		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetPKType())
-		// block.delIndex = indexwrapper.NewDeletesMap(block.meta.GetSchema().GetPKType())
 	} else {
 		block.index = indexwrapper.NewImmutableIndex()
 	}
@@ -105,7 +103,11 @@ func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
 		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
 		defer common.GPool.Free(w.MNode)
-		err = blk.index.BatchUpsert(&w.Vector, 0, uint32(movec.Length(&w.Vector)), 0, 0)
+		keysCtx := new(indexwrapper.KeysCtx)
+		keysCtx.Keys = &w.Vector
+		keysCtx.Start = 0
+		keysCtx.Count = movec.Length(&w.Vector)
+		err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}
 	err = blk.index.ReadFrom(blk)
@@ -145,9 +147,6 @@ func (blk *dataBlock) Destroy() (err error) {
 			return
 		}
 	}
-	// if blk.delIndex != nil {
-	// 	blk.delIndex = nil
-	// }
 	if blk.file != nil {
 		if err = blk.file.Close(); err != nil {
 			return
@@ -761,12 +760,6 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 		if gen.HasNext() {
 			row = gen.Next()
 			v, _ := vec.GetValue(int(row))
-			// if err = blk.delIndex.LogDeletedKey(v, row, ts); err != nil {
-			// 	if err != data.ErrDuplicate {
-			// 		return err
-			// 	}
-			// 	err = nil
-			// }
 			currRow, err = blk.index.GetActiveRow(v)
 			if err != nil || currRow == row {
 				if err = blk.index.Delete(v, ts); err != nil {

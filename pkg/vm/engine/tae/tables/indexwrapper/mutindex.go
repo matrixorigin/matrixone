@@ -23,21 +23,22 @@ func NewMutableIndex(keyT types.Type) *mutableIndex {
 	}
 }
 
-func (index *mutableIndex) BatchUpsert(keys *vector.Vector, start uint32, count uint32, offset uint32, ts uint64) (err error) {
+func (index *mutableIndex) BatchUpsert(keysCtx *KeysCtx, offset uint32, ts uint64) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-	if err = index.zonemap.BatchUpdate(keys, start, -1); err != nil {
+	if err = index.zonemap.BatchUpdate(keysCtx.Keys, uint32(keysCtx.Start), -1); err != nil {
 		return
 	}
 	// logutil.Infof("Pre: %s", index.art.String())
 	// logutil.Infof("Post: %s", index.art.String())
-	keyspos, rows, err := index.art.BatchInsert(keys, int(start), int(count), offset, false, true)
-	if keyspos != nil {
-		posArr := keyspos.ToArray()
-		rowArr := rows.ToArray()
+	// keyspos, rows, err := index.art.BatchInsert(keys, int(start), int(count), offset, false, true)
+	resp, err := index.art.BatchInsert(keysCtx, offset, true)
+	if resp != nil {
+		posArr := resp.UpdatedKeys.ToArray()
+		rowArr := resp.UpdatedRows.ToArray()
 		for i := 0; i < len(posArr); i++ {
-			key := compute.GetValue(keys, posArr[i])
+			key := compute.GetValue(keysCtx.Keys, posArr[i])
 			if err = index.deletes.LogDeletedKey(key, rowArr[i], ts); err != nil {
 				return
 			}

@@ -51,7 +51,7 @@ func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	return
 }
 
-func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, offset uint32, verify, upsert bool) (updatedpos, updatedrow *roaring.Bitmap, err error) {
+func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (resp *BatchResp, err error) {
 	existence := make(map[any]bool)
 
 	processor := func(v any, i uint32) error {
@@ -59,30 +59,31 @@ func (art *simpleARTMap) BatchInsert(keys *vector.Vector, start int, count int, 
 		if err != nil {
 			return err
 		}
-		if verify {
+		if keys.NeedVerify {
 			if _, found := existence[string(encoded)]; found {
 				return ErrDuplicate
 			}
 			existence[string(encoded)] = true
 		}
-		old, _ := art.tree.Insert(encoded, offset)
+		old, _ := art.tree.Insert(encoded, startRow)
 		if old != nil {
 			// TODO: rollback previous insertion if duplication comes up
 			if !upsert {
 				return ErrDuplicate
 			}
-			if updatedpos == nil {
-				updatedpos = roaring.New()
-				updatedrow = roaring.New()
+			if resp == nil {
+				resp = new(BatchResp)
+				resp.UpdatedKeys = roaring.New()
+				resp.UpdatedRows = roaring.New()
 			}
-			updatedrow.Add(old.(uint32))
-			updatedpos.Add(i)
+			resp.UpdatedRows.Add(old.(uint32))
+			resp.UpdatedKeys.Add(i)
 		}
-		offset++
+		startRow++
 		return nil
 	}
 
-	err = compute.ProcessVector(keys, uint32(start), -1, processor, nil)
+	err = compute.ProcessVector(keys.Keys, uint32(keys.Start), -1, processor, nil)
 	return
 }
 
