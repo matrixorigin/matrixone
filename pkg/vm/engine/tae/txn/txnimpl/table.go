@@ -118,7 +118,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 		return
 	}
 	if !ok {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -345,15 +345,15 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
 	node := tbl.deleteNodes[*id]
 	if node != nil {
 		chain := node.GetChain().(*updates.DeleteChain)
-		controller := chain.GetController()
-		writeLock := controller.GetExclusiveLock()
-		err = controller.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
+		mvcc := chain.GetController()
+		mvcc.Lock()
+		err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
 		if err == nil {
-			if err = controller.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
+			if err = mvcc.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
 				node.RangeDeleteLocked(start, end)
 			}
 		}
-		writeLock.Unlock()
+		mvcc.Unlock()
 		if err != nil {
 			seg, _ := tbl.entry.GetSegmentByID(id.SegmentID)
 			blk, _ := seg.GetBlockEntryByID(id.BlockID)
@@ -406,6 +406,9 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 		}
 		blockIt.Next()
 	}
+	if err == nil && id == nil {
+		err = data.ErrNotFound
+	}
 	return
 }
 
@@ -434,14 +437,14 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 
 func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v any) (err error) {
 	chain := node.GetChain().(*updates.ColumnChain)
-	controller := chain.GetController()
-	sharedLock := controller.GetSharedLock()
-	if err = controller.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
+	mvcc := chain.GetController()
+	mvcc.RLock()
+	if err = mvcc.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
 		chain.Lock()
 		err = chain.TryUpdateNodeLocked(row, v, node)
 		chain.Unlock()
 	}
-	sharedLock.Unlock()
+	mvcc.RUnlock()
 	return
 }
 

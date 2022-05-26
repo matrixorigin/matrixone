@@ -87,8 +87,8 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 }
 func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
 	err = appender.node.DoWithPin(func() (err error) {
-		writeLock := appender.node.block.mvcc.GetExclusiveLock()
-		defer writeLock.Unlock()
+		appender.node.block.mvcc.Lock()
+		defer appender.node.block.mvcc.Unlock()
 		err = appender.node.Expand(0, func() error {
 			var err error
 			from, err = appender.node.ApplyAppend(bat, offset, length, txn)

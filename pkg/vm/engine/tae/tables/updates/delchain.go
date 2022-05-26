@@ -76,7 +76,7 @@ func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, revers
 	chain.Loop(wrapped, reverse)
 }
 
-func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool, err error) {
+func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMutex) (deleted bool, err error) {
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Skip txn that started after ts
 		if n.GetStartTS() > ts {
@@ -96,7 +96,13 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool, err er
 			if txn == nil || txn.GetStartTS() == ts {
 				deleted = true
 			} else {
+				if rwlocker != nil {
+					rwlocker.RUnlock()
+				}
 				state := txn.GetTxnState(true)
+				if rwlocker != nil {
+					rwlocker.RLock()
+				}
 				// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 				if state == txnif.TxnStateCommitted {
 					deleted = true
@@ -149,7 +155,8 @@ func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn) txnif.DeleteNode {
 
 func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	var merged *DeleteNode
-	chain.RLock()
+	chain.mvcc.RLock()
+	// chain.RLock()
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Already have a latest merged node
 		if n.IsMerged() && merged == nil {
@@ -173,7 +180,8 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	if merged != nil {
 		merged.AttachTo(chain)
 	}
-	chain.RUnlock()
+	// chain.RUnlock()
+	chain.mvcc.RUnlock()
 	return merged
 }
 
