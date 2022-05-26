@@ -205,7 +205,7 @@ func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, nod
 		WhereList:   projectNodeWhere,
 	}
 
-	node.ProjectList = make([]*Expr, joinResultLen)
+	node.ProjectList = make([]*Expr, projectResultLen)
 	joinNodeIdx := 0
 	projNodeIdx := usingColsLen
 	for i, expr := range leftChild.ProjectList {
@@ -238,19 +238,6 @@ func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, nod
 	}
 
 	for i, expr := range rightChild.ProjectList {
-		colExpr := &Expr{
-			Typ:       expr.Typ,
-			TableName: expr.TableName,
-			ColName:   expr.ColName,
-			Expr: &plan.Expr_Col{
-				Col: &ColRef{
-					RelPos: 1,
-					ColPos: int32(i),
-				},
-			},
-		}
-		node.ProjectList[joinNodeIdx] = colExpr
-
 		// semi join or anti join, rightChild.ProjectList will abandon in the ProjectNode(after JoinNode)
 		if !isSemiOrAntiJoin {
 			// other join, we coalesced the using cols in the ProjectNode(after JoinNode)
@@ -258,7 +245,29 @@ func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, nod
 			if ok {
 				binderCtx.usingCols[expr.ColName] = expr.TableName
 			} else {
-				projectNode.ProjectList[projNodeIdx] = colExpr
+				node.ProjectList[projNodeIdx] = &Expr{
+					Typ:       expr.Typ,
+					TableName: expr.TableName,
+					ColName:   expr.ColName,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: 1,
+							ColPos: int32(i),
+						},
+					},
+				}
+
+				projectNode.ProjectList[projNodeIdx] = &Expr{
+					Typ:       expr.Typ,
+					TableName: expr.TableName,
+					ColName:   expr.ColName,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: 0,
+							ColPos: int32(i),
+						},
+					},
+				}
 				projNodeIdx++
 			}
 		}
