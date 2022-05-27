@@ -96,6 +96,8 @@ type Decimal128 struct {
 	Hi int64
 }
 
+type Bool int8
+
 var Types map[string]T = map[string]T{
 	"bool": T_bool,
 

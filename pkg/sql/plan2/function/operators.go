@@ -1439,7 +1439,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Not,
 		},
 	},
 	// arithmetic operator
@@ -2101,7 +2101,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int8},
 			ReturnTyp:   types.T_int8,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int8],
 		},
 		{
 			Index:       1,
@@ -2110,7 +2110,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int16},
 			ReturnTyp:   types.T_int16,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int16],
 		},
 		{
 			Index:       2,
@@ -2119,7 +2119,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int32},
 			ReturnTyp:   types.T_int32,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int32],
 		},
 		{
 			Index:       3,
@@ -2128,7 +2128,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_int64},
 			ReturnTyp:   types.T_int64,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[int64],
 		},
 		{
 			Index:       4,
@@ -2137,7 +2137,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[float32],
 		},
 		{
 			Index:       5,
@@ -2146,7 +2146,7 @@ var operators = map[int][]Function{
 			Args:        []types.T{types.T_float64},
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Minus[float64],
 		},
 		{
 			Index:       6,
