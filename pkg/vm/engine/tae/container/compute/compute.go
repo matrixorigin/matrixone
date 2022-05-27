@@ -269,6 +269,9 @@ func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 }
 
 func UpdateOffsets(data *types.Bytes, start, end int) {
+	if len(data.Offsets) == 0 {
+		return
+	}
 	if start == -1 {
 		data.Offsets[0] = 0
 		start++

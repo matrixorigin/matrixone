@@ -78,13 +78,10 @@ type BFReader struct {
 	node *bloomFilterNode
 }
 
-func NewBFReader() *BFReader {
-	return &BFReader{}
-}
-
-func (reader *BFReader) Init(mgr base.INodeManager, file common.IVFile, id *common.ID) error {
-	reader.node = newBloomFilterNode(mgr, file, id)
-	return nil
+func NewBFReader(mgr base.INodeManager, file common.IVFile, id *common.ID) *BFReader {
+	return &BFReader{
+		node: newBloomFilterNode(mgr, file, id),
+	}
 }
 
 func (reader *BFReader) Destroy() (err error) {
@@ -97,13 +94,13 @@ func (reader *BFReader) Destroy() (err error) {
 func (reader *BFReader) MayContainsKey(key any) (bool, error) {
 	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
-	return handle.GetNode().(*bloomFilterNode).impl.MayContainsKey(key)
+	return reader.node.impl.MayContainsKey(key)
 }
 
 func (reader *BFReader) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
 	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
-	return handle.GetNode().(*bloomFilterNode).impl.MayContainsAnyKeys(keys, visibility)
+	return reader.node.impl.MayContainsAnyKeys(keys, visibility)
 }
 
 type BFWriter struct {

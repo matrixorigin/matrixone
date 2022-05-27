@@ -306,21 +306,9 @@ func (s *Scope) DispatchRun(e engine.Engine) error {
 		ss[i] = &Scope{
 			Magic: Merge,
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))
-		ss[i].Proc.Id = s.Proc.Id
-		ss[i].Proc.Lim = s.Proc.Lim
-		ss[i].Proc.UnixTime = s.Proc.UnixTime
-		ss[i].Proc.Snapshot = s.Proc.Snapshot
-		ss[i].Proc.Cancel = cancel
-		ss[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(s.PreScopes))
+		ss[i].Proc = process.NewFromProc(mheap.New(s.Proc.Mp.Gm), s.Proc, len(s.PreScopes))
 		for j := 0; j < len(s.PreScopes); j++ {
-			reg := &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-			regs[j][i] = reg
-			ss[i].Proc.Reg.MergeReceivers[j] = reg
+			regs[j][i] = ss[i].Proc.Reg.MergeReceivers[j]
 		}
 		ss[i].Instructions = append(ss[i].Instructions, dupInstruction(s.Instructions[0]))
 	}
