@@ -15,7 +15,6 @@
 package compile2
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -160,14 +159,7 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 		PreScopes: ss,
 		Magic:     Merge,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
-	rs.Proc.Cancel = cancel
-	rs.Proc.Id = c.proc.Id
-	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.UnixTime = c.proc.UnixTime
-	rs.Proc.Snapshot = c.proc.Snapshot
-	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.Merge,
 		Arg: &merge.Argument{},
@@ -179,14 +171,7 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 			Func: c.fill,
 		},
 	})
-	{
-		for i := 0; i < len(ss); i++ {
-			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-		}
-	}
+
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: overload.Connector,
@@ -228,11 +213,7 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 				Magic:      Remote,
 				NodeInfo:   nodes[i],
 			}
-			ss[i].Proc = process.New(mheap.New(c.proc.Mp.Gm))
-			ss[i].Proc.Id = c.proc.Id
-			ss[i].Proc.Lim = c.proc.Lim
-			ss[i].Proc.UnixTime = c.proc.UnixTime
-			ss[i].Proc.Snapshot = c.proc.Snapshot
+			ss[i].Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
 		}
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_PROJECT:
@@ -297,26 +278,12 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 	rs := make([]*Scope, len(ss))
 	for i := range ss {
 		chp := &Scope{
-			PreScopes: children,
-			Magic:     Merge,
+			PreScopes:   children,
+			Magic:       Merge,
+			DispatchAll: true,
 		}
 		{ // build merge scope for children
-			ctx, cancel := context.WithCancel(context.Background())
-			chp.Proc = process.New(mheap.New(c.proc.Mp.Gm))
-			chp.Proc.Cancel = cancel
-			chp.Proc.Id = c.proc.Id
-			chp.Proc.Lim = c.proc.Lim
-			chp.Proc.UnixTime = c.proc.UnixTime
-			chp.Proc.Snapshot = c.proc.Snapshot
-			chp.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(children))
-			{
-				for j := 0; j < len(children); j++ {
-					chp.Proc.Reg.MergeReceivers[j] = &process.WaitRegister{
-						Ctx: ctx,
-						Ch:  make(chan *batch.Batch, 1),
-					}
-				}
-			}
+			chp.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(children))
 			for j := range children {
 				children[j].Instructions = append(children[j].Instructions, vm.Instruction{
 					Op: overload.Connector,
@@ -331,25 +298,7 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 			Magic:     Remote,
 			PreScopes: []*Scope{ss[i], chp},
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		rs[i].Proc = process.New(mheap.New(c.proc.Mp.Gm))
-		rs[i].Proc.Cancel = cancel
-		rs[i].Proc.Id = c.proc.Id
-		rs[i].Proc.Lim = c.proc.Lim
-		rs[i].Proc.UnixTime = c.proc.UnixTime
-		rs[i].Proc.Snapshot = c.proc.Snapshot
-		rs[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
-		{
-			rs[i].Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-			rs[i].Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-
-		}
+		rs[i].Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 2)
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: overload.Connector,
 			Arg: &connector.Argument{
@@ -432,26 +381,12 @@ func (c *compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 		PreScopes: ss,
 		Magic:     Merge,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
-	rs.Proc.Cancel = cancel
-	rs.Proc.Id = c.proc.Id
-	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.UnixTime = c.proc.UnixTime
-	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.MergeTop,
 		Arg: constructMergeTop(n, c.proc),
 	})
-	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
-	{
-		for i := 0; i < len(ss); i++ {
-			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-		}
-	}
+
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: overload.Connector,
@@ -475,26 +410,12 @@ func (c *compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 		PreScopes: ss,
 		Magic:     Merge,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
-	rs.Proc.Cancel = cancel
-	rs.Proc.Id = c.proc.Id
-	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.UnixTime = c.proc.UnixTime
-	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.MergeOrder,
 		Arg: constructMergeOrder(n, c.proc),
 	})
-	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
-	{
-		for i := 0; i < len(ss); i++ {
-			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-		}
-	}
+
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: overload.Connector,
@@ -518,26 +439,12 @@ func (c *compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 		PreScopes: ss,
 		Magic:     Merge,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
-	rs.Proc.Cancel = cancel
-	rs.Proc.Id = c.proc.Id
-	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.UnixTime = c.proc.UnixTime
-	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.MergeOffset,
 		Arg: constructMergeOffset(n, c.proc),
 	})
-	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
-	{
-		for i := 0; i < len(ss); i++ {
-			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-		}
-	}
+
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: overload.Connector,
@@ -561,26 +468,12 @@ func (c *compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 		PreScopes: ss,
 		Magic:     Merge,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
-	rs.Proc.Cancel = cancel
-	rs.Proc.Id = c.proc.Id
-	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.UnixTime = c.proc.UnixTime
-	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.MergeLimit,
 		Arg: constructMergeLimit(n, c.proc),
 	})
-	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
-	{
-		for i := 0; i < len(ss); i++ {
-			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-		}
-	}
+
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: overload.Connector,
@@ -604,26 +497,12 @@ func (c *compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
 		PreScopes: ss,
 		Magic:     Merge,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rs.Proc = process.New(mheap.New(c.proc.Mp.Gm))
-	rs.Proc.Cancel = cancel
-	rs.Proc.Id = c.proc.Id
-	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.UnixTime = c.proc.UnixTime
-	rs.Proc.Snapshot = c.proc.Snapshot
+	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.MergeGroup,
 		Arg: constructMergeGroup(n, true),
 	})
-	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
-	{
-		for i := 0; i < len(ss); i++ {
-			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			}
-		}
-	}
+
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: overload.Connector,
