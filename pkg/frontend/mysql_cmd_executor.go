@@ -273,6 +273,15 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 		//begin1 := time.Now()
 		for i, vec := range bat.Vecs { //col index
+			rowIndexBackup := rowIndex
+			if vec.IsScalarNull() {
+				row[i] = nil
+				continue
+			}
+			if vec.IsScalar() {
+				rowIndex = 0
+			}
+
 			switch vec.Typ.Oid { //get col
 			case types.T_bool:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
@@ -409,25 +418,25 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			case types.T_char:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(int64(rowIndex))
+					row[i] = vs.Get(rowIndex)
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.(*types.Bytes)
-						row[i] = vs.Get(int64(rowIndex))
+						row[i] = vs.Get(rowIndex)
 					}
 				}
 			case types.T_varchar:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(int64(rowIndex))
+					row[i] = vs.Get(rowIndex)
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.(*types.Bytes)
-						row[i] = vs.Get(int64(rowIndex))
+						row[i] = vs.Get(rowIndex)
 					}
 				}
 			case types.T_date:
@@ -497,6 +506,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 				return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 			}
+			rowIndex = rowIndexBackup
 		}
 		//row2colTime += time.Since(begin1)
 		//duplicate rows

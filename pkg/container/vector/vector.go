@@ -160,6 +160,20 @@ func NewConst(typ types.Type) *Vector {
 	return v
 }
 
+// IsScalar return true if the vector means a scalar value.
+// e.g.
+// 		a + 1, and 1's vector will return true
+func (v *Vector) IsScalar() bool {
+	return v.IsConst
+}
+
+// IsScalarNull return true if the vector means a scalar Null.
+// e.g.
+// 		a + Null, and the vector of right part will return true
+func (v *Vector) IsScalarNull() bool {
+	return v.IsConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
+}
+
 func Reset(v *Vector) {
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
@@ -298,6 +312,9 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 }
 
 func Length(v *Vector) int {
+	if v.IsScalar() {
+		return v.Length
+	}
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
 		return len(v.Col.(*types.Bytes).Offsets)
