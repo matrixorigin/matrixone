@@ -26,7 +26,7 @@ type fileAppender struct {
 	tempPos       int
 	rollbackState *vFileState
 	syncWaited    *vFile
-	info          interface{}
+	info          any
 }
 
 func newFileAppender(rfile *rotateFile) *fileAppender {
@@ -36,7 +36,7 @@ func newFileAppender(rfile *rotateFile) *fileAppender {
 	return appender
 }
 
-func (appender *fileAppender) Prepare(size int, info interface{}) error {
+func (appender *fileAppender) Prepare(size int, info any) error {
 	var err error
 	appender.capacity = size
 	appender.rfile.Lock()

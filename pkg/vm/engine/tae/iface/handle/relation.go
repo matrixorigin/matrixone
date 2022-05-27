@@ -22,10 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type Reader interface {
-	Next(ctx interface{}, attrs []string) (*batch.Batch, error)
-}
-
 type Relation interface {
 	io.Closer
 	ID() uint64
@@ -34,20 +30,20 @@ type Relation interface {
 	String() string
 	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
-	Schema() interface{}
+	Schema() any
 	MakeSegmentIt() SegmentIt
-	MakeReader() Reader
 	MakeBlockIt() BlockIt
 
 	RangeDelete(id *common.ID, start, end uint32) error
-	Update(id *common.ID, row uint32, col uint16, v interface{}) error
+	Update(id *common.ID, row uint32, col uint16, v any) error
 	GetByFilter(filter *Filter) (id *common.ID, offset uint32, err error)
-	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
+	GetValue(id *common.ID, row uint32, col uint16) (any, error)
+	UpdateByFilter(filter *Filter, col uint16, v any) error
 
 	BatchDedup(col *vector.Vector) error
 	Append(data *batch.Batch) error
 
-	GetMeta() interface{}
+	GetMeta() any
 	CreateSegment() (Segment, error)
 	CreateNonAppendableSegment() (Segment, error)
 	GetSegment(id uint64) (Segment, error)

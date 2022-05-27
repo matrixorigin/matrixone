@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -36,27 +37,29 @@ func NewColumnView() *ColumnView {
 	}
 }
 
-func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}) {
+func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]any, err error) {
 	if len(view.links) == 0 {
 		return
 	}
 	mask = roaring.New()
-	vals = make(map[uint32]interface{})
+	vals = make(map[uint32]any)
 	it := view.mask.Iterator()
-	var err error
-	var v interface{}
+	var v any
 	for it.HasNext() {
 		row := it.Next()
 		v, err = view.GetValue(row, ts)
 		if err == nil {
 			vals[row] = v
 			mask.Add(row)
+		} else if err == txnif.TxnInternalErr {
+			break
 		}
+		err = nil
 	}
 	return
 }
 
-func (view *ColumnView) GetValue(key uint32, startTs uint64) (v interface{}, err error) {
+func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) {
 	link := view.links[key]
 	if link == nil {
 		err = txnbase.ErrNotFound
@@ -88,15 +91,22 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v interface{}, err
 				}
 				// 3. Node is committing and wait committed or rollbacked
 				state := nTxn.GetTxnState(true)
+				// logutil.Infof("%d -- wait --> %s: state", startTs, nTxn.Repr(), state)
 				if state == txnif.TxnStateCommitted {
 					// 3.1 If committed. use this node
 					break
-				} else {
+				} else if state == txnif.TxnStateRollbacked {
 					// 3.2 If rollbacked. go to prev node
 					err = nil
 					v = nil
 					head = head.GetNext()
 					continue
+				} else if state == txnif.TxnStateCommitting {
+					logutil.Fatal("txn state error")
+				} else if state == txnif.TxnStateUnknown {
+					err = txnif.TxnInternalErr
+					v = nil
+					break
 				}
 			}
 		}
@@ -110,7 +120,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v interface{}, err
 		node.RUnlock()
 		break
 	}
-	if v == nil {
+	if v == nil && err == nil {
 		err = txnbase.ErrNotFound
 	}
 	return

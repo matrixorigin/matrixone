@@ -38,7 +38,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		case <-reg.Ctx.Done():
 			return true, nil
 		case reg.Ch <- bat:
-			return false, nil
+			return true, nil
 		}
 	}
 	if len(bat.Zs) == 0 {

@@ -15,8 +15,11 @@
 package function
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/aggregate"
 )
 
 func initAggregateFunction() {
@@ -42,7 +45,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint8,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         1,
@@ -51,7 +54,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint16,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         2,
@@ -60,7 +63,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint32,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         3,
@@ -69,7 +72,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         4,
@@ -78,7 +81,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int8,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         5,
@@ -87,7 +90,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int16,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         6,
@@ -96,7 +99,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int32,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         7,
@@ -105,7 +108,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         8,
@@ -114,7 +117,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_float32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float32,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         9,
@@ -123,7 +126,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_float64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         10,
@@ -132,7 +135,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_varchar},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_varchar,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         11,
@@ -141,7 +144,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_char},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_char,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         12,
@@ -150,7 +153,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_date},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_date,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         13,
@@ -159,7 +162,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_datetime},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_datetime,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         14,
@@ -168,7 +171,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 		{
 			Index:         15,
@@ -177,7 +180,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal128},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal128,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Max,
 		},
 	},
 	MIN: {
@@ -188,7 +191,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint8,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         1,
@@ -197,7 +200,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint16,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         2,
@@ -206,7 +209,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint32,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         3,
@@ -215,7 +218,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         4,
@@ -224,7 +227,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int8,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         5,
@@ -233,7 +236,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int16,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         6,
@@ -242,7 +245,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int32,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         7,
@@ -251,7 +254,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         8,
@@ -260,7 +263,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_float32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float32,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         9,
@@ -269,7 +272,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_float64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         10,
@@ -278,7 +281,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_varchar},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_varchar,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         11,
@@ -287,7 +290,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_char},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_char,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         12,
@@ -296,7 +299,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_date},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_date,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         13,
@@ -305,7 +308,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_datetime},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_datetime,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         14,
@@ -314,7 +317,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 		{
 			Index:         15,
@@ -323,7 +326,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal128},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal128,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Min,
 		},
 	},
 	SUM: {
@@ -334,7 +337,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         1,
@@ -343,7 +346,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         2,
@@ -352,7 +355,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         3,
@@ -361,7 +364,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_uint64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         4,
@@ -370,7 +373,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         5,
@@ -379,7 +382,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int16},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         6,
@@ -388,7 +391,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         7,
@@ -397,7 +400,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         8,
@@ -406,7 +409,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_float32},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         9,
@@ -415,7 +418,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_float64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         10,
@@ -424,7 +427,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_varchar},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_varchar,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         11,
@@ -433,7 +436,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_char},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_char,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         12,
@@ -442,7 +445,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_date},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_date,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         13,
@@ -451,7 +454,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_datetime},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_datetime,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         14,
@@ -460,7 +463,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal64,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 		{
 			Index:         15,
@@ -469,7 +472,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal128},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal128,
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 	},
 	AVG: {
@@ -484,7 +487,7 @@ var aggregates = map[int][]Function{
 				}
 				return false
 			},
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.Sum,
 		},
 	},
 	COUNT: {
@@ -494,12 +497,123 @@ var aggregates = map[int][]Function{
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_int64,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				return len(inputTypes) == 1
+			},
+			AggregateInfo: aggregate.Count,
+		},
+	},
+	STARCOUNT: {
+		{
+			Index:     0,
+			Flag:      plan.Function_AGG,
+			Layout:    STANDARD_FUNCTION,
+			ReturnTyp: types.T_int64,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				return len(inputTypes) == 1
+			},
+			AggregateInfo: aggregate.StarCount,
+		},
+	},
+	BIT_AND: {
+		{
+			Index:     0,
+			Flag:      plan.Function_AGG,
+			Layout:    STANDARD_FUNCTION,
+			ReturnTyp: types.T_uint64,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) == 1 {
-					return true
+					_, err := aggregate.NewBitAnd(types.Type{Oid: inputTypes[0]})
+					if err == nil {
+						return true
+					}
 				}
 				return false
 			},
-			AggregateInfo: nil,
+			AggregateInfo: aggregate.BitAnd,
+		},
+	},
+	BIT_OR: {
+		{
+			Index:     0,
+			Flag:      plan.Function_AGG,
+			Layout:    STANDARD_FUNCTION,
+			ReturnTyp: types.T_uint64,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				if len(inputTypes) == 1 {
+					_, err := aggregate.NewBitOr(types.Type{Oid: inputTypes[0]})
+					if err == nil {
+						return true
+					}
+				}
+				return false
+			},
+			AggregateInfo: aggregate.BitOr,
+		},
+	},
+	BIT_XOR: {
+		{
+			Index:     0,
+			Flag:      plan.Function_AGG,
+			Layout:    STANDARD_FUNCTION,
+			ReturnTyp: types.T_uint64,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				if len(inputTypes) == 1 {
+					_, err := aggregate.NewBitXor(types.Type{Oid: inputTypes[0]})
+					if err == nil {
+						return true
+					}
+				}
+				return false
+			},
+			AggregateInfo: aggregate.BitXor,
+		},
+	},
+	VAR_POP: {
+		{
+			Index:     0,
+			Flag:      plan.Function_AGG,
+			Layout:    STANDARD_FUNCTION,
+			ReturnTyp: types.T_float64,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				if len(inputTypes) == 1 {
+					_, err := variance.NewVarianceRingWithTypeCheck(types.Type{Oid: inputTypes[0]})
+					if err == nil {
+						return true
+					}
+				}
+				return false
+			},
+			AggregateInfo: aggregate.Variance,
+		},
+	},
+	STDDEV_POP: {
+		{
+			Index:     0,
+			Flag:      plan.Function_AGG,
+			Layout:    STANDARD_FUNCTION,
+			ReturnTyp: types.T_float64,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				if len(inputTypes) == 1 {
+					_, err := stddevpop.NewStdDevPopRingWithTypeCheck(types.Type{Oid: inputTypes[0]})
+					if err == nil {
+						return true
+					}
+				}
+				return false
+			},
+			AggregateInfo: aggregate.StdDevPop,
+		},
+	},
+	APPROX_COUNT_DISTINCT: {
+		{
+			Index:     0,
+			Flag:      plan.Function_AGG,
+			Layout:    STANDARD_FUNCTION,
+			ReturnTyp: types.T_uint64,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				return len(inputTypes) == 1
+			},
+			AggregateInfo: aggregate.ApproxCountDistinct,
 		},
 	},
 }

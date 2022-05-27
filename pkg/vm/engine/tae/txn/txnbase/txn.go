@@ -52,11 +52,15 @@ type Txn struct {
 	sync.RWMutex
 	sync.WaitGroup
 	*TxnCtx
-	Mgr             *TxnManager
-	Store           txnif.TxnStore
-	Err             error
-	DoneCond        sync.Cond
-	PrepareCommitFn func(interface{}) error
+	Mgr      *TxnManager
+	Store    txnif.TxnStore
+	Err      error
+	DoneCond sync.Cond
+
+	PrepareCommitFn   func(txnif.AsyncTxn) error
+	PrepareRollbackFn func(txnif.AsyncTxn) error
+	ApplyCommitFn     func(txnif.AsyncTxn) error
+	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
 func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start uint64, info []byte) *Txn {
@@ -74,7 +78,10 @@ func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
 func (txn *Txn) SetError(err error) { txn.Err = err }
 func (txn *Txn) GetError() error    { return txn.Err }
 
-func (txn *Txn) SetPrepareCommitFn(fn func(interface{}) error) { txn.PrepareCommitFn = fn }
+func (txn *Txn) SetPrepareCommitFn(fn func(txnif.AsyncTxn) error)   { txn.PrepareCommitFn = fn }
+func (txn *Txn) SetPrepareRollbackFn(fn func(txnif.AsyncTxn) error) { txn.PrepareRollbackFn = fn }
+func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyCommitFn = fn }
+func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyRollbackFn = fn }
 
 func (txn *Txn) Commit() (err error) {
 	if txn.Store.IsReadonly() {
@@ -94,7 +101,7 @@ func (txn *Txn) Commit() (err error) {
 		txn.Unlock()
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.Done()
+		txn.DoneWithErr(err)
 	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
@@ -118,7 +125,7 @@ func (txn *Txn) Rollback() (err error) {
 	if err != nil {
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.Done()
+		txn.DoneWithErr(err)
 	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
@@ -126,15 +133,20 @@ func (txn *Txn) Rollback() (err error) {
 	return
 }
 
-func (txn *Txn) Done() {
+func (txn *Txn) DoneWithErr(err error) {
 	txn.DoneCond.L.Lock()
-	if txn.State == txnif.TxnStateCommitting {
-		if err := txn.ToCommittedLocked(); err != nil {
-			txn.SetError(err)
-		}
+	if err != nil {
+		txn.ToUnknownLocked()
+		txn.SetError(err)
 	} else {
-		if err := txn.ToRollbackedLocked(); err != nil {
-			txn.SetError(err)
+		if txn.State == txnif.TxnStateCommitting {
+			if err := txn.ToCommittedLocked(); err != nil {
+				txn.SetError(err)
+			}
+		} else {
+			if err := txn.ToRollbackedLocked(); err != nil {
+				txn.SetError(err)
+			}
 		}
 	}
 	txn.WaitGroup.Done()
@@ -166,22 +178,25 @@ func (txn *Txn) GetTxnState(waitIfcommitting bool) txnif.TxnState {
 		return state
 	}
 	txn.DoneCond.Wait()
+	state = txn.State
 	txn.DoneCond.L.Unlock()
 	return state
 }
 
-func (txn *Txn) PrepareCommit() error {
+func (txn *Txn) PrepareCommit() (err error) {
 	logutil.Debugf("Prepare Committing %d", txn.ID)
-	var err error
 	if txn.PrepareCommitFn != nil {
-		err = txn.PrepareCommitFn(txn)
+		if err = txn.PrepareCommitFn(txn); err != nil {
+			return
+		}
 	}
-	if err != nil {
-		return err
-	}
-	// TODO: process data in store
 	err = txn.Store.PrepareCommit()
 	return err
+}
+
+func (txn *Txn) PreApplyCommit() (err error) {
+	err = txn.Store.PreApplyCommit()
+	return
 }
 
 func (txn *Txn) ApplyCommit() (err error) {
@@ -192,6 +207,11 @@ func (txn *Txn) ApplyCommit() (err error) {
 			txn.Store.Close()
 		}
 	}()
+	if txn.ApplyCommitFn != nil {
+		if err = txn.ApplyCommitFn(txn); err != nil {
+			return
+		}
+	}
 	err = txn.Store.ApplyCommit()
 	return
 }
@@ -204,6 +224,11 @@ func (txn *Txn) ApplyRollback() (err error) {
 			txn.Store.Close()
 		}
 	}()
+	if txn.ApplyRollbackFn != nil {
+		if err = txn.ApplyRollbackFn(txn); err != nil {
+			return
+		}
+	}
 	err = txn.Store.ApplyRollback()
 	return
 }
@@ -212,9 +237,15 @@ func (txn *Txn) PreCommit() error {
 	return txn.Store.PreCommit()
 }
 
-func (txn *Txn) PrepareRollback() error {
+func (txn *Txn) PrepareRollback() (err error) {
 	logutil.Debugf("Prepare Rollbacking %d", txn.ID)
-	return txn.Store.PrepareRollback()
+	if txn.PrepareRollbackFn != nil {
+		if err = txn.PrepareRollbackFn(txn); err != nil {
+			return
+		}
+	}
+	err = txn.Store.PrepareRollback()
+	return
 }
 
 func (txn *Txn) String() string {
@@ -222,9 +253,9 @@ func (txn *Txn) String() string {
 	return fmt.Sprintf("%s: %v", str, txn.GetError())
 }
 
-func (txn *Txn) WaitDone() error {
+func (txn *Txn) WaitDone(err error) error {
 	// logutil.Infof("Wait %s Done", txn.String())
-	txn.Done()
+	txn.DoneWithErr(err)
 	return txn.Err
 }
 

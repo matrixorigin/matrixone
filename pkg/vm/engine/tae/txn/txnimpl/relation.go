@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -32,6 +33,7 @@ type txnRelationIt struct {
 	txnDB  *txnDB
 	linkIt *common.LinkIt
 	curr   *catalog.TableEntry
+	err    error
 }
 
 func newRelationIt(db *txnDB) *txnRelationIt {
@@ -40,10 +42,18 @@ func newRelationIt(db *txnDB) *txnRelationIt {
 		linkIt:  db.entry.MakeTableIt(true),
 		txnDB:   db,
 	}
+	var err error
+	var ok bool
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.TableEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.txnDB.store.txn, curr.RWMutex) {
+		ok, err = curr.TxnCanRead(it.txnDB.store.txn, curr.RWMutex)
+		if err != nil {
+			curr.RUnlock()
+			it.err = err
+			return it
+		}
+		if ok {
 			curr.RUnlock()
 			it.curr = curr
 			break
@@ -56,9 +66,16 @@ func newRelationIt(db *txnDB) *txnRelationIt {
 
 func (it *txnRelationIt) Close() error { return nil }
 
-func (it *txnRelationIt) Valid() bool { return it.linkIt.Valid() }
+func (it *txnRelationIt) GetError() error { return it.err }
+func (it *txnRelationIt) Valid() bool {
+	if it.err != nil {
+		return false
+	}
+	return it.linkIt.Valid()
+}
 
 func (it *txnRelationIt) Next() {
+	var err error
 	valid := true
 	for {
 		it.linkIt.Next()
@@ -69,8 +86,12 @@ func (it *txnRelationIt) Next() {
 		}
 		entry := node.GetPayload().(*catalog.TableEntry)
 		entry.RLock()
-		valid = entry.TxnCanRead(it.txnDB.store.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.txnDB.store.txn, entry.RWMutex)
 		entry.RUnlock()
+		if err != nil {
+			it.err = err
+			break
+		}
 		if valid {
 			it.curr = entry
 			break
@@ -114,14 +135,13 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	return s
 }
 
-func (h *txnRelation) GetMeta() interface{}   { return h.table.entry }
-func (h *txnRelation) GetSchema() interface{} { return h.table.entry.GetSchema() }
+func (h *txnRelation) GetMeta() any   { return h.table.entry }
+func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Close() error                     { return nil }
 func (h *txnRelation) Rows() int64                      { return 0 }
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
-func (h *txnRelation) MakeReader() handle.Reader        { return nil }
 
 func (h *txnRelation) BatchDedup(col *vector.Vector) error {
 	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
@@ -163,7 +183,32 @@ func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, er
 	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
 }
 
-func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{}) error {
+func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error) {
+	id, row, err := h.table.GetByFilter(filter)
+	if err != nil {
+		return
+	}
+	schema := h.table.entry.GetSchema()
+	if !schema.IsPartOfPK(int(col)) {
+		err = h.table.Update(id, row, col, v)
+		return
+	}
+	bat := catalog.MockData(schema, 0)
+	for i := range schema.ColDefs {
+		colVal, err := h.table.GetValue(id, row, uint16(i))
+		if err != nil {
+			return err
+		}
+		compute.AppendValue(bat.Vecs[i], colVal)
+	}
+	if err = h.table.RangeDelete(id, row, row); err != nil {
+		return
+	}
+	err = h.table.Append(bat)
+	return
+}
+
+func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v any) error {
 	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
 }
 
@@ -171,7 +216,7 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32) error {
 	return h.Txn.GetStore().RangeDelete(h.table.entry.GetDB().ID, id, start, end)
 }
 
-func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (interface{}, error) {
+func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, error) {
 	return h.Txn.GetStore().GetValue(h.table.entry.GetDB().ID, id, row, col)
 }
 

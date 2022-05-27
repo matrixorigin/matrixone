@@ -77,8 +77,8 @@ func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err e
 
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	view := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
-	if view == nil {
+	view, err := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
+	if view == nil || err != nil {
 		return
 	}
 	deletes := view.DeleteMask

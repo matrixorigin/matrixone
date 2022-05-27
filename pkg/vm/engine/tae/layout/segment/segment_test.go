@@ -252,18 +252,47 @@ func TestSegment_Replay(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 10)))
-	assert.Nil(t, err)
+	for _, file = range seg.nodes {
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 10)))
+		assert.Nil(t, err)
+		buffer1 := mockData(2048000)
+		assert.NotNil(t, buffer1)
+		err = file.segment.Append(file, buffer1)
+		assert.Nil(t, err)
+		buffer2 := mockData(49152)
+		assert.NotNil(t, buffer2)
+		err = file.segment.Append(file, buffer2)
+		assert.Nil(t, err)
+		buffer3 := mockData(8192)
+		assert.NotNil(t, buffer3)
+		err = file.segment.Append(file, buffer3)
+		assert.Nil(t, err)
+		buffer4 := mockData(5242880)
+		assert.NotNil(t, buffer4)
+		err = file.segment.Append(file, buffer4)
+		assert.Nil(t, err)
+	}
+	level0 := seg.allocator.(*BitmapAllocator).level0
+	level1 := seg.allocator.(*BitmapAllocator).level1
 	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
 	assert.Nil(t, err)
-	seg = Segment{
+	seg1 := Segment{
 		name:    name,
 		segFile: segfile,
 	}
 	cache := bytes.NewBuffer(make([]byte, LOG_SIZE))
-	err = seg.Replay(cache)
+	err = seg1.Replay(cache)
 	assert.Nil(t, err)
-	assert.Equal(t, 11, len(seg.nodes))
+	assert.Equal(t, 11, len(seg1.nodes))
+	level0_2 := seg1.allocator.(*BitmapAllocator).level0
+	level1_2 := seg1.allocator.(*BitmapAllocator).level1
+	for i := range level0_2 {
+		assert.Equal(t, level0[i], level0_2[i])
+	}
+	for i := range level1_2 {
+		assert.Equal(t, level1[i], level1_2[i])
+	}
+
 }
 
 func TestSegment_Init(t *testing.T) {

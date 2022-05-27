@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -85,15 +84,15 @@ func TestGCBlock1(t *testing.T) {
 	err = meta.GetSegment().RemoveEntry(meta)
 	assert.Nil(t, err)
 	blkData := meta.GetBlockData()
-	assert.Equal(t, 1, tae.MTBufMgr.Count())
+	assert.Equal(t, 3, tae.MTBufMgr.Count())
 	err = blkData.Destroy()
 	assert.Nil(t, err)
-	assert.Equal(t, 0, tae.MTBufMgr.Count())
+	assert.Equal(t, 2, tae.MTBufMgr.Count())
 
-	assert.Equal(t, 2, idxCommon.MockIndexBufferManager.Count())
 	err = task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().Destroy()
 	assert.Nil(t, err)
-	assert.Equal(t, 0, idxCommon.MockIndexBufferManager.Count())
+	assert.Equal(t, 0, tae.MTBufMgr.Count())
+	t.Log(tae.MTBufMgr.String())
 }
 
 func TestAutoGC1(t *testing.T) {

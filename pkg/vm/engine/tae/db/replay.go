@@ -17,16 +17,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+const DefaultReplayCacheSize = common.G
+
 type Replayer struct {
-	DataFactory *tables.DataFactory
-	db          *DB
-	maxTs       uint64
+	DataFactory  *tables.DataFactory
+	db           *DB
+	maxTs        uint64
+	cache        *bytes.Buffer
+	staleIndexes []*wal.Index
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 	return &Replayer{
-		DataFactory: dataFactory,
-		db:          db,
+		DataFactory:  dataFactory,
+		db:           db,
+		cache:        bytes.NewBuffer(make([]byte, DefaultReplayCacheSize)),
+		staleIndexes: make([]*wal.Index, 0),
 	}
 }
 
@@ -35,9 +41,17 @@ func (replayer *Replayer) Replay() {
 	if err != nil {
 		panic(err)
 	}
+	_, err = replayer.db.Wal.Checkpoint(replayer.staleIndexes)
+	if err != nil {
+		panic(err)
+	}
 }
 
-func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+func (replayer *Replayer) OnStaleIndex(idx *wal.Index) {
+	replayer.staleIndexes = append(replayer.staleIndexes, idx)
+}
+
+func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 	if group != wal.GroupC {
 		return
 	}
@@ -51,7 +65,6 @@ func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload [
 	if err != nil {
 		panic(err)
 	}
-	return
 }
 
 func (replayer *Replayer) GetMaxTS() uint64 {
@@ -82,11 +95,11 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 			}
 		}
 	case *catalog.EntryCommand:
-		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer)
+		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer, replayer.cache)
 	case *txnimpl.AppendCmd:
 		replayer.db.onReplayAppendCmd(cmd)
 	case *updates.UpdateCmd:
-		err = replayer.db.onReplayUpdateCmd(cmd)
+		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer)
 	}
 	if err != nil {
 		panic(err)
@@ -141,6 +154,13 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 		if blk.CurrOp == catalog.OpSoftDelete {
 			continue
 		}
+		fileTs, err := blk.GetFileTs()
+		if err != nil {
+			panic(err)
+		}
+		if fileTs > cmd.Ts {
+			continue
+		}
 		start := info.GetSrcOff()
 		end := start + info.GetSrcLen() - 1
 		bat, err := db.window(attrs, data, deletes, start, end)
@@ -159,7 +179,6 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 			panic(err)
 		}
 	}
-	return
 }
 
 func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap, start, end uint32) (*gbat.Batch, error) {
@@ -173,31 +192,32 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 		if err != nil {
 			return nil, err
 		}
-		deletes := common.BitMapWindow(deletes, int(start), int(end))
+		deletes := common.BM32Window(deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
 		ret.Vecs[i] = srcVec
 	}
 	return ret, nil
 }
 
-func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd) (err error) {
+func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) (err error) {
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
-		db.onReplayAppend(cmd)
+		db.onReplayAppend(cmd, idxCtx, observer)
 	case txnbase.CmdUpdate:
-		db.onReplayUpdate(cmd)
+		db.onReplayUpdate(cmd, idxCtx, observer)
 	case txnbase.CmdDelete:
-		db.onReplayDelete(cmd)
+		db.onReplayDelete(cmd, idxCtx, observer)
 	}
 	return
 }
 
-func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) {
+func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
 	}
 	deleteNode := cmd.GetDeleteNode()
+	deleteNode.SetLogIndex(idxCtx)
 	id := deleteNode.GetID()
 	tb, err := database.GetTableEntryByID(id.TableID)
 	if err != nil {
@@ -212,25 +232,34 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd) {
 		panic(err)
 	}
 	if blk.CurrOp == catalog.OpSoftDelete {
+		observer.OnStaleIndex(idxCtx)
+		return
+	}
+	fileTs, err := blk.GetFileTs()
+	if err != nil {
+		panic(err)
+	}
+	if fileTs > deleteNode.GetCommitTSLocked() {
+		observer.OnStaleIndex(idxCtx)
 		return
 	}
 	datablk := blk.GetBlockData()
-	iterator := deleteNode.GetDeleteMaskLocked().Iterator()
-	for iterator.HasNext() {
-		row := iterator.Next()
-		err = datablk.OnReplayDelete(row, row)
-		if err != nil {
-			panic(err)
-		}
+	err = datablk.OnReplayDelete(deleteNode)
+	if err != nil {
+		panic(err)
+	}
+	if observer != nil {
+		observer.OnTimeStamp(deleteNode.GetCommitTSLocked())
 	}
 }
 
-func (db *DB) onReplayAppend(cmd *updates.UpdateCmd) {
+func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
 	}
 	appendNode := cmd.GetAppendNode()
+	appendNode.SetLogIndex(idxCtx)
 	id := appendNode.GetID()
 	tb, err := database.GetTableEntryByID(id.TableID)
 	if err != nil {
@@ -245,6 +274,15 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd) {
 		panic(err)
 	}
 	if blk.CurrOp == catalog.OpSoftDelete {
+		observer.OnStaleIndex(idxCtx)
+		return
+	}
+	fileTs, err := blk.GetFileTs()
+	if err != nil {
+		panic(err)
+	}
+	if fileTs > appendNode.GetCommitTS() {
+		observer.OnStaleIndex(idxCtx)
 		return
 	}
 	datablk := blk.GetBlockData()
@@ -253,15 +291,19 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd) {
 	if err != nil {
 		panic(err)
 	}
-	appender.OnReplayAppendNode(cmd.GetAppendNode().GetMaxRow())
+	appender.OnReplayAppendNode(cmd.GetAppendNode())
+	if observer != nil {
+		observer.OnTimeStamp(appendNode.GetCommitTS())
+	}
 }
 
-func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd) {
+func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
 	}
 	updateNode := cmd.GetUpdateNode()
+	updateNode.SetLogIndex(idxCtx)
 	id := updateNode.GetID()
 	tb, err := database.GetTableEntryByID(id.TableID)
 	if err != nil {
@@ -276,16 +318,23 @@ func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd) {
 		panic(err)
 	}
 	if blk.CurrOp == catalog.OpSoftDelete {
+		observer.OnStaleIndex(idxCtx)
+		return
+	}
+	fileTs, err := blk.GetFileTs()
+	if err != nil {
+		panic(err)
+	}
+	if fileTs > updateNode.GetCommitTSLocked() {
+		observer.OnStaleIndex(idxCtx)
 		return
 	}
 	blkdata := blk.GetBlockData()
-	iterator := updateNode.GetMask().Iterator()
-	vals := updateNode.GetValues()
-	for iterator.HasNext() {
-		row := iterator.Next()
-		err = blkdata.OnReplayUpdate(row, id.Idx, vals[row])
-		if err != nil {
-			panic(err)
-		}
+	err = blkdata.OnReplayUpdate(id.Idx, updateNode)
+	if err != nil {
+		panic(err)
+	}
+	if observer != nil {
+		observer.OnTimeStamp(updateNode.GetCommitTSLocked())
 	}
 }

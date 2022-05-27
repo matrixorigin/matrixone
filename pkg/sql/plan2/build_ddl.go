@@ -35,7 +35,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// get database name
 	if len(stmt.Table.SchemaName) == 0 {
-		createTable.Database = ctx.DefaultDatabase()
+		createTable.Database = ""
 	} else {
 		createTable.Database = string(stmt.Table.SchemaName)
 	}
@@ -217,6 +217,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			},
 		})
 	}
+
 	return nil
 }
 
@@ -225,7 +226,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 	}
 	if len(stmt.Names) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("support drop one table now"))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one table now")
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {

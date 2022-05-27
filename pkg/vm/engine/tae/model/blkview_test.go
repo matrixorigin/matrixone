@@ -42,12 +42,12 @@ func TestEval(t *testing.T) {
 
 	view.UpdateMasks[1] = &roaring.Bitmap{}
 	view.UpdateMasks[1].Add(3)
-	view.UpdateVals[1] = make(map[uint32]interface{})
+	view.UpdateVals[1] = make(map[uint32]any)
 	view.UpdateVals[1][3] = int16(7)
 
 	view.UpdateMasks[13] = &roaring.Bitmap{}
 	view.UpdateMasks[13].Add(4)
-	view.UpdateVals[13] = make(map[uint32]interface{})
+	view.UpdateVals[13] = make(map[uint32]any)
 	view.UpdateVals[13][4] = []byte("testEval")
 
 	view.Eval()

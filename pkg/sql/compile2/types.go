@@ -29,6 +29,12 @@ const (
 	Normal
 	Remote
 	Parallel
+	CreateDatabase
+	CreateTable
+	CreateIndex
+	DropDatabase
+	DropTable
+	DropIndex
 )
 
 // Address is the ip:port of local node
@@ -58,6 +64,9 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic int
 
+	// used for dispatch
+	DispatchAll bool
+
 	Plan *plan.Plan
 	// DataSource stores information about data source.
 	DataSource *Source
@@ -69,6 +78,8 @@ type Scope struct {
 	Instructions vm.Instructions
 	// Proc contains the execution context.
 	Proc *process.Process
+
+	Reg *process.WaitRegister
 }
 
 // compile contains all the information needed for compilation.

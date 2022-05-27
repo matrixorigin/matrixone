@@ -25,32 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type sharedLock struct {
-	locker *sync.RWMutex
-}
-
-func (lock *sharedLock) Lock() {
-	lock.locker.RLock()
-}
-
-func (lock *sharedLock) Unlock() {
-	lock.locker.RUnlock()
-}
-
-func newSharedLock(locker *sync.RWMutex) *sharedLock {
-	return &sharedLock{
-		locker: locker,
-	}
-}
-
 type MVCCHandle struct {
 	*sync.RWMutex
-	columns    map[uint16]*ColumnChain
-	deletes    *DeleteChain
-	meta       *catalog.BlockEntry
-	maxVisible uint64
-	appends    []*AppendNode
-	changes    uint32
+	columns         map[uint16]*ColumnChain
+	deletes         *DeleteChain
+	meta            *catalog.BlockEntry
+	maxVisible      uint64
+	appends         []*AppendNode
+	changes         uint32
+	deletesListener func(common.RowGen, uint64) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -69,6 +52,14 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MVCCHandle) SetDeletesListener(l func(common.RowGen, uint64) error) {
+	n.deletesListener = l
+}
+
+func (n *MVCCHandle) GetDeletesListener() func(common.RowGen, uint64) error {
+	return n.deletesListener
 }
 
 func (n *MVCCHandle) HasActiveAppendNode() bool {
@@ -129,24 +120,6 @@ func (n *MVCCHandle) StringLocked() string {
 	return s
 }
 
-func (n *MVCCHandle) GetSharedLock() sync.Locker {
-	locker := newSharedLock(n.RWMutex)
-	locker.Lock()
-	return locker
-}
-
-func (n *MVCCHandle) GetExclusiveLock() sync.Locker {
-	n.Lock()
-	return n.RWMutex
-}
-
-func (n *MVCCHandle) GetColumnSharedLock(idx uint16) sync.Locker {
-	col := n.columns[idx]
-	locker := newSharedLock(col.RWMutex)
-	locker.Lock()
-	return locker
-}
-
 func (n *MVCCHandle) GetColumnExclusiveLock(idx uint16) sync.Locker {
 	col := n.columns[idx]
 	col.Lock()
@@ -159,6 +132,11 @@ func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts uint64) error {
 
 func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn) txnif.DeleteNode {
 	return n.deletes.AddNodeLocked(txn)
+}
+
+func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
+	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
+	n.TrySetMaxVisible(deleteNode.(*DeleteNode).commitTs)
 }
 
 func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
@@ -195,35 +173,51 @@ func (n *MVCCHandle) GetColumnChain(colIdx uint16) *ColumnChain {
 func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
 	return n.deletes
 }
-
+func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
+	an.mvcc = n
+	n.appends = append(n.appends, an)
+	n.TrySetMaxVisible(an.commitTs)
+}
+func (n *MVCCHandle) TrySetMaxVisible(ts uint64) {
+	if ts > n.maxVisible {
+		n.maxVisible = ts
+	}
+}
 func (n *MVCCHandle) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
 	an := NewAppendNode(txn, maxRow, n)
 	n.appends = append(n.appends, an)
 	return an
 }
 
-func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) bool {
-	maxRow, ok := n.GetMaxVisibleRowLocked(ts)
-	if !ok {
-		return ok
+func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) (bool, error) {
+	maxRow, visible, err := n.GetMaxVisibleRowLocked(ts)
+	if !visible || err != nil {
+		return visible, err
 	}
-	return maxRow >= row
+	visible = maxRow >= row
+	return visible, err
 }
 
-func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64) bool {
-	return n.deletes.IsDeleted(row, ts)
+func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64, rwlocker *sync.RWMutex) (bool, error) {
+	return n.deletes.IsDeleted(row, ts, rwlocker)
 }
 
-func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (indexes []*wal.Index) {
+func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (indexes []*wal.Index, err error) {
 	if len(n.appends) == 0 {
 		return
 	}
-	startOffset, _, startOk := n.getMaxVisibleRowLocked(startTs - 1)
-	endOffset, _, endOk := n.getMaxVisibleRowLocked(endTs)
-	if !endOk {
+	startOffset, _, startVisible, err := n.getMaxVisibleRowLocked(startTs - 1)
+	if err != nil {
 		return
 	}
-	if !startOk {
+	endOffset, _, endVisible, err := n.getMaxVisibleRowLocked(endTs)
+	if err != nil {
+		return
+	}
+	if !endVisible {
+		return
+	}
+	if !startVisible {
 		startOffset = 0
 	} else {
 		startOffset += 1
@@ -234,23 +228,21 @@ func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (index
 	return
 }
 
-func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
-	_, row, ok := n.getMaxVisibleRowLocked(ts)
-	return row, ok
+func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (row uint32, visible bool, err error) {
+	_, row, visible, err = n.getMaxVisibleRowLocked(ts)
+	return
 }
 
-func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool) {
+func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error) {
 	if len(n.appends) == 0 {
-		return 0, 0, false
+		return 0, 0, false, nil
 	}
-	// readLock := n.GetSharedLock()
 	maxVisible := n.LoadMaxVisible()
 	lastAppend := n.appends[len(n.appends)-1]
 
 	// 1. Last append node is in the window and it was already committed
 	if ts > lastAppend.GetCommitTS() && maxVisible >= lastAppend.GetCommitTS() {
-		// readLock.Unlock()
-		return len(n.appends) - 1, lastAppend.GetMaxRow(), true
+		return len(n.appends) - 1, lastAppend.GetMaxRow(), true, nil
 	}
 	start, end := 0, len(n.appends)-1
 	var mid int
@@ -266,21 +258,28 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool) {
 	}
 	if mid == 0 && n.appends[mid].GetCommitTS() > ts {
 		// 2. The first node is found and it was committed after ts
-		// readLock.Unlock()
-		return 0, 0, false
+		return 0, 0, false, nil
 	} else if mid != 0 && n.appends[mid].GetCommitTS() > ts {
 		// 3. A node (not first) is found and it was committed after ts. Use the prev node
 		mid = mid - 1
 	}
+	var err error
 	node := n.appends[mid]
-	// readLock.Unlock()
-	if node.GetCommitTS() < n.LoadMaxVisible() {
+	if node.GetCommitTS() > n.LoadMaxVisible() {
 		node.RLock()
 		txn := node.txn
 		node.RUnlock()
-		if txn != nil {
-			txn.GetTxnState(true)
+		// Note: Maybe there is a deadlock risk here
+		if txn != nil && node.GetCommitTS() > n.LoadMaxVisible() {
+			// Append node should not be rollbacked because apply append is the last step of prepare commit
+			state := txn.GetTxnState(true)
+			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
+			if state == txnif.TxnStateUnknown {
+				err = txnif.TxnInternalErr
+			} else if state == txnif.TxnStateRollbacked {
+				panic("append node shoul not be rollbacked")
+			}
 		}
 	}
-	return mid, node.GetMaxRow(), true
+	return mid, node.GetMaxRow(), true, err
 }

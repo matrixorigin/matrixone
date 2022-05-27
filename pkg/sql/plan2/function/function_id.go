@@ -144,6 +144,7 @@ const (
 	SIGN              // SIGN
 	SIN               // SIN
 	SPLIT             // SPLIT
+	STARCOUNT         // STARTCOUNT
 	STARTSWITH        // STARTSWITH
 	STDDEV_POP        // STDDEV_POP
 	STDDEV_SAMPLE     // STDDEV_SAMPLE
@@ -168,13 +169,17 @@ const (
 	SUBSTRING // SUBSTRING
 	YEAR      // YEAR
 
+	DATE_ADD              // DATE_ADD
+	DATE_SUB              // DATE_SUB
+	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
 )
 
 // functionIdRegister is what function we have registered already.
-var functionIdRegister = map[string]int{
+var functionIdRegister = map[string]int32{
 	// operators
 	"=":           EQUAL,
 	">":           GREAT_THAN,
@@ -202,15 +207,24 @@ var functionIdRegister = map[string]int{
 	"case":        CASE,
 	"cast":        CAST,
 	// aggregate
-	"max":   MAX,
-	"min":   MIN,
-	"sum":   SUM,
-	"avg":   AVG,
-	"count": COUNT,
+	"max":                   MAX,
+	"min":                   MIN,
+	"sum":                   SUM,
+	"avg":                   AVG,
+	"count":                 COUNT,
+	"starcount":             STARCOUNT,
+	"bit_or":                BIT_OR,
+	"bit_and":               BIT_AND,
+	"bit_xor":               BIT_XOR,
+	"stddev_pop":            STDDEV_POP,
+	"variance":              VAR_POP,
+	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	// builtin
 	"extract":   EXTRACT,
 	"year":      YEAR,
 	"substr":    SUBSTRING,
 	"substring": SUBSTRING,
 	"iff":       IFF,
+	"date_add":  DATE_ADD,
+	"date_sub":  DATE_SUB,
 }

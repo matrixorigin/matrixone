@@ -113,6 +113,28 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	// insert values for columns
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vs := make([]bool, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(bool), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(bool)
+						}
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		case types.T_int8:
 			vs := make([]int8, len(rows.Rows))
 			{

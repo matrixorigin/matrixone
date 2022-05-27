@@ -197,6 +197,10 @@ func (s *Schema) String() string {
 	return string(buf)
 }
 
+func (s *Schema) IsPartOfPK(idx int) bool {
+	return int32(idx) == s.PrimaryKey
+}
+
 func (s *Schema) GetPKType() types.Type {
 	return s.ColDefs[s.PrimaryKey].Type
 }
@@ -360,5 +364,8 @@ func MockSchemaAll(colCnt int) *Schema {
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
+	if colCnt > 0 {
+		schema.PrimaryKey = int32(colCnt) - 1
+	}
 	return schema
 }

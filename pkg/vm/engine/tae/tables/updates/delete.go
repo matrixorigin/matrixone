@@ -21,9 +21,7 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -149,20 +147,21 @@ func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) {
 func (node *DeleteNode) GetCommitTSLocked() uint64 { return node.commitTs }
 func (node *DeleteNode) GetStartTS() uint64        { return node.startTs }
 
+func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
+	return node.mask.Contains(row)
+}
+
 func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 	node.mask.AddRange(uint64(start), uint64(end+1))
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
 func (node *DeleteNode) PrepareCommit() (err error) {
-	node.chain.Lock()
-	defer node.chain.Unlock()
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
 	if node.commitTs != txnif.UncommitTS {
 		return
 	}
-	// if node.commitTs != txnif.UncommitTS {
-	// 	panic("logic error")
-	// }
 	node.commitTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	return
@@ -176,11 +175,11 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.txn = nil
 	node.logIndex = index
-	if node.chain.controller != nil {
-		node.chain.controller.SetMaxVisible(node.commitTs)
+	if node.chain.mvcc != nil {
+		node.chain.mvcc.SetMaxVisible(node.commitTs)
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
-	node.chain.controller.IncChangeNodeCnt()
+	node.chain.mvcc.IncChangeNodeCnt()
 	return
 }
 
@@ -198,7 +197,7 @@ func (node *DeleteNode) StringLocked() string {
 }
 
 func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
-	cn, err := w.Write(txnbase.MarshalID(node.chain.controller.GetID()))
+	cn, err := w.Write(txnbase.MarshalID(node.chain.mvcc.GetID()))
 	if err != nil {
 		return
 	}
@@ -214,7 +213,11 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 	if sn, err = w.Write(buf); err != nil {
 		return
 	}
-	n = int64(sn) + 4
+	n += int64(sn) + 4
+	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
+		return
+	}
+	n += 8
 	return
 }
 
@@ -230,7 +233,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
 		return
 	}
-	n = 4
+	n += 4
 	if cnt == 0 {
 		return
 	}
@@ -241,26 +244,41 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	n += int64(cnt)
 	node.mask = roaring.New()
 	err = node.mask.UnmarshalBinary(buf)
+	if err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
+		return
+	}
+	n += 4
 	return
 }
-
+func (node *DeleteNode) SetLogIndex(idx *wal.Index) {
+	node.logIndex = idx
+}
 func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewDeleteCmd(id, node)
 	return
 }
 
-func (node *DeleteNode) ApplyDeletes(vec *gvec.Vector) *gvec.Vector {
-	if node == nil {
-		return vec
-	}
-	return compute.ApplyDeleteToVector(vec, node.mask)
-}
-
 func (node *DeleteNode) PrepareRollback() (err error) {
-	node.chain.Lock()
-	defer node.chain.Unlock()
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
 	node.chain.RemoveNodeLocked(node)
 	return
 }
 
 func (node *DeleteNode) ApplyRollback() (err error) { return }
+
+func (node *DeleteNode) OnApply() (err error) {
+	listener := node.chain.mvcc.GetDeletesListener()
+	if listener == nil {
+		return
+	}
+	err = listener(node.mask.Iterator(), node.commitTs)
+	return
+}
+
+func (node *DeleteNode) GetRowMaskRefLocked() *roaring.Bitmap {
+	return node.mask
+}

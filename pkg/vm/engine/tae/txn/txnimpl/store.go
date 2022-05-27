@@ -156,7 +156,7 @@ func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id 
 	return db.GetByFilter(tid, filter)
 }
 
-func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v interface{}, err error) {
+func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx uint16) (v any, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -168,7 +168,7 @@ func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx u
 	return db.GetValue(id, row, colIdx)
 }
 
-func (store *txnStore) Update(dbId uint64, id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
+func (store *txnStore) Update(dbId uint64, id *common.ID, row uint32, colIdx uint16, v any) (err error) {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -240,7 +240,7 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	return
 }
 
-func (store *txnStore) CreateRelation(dbId uint64, def interface{}) (relation handle.Relation, err error) {
+func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Relation, err error) {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -383,7 +383,6 @@ func (store *txnStore) PreCommit() (err error) {
 }
 
 func (store *txnStore) PrepareCommit() (err error) {
-	now := time.Now()
 	if store.warChecker != nil {
 		if err = store.warChecker.check(); err != nil {
 			return err
@@ -395,26 +394,35 @@ func (store *txnStore) PrepareCommit() (err error) {
 		}
 	}
 
+	return
+}
+
+func (store *txnStore) PreApplyCommit() (err error) {
+	now := time.Now()
+	for _, db := range store.dbs {
+		if err = db.PreApplyCommit(); err != nil {
+			return
+		}
+	}
 	if err = store.CollectCmd(); err != nil {
 		return
 	}
 
 	logEntry, err := store.cmdMgr.ApplyTxnRecord()
 	if err != nil {
-		panic(err)
+		return
 	}
 	if logEntry != nil {
 		store.logs = append(store.logs, logEntry)
 	}
 	logutil.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
-
 	return
 }
 
 func (store *txnStore) CollectCmd() (err error) {
 	for _, db := range store.dbs {
 		if err = db.CollectCmd(store.cmdMgr); err != nil {
-			panic(err)
+			return
 		}
 	}
 	return

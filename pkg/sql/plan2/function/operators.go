@@ -43,8 +43,8 @@ var operators = map[int][]Function{
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
-				types.T_uint8, // left part of +
-				types.T_uint8, // right part of +
+				types.T_uint8,
+				types.T_uint8,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -213,6 +213,18 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_date,
 				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -400,6 +412,18 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	GREAT_EQUAL: {
 		{
@@ -577,6 +601,18 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_date,
 				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -764,6 +800,18 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	LESS_EQUAL: {
 		{
@@ -941,6 +989,18 @@ var operators = map[int][]Function{
 			Args: []types.T{
 				types.T_date,
 				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
@@ -1128,6 +1188,18 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          nil,
+		},
 	},
 	LIKE: {
 		{
@@ -1305,7 +1377,7 @@ var operators = map[int][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_STRICT,
-			Layout:    EXISTS_ANY_PREDICATE,
+			Layout:    IN_PREDICATE,
 			ReturnTyp: types.T_bool,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) == 2 && inputTypes[1] == types.T_tuple {
@@ -1323,10 +1395,7 @@ var operators = map[int][]Function{
 			Layout:    EXISTS_ANY_PREDICATE,
 			ReturnTyp: types.T_bool,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				if len(inputTypes) != 1 {
-					return false
-				}
-				return true
+				return len(inputTypes) == 1
 			},
 		},
 	},

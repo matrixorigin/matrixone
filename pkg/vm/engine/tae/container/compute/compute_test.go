@@ -17,7 +17,6 @@ package compute
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/stretchr/testify/require"
 
 	"github.com/RoaringBitmap/roaring"
@@ -35,7 +34,7 @@ func TestApplyUpdateToIVector(t *testing.T) {
 	vec := vector.MockVector(typ, 10)
 
 	mask := roaring.NewBitmap()
-	vals := make(map[uint32]interface{})
+	vals := make(map[uint32]any)
 	mask.Add(3)
 	vals[3] = int32(87)
 	mask.Add(9)
@@ -61,7 +60,7 @@ func TestApplyUpdateToIVector2(t *testing.T) {
 	vec := vector.MockVector(typ, 10)
 
 	mask := roaring.NewBitmap()
-	vals := make(map[uint32]interface{})
+	vals := make(map[uint32]any)
 	mask.Add(3)
 	vals[3] = []byte("TestApplyUpdateToIVector3")
 	mask.Add(9)
@@ -82,7 +81,7 @@ func TestApplyUpdateToIVector2(t *testing.T) {
 
 func TestShuffleByDeletes(t *testing.T) {
 	origMask := roaring.New()
-	origVals := make(map[uint32]interface{})
+	origVals := make(map[uint32]any)
 	origMask.Add(1)
 	origVals[1] = 1
 	origMask.Add(10)
@@ -113,7 +112,7 @@ func TestCheckRowExists(t *testing.T) {
 		Size:  4,
 		Width: 32,
 	}
-	vec := common.MockVec(typ, 100, 0)
+	vec := MockVec(typ, 100, 0)
 	_, exist := CheckRowExists(vec, int32(55), nil)
 	require.True(t, exist)
 	_, exist = CheckRowExists(vec, int32(0), nil)

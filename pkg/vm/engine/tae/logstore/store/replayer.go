@@ -154,7 +154,7 @@ type replayEntry struct {
 	tid uint64
 	// checkpointRange *common.ClosedInterval
 	payload []byte
-	info    interface{}
+	info    any
 }
 
 func (r *replayEntry) String() string {

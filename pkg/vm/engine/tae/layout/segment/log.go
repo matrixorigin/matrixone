@@ -69,6 +69,10 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 		return
 	}
 	n += int(unsafe.Sizeof(file.snode.size))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.originSize); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.originSize))
 	if err = binary.Read(cache, binary.BigEndian, &extentLen); err != nil {
 		return
 	}
@@ -135,7 +139,13 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 		}
 		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
 		block := l.logFile.segment.nodes[file.name]
-		if block == nil || block.snode.seq < file.snode.seq {
+		if (block == nil || block.snode.seq < file.snode.seq) &&
+			file.snode.state == RESIDENT {
+			extents := file.GetExtents()
+			for _, extent := range *extents {
+				l.logFile.segment.allocator.CheckAllocations(
+					extent.offset-DATA_START, extent.length)
+			}
 			l.logFile.segment.nodes[file.name] = file
 		}
 		if block == nil {
@@ -185,6 +195,9 @@ func (l *Log) Append(file *BlockFile) error {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.size); err != nil {
+		return err
+	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.originSize); err != nil {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, uint64(len(file.snode.extents))); err != nil {

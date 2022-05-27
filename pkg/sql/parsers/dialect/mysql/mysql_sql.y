@@ -366,7 +366,7 @@ import (
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
 %type <str> sql_id charset_keyword db_name
-%type <str> not_keyword
+%type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
 %type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
@@ -4690,6 +4690,14 @@ function_call_generic:
              Exprs: tree.Exprs{timeUinit, $5},
        }
     }
+|	func_not_keyword '(' expression_list_opt ')'
+	{
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
 
 substr_option:
 	SUBSTRING
@@ -4946,14 +4954,22 @@ interval_expr:
 	}
 |   INTERVAL INTEGRAL time_unit
     {
-        name := tree.SetUnresolvedName("interval")
-        ival := util.GetUint64($2)
-        ustr := strconv.FormatUint(ival, 10)
-        e1 := tree.NewNumVal(constant.MakeUint64(ival), ustr, false)
-        e2 := tree.NewNumVal(constant.MakeString($3), $3, false)
+//        name := tree.SetUnresolvedName("interval")
+//        ival := util.GetUint64($2)
+//        ustr := strconv.FormatUint(ival, 10)
+//        e1 := tree.NewNumVal(constant.MakeUint64(ival), ustr, false)
+//        e2 := tree.NewNumVal(constant.MakeString($3), $3, false)
+//        $$ = &tree.FuncExpr{
+//            Func: tree.FuncName2ResolvableFunctionReference(name),
+//            Exprs: tree.Exprs{e1, e2},
+//        }
+		str := strconv.FormatInt($2.(int64), 10)
+		str += " " + $3
+ 		name := tree.SetUnresolvedName("interval")
+		es := tree.NewNumVal(constant.MakeString(str), str, false)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{e1, e2},
+            Exprs: tree.Exprs{es},
         }
     }
 
@@ -6242,6 +6258,11 @@ non_reserved_keyword:
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
 |   QUARTER
+
+func_not_keyword:
+	DATE_ADD
+|	DATE_SUB
+|   NOW
 
 not_keyword:
     ADDDATE

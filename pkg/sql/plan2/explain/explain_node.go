@@ -119,7 +119,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		case plan.Node_DELETE:
 			result += " on "
 			if ndesc.Node.ObjRef != nil {
-				result += ndesc.Node.ObjRef.GetDbName() + "." + ndesc.Node.ObjRef.GetObjName()
+				result += ndesc.Node.ObjRef.GetSchemaName() + "." + ndesc.Node.ObjRef.GetObjName()
 			} else if ndesc.Node.TableDef != nil {
 				result += ndesc.Node.TableDef.GetName()
 			}
@@ -168,7 +168,16 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 
 	// Get Costs info of Node
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
+		costDescImpl := &CostDescribeImpl{
+			Cost: ndesc.Node.GetCost(),
+		}
+		costInfo, err := costDescImpl.GetDescription(options)
+		if err != nil {
+			return result, err
+		}
+		result += costInfo
+
+		//result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
@@ -204,6 +213,15 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 			return nil, err
 		}
 		lines = append(lines, groupByInfo)
+	}
+
+	// Get Aggregate function info
+	if ndesc.Node.AggList != nil {
+		aggListInfo, err := ndesc.GetAggregationInfo(options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, aggListInfo)
 	}
 
 	// Get Filter list info
@@ -314,6 +332,29 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 	return result, nil
 }
 
+func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (string, error) {
+	var result string = "Aggregate Functions: "
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		var first bool = true
+		for _, v := range ndesc.Node.GetAggList() {
+			if !first {
+				result += ", "
+			}
+			first = false
+			descV, err := describeExpr(v, options)
+			if err != nil {
+				return result, err
+			}
+			result += descV
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+	}
+	return result, nil
+}
+
 func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) (string, error) {
 	var result string = "Sort Key:"
 	if options.Format == EXPLAIN_FORMAT_TEXT {
@@ -351,12 +392,18 @@ type CostDescribeImpl struct {
 
 func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	//(cost=11.75..13.15 rows=140 width=4)
-	var result string = "(cost=" +
-		strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
-		".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
-		" rows=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
-		" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
-		" width=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64)
+	var result string
+	if c.Cost == nil {
+		result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
+	} else {
+		result = "(cost=" +
+			strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
+			".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
+			" card=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
+			" ndv=" + strconv.FormatFloat(c.Cost.Ndv, 'f', 2, 64) +
+			" rowsize=" + strconv.FormatFloat(c.Cost.Rowsize, 'f', 0, 64)
+	}
+
 	return result, nil
 }
 

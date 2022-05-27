@@ -72,10 +72,20 @@ func (node *appendableNode) TryPin() (base.INodeHandle, error) {
 	return node.mgr.TryPin(node.Node, time.Second)
 }
 
+func (node *appendableNode) DoWithPin(do func() error) (err error) {
+	h, err := node.TryPin()
+	if err != nil {
+		return
+	}
+	defer h.Close()
+	err = do()
+	return
+}
+
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 	if coarse {
-		readLock := node.block.mvcc.GetSharedLock()
-		defer readLock.Unlock()
+		node.block.mvcc.RLock()
+		defer node.block.mvcc.RUnlock()
 		return node.rows
 	}
 	// TODO: fine row count
@@ -168,22 +178,33 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 		return data.ErrStaleRequest
 	}
 	masks := make(map[uint16]*roaring.Bitmap)
-	vals := make(map[uint16]map[uint32]interface{})
-	readLock := mvcc.GetSharedLock()
+	vals := make(map[uint16]map[uint32]any)
+	mvcc.RLock()
 	for i := range node.block.meta.GetSchema().ColDefs {
 		chain := mvcc.GetColumnChain(uint16(i))
 
 		chain.RLock()
-		updateMask, updateVals := chain.CollectUpdatesLocked(ts)
+		updateMask, updateVals, err := chain.CollectUpdatesLocked(ts)
 		chain.RUnlock()
+		if err != nil {
+			break
+		}
 		if updateMask != nil {
 			masks[uint16(i)] = updateMask
 			vals[uint16(i)] = updateVals
 		}
 	}
+	if err != nil {
+		mvcc.RUnlock()
+		return
+	}
 	deleteChain := mvcc.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(ts, false).(*updates.DeleteNode)
-	readLock.Unlock()
+	n, err := deleteChain.CollectDeletesLocked(ts, false)
+	mvcc.RUnlock()
+	if err != nil {
+		return
+	}
+	dnode := n.(*updates.DeleteNode)
 	logutil.Infof("[TS=%d] Unloading block %s", ts, node.block.meta.AsCommonID().String())
 	var deletes *roaring.Bitmap
 	if dnode != nil {

@@ -35,6 +35,12 @@ func DecodeFixedCol[T any](v *Vector, sz int) []T {
 
 func New(typ types.Type) *Vector {
 	switch typ.Oid {
+	case types.T_bool:
+		return &Vector{
+			Typ: typ,
+			Col: []bool{},
+			Nsp: &nulls.Nulls{},
+		}
 	case types.T_int8:
 		return &Vector{
 			Typ: typ,
@@ -154,10 +160,18 @@ func NewConst(typ types.Type) *Vector {
 	return v
 }
 
-func NewConstNull(typ types.Type) *Vector {
-	v := New(typ)
-	v.IsConstNull = true
-	return v
+// IsScalar return true if the vector means a scalar value.
+// e.g.
+// 		a + 1, and 1's vector will return true
+func (v *Vector) IsScalar() bool {
+	return v.IsConst
+}
+
+// IsScalarNull return true if the vector means a scalar Null.
+// e.g.
+// 		a + Null, and the vector of right part will return true
+func (v *Vector) IsScalarNull() bool {
+	return v.IsConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
 }
 
 func Reset(v *Vector) {
@@ -298,6 +312,9 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 }
 
 func Length(v *Vector) int {
+	if v.IsScalar() {
+		return v.Length
+	}
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
 		return len(v.Col.(*types.Bytes).Offsets)
@@ -370,6 +387,22 @@ func SetLength(v *Vector, n int) {
 
 func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		vs := v.Col.([]bool)
+		data, err := mheap.Alloc(m, int64(len(vs)))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeBoolSlice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+			Ref:  v.Ref,
+			Link: v.Link,
+		}, nil
 	case types.T_int8:
 		vs := v.Col.([]int8)
 		data, err := mheap.Alloc(m, int64(len(vs)))
@@ -707,6 +740,8 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 
 func Append(v *Vector, arg interface{}) error {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		v.Col = append(v.Col.([]bool), arg.([]bool)...)
 	case types.T_int8:
 		v.Col = append(v.Col.([]int8), arg.([]int8)...)
 	case types.T_int16:
@@ -3233,6 +3268,17 @@ func (v *Vector) Read(data []byte) error {
 	v.Typ = typ
 	v.Or = true
 	switch typ.Oid {
+	case types.T_bool:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeBoolSlice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeBoolSlice(data[size:])
+		}
 	case types.T_int8:
 		size := encoding.DecodeUint32(data)
 		if size == 0 {

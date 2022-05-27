@@ -59,6 +59,9 @@ var sumReturnTypes = map[types.T]types.T{
 func ReturnType(op int, typ types.T) types.T {
 	switch op {
 	case Avg:
+		if typ == types.T_decimal64 || typ == types.T_decimal128 {
+			return types.T_decimal128
+		}
 		return types.T_float64
 	case Max:
 		return typ
@@ -89,6 +92,9 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case Sum:
 		return NewSum(typ)
 	case Avg:
+		if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+			return avg.NewDecimalRing(typ), nil
+		}
 		return avg.NewAvg(typ), nil
 	case Max:
 		return NewMax(typ)
@@ -182,6 +188,10 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 		return max.NewDate(typ), nil
 	case types.T_datetime:
 		return max.NewDatetime(typ), nil
+	case types.T_decimal64:
+		return max.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return max.NewDecimal128(typ), nil
 	}
 	return nil, fmt.Errorf("'%v' not support Max", typ)
 }
@@ -214,6 +224,10 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 		return min.NewDate(typ), nil
 	case types.T_datetime:
 		return min.NewDatetime(typ), nil
+	case types.T_decimal64:
+		return min.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return min.NewDecimal128(typ), nil
 	}
 	return nil, fmt.Errorf("'%v' not support Min", typ)
 }
