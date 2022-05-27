@@ -13,6 +13,7 @@
 // limitations under the License.
 
 package add
+
 /*
 
 #include "arm_neon.h"
@@ -139,7 +140,7 @@ void int8AddScalarArm(GoInt8* x, GoInt8* y, GoInt8* r, int len) {
 }
 
 void int16AddScalarArm(GoInt16* x, GoInt16* y, GoInt16* r, int len) {
-	int i = 0; 
+	int i = 0;
 	int16x8_t dup = vdupq_n_s16(*(int16_t*)y),re;
 	for (; i <= len - 8; i += 8) {
 		re = vaddq_s16(*(int16x8_t*)(x + i), dup);
@@ -226,7 +227,7 @@ void float64AddScalarArm(GoFloat64* x, GoFloat64* y, GoFloat64* r, int len) {
 import "C"
 import "unsafe"
 
-func init(){
+func init() {
 	Int8Add = int8AddArm
 	Int8AddScalar = int8AddScalarArm
 	Int16Add = int16AddArm
@@ -249,84 +250,84 @@ func init(){
 	Float64AddScalar = float64AddScalarArm
 }
 
-func int8AddArm(x, y, r []int8)[]int8{ 
-    C.int8AddArm((*C.schar)(unsafe.Pointer(&x[0])), (*C.schar)(unsafe.Pointer(&y[0])), (*C.schar)(unsafe.Pointer(&r[0])), C.int(len(r)))
-    return r 
+func int8AddArm(x, y, r []int8) []int8 {
+	C.int8AddArm((*C.schar)(unsafe.Pointer(&x[0])), (*C.schar)(unsafe.Pointer(&y[0])), (*C.schar)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
-func int16AddArm(x, y, r []int16)[]int16{ 
-    C.int16AddArm((*C.short)(unsafe.Pointer(&x[0])), (*C.short)(unsafe.Pointer(&y[0])), (*C.short)(unsafe.Pointer(&r[0])), C.int(len(r))) 
-    return r 
+func int16AddArm(x, y, r []int16) []int16 {
+	C.int16AddArm((*C.short)(unsafe.Pointer(&x[0])), (*C.short)(unsafe.Pointer(&y[0])), (*C.short)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
-func int32AddArm(x, y, r []int32)[]int32{ 
-    C.int32AddArm((*C.int)(unsafe.Pointer(&x[0])), (*C.int)(unsafe.Pointer(&y[0])), (*C.int)(unsafe.Pointer(&r[0])), C.int(len(r))) 
-    return r 
+func int32AddArm(x, y, r []int32) []int32 {
+	C.int32AddArm((*C.int)(unsafe.Pointer(&x[0])), (*C.int)(unsafe.Pointer(&y[0])), (*C.int)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
-func int64AddArm(x, y, r []int64)[]int64{ 
-    C.int64AddArm((*C.longlong)(unsafe.Pointer(&x[0])), (*C.longlong)(unsafe.Pointer(&y[0])), (*C.longlong)(unsafe.Pointer(&r[0])), C.int(len(r))) 
-    return r 
+func int64AddArm(x, y, r []int64) []int64 {
+	C.int64AddArm((*C.longlong)(unsafe.Pointer(&x[0])), (*C.longlong)(unsafe.Pointer(&y[0])), (*C.longlong)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
-func uint8AddArm(x, y, r[]uint8)[]uint8{ 
-    C.uint8AddArm((*C.uchar)(unsafe.Pointer(&x[0])), (*C.uchar)(unsafe.Pointer(&y[0])), (*C.uchar)(unsafe.Pointer(&r[0])), C.int(len(r))) 
-    return r 
+func uint8AddArm(x, y, r []uint8) []uint8 {
+	C.uint8AddArm((*C.uchar)(unsafe.Pointer(&x[0])), (*C.uchar)(unsafe.Pointer(&y[0])), (*C.uchar)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
-func uint16AddArm(x, y, r[]uint16)[]uint16{ 
-    C.uint16AddArm((*C.ushort)(unsafe.Pointer(&x[0])), (*C.ushort)(unsafe.Pointer(&y[0])), (*C.ushort)(unsafe.Pointer(&r[0])), C.int(len(r))) 
-    return r 
+func uint16AddArm(x, y, r []uint16) []uint16 {
+	C.uint16AddArm((*C.ushort)(unsafe.Pointer(&x[0])), (*C.ushort)(unsafe.Pointer(&y[0])), (*C.ushort)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
-func uint32AddArm(x, y, r[]uint32)[]uint32{ 
-    C.uint32AddArm((*C.uint)(unsafe.Pointer(&x[0])), (*C.uint)(unsafe.Pointer(&y[0])), (*C.uint)(unsafe.Pointer(&r[0])), C.int(len(r))) 
-    return r 
+func uint32AddArm(x, y, r []uint32) []uint32 {
+	C.uint32AddArm((*C.uint)(unsafe.Pointer(&x[0])), (*C.uint)(unsafe.Pointer(&y[0])), (*C.uint)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
-func uint64AddArm(x, y, r[]uint64)[]uint64{ 
-    C.uint64AddArm((*C.ulonglong)(unsafe.Pointer(&x[0])), (*C.ulonglong)(unsafe.Pointer(&y[0])), (*C.ulonglong)(unsafe.Pointer(&r[0])), C.int(len(r))) 
-    return r 
+func uint64AddArm(x, y, r []uint64) []uint64 {
+	C.uint64AddArm((*C.ulonglong)(unsafe.Pointer(&x[0])), (*C.ulonglong)(unsafe.Pointer(&y[0])), (*C.ulonglong)(unsafe.Pointer(&r[0])), C.int(len(r)))
+	return r
 }
 
-func int8AddScalarArm(x int8, y, r[]int8)[]int8{ 
-	C.int8AddScalarArm((*C.schar)(unsafe.Pointer(&y[0])), (*C.schar)(unsafe.Pointer(&x)), (*C.schar)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func int8AddScalarArm(x int8, y, r []int8) []int8 {
+	C.int8AddScalarArm((*C.schar)(unsafe.Pointer(&y[0])), (*C.schar)(unsafe.Pointer(&x)), (*C.schar)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func int16AddScalarArm(x int16, y, r[]int16)[]int16{ 
-	C.int16AddScalarArm((*C.short)(unsafe.Pointer(&y[0])), (*C.short)(unsafe.Pointer(&x)), (*C.short)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func int16AddScalarArm(x int16, y, r []int16) []int16 {
+	C.int16AddScalarArm((*C.short)(unsafe.Pointer(&y[0])), (*C.short)(unsafe.Pointer(&x)), (*C.short)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func int32AddScalarArm(x int32, y, r[]int32)[]int32{ 
-	C.int32AddScalarArm((*C.int)(unsafe.Pointer(&y[0])), (*C.int)(unsafe.Pointer(&x)), (*C.int)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func int32AddScalarArm(x int32, y, r []int32) []int32 {
+	C.int32AddScalarArm((*C.int)(unsafe.Pointer(&y[0])), (*C.int)(unsafe.Pointer(&x)), (*C.int)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func int64AddScalarArm(x int64, y, r[]int64)[]int64{ 
-	C.int64AddScalarArm((*C.longlong)(unsafe.Pointer(&y[0])), (*C.longlong)(unsafe.Pointer(&x)), (*C.longlong)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func int64AddScalarArm(x int64, y, r []int64) []int64 {
+	C.int64AddScalarArm((*C.longlong)(unsafe.Pointer(&y[0])), (*C.longlong)(unsafe.Pointer(&x)), (*C.longlong)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func uint8AddScalarArm(x uint8, y, r[]uint8)[]uint8{ 
-	C.uint8AddScalarArm((*C.uchar)(unsafe.Pointer(&y[0])), (*C.uchar)(unsafe.Pointer(&x)), (*C.uchar)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func uint8AddScalarArm(x uint8, y, r []uint8) []uint8 {
+	C.uint8AddScalarArm((*C.uchar)(unsafe.Pointer(&y[0])), (*C.uchar)(unsafe.Pointer(&x)), (*C.uchar)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func uint16AddScalarArm(x uint16, y, r[]uint16)[]uint16{ 
-	C.uint16AddScalarArm((*C.ushort)(unsafe.Pointer(&y[0])), (*C.ushort)(unsafe.Pointer(&x)), (*C.ushort)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func uint16AddScalarArm(x uint16, y, r []uint16) []uint16 {
+	C.uint16AddScalarArm((*C.ushort)(unsafe.Pointer(&y[0])), (*C.ushort)(unsafe.Pointer(&x)), (*C.ushort)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func uint32AddScalarArm(x uint32, y, r[]uint32)[]uint32{ 
-	C.uint32AddScalarArm((*C.uint)(unsafe.Pointer(&y[0])), (*C.uint)(unsafe.Pointer(&x)), (*C.uint)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func uint32AddScalarArm(x uint32, y, r []uint32) []uint32 {
+	C.uint32AddScalarArm((*C.uint)(unsafe.Pointer(&y[0])), (*C.uint)(unsafe.Pointer(&x)), (*C.uint)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func uint64AddScalarArm(x uint64, y, r[]uint64)[]uint64{
-	C.uint64AddScalarArm((*C.ulonglong)(unsafe.Pointer(&y[0])), (*C.ulonglong)(unsafe.Pointer(&x)), (*C.ulonglong)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func uint64AddScalarArm(x uint64, y, r []uint64) []uint64 {
+	C.uint64AddScalarArm((*C.ulonglong)(unsafe.Pointer(&y[0])), (*C.ulonglong)(unsafe.Pointer(&x)), (*C.ulonglong)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func float32AddArm(x, y, r []float32)[]float32{
-	C.float32AddArm((*C.float)(unsafe.Pointer(&x[0])), (*C.float)(unsafe.Pointer(&y[0])), (*C.float)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func float32AddArm(x, y, r []float32) []float32 {
+	C.float32AddArm((*C.float)(unsafe.Pointer(&x[0])), (*C.float)(unsafe.Pointer(&y[0])), (*C.float)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func float64AddArm(x, y, r []float64)[]float64{
-	C.float64AddArm((*C.double)(unsafe.Pointer(&x[0])), (*C.double)(unsafe.Pointer(&y[0])), (*C.double)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func float64AddArm(x, y, r []float64) []float64 {
+	C.float64AddArm((*C.double)(unsafe.Pointer(&x[0])), (*C.double)(unsafe.Pointer(&y[0])), (*C.double)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func float32AddScalarArm(x float32, y, r []float32)[]float32{
-	C.float32AddScalarArm((*C.float)(unsafe.Pointer(&y[0])), (*C.float)(unsafe.Pointer(&x)), (*C.float)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func float32AddScalarArm(x float32, y, r []float32) []float32 {
+	C.float32AddScalarArm((*C.float)(unsafe.Pointer(&y[0])), (*C.float)(unsafe.Pointer(&x)), (*C.float)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
-func float64AddScalarArm(x float64, y, r []float64)[]float64{
-	C.float64AddScalarArm((*C.double)(unsafe.Pointer(&y[0])), (*C.double)(unsafe.Pointer(&x)), (*C.double)(unsafe.Pointer(&r[0])), C.int(len(r))) 
+func float64AddScalarArm(x float64, y, r []float64) []float64 {
+	C.float64AddScalarArm((*C.double)(unsafe.Pointer(&y[0])), (*C.double)(unsafe.Pointer(&x)), (*C.double)(unsafe.Pointer(&r[0])), C.int(len(r)))
 	return r
 }
