@@ -40,6 +40,18 @@ type leaseHistoryQuery struct {
 	index uint64
 }
 
+func parseCmdTag(cmd []byte) uint16 {
+	return binaryEnc.Uint16(cmd)
+}
+
+func parseTruncatedIndex(cmd []byte) uint64 {
+	return binaryEnc.Uint64(cmd[headerSize:])
+}
+
+func parseLeaseHolderID(cmd []byte) uint64 {
+	return binaryEnc.Uint64(cmd[headerSize:])
+}
+
 func getSetLeaseHolderCmd(leaseHolderID uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint16(cmd, leaseHolderIDTag)
@@ -66,14 +78,14 @@ func isUserUpdate(cmd []byte) bool {
 	if len(cmd) < headerSize+8 {
 		return false
 	}
-	return binaryEnc.Uint16(cmd) == userEntryTag
+	return parseCmdTag(cmd) == userEntryTag
 }
 
 func tagMatch(cmd []byte, expectedTag uint16) bool {
 	if len(cmd) != headerSize+8 {
 		return false
 	}
-	return binaryEnc.Uint16(cmd) == expectedTag
+	return parseCmdTag(cmd) == expectedTag
 }
 
 type stateMachine struct {
@@ -101,7 +113,7 @@ func (s *stateMachine) setLeaseHolderID(index uint64, cmd []byte) {
 	if !isSetLeaseHolderUpdate(cmd) {
 		panic("not a setLeaseHolder update")
 	}
-	s.LeaseHolderID = binaryEnc.Uint64(cmd[headerSize:])
+	s.LeaseHolderID = parseLeaseHolderID(cmd)
 	s.LeaseHistory[index] = s.LeaseHolderID
 }
 
@@ -133,7 +145,7 @@ func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
 	if !isSetTruncatedIndexUpdate(cmd) {
 		panic("not a setTruncatedIndex update")
 	}
-	index := binaryEnc.Uint64(cmd[headerSize:])
+	index := parseTruncatedIndex(cmd)
 	if index > s.TruncatedIndex {
 		s.TruncatedIndex = index
 		s.truncateLeaseHistory(index)
@@ -149,7 +161,7 @@ func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
 	if !isUserUpdate(cmd) {
 		panic("not user update")
 	}
-	if s.LeaseHolderID != binaryEnc.Uint64(cmd[headerSize:]) {
+	if s.LeaseHolderID != parseLeaseHolderID(cmd) {
 		return sm.Result{Value: s.LeaseHolderID}
 	}
 	return sm.Result{}

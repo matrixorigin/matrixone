@@ -60,11 +60,11 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 	}
 }
 
-type ShardManager struct {
+type LogStore struct {
 	nh *dragonboat.NodeHost
 }
 
-func NewShardManager(cfg Config) (*ShardManager, error) {
+func NewLogStore(cfg Config) (*LogStore, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -74,29 +74,29 @@ func NewShardManager(cfg Config) (*ShardManager, error) {
 		return nil, err
 	}
 
-	return &ShardManager{nh: nh}, nil
+	return &LogStore{nh: nh}, nil
 }
 
-func (l *ShardManager) Close() error {
+func (l *LogStore) Close() error {
 	l.nh.Close()
 	return nil
 }
 
-func (l *ShardManager) StartHAKeeperReplica(replicaID uint64,
+func (l *LogStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(defaultHAKeeperShardID, replicaID)
 	// FIXME: why join is always true
 	return l.nh.StartCluster(initialReplicas, true, newHAKeeperStateMachine, raftConfig)
 }
 
-func (l *ShardManager) StartReplica(shardID uint64, replicaID uint64,
+func (l *LogStore) StartReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(shardID, replicaID)
 	// FIXME: why join is always true
 	return l.nh.StartConcurrentCluster(initialReplicas, true, newStateMachine, raftConfig)
 }
 
-func (l *ShardManager) GetOrExtendDNLease(ctx context.Context,
+func (l *LogStore) GetOrExtendDNLease(ctx context.Context,
 	shardID uint64, dnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetLeaseHolderCmd(dnID)
@@ -104,7 +104,7 @@ func (l *ShardManager) GetOrExtendDNLease(ctx context.Context,
 	return err
 }
 
-func (l *ShardManager) TruncateLog(ctx context.Context,
+func (l *LogStore) TruncateLog(ctx context.Context,
 	shardID uint64, index uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetTruncatedIndexCmd(index)
@@ -118,7 +118,7 @@ func (l *ShardManager) TruncateLog(ctx context.Context,
 	return nil
 }
 
-func (l *ShardManager) Append(ctx context.Context,
+func (l *LogStore) Append(ctx context.Context,
 	shardID uint64, cmd []byte) error {
 	if !isUserUpdate(cmd) {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not user update"))
@@ -134,7 +134,7 @@ func (l *ShardManager) Append(ctx context.Context,
 	return nil
 }
 
-func (l *ShardManager) GetTruncatedIndex(ctx context.Context,
+func (l *LogStore) GetTruncatedIndex(ctx context.Context,
 	shardID uint64) (uint64, error) {
 	v, err := l.nh.SyncRead(ctx, shardID, truncatedIndexTag)
 	if err != nil {
@@ -143,7 +143,7 @@ func (l *ShardManager) GetTruncatedIndex(ctx context.Context,
 	return v.(uint64), nil
 }
 
-func (l *ShardManager) getLeaseHolderID(ctx context.Context,
+func (l *LogStore) getLeaseHolderID(ctx context.Context,
 	shardID uint64, entries []pb.Entry) (uint64, error) {
 	if len(entries) == 0 {
 		panic("empty entries")
@@ -151,7 +151,7 @@ func (l *ShardManager) getLeaseHolderID(ctx context.Context,
 	// first entry is a update lease cmd
 	e := entries[0]
 	if isSetLeaseHolderUpdate(e.Cmd) {
-		return binaryEnc.Uint64(e.Cmd[headerSize:]), nil
+		return parseLeaseHolderID(e.Cmd), nil
 	}
 	v, err := l.nh.SyncRead(ctx, shardID, leaseHistoryQuery{index: e.Index})
 	if err != nil {
@@ -160,7 +160,7 @@ func (l *ShardManager) getLeaseHolderID(ctx context.Context,
 	return v.(uint64), nil
 }
 
-func (l *ShardManager) filterEntries(ctx context.Context,
+func (l *LogStore) filterEntries(ctx context.Context,
 	shardID uint64, entries []pb.Entry) ([]pb.Entry, error) {
 	if len(entries) == 0 {
 		return entries, nil
@@ -176,11 +176,11 @@ func (l *ShardManager) filterEntries(ctx context.Context,
 			continue
 		}
 		if isSetLeaseHolderUpdate(e.Cmd) {
-			leaseHolderID = binaryEnc.Uint64(e.Cmd[headerSize:])
+			leaseHolderID = parseLeaseHolderID(e.Cmd)
 			continue
 		}
 		if isUserUpdate(e.Cmd) {
-			if binaryEnc.Uint64(e.Cmd[headerSize:]) != leaseHolderID {
+			if parseLeaseHolderID(e.Cmd) != leaseHolderID {
 				// lease not match, skip
 				continue
 			}
@@ -192,7 +192,7 @@ func (l *ShardManager) filterEntries(ctx context.Context,
 
 // TODO: update QueryLog to provide clear indication whether there is any more
 // log to recover.
-func (l *ShardManager) QueryLog(ctx context.Context, shardID uint64,
+func (l *LogStore) QueryLog(ctx context.Context, shardID uint64,
 	firstIndex uint64, lastIndex uint64, maxSize uint64) ([]pb.Entry, error) {
 	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex, maxSize)
 	if err != nil {

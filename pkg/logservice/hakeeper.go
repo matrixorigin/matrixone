@@ -61,7 +61,7 @@ func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
 	if len(cmd) <= headerSize {
 		return "", false
 	}
-	if binaryEnc.Uint16(cmd) == tag {
+	if parseCmdTag(cmd) == tag {
 		return string(cmd[headerSize:]), true
 	}
 	return "", false
