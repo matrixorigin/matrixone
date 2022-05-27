@@ -2244,14 +2244,15 @@ func TestChaos1(t *testing.T) {
 		}
 		_ = txn.Rollback()
 	}
-	pool, _ := ants.NewPool(2)
-	for i := 0; i < 5; i++ {
+	pool, _ := ants.NewPool(20)
+	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		pool.Submit(worker)
 	}
 	wg.Wait()
 	t.Logf("AppendCnt: %d", appendCnt)
 	t.Logf("DeleteCnt: %d", deleteCnt)
+	assert.True(t, appendCnt-deleteCnt <= 1)
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
@@ -2259,7 +2260,8 @@ func TestChaos1(t *testing.T) {
 	blk := it.GetBlock()
 	view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 	assert.Equal(t, int(appendCnt), view.Length())
-	// view.ApplyDeletes()
+	view.ApplyDeletes()
 	t.Log(view.DeleteMask.String())
 	t.Log(view.String())
+	assert.Equal(t, uint64(deleteCnt), view.DeleteMask.GetCardinality())
 }
