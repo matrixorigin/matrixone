@@ -5,15 +5,26 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"math"
+	bits2 "math/bits"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 var (
-	errorConvertToBoolFailed   = errors.New("convert to the system variable bool type failed")
-	errorConvertToIntFailed    = errors.New("convert to the system variable int type failed")
-	errorConvertToUintFailed   = errors.New("convert to the system variable uint type failed")
-	errorConvertToDoubleFailed = errors.New("convert to the system variable double type failed")
-	errorConvertToEnumFailed   = errors.New("convert to the system variable enum type failed")
+	errorConvertToBoolFailed        = errors.New("convert to the system variable bool type failed")
+	errorConvertToIntFailed         = errors.New("convert to the system variable int type failed")
+	errorConvertToUintFailed        = errors.New("convert to the system variable uint type failed")
+	errorConvertToDoubleFailed      = errors.New("convert to the system variable double type failed")
+	errorConvertToEnumFailed        = errors.New("convert to the system variable enum type failed")
+	errorConvertToSetFailed         = errors.New("convert to the system variable set type failed")
+	errorConvertToStringFailed      = errors.New("convert to the system variable string type failed")
+	errorConvertToNullFailed        = errors.New("convert to the system variable null type failed")
+	errorSystemVariableDoesNotExist = errors.New("the system variable does not exist")
+	errorSystemVariableIsSession    = errors.New("the system variable is session")
+	errorSystemVariableIsGlobal     = errors.New("the system variable is global")
+	errorSystemVariableIsReadOnly   = errors.New("the system variable is read only")
 )
 
 type Scope int
@@ -67,6 +78,37 @@ var _ SystemVariableType = SystemVariableIntType{}
 var _ SystemVariableType = SystemVariableUintType{}
 var _ SystemVariableType = SystemVariableDoubleType{}
 var _ SystemVariableType = SystemVariableEnumType{}
+var _ SystemVariableType = SystemVariableSetType{}
+var _ SystemVariableType = SystemVariableStringType{}
+var _ SystemVariableType = SystemVariableNullType{}
+
+var ()
+
+type SystemVariableNullType struct {
+}
+
+func (svnt SystemVariableNullType) String() string {
+	return "NULL"
+}
+
+func (svnt SystemVariableNullType) Convert(value interface{}) (interface{}, error) {
+	if value != nil {
+		return nil, errorConvertToNullFailed
+	}
+	return nil, nil
+}
+
+func (svnt SystemVariableNullType) Type() types.T {
+	return types.T_any
+}
+
+func (svnt SystemVariableNullType) MysqlType() uint8 {
+	return defines.MYSQL_TYPE_NULL
+}
+
+func (svnt SystemVariableNullType) Zero() interface{} {
+	return nil
+}
 
 type SystemVariableBoolType struct {
 	name string
@@ -367,6 +409,10 @@ func (svdt SystemVariableDoubleType) Zero() interface{} {
 	return float64(0)
 }
 
+var (
+	errorEnumHasMoreThan65535Values = errors.New("the enum has more than 65535 values")
+)
+
 type SystemVariableEnumType struct {
 	name string
 	//tag name -> id
@@ -374,6 +420,21 @@ type SystemVariableEnumType struct {
 
 	// id -> tag name
 	id2TagName []string
+}
+
+func InitSystemSystemEnumType(name string, values ...string) SystemVariableEnumType {
+	if len(values) > 65535 {
+		panic(errorEnumHasMoreThan65535Values)
+	}
+	tagName2Id := make(map[string]int)
+	for i, value := range values {
+		tagName2Id[strings.ToLower(value)] = i
+	}
+	return SystemVariableEnumType{
+		name:       name,
+		tagName2Id: tagName2Id,
+		id2TagName: values,
+	}
 }
 
 func (svet SystemVariableEnumType) String() string {
@@ -449,13 +510,153 @@ const (
 var (
 	errorValuesOfSetIsEmpty       = errors.New("the count of values for set is empty")
 	errorValuesOfSetGreaterThan64 = errors.New("the count of value is greater than 64")
+	errorValueHasComma            = errors.New("the value has the comma")
+	errorValueIsDuplicate         = errors.New("the value is duplicate")
+	errorValuesAreNotEnough       = errors.New("values are not enough")
+	errorValueIsInvalid           = errors.New("the value is invalid")
 )
 
 type SystemVariableSetType struct {
 	name                string
 	normalized2original map[string]string
-	value2BitIndex      map[string]int8
-	bitIndex2Value      map[int8]string
+	value2BitIndex      map[string]int
+	bitIndex2Value      map[int]string
+}
+
+func (svst SystemVariableSetType) String() string {
+	return fmt.Sprintf("SET('%v')",
+		strings.Join(svst.Values(), "','"))
+}
+
+func (svst SystemVariableSetType) Values() []string {
+	bitsCount := 64 - bits2.LeadingZeros64(svst.bitmap())
+	var res []string
+	for i := 0; i < bitsCount; i++ {
+		res = append(res, svst.bitIndex2Value[i])
+	}
+	return res
+}
+
+func (svst SystemVariableSetType) bitmap() uint64 {
+	cnt := uint64(len(svst.value2BitIndex))
+	if cnt == 64 {
+		return math.MaxUint64
+	}
+	return uint64(1<<cnt) - 1
+}
+
+func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
+	bld := strings.Builder{}
+	bitCount := 64 - bits2.LeadingZeros64(bits)
+	if bitCount > len(svst.bitIndex2Value) {
+		return "", errorValuesAreNotEnough
+	}
+
+	for i := 0; i < bitCount; i++ {
+		mask := uint64(1 << uint64(i))
+		if mask&bits != 0 {
+			v, ok := svst.bitIndex2Value[i]
+			if !ok {
+				return "", errorValueIsInvalid
+			}
+			if i != 0 {
+				bld.WriteByte(',')
+			}
+			bld.WriteString(v)
+		}
+	}
+	return bld.String(), nil
+}
+
+func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
+	if len(s) == 0 {
+		return 0, nil
+	}
+	ss := strings.Split(s, ",")
+	bits := uint64(0)
+	for _, sss := range ss {
+		normalized := strings.ToLower(strings.TrimRight(sss, " "))
+		if origin, ok := svst.normalized2original[normalized]; ok {
+			bits |= 1 << svst.value2BitIndex[origin]
+		} else {
+			if x, err := strconv.ParseUint(sss, 10, 64); err == nil {
+				if x == 0 {
+					continue
+				}
+				bitsCount := bits2.TrailingZeros64(x)
+				xv := 1 << uint64(bitsCount)
+				if _, ok2 := svst.bitIndex2Value[xv]; ok2 {
+					bits |= uint64(xv)
+					continue
+				}
+			}
+			return 0, errorValueIsInvalid
+		}
+	}
+	return bits, nil
+}
+
+func (svst SystemVariableSetType) Convert(value interface{}) (interface{}, error) {
+	if value == nil {
+		return nil, nil
+	}
+	cv1 := func(x uint64) (interface{}, error) {
+		if x <= svst.bitmap() {
+			return svst.bits2string(x)
+		}
+		return nil, errorConvertToSetFailed
+	}
+	cv2 := func(x string) (interface{}, error) {
+		bits, err := svst.string2bits(x)
+		if err != nil {
+			return nil, err
+		}
+		return svst.bits2string(bits)
+	}
+
+	switch v := value.(type) {
+	case int:
+		return cv1(uint64(v))
+	case uint:
+		return cv1(uint64(v))
+	case int8:
+		return cv1(uint64(v))
+	case uint8:
+		return cv1(uint64(v))
+	case int16:
+		return cv1(uint64(v))
+	case uint16:
+		return cv1(uint64(v))
+	case int32:
+		return cv1(uint64(v))
+	case uint32:
+		return cv1(uint64(v))
+	case int64:
+		return cv1(uint64(v))
+	case uint64:
+		return cv1(v)
+	case float32:
+		return cv1(uint64(v))
+	case float64:
+		return cv1(uint64(v))
+	case string:
+		return cv2(v)
+	case []byte:
+		return cv2(string(v))
+	}
+	return nil, errorConvertToSetFailed
+}
+
+func (svst SystemVariableSetType) Type() types.T {
+	return types.T_any
+}
+
+func (svst SystemVariableSetType) MysqlType() uint8 {
+	return defines.MYSQL_TYPE_SET
+}
+
+func (svst SystemVariableSetType) Zero() interface{} {
+	return ""
 }
 
 func InitSystemVariableSetType(name string, values ...string) SystemVariableSetType {
@@ -465,6 +666,224 @@ func InitSystemVariableSetType(name string, values ...string) SystemVariableSetT
 	if len(values) > MaxMemberCountOfSetType {
 		panic(errorValuesOfSetGreaterThan64)
 	}
-	//TODO: add initial
-	return SystemVariableSetType{}
+
+	normalized2original := make(map[string]string)
+	value2BitIndex := make(map[string]int)
+	bitIndex2Value := make(map[int]string)
+	for i, value := range values {
+		if strings.Contains(value, ",") {
+			panic(errorValueHasComma)
+		}
+		v := strings.TrimRight(value, " ")
+		lv := strings.ToLower(v)
+		if _, ok := normalized2original[lv]; ok {
+			panic(errorValueIsDuplicate)
+		}
+		normalized2original[lv] = v
+		value2BitIndex[v] = i
+		bitIndex2Value[i] = v
+	}
+
+	return SystemVariableSetType{
+		normalized2original: normalized2original,
+		value2BitIndex:      value2BitIndex,
+		bitIndex2Value:      bitIndex2Value,
+	}
+}
+
+type SystemVariableStringType struct {
+	name string
+}
+
+func InitSystemVariableStringType(name string) SystemVariableStringType {
+	return SystemVariableStringType{
+		name: name,
+	}
+}
+
+func (svst SystemVariableStringType) String() string {
+	return "STRING"
+}
+
+func (svst SystemVariableStringType) Convert(value interface{}) (interface{}, error) {
+	if value == nil {
+		return "", nil
+	}
+	if v, ok := value.(string); ok {
+		return v, nil
+	}
+	return nil, errorConvertToStringFailed
+}
+
+func (svst SystemVariableStringType) Type() types.T {
+	return types.T_varchar
+}
+
+func (svst SystemVariableStringType) MysqlType() uint8 {
+	return defines.MYSQL_TYPE_VARCHAR
+}
+
+func (svst SystemVariableStringType) Zero() interface{} {
+	return ""
+}
+
+type SystemVariable struct {
+	Name string
+
+	// scope of the system variable includes Global,Session,Both
+	Scope Scope
+
+	// can be changed during runtime
+	Dynamic bool
+
+	//can be set for single query by SET_VAR()
+	SetVarHintApplies bool
+
+	Type SystemVariableType
+
+	Default interface{}
+}
+
+type GlobalSystemVariables struct {
+	mu sync.Mutex
+	// name -> value/default
+	sysVars map[string]interface{}
+}
+
+// the set of variables
+var gSysVariables = &GlobalSystemVariables{
+	sysVars: make(map[string]interface{}),
+}
+
+// initialize system variables from definition
+func InitGlobalSystemVariables() {
+	for _, def := range gSysVarsDefs {
+		gSysVariables.sysVars[def.Name] = def.Default
+	}
+}
+
+// add custom system variables
+func (gsv *GlobalSystemVariables) AddSysVariables(vars []SystemVariable) {
+	gsv.mu.Lock()
+	defer gsv.mu.Unlock()
+	for _, v := range vars {
+		vv := v
+		lname := strings.ToLower(vv.Name)
+		vv.Name = lname
+		gSysVarsDefs[lname] = vv
+		gsv.sysVars[lname] = vv.Default
+	}
+}
+
+// set values to system variables
+func (gsv *GlobalSystemVariables) SetValues(values map[string]interface{}) error {
+	gsv.mu.Lock()
+	defer gsv.mu.Unlock()
+	for name, val := range values {
+		name = strings.ToLower(name)
+		if sv, ok := gSysVarsDefs[name]; ok {
+			cv, err := sv.Type.Convert(val)
+			if err != nil {
+				return err
+			}
+			gsv.sysVars[name] = cv
+		} else {
+			return errorSystemVariableDoesNotExist
+		}
+	}
+	return nil
+}
+
+// copy global system variable to session
+func (gsv *GlobalSystemVariables) CopySysVarsToSession() map[string]interface{} {
+	gsv.mu.Lock()
+	defer gsv.mu.Unlock()
+	sesSysVars := make(map[string]interface{}, len(gsv.sysVars))
+	for name, value := range gsv.sysVars {
+		sesSysVars[name] = value
+	}
+	return sesSysVars
+}
+
+// get system variable definition ,value.
+// return false, if there is no such variable.
+func (gsv *GlobalSystemVariables) GetGlobalSysVar(name string) (SystemVariable, interface{}, bool) {
+	gsv.mu.Lock()
+	defer gsv.mu.Unlock()
+	name = strings.ToLower(name)
+	if v, ok := gSysVarsDefs[name]; ok {
+		return v, gsv.sysVars[name], true
+	}
+	return SystemVariable{}, nil, false
+}
+
+// set global dynamic variable by SET GLOBAL
+func (gsv *GlobalSystemVariables) SetGlobalSysVar(name string, value interface{}) error {
+	gsv.mu.Lock()
+	defer gsv.mu.Unlock()
+	name = strings.ToLower(name)
+	if sv, ok := gSysVarsDefs[name]; ok {
+		if sv.Scope == ScopeSession {
+			return errorSystemVariableIsSession
+		}
+		if !sv.Dynamic {
+			return errorSystemVariableIsReadOnly
+		}
+		val, err := sv.Type.Convert(value)
+		if err != nil {
+			return err
+		}
+		gsv.sysVars[name] = val
+	} else {
+		return errorSystemVariableDoesNotExist
+	}
+	return nil
+}
+
+func init() {
+	InitGlobalSystemVariables()
+}
+
+// definitions of system variables
+var gSysVarsDefs = map[string]SystemVariable{
+	"port": {
+		Name:              "port",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("port", 0, 65535, false),
+		Default:           int64(6001),
+	},
+	"host": {
+		Name:              "host",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("host"),
+		Default:           "0.0.0.0",
+	},
+	"max_allowed_packet": {
+		Name:              "max_allowed_packet",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
+		Default:           int64(16777216),
+	},
+	"version_comment": {
+		Name:              "version_comment",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableStringType("version_comment"),
+		Default:           "MatrixOne",
+	},
+	"tx_isolation": {
+		Name:              "tx_isolation",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("tx_isolation", "READ-UNCOMMITTED", "READ-COMMITTED", "REPEATABLE-READ", "SERIALIZABLE"),
+		Default:           "REPEATABLE-READ",
+	},
 }
