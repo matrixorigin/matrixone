@@ -81,6 +81,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			if err != nil {
 				return nil, err
 			}
+			v.Length = len(bat.Zs)
 			vs[i] = v
 		}
 		return f.VecFn(vs, proc)
