@@ -326,8 +326,90 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, binderCtx 
 	return nil
 }
 
+func pushDownWhereList(query *Query, node *Node, exprs []*Expr) ([]*Expr, error) {
+	var containMutiTableExprs []*Expr
+	var containMutiTableCols []map[string]string
+	containOneTableExprs := make(map[string][]*Expr)
+	var newExprs []*Expr
+
+	for _, expr := range exprs {
+		cols := make(map[string]string)
+		getExprTableAndColName(expr, cols)
+
+		if len(cols) > 1 {
+			if expr.Expr.(*plan.Expr_F).F.Func.GetObjName() == "=" {
+				containMutiTableExprs = append(containMutiTableExprs, expr)
+				containMutiTableCols = append(containMutiTableCols, cols)
+				continue
+			}
+		}
+
+		if len(cols) == 1 {
+			for _, tbl := range cols {
+				containOneTableExprs[tbl] = append(containOneTableExprs[tbl], expr)
+			}
+			continue
+		}
+
+		newExprs = append(newExprs, expr)
+	}
+
+	resetOnListAndWhereList(query, node, containMutiTableExprs, containMutiTableCols, containOneTableExprs)
+
+	return newExprs, nil
+}
+
+func getExprTableAndColName(e *Expr, tables map[string]string) {
+	switch item := e.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range item.F.Args {
+			getExprTableAndColName(arg, tables)
+		}
+	case *plan.Expr_Col:
+		str := e.TableName + "." + e.ColName
+		tables[str] = e.TableName
+	default:
+	}
+}
+
+func resetOnListAndWhereList(query *Query, node *Node, containMutiTableExprs []*Expr, containMutiTableCols []map[string]string, containOneTableExprs map[string][]*Expr) {
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		if exprs, ok := containOneTableExprs[node.TableDef.Name]; ok {
+			node.WhereList = append(node.WhereList, exprs...)
+		}
+	}
+
+	if node.NodeType == plan.Node_JOIN {
+
+		for idx, cols := range containMutiTableCols {
+			matchNum := len(cols)
+			matchLeftAndRight := false
+
+			for _, expr := range node.ProjectList {
+				str := expr.TableName + "." + expr.ColName
+				if _, ok := cols[str]; ok {
+					if expr.Expr.(*plan.Expr_Col).Col.RelPos != 0 {
+						matchLeftAndRight = true
+					}
+					matchNum--
+				}
+			}
+
+			if matchLeftAndRight && matchNum <= 0 {
+				node.OnList = append(node.OnList, containMutiTableExprs[idx])
+			}
+		}
+	}
+
+	for _, idx := range node.Children {
+		resetOnListAndWhereList(query, query.Nodes[idx], containMutiTableExprs, containMutiTableCols, containOneTableExprs)
+	}
+}
+
+
 func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, binderCtx *BinderContext) (nodeId int32, selectExprs tree.SelectExprs, err error) {
-	// build FROM clause
+	
+  // build FROM clause
 	nodeId, err = buildFrom(stmt.From.Tables, ctx, query, binderCtx)
 	if err != nil {
 		return
@@ -337,7 +419,12 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 	// build WHERE clause
 	if stmt.Where != nil {
-		node.WhereList, err = splitAndBuildExpr(stmt.Where.Expr, ctx, query, node, binderCtx, false)
+		var exprs []*Expr
+		exprs, err = splitAndBuildExpr(stmt.Where.Expr, ctx, query, node, binderCtx, false)
+		if err != nil {
+			return
+		}
+		node.WhereList, err = pushDownWhereList(query, node, exprs)
 		if err != nil {
 			return
 		}
