@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -326,7 +327,12 @@ func (entry *SegmentEntry) Clone() CheckpointItem {
 	}
 	return cloned
 }
-
+func (entry *SegmentEntry) ReplayFile(cache *bytes.Buffer) {
+	colCnt := len(entry.table.GetSchema().ColDefs)
+	indexCnt := make(map[int]int)
+	indexCnt[int(entry.table.GetSchema().PrimaryKey)] = 2
+	entry.GetSegmentData().GetSegmentFile().Replay(colCnt, indexCnt, cache)
+}
 func (entry *SegmentEntry) CloneCreate() CheckpointItem {
 	cloned := &SegmentEntry{
 		BaseEntry: entry.BaseEntry.CloneCreate(),

@@ -161,6 +161,8 @@ type UpdateNode interface {
 	String() string
 	GetChain() UpdateChain
 	GetDLNode() *common.DLNode
+	GetMask() *roaring.Bitmap
+	GetValues() map[uint32]interface{}
 
 	UpdateLocked(row uint32, v any) error
 }

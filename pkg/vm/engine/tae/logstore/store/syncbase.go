@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -93,6 +94,14 @@ func (info *checkpointInfo) GetCheckpointed() uint64 {
 	return info.ranges.Intervals[0].End
 }
 
+func (info *checkpointInfo) String() string {
+	s := fmt.Sprintf("range %v, partial ", info.ranges)
+	for lsn, partial := range info.partial {
+		s = fmt.Sprintf("%s[%d-%v]", s, lsn, partial)
+	}
+	return s
+}
+
 func (info *checkpointInfo) GetCkpCnt() uint64 {
 	cnt := uint64(0)
 	cnt += uint64(info.ranges.GetCardinality())
@@ -133,6 +142,7 @@ func (base *syncBase) OnReplay(r *replayer) {
 	}
 	for groupId, ckps := range r.checkpointrange {
 		base.checkpointed.ids[groupId] = ckps.GetCheckpointed()
+		base.checkpointing[groupId] = ckps
 	}
 }
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {
@@ -265,6 +275,7 @@ func (base *syncBase) OnCommit() {
 	for group, checkpointing := range base.checkpointing {
 		checkpointingId := checkpointing.GetCheckpointed()
 		ckpcnt := checkpointing.GetCkpCnt()
+		// logutil.Infof("G%d-%v",group,checkpointing)
 		checkpointedId := base.GetCheckpointed(group)
 		if checkpointingId > checkpointedId {
 			base.SetCheckpointed(group, checkpointingId)
