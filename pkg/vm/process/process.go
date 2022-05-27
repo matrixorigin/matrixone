@@ -64,6 +64,16 @@ func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error) {
 	return vec, nil
 }
 
+func Get2(proc *Process, size int64, typ types.Type) (*vector.Vector, error) {
+	data, err := mheap.Alloc(proc.Mp, size)
+	if err != nil {
+		return nil, err
+	}
+	vec := vector.New(typ)
+	vec.Data = data
+	return vec, nil
+}
+
 func Put(proc *Process, vec *vector.Vector) {
 	proc.Reg.Vecs = append(proc.Reg.Vecs, vec)
 }
