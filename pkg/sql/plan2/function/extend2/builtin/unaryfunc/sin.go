@@ -38,22 +38,3 @@ func Sin[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pr
 		return resultVector, nil
 	}
 }
-
-/*
-Typ:        types.T_int64,
-ReturnType: types.T_float64,
-Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
-	origVecCol := origVec.Col.([]int64)
-	resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_float64, Size: 8})
-	if err != nil {
-		return nil, err
-	}
-	results := encoding.DecodeFloat64Slice(resultVector.Data)
-	results = results[:len(origVecCol)]
-	resultVector.Col = results
-	nulls.Set(resultVector.Nsp, origVec.Nsp)
-	vector.SetCol(resultVector, sin.SinInt64(origVecCol, results))
-	return resultVector, nil
-}
-
-*/

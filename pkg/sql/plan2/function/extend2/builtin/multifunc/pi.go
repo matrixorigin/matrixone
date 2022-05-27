@@ -8,13 +8,11 @@ import (
 )
 
 func Pi(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultVector := vector.New(resultType)
 	result := make([]float64, 1)
 	result[0] = pi.GetPi()
 	vector.SetCol(resultVector, result)
 	resultVector.IsConst = true
-	resultVector.Length = 1 // discussion needed, what if our sql query is "select a, pi() from table1;"
 	return resultVector, nil
 }
