@@ -17,7 +17,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-const DefaultReplayCacheSize = common.G
+const DefaultReplayCacheSize = 2 * common.M
 
 type Replayer struct {
 	DataFactory  *tables.DataFactory
