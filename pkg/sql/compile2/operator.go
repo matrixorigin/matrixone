@@ -393,8 +393,5 @@ func constructJoinCondition(expr *plan.Expr) (int32, types.Type, int32, types.Ty
 
 func supportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
-	if fid == function.EQUAL {
-		return true
-	}
-	return false
+	return fid == function.EQUAL
 }
