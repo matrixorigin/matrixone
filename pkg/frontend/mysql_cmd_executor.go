@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/pprof"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -48,7 +49,8 @@ import (
 )
 
 var (
-	errorDatabaseIsNull = goErrors.New("the database name is an empty string")
+	errorDatabaseIsNull             = goErrors.New("the database name is an empty string")
+	errorNoSuchGlobalSystemVariable = goErrors.New("there is no such global system variable")
 )
 
 //tableInfos of a database
@@ -599,104 +601,44 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 }
 
 /*
-handle "SELECT @@max_allowed_packet"
-*/
-func (mce *MysqlCmdExecutor) handleMaxAllowedPacket() error {
-	var err error = nil
-	ses := mce.GetSession()
-	proto := ses.protocol
-
-	col := new(MysqlColumn)
-	col.SetColumnType(defines.MYSQL_TYPE_LONG)
-	col.SetName("@@max_allowed_packet")
-	ses.Mrs.AddColumn(col)
-
-	var data = make([]interface{}, 1)
-	//16MB
-	data[0] = 16777216
-	ses.Mrs.AddRow(data)
-
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
-
-	if err := proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return err
-}
-
-/*
-handle "SELECT @@version_comment"
-*/
-func (mce *MysqlCmdExecutor) handleVersionComment() error {
-	var err error = nil
-	ses := mce.GetSession()
-	proto := ses.protocol
-
-	col := new(MysqlColumn)
-	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col.SetName("@@version_comment")
-	ses.Mrs.AddColumn(col)
-
-	var data = make([]interface{}, 1)
-	data[0] = "MatrixOne"
-	ses.Mrs.AddRow(data)
-
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
-
-	if err := proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return err
-}
-
-/*
-handle "SELECT @@session.tx_isolation"
-*/
-func (mce *MysqlCmdExecutor) handleTxIsolation() error {
-	var err error = nil
-	ses := mce.GetSession()
-	proto := ses.protocol
-
-	col := new(MysqlColumn)
-	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col.SetName("@@session.tx_isolation")
-	ses.Mrs.AddColumn(col)
-
-	var data = make([]interface{}, 1)
-	data[0] = "REPEATABLE-READ"
-	ses.Mrs.AddRow(data)
-
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
-
-	if err := proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return err
-}
-
-/*
 handle "SELECT @@xxx.yyyy"
 */
-func (mce *MysqlCmdExecutor) handleSelectVariables(v string) error {
+func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	var err error = nil
 	ses := mce.GetSession()
 	proto := ses.protocol
 
-	if v == "tx_isolation" || v == "transaction_isolation" {
-		col := new(MysqlColumn)
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-		col.SetName("@@tx_isolation")
-		ses.Mrs.AddColumn(col)
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetName("@@" + ve.Name)
+	ses.Mrs.AddColumn(col)
 
-		var data = make([]interface{}, 1)
-		data[0] = "REPEATABLE-READ"
-		ses.Mrs.AddRow(data)
+	row := make([]interface{}, 1)
+	if ve.System {
+		if ve.Global {
+			_, val, ok := gSysVariables.GetGlobalSysVar(ve.Name)
+			if ok {
+				row[0] = val
+			} else {
+				return errorNoSuchGlobalSystemVariable
+			}
+		} else {
+			val, err := ses.GetSessionVar(ve.Name)
+			if err != nil {
+				return err
+			}
+			row[0] = val
+		}
 	} else {
-		return fmt.Errorf("unsupported system variable %s", v)
+		//user defined variable
+		_, val, err := ses.GetUserDefinedVar(ve.Name)
+		if err != nil {
+			return err
+		}
+		row[0] = val
 	}
+
+	ses.Mrs.AddRow(row)
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
@@ -810,7 +752,9 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
-	db := proto.GetDatabaseName()
+	//TODO:fix it on tae
+
+	db := ses.GetDatabaseName()
 	if db == "" {
 		return NewMysqlError(ER_NO_DB_ERROR)
 	}
@@ -827,7 +771,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 			return err
 		}
 
-		mce.db = proto.GetDatabaseName()
+		mce.db = ses.GetDatabaseName()
 		mce.tableInfos = make(map[string]aoe.TableInfo)
 
 		//cache these info in the executor
@@ -891,7 +835,7 @@ func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 /*
 handle show variables
 */
-func (mce *MysqlCmdExecutor) handleShowVariables(_ *tree.ShowVariables) error {
+func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	var err error = nil
 	ses := mce.GetSession()
 	proto := mce.GetSession().protocol
@@ -906,6 +850,36 @@ func (mce *MysqlCmdExecutor) handleShowVariables(_ *tree.ShowVariables) error {
 
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
+
+	var sysVars map[string]interface{}
+	if sv.Global {
+		tmp := gSysVariables.CopySysVarsToSession()
+		sysVars = make(map[string]interface{})
+		for name := range tmp {
+			if _, val, ok := gSysVariables.GetGlobalSysVar(name); ok {
+				sysVars[name] = val
+			}
+		}
+	} else {
+		sysVars = ses.CopyAllSessionVars()
+	}
+
+	var rows [][]interface{}
+	for name, value := range sysVars {
+		row := make([]interface{}, 2)
+		row[0] = name
+		row[1] = value
+		rows = append(rows, row)
+	}
+
+	//sort by name
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i][0].(string) < rows[j][0].(string)
+	})
+
+	for _, row := range rows {
+		ses.Mrs.AddRow(row)
+	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
@@ -1691,31 +1665,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 							}
 						}
 					} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
-						if strings.ToLower(ve.Name) == "max_allowed_packet" {
-							err = mce.handleMaxAllowedPacket()
-							if err != nil {
-								goto handleFailed
-							}
-
-							//next statement
-							goto handleSucceeded
-						} else if strings.ToLower(ve.Name) == "version_comment" {
-							err = mce.handleVersionComment()
-							if err != nil {
-								goto handleFailed
-							}
-
-							//next statement
-							goto handleSucceeded
-						} else if strings.ToLower(ve.Name) == "tx_isolation" {
-							err = mce.handleTxIsolation()
-							if err != nil {
-								goto handleFailed
-							}
-
-							//next statement
-							goto handleSucceeded
+						//TODO: fix multiple variables in single statement like `select @@a,@@b,@@c`
+						err = mce.handleSelectVariables(ve)
+						if err != nil {
+							goto handleFailed
 						}
+
+						//next statement
+						goto handleSucceeded
 					}
 				}
 			}
@@ -1726,7 +1683,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			//if none database has been selected, database operations must be failed.
 			switch t := stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
+				*tree.ShowStatus, *tree.ShowVariables, *tree.DropDatabase, *tree.Load,
 				*tree.Use, *tree.SetVar,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			case *tree.ShowColumns:

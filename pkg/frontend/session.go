@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"strings"
 )
 
 var (
@@ -166,6 +167,9 @@ type Session struct {
 	txnCompileCtx *TxnCompilerContext
 	storage       engine.Engine
 	sql           string
+
+	sysVars         map[string]interface{}
+	userDefinedVars map[string]interface{}
 }
 
 func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit) *Session {
@@ -183,17 +187,79 @@ func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempo
 		},
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
-		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:       config.StorageEngine,
+		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
+		storage:         config.StorageEngine,
+		sysVars:         gSysVariables.CopySysVarsToSession(),
+		userDefinedVars: make(map[string]interface{}),
 	}
 }
 
-func (ses *Session) GetEpochgc() *PDCallbackImpl {
-	return ses.pdHook
+// SetSessionVar sets the value of system variable in session
+func (ses *Session) SetSessionVar(name string, value interface{}) error {
+	if def, _, ok := gSysVariables.GetGlobalSysVar(name); ok {
+		if def.Scope == ScopeGlobal {
+			return errorSystemVariableIsGlobal
+		}
+		if !def.Dynamic {
+			return errorSystemVariableIsReadOnly
+		}
+
+		cv, err := def.Type.Convert(value)
+		if err != nil {
+			return err
+		}
+		ses.sysVars[def.Name] = cv
+	} else {
+		return errorSystemVariableDoesNotExist
+	}
+	return nil
+}
+
+// GetSessionVar gets this value of the system variable in session
+func (ses *Session) GetSessionVar(name string) (interface{}, error) {
+	if def, _, ok := gSysVariables.GetGlobalSysVar(name); ok {
+		ciname := strings.ToLower(name)
+		var v interface{}
+		var ok2 bool
+		if v, ok2 = ses.sysVars[ciname]; !ok2 {
+			ses.sysVars[ciname] = def.Default
+			v = def.Default
+		}
+		return v, nil
+	} else {
+		return nil, errorSystemVariableDoesNotExist
+	}
+}
+
+func (ses *Session) CopyAllSessionVars() map[string]interface{} {
+	cp := make(map[string]interface{})
+	for k, v := range ses.sysVars {
+		cp[k] = v
+	}
+	return cp
+}
+
+// SetUserDefinedVar sets the user defined variable to the value in session
+func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+	ses.userDefinedVars[strings.ToLower(name)] = value
+	return nil
+}
+
+// GetUserDefinedVar gets value of the user defined variable
+func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+	val, ok := ses.userDefinedVars[strings.ToLower(name)]
+	if !ok {
+		return SystemVariableNullType{}, nil, nil
+	}
+	return InitSystemVariableStringType(name), val, nil
 }
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
+}
+
+func (ses *Session) GetEpochgc() *PDCallbackImpl {
+	return ses.pdHook
 }
 
 func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
