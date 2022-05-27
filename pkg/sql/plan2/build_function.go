@@ -130,27 +130,33 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 		resultExpr, err = appendCastExpr(args[0], &plan.Type{
 			Id: plan.Type_DATE,
 		})
+		return
 	case "interval":
 		resultExpr, err = appendCastExpr(args[0], &plan.Type{
 			Id: plan.Type_INTERVAL,
 		})
-	default:
-		resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, args)
-		if paramIsAgg {
-			node.AggList = append(node.AggList, resultExpr)
-			resultExpr = &Expr{
-				Typ: resultExpr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: -2,
-						ColPos: int32(len(node.AggList) - 1),
-					},
-				},
-			}
-			isAgg = true
+		return
+	case "date_add", "date_sub":
+		if len(args) != 2 {
+			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
 		}
+		args, err = resetIntervalFunctionExprs(args[0], args[1])
 	}
 
+	resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, args)
+	if paramIsAgg {
+		node.AggList = append(node.AggList, resultExpr)
+		resultExpr = &Expr{
+			Typ: resultExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &ColRef{
+					RelPos: -2,
+					ColPos: int32(len(node.AggList) - 1),
+				},
+			},
+		}
+		isAgg = true
+	}
 	return
 }
 
@@ -181,7 +187,7 @@ func getFunctionObjRef(funcId int64, name string) *ObjectRef {
 	}
 }
 
-func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr, error) {
+func resetIntervalFunctionExprs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 	strExpr := intervalExpr.Expr.(*plan.Expr_F).F.Args[0].Expr
 	intervalStr := strExpr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
 	intervalArray := strings.Split(intervalStr, " ")
@@ -195,13 +201,7 @@ func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr
 		return nil, err
 	}
 
-	// only support date operator now
-	namesMap := map[string]string{
-		"+": "date_add",
-		"-": "date_sub",
-	}
-
-	exprs := []*Expr{
+	return []*Expr{
 		dateExpr,
 		{
 			Expr: &plan.Expr_C{
@@ -229,8 +229,20 @@ func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr
 				Size: 8,
 			},
 		},
+	}, nil
+}
+
+func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr, error) {
+	exprs, err := resetIntervalFunctionExprs(dateExpr, intervalExpr)
+	if err != nil {
+		return nil, err
 	}
 
+	// only support date operator now
+	namesMap := map[string]string{
+		"+": "date_add",
+		"-": "date_sub",
+	}
 	resultExpr, _, err := getFunctionExprByNameAndPlanExprs(namesMap[name], exprs)
 
 	return resultExpr, err

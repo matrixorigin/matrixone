@@ -30,18 +30,7 @@ import (
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
-	sql := `select * 
-from
-	customer,
-	orders,
-	lineitem
-where
-	c_mktsegment = 'HOUSEHOLD'
-	and c_custkey = o_custkey
-	and l_orderkey = o_orderkey
-	and o_orderdate < date '1995-03-29'
-	and l_shipdate > date '1995-03-29'
-	and l_orderkey > o_orderkey`
+	sql := `select date_add(date '2001-01-01', interval 1 day) as a`
 	// sql := `SELECT REGION.* FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
@@ -405,6 +394,8 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10", //test agg
 		"SELECT DISTINCT N_NAME FROM NATION", //test distinct
 		"select sum(n_nationkey) as s from nation order by s",
+		"select date_add(date '2001-01-01', interval 1 day) as a",
+		"select date_sub(date '2001-01-01', interval '1 day') as a",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
