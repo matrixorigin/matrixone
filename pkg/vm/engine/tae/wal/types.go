@@ -37,6 +37,7 @@ type Index struct {
 
 type ReplayObserver interface {
 	OnTimeStamp(uint64)
+	OnStaleIndex(*Index)
 }
 
 type LogEntry entry.Entry

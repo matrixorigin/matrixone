@@ -57,6 +57,9 @@ func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, mvcc *MVCCHandle) *AppendN
 	}
 	return n
 }
+func (n *AppendNode) SetLogIndex(idx *wal.Index) {
+	n.logIndex = idx
+}
 func (n *AppendNode) GetID() *common.ID {
 	return n.id
 }
@@ -92,7 +95,11 @@ func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, node.maxRow); err != nil {
 		return
 	}
-	n = 4
+	n += 4
+	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
+		return
+	}
+	n += 8
 	return
 }
 
@@ -107,7 +114,11 @@ func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &node.maxRow); err != nil {
 		return
 	}
-	n = 4
+	n += 4
+	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
+		return
+	}
+	n += 8
 	return
 }
 

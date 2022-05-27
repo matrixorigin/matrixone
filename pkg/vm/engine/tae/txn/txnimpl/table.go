@@ -21,6 +21,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -89,6 +90,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
+		// logutil.Infof("%d-%d",csn,cmd.GetType())
 		if err != nil {
 			return err
 		}
