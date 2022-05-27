@@ -17,6 +17,7 @@ package compile2
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -46,11 +48,23 @@ import (
 
 func (s *Scope) CreateDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
+	if _, err := engine.Database(dbName, snapshot); err == nil {
+		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
+	}
 	return engine.Create(ts, dbName, 0, snapshot)
 }
 
 func (s *Scope) DropDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
-	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
+	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
+	if _, err := engine.Database(dbName, snapshot); err != nil {
+		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
+			return nil
+		}
+		return err
+	}
 	return engine.Delete(ts, dbName, snapshot)
 }
 
@@ -71,7 +85,15 @@ func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.E
 	if err != nil {
 		return err
 	}
-	return dbSource.Create(ts, qry.GetTableDef().GetName(), append(exeCols, exeDefs...), snapshot)
+	tblName := qry.GetTableDef().GetName()
+	if relation, err := dbSource.Relation(tblName, snapshot); err == nil {
+		relation.Close(snapshot)
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
+	}
+	return dbSource.Create(ts, tblName, append(exeCols, exeDefs...), snapshot)
 }
 
 func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
@@ -80,10 +102,20 @@ func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 	dbName := qry.GetDatabase()
 	dbSource, err := engine.Database(dbName, snapshot)
 	if err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
 		return err
 	}
-
 	tblName := qry.GetTable()
+	if relation, err := dbSource.Relation(tblName, snapshot); err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	} else {
+		relation.Close(snapshot)
+	}
 	return dbSource.Delete(ts, tblName, snapshot)
 }
 
