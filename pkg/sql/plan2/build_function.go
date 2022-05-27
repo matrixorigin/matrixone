@@ -141,6 +141,9 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
 		}
 		args, err = resetIntervalFunctionExprs(args[0], args[1])
+		if err != nil {
+			return
+		}
 	}
 
 	resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, args)
