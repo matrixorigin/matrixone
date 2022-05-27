@@ -178,6 +178,7 @@ func (txn *Txn) GetTxnState(waitIfcommitting bool) txnif.TxnState {
 		return state
 	}
 	txn.DoneCond.Wait()
+	state = txn.State
 	txn.DoneCond.L.Unlock()
 	return state
 }

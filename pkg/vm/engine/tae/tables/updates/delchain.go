@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -106,6 +107,8 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64, rwlocker *sync.RWMute
 				// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 				if state == txnif.TxnStateCommitted {
 					deleted = true
+				} else if state == txnif.TxnStateCommitting {
+					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
 					err = txnif.TxnInternalErr
 				}
