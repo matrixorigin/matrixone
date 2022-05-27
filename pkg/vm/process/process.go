@@ -64,6 +64,26 @@ func PutSels(sels []int64, proc *Process) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
 }
 
+func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {
+	data, err := mheap.Alloc(proc.Mp, size)
+	if err != nil {
+		return nil, err
+	}
+	vec := vector.New(typ)
+	vec.Data = data
+	return vec, nil
+}
+
+func (proc *Process) AllocScalarVector(typ types.Type) *vector.Vector {
+	return vector.NewConst(typ)
+}
+
+func (proc *Process) AllocScalarNullVector(typ types.Type) *vector.Vector {
+	vec := vector.NewConst(typ)
+	nulls.Add(vec.Nsp, 0)
+	return vec
+}
+
 func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error) {
 	for i, vec := range proc.Reg.Vecs {
 		if int64(cap(vec.Data)) >= size {
