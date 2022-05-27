@@ -1820,6 +1820,7 @@ func TestDedup(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(bat)
 	t.Log(err)
+	assert.ErrorIs(t, err, data.ErrDuplicate)
 	it := rel.MakeBlockIt()
 	rows := 0
 	for it.Valid() {
@@ -1827,6 +1828,7 @@ func TestDedup(t *testing.T) {
 		view, err := blk.GetColumnDataById(2, nil, nil)
 		assert.NoError(t, err)
 		rows += view.Length()
+		t.Log(view.Length())
 		t.Log(view.GetColumnData().String())
 		it.Next()
 	}
@@ -2383,5 +2385,6 @@ func TestSnapshotIsolation2(t *testing.T) {
 	// Step 4
 	err = rel1.Append(bat)
 	t.Log(err)
-	// assert.Error(t, err)
+	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	_ = txn1.Rollback()
 }

@@ -506,15 +506,20 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 	return tbl.localSegment.Rows()
 }
 
-func (tbl *txnTable) PreCommitDededup() (err error) {
+func (tbl *txnTable) PreCommitDedup() (err error) {
 	if tbl.localSegment == nil {
 		return
 	}
 	pks := tbl.localSegment.GetPrimaryColumn()
+	err = tbl.DoDedup(pks, true)
+	return
+}
+
+func (tbl *txnTable) DoDedup(pks *vector.Vector, preCommit bool) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
-		if seg.GetID() < tbl.maxSegId {
+		if preCommit && seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
@@ -539,7 +544,7 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload().(*catalog.BlockEntry)
-			if blk.GetID() < tbl.maxBlkId {
+			if preCommit && blk.GetID() < tbl.maxBlkId {
 				return
 			}
 			{
@@ -577,41 +582,48 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 	if err != nil {
 		return
 	}
-	h := newRelation(tbl)
-	segIt := h.MakeSegmentIt()
-	for segIt.Valid() {
-		seg := segIt.GetSegment()
-		if err = seg.BatchDedup(pks); err == txnbase.ErrDuplicated {
-			break
+	if tbl.localSegment != nil {
+		if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
+			return
 		}
-		if err == data.ErrPossibleDuplicate {
-			err = nil
-			blkIt := seg.MakeBlockIt()
-			for blkIt.Valid() {
-				block := blkIt.GetBlock()
-				var rowmask *roaring.Bitmap
-				// There were some deletes applied to state machine before. we need to check those delete nodes
-				if len(tbl.deleteNodes) > 0 {
-					fp := block.Fingerprint()
-					dn := tbl.deleteNodes[*fp]
-					// If a delete node was applied to this block, get the row mask
-					if dn != nil {
-						rowmask = dn.GetRowMaskRefLocked()
-					}
-				}
-				if err = block.BatchDedup(pks, rowmask); err != nil {
-					break
-				}
-				blkIt.Next()
-			}
-		}
-		if err != nil {
-			break
-		}
-		segIt.Next()
 	}
-	segIt.Close()
+	err = tbl.DoDedup(pks, false)
 	return
+	// h := newRelation(tbl)
+	// segIt := h.MakeSegmentIt()
+	// for segIt.Valid() {
+	// 	seg := segIt.GetSegment()
+	// 	if err = seg.BatchDedup(pks); err == txnbase.ErrDuplicated {
+	// 		break
+	// 	}
+	// 	if err == data.ErrPossibleDuplicate {
+	// 		err = nil
+	// 		blkIt := seg.MakeBlockIt()
+	// 		for blkIt.Valid() {
+	// 			block := blkIt.GetBlock()
+	// 			var rowmask *roaring.Bitmap
+	// 			// There were some deletes applied to state machine before. we need to check those delete nodes
+	// 			if len(tbl.deleteNodes) > 0 {
+	// 				fp := block.Fingerprint()
+	// 				dn := tbl.deleteNodes[*fp]
+	// 				// If a delete node was applied to this block, get the row mask
+	// 				if dn != nil {
+	// 					rowmask = dn.GetRowMaskRefLocked()
+	// 				}
+	// 			}
+	// 			if err = block.BatchDedup(pks, rowmask); err != nil {
+	// 				break
+	// 			}
+	// 			blkIt.Next()
+	// 		}
+	// 	}
+	// 	if err != nil {
+	// 		break
+	// 	}
+	// 	segIt.Next()
+	// }
+	// segIt.Close()
+	// return
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {

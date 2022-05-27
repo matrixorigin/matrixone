@@ -42,6 +42,9 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
+func (index *immutableIndex) GetMaxDeleteTS() uint64                    { panic("not supported") }
+func (index *immutableIndex) HasDeleteFrom(key any, fromTs uint64) bool { panic("not supported") }
+
 func (index *immutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
