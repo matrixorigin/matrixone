@@ -37,7 +37,7 @@ func splitAndBuildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *
 			return nil, err
 		}
 		if needAgg != isAgg {
-			return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' contains column(s) not in the GROUP BY clause or be used in an aggregate function", tree.String(*cond, dialect.MYSQL)))
+			return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' must appear in the GROUP BY clause or be used in an aggregate function", tree.String(*cond, dialect.MYSQL)))
 		}
 		exprs[i] = expr
 	}
