@@ -126,6 +126,7 @@ const (
 	NTILE             // NTILE
 	NULLIF            // NULLIF
 	PERCENT_RANK      // PERCENT_RANK
+	PI                // PI
 	POSITION          // POSITION
 	POW               // POW
 	RADIAN            // RADIAN

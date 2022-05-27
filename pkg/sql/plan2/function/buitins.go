@@ -17,6 +17,8 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/extend2/builtin/binaryfunc"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/extend2/builtin/unaryfunc"
 )
 
 func initBuiltIns() {
@@ -114,6 +116,109 @@ var builtins = map[int][]Function{
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
+		},
+	},
+	SIN: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint8},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[uint8],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint16},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[uint16],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint32},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[uint32],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[uint64],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int8},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[int8],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int16},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[int16],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int32},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[int32],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[int64],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float32},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[float32],
+		},
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unaryfunc.Sin[float64],
+		},
+	},
+	POW: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64, types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          binaryfunc.Power,
 		},
 	},
 }
