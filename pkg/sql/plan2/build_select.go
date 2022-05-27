@@ -406,10 +406,9 @@ func resetOnListAndWhereList(query *Query, node *Node, containMutiTableExprs []*
 	}
 }
 
-
 func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, binderCtx *BinderContext) (nodeId int32, selectExprs tree.SelectExprs, err error) {
-	
-  // build FROM clause
+
+	// build FROM clause
 	nodeId, err = buildFrom(stmt.From.Tables, ctx, query, binderCtx)
 	if err != nil {
 		return
