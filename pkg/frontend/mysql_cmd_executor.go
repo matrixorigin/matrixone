@@ -855,7 +855,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	if sv.Global {
 		tmp := gSysVariables.CopySysVarsToSession()
 		sysVars = make(map[string]interface{})
-		for name, _ := range tmp {
+		for name := range tmp {
 			if _, val, ok := gSysVariables.GetGlobalSysVar(name); ok {
 				sysVars[name] = val
 			}

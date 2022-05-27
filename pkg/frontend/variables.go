@@ -82,8 +82,6 @@ var _ SystemVariableType = SystemVariableSetType{}
 var _ SystemVariableType = SystemVariableStringType{}
 var _ SystemVariableType = SystemVariableNullType{}
 
-var ()
-
 type SystemVariableNullType struct {
 }
 
