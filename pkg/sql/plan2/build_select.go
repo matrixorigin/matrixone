@@ -66,7 +66,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 				}
 
 				for _, selectExpr := range selectExprs {
-					expr, isAgg, err := buildExpr(selectExpr.Expr, ctx, query, node, binderCtx, true)
+					expr, isAgg, err := buildExpr(selectExpr.Expr, ctx, query, aggNode, binderCtx, true)
 					if err != nil {
 						return 0, err
 					}
