@@ -312,6 +312,9 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 }
 
 func Length(v *Vector) int {
+	if v.IsScalar() {
+		return v.Length
+	}
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
 		return len(v.Col.(*types.Bytes).Offsets)

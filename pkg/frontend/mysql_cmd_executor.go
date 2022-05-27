@@ -281,6 +281,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			if vec.IsScalar() {
 				rowIndex = 0
 			}
+
 			switch vec.Typ.Oid { //get col
 			case types.T_bool:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
