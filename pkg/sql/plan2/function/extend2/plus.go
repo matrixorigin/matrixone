@@ -37,6 +37,8 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		// resultValues := resultValues[:len(rightValues)] // I think this line of code is redundant
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+		// how about we add a check here to see whether the const value is null, and skip the following line if it is so,
+		// doing this may have some benefits, should we add this check?
 		vector.SetCol(resultVector, add.NumericAddScalar[T](leftValues[0], rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsConst && right.IsConst:
