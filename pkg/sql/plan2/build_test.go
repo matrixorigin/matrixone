@@ -98,6 +98,28 @@ func TestNodeTree(t *testing.T) {
 				1: {0},
 			},
 		},
+		"select sum(n_nationkey) from nation": {
+			steps: []int32{1},
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN,
+				1: plan.Node_AGG,
+			},
+			children: map[int][]int32{
+				1: {0},
+			},
+		},
+		"select sum(n_nationkey) from nation order by sum(n_nationkey)": {
+			steps: []int32{2},
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN,
+				1: plan.Node_AGG,
+				2: plan.Node_SORT,
+			},
+			children: map[int][]int32{
+				1: {0},
+				2: {1},
+			},
+		},
 		// two nodes- SCAN + AGG(distinct)
 		"SELECT distinct N_NAME FROM NATION": {
 			steps: []int32{1},
@@ -356,6 +378,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT count(*) FROM NATION group by N_NAME", //test star
 		"SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10", //test agg
 		"SELECT DISTINCT N_NAME FROM NATION", //test distinct
+		"select sum(n_nationkey) as s from nation order by s",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
@@ -374,6 +397,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME, b.N_REGIONKEY FROM NATION a ORDER BY b.N_REGIONKEY", //table alias not exist
 		"SELECT N_NAME FROM NATION WHERE ffff(N_REGIONKEY) > 0",             //function name not exist
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
+		"select n_nationkey, sum(n_nationkey) from nation",
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
 	}

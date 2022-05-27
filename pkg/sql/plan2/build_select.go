@@ -50,6 +50,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 
 	var selectList []*Expr
 
+	// build SELECT clause
 	needAgg := node.NodeType == plan.Node_AGG
 	for _, selectExpr := range selectExprs {
 		expr, isAgg, err := buildExpr(selectExpr.Expr, ctx, query, node, binderCtx, needAgg)
@@ -57,6 +58,54 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 			return 0, err
 		}
 		if isAgg {
+			if !needAgg {
+				// Found aggregate function in SELECT without GROUP BY or HAVING. Need to append an AGG node
+				aggNode := &Node{
+					NodeType: plan.Node_AGG,
+					Children: []int32{nodeId},
+				}
+
+				for _, selectExpr := range selectExprs {
+					expr, isAgg, err := buildExpr(selectExpr.Expr, ctx, query, aggNode, binderCtx, true)
+					if err != nil {
+						return 0, err
+					}
+					if !isAgg {
+						return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("'%s' must appear in the GROUP BY clause or be used in an aggregate function", tree.String(selectExpr.Expr, dialect.MYSQL)))
+					}
+					switch listExpr := expr.Expr.(type) {
+					case *plan.Expr_List:
+						// select a.* from tbl a or select * from tbl,   buildExpr() will return plan.ExprList
+						selectList = append(selectList, listExpr.List.List...)
+					default:
+						alias := string(selectExpr.As)
+						if alias == "" {
+							expr.ColName = tree.String(&selectExpr, dialect.MYSQL)
+						} else {
+							binderCtx.columnAlias[alias] = &plan.Expr{
+								Typ:     expr.Typ,
+								ColName: alias,
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										RelPos: 0,
+										ColPos: int32(len(aggNode.ProjectList)),
+									},
+								},
+							}
+							expr.TableName = ""
+							expr.ColName = alias
+							aggNode.ProjectList = append(aggNode.ProjectList, expr)
+						}
+						selectList = append(selectList, expr)
+					}
+				}
+
+				nodeId = appendQueryNode(query, aggNode)
+				node = query.Nodes[nodeId]
+
+				break
+			}
+
 			node.ProjectList = append(node.ProjectList, expr)
 		}
 		switch listExpr := expr.Expr.(type) {
@@ -112,7 +161,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 						return
 					}
 					if !isAgg {
-						err = errors.New(errno.GroupingError, fmt.Sprintf("'%v' contains column(s) not in the GROUP BY clause or be used in an aggregate function", tree.String(order.Expr, dialect.MYSQL)))
+						err = errors.New(errno.GroupingError, fmt.Sprintf("'%s' must appear in the GROUP BY clause or be used in an aggregate function", tree.String(order.Expr, dialect.MYSQL)))
 						return
 					}
 					preNode.ProjectList = append(preNode.ProjectList, expr)
@@ -278,7 +327,7 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, binderCtx 
 }
 
 func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, binderCtx *BinderContext) (nodeId int32, selectExprs tree.SelectExprs, err error) {
-	// from
+	// build FROM clause
 	nodeId, err = buildFrom(stmt.From.Tables, ctx, query, binderCtx)
 	if err != nil {
 		return
@@ -286,7 +335,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 	node := query.Nodes[nodeId]
 
-	// filter
+	// build WHERE clause
 	if stmt.Where != nil {
 		node.WhereList, err = splitAndBuildExpr(stmt.Where.Expr, ctx, query, node, binderCtx, false)
 		if err != nil {
@@ -294,13 +343,13 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		}
 	}
 
+	// build GROUP BY and HAVING clause and DISTINCT
 	if stmt.GroupBy != nil || stmt.Having != nil || stmt.Distinct {
 		aggNode := &Node{
 			NodeType: plan.Node_AGG,
 			Children: []int32{nodeId},
 		}
 
-		// group_by
 		if stmt.GroupBy != nil {
 			if stmt.Distinct {
 				err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement(DISTINCT with GROUP BY): %T", stmt))
@@ -324,7 +373,6 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 			}
 		}
 
-		// having
 		if stmt.Having != nil {
 			if stmt.Distinct {
 				err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement(DISTINCT with HAVING): %T", stmt))
