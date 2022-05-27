@@ -519,10 +519,9 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 		}
 		{
 			seg.RLock()
-			uncreated := seg.IsCreatedUncommitted()
-			dropped := seg.IsDroppedCommitted()
+			invalid := seg.IsDroppedCommitted() || seg.InTxnOrRollbacked()
 			seg.RUnlock()
-			if uncreated || dropped {
+			if invalid {
 				segIt.Next()
 				continue
 			}
@@ -545,10 +544,9 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 			}
 			{
 				blk.RLock()
-				uncreated := blk.IsCreatedUncommitted()
-				dropped := blk.IsDroppedCommitted()
+				invalid := blk.IsDroppedCommitted() || blk.InTxnOrRollbacked()
 				blk.RUnlock()
-				if uncreated || dropped {
+				if invalid {
 					blkIt.Next()
 					continue
 				}

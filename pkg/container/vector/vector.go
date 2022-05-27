@@ -35,6 +35,12 @@ func DecodeFixedCol[T any](v *Vector, sz int) []T {
 
 func New(typ types.Type) *Vector {
 	switch typ.Oid {
+	case types.T_any:
+		return &Vector{
+			Typ: typ,
+			Col: nil,
+			Nsp: &nulls.Nulls{},
+		}
 	case types.T_bool:
 		return &Vector{
 			Typ: typ,
@@ -158,6 +164,20 @@ func NewConst(typ types.Type) *Vector {
 	v := New(typ)
 	v.IsConst = true
 	return v
+}
+
+// IsScalar return true if the vector means a scalar value.
+// e.g.
+// 		a + 1, and 1's vector will return true
+func (v *Vector) IsScalar() bool {
+	return v.IsConst
+}
+
+// IsScalarNull return true if the vector means a scalar Null.
+// e.g.
+// 		a + Null, and the vector of right part will return true
+func (v *Vector) IsScalarNull() bool {
+	return v.IsConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
 }
 
 func Reset(v *Vector) {
@@ -298,6 +318,9 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 }
 
 func Length(v *Vector) int {
+	if v.IsScalar() {
+		return v.Length
+	}
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
 		return len(v.Col.(*types.Bytes).Offsets)
@@ -315,6 +338,8 @@ func setLengthFixed[T any](v *Vector, n int) {
 
 func SetLength(v *Vector, n int) {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		setLengthFixed[bool](v, n)
 	case types.T_int8:
 		setLengthFixed[int8](v, n)
 	case types.T_int16:
@@ -661,6 +686,9 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
 	switch v.Typ.Oid {
+	case types.T_bool:
+		w.Col = v.Col.([]int8)[start:end]
+		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	case types.T_int8:
 		w.Col = v.Col.([]int8)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
@@ -769,6 +797,13 @@ func Append(v *Vector, arg interface{}) error {
 
 func Shrink(v *Vector, sels []int64) {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		vs := v.Col.([]bool)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
 	case types.T_int8:
 		vs := v.Col.([]int8)
 		for i, sel := range sels {
@@ -902,6 +937,16 @@ func Shrink(v *Vector, sels []int64) {
 
 func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		vs := v.Col.([]bool)
+		data, err := mheap.Alloc(m, int64(len(vs)))
+		if err != nil {
+			return err
+		}
+		ws := encoding.DecodeBoolSlice(data)
+		v.Col = shuffle.BoolShuffle(vs, ws, sels)
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+		mheap.Free(m, data)
 	case types.T_int8:
 		vs := v.Col.([]int8)
 		data, err := mheap.Alloc(m, int64(len(vs)))
@@ -1123,6 +1168,33 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 		return errors.New("UnionOne operation cannot be performed for origin vector")
 	}
 	switch v.Typ.Oid {
+	case types.T_bool:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeBoolSlice(data)
+			vs[0] = w.Col.([]bool)[sel]
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]bool)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeBoolSlice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, w.Col.([]bool)[sel])
+			v.Col = vs
+		}
 	case types.T_int8:
 		if len(v.Data) == 0 {
 			data, err := mheap.Alloc(m, 8)
@@ -1577,6 +1649,32 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 		return errors.New("UnionNull operation cannot be performed for origin vector")
 	}
 	switch v.Typ.Oid {
+	case types.T_bool:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeBoolSlice(data)
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]bool)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeBoolSlice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, vs[0])
+			v.Col = vs
+		}
 	case types.T_int8:
 		if len(v.Data) == 0 {
 			data, err := mheap.Alloc(m, 8)
@@ -1983,6 +2081,27 @@ func Union(v, w *Vector, sels []int64, m *mheap.Mheap) error {
 	}
 	oldLen := Length(v)
 	switch v.Typ.Oid {
+	case types.T_bool:
+		cnt := len(sels)
+		ws := w.Col.([]bool)
+		vs := v.Col.([]bool)
+		n := len(vs)
+		if n+cnt >= cap(vs) {
+			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
+			if err != nil {
+				return err
+			}
+			mheap.Free(m, v.Data)
+			vs = encoding.DecodeBoolSlice(data)
+			v.Data = data
+		}
+		vs = vs[:n+cnt]
+		j := n
+		for i, sel := range sels {
+			vs[i] = ws[sel]
+			j++
+		}
+		v.Col = vs
 	case types.T_int8:
 		cnt := len(sels)
 		ws := w.Col.([]int8)
@@ -2299,6 +2418,48 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	oldLen := Length(v)
 
 	switch v.Typ.Oid {
+	case types.T_bool:
+		col := w.Col.([]bool)
+		if len(v.Data) == 0 {
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize))
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeBoolSlice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]bool)
+			n := len(vs)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeBoolSlice(data)
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
 	case types.T_int8:
 		col := w.Col.([]int8)
 		if len(v.Data) == 0 {
@@ -3012,6 +3173,18 @@ func (v *Vector) Show() ([]byte, error) {
 	var buf bytes.Buffer
 
 	switch v.Typ.Oid {
+	case types.T_bool:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeBoolSlice(v.Col.([]bool)))
+		return buf.Bytes(), nil
 	case types.T_int8:
 		buf.Write(encoding.EncodeType(v.Typ))
 		nb, err := v.Nsp.Show()
@@ -3477,6 +3650,15 @@ func (v *Vector) Read(data []byte) error {
 
 func (v *Vector) String() string {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		col := v.Col.([]bool)
+		if len(col) == 1 {
+			if nulls.Contains(v.Nsp, 0) {
+				return "null"
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
 	case types.T_int8:
 		col := v.Col.([]int8)
 		if len(col) == 1 {
@@ -3652,6 +3834,33 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 	ifSel := len(selectIndexs) != 0
 
 	switch typ.Oid {
+	case types.T_bool:
+		vs := v.Col.([]bool)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%v", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%v", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
 	case types.T_int8:
 		vs := v.Col.([]int8)
 		for i := 0; i < rows; i++ {

@@ -37,7 +37,7 @@ func splitAndBuildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *
 			return nil, err
 		}
 		if needAgg != isAgg {
-			return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' contains column(s) not in the GROUP BY clause or be used in an aggregate function", tree.String(*cond, dialect.MYSQL)))
+			return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' must appear in the GROUP BY clause or be used in an aggregate function", tree.String(*cond, dialect.MYSQL)))
 		}
 		exprs[i] = expr
 	}
@@ -118,6 +118,9 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 		resultExpr, isAgg, err = buildExpr(astExpr.Expr, ctx, query, node, binderCtx, needAgg)
 	case *tree.OrExpr:
 		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("OR", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+	case *tree.XorExpr:
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("XOR", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		// return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", stmt))
 	case *tree.NotExpr:
 		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("NOT", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 	case *tree.AndExpr:
@@ -167,8 +170,6 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 		resultExpr, isAgg, err = buildCaseExpr(astExpr, ctx, query, node, binderCtx, needAgg)
 	case *tree.IntervalExpr:
 		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", stmt))
-	case *tree.XorExpr:
-		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", stmt))
 	case *tree.Subquery:
 		resultExpr, err = buildSubQuery(astExpr, ctx, query, node, binderCtx)
 		isAgg = needAgg
@@ -467,6 +468,20 @@ func buildBinaryExpr(astExpr *tree.BinaryExpr, ctx CompilerContext, query *Query
 
 func buildNumVal(val constant.Value) (*Expr, error) {
 	switch val.Kind() {
+	case constant.Unknown:
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
+				},
+			},
+			Typ: &plan.Type{
+				Id:        plan.Type_ANY,
+				Nullable:  true,
+				Width:     0,
+				Precision: 0,
+			},
+		}, nil
 	case constant.Bool:
 		boolValue := constant.BoolVal(val)
 		return &Expr{

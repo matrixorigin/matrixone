@@ -350,7 +350,7 @@ func constructJoinResult(expr *plan.Expr) (int32, int32) {
 
 func constructJoinCondition(expr *plan.Expr) (int32, types.Type, int32, types.Type) {
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok {
+	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
 	}
 	left, ok := e.F.Args[0].Expr.(*plan.Expr_Col)
@@ -389,4 +389,9 @@ func constructJoinCondition(expr *plan.Expr) (int32, types.Type, int32, types.Ty
 			Scale:     e.F.Args[0].Typ.Scale,
 			Precision: e.F.Args[0].Typ.Precision,
 		}
+}
+
+func supportedJoinCondition(id int64) bool {
+	fid, _ := function.DecodeOverloadID(id)
+	return fid == function.EQUAL
 }

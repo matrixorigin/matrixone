@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -100,6 +101,8 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 					v = nil
 					head = head.GetNext()
 					continue
+				} else if state == txnif.TxnStateCommitting {
+					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
 					err = txnif.TxnInternalErr
 					v = nil

@@ -43,7 +43,7 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *
 			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
 			return
 		}
-	case "and", "or", "not":
+	case "and", "or", "not", "xor":
 		if err := convertValueIntoBool(name, exprs, true); err != nil {
 			return nil, false, err
 		}

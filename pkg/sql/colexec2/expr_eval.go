@@ -87,7 +87,12 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			}
 			vs[i] = v
 		}
-		return f.VecFn(vs, proc)
+		v, err := f.VecFn(vs, proc)
+		if err != nil {
+			return nil, err
+		}
+		v.Length = len(bat.Zs)
+		return v, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))

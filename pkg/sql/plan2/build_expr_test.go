@@ -16,7 +16,6 @@ package plan2
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -378,36 +377,6 @@ func TestExpr_B(t *testing.T) {
 		}
 	})
 }
-
-func TestExpr_C(t *testing.T) {
-	convey.Convey("selectAndStmt succ", t, func() {
-		mock := NewMockOptimizer()
-		// var params []bool = []bool{false, false, true, true}
-		input := []string{"select 0 between -1 and 2 from dual;"}
-		for i := 0; i < len(input); i++ {
-			pl, err := runOneExprStmt(mock, t, input[i])
-			if err != nil {
-				t.Fatalf("%+v", err)
-			}
-			fmt.Println("wangjian test0 is", pl)
-			/*query, ok := pl.Plan.(*plan.Plan_Query)
-			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
-			}
-			expr := query.Query.Nodes[0].ProjectList[0]
-			exprF, ok := expr.Expr.(*plan.Expr_F)
-			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
-			}
-			convey.So(expr.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
-			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
-			for _, arg := range exprF.F.Args {
-				convey.So(arg.Typ.Id, convey.ShouldEqual, plan.Type_BOOL)
-			}*/
-		}
-	})
-}
-
 
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
 	stmts, err := mysql.Parse(sql)

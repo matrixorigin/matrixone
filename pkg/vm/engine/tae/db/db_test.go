@@ -2221,7 +2221,8 @@ func TestChaos1(t *testing.T) {
 		if err == nil {
 			err = rel.RangeDelete(id, row, row)
 			if err != nil {
-				// assert.Equal(t, txnif.TxnWWConflictErr, err)
+				t.Logf("delete: %v", err)
+				assert.Equal(t, txnif.TxnWWConflictErr, err)
 				assert.NoError(t, txn.Rollback())
 				return
 			}
@@ -2239,19 +2240,22 @@ func TestChaos1(t *testing.T) {
 			// assert.NotEqual(t, data.ErrDuplicate, err)
 			if err == nil {
 				atomic.AddUint32(&appendCnt, uint32(1))
+			} else {
+				t.Logf("commit: %v", err)
 			}
 			return
 		}
 		_ = txn.Rollback()
 	}
-	pool, _ := ants.NewPool(2)
-	for i := 0; i < 5; i++ {
+	pool, _ := ants.NewPool(10)
+	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		pool.Submit(worker)
 	}
 	wg.Wait()
 	t.Logf("AppendCnt: %d", appendCnt)
 	t.Logf("DeleteCnt: %d", deleteCnt)
+	assert.True(t, appendCnt-deleteCnt <= 1)
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
@@ -2259,7 +2263,8 @@ func TestChaos1(t *testing.T) {
 	blk := it.GetBlock()
 	view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 	assert.Equal(t, int(appendCnt), view.Length())
-	// view.ApplyDeletes()
+	view.ApplyDeletes()
 	t.Log(view.DeleteMask.String())
 	t.Log(view.String())
+	assert.Equal(t, uint64(deleteCnt), view.DeleteMask.GetCardinality())
 }
