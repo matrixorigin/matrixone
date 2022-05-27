@@ -2265,3 +2265,63 @@ func TestChaos1(t *testing.T) {
 	t.Log(view.String())
 	assert.Equal(t, uint64(deleteCnt), view.DeleteMask.GetCardinality())
 }
+
+// Testing Steps
+// 1. Append 10 rows
+// 2. Start txn1
+// 3. Start txn2. Update the 3rd row 3rd col to int64(2222) and commit. -- PASS
+// 4. Txn1 try to update the 3rd row 3rd col to int64(1111). -- W-W Conflict. Rollback
+// 5. Start txn3 and try to update th3 3rd row 3rd col to int64(3333). -- PASS
+func TestSnapshotIsolation1(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	bat := catalog.MockData(schema, 10)
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
+	filter := handle.NewEQFilter(v)
+
+	// Step 1
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// Step 2
+	txn1, _ := tae.StartTxn(nil)
+	db1, _ := txn1.GetDatabase("db")
+	rel1, _ := db1.GetRelationByName(schema.Name)
+
+	// Step 3
+	txn2, _ := tae.StartTxn(nil)
+	db2, _ := txn2.GetDatabase("db")
+	rel2, _ := db2.GetRelationByName(schema.Name)
+	err = rel2.UpdateByFilter(filter, 3, int64(2222))
+	assert.NoError(t, err)
+	assert.NoError(t, txn2.Commit())
+
+	// Step 4
+	err = rel1.UpdateByFilter(filter, 3, int64(1111))
+	t.Log(err)
+	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
+	_ = txn1.Rollback()
+
+	// Step 5
+	txn3, _ := tae.StartTxn(nil)
+	db3, _ := txn3.GetDatabase("db")
+	rel3, _ := db3.GetRelationByName(schema.Name)
+	err = rel3.UpdateByFilter(filter, 3, int64(3333))
+	assert.NoError(t, err)
+	assert.NoError(t, txn3.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	v, err = rel.GetValue(id, row, 3)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3333), v.(int64))
+}
