@@ -15,6 +15,9 @@
 package function
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,6 +35,49 @@ func initOperators() {
 			}
 		}
 	}
+}
+
+func And(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lv := vectors[0]
+	rv := vectors[1]
+	fmt.Println("wangjian test0 is", lv.Col, lv.Nsp, rv.Col, rv.Nsp)
+	lvs, rvs := lv.Col.([]bool), rv.Col.([]bool)
+	n := len(lvs)
+	if n < len(rvs) {
+		n = len(rvs)
+		lvs, rvs = rvs, lvs
+		lv, rv = rv, lv
+	}
+	vec, err := process.Get(proc, int64(n)*1, lv.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if rv.IsConst {
+		col := make([]bool, len(lvs))
+		rb := rvs[0]
+		for i := 0; i < len(lvs); i++ {
+			if nulls.Contains(lv.Nsp, uint64(i)) { //is null
+				col[i] = false
+			} else {
+				col[i] = lvs[i] && rb
+			}
+		}
+		vector.SetCol(vec, col)
+	} else {
+		col := make([]bool, len(lvs))
+		for i := 0; i < len(lvs); i++ {
+			if nulls.Contains(lv.Nsp, uint64(i)) { //is null
+				col[i] = false
+			} else {
+				col[i] = lvs[i] && rvs[i]
+			}
+		}
+		vector.SetCol(vec, col)
+	}
+
+	fmt.Println("wangjian test0z is", vec.Col)
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+	return vec, nil
 }
 
 // operators contains the operator function indexed by function id.
@@ -1411,7 +1457,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          And,
 		},
 	},
 	OR: {

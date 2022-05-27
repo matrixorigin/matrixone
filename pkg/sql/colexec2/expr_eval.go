@@ -32,6 +32,7 @@ var (
 	constIType = types.Type{Oid: types.T_int64}
 	constDType = types.Type{Oid: types.T_float64}
 	constSType = types.Type{Oid: types.T_varchar}
+	constBType = types.Type{Oid: types.T_bool}
 )
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
@@ -58,6 +59,9 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 					Offsets: []uint32{0},
 					Lengths: []uint32{uint32(len(sval))},
 				}
+			case *plan.Const_Bval:
+				vec = vector.NewConst(constBType)
+				vec.Col = []bool{t.C.GetBval()}
 			}
 		}
 		vec.Length = len(bat.Zs)
