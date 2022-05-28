@@ -295,6 +295,59 @@ func TestSegment_Replay(t *testing.T) {
 
 }
 
+func TestSegment_Replay2(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "init.seg")
+	seg := Segment{}
+	err := seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	var file *BlockFile
+	for i := 0; i < 5120; i++ {
+		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
+		assert.Nil(t, err)
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
+		assert.Nil(t, err)
+	}
+	for i := 5120; i < 10240; i++ {
+		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
+		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
+		assert.Nil(t, err)
+	}
+	level0 := seg.allocator.(*BitmapAllocator).level0
+	level1 := seg.allocator.(*BitmapAllocator).level1
+	log_l0 := seg.log.allocator.(*BitmapAllocator).level0
+	log_l1 := seg.log.allocator.(*BitmapAllocator).level1
+	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	assert.Nil(t, err)
+	seg1 := Segment{
+		name:    name,
+		segFile: segfile,
+	}
+	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
+	err = seg1.Replay(cache)
+	assert.Nil(t, err)
+	assert.Equal(t, 10241, len(seg1.nodes))
+	level0_2 := seg1.allocator.(*BitmapAllocator).level0
+	level1_2 := seg1.allocator.(*BitmapAllocator).level1
+	for i := range level0_2 {
+		assert.Equal(t, level0[i], level0_2[i])
+	}
+	for i := range level1_2 {
+		assert.Equal(t, level1[i], level1_2[i])
+	}
+	log_l0_2 := seg1.log.allocator.(*BitmapAllocator).level0
+	log_l1_2 := seg1.log.allocator.(*BitmapAllocator).level1
+	for i := range log_l0_2 {
+		assert.Equal(t, log_l0[i], log_l0_2[i])
+	}
+	for i := range log_l1_2 {
+		assert.Equal(t, log_l1[i], log_l1_2[i])
+	}
+
+}
+
 func TestSegment_Init(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")

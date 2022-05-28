@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"io"
 	"unsafe"
 )
 
@@ -108,6 +109,9 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 	for {
 		pos, hole, err := l.replayData(cache, off)
 		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
 			return err
 		}
 		if pos >= LOG_SIZE || hole >= HOLE_SIZE {
@@ -120,7 +124,7 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32, err error) {
 	hole = 0
 	pos, err = l.logFile.segment.segFile.ReadAt(data.Bytes(), offset)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return 0, hole, err
 	}
 	if pos != data.Len() {
@@ -155,10 +159,6 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 			continue
 		}
 		seekLen := l.logFile.segment.super.blockSize - (uint32(n) % l.logFile.segment.super.blockSize)
-		if int(seekLen) == cache.Len() {
-			break
-		}
-		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
 		block := l.logFile.segment.nodes[file.name]
 		if (block == nil || block.snode.seq < file.snode.seq) &&
 			file.snode.state == RESIDENT {
@@ -167,6 +167,9 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 				l.logFile.segment.allocator.CheckAllocations(
 					extent.offset-DATA_START, extent.length)
 			}
+			file.snode.logExtents.length = uint32(n + int(seekLen))
+			file.snode.logExtents.offset = uint32(int(offset) + data.Cap() - cache.Len() - n)
+			l.allocator.CheckAllocations(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
 			l.logFile.segment.nodes[file.name] = file
 		}
 		if block == nil {
@@ -174,6 +177,10 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 		} else {
 			logutil.Infof("block: %v seq: %d is overwritten", block.name, block.snode.seq)
 		}
+		if int(seekLen) == cache.Len() {
+			break
+		}
+		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
 	}
 	return pos, hole, nil
 }
