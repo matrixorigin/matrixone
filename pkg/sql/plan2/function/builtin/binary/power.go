@@ -26,16 +26,20 @@ func Power(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vs[0], vs[1]
 	lvs, rvs := lv.Col.([]float64), rv.Col.([]float64)
 	switch {
-	case lv.IsConst && rv.IsConst:
-		vec := vector.New(lv.Typ)
+	case lv.IsScalar() && rv.IsScalar():
+		if lv.IsScalarNull() || rv.IsScalarNull() {
+			return proc.AllocScalarNullVector(lv.Typ), nil
+		}
+		vec := proc.AllocScalarVector(lv.Typ)
 		rs := make([]float64, 1)
 		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 		vector.SetCol(vec, power.Power(lvs, rvs, rs))
-		vec.IsConst = true
-		vec.Length = lv.Length
 		return vec, nil
-	case lv.IsConst && !rv.IsConst:
-		vec, err := process.Get2(proc, 8*int64(len(rvs)), lv.Typ)
+	case lv.IsScalar() && !rv.IsScalar():
+		if lv.IsScalarNull() {
+			return proc.AllocScalarNullVector(lv.Typ), nil
+		}
+		vec, err := proc.AllocVector(lv.Typ, 8*int64(len(rvs)))
 		if err != nil {
 			return nil, err
 		}
@@ -45,8 +49,11 @@ func Power(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 		vector.SetCol(vec, power.PowerScalarLeftConst(lvs[0], rvs, rs))
 		return vec, nil
-	case !lv.IsConst && rv.IsConst:
-		vec, err := process.Get2(proc, 8*int64(len(lvs)), lv.Typ)
+	case !lv.IsScalar() && rv.IsScalar():
+		if rv.IsScalarNull() {
+			return proc.AllocScalarNullVector(rv.Typ), nil
+		}
+		vec, err := proc.AllocVector(lv.Typ, 8*int64(len(lvs)))
 		if err != nil {
 			return nil, err
 		}
@@ -57,7 +64,7 @@ func Power(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		vector.SetCol(vec, power.PowerScalarRightConst(rvs[0], lvs, rs))
 		return vec, nil
 	}
-	vec, err := process.Get2(proc, 8*int64(len(lvs)), lv.Typ)
+	vec, err := proc.AllocVector(lv.Typ, 8*int64(len(lvs)))
 	if err != nil {
 		return nil, err
 	}

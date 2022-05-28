@@ -230,4 +230,8 @@ var functionIdRegister = map[string]int32{
 	"iff":       IFF,
 	"date_add":  DATE_ADD,
 	"date_sub":  DATE_SUB,
+	"abs":       ABS,
+	"acos":      ACOS,
+	"power":     POWER,
+	"floor":     FLOOR,
 }
