@@ -139,7 +139,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
 		if node.GetCommitTSLocked() > ts {
-			err = txnbase.ErrDuplicated
+			err = txnif.TxnWWConflictErr
 			node.RUnlock()
 			return
 		}
@@ -155,7 +155,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
 	// 3. The specified row has other uncommitted change
 	// Note: Here we have some overkill to proactivelly w-w with committing txn
 	node.RUnlock()
-	err = txnbase.ErrDuplicated
+	err = txnif.TxnWWConflictErr
 	return
 }
 
@@ -177,7 +177,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
 		if node.GetCommitTSLocked() > n.GetStartTS() {
-			err = txnbase.ErrDuplicated
+			err = txnif.TxnWWConflictErr
 			node.RUnlock()
 			return
 		}
@@ -195,7 +195,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	// 3. The specified row has other uncommitted change
 	// Note: Here we have some overkill to proactivelly w-w with committing txn
 	node.RUnlock()
-	err = txnbase.ErrDuplicated
+	err = txnif.TxnWWConflictErr
 	return
 }
 

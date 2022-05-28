@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -877,9 +878,9 @@ func TestDedup1(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(bats[0])
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		err = rel.Append(bats[0])
-		assert.NotNil(t, err)
+		assert.ErrorIs(t, err, data.ErrDuplicate)
 		assert.Nil(t, txn.Rollback())
 	}
 
@@ -896,7 +897,7 @@ func TestDedup1(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(bats[0])
-		assert.NotNil(t, err)
+		assert.ErrorIs(t, err, data.ErrDuplicate)
 		assert.Nil(t, txn.Rollback())
 	}
 	{
@@ -925,10 +926,9 @@ func TestDedup1(t *testing.T) {
 		assert.Nil(t, txn3.Commit())
 
 		err = rel.Append(bats[3])
-		assert.Nil(t, err)
-		err = txn.Commit()
-		t.Log(txn.String())
-		assert.NotNil(t, err)
+		// TODO: should be w-w error
+		assert.Error(t, err)
+		_ = txn.Rollback()
 	}
 	t.Log(c.SimplePPString(common.PPL1))
 }

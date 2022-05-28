@@ -750,10 +750,31 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask *roaring.Bitmap) (err error) {
 	if blk.meta.IsAppendable() {
+		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		_, err = blk.index.BatchDedup(pks, rowmask)
-		return
+		keyselects, err := blk.index.BatchDedup(pks, rowmask)
+		// If duplicated with active rows
+		// TODO: index should store ts to identify w-w
+		if err != nil {
+			return err
+		}
+		// Check with deletes map
+		// If txn start ts is bigger than deletes max ts, skip scanning deletes
+		if ts > blk.index.GetMaxDeleteTS() {
+			return err
+		}
+		it := keyselects.Iterator()
+		for it.HasNext() {
+			row := it.Next()
+			key := compute.GetValue(pks, row)
+			if blk.index.HasDeleteFrom(key, ts) {
+				err = txnif.TxnWWConflictErr
+				break
+			}
+		}
+
+		return err
 	}
 	if blk.index == nil {
 		panic("index not found")
@@ -772,7 +793,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 	defer view.Free()
 	deduplicate := func(v any, _ uint32) error {
 		if _, existed := compute.CheckRowExists(view.AppliedVec, v, view.DeleteMask); existed {
-			return txnbase.ErrDuplicated
+			return data.ErrDuplicate
 		}
 		return nil
 	}
