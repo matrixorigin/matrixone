@@ -371,3 +371,8 @@ func (d Date) Month() uint8 {
 	_, month, _, _ := d.Calendar(true)
 	return month
 }
+
+func (d Date) Day() uint8 {
+	_, _, day, _ := d.Calendar(true)
+	return day
+}

@@ -11,49 +11,30 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package dayofmonth
 
-package builtin
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-
-const (
-	Length = iota + overload.NE + 1
-	Space
-	Reverse
-	Substring
-	Ltrim
-	Rtrim
-	Oct
-	StartsWith
-	Lpad
-	Rpad
-	Empty
-	LengthUTF8
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	Sin
-	Sinh
-	Cos
-	Acos
-	Tan
-	Atan
-	Cot
-	UTCTimestamp
-	DayOfYear
-	DayOfMonth
-	Month
-	Year
-	Weekday
-	EndsWith
-	Date
-	BitLength
-	Bin
-	FindInSet
+var (
+	DateDayOfMonth     func([]types.Date, []uint8) []uint8
+	DatetimeDayOfMonth func([]types.Datetime, []uint8) []uint8
 )
+
+func init() {
+	DateDayOfMonth = dateDayOfMonth
+	DatetimeDayOfMonth = datetimeDayOfMonth
+}
+
+func dateDayOfMonth(xs []types.Date, rs []uint8) []uint8 {
+	for i, x := range xs {
+		rs[i] = x.Day()
+	}
+	return rs
+}
+
+func datetimeDayOfMonth(xs []types.Datetime, rs []uint8) []uint8 {
+	for i, x := range xs {
+		rs[i] = x.Day()
+	}
+	return rs
+}

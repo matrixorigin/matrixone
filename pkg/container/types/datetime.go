@@ -194,3 +194,7 @@ func (dt Datetime) Year() uint16 {
 func (dt Datetime) Month() uint8 {
 	return dt.ToDate().Month()
 }
+
+func (dt Datetime) Day() uint8 {
+	return dt.ToDate().Day()
+}
