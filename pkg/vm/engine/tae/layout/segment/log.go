@@ -104,11 +104,26 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 }
 
 func (l *Log) Replay(cache *bytes.Buffer) error {
-	n, err := l.logFile.segment.segFile.ReadAt(cache.Bytes(), LOG_START)
-	if err != nil {
-		return err
+	var off int64 = LOG_START
+	for {
+		pos, hole, err := l.replayData(cache, off)
+		if err != nil {
+			return err
+		}
+		if pos >= LOG_SIZE || hole >= HOLE_SIZE {
+			return nil
+		}
+		off += int64(pos)
 	}
-	if n != cache.Len() {
+}
+
+func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32, err error) {
+	hole = 0
+	pos, err = l.logFile.segment.segFile.ReadAt(data.Bytes(), offset)
+	if err != nil {
+		return 0, hole, err
+	}
+	if pos != data.Len() {
 		panic(any("Replay read error"))
 	}
 	l.logFile.segment.mutex.Lock()
@@ -117,20 +132,26 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 	l.logFile.name = "logfile"
 	l.logFile.segment.nodes[l.logFile.name] = l.logFile
 	magicLen := uint32(unsafe.Sizeof(l.logFile.snode.magic))
+	buffer := data.Bytes()
+	cache := bytes.NewBuffer(buffer)
 	for {
+		if hole >= HOLE_SIZE {
+			break
+		}
 		file := &BlockFile{
 			snode:   &Inode{},
 			segment: l.logFile.segment,
 		}
-		n, err = l.readInode(cache, file)
+		n, err := l.readInode(cache, file)
 		if err != nil {
-			return err
+			return 0, hole, err
 		}
 		if n == 0 {
-			if int(l.logFile.segment.super.blockSize-magicLen) == cache.Len() {
+			if int(l.logFile.segment.super.blockSize) == cache.Len() {
 				break
 			}
 			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.segment.super.blockSize-magicLen:])
+			hole += l.logFile.segment.super.blockSize
 			continue
 		}
 		seekLen := l.logFile.segment.super.blockSize - (uint32(n) % l.logFile.segment.super.blockSize)
@@ -154,7 +175,7 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 			logutil.Infof("block: %v seq: %d is overwritten", block.name, block.snode.seq)
 		}
 	}
-	return nil
+	return pos, hole, nil
 }
 
 func (l *Log) RemoveInode(file *BlockFile) error {
