@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -586,7 +585,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v an
 			err = nil
 		}
 	} else {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 	}
 	blk.mvcc.RUnlock()
 	if v != nil || err != nil {
@@ -693,7 +692,7 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 	col := &pkColumn.Vector
 	offset, existed := compute.CheckRowExists(col, filter.Val, nil)
 	if !existed {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 
