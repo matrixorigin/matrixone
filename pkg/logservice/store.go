@@ -16,11 +16,14 @@ package logservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v3"
+	"github.com/lni/dragonboat/v3/client"
 	"github.com/lni/dragonboat/v3/config"
 	pb "github.com/lni/dragonboat/v3/raftpb"
+	sm "github.com/lni/dragonboat/v3/statemachine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -29,16 +32,20 @@ var (
 	ErrInvalidTruncateIndex = moerr.NewError(moerr.INVALID_INPUT, "invalid input")
 	ErrNotLeaseHolder       = moerr.NewError(moerr.INVALID_STATE, "not lease holder")
 	ErrOutOfRange           = moerr.NewError(moerr.INVALID_INPUT, "query out of range")
+	ErrInvalidShardID       = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
 )
 
 func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
 		NodeHostDir:         cfg.DataDir,
-		RTTMillisecond:      200,
+		RTTMillisecond:      cfg.RTTMillisecond,
 		AddressByNodeHostID: true,
 		RaftAddress:         cfg.RaftAddress,
 		ListenAddress:       cfg.RaftListenAddress,
+		Expert: config.ExpertConfig{
+			FS: cfg.FS,
+		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,
 			AdvertiseAddress: cfg.GossipAddress,
@@ -85,30 +92,64 @@ func (l *LogStore) Close() error {
 func (l *LogStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(defaultHAKeeperShardID, replicaID)
-	// FIXME: why join is always true
-	return l.nh.StartCluster(initialReplicas, true, newHAKeeperStateMachine, raftConfig)
+	// TODO: add another API for joining
+	return l.nh.StartCluster(initialReplicas, false, newHAKeeperStateMachine, raftConfig)
 }
 
 func (l *LogStore) StartReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
+	if shardID == defaultHAKeeperShardID {
+		return ErrInvalidShardID
+	}
 	raftConfig := getRaftConfig(shardID, replicaID)
-	// FIXME: why join is always true
-	return l.nh.StartConcurrentCluster(initialReplicas, true, newStateMachine, raftConfig)
+	// TODO: add another API for joining
+	return l.nh.StartConcurrentCluster(initialReplicas, false, newStateMachine, raftConfig)
+}
+
+func (l *LogStore) propose(ctx context.Context,
+	session *client.Session, cmd []byte) (sm.Result, error) {
+	for {
+		result, err := l.nh.SyncPropose(ctx, session, cmd)
+		if err != nil {
+			if errors.Is(err, dragonboat.ErrClusterNotReady) {
+				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
+				continue
+			}
+			return sm.Result{}, err
+		}
+		return result, nil
+	}
+}
+
+func (l *LogStore) read(ctx context.Context,
+	shardID uint64, query interface{}) (interface{}, error) {
+	for {
+		result, err := l.nh.SyncRead(ctx, shardID, query)
+		if err != nil {
+			if errors.Is(err, dragonboat.ErrClusterNotReady) {
+				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
+				continue
+			}
+			return result, err
+		}
+		return result, nil
+	}
 }
 
 func (l *LogStore) GetOrExtendDNLease(ctx context.Context,
 	shardID uint64, dnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetLeaseHolderCmd(dnID)
-	_, err := l.nh.SyncPropose(ctx, session, cmd)
+	_, err := l.propose(ctx, session, cmd)
 	return err
 }
 
+// TODO: actually truncate the log in raft
 func (l *LogStore) TruncateLog(ctx context.Context,
 	shardID uint64, index uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetTruncatedIndexCmd(index)
-	result, err := l.nh.SyncPropose(ctx, session, cmd)
+	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
 		return err
 	}
@@ -124,19 +165,19 @@ func (l *LogStore) Append(ctx context.Context,
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not user update"))
 	}
 	session := l.nh.GetNoOPSession(shardID)
-	result, err := l.nh.SyncPropose(ctx, session, cmd)
+	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
 		return err
 	}
 	if result.Value > 0 {
-		return errors.Wrapf(ErrNotLeaseHolder, "lease holder ID %d", result.Value)
+		return errors.Wrapf(ErrNotLeaseHolder, "current lease holder ID %d", result.Value)
 	}
 	return nil
 }
 
 func (l *LogStore) GetTruncatedIndex(ctx context.Context,
 	shardID uint64) (uint64, error) {
-	v, err := l.nh.SyncRead(ctx, shardID, truncatedIndexTag)
+	v, err := l.read(ctx, shardID, truncatedIndexTag)
 	if err != nil {
 		return 0, err
 	}
@@ -153,11 +194,24 @@ func (l *LogStore) getLeaseHolderID(ctx context.Context,
 	if isSetLeaseHolderUpdate(e.Cmd) {
 		return parseLeaseHolderID(e.Cmd), nil
 	}
-	v, err := l.nh.SyncRead(ctx, shardID, leaseHistoryQuery{index: e.Index})
+	v, err := l.read(ctx, shardID, leaseHistoryQuery{index: e.Index})
 	if err != nil {
 		return 0, err
 	}
 	return v.(uint64), nil
+}
+
+func (l *LogStore) decodeCmd(e pb.Entry) []byte {
+	if e.Type == pb.ApplicationEntry {
+		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected entry type"))
+	}
+	if e.Type == pb.EncodedEntry {
+		if e.Cmd[0] != 0 {
+			panic(moerr.NewError(moerr.INVALID_STATE, "unexpected cmd header"))
+		}
+		return e.Cmd[1:]
+	}
+	panic(moerr.NewError(moerr.INVALID_STATE, "invalid cmd"))
 }
 
 func (l *LogStore) filterEntries(ctx context.Context,
@@ -175,12 +229,13 @@ func (l *LogStore) filterEntries(ctx context.Context,
 			// raft internal stuff
 			continue
 		}
-		if isSetLeaseHolderUpdate(e.Cmd) {
-			leaseHolderID = parseLeaseHolderID(e.Cmd)
+		cmd := l.decodeCmd(e)
+		if isSetLeaseHolderUpdate(cmd) {
+			leaseHolderID = parseLeaseHolderID(cmd)
 			continue
 		}
-		if isUserUpdate(e.Cmd) {
-			if parseLeaseHolderID(e.Cmd) != leaseHolderID {
+		if isUserUpdate(cmd) {
+			if parseLeaseHolderID(cmd) != leaseHolderID {
 				// lease not match, skip
 				continue
 			}

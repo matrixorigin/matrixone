@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"github.com/cockroachdb/errors"
+	"github.com/lni/vfs"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -34,6 +35,8 @@ var (
 // TODO: add toml or json support
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
+	FS                   vfs.FS
+	RTTMillisecond       uint64
 	DeploymentID         uint64
 	DataDir              string
 	ServiceAddress       string
@@ -68,6 +71,9 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) Fill() {
+	if c.RTTMillisecond == 0 {
+		c.RTTMillisecond = 200
+	}
 	if len(c.DataDir) == 0 {
 		c.DataDir = defaultDataDir
 	}
