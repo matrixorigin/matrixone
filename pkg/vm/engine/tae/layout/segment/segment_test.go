@@ -317,6 +317,8 @@ func TestSegment_Replay2(t *testing.T) {
 	}
 	level0 := seg.allocator.(*BitmapAllocator).level0
 	level1 := seg.allocator.(*BitmapAllocator).level1
+	log_l0 := seg.log.allocator.(*BitmapAllocator).level0
+	log_l1 := seg.log.allocator.(*BitmapAllocator).level1
 	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
 	assert.Nil(t, err)
 	seg1 := Segment{
@@ -334,6 +336,14 @@ func TestSegment_Replay2(t *testing.T) {
 	}
 	for i := range level1_2 {
 		assert.Equal(t, level1[i], level1_2[i])
+	}
+	log_l0_2 := seg1.log.allocator.(*BitmapAllocator).level0
+	log_l1_2 := seg1.log.allocator.(*BitmapAllocator).level1
+	for i := range log_l0_2 {
+		assert.Equal(t, log_l0[i], log_l0_2[i])
+	}
+	for i := range log_l1_2 {
+		assert.Equal(t, log_l1[i], log_l1_2[i])
 	}
 
 }

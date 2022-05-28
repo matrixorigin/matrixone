@@ -167,6 +167,9 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 				l.logFile.segment.allocator.CheckAllocations(
 					extent.offset-DATA_START, extent.length)
 			}
+			file.snode.logExtents.length = uint32(n + int(seekLen))
+			file.snode.logExtents.offset = uint32(int(offset) + data.Cap() - cache.Len() - n)
+			l.allocator.CheckAllocations(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
 			l.logFile.segment.nodes[file.name] = file
 		}
 		if block == nil {
