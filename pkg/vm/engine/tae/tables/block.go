@@ -89,11 +89,12 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:    bufMgr,
 	}
 	if meta.IsAppendable() {
-		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
+		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
 		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetPKType())
 	} else {
+		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		block.index = indexwrapper.NewImmutableIndex()
 	}
 	return block
@@ -718,7 +719,12 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	return blk.blkGetByFilter(txn.GetStartTS(), filter)
 }
 
-func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err error) {
+func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	return
+}
+
+func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
 	var row uint32
 	err = blk.node.DoWithPin(func() (err error) {
 		blk.mvcc.RLock()
@@ -742,6 +748,7 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 				}
 			}
 		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 		return
 	})
 	return
