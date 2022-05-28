@@ -119,7 +119,6 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 		}
 		off += int64(pos)
 	}
-	return nil
 }
 
 func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32, err error) {
