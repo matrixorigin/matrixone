@@ -1,4 +1,3 @@
-// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -144,9 +143,8 @@ func (l *LogStore) GetOrExtendDNLease(ctx context.Context,
 	return err
 }
 
-// TODO: actually truncate the log in raft
 func (l *LogStore) TruncateLog(ctx context.Context,
-	shardID uint64, index uint64) error {
+	shardID uint64, index Lsn) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetTruncatedIndexCmd(index)
 	result, err := l.propose(ctx, session, cmd)
@@ -156,23 +154,37 @@ func (l *LogStore) TruncateLog(ctx context.Context,
 	if result.Value > 0 {
 		return errors.Wrapf(ErrInvalidTruncateIndex, "already truncated to %d", result.Value)
 	}
+	// the first 4 entries for a 3-replica raft group are tiny anyway
+	if index > 1 {
+		opts := dragonboat.SnapshotOption{
+			OverrideCompactionOverhead: true,
+			CompactionIndex:            index - 1,
+		}
+		if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (l *LogStore) Append(ctx context.Context,
-	shardID uint64, cmd []byte) error {
+	shardID uint64, cmd []byte) (Lsn, error) {
 	if !isUserUpdate(cmd) {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not user update"))
 	}
 	session := l.nh.GetNoOPSession(shardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if result.Value > 0 {
-		return errors.Wrapf(ErrNotLeaseHolder, "current lease holder ID %d", result.Value)
+	if len(result.Data) > 0 {
+		return 0, errors.Wrapf(ErrNotLeaseHolder,
+			"current lease holder ID %d", binaryEnc.Uint64(result.Data))
 	}
-	return nil
+	if result.Value == 0 {
+		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected Lsn value"))
+	}
+	return result.Value, nil
 }
 
 func (l *LogStore) GetTruncatedIndex(ctx context.Context,
@@ -215,15 +227,15 @@ func (l *LogStore) decodeCmd(e pb.Entry) []byte {
 }
 
 func (l *LogStore) filterEntries(ctx context.Context,
-	shardID uint64, entries []pb.Entry) ([]pb.Entry, error) {
+	shardID uint64, entries []pb.Entry) ([]LogRecord, error) {
 	if len(entries) == 0 {
-		return entries, nil
+		return []LogRecord{}, nil
 	}
 	leaseHolderID, err := l.getLeaseHolderID(ctx, shardID, entries)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]pb.Entry, 0)
+	result := make([]LogRecord, 0)
 	for _, e := range entries {
 		if e.Type == pb.ConfigChangeEntry || e.Type == pb.MetadataEntry || len(e.Cmd) == 0 {
 			// raft internal stuff
@@ -239,34 +251,49 @@ func (l *LogStore) filterEntries(ctx context.Context,
 				// lease not match, skip
 				continue
 			}
-			result = append(result, e)
+			result = append(result, LogRecord{Data: cmd})
 		}
 	}
 	return result, nil
 }
 
-// TODO: update QueryLog to provide clear indication whether there is any more
-// log to recover.
+func getNextIndex(entries []pb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
+	if len(entries) == 0 {
+		return firstIndex
+	}
+	lastResultIndex := entries[len(entries)-1].Index
+	if lastResultIndex+1 < lastIndex {
+		return lastResultIndex + 1
+	}
+	return firstIndex
+}
+
 func (l *LogStore) QueryLog(ctx context.Context, shardID uint64,
-	firstIndex uint64, lastIndex uint64, maxSize uint64) ([]pb.Entry, error) {
-	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex, maxSize)
+	firstIndex Lsn, maxSize uint64) ([]LogRecord, Lsn, error) {
+	v, err := l.read(ctx, shardID, indexTag)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	lastIndex := v.(uint64)
+	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex+1, maxSize)
+	if err != nil {
+		return nil, 0, err
 	}
 	select {
 	case v := <-rs.CompletedC:
 		if v.Completed() {
-			entries, _ := v.RaftLogs()
-			entries, err := l.filterEntries(ctx, shardID, entries)
+			entries, logRange := v.RaftLogs()
+			next := getNextIndex(entries, firstIndex, logRange.LastIndex)
+			results, err := l.filterEntries(ctx, shardID, entries)
 			if err != nil {
-				return nil, err
+				return nil, 0, err
 			}
-			return entries, nil
+			return results, next, nil
 		} else if v.RequestOutOfRange() {
-			return nil, ErrOutOfRange
+			return nil, 0, ErrOutOfRange
 		}
 		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected rs state"))
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, 0, ctx.Err()
 	}
 }

@@ -34,6 +34,7 @@ const (
 	leaseHolderIDTag  uint16 = 0xBF01
 	truncatedIndexTag uint16 = 0xBF02
 	userEntryTag      uint16 = 0xBF03
+	indexTag          uint16 = 0xBF04
 )
 
 type leaseHistoryQuery struct {
@@ -92,6 +93,7 @@ type stateMachine struct {
 	shardID        uint64
 	replicaID      uint64
 	mu             sync.RWMutex
+	Index          uint64
 	LeaseHolderID  uint64
 	TruncatedIndex uint64
 	LeaseHistory   map[uint64]uint64 // log index -> truncate index
@@ -157,14 +159,16 @@ func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
 // handleUserUpdate returns an empty sm.Result on success or it returns a
 // sm.Result value with the Value field set to the current lease holder ID
 // to indicate rejection by mismatched lease holder ID.
-func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
+func (s *stateMachine) handleUserUpdate(index uint64, cmd []byte) sm.Result {
 	if !isUserUpdate(cmd) {
 		panic("not user update")
 	}
 	if s.LeaseHolderID != parseLeaseHolderID(cmd) {
-		return sm.Result{Value: s.LeaseHolderID}
+		data := make([]byte, 8)
+		binaryEnc.PutUint64(data, s.LeaseHolderID)
+		return sm.Result{Data: data}
 	}
-	return sm.Result{}
+	return sm.Result{Value: index}
 }
 
 func (s *stateMachine) Close() error {
@@ -176,6 +180,7 @@ func (s *stateMachine) Update(entries []sm.Entry) ([]sm.Entry, error) {
 	defer s.mu.Unlock()
 
 	for idx, e := range entries {
+		s.Index = e.Index
 		cmd := e.Cmd
 		if isSetLeaseHolderUpdate(cmd) {
 			s.setLeaseHolderID(e.Index, cmd)
@@ -187,7 +192,7 @@ func (s *stateMachine) Update(entries []sm.Entry) ([]sm.Entry, error) {
 				entries[idx].Result = sm.Result{Value: s.TruncatedIndex}
 			}
 		} else if isUserUpdate(cmd) {
-			entries[idx].Result = s.handleUserUpdate(cmd)
+			entries[idx].Result = s.handleUserUpdate(e.Index, cmd)
 		} else {
 			panic("corrupted entry")
 		}
@@ -200,7 +205,9 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	defer s.mu.RUnlock()
 
 	if v, ok := query.(uint16); ok {
-		if v == leaseHolderIDTag {
+		if v == indexTag {
+			return s.Index, nil
+		} else if v == leaseHolderIDTag {
 			return s.LeaseHolderID, nil
 		} else if v == truncatedIndexTag {
 			return s.TruncatedIndex, nil
@@ -220,6 +227,7 @@ func (s *stateMachine) PrepareSnapshot() (interface{}, error) {
 	defer s.mu.RUnlock()
 
 	v := &stateMachine{
+		Index:          s.Index,
 		LeaseHolderID:  s.LeaseHolderID,
 		TruncatedIndex: s.TruncatedIndex,
 		LeaseHistory:   make(map[uint64]uint64),

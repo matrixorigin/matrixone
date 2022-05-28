@@ -175,16 +175,19 @@ func TestStateMachineUserUpdate(t *testing.T) {
 
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	tsm.LeaseHolderID = 1234
-	entries := []sm.Entry{{Cmd: cmd}}
+	entries := []sm.Entry{{Index: 100, Cmd: cmd}}
 	result, err := tsm.Update(entries)
 	assert.Nil(t, err)
-	assert.Equal(t, sm.Result{}, result[0].Result)
+	assert.Equal(t, entries[0].Index, result[0].Result.Value)
+	assert.Nil(t, result[0].Result.Data)
 
 	tsm.LeaseHolderID = 2345
 	entries = []sm.Entry{{Cmd: cmd}}
 	result, err = tsm.Update(entries)
 	assert.Nil(t, err)
-	assert.Equal(t, sm.Result{Value: 2345}, result[0].Result)
+	assert.Equal(t, uint64(0), result[0].Result.Value)
+	assert.NotNil(t, result[0].Result.Data)
+	assert.Equal(t, tsm.LeaseHolderID, binaryEnc.Uint64(result[0].Result.Data))
 }
 
 func TestStateMachineSnapshot(t *testing.T) {
@@ -206,6 +209,7 @@ func TestStateMachineSnapshot(t *testing.T) {
 
 func TestStateMachineLookup(t *testing.T) {
 	tsm := newStateMachine(1, 2).(*stateMachine)
+	tsm.Index = 1234
 	tsm.LeaseHolderID = 123456
 	tsm.TruncatedIndex = 456789
 	v, err := tsm.Lookup(leaseHolderIDTag)
@@ -215,6 +219,10 @@ func TestStateMachineLookup(t *testing.T) {
 	v2, err := tsm.Lookup(truncatedIndexTag)
 	assert.Nil(t, err)
 	assert.Equal(t, tsm.TruncatedIndex, v2.(uint64))
+
+	v3, err := tsm.Lookup(indexTag)
+	assert.Nil(t, err)
+	assert.Equal(t, tsm.Index, v3.(uint64))
 }
 
 func TestStateMachineLookupPanicOnUnexpectedInputValue(t *testing.T) {
