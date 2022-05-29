@@ -89,5 +89,7 @@ func (c *Config) Fill() {
 	if len(c.GossipAddress) == 0 {
 		c.GossipAddress = defaultGossipAddress
 		c.GossipListenAddress = defaultGossipAddress
+	} else if len(c.GossipAddress) != 0 && len(c.GossipListenAddress) == 0 {
+		c.GossipListenAddress = c.GossipAddress
 	}
 }

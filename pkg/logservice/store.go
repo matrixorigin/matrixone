@@ -60,6 +60,9 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		ListenAddress:       cfg.RaftListenAddress,
 		Expert: config.ExpertConfig{
 			FS: cfg.FS,
+			// FIXME: dragonboat need to be updated to make this field a first class
+			// citizen
+			TestGossipProbeInterval: 50 * time.Millisecond,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,
@@ -100,8 +103,20 @@ func NewLogStore(cfg Config) (*LogStore, error) {
 }
 
 func (l *LogStore) Close() error {
-	l.nh.Close()
+	if l.nh != nil {
+		l.nh.Close()
+	}
 	return nil
+}
+
+// TODO: rather than providing such low level API, provide a way to directly
+// query serviceAddress by nhID
+func (l *LogStore) GetNodeHostRegistry() dragonboat.INodeHostRegistry {
+	r, ok := l.nh.GetNodeHostRegistry()
+	if !ok {
+		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
+	}
+	return r
 }
 
 func (l *LogStore) StartHAKeeperReplica(replicaID uint64,

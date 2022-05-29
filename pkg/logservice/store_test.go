@@ -51,7 +51,7 @@ func TestRaftConfig(t *testing.T) {
 func getStoreTestConfig() Config {
 	return Config{
 		RTTMillisecond:      10,
-		GossipSeedAddresses: []string{"localhost:9000"},
+		GossipSeedAddresses: []string{"127.0.0.1:9000"},
 		DeploymentID:        1,
 		FS:                  vfs.NewStrictMem(),
 	}
@@ -233,4 +233,66 @@ func TestQueryLog(t *testing.T) {
 		assert.Equal(t, entries[0].Data, cmd)
 	}
 	runStoreTest(t, fn)
+}
+
+func TestStoreServiceAddressCanBeQueried(t *testing.T) {
+	cfg1 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+	}
+	cfg2 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-2",
+		ServiceAddress:      "127.0.0.1:9012",
+		RaftAddress:         "127.0.0.1:9010",
+		GossipAddress:       "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+	}
+	store1, err := NewLogStore(cfg1)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, store1.Close())
+	}()
+	store2, err := NewLogStore(cfg2)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, store2.Close())
+	}()
+	nhID1 := store1.nh.ID()
+	nhID2 := store2.nh.ID()
+	r1 := store1.GetNodeHostRegistry()
+	//r2 := store2.GetNodeHostRegistry()
+
+	done := false
+	for i := 0; i < 3000; i++ {
+		data11, ok := r1.GetMeta(nhID1)
+		if !ok {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.NotNil(t, data11)
+		var md logStoreMeta
+		md.unmarshal(data11)
+		assert.Equal(t, cfg1.ServiceAddress, md.serviceAddress)
+
+		data12, ok := r1.GetMeta(nhID2)
+		if !ok {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.NotNil(t, data12)
+		md.unmarshal(data12)
+		assert.Equal(t, cfg2.ServiceAddress, md.serviceAddress)
+
+		done = true
+	}
+	assert.True(t, done)
 }
