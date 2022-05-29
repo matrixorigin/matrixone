@@ -158,13 +158,11 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 1
-		if ok := s.AppendColDef(def); !ok {
-			panic("bad column def")
+		if err = s.AppendColDef(def); err != nil {
+			return
 		}
 	}
-	if ok := s.Finalize(true); !ok {
-		panic("bad schema def")
-	}
+	err = s.Finalize(true)
 	return
 }
 
@@ -212,18 +210,19 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) AppendColDef(def *ColDef) bool {
+func (s *Schema) AppendColDef(def *ColDef) (err error) {
 	def.Idx = len(s.ColDefs)
 	s.ColDefs = append(s.ColDefs, def)
 	_, existed := s.NameIndex[def.Name]
 	if existed {
-		return false
+		err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+		return
 	}
 	s.NameIndex[def.Name] = def.Idx
-	return true
+	return
 }
 
-func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) bool {
+func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 	def := &ColDef{
 		Name:       name,
 		Type:       typ,
@@ -232,7 +231,7 @@ func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) bool {
 	return s.AppendColDef(def)
 }
 
-func (s *Schema) AppendCol(name string, typ types.Type) bool {
+func (s *Schema) AppendCol(name string, typ types.Type) error {
 	def := &ColDef{
 		Name:       name,
 		Type:       typ,
@@ -277,12 +276,14 @@ func (s *Schema) Types() []types.Type {
 	return ts
 }
 
-func (s *Schema) Finalize(rebuild bool) bool {
+func (s *Schema) Finalize(rebuild bool) (err error) {
 	if s == nil {
-		return false
+		err = fmt.Errorf("%w: nil schema", ErrSchemaValidation)
+		return
 	}
 	if len(s.ColDefs) == 0 {
-		return false
+		err = fmt.Errorf("%w: empty schema", ErrSchemaValidation)
+		return
 	}
 	if !rebuild {
 		hiddenDef := &ColDef{
@@ -298,12 +299,14 @@ func (s *Schema) Finalize(rebuild bool) bool {
 	for idx, def := range s.ColDefs {
 		// Check column idx validility
 		if idx != def.Idx {
-			return false
+			err = fmt.Errorf("%w: wrong column index %d specified for \"%s\"", ErrSchemaValidation, def.Idx, def.Name)
+			return
 		}
 		// Check unique name
 		_, ok := names[def.Name]
 		if ok {
-			return false
+			err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+			return
 		}
 		names[def.Name] = true
 		if def.IsPrimary() {
@@ -315,7 +318,8 @@ func (s *Schema) Finalize(rebuild bool) bool {
 		// One pk defined
 		def := s.ColDefs[pkIdx[0]]
 		if def.PrimaryIdx != 0 {
-			return false
+			err = fmt.Errorf("%w: bad primary idx %d, should be 0", ErrSchemaValidation, def.PrimaryIdx)
+			return
 		}
 		s.SinglePK = &SinglePK{Idx: def.Idx}
 		s.CompoundPK = nil
@@ -327,7 +331,7 @@ func (s *Schema) Finalize(rebuild bool) bool {
 		// Compound pk defined
 		panic("implement me")
 	}
-	return true
+	return
 }
 
 // GetColIdx returns column index for the given column name

@@ -78,21 +78,19 @@ func MockIndexInfo() *aoe.IndexInfo {
 	return &idxInfo
 }
 
-func TableInfoToSchema(info *aoe.TableInfo) *catalog.Schema {
-	schema := catalog.NewEmptySchema(info.Name)
+func TableInfoToSchema(info *aoe.TableInfo) (schema *catalog.Schema, err error) {
+	schema = catalog.NewEmptySchema(info.Name)
 	for _, colInfo := range info.Columns {
 		if colInfo.PrimaryKey {
-			if ok := schema.AppendPKCol(colInfo.Name, colInfo.Type, 0); !ok {
-				panic("bad col def")
+			if err = schema.AppendPKCol(colInfo.Name, colInfo.Type, 0); err != nil {
+				return
 			}
 		} else {
-			if ok := schema.AppendCol(colInfo.Name, colInfo.Type); !ok {
-				panic("bad col def")
+			if err = schema.AppendCol(colInfo.Name, colInfo.Type); err != nil {
+				return
 			}
 		}
 	}
-	if ok := schema.Finalize(true); !ok {
-		panic("bad schema def")
-	}
-	return schema
+	err = schema.Finalize(true)
+	return
 }
