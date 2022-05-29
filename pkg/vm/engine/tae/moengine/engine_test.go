@@ -10,7 +10,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -54,7 +53,7 @@ func TestEngine(t *testing.T) {
 	rel, err := dbase.Relation(mockTbl.Name, txn.GetCtx())
 	assert.Nil(t, err)
 	meta := rel.(*txnRelation).handle.GetMeta().(*catalog.TableEntry)
-	bat := compute.MockBatch(meta.GetSchema().Types(), 100, int(meta.GetSchema().PrimaryKey), nil)
+	bat := catalog.MockData(meta.GetSchema(), 100)
 	err = rel.Write(0, bat, txn.GetCtx())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())

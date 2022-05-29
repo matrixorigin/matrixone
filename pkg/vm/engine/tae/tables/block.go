@@ -61,7 +61,7 @@ type dataBlock struct {
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
-	indexCnt[int(meta.GetSchema().PrimaryKey)] = 2
+	indexCnt[meta.GetSchema().GetPrimaryKeyIdx()] = 2
 	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
 	if err != nil {
 		panic(err)
@@ -92,7 +92,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetPKType())
+		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetSinglePKType())
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		block.index = indexwrapper.NewImmutableIndex()
@@ -102,7 +102,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
-		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
+		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().GetPrimaryKeyIdx()))
 		defer common.GPool.Free(w.MNode)
 		keysCtx := new(index.KeysCtx)
 		keysCtx.Keys = &w.Vector
@@ -404,7 +404,7 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 }
 
 func (blk *dataBlock) GetPKColumnDataOptimized(ts uint64) (view *model.ColumnView, err error) {
-	pkIdx := int(blk.meta.GetSchema().PrimaryKey)
+	pkIdx := blk.meta.GetSchema().GetPrimaryKeyIdx()
 	wrapper, err := blk.getVectorWrapper(pkIdx)
 	if err != nil {
 		return view, err
@@ -685,7 +685,7 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 		return
 	}
 	err = nil
-	pkColumn, err := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
+	pkColumn, err := blk.getVectorWrapper(blk.meta.GetSchema().GetPrimaryKeyIdx())
 	if err != nil {
 		return
 	}
@@ -728,7 +728,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 	var row uint32
 	err = blk.node.DoWithPin(func() (err error) {
 		blk.mvcc.RLock()
-		vec, err := blk.node.data.GetVectorByAttr(int(blk.meta.GetSchema().PrimaryKey))
+		vec, err := blk.node.data.GetVectorByAttr(blk.meta.GetSchema().GetPrimaryKeyIdx())
 		if err != nil {
 			blk.mvcc.RUnlock()
 			return err

@@ -27,6 +27,9 @@ const (
 )
 
 const (
+	HiddenColumnName    = "PADDR"
+	HiddenColumnComment = "Physical address"
+
 	SystemDBID               = uint64(1)
 	SystemDBName             = "mo_catalog"
 	CatalogName              = "taec"
@@ -86,9 +89,6 @@ const (
 	SystemColAttr_Comment         = "att_comment"
 )
 
-// UINT8 UINT64  VARCHAR UINT64  INT8   CHAR    VARCHAR    UINT64
-//  ET  |  ID  |  NAME  |  TS  | OPT | LOGIDX |  INFO   | PARENTID |
-var ModelSchema *Schema
 var SystemDBSchema *Schema
 var SystemTableSchema *Schema
 var SystemColumnSchema *Schema
@@ -125,6 +125,7 @@ func init() {
 		Width: 100,
 	}
 	SystemDBSchema.AppendCol(SystemDBAttr_CreateSQL, t)
+	// SystemDBSchema.Finalize(true)
 
 	SystemTableSchema = NewEmptySchema(SystemTable_Table_Name)
 	t = types.Type{
@@ -163,6 +164,7 @@ func init() {
 		Width: 100,
 	}
 	SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, t)
+	// SystemTableSchema.Finalize(true)
 
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
 	t = types.Type{
@@ -255,54 +257,5 @@ func init() {
 		Width: 8,
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_IsHidden, t)
-
-	ModelSchema = NewEmptySchema(ModelSchemaName)
-	t = types.Type{
-		Oid:   types.T_uint8,
-		Size:  1,
-		Width: 8,
-	}
-	ModelSchema.AppendCol(ModelAttrET, t)
-	t = types.Type{
-		Oid:   types.T_uint64,
-		Size:  8,
-		Width: 64,
-	}
-	ModelSchema.AppendCol(ModelAttrID, t)
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	ModelSchema.AppendCol(ModelAttrName, t)
-	t = types.Type{
-		Oid:   types.T_uint64,
-		Size:  8,
-		Width: 64,
-	}
-	ModelSchema.AppendCol(ModelAttrTS, t)
-	t = types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	ModelSchema.AppendCol(ModelAttrOpT, t)
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	ModelSchema.AppendCol(ModelAttrLogIdx, t)
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	ModelSchema.AppendCol(ModelAttrInfo, t)
-	t = types.Type{
-		Oid:   types.T_uint64,
-		Size:  8,
-		Width: 64,
-	}
-	ModelSchema.AppendCol(ModelAttrParentID, t)
+	// SystemColumnSchema.Finalize(true)
 }

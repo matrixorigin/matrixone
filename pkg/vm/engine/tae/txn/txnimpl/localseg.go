@@ -183,7 +183,7 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		start := seg.rows
-		if err = seg.index.BatchInsert(data.Vecs[seg.table.GetSchema().PrimaryKey], int(offset), int(appended), start, false); err != nil {
+		if err = seg.index.BatchInsert(data.Vecs[seg.table.GetSchema().GetPrimaryKeyIdx()], int(offset), int(appended), start, false); err != nil {
 			break
 		}
 		offset += appended
@@ -207,7 +207,7 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 		err = node.RangeDelete(firstOffset, lastOffset)
 		if err == nil {
 			for i := firstOffset; i <= lastOffset; i++ {
-				v, _ := node.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), i)
+				v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
 				if err = seg.index.Delete(v); err != nil {
 					break
 				}
@@ -219,7 +219,7 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 		node = seg.nodes[last]
 		err = node.RangeDelete(0, lastOffset)
 		for i := uint32(0); i <= lastOffset; i++ {
-			v, _ := node.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), i)
+			v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
 			if err = seg.index.Delete(v); err != nil {
 				break
 			}
@@ -231,7 +231,7 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 					break
 				}
 				for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
-					v, _ := node.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), i)
+					v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
 					if err = seg.index.Delete(v); err != nil {
 						break
 					}
@@ -290,7 +290,7 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
 	}
-	v, _ := n.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), row)
+	v, _ := n.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), row)
 	if err = seg.index.Delete(v); err != nil {
 		panic(err)
 	}
@@ -325,7 +325,7 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 
 func (seg *localSegment) GetPrimaryColumn() *vector.Vector {
 	schema := seg.table.entry.GetSchema()
-	return seg.index.KeyToVector(schema.ColDefs[schema.PrimaryKey].Type)
+	return seg.index.KeyToVector(schema.GetSinglePKType())
 }
 
 func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {

@@ -141,7 +141,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(int(schema.PrimaryKey), nil, nil); err != nil {
+		if view, err = block.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil); err != nil {
 			return
 		}
 		vec := view.ApplyDeletes()
@@ -185,7 +185,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		closure := meta.GetBlockData().FlushColumnDataClosure(ts, int(schema.PrimaryKey), vec, false)
+		closure := meta.GetBlockData().FlushColumnDataClosure(ts, schema.GetPrimaryKeyIdx(), vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
 		if err != nil {
 			return
@@ -206,7 +206,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	for i := 0; i < len(schema.ColDefs); i++ {
-		if i == int(schema.PrimaryKey) {
+		if i == schema.GetPrimaryKeyIdx() {
 			continue
 		}
 		vecs = vecs[:0]

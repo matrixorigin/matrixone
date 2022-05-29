@@ -89,10 +89,10 @@ func main() {
 			panic(err)
 		}
 	}
-	batchCnt := uint64(100)
-	batchRows := uint64(10000) * 1 / 2 * batchCnt
+	batchCnt := uint32(100)
+	batchRows := uint32(10000) * 1 / 2 * batchCnt
 	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
-	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, batchRows)
 	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {

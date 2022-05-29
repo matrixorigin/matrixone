@@ -87,7 +87,7 @@ func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
 		vec := view.ApplyDeletes()
 		bat.Vecs[i] = vec
 	}
-	if err = mergesort.SortBlockColumns(bat.Vecs, int(task.meta.GetSchema().PrimaryKey)); err != nil {
+	if err = mergesort.SortBlockColumns(bat.Vecs, task.meta.GetSchema().GetPrimaryKeyIdx()); err != nil {
 		return
 	}
 	return

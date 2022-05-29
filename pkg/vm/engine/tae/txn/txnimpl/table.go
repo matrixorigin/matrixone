@@ -309,7 +309,7 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 }
 
 func (tbl *txnTable) Append(data *batch.Batch) error {
-	err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().PrimaryKey])
+	err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().GetPrimaryKeyIdx()])
 	if err != nil {
 		return err
 	}
@@ -596,7 +596,7 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
 	if tbl.localSegment != nil {
-		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().PrimaryKey])
+		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().GetPrimaryKeyIdx()])
 	}
 	return
 }

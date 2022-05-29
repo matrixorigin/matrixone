@@ -77,7 +77,7 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 		})
 
 		keysCtx := new(index.KeysCtx)
-		keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
+		keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetPrimaryKeyIdx()]
 		keysCtx.Start = offset
 		keysCtx.Count = length
 		// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
@@ -101,7 +101,7 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 		})
 
 		keysCtx := new(index.KeysCtx)
-		keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
+		keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetPrimaryKeyIdx()]
 		keysCtx.Start = offset
 		keysCtx.Count = length
 		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())

@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -29,14 +28,12 @@ func SchemaToTableInfo(schema *catalog.Schema) aoe.TableInfo {
 		Columns: make([]aoe.ColumnInfo, 0),
 		Indices: make([]aoe.IndexInfo, 0),
 	}
-	for idx, colDef := range schema.ColDefs {
+	for _, colDef := range schema.ColDefs {
 		col := aoe.ColumnInfo{
 			Name: colDef.Name,
 			Type: colDef.Type,
 		}
-		if idx == int(schema.PrimaryKey) {
-			col.PrimaryKey = true
-		}
+		col.PrimaryKey = colDef.IsPrimary()
 		tblInfo.Columns = append(tblInfo.Columns, col)
 	}
 	return tblInfo
@@ -83,19 +80,19 @@ func MockIndexInfo() *aoe.IndexInfo {
 
 func TableInfoToSchema(info *aoe.TableInfo) *catalog.Schema {
 	schema := catalog.NewEmptySchema(info.Name)
-	for idx, colInfo := range info.Columns {
-		newInfo := &catalog.ColDef{
-			Name: colInfo.Name,
-			Idx:  idx,
-			Type: colInfo.Type,
-		}
+	for _, colInfo := range info.Columns {
 		if colInfo.PrimaryKey {
-			schema.PrimaryKey = int32(idx)
-			logutil.Debugf("Table to schema, schema.PrimaryKey is %d, its name is %v.", schema.PrimaryKey, colInfo.Name)
+			if ok := schema.AppendPKCol(colInfo.Name, colInfo.Type, 0); !ok {
+				panic("bad col def")
+			}
+		} else {
+			if ok := schema.AppendCol(colInfo.Name, colInfo.Type); !ok {
+				panic("bad col def")
+			}
 		}
-		schema.NameIndex[newInfo.Name] = len(schema.ColDefs)
-		schema.ColDefs = append(schema.ColDefs, newInfo)
 	}
-
+	if ok := schema.Finalize(true); !ok {
+		panic("bad schema def")
+	}
 	return schema
 }
