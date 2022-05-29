@@ -305,13 +305,13 @@ func TestSegment_Replay(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	var file *BlockFile
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 20; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 20; i++ {
 		file = seg.nodes[fmt.Sprintf("test_%d.blk", i)]
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 10)))
 		assert.Nil(t, err)
@@ -334,7 +334,7 @@ func TestSegment_Replay(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		file = seg.nodes[fmt.Sprintf("test_%d.blk", i*10)]
+		file = seg.nodes[fmt.Sprintf("test_%d.blk", i*2)]
 		seg.ReleaseFile(file)
 	}
 	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
@@ -346,7 +346,7 @@ func TestSegment_Replay(t *testing.T) {
 	cache := bytes.NewBuffer(make([]byte, LOG_SIZE))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
-	assert.Equal(t, 91, len(seg1.nodes))
+	assert.Equal(t, 11, len(seg1.nodes))
 	checkSegment(t, &seg, &seg1)
 }
 
