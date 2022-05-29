@@ -15,82 +15,67 @@
 package moengine
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-func SchemaToTableInfo(schema *catalog.Schema) aoe.TableInfo {
-	tblInfo := aoe.TableInfo{
-		Name:    schema.Name,
-		Columns: make([]aoe.ColumnInfo, 0),
-		Indices: make([]aoe.IndexInfo, 0),
+func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
+	if schema.Comment != "" {
+		commentDef := new(engine.CommentDef)
+		commentDef.Comment = schema.Comment
+		defs = append(defs, commentDef)
 	}
-	for _, colDef := range schema.ColDefs {
-		col := aoe.ColumnInfo{
-			Name: colDef.Name,
-			Type: colDef.Type,
+	for _, col := range schema.ColDefs {
+		if col.IsHidden() {
+			continue
 		}
-		col.PrimaryKey = colDef.IsPrimary()
-		tblInfo.Columns = append(tblInfo.Columns, col)
+		def := &engine.AttributeDef{
+			Attr: engine.Attribute{
+				Name:    col.Name,
+				Type:    col.Type,
+				Primary: col.IsPrimary(),
+			},
+		}
+		defs = append(defs, def)
 	}
-	return tblInfo
+	if schema.SinglePK != nil {
+		pkDef := new(engine.PrimaryIndexDef)
+		pkDef.Names = append(pkDef.Names, schema.GetSinglePKColDef().Name)
+		defs = append(defs, pkDef)
+	} else {
+		for _, idx := range schema.CompoundPK.Idxes {
+			pkDef := new(engine.PrimaryIndexDef)
+			pkDef.Names = append(pkDef.Names, schema.ColDefs[idx].Name)
+			defs = append(defs, pkDef)
+		}
+	}
+	return
 }
 
-func MockTableInfo(colCnt int) *aoe.TableInfo {
-	tblInfo := &aoe.TableInfo{
-		Name:    "mocktbl",
-		Columns: make([]aoe.ColumnInfo, 0),
-		Indices: make([]aoe.IndexInfo, 0),
-	}
-	prefix := "mock_"
-	indexId := 0
-	for i := 0; i < colCnt; i++ {
-		name := fmt.Sprintf("%s%d", prefix, i)
-		colInfo := aoe.ColumnInfo{
-			Name: name,
-		}
-		if i == 1 {
-			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
-		} else {
-			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
-		}
-		indexId++
-		indexInfo := aoe.IndexInfo{
-			Type:    aoe.IndexT(catalog.ZoneMap),
-			Columns: []uint64{uint64(i)},
-			Name:    fmt.Sprintf("idx-%d", indexId),
-		}
-		tblInfo.Columns = append(tblInfo.Columns, colInfo)
-		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
-	}
-	return tblInfo
-}
-
-func MockIndexInfo() *aoe.IndexInfo {
-	idxInfo := aoe.IndexInfo{
-		Type:    aoe.IndexT(catalog.ZoneMap),
-		Columns: []uint64{uint64(0)},
-		Name:    fmt.Sprintf("idx-%d", 0),
-	}
-	return &idxInfo
-}
-
-func TableInfoToSchema(info *aoe.TableInfo) (schema *catalog.Schema, err error) {
-	schema = catalog.NewEmptySchema(info.Name)
-	for _, colInfo := range info.Columns {
-		if colInfo.PrimaryKey {
-			if err = schema.AppendPKCol(colInfo.Name, colInfo.Type, 0); err != nil {
-				return
+func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
+	schema = catalog.NewEmptySchema(name)
+	pkMap := make(map[string]int)
+	for _, def := range defs {
+		if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
+			for i, name := range pkDef.Names {
+				pkMap[name] = i
 			}
-		} else {
-			if err = schema.AppendCol(colInfo.Name, colInfo.Type); err != nil {
-				return
+			break
+		}
+	}
+	for _, def := range defs {
+		if attrDef, ok := def.(*engine.AttributeDef); ok {
+			if idx, ok := pkMap[attrDef.Attr.Name]; ok {
+				if err = schema.AppendPKCol(attrDef.Attr.Name, attrDef.Attr.Type, idx); err != nil {
+					return
+				}
+			} else {
+				if err = schema.AppendCol(attrDef.Attr.Name, attrDef.Attr.Type); err != nil {
+					return
+				}
 			}
 		}
 	}
-	err = schema.Finalize(false)
+	schema.Finalize(false)
 	return
 }

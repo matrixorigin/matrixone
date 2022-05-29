@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -324,6 +325,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		}
 		names[def.Name] = true
 		if def.IsPrimary() {
+			logutil.Infof("xxxxx-%v", def)
 			pkIdx = append(pkIdx, idx)
 		}
 	}

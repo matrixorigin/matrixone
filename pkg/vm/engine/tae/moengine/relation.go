@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -69,8 +68,7 @@ func (_ *txnRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapsh
 
 func (rel *txnRelation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	info := SchemaToTableInfo(schema)
-	_, _, _, _, defs, _ := helper.UnTransfer(info)
+	defs, _ := SchemaToDefs(schema)
 	return defs
 }
 
