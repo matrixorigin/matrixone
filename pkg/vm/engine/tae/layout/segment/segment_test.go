@@ -262,55 +262,6 @@ func checkSegment(t *testing.T, seg, seg1 *Segment) {
 	}
 }
 
-func TestSegment_Replay(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	name := path.Join(dir, "init.seg")
-	seg := Segment{}
-	err := seg.Init(name)
-	assert.Nil(t, err)
-	seg.Mount()
-	var file *BlockFile
-	for i := 0; i < 10; i++ {
-		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
-		file.snode.algo = compress.None
-		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
-		assert.Nil(t, err)
-	}
-	for i := 0; i < 10; i++ {
-		file = seg.nodes[fmt.Sprintf("test_%d.blk", i)]
-		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 10)))
-		assert.Nil(t, err)
-		buffer1 := mockData(2048000)
-		assert.NotNil(t, buffer1)
-		err = file.segment.Append(file, buffer1)
-		assert.Nil(t, err)
-		buffer2 := mockData(49152)
-		assert.NotNil(t, buffer2)
-		err = file.segment.Append(file, buffer2)
-		assert.Nil(t, err)
-		buffer3 := mockData(8192)
-		assert.NotNil(t, buffer3)
-		err = file.segment.Append(file, buffer3)
-		assert.Nil(t, err)
-		buffer4 := mockData(5242880)
-		assert.NotNil(t, buffer4)
-		err = file.segment.Append(file, buffer4)
-		assert.Nil(t, err)
-	}
-	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
-	assert.Nil(t, err)
-	seg1 := Segment{
-		name:    name,
-		segFile: segfile,
-	}
-	cache := bytes.NewBuffer(make([]byte, LOG_SIZE))
-	err = seg1.Replay(cache)
-	assert.Nil(t, err)
-	assert.Equal(t, 11, len(seg1.nodes))
-	checkSegment(t, &seg, &seg1)
-
-}
-
 func TestSegment_Replay2(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
@@ -346,7 +297,7 @@ func TestSegment_Replay2(t *testing.T) {
 	checkSegment(t, &seg, &seg1)
 }
 
-func TestSegment_Replay3(t *testing.T) {
+func TestSegment_Replay(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
 	seg := Segment{}
