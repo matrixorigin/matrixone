@@ -91,6 +91,6 @@ func TableInfoToSchema(info *aoe.TableInfo) (schema *catalog.Schema, err error) 
 			}
 		}
 	}
-	err = schema.Finalize(true)
+	err = schema.Finalize(false)
 	return
 }

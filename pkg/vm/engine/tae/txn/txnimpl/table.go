@@ -45,6 +45,7 @@ type txnTable struct {
 	updateNodes  map[common.ID]txnif.UpdateNode
 	deleteNodes  map[common.ID]txnif.DeleteNode
 	entry        *catalog.TableEntry
+	schema       *catalog.Schema
 	logs         []wal.LogEntry
 	maxSegId     uint64
 	maxBlkId     uint64
@@ -57,6 +58,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 	tbl := &txnTable{
 		store:       store,
 		entry:       entry,
+		schema:      entry.GetSchema(),
 		updateNodes: make(map[common.ID]txnif.UpdateNode),
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
@@ -261,7 +263,7 @@ func (tbl *txnTable) IsDeleted() bool {
 }
 
 func (tbl *txnTable) GetSchema() *catalog.Schema {
-	return tbl.entry.GetSchema()
+	return tbl.schema
 }
 
 func (tbl *txnTable) GetMeta() *catalog.TableEntry {
@@ -309,9 +311,11 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 }
 
 func (tbl *txnTable) Append(data *batch.Batch) error {
-	err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().GetPrimaryKeyIdx()])
-	if err != nil {
-		return err
+	if !tbl.schema.IsHiddenPK() {
+		err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().GetPrimaryKeyIdx()])
+		if err != nil {
+			return err
+		}
 	}
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
@@ -510,7 +514,7 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 }
 
 func (tbl *txnTable) PreCommitDedup() (err error) {
-	if tbl.localSegment == nil {
+	if tbl.localSegment == nil || tbl.schema.IsHiddenPK() {
 		return
 	}
 	pks := tbl.localSegment.GetPrimaryColumn()

@@ -25,6 +25,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+// [48 Bit (BlockID) + 48 Bit (SegmentID)]
+func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
+	buf := make([]byte, 12)
+	tempBuf := make([]byte, 8)
+	binary.BigEndian.PutUint64(tempBuf, segmentId)
+	copy(buf[0:], tempBuf[:6])
+	binary.BigEndian.PutUint64(tempBuf, blockId)
+	copy(buf[6:], tempBuf[:6])
+	return buf
+}
+
+func DecodeBlockKeyPrefix(buf []byte) (segmentId, blockId uint64) {
+	tempBuf := make([]byte, 12)
+	copy(tempBuf[0:6], buf[:6])
+	segmentId = binary.BigEndian.Uint64(tempBuf)
+	copy(tempBuf[0:6], buf[6:])
+	blockId = binary.BigEndian.Uint64(tempBuf)
+	return
+}
+
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
 type BlockEntry struct {
@@ -209,4 +229,8 @@ func (entry *BlockEntry) CloneCreate() CheckpointItem {
 
 func (entry *BlockEntry) DestroyData() (err error) {
 	return entry.blkData.Destroy()
+}
+
+func (entry *BlockEntry) MakeKey() []byte {
+	return EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
 }

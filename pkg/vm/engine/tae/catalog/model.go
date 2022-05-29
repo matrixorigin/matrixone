@@ -26,6 +26,8 @@ const (
 	ETColDef
 )
 
+var HiddenColumnType types.Type
+
 const (
 	HiddenColumnName    = "PADDR"
 	HiddenColumnComment = "Physical address"
@@ -106,6 +108,12 @@ const (
 )
 
 func init() {
+	HiddenColumnType = types.Type{
+		Oid:   types.T_decimal128,
+		Size:  16,
+		Width: 128,
+	}
+
 	SystemDBSchema = NewEmptySchema(SystemTable_DB_Name)
 	t := types.Type{
 		Oid:   types.T_varchar,

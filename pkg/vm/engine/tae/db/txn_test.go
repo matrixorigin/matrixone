@@ -107,7 +107,7 @@ func init() {
 	wareHouse.AppendCol("W_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
 	wareHouse.AppendCol("W_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
 	wareHouse.AppendCol("W_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	wareHouse.Finalize(true)
+	wareHouse.Finalize(false)
 
 	district = catalog.NewEmptySchema("DISTRICT")
 	district.BlockMaxRows = 40000
@@ -123,7 +123,7 @@ func init() {
 	district.AppendCol("D_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
 	district.AppendCol("D_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
 	district.AppendCol("D_NEXT_O_ID", types.Type{Oid: types.T_int64, Size: 8, Width: 64})
-	district.Finalize(true)
+	district.Finalize(false)
 
 	balance = catalog.NewEmptySchema("BALANCE")
 	balance.BlockMaxRows = 40000
@@ -131,7 +131,7 @@ func init() {
 	balance.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
 	balance.AppendCol("BALANCE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
 	// balance.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	balance.Finalize(true)
+	balance.Finalize(false)
 
 	user = catalog.NewEmptySchema("USER")
 	user.BlockMaxRows = 40000
@@ -141,7 +141,7 @@ func init() {
 	user.AppendCol("BIRTH", types.Type{Oid: types.T_date, Size: 4, Width: 32})
 	user.AppendCol("ADDR", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
 	user.AppendCol("BALANCEID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	user.Finalize(true)
+	user.Finalize(false)
 
 	goods = catalog.NewEmptySchema("GOODS")
 	goods.BlockMaxRows = 40000
@@ -150,7 +150,7 @@ func init() {
 	goods.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
 	goods.AppendCol("PRICE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
 	goods.AppendCol("DESC", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	goods.Finalize(true)
+	goods.Finalize(false)
 
 	repertory = catalog.NewEmptySchema("REPERTORY")
 	repertory.BlockMaxRows = 40000
@@ -158,7 +158,7 @@ func init() {
 	repertory.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
 	repertory.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
 	repertory.AppendCol("COUNT", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	repertory.Finalize(true)
+	repertory.Finalize(false)
 
 	deal = catalog.NewEmptySchema("DEAL")
 	deal.BlockMaxRows = 40000
@@ -168,7 +168,7 @@ func init() {
 	deal.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
 	deal.AppendCol("QUANTITY", types.Type{Oid: types.T_uint32, Size: 4, Width: 32})
 	deal.AppendCol("DEALTIME", types.Type{Oid: types.T_datetime, Size: 8, Width: 64})
-	deal.Finalize(true)
+	deal.Finalize(false)
 }
 
 func NewApp1(mgr *txnbase.TxnManager, dbName string) *APP1 {

@@ -193,13 +193,19 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 		err = h.Update(id, row, col, v)
 		return
 	}
-	bat := catalog.MockData(schema, 0)
-	for i := range schema.ColDefs {
-		colVal, err := h.table.GetValue(id, row, uint16(i))
+	bat := batch.New(true, []string{})
+	for _, def := range schema.ColDefs {
+		if def.IsHidden() {
+			continue
+		}
+		colVal, err := h.table.GetValue(id, row, uint16(def.Idx))
 		if err != nil {
 			return err
 		}
-		compute.AppendValue(bat.Vecs[i], colVal)
+		vec := vector.New(def.Type)
+		compute.AppendValue(vec, colVal)
+		bat.Vecs = append(bat.Vecs, vec)
+		bat.Attrs = append(bat.Attrs, def.Name)
 	}
 	if err = h.table.RangeDelete(id, row, row); err != nil {
 		return

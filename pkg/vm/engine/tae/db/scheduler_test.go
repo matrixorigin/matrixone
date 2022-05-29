@@ -142,7 +142,7 @@ func TestCheckpoint2(t *testing.T) {
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.IndexCapacity = 1000000
 	opts.CacheCfg.TxnCapacity = 1000000
-	opts.CacheCfg.InsertCapacity = 200
+	opts.CacheCfg.InsertCapacity = 400
 	// opts.CheckpointCfg = new(options.CheckpointCfg)
 	// opts.CheckpointCfg.ScannerInterval = 10
 	// opts.CheckpointCfg.ExecutionLevels = 2
@@ -173,10 +173,11 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	doAppend := func(data *gbat.Batch, name string) {
-		txn, _ := tae.StartTxn(nil)
+		txn, err := tae.StartTxn(nil)
+		assert.NoError(t, err)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(name)
-		err := rel.Append(data)
+		err = rel.Append(data)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}

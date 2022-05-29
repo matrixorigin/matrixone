@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -161,7 +162,7 @@ func (node *appendableNode) OnLoad() {
 	}
 	var err error
 	schema := node.block.meta.GetSchema()
-	if node.data, err = node.file.LoadIBatch(schema.Types(), schema.BlockMaxRows); err != nil {
+	if node.data, err = node.file.LoadIBatch(schema.AllTypes(), schema.BlockMaxRows); err != nil {
 		node.exception.Store(err)
 	}
 }
@@ -280,6 +281,20 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	return
 }
 
+func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error) {
+	col, closer, err := compute.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
+	if err != nil {
+		return
+	}
+	defer closer()
+	vec, err := node.data.GetVectorByAttr(node.block.meta.GetSchema().HiddenKeyDef().Idx)
+	if err != nil {
+		return
+	}
+	_, err = vec.AppendVector(col, 0)
+	return
+}
+
 func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
@@ -296,18 +311,18 @@ func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, 
 		node.data, _ = batch.NewBatch(attrs, vecs)
 	}
 	from = node.rows
-	for idx, attr := range node.data.GetAttrs() {
-		for i, a := range bat.Attrs {
-			if a == node.block.meta.GetSchema().ColDefs[idx].Name {
-				vec, err := node.data.GetVectorByAttr(attr)
-				if err != nil {
-					return 0, err
-				}
-				if _, err = vec.AppendVector(bat.Vecs[i], int(offset)); err != nil {
-					return from, err
-				}
-			}
+	for srcPos, attr := range bat.Attrs {
+		attrId := node.block.meta.GetSchema().GetColIdx(attr)
+		destVec, err := node.data.GetVectorByAttr(attrId)
+		if err != nil {
+			return from, err
 		}
+		if _, err = destVec.AppendVector(bat.Vecs[srcPos], int(offset)); err != nil {
+			return from, err
+		}
+	}
+	if err = node.FillHiddenColumn(from, length); err != nil {
+		return
 	}
 	node.rows += length
 	return

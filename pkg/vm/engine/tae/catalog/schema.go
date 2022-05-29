@@ -99,6 +99,8 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
+func (s *Schema) HiddenKeyDef() *ColDef { return s.ColDefs[len(s.ColDefs)-1] }
+
 func (s *Schema) IsSinglePK() bool { return s.SinglePK != nil }
 
 // Should be call only if IsSinglePK is checked
@@ -260,6 +262,8 @@ func (s *Schema) GetSinglePKColDef() *ColDef {
 	return s.ColDefs[s.SinglePK.Idx]
 }
 
+func (s *Schema) IsHiddenPK() bool { return s.ColDefs[s.SinglePK.Idx].IsHidden() }
+
 func (s *Schema) Attrs() []string {
 	attrs := make([]string, len(s.ColDefs))
 	for i, def := range s.ColDefs {
@@ -269,6 +273,14 @@ func (s *Schema) Attrs() []string {
 }
 
 func (s *Schema) Types() []types.Type {
+	ts := make([]types.Type, len(s.ColDefs)-1)
+	for i, def := range s.ColDefs[:len(s.ColDefs)-1] {
+		ts[i] = def.Type
+	}
+	return ts
+}
+
+func (s *Schema) AllTypes() []types.Type {
 	ts := make([]types.Type, len(s.ColDefs))
 	for i, def := range s.ColDefs {
 		ts[i] = def.Type
@@ -287,9 +299,11 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	}
 	if !rebuild {
 		hiddenDef := &ColDef{
-			Name:    HiddenColumnName,
-			Comment: HiddenColumnComment,
-			Hidden:  int8(1),
+			Name:       HiddenColumnName,
+			Comment:    HiddenColumnComment,
+			Type:       HiddenColumnType,
+			Hidden:     int8(1),
+			PrimaryIdx: -1,
 		}
 		s.AppendColDef(hiddenDef)
 	}
@@ -325,7 +339,9 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		s.CompoundPK = nil
 	} else if len(pkIdx) == 0 {
 		// No pk specified
-		s.SinglePK = &SinglePK{Idx: len(s.ColDefs) - 1}
+		def := s.ColDefs[len(s.ColDefs)-1]
+		def.PrimaryIdx = 0
+		s.SinglePK = &SinglePK{Idx: def.Idx}
 		s.CompoundPK = nil
 	} else {
 		// Compound pk defined
@@ -355,7 +371,7 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 			schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
 		}
 	}
-	schema.Finalize(true)
+	schema.Finalize(false)
 	return schema
 }
 
@@ -460,6 +476,6 @@ func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
-	schema.Finalize(true)
+	schema.Finalize(false)
 	return schema
 }

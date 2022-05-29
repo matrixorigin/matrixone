@@ -488,13 +488,14 @@ func (n *insertNode) PrintDeletes() string {
 
 // TODO: Rewrite later
 func (n *insertNode) Window(start, end uint32) (*gbat.Batch, error) {
-	attrs := make([]string, len(n.table.GetSchema().ColDefs))
-	for i := range attrs {
-		attrs[i] = n.table.GetSchema().ColDefs[i].Name
+	attrs := make([]string, 0, 4)
+	for _, attrId := range n.data.GetAttrs() {
+		def := n.table.GetSchema().ColDefs[attrId]
+		attrs = append(attrs, def.Name)
 	}
 	ret := gbat.New(true, attrs)
-	for i, attr := range n.data.GetAttrs() {
-		src, err := n.data.GetVectorByAttr(attr)
+	for i, attrId := range n.data.GetAttrs() {
+		src, err := n.data.GetVectorByAttr(attrId)
 		if err != nil {
 			return nil, err
 		}

@@ -56,6 +56,7 @@ type dataBlock struct {
 	mvcc      *updates.MVCCHandle
 	nice      uint32
 	ckpTs     uint64
+	prefix    []byte
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -87,6 +88,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		mvcc:      updates.NewMVCCHandle(meta),
 		scheduler: scheduler,
 		bufMgr:    bufMgr,
+		prefix:    meta.MakeKey(),
 	}
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)

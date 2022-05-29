@@ -21,9 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -75,21 +77,37 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
-func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
-	attrs := task.meta.GetSchema().Attrs()
+func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, closer func(), err error) {
+	attrs := make([]string, 0, 4)
 	bat = batch.New(true, attrs)
 
-	for i := range task.meta.GetSchema().ColDefs {
-		view, err := task.compacted.GetColumnDataById(i, nil, nil)
+	var view *model.ColumnView
+	hiddenDef := task.meta.GetSchema().HiddenKeyDef()
+	for _, def := range task.meta.GetSchema().ColDefs {
+		if hiddenDef.Idx == def.Idx {
+			continue
+		}
+		view, err = task.compacted.GetColumnDataById(def.Idx, nil, nil)
 		if err != nil {
-			return bat, err
+			return
 		}
 		vec := view.ApplyDeletes()
-		bat.Vecs[i] = vec
+		bat.Vecs = append(bat.Vecs, vec)
+		bat.Attrs = append(bat.Attrs, def.Name)
 	}
-	if err = mergesort.SortBlockColumns(bat.Vecs, task.meta.GetSchema().GetPrimaryKeyIdx()); err != nil {
+	// Merge sort only if hidden column is not primary key
+	if !hiddenDef.IsPrimary() {
+		if err = mergesort.SortBlockColumns(bat.Vecs, task.meta.GetSchema().GetPrimaryKeyIdx()); err != nil {
+			return
+		}
+	}
+	// Prepare hidden column data
+	hidden, closer, err := compute.PrepareHiddenData(catalog.HiddenColumnType, blkKey, 0, uint32(compute.LengthOfBatch(bat)))
+	if err != nil {
 		return
 	}
+	bat.Vecs = append(bat.Vecs, hidden)
+	bat.Attrs = append(bat.Attrs, catalog.HiddenColumnName)
 	return
 }
 
@@ -97,20 +115,21 @@ func (task *compactBlockTask) GetNewBlock() handle.Block { return task.created }
 
 func (task *compactBlockTask) Execute() (err error) {
 	now := time.Now()
-	data, err := task.PrepareData()
-	if err != nil {
-		return
-	}
 	seg := task.compacted.GetSegment()
-	// rel := seg.GetRelation()
+	// Prepare a block placeholder
 	newBlk, err := seg.CreateNonAppendableBlock()
 	if err != nil {
 		return err
 	}
+	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
+	data, closer, err := task.PrepareData(newMeta.MakeKey())
+	if err != nil {
+		return
+	}
+	defer closer()
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
-	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
 	newBlkData := newMeta.GetBlockData()
 	blockFile := newBlkData.GetBlockFile()
 

@@ -413,10 +413,11 @@ func TestCompactBlock1(t *testing.T) {
 		t.Log(blkMeta.String())
 		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, db.Scheduler)
 		assert.Nil(t, err)
-		data, err := task.PrepareData()
+		data, closer, err := task.PrepareData(blkMeta.MakeKey())
 		assert.Nil(t, err)
 		assert.NotNil(t, data)
-		for col := 0; col < len(data.Vecs); col++ {
+		defer closer()
+		for col := 0; col < len(bat.Vecs); col++ {
 			for row := 0; row < vector.Length(bat.Vecs[0]); row++ {
 				exp := compute.GetValue(bat.Vecs[col], uint32(row))
 				act := compute.GetValue(data.Vecs[col], uint32(row))
@@ -447,8 +448,9 @@ func TestCompactBlock1(t *testing.T) {
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		data, err := task.PrepareData()
+		data, closer, err := task.PrepareData(blkMeta.MakeKey())
 		assert.Nil(t, err)
+		defer closer()
 		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
 		{
 			txn, _ := db.StartTxn(nil)
@@ -468,8 +470,9 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		data, err = task.PrepareData()
+		data, closer, err = task.PrepareData(blkMeta.MakeKey())
 		assert.Nil(t, err)
+		defer closer()
 		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
 		var maxTs uint64
 		{
@@ -484,8 +487,9 @@ func TestCompactBlock1(t *testing.T) {
 			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
 			task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 			assert.Nil(t, err)
-			data, err := task.PrepareData()
+			data, closer, err := task.PrepareData(blkMeta.MakeKey())
 			assert.Nil(t, err)
+			defer closer()
 			assert.Equal(t, vector.Length(bat.Vecs[0])-2, vector.Length(data.Vecs[0]))
 			t.Log(blk.String())
 			maxTs = txn.GetStartTS()
@@ -1205,7 +1209,7 @@ func TestUnload1(t *testing.T) {
 func TestUnload2(t *testing.T) {
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.InsertCapacity = common.K * 3
+	opts.CacheCfg.InsertCapacity = common.K*4 - common.K/2
 	opts.CacheCfg.TxnCapacity = common.M
 	db := initDB(t, opts)
 	defer db.Close()
