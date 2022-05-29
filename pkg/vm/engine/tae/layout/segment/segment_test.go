@@ -276,10 +276,8 @@ func TestSegment_Replay(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	for _, file = range seg.nodes {
-		if file.name == "logfile" {
-			continue
-		}
+	for i := 0; i < 10; i++ {
+		file = seg.nodes[fmt.Sprintf("test_%d.blk", i)]
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 10)))
 		assert.Nil(t, err)
 		buffer1 := mockData(2048000)
