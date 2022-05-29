@@ -34,7 +34,22 @@ var (
 	ErrInvalidShardID       = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
 )
 
+type logStoreMeta struct {
+	serviceAddress string
+}
+
+func (l *logStoreMeta) marshal() []byte {
+	return []byte(l.serviceAddress)
+}
+
+func (l *logStoreMeta) unmarshal(data []byte) {
+	l.serviceAddress = string(data)
+}
+
 func getNodeHostConfig(cfg Config) config.NodeHostConfig {
+	meta := logStoreMeta{
+		serviceAddress: cfg.ServiceAddress,
+	}
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
 		NodeHostDir:         cfg.DataDir,
@@ -49,7 +64,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 			BindAddress:      cfg.GossipListenAddress,
 			AdvertiseAddress: cfg.GossipAddress,
 			Seed:             cfg.GossipSeedAddresses,
-			// TODO: pass the service address to the Meta []byte
+			Meta:             meta.marshal(),
 		},
 	}
 }
@@ -226,6 +241,13 @@ func (l *LogStore) decodeCmd(e pb.Entry) []byte {
 	panic(moerr.NewError(moerr.INVALID_STATE, "invalid cmd"))
 }
 
+func isRaftInternalEntry(e pb.Entry) bool {
+	if len(e.Cmd) == 0 {
+		return true
+	}
+	return e.Type == pb.ConfigChangeEntry || e.Type == pb.MetadataEntry
+}
+
 func (l *LogStore) filterEntries(ctx context.Context,
 	shardID uint64, entries []pb.Entry) ([]LogRecord, error) {
 	if len(entries) == 0 {
@@ -237,7 +259,7 @@ func (l *LogStore) filterEntries(ctx context.Context,
 	}
 	result := make([]LogRecord, 0)
 	for _, e := range entries {
-		if e.Type == pb.ConfigChangeEntry || e.Type == pb.MetadataEntry || len(e.Cmd) == 0 {
+		if isRaftInternalEntry(e) {
 			// raft internal stuff
 			continue
 		}
