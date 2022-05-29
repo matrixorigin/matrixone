@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -90,11 +89,12 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:    bufMgr,
 	}
 	if meta.IsAppendable() {
-		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
+		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
 		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetPKType())
 	} else {
+		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		block.index = indexwrapper.NewImmutableIndex()
 	}
 	return block
@@ -586,7 +586,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v an
 			err = nil
 		}
 	} else {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 	}
 	blk.mvcc.RUnlock()
 	if v != nil || err != nil {
@@ -693,7 +693,7 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 	col := &pkColumn.Vector
 	offset, existed := compute.CheckRowExists(col, filter.Val, nil)
 	if !existed {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 
@@ -719,7 +719,12 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	return blk.blkGetByFilter(txn.GetStartTS(), filter)
 }
 
-func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err error) {
+func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	return
+}
+
+func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
 	var row uint32
 	err = blk.node.DoWithPin(func() (err error) {
 		blk.mvcc.RLock()
@@ -743,6 +748,7 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 				}
 			}
 		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 		return
 	})
 	return

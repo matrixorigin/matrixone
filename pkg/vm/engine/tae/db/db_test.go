@@ -1329,6 +1329,7 @@ func TestDelete1(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
+		assert.Equal(t, compute.LengthOfBatch(bat), int(rel.Rows()))
 		pkCol := bat.Vecs[schema.PrimaryKey]
 		pkVal := compute.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
@@ -1344,6 +1345,7 @@ func TestDelete1(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
+		assert.Equal(t, compute.LengthOfBatch(bat)-1, int(rel.Rows()))
 		pkCol := bat.Vecs[schema.PrimaryKey]
 		pkVal := compute.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
@@ -1398,6 +1400,7 @@ func TestDelete1(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
+		assert.Equal(t, compute.LengthOfBatch(bat)-2, int(rel.Rows()))
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
@@ -2262,6 +2265,7 @@ func TestChaos1(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ := db.GetRelationByName(schema.Name)
+	assert.Equal(t, int64(appendCnt-deleteCnt), rel.Rows())
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)

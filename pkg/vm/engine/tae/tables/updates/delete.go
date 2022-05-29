@@ -275,7 +275,7 @@ func (node *DeleteNode) OnApply() (err error) {
 	if listener == nil {
 		return
 	}
-	err = listener(node.mask.Iterator(), node.commitTs)
+	err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.commitTs)
 	return
 }
 

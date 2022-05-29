@@ -109,6 +109,7 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 		if err != nil {
 			panic(err)
 		}
+		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 		node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
 		return
 	})
