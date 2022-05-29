@@ -36,8 +36,9 @@ var (
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
 	FS                   vfs.FS
-	RTTMillisecond       uint64
 	DeploymentID         uint64
+	NodeHostID           string
+	RTTMillisecond       uint64
 	DataDir              string
 	ServiceAddress       string
 	ServiceListenAddress string

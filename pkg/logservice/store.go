@@ -52,6 +52,7 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	}
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
+		NodeHostID:          cfg.NodeHostID,
 		NodeHostDir:         cfg.DataDir,
 		RTTMillisecond:      cfg.RTTMillisecond,
 		AddressByNodeHostID: true,
