@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -185,7 +186,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		closure := meta.GetBlockData().FlushColumnDataClosure(ts, schema.GetPrimaryKeyIdx(), vec, false)
+
+		def := schema.GetSinglePKColDef()
+		if def.IsHidden() {
+			continue
+		}
+
+		closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
 		if err != nil {
 			return
@@ -199,19 +206,30 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err = meta.GetBlockData().ReplayData(); err != nil {
 			return
 		}
-		// bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
-		// if bf.WriteColumnVec(task.txn.GetStartTS(), int(schema.PrimaryKey), vec); err != nil {
-		// 	return
-		// }
 	}
-
-	for i := 0; i < len(schema.ColDefs); i++ {
-		if i == schema.GetPrimaryKeyIdx() {
+	hidden := schema.HiddenKeyDef()
+	for _, blk := range task.createdBlks {
+		vec, closer, err := compute.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[0])))
+		if err != nil {
+			return err
+		}
+		defer closer()
+		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
+		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
+		if err != nil {
+			return err
+		}
+		if err = flushTask.WaitDone(); err != nil {
+			return err
+		}
+	}
+	for _, def := range schema.ColDefs {
+		if def.IsHidden() || def.IsPrimary() {
 			continue
 		}
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(i, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
 			vec := view.ApplyDeletes()
@@ -220,7 +238,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, i, vec, false)
+			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
 			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 			if err != nil {
 				return
