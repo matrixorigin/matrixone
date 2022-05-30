@@ -123,56 +123,67 @@ func TestLength(t *testing.T) {
 func TestSetLength(t *testing.T) {
 	v0 := New(types.Type{Oid: types.T(types.T_int8)})
 	v0.Col = []int8{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v0)
 	SetLength(v0, 3)
 	require.Equal(t, 3, len(v0.Col.([]int8)))
 
 	v1 := New(types.Type{Oid: types.T(types.T_int16)})
 	v1.Col = []int16{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v1)
 	SetLength(v1, 3)
 	require.Equal(t, 3, len(v1.Col.([]int16)))
 
 	v2 := New(types.Type{Oid: types.T(types.T_int32)})
 	v2.Col = []int32{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v2)
 	SetLength(v2, 3)
 	require.Equal(t, 3, len(v2.Col.([]int32)))
 
 	v3 := New(types.Type{Oid: types.T(types.T_int64)})
 	v3.Col = []int64{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v3)
 	SetLength(v3, 3)
 	require.Equal(t, 3, len(v3.Col.([]int64)))
 
 	v4 := New(types.Type{Oid: types.T(types.T_uint8)})
 	v4.Col = []uint8{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v4)
 	SetLength(v4, 3)
 	require.Equal(t, 3, len(v4.Col.([]uint8)))
 
 	v5 := New(types.Type{Oid: types.T(types.T_uint16)})
 	v5.Col = []uint16{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v5)
 	SetLength(v5, 3)
 	require.Equal(t, 3, len(v5.Col.([]uint16)))
 
 	v6 := New(types.Type{Oid: types.T(types.T_uint32)})
 	v6.Col = []uint32{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v6)
 	SetLength(v6, 3)
 	require.Equal(t, 3, len(v6.Col.([]uint32)))
 
 	v7 := New(types.Type{Oid: types.T(types.T_uint64)})
 	v7.Col = []uint64{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v7)
 	SetLength(v7, 3)
 	require.Equal(t, 3, len(v7.Col.([]uint64)))
 
 	v8 := New(types.Type{Oid: types.T(types.T_float32)})
 	v8.Col = []float32{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v8)
 	SetLength(v8, 3)
 	require.Equal(t, 3, len(v8.Col.([]float32)))
 
 	v9 := New(types.Type{Oid: types.T(types.T_float64)})
 	v9.Col = []float64{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v9)
 	SetLength(v9, 3)
 	require.Equal(t, 3, len(v9.Col.([]float64)))
 
 	v10 := New(types.Type{Oid: types.T(types.T_sel)})
 	v10.Col = []int64{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v10)
 	SetLength(v10, 3)
 	require.Equal(t, 3, len(v10.Col.([]int64)))
 
@@ -187,11 +198,13 @@ func TestSetLength(t *testing.T) {
 
 	v12 := New(types.Type{Oid: types.T(types.T_date)})
 	v12.Col = []types.Date{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v12)
 	SetLength(v12, 3)
 	require.Equal(t, 3, len(v12.Col.([]types.Date)))
 
 	v13 := New(types.Type{Oid: types.T(types.T_datetime)})
 	v13.Col = []types.Datetime{1, 2, 3, 4, 5, 6, 7, 8}
+	FillVectorData(v13)
 	SetLength(v13, 3)
 	require.Equal(t, 3, len(v13.Col.([]types.Datetime)))
 }
@@ -1145,3 +1158,40 @@ func TestVector(t *testing.T) {
 	fmt.Printf("guest: %v, host: %v\n", gm.Size(), gm.HostSize())
 }
 */
+
+func FillVectorData(v *Vector) {
+	switch v.Typ.Oid {
+	case types.T_bool:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]bool), 1)
+	case types.T_int8:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]int8), 1)
+	case types.T_int16:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]int16), 2)
+	case types.T_int32:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]int32), 4)
+	case types.T_int64:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]int64), 8)
+	case types.T_uint8:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]uint8), 1)
+	case types.T_uint16:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]uint16), 2)
+	case types.T_uint32:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]uint32), 4)
+	case types.T_uint64:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]uint64), 8)
+	case types.T_float32:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]float32), 4)
+	case types.T_float64:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]float64), 8)
+	case types.T_date:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]types.Date), 4)
+	case types.T_datetime:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
+	case types.T_timestamp:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
+	case types.T_decimal64:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
+	case types.T_decimal128:
+		v.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+	}
+}

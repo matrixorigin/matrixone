@@ -372,6 +372,8 @@ func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileTop(n, ss)
+	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
+		return c.compileOrder(n, ss)
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset and limit
