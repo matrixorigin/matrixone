@@ -53,6 +53,8 @@ func TestEngine(t *testing.T) {
 
 	rel, err := dbase.Relation(mockTbl.Name, txn.GetCtx())
 	assert.Nil(t, err)
+	assert.Equal(t, 1, len(rel.Nodes(nil)))
+	assert.Equal(t, "localhost:20000", rel.Nodes(nil)[0])
 	meta := rel.(*txnRelation).handle.GetMeta().(*catalog.TableEntry)
 	bat := compute.MockBatch(meta.GetSchema().Types(), 100, int(meta.GetSchema().PrimaryKey), nil)
 	err = rel.Write(0, bat, txn.GetCtx())

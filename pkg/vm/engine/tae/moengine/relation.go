@@ -28,9 +28,13 @@ var (
 )
 
 func newRelation(h handle.Relation) *txnRelation {
-	return &txnRelation{
+	r := &txnRelation{
 		handle: h,
 	}
+	r.nodes = append(r.nodes, engine.Node{
+		Addr: "localhost:20000",
+	})
+	return r
 }
 
 func (rel *txnRelation) ID(_ engine.Snapshot) string {
@@ -40,7 +44,7 @@ func (rel *txnRelation) ID(_ engine.Snapshot) string {
 func (rel *txnRelation) Close(_ engine.Snapshot) {}
 
 func (rel *txnRelation) Nodes(_ engine.Snapshot) (nodes engine.Nodes) {
-	return
+	return rel.nodes
 }
 
 func (_ *txnRelation) Size(_ string) int64 {
@@ -52,19 +56,19 @@ func (_ *txnRelation) CardinalNumber(_ string) int64 {
 }
 
 func (_ *txnRelation) CreateIndex(_ uint64, _ []engine.TableDef) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (_ *txnRelation) DropIndex(_ uint64, _ string) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (_ *txnRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (_ *txnRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (rel *txnRelation) TableDefs(_ engine.Snapshot) []engine.TableDef {
@@ -79,7 +83,7 @@ func (rel *txnRelation) Rows() int64 {
 }
 
 func (_ *txnRelation) Index() []*engine.IndexTableDef {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (rel *txnRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
