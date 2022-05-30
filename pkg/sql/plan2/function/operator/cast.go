@@ -395,8 +395,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "parameter types of cast function do not match")
 }
 
-//  CastSameType[T constraints.Integer | constraints.Float]
-//  @Description: Cast handles the same data type and is numeric , Contains the following:
+//  CastSameType: Cast handles the same data type and is numeric , Contains the following:
 // int8    -> int8,
 // int16   -> int16,
 // int32   -> int32,
@@ -431,13 +430,7 @@ func CastSameType[T constraints.Integer | constraints.Float](lv, rv *vector.Vect
 	return vec, nil
 }
 
-// SameType2 no const it can merge with sametype1
-//date -> date
-//datetime -> datetime
-//timestamp -> timestamp
-
-//  CastSameType2[T types.Date | types.Datetime | types.Timestamp]
-//  @Description: Cast handles the same data type and is date series , Contains the following:
+//  CastSameType2: Cast handles the same data type and is date series , Contains the following:
 // date -> date
 // datetime -> datetime
 // timestamp -> timestamp
@@ -465,8 +458,7 @@ func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vect
 	return vec, nil
 }
 
-//  CastLeftToRight[T1, T2 constraints.Integer | constraints.Float]
-//  @Description: Cast handles conversions in the form of cast (left as right), where left and right are different types,
+//  CastLeftToRight: Cast handles conversions in the form of cast (left as right), where left and right are different types,
 //  and both left and right are numeric types, Contains the following:
 // int8 -> (int16/int32/int64/uint8/uint16/uint32/uint64/float32/float64)
 // int16 -> (int8/int32/int64/uint8/uint16/uint32/uint64/float32/float64)
@@ -507,8 +499,7 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	return vec, nil
 }
 
-//  CastSpecials1Int[T constraints.Integer]
-//  @Description: Cast converts string to integer,Contains the following:
+//  CastSpecials1Int: Cast converts string to integer,Contains the following:
 // (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
 func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.FixedLength()
@@ -534,8 +525,7 @@ func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 	return vec, nil
 }
 
-//  CastSpecials1Float[T constraints.Float]
-//  @Description: Cast converts string to floating point number,Contains the following:
+//  CastSpecials1Float: Cast converts string to floating point number,Contains the following:
 // (char / varhcar) -> (float32 / float64)
 func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.FixedLength()
@@ -560,8 +550,7 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 	return vec, nil
 }
 
-//  CastSpecials2Int[T constraints.Integer]
-//  @Description: Cast converts integer to string,Contains the following:
+//  CastSpecials2Int: Cast converts integer to string,Contains the following:
 // (int8 /int16/int32/int64/uint8/uint16/uint32/uint64) -> (char / varhcar)
 func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
@@ -587,8 +576,7 @@ func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 	return vec, nil
 }
 
-//  CastSpecials2Float[T constraints.Float]
-//  @Description: Cast converts floating point number to string ,Contains the following:
+//  CastSpecials2Float: Cast converts floating point number to string ,Contains the following:
 // (float32/float64) -> (char / varhcar)
 func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
@@ -615,8 +603,7 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 }
 
 //
-//  CastSpecials3
-//  @Description:  Cast converts string to string ,Contains the following:
+//  CastSpecials3:  Cast converts string to string ,Contains the following:
 // char -> char
 // char -> varhcar
 // varhcar -> char
@@ -644,8 +631,7 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 	return vec, nil
 }
 
-//  CastSpecials4[T int8 | int16 | int32 | int64]
-//  @Description: Cast converts signed integer to decimal128 ,Contains the following:
+//  CastSpecials4: Cast converts signed integer to decimal128 ,Contains the following:
 // (int8 /int16/int32/int64) to decimal128
 func CastSpecials4[T int8 | int16 | int32 | int64](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultScale := int32(0)
