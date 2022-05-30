@@ -503,24 +503,22 @@ func (n *insertNode) PrintDeletes() string {
 }
 
 // TODO: Rewrite later
-func (n *insertNode) Window(start, end uint32) (*gbat.Batch, error) {
-	attrs := make([]string, 0, 4)
+func (n *insertNode) Window(start, end uint32) (bat *gbat.Batch, err error) {
+	bat = gbat.New(true, []string{})
 	for _, attrId := range n.data.GetAttrs() {
-		def := n.table.GetSchema().ColDefs[attrId]
-		attrs = append(attrs, def.Name)
-	}
-	ret := gbat.New(true, attrs)
-	for i, attrId := range n.data.GetAttrs() {
-		src, err := n.data.GetVectorByAttr(attrId)
+		def := n.table.entry.GetSchema().ColDefs[attrId]
+		if def.IsHidden() {
+			continue
+		}
+		src, err := n.data.GetVectorByAttr(def.Idx)
 		if err != nil {
 			return nil, err
 		}
 		srcVec, _ := src.Window(start, end+1).CopyToVector()
 		deletes := common.BM32Window(n.deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
-		ret.Vecs[i] = srcVec
+		bat.Vecs = append(bat.Vecs, srcVec)
+		bat.Attrs = append(bat.Attrs, def.Name)
 	}
-	return ret, nil
+	return
 }
-
-// TODO: Engine merge delete info or just provide raw delete info?
