@@ -234,4 +234,9 @@ var functionIdRegister = map[string]int32{
 	"acos":      ACOS,
 	"power":     POWER,
 	"floor":     FLOOR,
+	"ceil":      CEIL,
+	"ceiling":   CEIL,
+	"round":     ROUND,
+	"lpad":      LPAD,
+	"rpad":      RPAD,
 }
