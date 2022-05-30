@@ -202,6 +202,54 @@ func TestHiddenWithPK1(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
+func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 12)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockData(schema, schema.BlockMaxRows*6)
+	bats := compute.SplitBatch(bat, 10)
+
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bats[0])
+	assert.NoError(t, err)
+	it := rel.MakeBlockIt()
+	blk := it.GetBlock()
+	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
+	assert.NoError(t, err)
+	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+		sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
+		t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+		expectV := compute.GetValue(bats[0].Vecs[3], offset)
+		cv, err := rel.GetValueByHiddenKey(v, 3)
+		assert.NoError(t, err)
+		assert.Equal(t, expectV, cv)
+		err = rel.UpdateByHiddenKey(v, 3, int64(9999))
+		assert.NoError(t, err)
+		return
+	})
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	it = rel.MakeBlockIt()
+	blk = it.GetBlock()
+
+	assert.Equal(t, compute.LengthOfBatch(bats[0]), int(rel.Rows()))
+	view, err = blk.GetColumnDataById(3, nil, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, compute.LengthOfBatch(bats[0]), view.Length())
+	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+		assert.Equal(t, int64(9999), v)
+		return
+	})
+	assert.NoError(t, txn.Commit())
+}
+
 // Testing Steps
 // 1. Mock schema w/o primary key
 // 2. Append data (append rows less than a block)

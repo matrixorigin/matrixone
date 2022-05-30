@@ -88,13 +88,12 @@ func (seg *localSegment) ApplyAppend() (err error) {
 			appendNode txnif.AppendNode
 		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, seg.table.store.txn); err != nil {
+		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, uint32(compute.LengthOfBatch(bat)), seg.table.store.txn); err != nil {
 			return
 		}
 		ctx.driver.Close()
 		id := ctx.driver.GetID()
-		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
-		logutil.Debugf(info.String())
+		ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
 		if err = appendNode.PrepareCommit(); err != nil {
 			return
 		}
@@ -146,7 +145,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		ctx := &appendCtx{
 			driver: appender,
 			node:   node,
-			start:  appended,
+			start:  node.OffsetWithDeletes(appended),
 			count:  toAppendWithDeletes,
 		}
 		id := appender.GetID()

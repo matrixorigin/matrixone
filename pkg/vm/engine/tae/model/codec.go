@@ -27,6 +27,15 @@ func DecodeBlockKeyPrefix(buf []byte) (segmentId, blockId uint64) {
 	return
 }
 
+func EncodeHiddenKey(segmentId, blockId uint64, offset uint32) (key any) {
+	buf := make([]byte, 16)
+	prefix := EncodeBlockKeyPrefix(segmentId, blockId)
+	offsetBuf := make([]byte, 4)
+	EncodeHiddenKeyWithPrefix(buf, prefix, offsetBuf, offset)
+	key = encoding.DecodeDecimal128(buf)
+	return
+}
+
 func EncodeHiddenKeyWithPrefix(dest, prefix, offsetBuf []byte, offset uint32) {
 	copy(dest, prefix)
 	binary.BigEndian.PutUint32(offsetBuf, offset)

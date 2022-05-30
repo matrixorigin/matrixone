@@ -68,6 +68,7 @@ type InsertNode interface {
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
+	OffsetWithDeletes(count uint32) uint32
 	GetAppends() []*appendInfo
 	GetTxn() txnif.AsyncTxn
 }
@@ -451,12 +452,13 @@ func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
 		return toAppend
 	}
-	appendedOffset := n.offsetWithDeletes(appended)
-	toAppendOffset := n.offsetWithDeletes(toAppend + appended)
+	appendedOffset := n.OffsetWithDeletes(appended)
+	toAppendOffset := n.OffsetWithDeletes(toAppend + appended)
+	// logutil.Infof("appened:%d, toAppend:%d, off1=%d, off2=%d", appended, toAppend, appendedOffset, toAppendOffset)
 	return toAppendOffset - appendedOffset
 }
 
-func (n *insertNode) offsetWithDeletes(count uint32) uint32 {
+func (n *insertNode) OffsetWithDeletes(count uint32) uint32 {
 	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
 		return count
 	}
