@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/builtin/unary"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/builtin/multi"
 )
 
 func initBuiltIns() {
