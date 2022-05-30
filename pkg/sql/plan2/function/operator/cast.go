@@ -923,7 +923,7 @@ func isString(t types.T) bool {
 
 //  isDateSeries: return true if the types.T is date related type
 func isDateSeries(t types.T) bool {
-	if t == types.T_date || t == types.T_datetime || t == types.T_datetime {
+	if t == types.T_date || t == types.T_datetime || t == types.T_timestamp {
 		return true
 	}
 	return false
