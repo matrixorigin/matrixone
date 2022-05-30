@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -210,7 +209,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	hidden := schema.HiddenKeyDef()
 	for _, blk := range task.createdBlks {
-		vec, closer, err := compute.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[0])))
+		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[0])))
 		if err != nil {
 			return err
 		}

@@ -27,11 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -282,7 +282,7 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error) {
-	col, closer, err := compute.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
+	col, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
 	if err != nil {
 		return
 	}

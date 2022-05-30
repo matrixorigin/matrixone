@@ -102,7 +102,7 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, clos
 		}
 	}
 	// Prepare hidden column data
-	hidden, closer, err := compute.PrepareHiddenData(catalog.HiddenColumnType, blkKey, 0, uint32(compute.LengthOfBatch(bat)))
+	hidden, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, blkKey, 0, uint32(compute.LengthOfBatch(bat)))
 	if err != nil {
 		return
 	}
