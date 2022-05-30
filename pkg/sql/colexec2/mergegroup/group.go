@@ -106,7 +106,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) error {
 		size := 0
 		for _, vec := range bat.Vecs {
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8, types.T_uint8, types.T_bool:
 				size += 1 + 1
 			case types.T_int16, types.T_uint16:
 				size += 2 + 1

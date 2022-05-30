@@ -140,7 +140,7 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	fs := make([]top.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = top.Descending
 		}
 	}
@@ -263,7 +263,7 @@ func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	fs := make([]order.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = order.Descending
 		}
 	}
@@ -327,7 +327,7 @@ func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
 	fs := make([]top.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = top.Descending
 		}
 	}
@@ -361,7 +361,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 	fs := make([]order.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = order.Descending
 		}
 	}
