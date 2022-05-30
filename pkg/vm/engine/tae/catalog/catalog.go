@@ -459,7 +459,31 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory
 		seg.AddEntryLocked(cmd.Block)
 	}
 }
-
+func (catalog *Catalog) ReplayTableRows() {
+	rows := uint64(0)
+	tableProcessor := new(LoopProcessor)
+	tableProcessor.BlockFn = func(be *BlockEntry) error {
+		if be.IsDroppedCommitted(){
+			return nil
+		}
+		rows += be.GetBlockData().GetRowsOnReplay()
+		return nil
+	}
+	processor := new(LoopProcessor)
+	processor.TableFn = func(tbl *TableEntry) error {
+		if tbl.db.name == "mo_catalog"{
+			return nil
+		}
+		rows =0
+		tbl.RecurLoop(tableProcessor)
+		tbl.rows = rows
+		return nil
+	}
+	err := catalog.RecurLoop(processor)
+	if err != nil {
+		panic(err)
+	}
+}
 func (catalog *Catalog) Close() error {
 	if catalog.store != nil {
 		catalog.store.Close()

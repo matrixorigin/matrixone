@@ -52,6 +52,7 @@ type BlockAppender interface {
 type Block interface {
 	CheckpointUnit
 
+	GetRowsOnReplay() uint64
 	OnReplayDelete(node txnif.DeleteNode) (err error)
 	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	GetID() *common.ID
