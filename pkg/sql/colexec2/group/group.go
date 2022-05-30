@@ -225,7 +225,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 			vec := ctr.groupVecs[i].vec
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8, types.T_uint8, types.T_bool:
 				size += 1 + 1
 			case types.T_int16, types.T_uint16:
 				size += 2 + 1

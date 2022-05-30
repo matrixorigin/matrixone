@@ -47,6 +47,8 @@ func TestEngine(t *testing.T) {
 
 	rel, err := dbase.Relation(schema.Name, txn.GetCtx())
 	assert.Nil(t, err)
+	assert.Equal(t, 1, len(rel.Nodes(nil)))
+	assert.Equal(t, ADDR, rel.Nodes(nil)[0].Addr)
 	bat := catalog.MockData(schema, 100)
 	err = rel.Write(0, bat, txn.GetCtx())
 	assert.Nil(t, err)
