@@ -29,17 +29,16 @@ import (
 //Typ:        types.T_varchar,
 //ReturnType: types.T_varchar,
 func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vs := vecs[0].Col.(*types.Bytes) //Get the first arg
+	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
+		return proc.AllocScalarNullVector(vecs[0].Typ), nil
+	}
 
-	if !vecs[1].IsScalar() && vecs[1].Typ.Oid != types.T_int64 || vecs[0].IsScalarNull() {
+	vs := vecs[0].Col.(*types.Bytes) //Get the first arg
+	if !vecs[1].IsScalar() && vecs[1].Typ.Oid != types.T_int64 {
 		return nil, errors.New("The second argument of the lpad function must be an int64 constant")
 	}
-	if !vecs[1].IsScalar() && vecs[2].Typ.Oid != types.T_varchar || vecs[1].IsScalarNull() {
+	if !vecs[2].IsScalar() && vecs[2].Typ.Oid != types.T_varchar {
 		return nil, errors.New("The third argument of the lpad function must be an string constant")
-	}
-
-	if vecs[0].IsScalarNull() {
-		return proc.AllocScalarNullVector(vecs[0].Typ), nil
 	}
 
 	lens := vecs[1].Col.([]int64)

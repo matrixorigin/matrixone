@@ -13,3 +13,41 @@
 // limitations under the License.
 
 package multi
+
+import (
+	"errors"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/rpad"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if origVecs[0].IsScalarNull() || origVecs[1].IsScalarNull() || origVecs[2].IsScalarNull() {
+		return proc.AllocScalarNullVector(origVecs[0].Typ), nil
+	}
+
+	isConst := []bool{origVecs[0].IsScalar(), origVecs[1].IsScalar(), origVecs[2].IsScalar()}
+
+	// gets all args
+	strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
+	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
+
+	if origVecs[0].IsScalar() {
+		return nil, errors.New("The first argument of the lpad function can not be a constant")
+	}
+
+	// gets a new vector to store our result
+	resultVec, err := process.Get(proc, 24*int64(len(strs.Lengths)), origVecs[0].Typ)
+	if err != nil {
+		return nil, err
+	}
+	result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+	if err != nil {
+		return nil, err
+	}
+	resultVec.Nsp = nsp
+	vector.SetCol(resultVec, result)
+	return resultVec, nil
+}
