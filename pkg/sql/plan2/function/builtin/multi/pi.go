@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Pi(lv []*vector.Vector, proc *process.Process, cs []bool) (*vector.Vector, error) {
+func Pi(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(lv) != 0 {
 		return nil, errors.New("pi() takes no arguments")
 	}

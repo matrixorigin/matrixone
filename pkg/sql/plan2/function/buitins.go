@@ -909,4 +909,26 @@ var builtins = map[int][]Function{
 			Fn:          unary.AcosFloat64,
 		},
 	},
+	PI: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.Pi,
+		},
+	},
+	UTC_TIMESTAMP: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{},
+			ReturnTyp:   types.T_datetime,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.UTCTimestamp,
+		},
+	},
 }
