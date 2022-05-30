@@ -287,7 +287,7 @@ func substringFromRightConstOffsetBounded(src *types.Bytes, res *types.Bytes, st
 func substringDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T,
 	lengthColumn interface{}, lengthColumnType types.T, cs []bool) *types.Bytes {
 	var retCursor uint32
-	for idx, _ := range res.Offsets {
+	for idx := range res.Offsets {
 		var cursor uint32
 		var curLen uint32
 		var bytes []byte
