@@ -192,6 +192,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			continue
 		}
 
+		// logutil.Infof("Flushing %s %v", meta.AsCommonID().String(), def)
 		closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
 		if err != nil {
@@ -214,6 +215,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 		defer closer()
+		// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), hidden)
 		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 		if err != nil {
@@ -238,6 +240,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
+			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
 			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
 			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 			if err != nil {
