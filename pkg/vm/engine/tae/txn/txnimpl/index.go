@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	idata "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type TableIndex interface {
@@ -99,7 +98,7 @@ func (idx *simpleTableIndex) Delete(vv any) error {
 	}
 	_, ok := idx.tree[v]
 	if !ok {
-		return txnbase.ErrNotFound
+		return idata.ErrNotFound
 	}
 	delete(idx.tree, v)
 	return nil
@@ -110,7 +109,7 @@ func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 	defer idx.RUnlock()
 	row, ok := idx.tree[v]
 	if !ok {
-		return 0, txnbase.ErrNotFound
+		return 0, idata.ErrNotFound
 	}
 	return uint32(row), nil
 }

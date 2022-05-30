@@ -49,6 +49,7 @@ type txnDatabase struct {
 
 type txnRelation struct {
 	handle handle.Relation
+	nodes  engine.Nodes
 }
 
 type txnBlock struct {

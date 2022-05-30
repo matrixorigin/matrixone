@@ -81,7 +81,7 @@ func (c *compile) Run(ts uint64) (err error) {
 		return nil
 	}
 
-	PrintScope(nil, []*Scope{c.scope})
+	//	PrintScope(nil, []*Scope{c.scope})
 
 	switch c.scope.Magic {
 	case Normal:
@@ -228,8 +228,11 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		ss = c.compileGroup(n, ss)
+		rewriteExprListForAggNode(n.WhereList, int32(len(n.GroupBy)))
+		rewriteExprListForAggNode(n.ProjectList, int32(len(n.GroupBy)))
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
+		needSwap, joinTyp := joinType(n, ns)
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err
@@ -238,7 +241,10 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		if err != nil {
 			return nil, err
 		}
-		return c.compileSort(n, c.compileJoin(n, ss, children)), nil
+		if needSwap {
+			return c.compileSort(n, c.compileJoin(n, children, ss, joinTyp)), nil
+		}
+		return c.compileSort(n, c.compileJoin(n, ss, children, joinTyp)), nil
 	case plan.Node_SORT:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
@@ -274,7 +280,7 @@ func (c *compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range ss {
 		chp := &Scope{
@@ -293,6 +299,10 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 					},
 				})
 			}
+			chp.Instructions = append(chp.Instructions, vm.Instruction{
+				Op:  overload.Merge,
+				Arg: &merge.Argument{},
+			})
 		}
 		rs[i] = &Scope{
 			Magic:     Remote,
@@ -314,8 +324,8 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 			},
 		})
 	}
-	switch n.JoinType {
-	case plan.Node_INNER, plan.Node_SEMI:
+	switch joinTyp {
+	case plan.Node_INNER:
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
@@ -330,6 +340,13 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 					Arg: constructJoin(n, c.proc),
 				})
 			}
+		}
+	case plan.Node_SEMI:
+		for i := range rs {
+			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				Op:  overload.Semi,
+				Arg: constructSemi(n, c.proc),
+			})
 		}
 	case plan.Node_OUTER:
 		for i := range rs {
@@ -355,6 +372,8 @@ func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileTop(n, ss)
+	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
+		return c.compileOrder(n, ss)
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset and limit
@@ -513,4 +532,38 @@ func (c *compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
 		})
 	}
 	return []*Scope{rs}
+}
+
+func rewriteExprListForAggNode(es []*plan.Expr, groupSize int32) {
+	for i := range es {
+		ce, ok := es[i].Expr.(*plan.Expr_Col)
+		if !ok {
+			continue
+		}
+		if ce.Col.RelPos == -2 {
+			ce.Col.ColPos += groupSize
+		}
+	}
+}
+
+func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
+	left, right := ns[n.Children[0]], ns[n.Children[1]]
+	switch {
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_INNER
+	case left.JoinType == plan.Node_SEMI && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_SEMI
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_SEMI:
+		return true, plan.Node_SEMI
+	case left.JoinType == plan.Node_OUTER && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_OUTER
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_OUTER:
+		return true, plan.Node_OUTER
+	case left.JoinType == plan.Node_ANTI && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_ANTI
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_ANTI:
+		return true, plan.Node_ANTI
+	default:
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v-%v' not support now", left.JoinType, right.JoinType)))
+	}
 }

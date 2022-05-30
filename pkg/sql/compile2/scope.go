@@ -17,8 +17,9 @@ package compile2
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"

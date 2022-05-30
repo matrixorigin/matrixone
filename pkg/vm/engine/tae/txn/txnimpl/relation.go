@@ -139,7 +139,7 @@ func (h *txnRelation) GetMeta() any   { return h.table.entry }
 func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Close() error                     { return nil }
-func (h *txnRelation) Rows() int64                      { return 0 }
+func (h *txnRelation) Rows() int64                      { return int64(h.table.entry.GetRows()) }
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 

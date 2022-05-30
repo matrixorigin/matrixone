@@ -46,7 +46,7 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, binderCt
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, rightChildId},
 		}
-		nodeId = appendQueryNode(query, node)
+		appendQueryNode(query, node)
 
 		usingCols := make(map[string]int)
 		projectNodeWhere := []*Expr{}
