@@ -235,11 +235,11 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (row uint32, visible bool
 
 //for replay
 func (n *MVCCHandle) GetTotalRow() uint32 {
-	if len(n.appends)==0{
+	if len(n.appends) == 0 {
 		return 0
 	}
-	delets:=n.deletes.cnt
-	return n.appends[len(n.appends)-1].maxRow-delets
+	delets := n.deletes.cnt
+	return n.appends[len(n.appends)-1].maxRow - delets
 }
 
 func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error) {

@@ -463,7 +463,7 @@ func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
 	tableProcessor := new(LoopProcessor)
 	tableProcessor.BlockFn = func(be *BlockEntry) error {
-		if be.IsDroppedCommitted(){
+		if be.IsDroppedCommitted() {
 			return nil
 		}
 		rows += be.GetBlockData().GetRowsOnReplay()
@@ -471,11 +471,14 @@ func (catalog *Catalog) ReplayTableRows() {
 	}
 	processor := new(LoopProcessor)
 	processor.TableFn = func(tbl *TableEntry) error {
-		if tbl.db.name == "mo_catalog"{
+		if tbl.db.name == "mo_catalog" {
 			return nil
 		}
-		rows =0
-		tbl.RecurLoop(tableProcessor)
+		rows = 0
+		err := tbl.RecurLoop(tableProcessor)
+		if err != nil {
+			panic(err)
+		}
 		tbl.rows = rows
 		return nil
 	}

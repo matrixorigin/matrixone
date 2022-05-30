@@ -551,6 +551,120 @@ func TestReplay2(t *testing.T) {
 	tae4.Close()
 }
 
+// update, delete and append in one txn
+// 1. Create db and tbl and {Append, Update, Delete} for 100 times in a same txn.
+// 2. Append, Update, Delete each in one txn
+// replay
+// check rows
+// 1. Ckp
+// TODO check rows
+func TestReplay3(t *testing.T) {
+	tae := initDB(t, nil)
+	schema := catalog.MockSchema(2)
+	schema.BlockMaxRows = 1000
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 1
+	bat := compute.MockBatch(schema.Types(), 1, int(schema.PrimaryKey), nil)
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
+	filter := handle.NewEQFilter(v)
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	tbl, err := db.CreateRelation(schema)
+	assert.Nil(t, err)
+	err = tbl.Append(bat)
+	assert.Nil(t, err)
+	for i := 0; i < 100; i++ {
+		blkID, row, err := tbl.GetByFilter(filter)
+		assert.Nil(t, err)
+		err = tbl.Update(blkID, row, 0, int32(33))
+		assert.Nil(t, err)
+		blkID, row, err = tbl.GetByFilter(filter)
+		assert.Nil(t, err)
+		err = tbl.RangeDelete(blkID, row, row)
+		assert.Nil(t, err)
+		err = tbl.Append(bat)
+		assert.Nil(t, err)
+	}
+	assert.Nil(t, txn.Commit())
+
+	for i := 0; i < 10; i++ {
+		txn, err := tae.StartTxn(nil)
+		assert.Nil(t, err)
+		db, err = txn.GetDatabase("db")
+		assert.Nil(t, err)
+		tbl, err = db.GetRelationByName(schema.Name)
+		assert.Nil(t, err)
+		blkID, row, err := tbl.GetByFilter(filter)
+		assert.Nil(t, err)
+		err = tbl.Update(blkID, row, 0, int32(33))
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+
+		txn, err = tae.StartTxn(nil)
+		assert.Nil(t, err)
+		db, err = txn.GetDatabase("db")
+		assert.Nil(t, err)
+		tbl, err = db.GetRelationByName(schema.Name)
+		assert.Nil(t, err)
+		blkID, row, err = tbl.GetByFilter(filter)
+		assert.Nil(t, err)
+		err = tbl.RangeDelete(blkID, row, row)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+
+		txn, err = tae.StartTxn(nil)
+		assert.Nil(t, err)
+		db, err = txn.GetDatabase("db")
+		assert.Nil(t, err)
+		tbl, err = db.GetRelationByName(schema.Name)
+		assert.Nil(t, err)
+		err = tbl.Append(bat)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+
+	tae.Close()
+
+	tae2, err := Open(tae.Dir, nil)
+	assert.Nil(t, err)
+
+	txn, err = tae2.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	tbl, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(1), tbl.GetMeta().(*catalog.TableEntry).GetRows())
+	assert.Nil(t, txn.Commit())
+
+	txn, err = tae2.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	tbl, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	blkIterator := tbl.MakeBlockIt()
+	for blkIterator.Valid() {
+		blk := blkIterator.GetBlock()
+		blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		blkdata.Flush()
+		blkIterator.Next()
+	}
+	err = tae2.Catalog.Checkpoint(txn.GetStartTS())
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae2.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae2.Wal.GetPenddingCnt())
+
+	tae2.Close()
+}
+
 // append, delete, compact, mergeblocks, ckp
 // 1. Create db and tbl and Append and Delete
 // 2. Append and Delete
