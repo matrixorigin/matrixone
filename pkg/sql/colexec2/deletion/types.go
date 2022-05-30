@@ -12,31 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package overload
+package deletion
 
-const (
-	Top = iota
-	Join
-	Semi
-	Left
-	Limit
-	Merge
-	Order
-	Group
-	Output
-	Offset
-	Product
-	Restrict
-	Dispatch
-	Connector
-	Projection
-	Complement
-
-	MergeTop
-	MergeLimit
-	MergeOrder
-	MergeGroup
-	MergeOffset
-
-	Deletion
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"sync"
 )
+
+type Argument struct {
+	Ts           uint64
+	TableSource  engine.Relation
+	M            sync.Mutex
+	Keys         []string
+	AffectedRows uint64
+}
