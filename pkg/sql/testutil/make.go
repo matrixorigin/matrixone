@@ -45,7 +45,7 @@ func MakeInt8Vector(vs []int8, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_int8, Size: 1})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -53,7 +53,7 @@ func MakeInt16Vector(vs []int16, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_int16, Size: 2})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -61,7 +61,7 @@ func MakeInt32Vector(vs []int32, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_int32, Size: 4})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -69,7 +69,7 @@ func MakeInt64Vector(vs []int64, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -77,7 +77,7 @@ func MakeUint8Vector(vs []uint8, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_uint8, Size: 1})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -85,7 +85,7 @@ func MakeUint16Vector(vs []uint16, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_uint16, Size: 2})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -93,7 +93,7 @@ func MakeUint32Vector(vs []uint32, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_uint32, Size: 4})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -101,7 +101,7 @@ func MakeUint64Vector(vs []uint64, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -116,7 +116,7 @@ func MakeFloat32Vector(vs []float32, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_float32, Size: 4})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }
 
@@ -124,6 +124,6 @@ func MakeFloat64Vector(vs []float64, ref uint64) *vector.Vector {
 	ret := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 	ret.Ref = ref
 	vector.SetCol(ret, vs)
-	vector.SetLength(ret, len(vs))
+	//	vector.SetLength(ret, len(vs))
 	return ret
 }

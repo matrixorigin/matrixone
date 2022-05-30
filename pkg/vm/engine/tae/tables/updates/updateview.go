@@ -20,8 +20,8 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type ColumnView struct {
@@ -62,7 +62,7 @@ func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals ma
 func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) {
 	link := view.links[key]
 	if link == nil {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 	head := link.GetHead()
@@ -121,7 +121,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 		break
 	}
 	if v == nil && err == nil {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 	}
 	return
 }

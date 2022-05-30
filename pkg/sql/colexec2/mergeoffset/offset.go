@@ -43,7 +43,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			// 1. the last batch at this receiver
 			if bat == nil {
 				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
-				i++
+				i--
 				continue
 			}
 			// 2. an empty batch

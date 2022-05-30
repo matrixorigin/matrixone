@@ -21,6 +21,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -591,41 +592,6 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 	}
 	err = tbl.DoDedup(pks, false)
 	return
-	// h := newRelation(tbl)
-	// segIt := h.MakeSegmentIt()
-	// for segIt.Valid() {
-	// 	seg := segIt.GetSegment()
-	// 	if err = seg.BatchDedup(pks); err == txnbase.ErrDuplicated {
-	// 		break
-	// 	}
-	// 	if err == data.ErrPossibleDuplicate {
-	// 		err = nil
-	// 		blkIt := seg.MakeBlockIt()
-	// 		for blkIt.Valid() {
-	// 			block := blkIt.GetBlock()
-	// 			var rowmask *roaring.Bitmap
-	// 			// There were some deletes applied to state machine before. we need to check those delete nodes
-	// 			if len(tbl.deleteNodes) > 0 {
-	// 				fp := block.Fingerprint()
-	// 				dn := tbl.deleteNodes[*fp]
-	// 				// If a delete node was applied to this block, get the row mask
-	// 				if dn != nil {
-	// 					rowmask = dn.GetRowMaskRefLocked()
-	// 				}
-	// 			}
-	// 			if err = block.BatchDedup(pks, rowmask); err != nil {
-	// 				break
-	// 			}
-	// 			blkIt.Next()
-	// 		}
-	// 	}
-	// 	if err != nil {
-	// 		break
-	// 	}
-	// 	segIt.Next()
-	// }
-	// segIt.Close()
-	// return
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {

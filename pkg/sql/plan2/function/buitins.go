@@ -17,7 +17,9 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/builtin/multi"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/builtin/unary"
 )
 
 func initBuiltIns() {
@@ -205,6 +207,131 @@ var builtins = map[int][]Function{
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
+		},
+	},
+	ABS: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int64},
+			ReturnTyp:   types.T_int64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.AbsInt64,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint64},
+			ReturnTyp:   types.T_uint64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.AbsUInt64,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.AbsFloat64,
+		},
+	},
+	POWER: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64, types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          binary.Power,
+		},
+	},
+	FLOOR: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint64},
+			ReturnTyp:   types.T_uint64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FloorUInt64,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint64, types.T_int64},
+			ReturnTyp:   types.T_uint64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FloorUInt64Int64,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int64},
+			ReturnTyp:   types.T_int64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FloorInt64,
+		},
+		{
+			Index:       3,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_int64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FloorInt64Int64,
+		},
+		{
+			Index:       4,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FloorFloat64,
+		},
+		{
+			Index:       5,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64, types.T_int64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FloorFloat64Int64,
+		},
+	},
+	ACOS: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_int64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.AcosInt64,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.AcosUInt64,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.AcosFloat64,
 		},
 	},
 }
