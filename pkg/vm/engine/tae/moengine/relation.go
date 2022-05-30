@@ -27,12 +27,14 @@ var (
 	_ engine.Relation = (*txnRelation)(nil)
 )
 
+const ADDR = "localhost:20000"
+
 func newRelation(h handle.Relation) *txnRelation {
 	r := &txnRelation{
 		handle: h,
 	}
 	r.nodes = append(r.nodes, engine.Node{
-		Addr: "localhost:20000",
+		Addr: ADDR,
 	})
 	return r
 }
