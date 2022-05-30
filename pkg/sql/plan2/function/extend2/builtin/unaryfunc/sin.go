@@ -22,7 +22,6 @@ func Sin[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pr
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, sin.Sin[T](inputValues, resultValues))
-		resultVector.Length = inputVector.Length
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
