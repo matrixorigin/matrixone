@@ -524,20 +524,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 
 	//logutil.Infof("row group -+> %v ", oq.getData())
-	{ // debug info
-		n := len(mrs.Data)
-		if n > 10 {
-			n = 10
-		}
-		for i := 0; i < n; i++ {
-			fmt.Printf("rows[%v] = %v\n", i, mrs.Data[i])
-			for j, row := range mrs.Data[i] {
-				if row == nil {
-					fmt.Printf("\tcolumn %v is null\n", j)
-				}
-			}
-		}
-	}
 
 	err := oq.flush()
 	if err != nil {
