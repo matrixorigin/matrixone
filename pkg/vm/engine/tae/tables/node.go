@@ -301,19 +301,14 @@ func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, 
 		err = exception.(error)
 		return
 	}
-	if node.data == nil {
-		vecs := make([]vector.IVector, len(bat.Vecs))
-		attrs := make([]int, len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			attrs[i] = i
-			vecs[i] = vector.NewVector(vec.Typ, uint64(node.block.meta.GetSchema().BlockMaxRows))
-		}
-		node.data, _ = batch.NewBatch(attrs, vecs)
-	}
+	schema := node.block.meta.GetSchema()
 	from = node.rows
 	for srcPos, attr := range bat.Attrs {
-		attrId := node.block.meta.GetSchema().GetColIdx(attr)
-		destVec, err := node.data.GetVectorByAttr(attrId)
+		def := schema.ColDefs[schema.GetColIdx(attr)]
+		if def.IsHidden() {
+			continue
+		}
+		destVec, err := node.data.GetVectorByAttr(def.Idx)
 		if err != nil {
 			return from, err
 		}

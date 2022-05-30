@@ -265,8 +265,8 @@ func (s *Schema) GetSinglePKColDef() *ColDef {
 func (s *Schema) IsHiddenPK() bool { return s.ColDefs[s.SinglePK.Idx].IsHidden() }
 
 func (s *Schema) Attrs() []string {
-	attrs := make([]string, len(s.ColDefs))
-	for i, def := range s.ColDefs {
+	attrs := make([]string, len(s.ColDefs)-1)
+	for i, def := range s.ColDefs[:len(s.ColDefs)-1] {
 		attrs[i] = def.Name
 	}
 	return attrs

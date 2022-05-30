@@ -422,7 +422,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider := compute.NewMockDataProvider()
 	provider.AddColumnProvider(4, balanceData.Vecs[0])
-	userData := compute.MockBatch(user.Types(), uint64(conf.Users), user.GetPrimaryKeyIdx(), provider)
+	userData := compute.MockBatchWithAttrs(user.Types(), user.Attrs(), uint64(conf.Users), user.GetPrimaryKeyIdx(), provider)
 
 	for i := 0; i < conf.Users; i++ {
 		uid := compute.GetValue(userData.Vecs[0], uint32(i))
@@ -446,7 +446,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider.Reset()
 	provider.AddColumnProvider(2, price)
-	goodsData := compute.MockBatch(goods.Types(), uint64(conf.GoodKinds), goods.GetPrimaryKeyIdx(), provider)
+	goodsData := compute.MockBatchWithAttrs(goods.Types(), goods.Attrs(), uint64(conf.GoodKinds), goods.GetPrimaryKeyIdx(), provider)
 	if err = goodsRel.Append(goodsData); err != nil {
 		panic(err)
 	}
@@ -466,7 +466,7 @@ func (app1 *APP1) Init(factor int) {
 	provider.Reset()
 	provider.AddColumnProvider(1, goodIds)
 	provider.AddColumnProvider(2, count)
-	repertoryData := compute.MockBatch(repertory.Types(), uint64(conf.GoodKinds), repertory.GetPrimaryKeyIdx(), provider)
+	repertoryData := compute.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), uint64(conf.GoodKinds), repertory.GetPrimaryKeyIdx(), provider)
 	repertoryRel, err := db.GetRelationByName(repertory.Name)
 	if err != nil {
 		panic(err)

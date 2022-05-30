@@ -351,7 +351,7 @@ func TestTxn4(t *testing.T) {
 		compute.AppendValue(pk, int32(1))
 		provider := compute.NewMockDataProvider()
 		provider.AddColumnProvider(schema.GetPrimaryKeyIdx(), pk)
-		bat := compute.MockBatch(schema.Types(), 3, schema.GetPrimaryKeyIdx(), provider)
+		bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), 3, schema.GetPrimaryKeyIdx(), provider)
 		err := rel.Append(bat)
 		t.Log(err)
 		assert.NotNil(t, err)
@@ -567,7 +567,7 @@ func TestMergeBlocks1(t *testing.T) {
 	provider := compute.NewMockDataProvider()
 	provider.AddColumnProvider(schema.GetPrimaryKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows*3), schema.GetPrimaryKeyIdx(), provider)
+	bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(schema.BlockMaxRows*3), schema.GetPrimaryKeyIdx(), provider)
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -675,7 +675,7 @@ func TestMergeBlocks2(t *testing.T) {
 	provider := compute.NewMockDataProvider()
 	provider.AddColumnProvider(schema.GetPrimaryKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows*3), schema.GetPrimaryKeyIdx(), provider)
+	bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(schema.BlockMaxRows*3), schema.GetPrimaryKeyIdx(), provider)
 	{
 		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")

@@ -84,7 +84,7 @@ func TestComposedCmd(t *testing.T) {
 
 	schema := catalog.MockSchema(4, 0)
 	for i := 0; i < batCnt; i++ {
-		data := compute.MockBatch(schema.Types(), (uint64(i)+1)*5, schema.GetPrimaryKeyIdx(), nil)
+		data := catalog.MockData(schema, uint32((i+1)*5))
 		bat, err := compute.CopyToIBatch(data, uint64(txnbase.MaxNodeRows))
 		assert.Nil(t, err)
 		batCmd := txnbase.NewBatchCmd(bat, schema.Types())

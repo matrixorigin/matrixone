@@ -33,6 +33,27 @@ func TestHiddenWithPK1(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	err := rel.Append(bats[0])
+	{
+		offsets := make([]uint32, 0)
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			view, err := blk.GetColumnDataById(schema.HiddenKeyDef().Idx, nil, nil)
+			assert.NoError(t, err)
+			fp := blk.Fingerprint()
+			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
+				t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+				assert.Equal(t, fp.SegmentID, sid)
+				assert.Equal(t, fp.BlockID, bid)
+				offsets = append(offsets, offset)
+				return
+			})
+			it.Next()
+		}
+		// sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+		// assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
+	}
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 

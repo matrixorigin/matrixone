@@ -3,7 +3,6 @@ package txnimpl
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -20,7 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-const LocalSegmentStartID = math.MaxUint64 / 2
+const (
+	// Note: Do not edit this id!!!
+	LocalSegmentStartID uint64 = 1 << 47
+)
 
 var localSegmentIdAlloc *common.IdAlloctor
 

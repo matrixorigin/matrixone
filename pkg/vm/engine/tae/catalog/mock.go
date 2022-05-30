@@ -195,7 +195,7 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 
 func MockData(schema *Schema, rows uint32) *batch.Batch {
 	if schema.IsSinglePK() {
-		return compute.MockBatch(schema.Types(), uint64(rows), schema.GetPrimaryKeyIdx(), nil)
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.GetPrimaryKeyIdx(), nil)
 	}
 	panic("implement me")
 }

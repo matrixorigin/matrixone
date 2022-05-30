@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -190,6 +191,7 @@ type insertNode struct {
 	rows    uint32
 	table   *txnTable
 	appends []*appendInfo
+	prefix  []byte
 }
 
 func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver wal.Driver) *insertNode {
@@ -202,6 +204,7 @@ func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver w
 	impl.LoadFunc = impl.OnLoad
 	impl.table = tbl
 	impl.appends = make([]*appendInfo, 0)
+	impl.prefix = model.EncodeBlockKeyPrefix(id.SegmentID, id.BlockID)
 	mgr.RegisterNode(impl)
 	return impl
 }
@@ -245,7 +248,7 @@ func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, 
 		entry = n.execUnload()
 	}
 	if n.lsn == 0 {
-		batCmd := txnbase.NewBatchCmd(n.data, n.table.GetSchema().Types())
+		batCmd := txnbase.NewBatchCmd(n.data, n.table.GetSchema().AllTypes())
 		composedCmd.AddCmd(batCmd)
 	} else {
 		ptrCmd := new(txnbase.PointerCmd)
@@ -263,7 +266,7 @@ func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, 
 func (n *insertNode) Type() txnbase.NodeType { return NTInsert }
 
 func (n *insertNode) makeLogEntry() wal.LogEntry {
-	cmd := txnbase.NewBatchCmd(n.data, n.table.GetSchema().Types())
+	cmd := txnbase.NewBatchCmd(n.data, n.table.GetSchema().AllTypes())
 	buf, err := cmd.Marshal()
 	e := entry.GetBase()
 	e.SetType(ETInsertNode)
@@ -362,40 +365,53 @@ func (n *insertNode) PrepareAppend(data *gbat.Batch, offset uint32) uint32 {
 	return nodeLeft
 }
 
-func (n *insertNode) Append(data *gbat.Batch, offset uint32) (uint32, error) {
+func (n *insertNode) Append(data *gbat.Batch, offset uint32) (an uint32, err error) {
+	schema := n.table.entry.GetSchema()
 	if n.data == nil {
-		var cnt int
-		var err error
-		vecs := make([]vector.IVector, len(data.Vecs))
-		attrs := make([]int, len(data.Vecs))
-		for i, vec := range data.Vecs {
-			attrs[i] = i
-			vecs[i] = vector.NewVector(vec.Typ, uint64(txnbase.MaxNodeRows))
-			cnt, err = vecs[i].AppendVector(vec, int(offset))
-			if err != nil {
-				return 0, err
-			}
+		vecs := make([]vector.IVector, len(schema.ColDefs))
+		attrIds := make([]int, len(schema.ColDefs))
+		for i, def := range schema.ColDefs {
+			attrIds[i] = def.Idx
+			vecs[i] = vector.NewVector(def.Type, uint64(txnbase.MaxNodeRows))
 		}
-		if n.data, err = batch.NewBatch(attrs, vecs); err != nil {
-			return 0, err
+		if n.data, err = batch.NewBatch(attrIds, vecs); err != nil {
+			return
 		}
-		n.rows = uint32(n.data.Length())
-		return uint32(cnt), nil
 	}
 
 	var cnt int
-	for i, attr := range n.data.GetAttrs() {
-		vec, err := n.data.GetVectorByAttr(attr)
+	from := uint32(n.data.Length())
+	for i, attr := range data.Attrs {
+		def := schema.ColDefs[schema.GetColIdx(attr)]
+		destVec, err := n.data.GetVectorByAttr(def.Idx)
 		if err != nil {
-			return 0, err
+			return an, err
 		}
-		cnt, err = vec.AppendVector(data.Vecs[i], int(offset))
-		if err != nil {
-			return 0, err
+		if cnt, err = destVec.AppendVector(data.Vecs[i], int(offset)); err != nil {
+			return an, err
 		}
-		n.rows = uint32(vec.Length())
+		n.rows = uint32(destVec.Length())
 	}
-	return uint32(cnt), nil
+	an = uint32(cnt)
+	err = n.FillHiddenColumn(from, uint32(compute.LengthOfBatch(data))-offset)
+	return
+}
+
+func (n *insertNode) FillHiddenColumn(startRow, length uint32) (err error) {
+	col, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, n.prefix, startRow, length)
+	if err != nil {
+		return
+	}
+	defer closer()
+	vec, err := n.data.GetVectorByAttr(n.table.entry.GetSchema().HiddenKeyDef().Idx)
+	if err != nil {
+		return
+	}
+	_, err = vec.AppendVector(col, 0)
+	if err != nil {
+		panic(err)
+	}
+	return
 }
 
 func (n *insertNode) FillColumnView(view *model.ColumnView, compressed, decompressed *bytes.Buffer) (err error) {
