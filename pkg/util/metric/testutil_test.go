@@ -24,7 +24,7 @@ import (
 	"time"
 )
 
-// some tests will modify package-level config variables, and something weird
+// some tests will modify global variables, and something weird
 // may happen if they run concurrently.
 // use this mutex to make those tests execute sequentially
 var configMu *sync.Mutex = new(sync.Mutex)
@@ -59,5 +59,5 @@ func makeDummyClock(startOffset int64) func() int64 {
 
 type dummySwitch struct{}
 
-func (dummySwitch) Start() {}
-func (dummySwitch) Stop()  {}
+func (dummySwitch) Start()                        {}
+func (dummySwitch) Stop() (<-chan struct{}, bool) { return nil, false }

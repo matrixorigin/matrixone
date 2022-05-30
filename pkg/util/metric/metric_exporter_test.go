@@ -71,7 +71,7 @@ func TestExporterCommonInfo(t *testing.T) {
 	names := []string{"color", "zaxis", "env"}
 	lblCnt := 0
 	for i, mf := range mfs {
-		assert.Equal(t, mf.GetNode(), int(42))
+		assert.Equal(t, mf.GetNode(), int32(42))
 		assert.Equal(t, mf.GetRole(), "monolithic")
 		name := names[:lblCnt]
 		for _, m := range mf.Metric {

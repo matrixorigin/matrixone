@@ -16,9 +16,11 @@ package metric
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -44,9 +46,15 @@ var (
 	occupiedLbls = map[string]struct{}{LBL_TIME: {}, LBL_VALUE: {}, LBL_NODE: {}, LBL_ROLE: {}}
 )
 
+type statusServer struct {
+	*http.Server
+	sync.WaitGroup
+}
+
 var registry *prom.Registry
 var moExporter MetricExporter
 var moCollector MetricCollector
+var statusSvr *statusServer
 
 func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, nodeId int, role string) {
 	// init global variables
@@ -57,24 +65,45 @@ func InitMetric(ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, 
 
 	// register metrics and create tables
 	registerAllMetrics()
-	exec := ieFactory()
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(METRIC_DB).Internal(true).Finish())
-	initTables(exec)
+	initTables(ieFactory)
 
 	// start the data flow
 	moCollector.Start()
 	moExporter.Start()
 
 	if getExportToProm() {
-		http.HandleFunc("/query", makeDebugHandleFunc(exec))
-		http.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
+		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
 		addr := fmt.Sprintf("%s:%d", pu.SV.GetHost(), pu.SV.GetStatusPort())
+		statusSvr = &statusServer{Server: &http.Server{Addr: addr, Handler: mux}}
+		statusSvr.Add(1)
 		go func() {
-			if err := http.ListenAndServe(addr, nil); err != nil {
+			defer statusSvr.Done()
+			if err := statusSvr.ListenAndServe(); err != http.ErrServerClosed {
 				panic(fmt.Sprintf("status server error: %v", err))
 			}
 		}()
-		logutil.Infof("[Metric] metrics scrape endpoint is ready at %s/metrics", addr)
+		logutil.Infof("[Metric] metrics scrape endpoint is ready at http://%s/metrics", addr)
+	}
+}
+
+func StopMetricSync() {
+	if moCollector != nil {
+		if ch, effect := moCollector.Stop(); effect {
+			<-ch
+		}
+		moCollector = nil
+	}
+	if moExporter != nil {
+		if ch, effect := moExporter.Stop(); effect {
+			<-ch
+		}
+		moExporter = nil
+	}
+	if statusSvr != nil {
+		statusSvr.Shutdown(context.TODO())
+		statusSvr = nil
 	}
 }
 
@@ -111,7 +140,9 @@ func mustRegister(collector prom.Collector) {
 }
 
 // initTables gathers all metrics and extract metadata to format create table sql
-func initTables(exec ie.InternalExecutor) {
+func initTables(ieFactory func() ie.InternalExecutor) {
+	exec := ieFactory()
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(METRIC_DB).Internal(true).Finish())
 	mustExec := func(sql string) {
 		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
@@ -152,44 +183,6 @@ func createTableSqlFromMetricFamily(mf *dto.MetricFamily, buf *bytes.Buffer) str
 	}
 	buf.WriteRune(')')
 	return buf.String()
-}
-
-// TODO: remove this debug handler
-func makeDebugHandleFunc(exec ie.InternalExecutor) func(w http.ResponseWriter, r *http.Request) {
-	tryExec := func(sql string) {
-		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
-			logutil.Errorf("[Metric] debug sql err: %v, sql: %s", err, sql)
-		}
-	}
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		sqls, ok := r.URL.Query()["sql"]
-
-		if !ok || len(sqls[0]) < 1 {
-			logutil.Debug("[Metric] Url Param 'key' is missing")
-			return
-		}
-		sql := sqls[0]
-
-		defer func() {
-			w.WriteHeader(200)
-			fmt.Fprintf(w, "sql is %s", sql)
-		}()
-
-		logutil.Debug("[Metric] debug sql comes in: " + sql)
-		switch strings.ToLower(sql[:6]) {
-		case "reinit":
-			initTables(exec)
-			StatementCounter(SQLTypeOther, true).Inc()
-			return
-		case "dropdb":
-			tryExec("drop database " + METRIC_DB)
-			// tryExec("create database if not exists " + METRIC_DB)
-			StatementCounter(SQLTypeOther, true).Inc()
-			return
-		}
-		tryExec(sql)
-	}
 }
 
 func mustValidLbls(name string, consts prom.Labels, vars []string) {

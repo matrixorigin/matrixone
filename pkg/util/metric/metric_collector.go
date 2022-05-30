@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,7 +34,7 @@ const CHAN_CAPACITY = 10000
 type MetricCollector interface {
 	SendMetrics(context.Context, []*pb.MetricFamily) error
 	Start()
-	Stop()
+	Stop() (<-chan struct{}, bool)
 }
 
 type collectorOpts struct {
@@ -91,8 +92,9 @@ type metricCollector struct {
 	ieFactory         func() ie.InternalExecutor
 	isRunning         int32
 	opts              collectorOpts
-	mf_ch             chan *pb.MetricFamily
-	sql_ch            chan string
+	mfCh              chan *pb.MetricFamily
+	sqlCh             chan string
+	stopWg            sync.WaitGroup
 	sqlWorkerCancel   context.CancelFunc
 	mergeWorkerCancel context.CancelFunc
 }
@@ -105,15 +107,15 @@ func newMetricCollector(factory func() ie.InternalExecutor, opts ...collectorOpt
 	c := &metricCollector{
 		ieFactory: factory,
 		opts:      initOpts,
-		sql_ch:    make(chan string, CHAN_CAPACITY),
-		mf_ch:     make(chan *pb.MetricFamily, CHAN_CAPACITY),
+		sqlCh:     make(chan string, CHAN_CAPACITY),
+		mfCh:      make(chan *pb.MetricFamily, CHAN_CAPACITY),
 	}
 	return c
 }
 
 func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
 	for _, mf := range mfs {
-		c.mf_ch <- mf
+		c.mfCh <- mf
 	}
 	return nil
 }
@@ -126,10 +128,15 @@ func (c *metricCollector) Start() {
 	c.startMergeWorker()
 }
 
-func (c *metricCollector) Stop() {
+func (c *metricCollector) Stop() (<-chan struct{}, bool) {
+	if atomic.SwapInt32(&c.isRunning, 0) == 0 {
+		return nil, false
+	}
 	c.sqlWorkerCancel()
 	c.mergeWorkerCancel()
-	atomic.StoreInt32(&c.isRunning, 0)
+	stopCh := make(chan struct{})
+	go func() { c.stopWg.Wait(); close(stopCh) }()
+	return stopCh, true
 }
 
 func (c *metricCollector) startSqlWorker() {
@@ -138,6 +145,7 @@ func (c *metricCollector) startSqlWorker() {
 	for i := 0; i < c.opts.sqlWorkerNum; i++ {
 		exec := c.ieFactory()
 		exec.ApplySessionOverride(ie.NewOptsBuilder().Database(METRIC_DB).Internal(true).Finish())
+		c.stopWg.Add(1)
 		go c.sqlWorker(ctx, exec)
 	}
 }
@@ -145,10 +153,12 @@ func (c *metricCollector) startSqlWorker() {
 func (c *metricCollector) startMergeWorker() {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mergeWorkerCancel = cancel
+	c.stopWg.Add(1)
 	go c.mergeWorker(ctx)
 }
 
 func (c *metricCollector) mergeWorker(ctx context.Context) {
+	defer c.stopWg.Done()
 	mfByNames := make(map[string]*mfset)
 	sqlbuf := new(bytes.Buffer)
 	reminder := newReminder()
@@ -164,7 +174,7 @@ func (c *metricCollector) mergeWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case mf := <-c.mf_ch:
+		case mf := <-c.mfCh:
 			if isFullBatchRawHist(mf) {
 				c.pushToSqlCh(newMfset(mf), sqlbuf)
 				continue
@@ -191,16 +201,17 @@ func (c *metricCollector) mergeWorker(ctx context.Context) {
 
 func (c *metricCollector) pushToSqlCh(set *mfset, buf *bytes.Buffer) {
 	if sql := set.getSql(buf); sql != "" {
-		c.sql_ch <- sql
+		c.sqlCh <- sql
 	}
 }
 
 func (c *metricCollector) sqlWorker(ctx context.Context, exec ie.InternalExecutor) {
+	defer c.stopWg.Done()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case sql := <-c.sql_ch:
+		case sql := <-c.sqlCh:
 			if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
 				logutil.Errorf("[Metric] insert error. sql: %s; err: %v", sql, err)
 			}

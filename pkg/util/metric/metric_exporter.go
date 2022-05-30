@@ -30,7 +30,7 @@ type MetricExporter interface {
 	// ExportMetricFamily can be used by a metric to push data. this method must be thread safe
 	ExportMetricFamily(context.Context, *pb.MetricFamily) error
 	Start()
-	Stop()
+	Stop() (<-chan struct{}, bool)
 }
 
 type metricExporter struct {
@@ -40,6 +40,7 @@ type metricExporter struct {
 	gather         prom.Gatherer
 	isRunning      int32
 	cancel         context.CancelFunc
+	stopWg         sync.WaitGroup
 	sync.Mutex
 	histFamilies []*pb.MetricFamily
 	now          func() int64
@@ -70,9 +71,14 @@ func (e *metricExporter) ExportMetricFamily(ctx context.Context, mf *pb.MetricFa
 	return nil
 }
 
-func (e *metricExporter) Stop() {
+func (e *metricExporter) Stop() (<-chan struct{}, bool) {
+	if atomic.SwapInt32(&e.isRunning, 0) == 0 {
+		return nil, false
+	}
 	e.cancel()
-	atomic.StoreInt32(&e.isRunning, 0)
+	stopCh := make(chan struct{})
+	go func() { e.stopWg.Wait(); close(stopCh) }()
+	return stopCh, true
 }
 
 func (e *metricExporter) Start() {
@@ -81,7 +87,9 @@ func (e *metricExporter) Start() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
+	e.stopWg.Add(1)
 	go func() {
+		defer e.stopWg.Done()
 		ticker := time.NewTicker(getGatherInterval())
 		defer ticker.Stop()
 		for {
