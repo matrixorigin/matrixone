@@ -109,14 +109,18 @@ func (l *LogStore) Close() error {
 	return nil
 }
 
-// TODO: rather than providing such low level API, provide a way to directly
-// query serviceAddress by nhID
-func (l *LogStore) GetNodeHostRegistry() dragonboat.INodeHostRegistry {
+func (l *LogStore) GetServiceAddress(nhID string) (string, bool) {
 	r, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
 	}
-	return r
+	data, ok := r.GetMeta(nhID)
+	if !ok {
+		return "", false
+	}
+	var md logStoreMeta
+	md.unmarshal(data)
+	return md.serviceAddress, true
 }
 
 func (l *LogStore) StartHAKeeperReplica(replicaID uint64,

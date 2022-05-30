@@ -236,6 +236,7 @@ func TestQueryLog(t *testing.T) {
 }
 
 func TestStoreServiceAddressCanBeQueried(t *testing.T) {
+	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
@@ -268,30 +269,36 @@ func TestStoreServiceAddressCanBeQueried(t *testing.T) {
 	}()
 	nhID1 := store1.nh.ID()
 	nhID2 := store2.nh.ID()
-	r1 := store1.GetNodeHostRegistry()
-	//r2 := store2.GetNodeHostRegistry()
 
 	done := false
 	for i := 0; i < 3000; i++ {
-		data11, ok := r1.GetMeta(nhID1)
+		addr1, ok := store1.GetServiceAddress(nhID1)
 		if !ok {
 			time.Sleep(time.Millisecond)
 			continue
 		}
-		assert.NotNil(t, data11)
-		var md logStoreMeta
-		md.unmarshal(data11)
-		assert.Equal(t, cfg1.ServiceAddress, md.serviceAddress)
+		assert.Equal(t, cfg1.ServiceAddress, addr1)
 
-		data12, ok := r1.GetMeta(nhID2)
+		addr2, ok := store1.GetServiceAddress(nhID2)
 		if !ok {
 			time.Sleep(time.Millisecond)
 			continue
 		}
-		assert.NotNil(t, data12)
-		md.unmarshal(data12)
-		assert.Equal(t, cfg2.ServiceAddress, md.serviceAddress)
+		assert.Equal(t, cfg2.ServiceAddress, addr2)
 
+		addr1, ok = store2.GetServiceAddress(nhID1)
+		if !ok {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, cfg1.ServiceAddress, addr1)
+
+		addr2, ok = store2.GetServiceAddress(nhID2)
+		if !ok {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, cfg2.ServiceAddress, addr2)
 		done = true
 	}
 	assert.True(t, done)
