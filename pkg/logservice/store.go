@@ -123,6 +123,18 @@ func (l *LogStore) GetServiceAddress(nhID string) (string, bool) {
 	return md.serviceAddress, true
 }
 
+func (l *LogStore) GetShardInfo(shardID uint64) (dragonboat.ClusterInfo, bool) {
+	r, ok := l.nh.GetNodeHostRegistry()
+	if !ok {
+		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
+	}
+	ci, ok := r.GetClusterInfo(shardID)
+	if !ok {
+		return dragonboat.ClusterInfo{}, false
+	}
+	return ci, true
+}
+
 func (l *LogStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(defaultHAKeeperShardID, replicaID)

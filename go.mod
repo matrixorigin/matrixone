@@ -17,7 +17,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
-	github.com/lni/dragonboat/v3 v3.1.1-0.20220529141851-9df37c082a25
+	github.com/lni/dragonboat/v3 v3.1.1-0.20220530080352-c5cb120f9718
 	github.com/lni/goutils v1.3.1-0.20220404072553-ddb2075d2587
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220511071845-cfc4bac02bb4
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
@@ -61,10 +61,9 @@ require (
 	github.com/DataDog/zstd v1.5.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.2.0 // indirect
-	github.com/cockroachdb/errors v1.9.0 // indirect
+	github.com/cockroachdb/errors v1.9.0
 	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect
 	github.com/cockroachdb/redact v1.1.3 // indirect
-	github.com/cockroachdb/sentry-go v0.6.1-cockroachdb.2 // indirect
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -88,7 +87,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.0.3 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/lni/vfs v0.2.1-0.20220408085249-8be85be1c3c1 // indirect
+	github.com/lni/vfs v0.2.1-0.20220408085249-8be85be1c3c1
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

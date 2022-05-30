@@ -235,7 +235,7 @@ func TestQueryLog(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
-func TestStoreServiceAddressCanBeQueried(t *testing.T) {
+func TestStoreServiceAddressAndShardInfoCanBeQueried(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg1 := Config{
 		FS:                  vfs.NewStrictMem(),
@@ -262,16 +262,50 @@ func TestStoreServiceAddressCanBeQueried(t *testing.T) {
 	defer func() {
 		assert.NoError(t, store1.Close())
 	}()
+	peers1 := make(map[uint64]dragonboat.Target)
+	peers1[1] = store1.nh.ID()
+	assert.NoError(t, store1.StartReplica(1, 1, peers1))
+
 	store2, err := NewLogStore(cfg2)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store2.Close())
 	}()
+	peers2 := make(map[uint64]dragonboat.Target)
+	peers2[1] = store2.nh.ID()
+	assert.NoError(t, store2.StartReplica(2, 1, peers1))
+
 	nhID1 := store1.nh.ID()
 	nhID2 := store2.nh.ID()
 
 	done := false
 	for i := 0; i < 3000; i++ {
+		si1, ok := store1.GetShardInfo(1)
+		if !ok || !si1.IsLeader {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si1.Nodes))
+		si2, ok := store1.GetShardInfo(2)
+		if !ok || !si2.IsLeader {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si2.Nodes))
+
+		si1, ok = store2.GetShardInfo(1)
+		if !ok || !si1.IsLeader {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si1.Nodes))
+		si2, ok = store2.GetShardInfo(2)
+		if !ok || !si2.IsLeader {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si2.Nodes))
+
 		addr1, ok := store1.GetServiceAddress(nhID1)
 		if !ok {
 			time.Sleep(time.Millisecond)
