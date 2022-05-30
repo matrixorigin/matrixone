@@ -35,10 +35,10 @@ var (
 )
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+	var vec *vector.Vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		var vec *vector.Vector
 		if t.C.GetIsnull() {
 			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.Id)})
 			nulls.Add(vec.Nsp, 0)
@@ -70,21 +70,20 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		if err != nil {
 			return nil, err
 		}
-		// for test, remove it finally
-		if f.IsAggregate() {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "aggregate function's eval shouldn't reach here")
-		}
-		//
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
 			v, err := EvalExpr(bat, proc, t.F.Args[i])
 			if err != nil {
 				return nil, err
 			}
-			v.Length = len(bat.Zs)
 			vs[i] = v
 		}
-		return f.VecFn(vs, proc)
+		vec, err = f.VecFn(vs, proc)
+		if err != nil {
+			return nil, err
+		}
+		vec.Length = len(bat.Zs)
+		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))
