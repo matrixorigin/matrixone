@@ -6,7 +6,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sin"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -17,20 +16,19 @@ func Sin[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pr
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsConst {
-		resultVector := vector.New(resultType)
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, sin.Sin[T](inputValues, resultValues))
-		resultVector.IsConst = true
 		resultVector.Length = inputVector.Length
 		return resultVector, nil
 	} else {
-		data, err := mheap.Alloc(proc.Mp, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		resultVector := vector.New(resultType)
-		resultVector.Data = data
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/extend2/builtin/binaryfunc"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/extend2/builtin/multifunc"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/extend2/builtin/unaryfunc"
 )
 
@@ -208,6 +209,17 @@ var builtins = map[int][]Function{
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          unaryfunc.Sin[float64],
+		},
+	},
+	PI: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multifunc.Pi,
 		},
 	},
 	POW: {
