@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,9 +23,6 @@ import (
 )
 
 func Pi(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(lv) != 0 {
-		return nil, errors.New("pi() takes no arguments")
-	}
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 0)
 	if err != nil {
 		return nil, err

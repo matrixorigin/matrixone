@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,10 +23,6 @@ import (
 )
 
 func UTCTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(lv) != 0 {
-		return nil, errors.New("utc_timestamp() takes no arguments")
-	}
-
 	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: 8}, 0)
 	if err != nil {
 		return nil, err
