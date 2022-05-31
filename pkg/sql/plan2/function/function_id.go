@@ -175,6 +175,8 @@ const (
 
 	//new Add Function
 	POWER
+	PI
+	UTC_TIMESTAMP
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -223,15 +225,22 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	// builtin
-	"extract":   EXTRACT,
-	"year":      YEAR,
-	"substr":    SUBSTRING,
-	"substring": SUBSTRING,
-	"iff":       IFF,
-	"date_add":  DATE_ADD,
-	"date_sub":  DATE_SUB,
-	"abs":       ABS,
-	"acos":      ACOS,
-	"power":     POWER,
-	"floor":     FLOOR,
+	"extract":       EXTRACT,
+	"year":          YEAR,
+	"substr":        SUBSTRING,
+	"substring":     SUBSTRING,
+	"iff":           IFF,
+	"date_add":      DATE_ADD,
+	"date_sub":      DATE_SUB,
+	"abs":           ABS,
+	"acos":          ACOS,
+	"power":         POWER,
+	"floor":         FLOOR,
+	"ceil":          CEIL,
+	"ceiling":       CEIL,
+	"round":         ROUND,
+	"lpad":          LPAD,
+	"rpad":          RPAD,
+	"pi":            PI,
+	"utc_timestamp": UTC_TIMESTAMP,
 }
