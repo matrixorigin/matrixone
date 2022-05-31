@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/dates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/datetimes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal128s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/float32s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/float64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/int16s"
@@ -60,6 +62,10 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 		dates.Sort(cols[pk], sortedIdx)
 	case types.T_datetime:
 		datetimes.Sort(cols[pk], sortedIdx)
+	case types.T_decimal64:
+		decimal64s.Sort(cols[pk], sortedIdx)
+	case types.T_decimal128:
+		decimal128s.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
 		varchar.Sort(cols[pk], sortedIdx)
 	}
@@ -93,6 +99,10 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 			dates.Shuffle(cols[i], sortedIdx)
 		case types.T_datetime:
 			datetimes.Shuffle(cols[i], sortedIdx)
+		case types.T_decimal64:
+			decimal64s.Shuffle(cols[i], sortedIdx)
+		case types.T_decimal128:
+			decimal128s.Shuffle(cols[i], sortedIdx)
 		case types.T_char, types.T_json, types.T_varchar:
 			varchar.Shuffle(cols[i], sortedIdx)
 		}
@@ -127,6 +137,10 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout,
 		ret, mapping = dates.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_datetime:
 		ret, mapping = datetimes.Merge(column, sortedIdx, fromLayout, toLayout)
+	case types.T_decimal64:
+		ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
+	case types.T_decimal128:
+		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
 	}
@@ -159,6 +173,10 @@ func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLa
 		ret = dates.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_datetime:
 		ret = datetimes.Multiplex(column, sortedIdx, fromLayout, toLayout)
+	case types.T_decimal64:
+		ret = decimal64s.Multiplex(column, sortedIdx, fromLayout, toLayout)
+	case types.T_decimal128:
+		ret = decimal128s.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar:
 		ret = varchar.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	}
