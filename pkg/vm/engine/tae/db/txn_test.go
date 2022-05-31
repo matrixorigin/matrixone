@@ -95,80 +95,95 @@ func init() {
 		GoodRepertory: 100,
 	}
 
+	var err error
 	wareHouse = catalog.NewEmptySchema("WAREHOUSE")
 	wareHouse.BlockMaxRows = 40000
 	wareHouse.SegmentMaxBlocks = 40
-	wareHouse.AppendPKCol("W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8}, 0)
-	wareHouse.AppendCol("W_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	wareHouse.AppendCol("W_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	wareHouse.Finalize(false)
+	_ = wareHouse.AppendPKCol("W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8}, 0)
+	_ = wareHouse.AppendCol("W_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = wareHouse.AppendCol("W_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	if err = wareHouse.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	district = catalog.NewEmptySchema("DISTRICT")
 	district.BlockMaxRows = 40000
 	district.SegmentMaxBlocks = 40
-	district.AppendPKCol("D_ID", types.Type{Oid: types.T_int16, Size: 2, Width: 16}, 0)
-	district.AppendCol("D_W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8})
-	district.AppendCol("D_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	district.AppendCol("D_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	district.AppendCol("D_NEXT_O_ID", types.Type{Oid: types.T_int64, Size: 8, Width: 64})
-	district.Finalize(false)
+	_ = district.AppendPKCol("D_ID", types.Type{Oid: types.T_int16, Size: 2, Width: 16}, 0)
+	_ = district.AppendCol("D_W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8})
+	_ = district.AppendCol("D_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = district.AppendCol("D_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = district.AppendCol("D_NEXT_O_ID", types.Type{Oid: types.T_int64, Size: 8, Width: 64})
+	if err = district.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	balance = catalog.NewEmptySchema("BALANCE")
 	balance.BlockMaxRows = 40000
 	balance.SegmentMaxBlocks = 40
-	balance.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	balance.AppendCol("BALANCE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = balance.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = balance.AppendCol("BALANCE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
 	// balance.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	balance.Finalize(false)
+	if err = balance.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	user = catalog.NewEmptySchema("USER")
 	user.BlockMaxRows = 40000
 	user.SegmentMaxBlocks = 40
-	user.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	user.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	user.AppendCol("BIRTH", types.Type{Oid: types.T_date, Size: 4, Width: 32})
-	user.AppendCol("ADDR", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	user.AppendCol("BALANCEID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	user.Finalize(false)
+	_ = user.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = user.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = user.AppendCol("BIRTH", types.Type{Oid: types.T_date, Size: 4, Width: 32})
+	_ = user.AppendCol("ADDR", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = user.AppendCol("BALANCEID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	if err = user.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	goods = catalog.NewEmptySchema("GOODS")
 	goods.BlockMaxRows = 40000
 	goods.SegmentMaxBlocks = 40
-	goods.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	goods.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	goods.AppendCol("PRICE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	goods.AppendCol("DESC", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	goods.Finalize(false)
+	_ = goods.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = goods.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = goods.AppendCol("PRICE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = goods.AppendCol("DESC", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	if err = goods.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	repertory = catalog.NewEmptySchema("REPERTORY")
 	repertory.BlockMaxRows = 40000
 	repertory.SegmentMaxBlocks = 40
-	repertory.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	repertory.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	repertory.AppendCol("COUNT", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	repertory.Finalize(false)
+	_ = repertory.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = repertory.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = repertory.AppendCol("COUNT", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	if err = repertory.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	deal = catalog.NewEmptySchema("DEAL")
 	deal.BlockMaxRows = 40000
 	deal.SegmentMaxBlocks = 40
-	deal.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
-	deal.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	deal.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	deal.AppendCol("QUANTITY", types.Type{Oid: types.T_uint32, Size: 4, Width: 32})
-	deal.AppendCol("DEALTIME", types.Type{Oid: types.T_datetime, Size: 8, Width: 64})
-	deal.Finalize(false)
+	_ = deal.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = deal.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = deal.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = deal.AppendCol("QUANTITY", types.Type{Oid: types.T_uint32, Size: 4, Width: 32})
+	_ = deal.AppendCol("DEALTIME", types.Type{Oid: types.T_datetime, Size: 8, Width: 64})
+	if err = deal.Finalize(false); err != nil {
+		panic(err)
+	}
 }
 
 func NewApp1(mgr *txnbase.TxnManager, dbName string) *APP1 {

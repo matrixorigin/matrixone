@@ -305,7 +305,9 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 			Hidden:     int8(1),
 			PrimaryIdx: -1,
 		}
-		s.AppendColDef(hiddenDef)
+		if err = s.AppendColDef(hiddenDef); err != nil {
+			return
+		}
 	}
 
 	pkIdx := make([]int, 0)
@@ -366,12 +368,12 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
-			schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+			_ = schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
 		} else {
-			schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
+			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
 		}
 	}
-	schema.Finalize(false)
+	_ = schema.Finalize(false)
 	return schema
 }
 
@@ -469,13 +471,13 @@ func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 			}
 		}
 		if pkIdx == i {
-			schema.AppendPKCol(name, typ, 0)
+			_ = schema.AppendPKCol(name, typ, 0)
 		} else {
-			schema.AppendCol(name, typ)
+			_ = schema.AppendCol(name, typ)
 		}
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
-	schema.Finalize(false)
+	_ = schema.Finalize(false)
 	return schema
 }
