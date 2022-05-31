@@ -120,5 +120,4 @@ func Sin[T constraints.Integer | constraints.Float](inputValues []T, resultValue
 		resultValues[i] = math.Sin(float64(n))
 	}
 	return resultValues
-
 }

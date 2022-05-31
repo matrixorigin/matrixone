@@ -19,15 +19,15 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(left.Typ)
+		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues)) // if our input contains null, this step may be redundant,
 		return resultVector, nil
 	case left.IsConst && !right.IsConst:
 		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(left.Typ), nil
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(rightValues)))
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 		if err != nil {
 			return nil, err
 		}
@@ -38,19 +38,19 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		return resultVector, nil
 	case !left.IsConst && right.IsConst:
 		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(left.Typ), nil
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(rightValues)))
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues)))
 		if err != nil {
 			return nil, err
 		}
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(leftValues)]
-		nulls.Set(resultVector.Nsp, right.Nsp)
+		nulls.Set(resultVector.Nsp, left.Nsp)
 		vector.SetCol(resultVector, power.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
-	resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(rightValues)))
+	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 	if err != nil {
 		return nil, err
 	}
