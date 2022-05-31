@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -350,15 +351,18 @@ func TestReplay1(t *testing.T) {
 	tae3.Close()
 }
 
-// 1. Create db and tbl, append data, update and delete.
-// 2. Get id and row of data
-// 3. Delete first blk
+// 1. Create db and tbl, append data   [1]
+// 2. Update and delete.               [2]
+// 3. Delete first blk                 [3]
 // replay (catalog and data not ckp, catalog softdelete)
 // check 1. blk not exist, 2. id and row of data
-// 1. Checkpoint catalog
-// 2. Append, update and delete
+// 1. Checkpoint catalog               [ckp 3, partial 1]
+// 2. Append                           [4]
 // replay (catalog ckp, data not ckp)
 // check id and row of data
+// 1. Checkpoint data and catalog      [ckp all]
+// replay
+// TODO check id and row of data
 func TestReplay2(t *testing.T) {
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2)
@@ -368,12 +372,17 @@ func TestReplay2(t *testing.T) {
 	bat := compute.MockBatch(schema.Types(), 10000, int(schema.PrimaryKey), nil)
 	bats := compute.SplitBatch(bat, 2)
 
-	txn, _ := tae.StartTxn(nil)
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
 	db, err := txn.CreateDatabase("db")
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
 	err = rel.Append(bats[0])
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
@@ -384,30 +393,14 @@ func TestReplay2(t *testing.T) {
 	filter.Val = int32(1500)
 	id, row, err := rel.GetByFilter(filter)
 	assert.Nil(t, err)
-	err = rel.Update(id, row-1, uint16(0), int32(33333))
-	assert.Nil(t, err)
-	err = rel.RangeDelete(id, row+1, row+100)
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
-
-	txn, _ = tae.StartTxn(nil)
-	db, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = db.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	filter = new(handle.Filter)
-	filter.Op = handle.FilterEq
-	filter.Val = int32(1500)
-	id, row, err = rel.GetByFilter(filter)
-	assert.Nil(t, err)
-	assert.Nil(t, err)
 	err = rel.Update(id, row-1, uint16(0), int32(33))
 	assert.Nil(t, err)
 	err = rel.RangeDelete(id, row+1, row+100)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -429,15 +422,17 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 
-	txn, _ = tae2.StartTxn(nil)
+	txn, err = tae2.StartTxn(nil)
+	assert.Nil(t, err)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	seg, err = rel.GetSegment(seg.GetID())
 	assert.Nil(t, err)
-	_, err = seg.GetBlock(blk.ID)
+	blkh, err := seg.GetBlock(blk.ID)
 	assert.Nil(t, err)
+	assert.True(t, blkh.GetMeta().(*catalog.BlockEntry).IsDroppedCommitted())
 	filter = new(handle.Filter)
 	filter.Op = handle.FilterEq
 	filter.Val = int32(1500)
@@ -455,7 +450,8 @@ func TestReplay2(t *testing.T) {
 	err = tae2.Catalog.Checkpoint(ts)
 	assert.Nil(t, err)
 
-	txn, _ = tae2.StartTxn(nil)
+	txn, err = tae2.StartTxn(nil)
+	assert.Nil(t, err)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -471,7 +467,8 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(tae3.Catalog.SimplePPString(common.PPL1))
 
-	txn, _ = tae3.StartTxn(nil)
+	txn, err = tae3.StartTxn(nil)
+	assert.Nil(t, err)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
@@ -494,5 +491,56 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit())
 
+	txn, err = tae3.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	blkIterator = rel.MakeBlockIt()
+	for blkIterator.Valid() {
+		blk := blkIterator.GetBlock()
+		blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		blkdata.Flush()
+		blkIterator.Next()
+	}
+	err = tae3.Catalog.Checkpoint(txn.GetStartTS())
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	testutils.WaitExpect(4000, func() bool {
+		return tae3.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae3.Wal.GetPenddingCnt())
+
 	tae3.Close()
+
+	tae4, err := Open(tae.Dir, nil)
+	assert.Nil(t, err)
+
+	// txn, err = tae4.StartTxn(nil)
+	// assert.Nil(t, err)
+	// db, err = txn.GetDatabase("db")
+	// assert.Nil(t, err)
+	// rel, err = db.GetRelationByName(schema.Name)
+	// assert.Nil(t, err)
+	// seg, err = rel.GetSegment(seg.GetID())
+	// assert.Nil(t, err)
+	// _, err = seg.GetBlock(blk.ID)
+	// assert.Nil(t, err)
+	// filter = new(handle.Filter)
+	// filter.Op = handle.FilterEq
+	// filter.Val = int32(1500)
+	// id2, row2, err = rel.GetByFilter(filter)
+	// assert.Nil(t, err)
+	// assert.Equal(t, id.BlockID, id2.BlockID)
+	// assert.Equal(t, row, row2)
+	// val, err = rel.GetValue(id, row-1, 0)
+	// assert.Nil(t, err)
+	// assert.Equal(t, int32(33), val)
+	// _, err = rel.GetValue(id, row+1, 0)
+	// assert.NotNil(t, err)
+	// assert.Nil(t, txn.Commit())
+
+	tae4.Close()
 }

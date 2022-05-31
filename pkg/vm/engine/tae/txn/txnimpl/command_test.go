@@ -139,25 +139,6 @@ func TestComposedCmd(t *testing.T) {
 	}
 }
 
-func TestAppendCmd(t *testing.T) {
-	infos := make([]*appendInfo, 0)
-	infos = append(infos, mockAppendInfo())
-	node := mockInsertNodeWithAppendInfo(infos)
-	cmd, _, err := node.MakeCommand(0, true)
-	assert.Nil(t, err)
-
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	checkAppendCmdIsEqual(t, cmd.(*AppendCmd), cmd2.(*AppendCmd))
-}
-
 func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *AppendCmd) {
 	assert.Equal(t, cmd1.ID, cmd2.ID)
 	assert.Equal(t, len(cmd1.Cmds), len(cmd2.Cmds))

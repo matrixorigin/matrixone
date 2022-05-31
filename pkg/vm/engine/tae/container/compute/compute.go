@@ -83,6 +83,10 @@ func AppendValue(vec *gvec.Vector, v any) {
 	}
 }
 
+func LengthOfBatch(bat *gbat.Batch) int {
+	return gvec.Length(bat.Vecs[0])
+}
+
 func GetValue(col *gvec.Vector, row uint32) any {
 	vals := col.Col
 	switch col.Typ.Oid {

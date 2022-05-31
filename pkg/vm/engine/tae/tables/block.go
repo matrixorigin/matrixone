@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -90,11 +89,12 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:    bufMgr,
 	}
 	if meta.IsAppendable() {
-		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
+		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
 		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetPKType())
 	} else {
+		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		block.index = indexwrapper.NewImmutableIndex()
 	}
 	return block
@@ -296,6 +296,10 @@ func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
 	return int(blk.file.ReadRows())
 }
 
+//for test
+func (blk *dataBlock) Flush() {
+	blk.node.OnUnload()
+}
 func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) string {
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows(nil, true))
 	if level >= common.PPL1 {
@@ -501,18 +505,9 @@ func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v an
 	return blk.updateWithFineLock(txn, row, colIdx, v)
 }
 
-func (blk *dataBlock) OnReplayUpdate(row uint32, colIdx uint16, v any) (err error) {
-	blk.mvcc.RLock()
-	defer blk.mvcc.RUnlock()
-	if err == nil {
-		chain := blk.mvcc.GetColumnChain(colIdx)
-		chain.Lock()
-		node := chain.AddNodeLocked(nil)
-		if err = chain.TryUpdateNodeLocked(row, v, node); err != nil {
-			chain.DeleteNodeLocked(node.GetDLNode())
-		}
-		chain.Unlock()
-	}
+func (blk *dataBlock) OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error) {
+	chain := blk.mvcc.GetColumnChain(colIdx)
+	chain.OnReplayUpdateNode(node)
 	return
 }
 
@@ -551,9 +546,8 @@ func (blk *dataBlock) updateWithFineLock(txn txnif.AsyncTxn, row uint32, colIdx 
 	return
 }
 
-func (blk *dataBlock) OnReplayDelete(start, end uint32) (err error) {
-	node := blk.mvcc.CreateDeleteNode(nil)
-	node.RangeDeleteLocked(start, end)
+func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
+	blk.mvcc.OnReplayDeleteNode(node)
 	return
 }
 
@@ -592,7 +586,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v an
 			err = nil
 		}
 	} else {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 	}
 	blk.mvcc.RUnlock()
 	if v != nil || err != nil {
@@ -699,7 +693,7 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 	col := &pkColumn.Vector
 	offset, existed := compute.CheckRowExists(col, filter.Val, nil)
 	if !existed {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 
@@ -725,7 +719,12 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	return blk.blkGetByFilter(txn.GetStartTS(), filter)
 }
 
-func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err error) {
+func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	return
+}
+
+func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
 	var row uint32
 	err = blk.node.DoWithPin(func() (err error) {
 		blk.mvcc.RLock()
@@ -749,6 +748,7 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 				}
 			}
 		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 		return
 	})
 	return
@@ -756,10 +756,31 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask *roaring.Bitmap) (err error) {
 	if blk.meta.IsAppendable() {
+		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		_, err = blk.index.BatchDedup(pks, rowmask)
-		return
+		keyselects, err := blk.index.BatchDedup(pks, rowmask)
+		// If duplicated with active rows
+		// TODO: index should store ts to identify w-w
+		if err != nil {
+			return err
+		}
+		// Check with deletes map
+		// If txn start ts is bigger than deletes max ts, skip scanning deletes
+		if ts > blk.index.GetMaxDeleteTS() {
+			return err
+		}
+		it := keyselects.Iterator()
+		for it.HasNext() {
+			row := it.Next()
+			key := compute.GetValue(pks, row)
+			if blk.index.HasDeleteFrom(key, ts) {
+				err = txnif.TxnWWConflictErr
+				break
+			}
+		}
+
+		return err
 	}
 	if blk.index == nil {
 		panic("index not found")
@@ -778,7 +799,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 	defer view.Free()
 	deduplicate := func(v any, _ uint32) error {
 		if _, existed := compute.CheckRowExists(view.AppliedVec, v, view.DeleteMask); existed {
-			return txnbase.ErrDuplicated
+			return data.ErrDuplicate
 		}
 		return nil
 	}

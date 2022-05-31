@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,6 +44,7 @@ import (
 var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Top:        top.String,
 	Join:       join.String,
+	Semi:       semi.String,
 	Left:       left.String,
 	Limit:      limit.String,
 	Order:      order.String,
@@ -67,6 +69,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Top:        top.Prepare,
 	Join:       join.Prepare,
+	Semi:       semi.Prepare,
 	Left:       left.Prepare,
 	Limit:      limit.Prepare,
 	Order:      order.Prepare,
@@ -91,6 +94,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Top:        top.Call,
 	Join:       join.Call,
+	Semi:       semi.Call,
 	Left:       left.Call,
 	Limit:      limit.Call,
 	Order:      order.Call,

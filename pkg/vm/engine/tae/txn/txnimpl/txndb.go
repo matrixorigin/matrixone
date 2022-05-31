@@ -8,6 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -87,21 +88,21 @@ func (db *txnDB) BatchDedup(id uint64, pks *vector.Vector) (err error) {
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
 
 	return table.BatchDedup(pks)
 }
 
-func (db *txnDB) Append(id uint64, data *batch.Batch) error {
+func (db *txnDB) Append(id uint64, bat *batch.Batch) error {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
-	return table.Append(data)
+	return table.Append(bat)
 }
 
 func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
@@ -110,7 +111,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
 	return table.RangeDelete(id, start, end)
 }
@@ -121,7 +122,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 		return
 	}
 	if table.IsDeleted() {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 	return table.GetByFilter(filter)
@@ -133,7 +134,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 		return
 	}
 	if table.IsDeleted() {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 	return table.GetValue(id, row, colIdx)
@@ -145,7 +146,7 @@ func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err er
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
 	return table.Update(id, row, colIdx, v)
 }
@@ -323,7 +324,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 
 func (db *txnDB) PreCommit() (err error) {
 	for _, table := range db.tables {
-		if err = table.PreCommitDededup(); err != nil {
+		if err = table.PreCommitDedup(); err != nil {
 			return
 		}
 	}

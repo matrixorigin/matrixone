@@ -185,6 +185,9 @@ const (
 	DATE_SUB              // DATE_SUB
 	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
 
+	//new Add Function
+	POWER
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -239,4 +242,8 @@ var functionIdRegister = map[string]int32{
 	"iff":       IFF,
 	"date_add":  DATE_ADD,
 	"date_sub":  DATE_SUB,
+	"abs":       ABS,
+	"acos":      ACOS,
+	"power":     POWER,
+	"floor":     FLOOR,
 }

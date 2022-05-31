@@ -63,58 +63,58 @@ var (
 	Float64AddSels       = NumericAddSels[float64]
 	Float64AddScalarSels = NumericAddScalarSels[float64]
 
-	Int32Int64Add               = numericAdd2[int32, int64]
-	Int32Int64AddScalar         = numericAddScalar2[int32, int64]
-	Int32Int64AddSels           = numericAddSels2[int32, int64]
-	Int32Int64AddScalarSels     = numericAddScalarSels2[int32, int64]
-	Int16Int64Add               = numericAdd2[int16, int64]
-	Int16Int64AddScalar         = numericAddScalar2[int16, int64]
-	Int16Int64AddSels           = numericAddSels2[int16, int64]
-	Int16Int64AddScalarSels     = numericAddScalarSels2[int16, int64]
-	Int8Int64Add                = numericAdd2[int8, int64]
-	Int8Int64AddScalar          = numericAddScalar2[int8, int64]
-	Int8Int64AddSels            = numericAddSels2[int8, int64]
-	Int8Int64AddScalarSels      = numericAddScalarSels2[int8, int64]
-	Int16Int32Add               = numericAdd2[int16, int32]
-	Int16Int32AddScalar         = numericAddScalar2[int16, int32]
-	Int16Int32AddSels           = numericAddSels2[int16, int32]
-	Int16Int32AddScalarSels     = numericAddScalarSels2[int16, int32]
-	Int8Int32Add                = numericAdd2[int8, int32]
-	Int8Int32AddScalar          = numericAddScalar2[int8, int32]
-	Int8Int32AddSels            = numericAddSels2[int8, int32]
-	Int8Int32AddScalarSels      = numericAddScalarSels2[int8, int32]
-	Int8Int16Add                = numericAdd2[int8, int16]
-	Int8Int16AddScalar          = numericAddScalar2[int8, int16]
-	Int8Int16AddSels            = numericAddSels2[int8, int16]
-	Int8Int16AddScalarSels      = numericAddScalarSels2[int8, int16]
-	Float32Float64Add           = numericAdd2[float32, float64]
-	Float32Float64AddScalar     = numericAddScalar2[float32, float64]
-	Float32Float64AddSels       = numericAddSels2[float32, float64]
-	Float32Float64AddScalarSels = numericAddScalarSels2[float32, float64]
-	Uint32Uint64Add             = numericAdd2[uint32, uint64]
-	Uint32Uint64AddScalar       = numericAddScalar2[uint32, uint64]
-	Uint32Uint64AddSels         = numericAddSels2[uint32, uint64]
-	Uint32Uint64AddScalarSels   = numericAddScalarSels2[uint32, uint64]
-	Uint16Uint64Add             = numericAdd2[uint16, uint64]
-	Uint16Uint64AddScalar       = numericAddScalar2[uint16, uint64]
-	Uint16Uint64AddSels         = numericAddSels2[uint16, uint64]
-	Uint16Uint64AddScalarSels   = numericAddScalarSels2[uint16, uint64]
-	Uint8Uint64Add              = numericAdd2[uint8, uint64]
-	Uint8Uint64AddScalar        = numericAddScalar2[uint8, uint64]
-	Uint8Uint64AddSels          = numericAddSels2[uint8, uint64]
-	Uint8Uint64AddScalarSels    = numericAddScalarSels2[uint8, uint64]
-	Uint16Uint32Add             = numericAdd2[uint16, uint32]
-	Uint16Uint32AddScalar       = numericAddScalar2[uint16, uint32]
-	Uint16Uint32AddSels         = numericAddSels2[uint16, uint32]
-	Uint16Uint32AddScalarSels   = numericAddScalarSels2[uint16, uint32]
-	Uint8Uint32Add              = numericAdd2[uint8, uint32]
-	Uint8Uint32AddScalar        = numericAddScalar2[uint8, uint32]
-	Uint8Uint32AddSels          = numericAddSels2[uint8, uint32]
-	Uint8Uint32AddScalarSels    = numericAddScalarSels2[uint8, uint32]
-	Uint8Uint16Add              = numericAdd2[uint8, uint16]
-	Uint8Uint16AddScalar        = numericAddScalar2[uint8, uint16]
-	Uint8Uint16AddSels          = numericAddSels2[uint8, uint16]
-	Uint8Uint16AddScalarSels    = numericAddScalarSels2[uint8, uint16]
+	Int32Int64Add               = NumericAdd2[int32, int64]
+	Int32Int64AddScalar         = NumericAddScalar2[int32, int64]
+	Int32Int64AddSels           = NumericAddSels2[int32, int64]
+	Int32Int64AddScalarSels     = NumericAddScalarSels2[int32, int64]
+	Int16Int64Add               = NumericAdd2[int16, int64]
+	Int16Int64AddScalar         = NumericAddScalar2[int16, int64]
+	Int16Int64AddSels           = NumericAddSels2[int16, int64]
+	Int16Int64AddScalarSels     = NumericAddScalarSels2[int16, int64]
+	Int8Int64Add                = NumericAdd2[int8, int64]
+	Int8Int64AddScalar          = NumericAddScalar2[int8, int64]
+	Int8Int64AddSels            = NumericAddSels2[int8, int64]
+	Int8Int64AddScalarSels      = NumericAddScalarSels2[int8, int64]
+	Int16Int32Add               = NumericAdd2[int16, int32]
+	Int16Int32AddScalar         = NumericAddScalar2[int16, int32]
+	Int16Int32AddSels           = NumericAddSels2[int16, int32]
+	Int16Int32AddScalarSels     = NumericAddScalarSels2[int16, int32]
+	Int8Int32Add                = NumericAdd2[int8, int32]
+	Int8Int32AddScalar          = NumericAddScalar2[int8, int32]
+	Int8Int32AddSels            = NumericAddSels2[int8, int32]
+	Int8Int32AddScalarSels      = NumericAddScalarSels2[int8, int32]
+	Int8Int16Add                = NumericAdd2[int8, int16]
+	Int8Int16AddScalar          = NumericAddScalar2[int8, int16]
+	Int8Int16AddSels            = NumericAddSels2[int8, int16]
+	Int8Int16AddScalarSels      = NumericAddScalarSels2[int8, int16]
+	Float32Float64Add           = NumericAdd2[float32, float64]
+	Float32Float64AddScalar     = NumericAddScalar2[float32, float64]
+	Float32Float64AddSels       = NumericAddSels2[float32, float64]
+	Float32Float64AddScalarSels = NumericAddScalarSels2[float32, float64]
+	Uint32Uint64Add             = NumericAdd2[uint32, uint64]
+	Uint32Uint64AddScalar       = NumericAddScalar2[uint32, uint64]
+	Uint32Uint64AddSels         = NumericAddSels2[uint32, uint64]
+	Uint32Uint64AddScalarSels   = NumericAddScalarSels2[uint32, uint64]
+	Uint16Uint64Add             = NumericAdd2[uint16, uint64]
+	Uint16Uint64AddScalar       = NumericAddScalar2[uint16, uint64]
+	Uint16Uint64AddSels         = NumericAddSels2[uint16, uint64]
+	Uint16Uint64AddScalarSels   = NumericAddScalarSels2[uint16, uint64]
+	Uint8Uint64Add              = NumericAdd2[uint8, uint64]
+	Uint8Uint64AddScalar        = NumericAddScalar2[uint8, uint64]
+	Uint8Uint64AddSels          = NumericAddSels2[uint8, uint64]
+	Uint8Uint64AddScalarSels    = NumericAddScalarSels2[uint8, uint64]
+	Uint16Uint32Add             = NumericAdd2[uint16, uint32]
+	Uint16Uint32AddScalar       = NumericAddScalar2[uint16, uint32]
+	Uint16Uint32AddSels         = NumericAddSels2[uint16, uint32]
+	Uint16Uint32AddScalarSels   = NumericAddScalarSels2[uint16, uint32]
+	Uint8Uint32Add              = NumericAdd2[uint8, uint32]
+	Uint8Uint32AddScalar        = NumericAddScalar2[uint8, uint32]
+	Uint8Uint32AddSels          = NumericAddSels2[uint8, uint32]
+	Uint8Uint32AddScalarSels    = NumericAddScalarSels2[uint8, uint32]
+	Uint8Uint16Add              = NumericAdd2[uint8, uint16]
+	Uint8Uint16AddScalar        = NumericAddScalar2[uint8, uint16]
+	Uint8Uint16AddSels          = NumericAddSels2[uint8, uint16]
+	Uint8Uint16AddScalarSels    = NumericAddScalarSels2[uint8, uint16]
 
 	Decimal64Add            = decimal64Add
 	Decimal64AddSels        = decimal64AddSels
@@ -154,28 +154,28 @@ func NumericAddScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs
 	return rs
 }
 
-func numericAdd2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig) []TBig {
+func NumericAdd2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig) []TBig {
 	for i, x := range xs {
 		rs[i] = TBig(x) + ys[i]
 	}
 	return rs
 }
 
-func numericAddSels2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig, sels []int64) []TBig {
+func NumericAddSels2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig, sels []int64) []TBig {
 	for i, sel := range sels {
 		rs[i] = TBig(xs[sel]) + ys[sel]
 	}
 	return rs
 }
 
-func numericAddScalar2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig) []TBig {
+func NumericAddScalar2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig) []TBig {
 	for i, y := range ys {
 		rs[i] = TBig(x) + y
 	}
 	return rs
 }
 
-func numericAddScalarSels2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig, sels []int64) []TBig {
+func NumericAddScalarSels2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig, sels []int64) []TBig {
 	for i, sel := range sels {
 		rs[i] = TBig(x) + ys[sel]
 	}

@@ -68,6 +68,7 @@ type InsertNode interface {
 	RowsWithoutDeletes() uint32
 	LengthWithDeletes(appended, toAppend uint32) uint32
 	GetAppends() []*appendInfo
+	GetTxn() txnif.AsyncTxn
 }
 
 type appendInfo struct {
@@ -213,6 +214,9 @@ func mockInsertNodeWithAppendInfo(infos []*appendInfo) *insertNode {
 	node.data, _ = batch.NewBatch(attrs, vecs)
 	node.lsn = 1
 	return node
+}
+func (n *insertNode) GetTxn() txnif.AsyncTxn {
+	return n.table.store.txn
 }
 func (n *insertNode) GetAppends() []*appendInfo {
 	return n.appends

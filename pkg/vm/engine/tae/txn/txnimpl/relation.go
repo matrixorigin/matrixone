@@ -139,7 +139,7 @@ func (h *txnRelation) GetMeta() any   { return h.table.entry }
 func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Close() error                     { return nil }
-func (h *txnRelation) Rows() int64                      { return 0 }
+func (h *txnRelation) Rows() int64                      { return int64(h.table.entry.GetRows()) }
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
@@ -190,7 +190,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 	}
 	schema := h.table.entry.GetSchema()
 	if !schema.IsPartOfPK(int(col)) {
-		err = h.table.Update(id, row, col, v)
+		err = h.Update(id, row, col, v)
 		return
 	}
 	bat := catalog.MockData(schema, 0)
@@ -204,7 +204,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 	if err = h.table.RangeDelete(id, row, row); err != nil {
 		return
 	}
-	err = h.table.Append(bat)
+	err = h.Append(bat)
 	return
 }
 

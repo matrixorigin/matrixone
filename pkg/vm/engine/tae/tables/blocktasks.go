@@ -88,11 +88,11 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	if endTs <= ckpTs {
 		return
 	}
-	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
+	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, endTs+1)
 	if err != nil {
 		return
 	}
-	view, err := blk.CollectChangesInRange(ckpTs+1, endTs)
+	view, err := blk.CollectChangesInRange(ckpTs+1, endTs+1)
 	if err != nil {
 		return
 	}
@@ -100,6 +100,9 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 		if err = blk.scheduler.Checkpoint(idxes); err != nil {
 			return
 		}
+		// for _, index := range idxes {
+		// 	logutil.Infof("Ckp1Index  %s", index.String())
+		// }
 	}
 	if err = blk.scheduler.Checkpoint(indexes); err != nil {
 		return
@@ -109,6 +112,9 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	}
 	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, len(indexes), blk.meta.String())
 	// for _, index := range indexes {
+	// 	logutil.Infof("Ckp1Index  %s", index.String())
+	// }
+	// for _, index := range view.DeleteLogIndexes {
 	// 	logutil.Infof("Ckp1Index  %s", index.String())
 	// }
 	blk.SetMaxCheckpointTS(endTs)

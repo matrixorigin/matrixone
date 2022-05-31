@@ -147,7 +147,9 @@ func (entry *BlockEntry) AsCommonID() *common.ID {
 
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
-
+func (entry *BlockEntry) GetFileTs() (uint64, error) {
+	return entry.GetBlockData().GetBlockFile().ReadTS()
+}
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	entry.RLock()
 	currOp := entry.CurrOp
