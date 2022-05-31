@@ -201,7 +201,7 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		//if n.RowsetData != nil {
 		//	init bat from n.RowsetData
 		//}
-		return c.compileProjection(n, []*Scope{ds}), nil
+		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
 		snap := engine.Snapshot(c.proc.Snapshot)
 		db, err := c.e.Database(n.ObjRef.SchemaName, snap)

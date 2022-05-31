@@ -29,6 +29,7 @@ import (
 )
 
 var (
+	constBType = types.Type{Oid: types.T_bool}
 	constIType = types.Type{Oid: types.T_int64}
 	constDType = types.Type{Oid: types.T_float64}
 	constSType = types.Type{Oid: types.T_varchar}
@@ -44,6 +45,9 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			nulls.Add(vec.Nsp, 0)
 		} else {
 			switch t.C.GetValue().(type) {
+			case *plan.Const_Bval:
+				vec = vector.NewConst(constBType)
+				vec.Col = []bool{t.C.GetBval()}
 			case *plan.Const_Ival:
 				vec = vector.NewConst(constIType)
 				vec.Col = []int64{t.C.GetIval()}
@@ -58,6 +62,8 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 					Offsets: []uint32{0},
 					Lengths: []uint32{uint32(len(sval))},
 				}
+			default:
+				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
 		}
 		vec.Length = len(bat.Zs)
