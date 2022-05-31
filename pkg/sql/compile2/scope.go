@@ -194,36 +194,13 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
 	switch v := value.GetConstantValue().(type) {
 	case *plan.ConstantValue_Int64V:
-		switch typ {
-		case plan.Type_INT8:
-			return int8(v.Int64V)
-		case plan.Type_INT16:
-			return int16(v.Int64V)
-		case plan.Type_INT32:
-			return int32(v.Int64V)
-		case plan.Type_INT64:
-			return v.Int64V
-		}
+		return v.Int64V
 	case *plan.ConstantValue_Uint64V:
-		switch typ {
-		case plan.Type_UINT8:
-			return uint8(v.Uint64V)
-		case plan.Type_UINT16:
-			return uint16(v.Uint64V)
-		case plan.Type_UINT32:
-			return uint32(v.Uint64V)
-		case plan.Type_UINT64:
-			return v.Uint64V
-		}
+		return v.Uint64V
 	case *plan.ConstantValue_Float32V:
-		return v.Float32V
+		return float64(v.Float32V)
 	case *plan.ConstantValue_Float64V:
-		switch typ {
-		case plan.Type_FLOAT32:
-			return float32(v.Float64V)
-		case plan.Type_FLOAT64:
-			return v.Float64V
-		}
+		return v.Float64V
 	case *plan.ConstantValue_StringV:
 		return v.StringV
 	case *plan.ConstantValue_DateV:
