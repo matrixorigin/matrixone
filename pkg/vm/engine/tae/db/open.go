@@ -77,6 +77,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory)
 
 	db.Replay(dataOpenFactory)
+	db.Catalog.ReplayTableRows()
 
 	db.TxnMgr.Start()
 

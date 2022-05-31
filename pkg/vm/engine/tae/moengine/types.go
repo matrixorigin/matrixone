@@ -61,4 +61,5 @@ type txnReader struct {
 	it           handle.BlockIt
 	compressed   []*bytes.Buffer
 	decompressed []*bytes.Buffer
+	zs           []int64
 }
