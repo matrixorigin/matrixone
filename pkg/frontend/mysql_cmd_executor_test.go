@@ -475,7 +475,7 @@ func Test_mce(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -571,7 +571,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -606,7 +606,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 
 		mce := NewMysqlCmdExecutor()
@@ -685,7 +685,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 
 		// mce := NewMysqlCmdExecutor()
@@ -752,7 +752,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		epochgc := getPCI()
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, nil)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 
 		convey.So(getDataFromPipeline(ses, nil), convey.ShouldBeNil)
@@ -936,7 +936,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		ses := NewSession(proto, nil, nil, nil, nil, nil)
+		ses := NewSession(proto, nil, nil, nil, nil, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -971,7 +971,7 @@ func Test_handleShowVariables(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		ses := NewSession(proto, nil, nil, nil, nil, nil)
+		ses := NewSession(proto, nil, nil, nil, nil, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
