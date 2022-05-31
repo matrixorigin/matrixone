@@ -27,7 +27,7 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	inputValues := inputVector.Col.([]int64)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -60,7 +60,7 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	inputVector := vectors[0]
 	inputValues := inputVector.Col.([]uint64)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -93,7 +93,7 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 	inputVector := vectors[0]
 	inputValues := inputVector.Col.([]T)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

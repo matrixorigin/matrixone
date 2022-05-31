@@ -28,7 +28,7 @@ func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	inputValues := inputVector.Col.([]types.Date)
 	resultType := types.Type{Oid: types.T_uint16, Size: 2}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

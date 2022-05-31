@@ -28,7 +28,7 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputValues := inputVector.Col.([]types.Date)
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -56,7 +56,7 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	inputValues := inputVector.Col.([]types.Datetime)
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

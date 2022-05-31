@@ -30,7 +30,7 @@ func Exp[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pr
 	inputValues := inputVector.Col.([]T)
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

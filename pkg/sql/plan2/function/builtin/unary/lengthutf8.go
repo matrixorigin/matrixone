@@ -28,7 +28,7 @@ func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputValues := inputVector.Col.(*types.Bytes)
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

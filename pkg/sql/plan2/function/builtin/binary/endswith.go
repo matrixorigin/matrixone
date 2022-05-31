@@ -29,17 +29,17 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
 	switch {
-	case left.IsConst && right.IsConst:
+	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(left.Typ)
+		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, endswith.EndsWithAllConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
-	case left.IsConst && !right.IsConst:
+	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(left.Typ), nil
+			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
 		if err != nil {
@@ -50,11 +50,11 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		nulls.Set(resultVector.Nsp, right.Nsp)
 		vector.SetCol(resultVector, endswith.EndsWithLeftConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
-	case !left.IsConst && right.IsConst:
+	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(left.Typ), nil
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(leftValues.Lengths)))
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues.Lengths)))
 		if err != nil {
 			return nil, err
 		}
@@ -64,7 +64,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		vector.SetCol(resultVector, endswith.EndsWithRightConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	}
-	resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(rightValues.Lengths)))
+	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
 	if err != nil {
 		return nil, err
 	}

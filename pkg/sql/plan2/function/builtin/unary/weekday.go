@@ -28,7 +28,7 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	inputValues := inputVector.Col.([]types.Date)
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -54,7 +54,7 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 	inputValues := inputVector.Col.([]types.Datetime)
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

@@ -30,7 +30,7 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	// totalCount - spaceCount is the total bytes need for the ltrim-ed string
 	spaceCount := rtrim.CountSpacesFromRight(inputValues)
 	totalCount := int32(len(inputValues.Data))
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

@@ -27,7 +27,7 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	inputValues := inputVector.Col.(*types.Bytes)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	// resultElementSize := int(resultType.Size)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
