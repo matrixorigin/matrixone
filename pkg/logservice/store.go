@@ -15,6 +15,7 @@ package logservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/errors"
@@ -23,6 +24,7 @@ import (
 	"github.com/lni/dragonboat/v3/config"
 	pb "github.com/lni/dragonboat/v3/raftpb"
 	sm "github.com/lni/dragonboat/v3/statemachine"
+	"github.com/lni/goutils/syncutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -86,7 +88,14 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 }
 
 type LogStore struct {
-	nh *dragonboat.NodeHost
+	nh      *dragonboat.NodeHost
+	stopper *syncutil.Stopper
+
+	mu struct {
+		sync.Mutex
+		truncateCh      chan struct{}
+		pendingTruncate map[uint64]struct{}
+	}
 }
 
 func NewLogStore(cfg Config) (*LogStore, error) {
@@ -98,11 +107,20 @@ func NewLogStore(cfg Config) (*LogStore, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return &LogStore{nh: nh}, nil
+	ls := &LogStore{
+		nh:      nh,
+		stopper: syncutil.NewStopper(),
+	}
+	ls.mu.truncateCh = make(chan struct{})
+	ls.mu.pendingTruncate = make(map[uint64]struct{})
+	ls.stopper.RunWorker(func() {
+		ls.truncationWorker()
+	})
+	return ls, nil
 }
 
 func (l *LogStore) Close() error {
+	l.stopper.Stop()
 	if l.nh != nil {
 		l.nh.Close()
 	}
@@ -201,16 +219,10 @@ func (l *LogStore) TruncateLog(ctx context.Context,
 	if result.Value > 0 {
 		return errors.Wrapf(ErrInvalidTruncateIndex, "already truncated to %d", result.Value)
 	}
-	// the first 4 entries for a 3-replica raft group are tiny anyway
-	if index > 1 {
-		opts := dragonboat.SnapshotOption{
-			OverrideCompactionOverhead: true,
-			CompactionIndex:            index - 1,
-		}
-		if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
-			return err
-		}
-	}
+	l.mu.Lock()
+	l.mu.pendingTruncate[shardID] = struct{}{}
+	l.mu.Unlock()
+	l.mu.truncateCh <- struct{}{}
 	return nil
 }
 
@@ -350,4 +362,58 @@ func (l *LogStore) QueryLog(ctx context.Context, shardID uint64,
 	case <-ctx.Done():
 		return nil, 0, ctx.Err()
 	}
+}
+
+func (l *LogStore) truncationWorker() {
+	for {
+		select {
+		case <-l.stopper.ShouldStop():
+			return
+		case <-l.mu.truncateCh:
+			if err := l.truncateLog(); err != nil {
+				panic(err)
+			}
+		}
+	}
+}
+
+// TODO: add tests for this
+func (l *LogStore) truncateLog() error {
+	l.mu.Lock()
+	pendings := l.mu.pendingTruncate
+	l.mu.pendingTruncate = make(map[uint64]struct{})
+	l.mu.Unlock()
+
+	for shardID := range pendings {
+		select {
+		case <-l.stopper.ShouldStop():
+			return nil
+		default:
+		}
+
+		if err := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			index, err := l.GetTruncatedIndex(ctx, shardID)
+			if err != nil {
+				// FIXME: check error type, see whether it is a tmp one
+				return err
+			}
+			// the first 4 entries for a 3-replica raft group are tiny anyway
+			if index > 1 {
+				opts := dragonboat.SnapshotOption{
+					OverrideCompactionOverhead: true,
+					CompactionIndex:            index - 1,
+				}
+				if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
+					// FIXME: check error type, see whether it is a tmp one
+					return err
+				}
+			}
+			return nil
+		}(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
