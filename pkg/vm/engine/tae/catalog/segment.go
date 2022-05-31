@@ -330,9 +330,8 @@ func (entry *SegmentEntry) Clone() CheckpointItem {
 func (entry *SegmentEntry) ReplayFile(cache *bytes.Buffer) {
 	colCnt := len(entry.table.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
-	indexCnt[int(entry.table.GetSchema().PrimaryKey)] = 2
-	err := entry.GetSegmentData().GetSegmentFile().Replay(colCnt, indexCnt, cache)
-	if err != nil {
+	indexCnt[entry.table.GetSchema().GetPrimaryKeyIdx()] = 2
+	if err := entry.GetSegmentData().GetSegmentFile().Replay(colCnt, indexCnt, cache); err != nil {
 		panic(err)
 	}
 }

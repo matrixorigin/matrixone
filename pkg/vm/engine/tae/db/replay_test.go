@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	// ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
@@ -22,7 +23,7 @@ func TestReplayCatalog1(t *testing.T) {
 	tae := initDB(t, nil)
 	schemas := make([]*catalog.Schema, 4)
 	for i := range schemas {
-		schemas[i] = catalog.MockSchema(2)
+		schemas[i] = catalog.MockSchema(2, 0)
 	}
 
 	txn, _ := tae.StartTxn(nil)
@@ -96,8 +97,8 @@ func TestReplayCatalog1(t *testing.T) {
 
 func TestReplayCatalog2(t *testing.T) {
 	tae := initDB(t, nil)
-	schema := catalog.MockSchema(2)
-	schema2 := catalog.MockSchema(2)
+	schema := catalog.MockSchema(2, 0)
+	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db2")
 	assert.Nil(t, err)
@@ -175,8 +176,8 @@ func TestReplayCatalog2(t *testing.T) {
 
 func TestReplayCatalog3(t *testing.T) {
 	tae := initDB(t, nil)
-	schema := catalog.MockSchema(2)
-	schema2 := catalog.MockSchema(2)
+	schema := catalog.MockSchema(2, 0)
+	schema2 := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase("db2")
 	assert.Nil(t, err)
@@ -259,10 +260,9 @@ func TestReplayCatalog3(t *testing.T) {
 // catalog not softdelete
 func TestReplay1(t *testing.T) {
 	tae := initDB(t, nil)
-	schema := catalog.MockSchema(2)
+	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	schema.PrimaryKey = 1
 	txn, _ := tae.StartTxn(nil)
 	assert.Nil(t, txn.Commit())
 
@@ -286,8 +286,7 @@ func TestReplay1(t *testing.T) {
 	c := tae2.Catalog
 	t.Log(c.SimplePPString(common.PPL1))
 
-	bat := compute.MockBatch(schema.Types(), 10000, int(schema.PrimaryKey), nil)
-	// bats := compute.SplitBatch(bat, 2)
+	bat := catalog.MockData(schema, 10000)
 	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
@@ -371,11 +370,10 @@ func TestReplay1(t *testing.T) {
 // TODO check id and row of data
 func TestReplay2(t *testing.T) {
 	tae := initDB(t, nil)
-	schema := catalog.MockSchema(2)
+	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	schema.PrimaryKey = 1
-	bat := compute.MockBatch(schema.Types(), 10000, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, 10000)
 	bats := compute.SplitBatch(bat, 2)
 
 	txn, err := tae.StartTxn(nil)
@@ -560,12 +558,11 @@ func TestReplay2(t *testing.T) {
 // TODO check rows
 func TestReplay3(t *testing.T) {
 	tae := initDB(t, nil)
-	schema := catalog.MockSchema(2)
+	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	schema.PrimaryKey = 1
-	bat := compute.MockBatch(schema.Types(), 1, int(schema.PrimaryKey), nil)
-	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
+	bat := catalog.MockData(schema, 1)
+	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 
 	txn, err := tae.StartTxn(nil)
@@ -677,11 +674,10 @@ func TestReplay3(t *testing.T) {
    replay and check rows */
 func TestReplayTableRows(t *testing.T) {
 	tae := initDB(t, nil)
-	schema := catalog.MockSchema(2)
+	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	schema.PrimaryKey = 1
-	bat := compute.MockBatch(schema.Types(), 4800, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, 4800)
 	bats := compute.SplitBatch(bat, 3)
 	rows := uint64(0)
 

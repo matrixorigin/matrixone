@@ -17,13 +17,14 @@ package frontend
 import (
 	"errors"
 	"fmt"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"sort"
 )
 
 var (
@@ -552,8 +553,10 @@ func DefineSchemaForMoUser() *CatalogSchema {
 	userHostAttr := &CatalogSchemaAttribute{
 		AttributeName: "user_host",
 		AttributeType: types.T_varchar.ToType(),
-		IsPrimaryKey:  true,
-		Comment:       "user host",
+		// Note: TAE now only support single PK. It should be part of primary key
+		// TODO: Set it as true if composite pk is ready
+		IsPrimaryKey: false,
+		Comment:      "user host",
 	}
 	userHostAttr.AttributeType.Width = 256
 

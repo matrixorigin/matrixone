@@ -86,7 +86,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 	}
 	metas := idxMeta.(*IndicesMeta)
 	entry := blk.GetMeta().(*catalog.BlockEntry)
-	colFile, err := file.OpenColumn(int(entry.GetSchema().PrimaryKey))
+	colFile, err := file.OpenColumn(entry.GetSchema().GetPrimaryKeyIdx())
 	if err != nil {
 		return
 	}

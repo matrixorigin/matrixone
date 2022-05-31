@@ -76,15 +76,18 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 			return err
 		})
 
-		keysCtx := new(index.KeysCtx)
-		keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
-		keysCtx.Start = offset
-		keysCtx.Count = length
-		// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-		err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
-		if err != nil {
-			panic(err)
+		if !appender.node.block.meta.GetSchema().IsHiddenPK() {
+			keysCtx := new(index.KeysCtx)
+			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetPrimaryKeyIdx()]
+			keysCtx.Start = offset
+			keysCtx.Count = length
+			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
+			err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+			if err != nil {
+				panic(err)
+			}
 		}
+		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 
 		return
 	})
@@ -100,14 +103,16 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 			return err
 		})
 
-		keysCtx := new(index.KeysCtx)
-		keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
-		keysCtx.Start = offset
-		keysCtx.Count = length
-		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())
-		err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
-		if err != nil {
-			panic(err)
+		if !appender.node.block.meta.GetSchema().IsHiddenPK() {
+			keysCtx := new(index.KeysCtx)
+			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetPrimaryKeyIdx()]
+			keysCtx.Start = offset
+			keysCtx.Count = length
+			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())
+			err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
+			if err != nil {
+				panic(err)
+			}
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 		node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)

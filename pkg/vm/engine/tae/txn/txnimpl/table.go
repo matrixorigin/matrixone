@@ -45,22 +45,27 @@ type txnTable struct {
 	updateNodes  map[common.ID]txnif.UpdateNode
 	deleteNodes  map[common.ID]txnif.DeleteNode
 	entry        *catalog.TableEntry
+	schema       *catalog.Schema
 	logs         []wal.LogEntry
 	maxSegId     uint64
 	maxBlkId     uint64
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
+
+	isHiddenPK bool
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 	tbl := &txnTable{
 		store:       store,
 		entry:       entry,
+		schema:      entry.GetSchema(),
 		updateNodes: make(map[common.ID]txnif.UpdateNode),
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
+		isHiddenPK:  entry.GetSchema().IsHiddenPK(),
 	}
 	return tbl
 }
@@ -261,7 +266,7 @@ func (tbl *txnTable) IsDeleted() bool {
 }
 
 func (tbl *txnTable) GetSchema() *catalog.Schema {
-	return tbl.entry.GetSchema()
+	return tbl.schema
 }
 
 func (tbl *txnTable) GetMeta() *catalog.TableEntry {
@@ -309,9 +314,11 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 }
 
 func (tbl *txnTable) Append(data *batch.Batch) error {
-	err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().PrimaryKey])
-	if err != nil {
-		return err
+	if !tbl.isHiddenPK {
+		err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().GetPrimaryKeyIdx()])
+		if err != nil {
+			return err
+		}
 	}
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
@@ -510,7 +517,7 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 }
 
 func (tbl *txnTable) PreCommitDedup() (err error) {
-	if tbl.localSegment == nil {
+	if tbl.localSegment == nil || tbl.isHiddenPK {
 		return
 	}
 	pks := tbl.localSegment.GetPrimaryColumn()
@@ -596,7 +603,7 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
 	if tbl.localSegment != nil {
-		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().PrimaryKey])
+		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().GetPrimaryKeyIdx()])
 	}
 	return
 }
