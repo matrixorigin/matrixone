@@ -282,6 +282,9 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 }
 
 func (seg *localSegment) Update(row uint32, col uint16, value any) error {
+	if seg.table.entry.GetSchema().HiddenKeyDef().Idx == int(col) {
+		return data.ErrUpdateHiddenKey
+	}
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	window, err := n.Window(uint32(noffset), uint32(noffset))

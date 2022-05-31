@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -227,8 +228,15 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 		cv, err := rel.GetValueByHiddenKey(v, 3)
 		assert.NoError(t, err)
 		assert.Equal(t, expectV, cv)
-		err = rel.UpdateByHiddenKey(v, 3, int64(9999))
-		assert.NoError(t, err)
+		if offset == 3 {
+			err = rel.DeleteByHiddenKey(v)
+			assert.NoError(t, err)
+		} else {
+			err = rel.UpdateByHiddenKey(v, 3, int64(9999))
+			assert.NoError(t, err)
+			err2 := rel.UpdateByHiddenKey(v, schema.HiddenKeyDef().Idx, v)
+			assert.ErrorIs(t, err2, data.ErrUpdateHiddenKey)
+		}
 		return
 	})
 	assert.NoError(t, txn.Commit())
@@ -239,10 +247,10 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	it = rel.MakeBlockIt()
 	blk = it.GetBlock()
 
-	assert.Equal(t, compute.LengthOfBatch(bats[0]), int(rel.Rows()))
+	assert.Equal(t, compute.LengthOfBatch(bats[0])-1, int(rel.Rows()))
 	view, err = blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, compute.LengthOfBatch(bats[0]), view.Length())
+	assert.Equal(t, compute.LengthOfBatch(bats[0])-1, view.Length())
 	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
 		assert.Equal(t, int64(9999), v)
 		return

@@ -21,6 +21,7 @@ var (
 	ErrAppendableBlockNotFound   = errors.New("tae data: no appendable block")
 	ErrNotAppendable             = errors.New("tae data: not appendable")
 	ErrUpdateUniqueKey           = errors.New("tae data: update unique key")
+	ErrUpdateHiddenKey           = errors.New("tae data: update hidden key")
 	ErrStaleRequest              = errors.New("tae data: stale request")
 
 	ErrPossibleDuplicate = errors.New("tae data: possible duplicate")

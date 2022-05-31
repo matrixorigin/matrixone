@@ -504,6 +504,10 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 }
 
 func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
+	if blk.meta.GetSchema().HiddenKeyDef().Idx == int(colIdx) {
+		err = data.ErrUpdateHiddenKey
+		return
+	}
 	return blk.updateWithFineLock(txn, row, colIdx, v)
 }
 
