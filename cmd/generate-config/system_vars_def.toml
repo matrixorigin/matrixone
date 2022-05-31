@@ -538,6 +538,36 @@ values = ["true"]
 comment = "default is false. true : one txn for an independent batch false : only one txn during loading data"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "kitexClientMaxIdlePerAddress"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["1000"]
+comment = "default is '1000'. default : the max num of the idle connection per address that kitex clinet need to keep"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "kitexClientMaxIdleGlobal"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["1000"]
+comment = "default is '1000'. default : the max num of the idle connection that kitex clinet need to keep"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "kitexClientMaxIdleTimeout"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["60"]
+comment = "default is '1'. default : the timeout of the idle connection. the unit is second, so the default timeout is one minutes"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
@@ -676,4 +706,4 @@ shard-split-check-duration = "1m"
 # the size of the data managed by each Shard, beyond which the Shard needs to be split
 shard-capacity-bytes = "4GB"
 # disable shard split
-disable-shard-split = true 
+disable-shard-split = true

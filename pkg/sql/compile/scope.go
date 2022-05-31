@@ -18,13 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"math"
 	"net"
 	"runtime"
 	"strings"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 
@@ -40,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 
-	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -62,6 +59,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/rpchandler"
 )
 
 const (
@@ -592,32 +591,29 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 	if Address == s.NodeInfo.Addr {
 		return s.ParallelRun(e)
 	}
+
 	ps := Transfer(s)
 	err := protocol.EncodeScope(ps, &buf)
 	if err != nil {
 		return err
 	}
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	encoder, decoder := rpcserver.NewCodec(1 << 30)
-	conn := goetty.NewIOSession(goetty.WithCodec(encoder, decoder))
-	defer conn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	addr, _ := net.ResolveTCPAddr("tcp", s.NodeInfo.Addr)
-	if _, err := conn.Connect(fmt.Sprintf("%v:%v", addr.IP, addr.Port+100), time.Second*3); err != nil {
+	conn := rpcserver.AcquireConn(fmt.Sprintf("%v:%v", addr.IP, addr.Port+100))
+	var streamClient rpchandler.RPCHandler_ProcessClient
+	if streamClient, err = (*conn).Process(ctx, &message.Message{Data: buf.Bytes()}); err != nil {
 		select {
 		case <-arg.Reg.Ctx.Done():
 		case arg.Reg.Ch <- nil:
 		}
 		return err
 	}
-	if err := conn.WriteAndFlush(&message.Message{Data: buf.Bytes()}); err != nil {
-		select {
-		case <-arg.Reg.Ctx.Done():
-		case arg.Reg.Ch <- nil:
-		}
-		return err
-	}
+	defer streamClient.Close()
+
 	for {
-		val, err := conn.Read()
+		msg, err := streamClient.Recv()
 		if err != nil {
 			select {
 			case <-arg.Reg.Ctx.Done():
@@ -625,7 +621,6 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 			}
 			return err
 		}
-		msg := val.(*message.Message)
 		if len(msg.Code) > 0 {
 			select {
 			case <-arg.Reg.Ctx.Done():
@@ -640,7 +635,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 			}
 			break
 		}
-		bat, _, err := protocol.DecodeBatchWithProcess(val.(*message.Message).Data, s.Proc)
+		bat, _, err := protocol.DecodeBatchWithProcess(msg.Data, s.Proc)
 		if err != nil {
 			select {
 			case <-arg.Reg.Ctx.Done():

@@ -41,8 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/handler"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/sql/handler"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
@@ -440,17 +440,16 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, port+100), 1<<30, logutil.GetGlobalLogger())
-	if err != nil {
-		logutil.Infof("Create rpcserver failed, %v", err)
-		os.Exit(CreateRPCExit)
-	}
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
 	proc := process.New(mheap.New(gm))
 	hp := handler.New(config.StorageEngine, proc)
-	srv.Register(hp.Process)
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, port+100), hp)
 
+	if err != nil {
+		logutil.Infof("Create rpcserver failed, %v", err)
+		os.Exit(CreateRPCExit)
+	}
 	go func() {
 		if err := srv.Run(); err != nil {
 			logutil.Infof("Start rpcserver failed, %v", err)

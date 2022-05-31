@@ -12,20 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package message
+package klogger
 
-import "sync"
-
-var pool = sync.Pool{
-	New: func() interface{} { return new(Message) },
-}
-
-func Acquire() *Message {
-	m := pool.Get().(*Message)
-	m.Reset()
-	return m
-}
-
-func Release(m *Message) {
-	pool.Put(m)
+// just globalLogger
+type klogger struct {
 }

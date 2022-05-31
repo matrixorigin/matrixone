@@ -16,7 +16,6 @@ package handler
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -24,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/fagongzi/goetty"
 )
 
 func New(engine engine.Engine, proc *process.Process) *Handler {
@@ -35,8 +32,8 @@ func New(engine engine.Engine, proc *process.Process) *Handler {
 	}
 }
 
-func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) error {
-	ps, _, err := protocol.DecodeScope(val.(*message.Message).Data)
+func (hp *Handler) Process(req *message.Message, stream message.RPCHandler_ProcessServer) (err error) {
+	ps, _, err := protocol.DecodeScope(req.Data)
 	if err != nil {
 		return err
 	}
@@ -44,25 +41,25 @@ func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) err
 	s.Instructions[len(s.Instructions)-1] = vm.Instruction{
 		Op: vm.Output,
 		Arg: &output.Argument{
-			Data: conn,
+			Data: stream,
 			Func: writeBack,
 		},
 	}
 	if err := s.ParallelRun(hp.engine); err != nil {
-		conn.WriteAndFlush(&message.Message{Code: []byte(err.Error())})
+		stream.Send(&message.Message{Code: []byte(err.Error())})
 	}
-	return conn.WriteAndFlush(&message.Message{Sid: 1})
+	return stream.Send(&message.Message{Sid: 1})
 }
 
 func writeBack(u interface{}, bat *batch.Batch) error {
 	var buf bytes.Buffer
 
-	conn := u.(goetty.IOSession)
+	stream := u.(message.RPCHandler_ProcessServer)
 	if bat == nil || len(bat.Zs) == 0 {
 		return nil
 	}
 	if err := protocol.EncodeBatch(bat, &buf); err != nil {
 		return err
 	}
-	return conn.WriteAndFlush(&message.Message{Data: buf.Bytes()})
+	return stream.Send(&message.Message{Data: buf.Bytes()})
 }
