@@ -123,14 +123,14 @@ func (l *LogStore) GetServiceAddress(nhID string) (string, bool) {
 	return md.serviceAddress, true
 }
 
-func (l *LogStore) GetShardInfo(shardID uint64) (dragonboat.ClusterInfo, bool) {
+func (l *LogStore) GetShardInfo(shardID uint64) (dragonboat.ClusterView, bool) {
 	r, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
 	}
 	ci, ok := r.GetClusterInfo(shardID)
 	if !ok {
-		return dragonboat.ClusterInfo{}, false
+		return dragonboat.ClusterView{}, false
 	}
 	return ci, true
 }

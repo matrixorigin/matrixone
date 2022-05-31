@@ -17,7 +17,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
-	github.com/lni/dragonboat/v3 v3.1.1-0.20220530080352-c5cb120f9718
+	github.com/lni/dragonboat/v3 v3.1.1-0.20220531071603-855530305a40
 	github.com/lni/goutils v1.3.1-0.20220404072553-ddb2075d2587
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220511071845-cfc4bac02bb4
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770

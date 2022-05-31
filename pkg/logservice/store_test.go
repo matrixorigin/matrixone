@@ -281,26 +281,26 @@ func TestStoreServiceAddressAndShardInfoCanBeQueried(t *testing.T) {
 	done := false
 	for i := 0; i < 3000; i++ {
 		si1, ok := store1.GetShardInfo(1)
-		if !ok || !si1.IsLeader {
+		if !ok || si1.LeaderID != 1 {
 			time.Sleep(time.Millisecond)
 			continue
 		}
 		assert.Equal(t, 1, len(si1.Nodes))
 		si2, ok := store1.GetShardInfo(2)
-		if !ok || !si2.IsLeader {
+		if !ok || si2.LeaderID != 1 {
 			time.Sleep(time.Millisecond)
 			continue
 		}
 		assert.Equal(t, 1, len(si2.Nodes))
 
 		si1, ok = store2.GetShardInfo(1)
-		if !ok || !si1.IsLeader {
+		if !ok || si1.LeaderID != 1 {
 			time.Sleep(time.Millisecond)
 			continue
 		}
 		assert.Equal(t, 1, len(si1.Nodes))
 		si2, ok = store2.GetShardInfo(2)
-		if !ok || !si2.IsLeader {
+		if !ok || si2.LeaderID != 1 {
 			time.Sleep(time.Millisecond)
 			continue
 		}
