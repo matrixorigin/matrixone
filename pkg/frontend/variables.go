@@ -23,6 +23,7 @@ var (
 	errorConvertToNullFailed        = errors.New("convert to the system variable null type failed")
 	errorSystemVariableDoesNotExist = errors.New("the system variable does not exist")
 	errorSystemVariableIsSession    = errors.New("the system variable is session")
+	errorSystemVariableSessionEmpty = errors.New("the value of the system variable with scope session is empty")
 	errorSystemVariableIsGlobal     = errors.New("the system variable is global")
 	errorSystemVariableIsReadOnly   = errors.New("the system variable is read only")
 )
@@ -754,9 +755,12 @@ var gSysVariables = &GlobalSystemVariables{
 }
 
 // initialize system variables from definition
-func InitGlobalSystemVariables() {
+func InitGlobalSystemVariables(gsv *GlobalSystemVariables) {
+	if gsv.sysVars == nil {
+		gsv.sysVars = make(map[string]interface{})
+	}
 	for _, def := range gSysVarsDefs {
-		gSysVariables.sysVars[def.Name] = def.Default
+		gsv.sysVars[def.Name] = def.Default
 	}
 }
 
@@ -839,7 +843,7 @@ func (gsv *GlobalSystemVariables) SetGlobalSysVar(name string, value interface{}
 }
 
 func init() {
-	InitGlobalSystemVariables()
+	InitGlobalSystemVariables(gSysVariables)
 }
 
 // definitions of system variables
@@ -883,5 +887,53 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemSystemEnumType("tx_isolation", "READ-UNCOMMITTED", "READ-COMMITTED", "REPEATABLE-READ", "SERIALIZABLE"),
 		Default:           "REPEATABLE-READ",
+	},
+	"testglobalvar_dyn": {
+		Name:              "testglobalvar_dyn",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("testglobalvar_dyn", 0, 100, false),
+		Default:           int64(0),
+	},
+	"testglobalvar_nodyn": {
+		Name:              "testglobalvar_nodyn",
+		Scope:             ScopeGlobal,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("testglobalvar_nodyn", 0, 100, false),
+		Default:           int64(0),
+	},
+	"testsessionvar_dyn": {
+		Name:              "testsessionvar_dyn",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("testsessionvar_dyn", 0, 100, false),
+		Default:           int64(0),
+	},
+	"testsessionvar_nodyn": {
+		Name:              "testsessionvar_nodyn",
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("testsessionvar_nodyn", 0, 100, false),
+		Default:           int64(0),
+	},
+	"testbothvar_dyn": {
+		Name:              "testbothvar_dyn",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("testbothvar_dyn", 0, 100, false),
+		Default:           int64(0),
+	},
+	"testbotchvar_nodyn": {
+		Name:              "testbotchvar_nodyn",
+		Scope:             ScopeBoth,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("testbotchvar_nodyn", 0, 100, false),
+		Default:           int64(0),
 	},
 }
