@@ -296,6 +296,16 @@ func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
 	return int(blk.file.ReadRows())
 }
 
+//for replay
+func (blk *dataBlock) GetRowsOnReplay() uint64 {
+	rows := uint64(blk.mvcc.GetTotalRow())
+	fileRows := uint64(blk.file.ReadRows())
+	if rows > fileRows {
+		return rows
+	}
+	return fileRows
+}
+
 //for test
 func (blk *dataBlock) Flush() {
 	blk.node.OnUnload()
