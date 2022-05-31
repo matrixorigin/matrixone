@@ -120,7 +120,7 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemDBSchema.AppendCol(SystemDBAttr_Name, t)
+	SystemDBSchema.AppendPKCol(SystemDBAttr_Name, t, 0)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
@@ -133,7 +133,7 @@ func init() {
 		Width: 100,
 	}
 	SystemDBSchema.AppendCol(SystemDBAttr_CreateSQL, t)
-	// SystemDBSchema.Finalize(true)
+	SystemDBSchema.Finalize(true)
 
 	SystemTableSchema = NewEmptySchema(SystemTable_Table_Name)
 	t = types.Type{
@@ -141,7 +141,7 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemTableSchema.AppendCol(SystemRelAttr_Name, t)
+	SystemTableSchema.AppendPKCol(SystemRelAttr_Name, t, 0)
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
@@ -172,7 +172,7 @@ func init() {
 		Width: 100,
 	}
 	SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, t)
-	// SystemTableSchema.Finalize(true)
+	SystemTableSchema.Finalize(true)
 
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
 	t = types.Type{
@@ -192,7 +192,7 @@ func init() {
 		Size:  24,
 		Width: 100,
 	}
-	SystemColumnSchema.AppendCol(SystemColAttr_Name, t)
+	SystemColumnSchema.AppendPKCol(SystemColAttr_Name, t, 0)
 	t = types.Type{
 		Oid:   types.T_int32,
 		Size:  4,
@@ -265,5 +265,5 @@ func init() {
 		Width: 8,
 	}
 	SystemColumnSchema.AppendCol(SystemColAttr_IsHidden, t)
-	// SystemColumnSchema.Finalize(true)
+	SystemColumnSchema.Finalize(true)
 }

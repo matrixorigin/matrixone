@@ -52,6 +52,8 @@ type txnTable struct {
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
+
+	isHiddenPK bool
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
@@ -63,6 +65,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
+		isHiddenPK:  entry.GetSchema().IsHiddenPK(),
 	}
 	return tbl
 }
@@ -311,7 +314,7 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 }
 
 func (tbl *txnTable) Append(data *batch.Batch) error {
-	if !tbl.schema.IsHiddenPK() {
+	if !tbl.isHiddenPK {
 		err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().GetPrimaryKeyIdx()])
 		if err != nil {
 			return err
@@ -514,7 +517,7 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 }
 
 func (tbl *txnTable) PreCommitDedup() (err error) {
-	if tbl.localSegment == nil || tbl.schema.IsHiddenPK() {
+	if tbl.localSegment == nil || tbl.isHiddenPK {
 		return
 	}
 	pks := tbl.localSegment.GetPrimaryColumn()

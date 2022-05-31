@@ -44,9 +44,11 @@ func NewFlushBlkTask(ctx *tasks.Context, bf file.Block, ts uint64, meta *catalog
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() (err error) {
-	pkColumnData := task.data.Vecs[task.meta.GetSchema().GetPrimaryKeyIdx()]
-	if err = BuildAndFlushBlockIndex(task.file, task.meta, pkColumnData); err != nil {
-		return
+	if !task.meta.GetSchema().IsHiddenPK() {
+		pkColumnData := task.data.Vecs[task.meta.GetSchema().GetPrimaryKeyIdx()]
+		if err = BuildAndFlushBlockIndex(task.file, task.meta, pkColumnData); err != nil {
+			return
+		}
 	}
 	if err = task.file.WriteBatch(task.data, task.ts); err != nil {
 		return

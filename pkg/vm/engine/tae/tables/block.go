@@ -110,10 +110,14 @@ func (blk *dataBlock) ReplayData() (err error) {
 		keysCtx.Keys = &w.Vector
 		keysCtx.Start = 0
 		keysCtx.Count = uint32(movec.Length(&w.Vector))
-		err = blk.index.BatchUpsert(keysCtx, 0, 0)
+		if !blk.meta.GetSchema().IsHiddenPK() {
+			err = blk.index.BatchUpsert(keysCtx, 0, 0)
+		}
 		return
 	}
-	err = blk.index.ReadFrom(blk)
+	if !blk.meta.GetSchema().IsHiddenPK() {
+		err = blk.index.ReadFrom(blk)
+	}
 	return
 }
 
@@ -719,6 +723,10 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
+	if blk.meta.GetSchema().IsHiddenPK() {
+		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
+		return
+	}
 	if blk.meta.IsAppendable() {
 		return blk.ablkGetByFilter(txn.GetStartTS(), filter)
 	}
@@ -731,6 +739,10 @@ func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint6
 }
 
 func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+	if blk.meta.GetSchema().IsHiddenPK() {
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+		return
+	}
 	var row uint32
 	err = blk.node.DoWithPin(func() (err error) {
 		blk.mvcc.RLock()

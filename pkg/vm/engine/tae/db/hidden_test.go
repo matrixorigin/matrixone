@@ -262,10 +262,9 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 // 1. Mock schema w/o primary key
 // 2. Append data (append rows less than a block)
 func TestHidden2(t *testing.T) {
-	return
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13, -1)
+	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockData(schema, schema.BlockMaxRows*4)
@@ -275,6 +274,159 @@ func TestHidden2(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	err := rel.Append(bats[0])
+	{
+		it := rel.MakeBlockIt()
+		blk := it.GetBlock()
+		var hidden *model.ColumnView
+		for _, def := range schema.ColDefs {
+			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, compute.LengthOfBatch(bats[0]), view.Length())
+			if def.IsHidden() {
+				hidden = view
+			}
+		}
+		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any) (err error) {
+			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
+			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
+			assert.NoError(t, err)
+			assert.Equal(t, key, v)
+			if offset == 1 {
+				err = rel.DeleteByHiddenKey(key)
+				assert.NoError(t, err)
+			}
+			return
+		})
+		for _, def := range schema.ColDefs {
+			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
+			assert.NoError(t, err)
+			view.ApplyDeletes()
+			assert.Equal(t, compute.LengthOfBatch(bats[0])-1, view.Length())
+		}
+	}
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	{
+		it := rel.MakeBlockIt()
+		blk := it.GetBlock()
+		var hidden *model.ColumnView
+		for _, def := range schema.ColDefs {
+			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
+			assert.NoError(t, err)
+			assert.Equal(t, compute.LengthOfBatch(bats[0])-1, view.Length())
+			if def.IsHidden() {
+				hidden = view
+			}
+		}
+		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any) (err error) {
+			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
+			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
+			assert.NoError(t, err)
+			assert.Equal(t, key, v)
+			if offset == 1 {
+				err = rel.DeleteByHiddenKey(key)
+				assert.NoError(t, err)
+			} else {
+				err = rel.UpdateByHiddenKey(key, 2, int32(8888))
+				assert.NoError(t, err)
+			}
+			return
+		})
+		fp := blk.Fingerprint()
+		key := model.EncodeHiddenKey(fp.SegmentID, fp.BlockID, 2)
+		v, err := rel.GetValueByHiddenKey(key, 2)
+		assert.NoError(t, err)
+		assert.Equal(t, int32(8888), v.(int32))
+		t.Log(v)
+	}
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	{
+		it := rel.MakeBlockIt()
+		blks := make([]data.Block, 0)
+		for it.Valid() {
+			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
+			blks = append(blks, blk)
+			it.Next()
+		}
+		for _, blk := range blks {
+			factory, taskType, scopes, err := blk.BuildCompactionTaskFactory()
+			assert.NoError(t, err)
+			task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+			assert.NoError(t, err)
+			err = task.WaitDone()
+			assert.NoError(t, err)
+		}
+	}
+	assert.NoError(t, txn.Commit())
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	{
+		it := rel.MakeSegmentIt()
+		segs := make([]data.Segment, 0)
+		for it.Valid() {
+			seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry).GetSegmentData()
+			segs = append(segs, seg)
+			it.Next()
+		}
+		for _, seg := range segs {
+			factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
+			assert.NoError(t, err)
+			if factory == nil {
+				continue
+			}
+			task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+			assert.NoError(t, err)
+			err = task.WaitDone()
+			assert.NoError(t, err)
+		}
+
+	}
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	t.Log(rel.Rows())
+	assert.Equal(t, int64(26), rel.Rows())
+	{
+		it := rel.MakeBlockIt()
+		rows := 0
+		for it.Valid() {
+			blk := it.GetBlock()
+			// hidden, err := blk.GetColumnDataById(0, nil, nil)
+			hidden, err := blk.GetColumnDataById(schema.HiddenKeyDef().Idx, nil, nil)
+			assert.NoError(t, err)
+			hidden.ApplyDeletes()
+			rows += hidden.Length()
+			it.Next()
+		}
+		assert.Equal(t, 26, rows)
+	}
+	assert.NoError(t, txn.Commit())
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }

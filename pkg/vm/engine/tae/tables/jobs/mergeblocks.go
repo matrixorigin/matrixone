@@ -120,6 +120,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	message = fmt.Sprintf("%s] | Started", message)
 	logutil.Info(message)
+	entry := task.rel.GetMeta().(*catalog.TableEntry)
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
@@ -141,8 +142,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil); err != nil {
-			return
+		if entry.GetSchema().IsHiddenPK() {
+			if view, err = block.GetColumnDataById(0, nil, nil); err != nil {
+				return
+			}
+		} else {
+			if view, err = block.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil); err != nil {
+				return
+			}
 		}
 		vec := view.ApplyDeletes()
 		vecs = append(vecs, vec)
@@ -208,13 +215,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 	hidden := schema.HiddenKeyDef()
-	for _, blk := range task.createdBlks {
-		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[0])))
+	for i, blk := range task.createdBlks {
+		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[i])))
 		if err != nil {
 			return err
 		}
 		defer closer()
-		// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), hidden)
 		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 		if err != nil {
