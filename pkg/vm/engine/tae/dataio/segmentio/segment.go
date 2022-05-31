@@ -73,9 +73,10 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 }
 
 func (sf *segmentFile) replayInfo(stat *fileStat, file *segment.BlockFile) {
-	stat.size = file.GetFileSize()
-	stat.originSize = file.GetOriginSize()
-	stat.algo = file.GetAlgo()
+	meta := file.GetInode()
+	stat.size = meta.GetFileSize()
+	stat.originSize = meta.GetOriginSize()
+	stat.algo = meta.GetAlgo()
 	stat.name = file.GetName()
 }
 
@@ -124,6 +125,10 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 			if bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
 				bf.columns[col].data.file[0] = file
+			}
+			if bf.ts <= ts {
+				bf.ts = ts
+				bf.rows = file.GetInode().GetRows()
 			}
 		case "update":
 			sf.replayInfo(bf.columns[col].updates.stat, file)
