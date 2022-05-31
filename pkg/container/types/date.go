@@ -48,7 +48,7 @@ func init() {
 	startupTime = time.Now()
 	_, offset := startupTime.Zone()
 	localTZ = int64(offset)
-	unixEpoch = FromClock(1970, 1, 1, 0, 0, 0, 0).sec() + localTZ
+	unixEpoch = FromClock(1970, 1, 1, 0, 0, 0, 0).sec()
 }
 
 var (
