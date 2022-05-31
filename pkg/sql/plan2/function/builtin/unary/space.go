@@ -99,7 +99,7 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		}
 		resultVector := vector.NewConst(resultType)
 		results := &types.Bytes{
-			Data:    make([]byte, inputValues[0]),
+			Data:    make([]byte, int(inputValues[0])),
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
