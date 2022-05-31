@@ -79,6 +79,8 @@ func TestSegmentFile_Replay(t *testing.T) {
 		blockTs := common.NextGlobalSeqNum()
 		err = block.WriteTS(blockTs)
 		assert.Nil(t, err)
+		err = block.WriteRows(1)
+		assert.Nil(t, err)
 		readTs, _ := block.ReadTS()
 		assert.Equal(t, blockTs, readTs)
 
@@ -89,6 +91,8 @@ func TestSegmentFile_Replay(t *testing.T) {
 		colBlk0, err := block.OpenColumn(0)
 		assert.Nil(t, err)
 		assert.NotNil(t, colBlk0)
+		err = colBlk0.WriteTS(blockTs)
+		assert.Nil(t, err)
 		err = colBlk0.WriteData(w.Bytes())
 		assert.Nil(t, err)
 		colBlk0.Close()
@@ -117,6 +121,10 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
 		t.Log(string(dbuf))
+		if block.ReadRows() < 1 {
+			t.Log(string(dbuf))
+		}
+		assert.Equal(t, 1, int(block.ReadRows()))
 
 		dataFile.Unref()
 		colBlk0.Close()

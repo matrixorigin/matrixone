@@ -92,10 +92,14 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 	df.mutex.RLock()
 	file := df.file[len(df.file)-1]
 	df.mutex.RUnlock()
+	if df.colBlk != nil && df.colBlk.block.rows > 0 {
+		file.SetRows(df.colBlk.block.rows)
+	}
 	err = file.GetSegement().Append(file, buf)
-	df.stat.algo = file.GetAlgo()
-	df.stat.originSize = file.GetOriginSize()
-	df.stat.size = file.GetFileSize()
+	meta := file.GetInode()
+	df.stat.algo = meta.GetAlgo()
+	df.stat.originSize = meta.GetOriginSize()
+	df.stat.size = meta.GetFileSize()
 	df.upgradeFile()
 	return
 }
