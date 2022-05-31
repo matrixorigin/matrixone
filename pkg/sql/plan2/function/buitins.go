@@ -259,7 +259,7 @@ var builtins = map[int][]Function{
 			Args:        []types.T{types.T_char}, // todo? check if there is implicit upcast for char/varchar, it not, register another type or add upcast
 			ReturnTyp:   types.T_uint64,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          unary.Length,
+			Fn:          unary.LengthUTF8,
 		},
 	},
 	LN: {
