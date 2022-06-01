@@ -243,7 +243,7 @@ func (h *txnRelation) DeleteByHiddenKeys(keys *vector.Vector) (err error) {
 	}
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
-	err = compute.ForEachValue(keys, false, func(key any) (err error) {
+	err = compute.ForEachValue(keys, false, func(key any, _ uint32) (err error) {
 		id.SegmentID, id.BlockID, row = model.DecodeHiddenKeyFromValue(key)
 		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row)
 		return

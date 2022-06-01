@@ -252,19 +252,23 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 		if err != nil {
 			return
 		}
-		rows := gvec.Length(view.AppliedVec)
-		for i := 0; i < rows; i++ {
-			v := compute.GetValue(view.AppliedVec, uint32(i))
-			if v == goodId {
-				id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-				offset = uint32(i)
-				comp.Reset()
-				decomp.Reset()
-				view, _ := blk.GetColumnDataByName(repertory.ColDefs[2].Name, &comp, &decomp)
-				count = compute.GetValue(view.AppliedVec, offset).(uint64)
+		_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, row uint32) (err error) {
+			pk := v.(uint64)
+			if pk != goodId {
 				return
 			}
-		}
+			if view.DeleteMask != nil && view.DeleteMask.Contains(row) {
+				return
+			}
+			fp := blk.Fingerprint()
+			key := model.EncodeHiddenKey(fp.SegmentID, fp.BlockID, row)
+			cntv, err := rel.GetValueByHiddenKey(key, 2)
+			if err != nil {
+				return
+			}
+			count = cntv.(uint64)
+			return
+		})
 		blockIt.Next()
 	}
 	err = catalog.ErrNotFound
@@ -284,35 +288,6 @@ func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, 
 	entry.ID = goodId
 	price, _ := goodRel.GetValue(id, offset, 2)
 	entry.Price = price.(float64)
-
-	// var comp bytes.Buffer
-	// var decomp bytes.Buffer
-	// for blockIt.Valid() {
-	// 	comp.Reset()
-	// 	decomp.Reset()
-	// 	blk := blockIt.GetBlock()
-	// 	vec, err := blk.GetColumnDataByName(goods.ColDefs[0].Name, &comp, &decomp)
-	// 	if err != nil {
-	// 		return id, offset, entry, err
-	// 	}
-	// 	rows := gvec.Length(vec)
-	// 	for i := 0; i < rows; i++ {
-	// 		v := compute.GetValue(vec, uint32(i))
-	// 		if v == goodId {
-	// 			entry = new(APP1Goods)
-	// 			entry.ID = goodId
-	// 			id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-	// 			offset = uint32(i)
-	// 			comp.Reset()
-	// 			decomp.Reset()
-	// 			vec, _ := blk.GetColumnDataByName(goods.ColDefs[2].Name, &comp, &decomp)
-	// 			entry.Price = compute.GetValue(vec, offset).(float64)
-	// 			return id, offset, entry, err
-	// 		}
-	// 	}
-	// 	blockIt.Next()
-	// }
-	// err = catalog.ErrNotFound
 	return
 }
 

@@ -42,7 +42,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			view, err := blk.GetColumnDataById(schema.HiddenKeyDef().Idx, nil, nil)
 			assert.NoError(t, err)
 			fp := blk.Fingerprint()
-			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 				t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, fp.SegmentID, sid)
@@ -69,7 +69,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		offsets := make([]uint32, 0)
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
-		_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+		_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 			assert.Equal(t, fp.SegmentID, sid)
@@ -137,7 +137,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			offsets := make([]uint32, 0)
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
-			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.GetSegment().ID, sid)
@@ -180,7 +180,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
 			t.Log(meta.GetSegment().String())
-			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.GetSegment().ID, sid)
@@ -221,7 +221,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	blk := it.GetBlock()
 	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 	assert.NoError(t, err)
-	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 		sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 		t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 		expectV := compute.GetValue(bats[0].Vecs[3], offset)
@@ -251,7 +251,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	view, err = blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, compute.LengthOfBatch(bats[0])-1, view.Length())
-	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 		assert.Equal(t, int64(9999), v)
 		return
 	})
@@ -286,7 +286,7 @@ func TestHidden2(t *testing.T) {
 				hidden = view
 			}
 		}
-		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any) (err error) {
+		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
@@ -323,7 +323,7 @@ func TestHidden2(t *testing.T) {
 				hidden = view
 			}
 		}
-		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any) (err error) {
+		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
