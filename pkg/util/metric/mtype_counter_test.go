@@ -135,3 +135,14 @@ func TestRateCounterVec(t *testing.T) {
 	assert.InDelta(t, 22.0, c1v, 0.05)
 	assert.InDelta(t, 8.6, c2v, 0.05)
 }
+
+func TestOrigCounter(t *testing.T) {
+	opts := CounterOpts{
+		Subsystem: "test",
+		Name:      "test_orig",
+	}
+	c1 := newCounter(opts)
+	assert.Equal(t, c1, c1.CollectorToProm())
+	factory := newCounterVec(opts, []string{"labelX"})
+	assert.Equal(t, factory, factory.CollectorToProm())
+}

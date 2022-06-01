@@ -31,29 +31,41 @@ type Counter interface {
 
 type CounterOpts = prom.CounterOpts
 
-func NewCounter(opts prom.CounterOpts) *counter {
+func NewCounter(opts prom.CounterOpts) *ratecounter {
 	mustValidLbls(opts.Name, opts.ConstLabels, nil)
-	return &counter{prom.NewCounter(opts)}
+	return newRateCounter(opts)
 }
 
-func NewCounterVec(opts CounterOpts, lvs []string) *counterVec {
+func NewCounterVec(opts CounterOpts, lvs []string) *rateCounterVec {
 	mustValidLbls(opts.Name, opts.ConstLabels, lvs)
-	return &counterVec{prom.NewCounterVec(opts, lvs)}
+	return newRateCounterVec(opts, lvs)
 }
 
 type counter struct {
+	selfAsPromCollector
 	prom.Counter
 }
 
-func (c *counter) CancelToProm()                   {}
-func (c *counter) CollectorToProm() prom.Collector { return c }
+func newCounter(opts CounterOpts) *counter {
+	c := &counter{
+		Counter: prom.NewCounter(opts),
+	}
+	c.init(c)
+	return c
+}
 
 type counterVec struct {
+	selfAsPromCollector
 	*prom.CounterVec
 }
 
-func (cv *counterVec) CancelToProm()                   {}
-func (cv *counterVec) CollectorToProm() prom.Collector { return cv }
+func newCounterVec(opts CounterOpts, lvs []string) *counterVec {
+	cv := &counterVec{
+		CounterVec: prom.NewCounterVec(opts, lvs),
+	}
+	cv.init(cv)
+	return cv
+}
 
 type ratecounter struct {
 	compat  *compatCounter
