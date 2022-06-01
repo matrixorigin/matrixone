@@ -229,6 +229,14 @@ func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v any) error
 	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
 }
 
+func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
+	id, row, err := h.GetByFilter(filter)
+	if err != nil {
+		return
+	}
+	return h.RangeDelete(id, row, row)
+}
+
 func (h *txnRelation) DeleteByHiddenKeys(keys *vector.Vector) (err error) {
 	id := &common.ID{
 		TableID: h.table.entry.ID,
