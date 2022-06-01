@@ -19,7 +19,6 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"math"
 	"os"
 	"runtime"
@@ -28,6 +27,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"

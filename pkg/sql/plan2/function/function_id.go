@@ -243,4 +243,7 @@ var functionIdRegister = map[string]int32{
 	"rpad":          RPAD,
 	"pi":            PI,
 	"utc_timestamp": UTC_TIMESTAMP,
+	"atan":          ATAN,
+	"cos": COS,
+	"cot":COT,
 }
