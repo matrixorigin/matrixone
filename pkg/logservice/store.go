@@ -28,6 +28,7 @@ import (
 	"github.com/lni/goutils/syncutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logservice/pb/heartbeat"
 )
 
 var (
@@ -89,6 +90,7 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 }
 
 type LogStore struct {
+	cfg     Config
 	nh      *dragonboat.NodeHost
 	stopper *syncutil.Stopper
 
@@ -109,6 +111,7 @@ func NewLogStore(cfg Config) (*LogStore, error) {
 		return nil, err
 	}
 	ls := &LogStore{
+		cfg:     cfg,
 		nh:      nh,
 		stopper: syncutil.NewStopper(),
 	}
@@ -417,4 +420,30 @@ func (l *LogStore) truncateLog() error {
 		}
 	}
 	return nil
+}
+
+func (l *LogStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
+	m := heartbeat.LogStoreHeartbeat{
+		UUID:           l.cfg.NodeHostID,
+		RaftAddress:    l.cfg.RaftAddress,
+		ServiceAddress: l.cfg.ServiceAddress,
+		GossipAddress:  l.cfg.GossipAddress,
+		Shards:         make([]*heartbeat.ShardInfo, 0),
+	}
+	opts := dragonboat.NodeHostInfoOption{
+		SkipLogInfo: true,
+	}
+	nhi := l.nh.GetNodeHostInfo(opts)
+	for _, ci := range nhi.ClusterInfoList {
+		shardInfo := &heartbeat.ShardInfo{
+			ShardID:  ci.ClusterID,
+			Replicas: ci.Nodes,
+			Epoch:    ci.ConfigChangeIndex,
+			LeaderID: ci.LeaderID,
+			Term:     ci.Term,
+		}
+		m.Shards = append(m.Shards, shardInfo)
+	}
+
+	return m
 }

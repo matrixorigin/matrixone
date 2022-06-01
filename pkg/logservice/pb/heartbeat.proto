@@ -1,0 +1,63 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+option go_package = "/heartbeat";
+
+// ShardState represents the state of a registered Shard. 
+message ShardState {
+  enum State {
+    REGISTERED = 0;
+    LAUNCHING  = 1;
+    LAUNCHED   = 2;
+    ABORTED    = 3;
+  }
+  string Name = 1;
+  uint64 ShardID = 2;
+  State LaunchState = 3;
+  // InitialReplicas is a map of ReplicaID to LogStore UUIDs, it describes the
+  // initial replicas assigned for the given shard. 
+  map<uint64, string> InitialReplicas = 4;
+};
+
+// ShardInfo contains information of a launched shard.  
+message ShardInfo {
+  uint64 ShardID               = 1;
+  // Replicas is a map of ReplicaID to LogStore UUID, it describe the member
+  // replicas of the shard at the given Epoch. 
+  map<uint64, string> Replicas = 2;
+  // Epoch is the epoch value of the Shard, member replicas of the Shard can
+  // change across epochs. 
+  uint64 Epoch                 = 3;
+  // LeaderID is the ReplicaID of the leader replica at the given term. When
+  // LeaderID is 0, it means there is no leader or the leader is unknown.
+  uint64 LeaderID              = 4;
+  // Term is the Raft term value. 
+  uint64 Term                  = 5;
+};
+
+// LogStoreHeartbeat is the periodic message sent to the HAKeeper. 
+message LogStoreHeartbeat {
+  // UUID is the uuid of the LogStore.
+  string UUID = 1;
+  
+  string RaftAddress    = 2;
+  string ServiceAddress = 3;
+  string GossipAddress  = 4;
+
+  // Shards is a list of ShardInfo instances collected on the specified
+  // LogStore. Details in Shards are based on the local knowledge of each
+  // replica running on the current LogStore, it may not be accurate or
+  // update to date due to various reasons. 
+  repeated ShardInfo Shards = 5;
+};
