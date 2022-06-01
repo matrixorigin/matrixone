@@ -244,6 +244,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 	var comp bytes.Buffer
 	var decomp bytes.Buffer
 	var view *model.ColumnView
+	found := false
 	for blockIt.Valid() {
 		comp.Reset()
 		decomp.Reset()
@@ -260,16 +261,21 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			if view.DeleteMask != nil && view.DeleteMask.Contains(row) {
 				return
 			}
-			fp := blk.Fingerprint()
-			key := model.EncodeHiddenKey(fp.SegmentID, fp.BlockID, row)
+			id = blk.Fingerprint()
+			key := model.EncodeHiddenKey(id.SegmentID, id.BlockID, row)
 			cntv, err := rel.GetValueByHiddenKey(key, 2)
 			if err != nil {
 				return
 			}
+			found = true
+			offset = row
 			count = cntv.(uint64)
-			return
+			return fmt.Errorf("stop iteration")
 		})
 		blockIt.Next()
+	}
+	if found {
+		return
 	}
 	err = catalog.ErrNotFound
 	return
