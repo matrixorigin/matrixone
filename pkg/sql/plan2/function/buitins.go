@@ -1594,15 +1594,4 @@ var builtins = map[int][]Function{
 			Fn:          nil,
 		},
 	},
-	POWER: {
-		{
-			Index:       0,
-			Flag:        plan.Function_STRICT,
-			Layout:      STANDARD_FUNCTION,
-			Args:        []types.T{types.T_float64, types.T_float64},
-			ReturnTyp:   types.T_float64,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          binary.Power,
-		},
-	},
 }

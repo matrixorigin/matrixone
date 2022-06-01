@@ -185,9 +185,6 @@ const (
 	DATE_SUB              // DATE_SUB
 	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
 
-	//new Add Function
-	POWER
-
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -235,22 +232,44 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	// builtin
-	"extract":       EXTRACT,
-	"year":          YEAR,
+	// binary functions
+	"endswith":   ENDSWITH,
+	"findinset":  FINDINSET,
+	"power":      POW,
+	"startswith": STARTSWITH,
+	// variadic functions
+	"ceil":          CEIL,
+	"ceiling":       CEIL,
+	"floor":         FLOOR,
+	"lpad":          LPAD,
+	"pi":            PI,
+	"round":         ROUND,
+	"rpad":          RPAD,
 	"substr":        SUBSTRING,
 	"substring":     SUBSTRING,
+	"utc_timestamp": UTC_TIMESTAMP,
+	"abs":           ABS,
+	"acos":          ACOS,
+	"bit_length":    BIT_LENGTH,
+	"date":          DATE,
+	"dayofyear":     DAYOFYEAR,
+	"exp":           EXP,
+	"empty":         EMPTY,
+	"length":        LENGTH,
+	"lengthutf8":    LENGTH_UTF8,
+	"ln":            LN,
+	"log":           LOG,
+	"ltrim":         LTRIM,
+	"month":         MONTH,
+	"oct":           OCT,
+	"reverse":       REVERSE,
+	"rtrim":         RTRIM,
+	"sin":           SIN,
+	"space":         SPACE,
+	"weekday":       WEEKDAY,
+	"year":          YEAR,
+	"extract":       EXTRACT,
 	"iff":           IFF,
 	"date_add":      DATE_ADD,
 	"date_sub":      DATE_SUB,
-	"abs":           ABS,
-	"acos":          ACOS,
-	"power":         POWER,
-	"floor":         FLOOR,
-	"ceil":          CEIL,
-	"ceiling":       CEIL,
-	"round":         ROUND,
-	"lpad":          LPAD,
-	"rpad":          RPAD,
-	"pi":            PI,
-	"utc_timestamp": UTC_TIMESTAMP,
 }
