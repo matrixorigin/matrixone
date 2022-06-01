@@ -173,14 +173,14 @@ func TestRawHistGather(t *testing.T) {
 		Subsystem: "test",
 		Name:      "test_raw",
 		Help:      "test raw hist metric",
-	}).(*rawHist)
+	})
 	raw1.exporter = &iexp
 
 	raw2 := NewRawHist(prom.HistogramOpts{
 		Subsystem: "stats",
 		Name:      "test_stats",
 		Help:      "test stats metric",
-	}).(*rawHist)
+	})
 	raw2.exporter = &iexp
 
 	reg := prom.NewRegistry()

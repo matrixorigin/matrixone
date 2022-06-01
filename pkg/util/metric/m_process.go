@@ -14,7 +14,10 @@
 
 package metric
 
-import "github.com/prometheus/client_golang/prometheus/collectors"
+import (
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+)
 
 // ProcessCollector collect following information about the current MO process:
 //
@@ -22,4 +25,17 @@ import "github.com/prometheus/client_golang/prometheus/collectors"
 // - open fds & max fds
 // - virtual_mem_bytes、virtual_max_mem_bytes、resident_mem_bytes
 // - process up time in seconds
-var ProcessCollector = collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})
+var ProcessCollector = newProcessCollector()
+
+func newProcessCollector() Collector {
+	c := &processCollector{
+		Collector: collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	}
+	c.init(c)
+	return c
+}
+
+type processCollector struct {
+	selfAsPromCollector
+	prom.Collector
+}

@@ -126,13 +126,15 @@ type simpleEntry interface {
 }
 
 type hardwareStatsCollector struct {
+	selfAsPromCollector
 	entris []simpleEntry
 }
 
-func newHardwareStatsCollector(entries ...simpleEntry) prom.Collector {
+func newHardwareStatsCollector(entries ...simpleEntry) Collector {
 	c := &hardwareStatsCollector{
 		entris: entries,
 	}
+	c.init(c)
 	return c
 }
 

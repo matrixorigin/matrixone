@@ -111,8 +111,8 @@ func TestExporter(t *testing.T) {
 		g := prom.NewGauge(prom.GaugeOpts{Subsystem: "test", Name: "test_gauge"})
 		reg.MustRegister(g)
 		h := NewRawHist(prom.HistogramOpts{Subsystem: "test", Name: "test_hist"})
-		h.(*rawHist).exporter = &iexp
-		h.(*rawHist).now = dumClock
+		h.exporter = &iexp
+		h.now = dumClock
 		reg.MustRegister(h)
 
 		wg := new(sync.WaitGroup)

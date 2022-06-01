@@ -98,7 +98,7 @@ type rawHist struct {
 	now func() int64
 }
 
-func NewRawHist(opts prom.HistogramOpts) prom.Histogram {
+func NewRawHist(opts prom.HistogramOpts) *rawHist {
 	mustValidLbls(opts.Name, opts.ConstLabels, nil)
 	compat := prom.NewHistogram(opts)
 	return newRawHist(
@@ -190,6 +190,10 @@ func (r *rawHist) CancelToProm() {
 	r.compat_inner = nil
 }
 
+func (r *rawHist) CollectorToProm() prom.Collector {
+	return r.compat_inner.(prom.Collector)
+}
+
 // RawHistVec is a Collector that bundles a set of RawHist that all share the
 // same Desc, but have different values for their variable labels. It can be
 // used as a factory for a series of Observers
@@ -221,7 +225,6 @@ func NewRawHistVec(opts prom.HistogramOpts, labelNames []string) *RawHistVec {
 	return r
 }
 
-// at runtime, set if rawHist should record samples for prometheus histogram
 func (r *RawHistVec) CancelToProm() {
 	r.compat = nil
 
@@ -230,6 +233,10 @@ func (r *RawHistVec) CancelToProm() {
 	for m := range ch {
 		m.(*rawHist).CancelToProm()
 	}
+}
+
+func (r *RawHistVec) CollectorToProm() prom.Collector {
+	return r.compat
 }
 
 func (v *RawHistVec) Collect(ch chan<- prom.Metric) {

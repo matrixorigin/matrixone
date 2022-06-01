@@ -31,12 +31,12 @@ import (
 func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
-	pu.SV.SetHost("0.0.0.0")
-	pu.SV.SetStatusPort(7001)
-	pu.SV.SetMetricToProm(true)
 
 	withModifiedConfig(func() {
+		pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
+		_ = pu.SV.SetHost("0.0.0.0")
+		_ = pu.SV.SetStatusPort(7001)
+		_ = pu.SV.SetMetricToProm(true)
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		InitMetric(factory, pu, 0, "test")
@@ -84,12 +84,13 @@ func TestMetric(t *testing.T) {
 func TestMetricNoProm(t *testing.T) {
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
-	pu.SV.SetHost("0.0.0.0")
-	pu.SV.SetStatusPort(7001)
-	pu.SV.SetMetricToProm(false)
 
 	withModifiedConfig(func() {
+		pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
+		_ = pu.SV.SetHost("0.0.0.0")
+		_ = pu.SV.SetStatusPort(7001)
+		_ = pu.SV.SetMetricToProm(false)
+
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		InitMetric(factory, pu, 0, "test")
@@ -101,6 +102,9 @@ func TestMetricNoProm(t *testing.T) {
 		_, err := client.Get("http://0.0.0.0:7001/metrics")
 		require.NotNil(t, err)
 		require.Contains(t, err.Error(), "connection refused")
+
+		// make static-check(errcheck) happay
+		_ = pu.SV.SetMetricToProm(true)
 	})
 }
 

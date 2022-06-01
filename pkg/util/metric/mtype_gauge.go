@@ -24,12 +24,26 @@ type Gauge interface {
 
 type GaugeOpts = prom.GaugeOpts
 
-func NewGauge(opts prom.GaugeOpts) Gauge {
+func NewGauge(opts prom.GaugeOpts) *gauge {
 	mustValidLbls(opts.Name, opts.ConstLabels, nil)
-	return prom.NewGauge(opts)
+	g := &gauge{Gauge: prom.NewGauge(opts)}
+	g.init(g)
+	return g
 }
 
-func NewGaugeVec(opts prom.GaugeOpts, lvs []string) *prom.GaugeVec {
+func NewGaugeVec(opts prom.GaugeOpts, lvs []string) *gaugeVec {
 	mustValidLbls(opts.Name, opts.ConstLabels, lvs)
-	return prom.NewGaugeVec(opts, lvs)
+	gv := &gaugeVec{GaugeVec: prom.NewGaugeVec(opts, lvs)}
+	gv.init(gv)
+	return gv
+}
+
+type gauge struct {
+	selfAsPromCollector
+	prom.Gauge
+}
+
+type gaugeVec struct {
+	selfAsPromCollector
+	*prom.GaugeVec
 }

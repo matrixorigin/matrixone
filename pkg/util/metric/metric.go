@@ -46,6 +46,22 @@ var (
 	occupiedLbls = map[string]struct{}{LBL_TIME: {}, LBL_VALUE: {}, LBL_NODE: {}, LBL_ROLE: {}}
 )
 
+type Collector interface {
+	prom.Collector
+	// CancelToProm remove the cost introduced by being compatible with prometheus
+	CancelToProm()
+	// collectorForProm returns a collector used in prometheus scrape registry
+	CollectorToProm() prom.Collector
+}
+
+type selfAsPromCollector struct {
+	self prom.Collector
+}
+
+func (c *selfAsPromCollector) init(self prom.Collector)        { c.self = self }
+func (s *selfAsPromCollector) CancelToProm()                   {}
+func (s *selfAsPromCollector) CollectorToProm() prom.Collector { return s.self }
+
 type statusServer struct {
 	*http.Server
 	sync.WaitGroup
@@ -116,26 +132,12 @@ func mustRegiterToProm(collector prom.Collector) {
 	}
 }
 
-func mustRegister(collector prom.Collector) {
+func mustRegister(collector Collector) {
 	registry.MustRegister(collector)
-	toPromConfig := getExportToProm()
-	toPromCollector := collector
-	switch t := collector.(type) {
-	case *rawHist:
-		if !toPromConfig {
-			t.CancelToProm()
-		} else {
-			toPromCollector = t.compat_inner.(prom.Collector)
-		}
-	case *RawHistVec:
-		if !toPromConfig {
-			t.CancelToProm()
-		} else {
-			toPromCollector = t.compat
-		}
-	}
-	if toPromConfig {
-		mustRegiterToProm(toPromCollector)
+	if getExportToProm() {
+		mustRegiterToProm(collector.CollectorToProm())
+	} else {
+		collector.CancelToProm()
 	}
 }
 
@@ -151,7 +153,10 @@ func initTables(ieFactory func() ie.InternalExecutor) {
 	mustExec(SQL_CREATE_DB)
 	var gatherCost, createCost time.Duration
 	defer func() {
-		logutil.Debugf("[Metric] init metrics tables: gather cost %d ms, create cost %d ms", gatherCost.Milliseconds(), createCost.Milliseconds())
+		logutil.Debugf(
+			"[Metric] init metrics tables: gather cost %d ms, create cost %d ms",
+			gatherCost.Milliseconds(),
+			createCost.Milliseconds())
 	}()
 	instant := time.Now()
 	mfs, err := registry.Gather()
