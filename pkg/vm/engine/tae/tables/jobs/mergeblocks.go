@@ -120,6 +120,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	message = fmt.Sprintf("%s] | Started", message)
 	logutil.Info(message)
+	entry := task.rel.GetMeta().(*catalog.TableEntry)
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
@@ -141,8 +142,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(int(schema.PrimaryKey), nil, nil); err != nil {
-			return
+		if entry.GetSchema().IsHiddenPK() {
+			if view, err = block.GetColumnDataById(0, nil, nil); err != nil {
+				return
+			}
+		} else {
+			if view, err = block.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil); err != nil {
+				return
+			}
 		}
 		vec := view.ApplyDeletes()
 		vecs = append(vecs, vec)
@@ -185,7 +192,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		closure := meta.GetBlockData().FlushColumnDataClosure(ts, int(schema.PrimaryKey), vec, false)
+
+		def := schema.GetSinglePKColDef()
+		if def.IsHidden() {
+			continue
+		}
+
+		// logutil.Infof("Flushing %s %v", meta.AsCommonID().String(), def)
+		closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
 		if err != nil {
 			return
@@ -199,19 +213,30 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err = meta.GetBlockData().ReplayData(); err != nil {
 			return
 		}
-		// bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
-		// if bf.WriteColumnVec(task.txn.GetStartTS(), int(schema.PrimaryKey), vec); err != nil {
-		// 	return
-		// }
 	}
-
-	for i := 0; i < len(schema.ColDefs); i++ {
-		if i == int(schema.PrimaryKey) {
+	hidden := schema.HiddenKeyDef()
+	for i, blk := range task.createdBlks {
+		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[i])))
+		if err != nil {
+			return err
+		}
+		defer closer()
+		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
+		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
+		if err != nil {
+			return err
+		}
+		if err = flushTask.WaitDone(); err != nil {
+			return err
+		}
+	}
+	for _, def := range schema.ColDefs {
+		if def.IsHidden() || def.IsPrimary() {
 			continue
 		}
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(i, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
 			vec := view.ApplyDeletes()
@@ -220,7 +245,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, i, vec, false)
+			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
+			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
 			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 			if err != nil {
 				return

@@ -9,6 +9,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -38,18 +40,18 @@ func InitColVector() []*vector.Vector {
 	return vec
 }
 
-func InitConstVector() (*vector.Vector) {
+func InitConstVector() *vector.Vector {
 	InitFuncMap()
-	vec := &vector.Vector{ Nsp: &nulls.Nulls{} }
+	vec := &vector.Vector{Nsp: &nulls.Nulls{}}
 	vec.IsConst = true
 	return vec
 }
 
 func Test_ColAndCol(t *testing.T) {
 	convey.Convey("Test col and col operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := InitColVector()
-		ret, err := And(vec, proc); 
+		ret, err := And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -74,11 +76,11 @@ func Test_ColAndCol(t *testing.T) {
 
 func Test_ColAndConst(t *testing.T) {
 	convey.Convey("Test col and const operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := InitColVector()
 		vec[1] = InitConstVector()
 		vec[1].Col = []bool{true}
-		ret, err := And(vec, proc); 
+		ret, err := And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -99,7 +101,7 @@ func Test_ColAndConst(t *testing.T) {
 		}
 
 		vec[1].Col = []bool{false}
-		ret, err = And(vec, proc); 
+		ret, err = And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -123,11 +125,11 @@ func Test_ColAndConst(t *testing.T) {
 
 func Test_ColAndNull(t *testing.T) {
 	convey.Convey("Test col and null operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := InitColVector()
 		vec[1] = InitConstVector()
 		nulls.Add(vec[1].Nsp, 0)
-		ret, err := And(vec, proc); 
+		ret, err := And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -135,19 +137,19 @@ func Test_ColAndNull(t *testing.T) {
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
 		}
-	
+
 	})
 }
 
 func Test_ConstAndConst(t *testing.T) {
 	convey.Convey("Test const and const operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 2)
 		vec[0] = InitConstVector()
 		vec[1] = InitConstVector()
 		vec[0].Col = []bool{true}
 		vec[1].Col = []bool{true}
-		ret, err := And(vec, proc); 
+		ret, err := And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -160,7 +162,7 @@ func Test_ConstAndConst(t *testing.T) {
 		convey.So(ret.Nsp.Np, convey.ShouldBeNil)
 
 		vec[1].Col = []bool{false}
-		ret, err = And(vec, proc); 
+		ret, err = And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -173,7 +175,7 @@ func Test_ConstAndConst(t *testing.T) {
 		convey.So(ret.Nsp.Np, convey.ShouldBeNil)
 
 		vec[0].Col = []bool{false}
-		ret, err = And(vec, proc); 
+		ret, err = And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -184,19 +186,19 @@ func Test_ConstAndConst(t *testing.T) {
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
 		convey.So(data, convey.ShouldResemble, []bool{false})
 		convey.So(ret.Nsp.Np, convey.ShouldBeNil)
-	
+
 	})
 }
 
 func Test_ConstAndNull(t *testing.T) {
 	convey.Convey("Test const and null operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 2)
 		vec[0] = InitConstVector()
 		vec[1] = InitConstVector()
 		vec[0].Col = []bool{true}
 		nulls.Add(vec[1].Nsp, 0)
-		ret, err := And(vec, proc); 
+		ret, err := And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -208,13 +210,13 @@ func Test_ConstAndNull(t *testing.T) {
 
 func Test_NullAndNull(t *testing.T) {
 	convey.Convey("Test null and null operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 2)
 		vec[0] = InitConstVector()
 		vec[1] = InitConstVector()
 		nulls.Add(vec[0].Nsp, 0)
 		nulls.Add(vec[1].Nsp, 0)
-		ret, err := And(vec, proc); 
+		ret, err := And(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}

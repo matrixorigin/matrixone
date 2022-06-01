@@ -37,7 +37,7 @@ func TestCompare_Vector(t *testing.T) {
 
 func TestCompare_Set(t *testing.T) {
 	c := New()
-	vector := vector.New(types.Type{Oid: types.T(types.T_int8)})
+	vector := vector.New(types.Type{Oid: types.T(types.T_bool)})
 	c.Set(1, vector)
 	require.Equal(t, vector, c.vs[1])
 }

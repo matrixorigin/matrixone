@@ -46,14 +46,15 @@ type BlockAppender interface {
 	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (txnif.AppendNode, uint32, error)
 	OnReplayInsertNode(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error)
 	IsAppendable() bool
-	OnReplayAppendNode(maxrow uint32)
+	OnReplayAppendNode(an txnif.AppendNode)
 }
 
 type Block interface {
 	CheckpointUnit
 
-	OnReplayDelete(start, end uint32) (err error)
-	OnReplayUpdate(row uint32, colIdx uint16, v any) (err error)
+	GetRowsOnReplay() uint64
+	OnReplayDelete(node txnif.DeleteNode) (err error)
+	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	GetID() *common.ID
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
@@ -86,4 +87,5 @@ type Block interface {
 	ForceCompact() error
 	Destroy() error
 	ReplayData() error
+	Flush()
 }

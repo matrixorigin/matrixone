@@ -9,6 +9,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -124,6 +126,7 @@ func GetInt64() []*vector.Vector {
 var EquintBool = []bool{true, false, true, false, true, false, true, false, true}
 var uintNullPos = []int{2, 5, 6, 7, 8}
 var uintNotNullPos = []int{0, 1, 3, 4}
+
 func GetUint8() []*vector.Vector {
 	v0 := []uint8{0, 0, 0, 1, 1, 1, 0, 0, 0}
 	v1 := []uint8{0, 1, 0, 0, 1, 0, 0, 1, 0}
@@ -272,7 +275,6 @@ func GetFloat64() []*vector.Vector {
 	return vec
 }
 
-
 func GetDate() []*vector.Vector {
 	v0 := []types.Date{-1, -1, -1, -1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0}
 	v1 := []types.Date{-1, 0, 1, 0, -1, 0, 1, 0, -1, 0, 1, 0, -1, 0, 1, 0}
@@ -352,6 +354,7 @@ func GetDecimal64() []*vector.Vector {
 }
 
 var EqboolBool = []bool{true, false, false, false, true, true, false, true, true}
+
 func GetBool() []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	vec[0] = &vector.Vector{
@@ -375,6 +378,7 @@ func GetBool() []*vector.Vector {
 }
 
 var EqstringBool = []bool{true, false, false, false, false, true, false, false, false, false, true, false, false, false, false, true}
+
 func GetString() []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	str1 := []string{"-1", "-1", "-1", "-1", "0", "0", "0", "0", "1", "1", "1", "1", "", "", "", ""}
@@ -390,7 +394,7 @@ func GetString() []*vector.Vector {
 	}
 	vec[0] = &vector.Vector{
 		Col: &types.Bytes{
-			Data: []byte(str3),
+			Data:    []byte(str3),
 			Offsets: offsets1,
 			Lengths: lengths1,
 		},
@@ -404,7 +408,7 @@ func GetString() []*vector.Vector {
 
 	vec[1] = &vector.Vector{
 		Col: &types.Bytes{
-			Data: []byte(str4),
+			Data:    []byte(str4),
 			Offsets: offsets2,
 			Lengths: lengths2,
 		},
@@ -418,31 +422,33 @@ func GetString() []*vector.Vector {
 	return vec
 }
 
-type testFunc = func() ([]*vector.Vector)
+type testFunc = func() []*vector.Vector
+
 var testFuncVec = []testFunc{
 	GetInt8, GetInt16, GetInt32, GetInt64, GetUint8, GetUint16, GetUint32, GetUint64,
 	GetFloat32, GetFloat64, GetDate, GetDatetime, GetDecimal64, GetBool, GetString,
 }
 
 type testEqFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var testEqFuncVec = []testEqFunc{
 	EqDataValue[int8], EqDataValue[int16], EqDataValue[int32], EqDataValue[int64],
 	EqDataValue[uint8], EqDataValue[uint16], EqDataValue[uint32], EqDataValue[uint64],
-	EqDataValue[float32], EqDataValue[float64], EqDataValue[types.Date], 
+	EqDataValue[float32], EqDataValue[float64], EqDataValue[types.Date],
 	EqDataValue[types.Datetime], EqDataValue[types.Decimal64], EqDataValue[bool], EqDataValue[string],
 }
 
-var EqretVec = [][]bool {
+var EqretVec = [][]bool{
 	EqintBool, EqintBool, EqintBool, EqintBool, EquintBool, EquintBool, EquintBool, EquintBool,
 	EqintBool, EqintBool, EqintBool, EqintBool, EqintBool, EqboolBool, EqstringBool,
 }
 
-var retNullPosVec = [][]int {
+var retNullPosVec = [][]int{
 	intNullPos, intNullPos, intNullPos, intNullPos, uintNullPos, uintNullPos, uintNullPos, uintNullPos,
 	intNullPos, intNullPos, intNullPos, intNullPos, intNullPos, uintNullPos, intNullPos,
 }
 
-var retNotNullPosVec = [][]int {
+var retNotNullPosVec = [][]int{
 	intNotNullPos, intNotNullPos, intNotNullPos, intNotNullPos, uintNotNullPos, uintNotNullPos, uintNotNullPos, uintNotNullPos,
 	intNotNullPos, intNotNullPos, intNotNullPos, intNotNullPos, intNotNullPos, uintNotNullPos, intNotNullPos,
 }
@@ -450,11 +456,11 @@ var retNotNullPosVec = [][]int {
 func Test_ColEqCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
 		InitFuncMap()
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {
 			vec := testFuncVec[i]()
-			ret, err := testEqFuncVec[i](vec, proc); 
+			ret, err := testEqFuncVec[i](vec, proc)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -472,6 +478,6 @@ func Test_ColEqCol(t *testing.T) {
 				convey.So(nulls.Contains(ret.Nsp, uint64(retNotNullPosVec[i][j])), convey.ShouldEqual, false)
 			}
 		}
-		
+
 	})
 }

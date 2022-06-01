@@ -59,6 +59,9 @@ func AppendValue(vec *gvec.Vector, v any) {
 	case types.T_decimal64:
 		vvals := vec.Col.([]types.Decimal64)
 		vec.Col = append(vvals, v.(types.Decimal64))
+	case types.T_decimal128:
+		vvals := vec.Col.([]types.Decimal128)
+		vec.Col = append(vvals, v.(types.Decimal128))
 	case types.T_float32:
 		vvals := vec.Col.([]float32)
 		vec.Col = append(vvals, v.(float32))
@@ -81,6 +84,10 @@ func AppendValue(vec *gvec.Vector, v any) {
 	default:
 		panic("not expected")
 	}
+}
+
+func LengthOfBatch(bat *gbat.Batch) int {
+	return gvec.Length(bat.Vecs[0])
 }
 
 func GetValue(col *gvec.Vector, row uint32) any {
@@ -112,6 +119,9 @@ func GetValue(col *gvec.Vector, row uint32) any {
 		return data[row]
 	case types.T_decimal64:
 		data := vals.([]types.Decimal64)
+		return data[row]
+	case types.T_decimal128:
+		data := vals.([]types.Decimal128)
 		return data[row]
 	case types.T_float32:
 		data := vals.([]float32)
@@ -174,6 +184,10 @@ func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 	case types.T_decimal64:
 		data := vals.([]types.Decimal64)
 		data[row] = val.(types.Decimal64)
+		col.Col = data
+	case types.T_decimal128:
+		data := vals.([]types.Decimal128)
+		data[row] = val.(types.Decimal128)
 		col.Col = data
 	case types.T_float32:
 		data := vals.([]float32)
@@ -241,6 +255,10 @@ func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 		data := vals.([]types.Decimal64)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
+	case types.T_decimal128:
+		data := vals.([]types.Decimal128)
+		data = append(data[:row], data[row+1:]...)
+		col.Col = data
 	case types.T_float32:
 		data := vals.([]float32)
 		data = append(data[:row], data[row+1:]...)
@@ -266,6 +284,25 @@ func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 		return vector.ErrVecTypeNotSupport
 	}
 	return nil
+}
+
+func ForEachValue(col *gvec.Vector, reversed bool, op func(v any) error) (err error) {
+	if reversed {
+		for i := gvec.Length(col) - 1; i >= 0; i-- {
+			v := GetValue(col, uint32(i))
+			if err = op(v); err != nil {
+				return
+			}
+		}
+		return
+	}
+	for i := 0; i < gvec.Length(col); i++ {
+		v := GetValue(col, uint32(i))
+		if err = op(v); err != nil {
+			return
+		}
+	}
+	return
 }
 
 func UpdateOffsets(data *types.Bytes, start, end int) {

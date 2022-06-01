@@ -90,6 +90,10 @@ func newPartialCkpInfo(size uint32) *partialCkpInfo {
 	}
 }
 
+func (info *partialCkpInfo) String() string {
+	return fmt.Sprintf("%s/%d", info.ckps.String(), info.size)
+}
+
 func (info *partialCkpInfo) IsAllCheckpointed() bool {
 	return info.size == uint32(info.ckps.GetCardinality())
 }

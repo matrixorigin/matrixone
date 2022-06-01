@@ -34,9 +34,10 @@ func NotNull(lv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 }
 
 type NotFunc = func(lv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var NotFuncMap = map[int]NotFunc{}
 
-var NotFuncVec = []NotFunc {
+var NotFuncVec = []NotFunc{
 	NotCol, NotConst, NotNull,
 }
 

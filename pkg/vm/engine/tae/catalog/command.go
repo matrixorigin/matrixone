@@ -410,7 +410,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		cmd.entry.CurrOp = OpCreate
 		cmd.Table = NewReplayTableEntry()
 		cmd.Table.BaseEntry = cmd.entry
-		cmd.Table.schema = new(Schema)
+		cmd.Table.schema = NewEmptySchema("")
 		if sn, err = cmd.Table.schema.ReadFrom(r); err != nil {
 			return
 		}

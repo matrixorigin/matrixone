@@ -17,7 +17,7 @@ package segment
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"io"
 	"unsafe"
 )
 
@@ -43,6 +43,10 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 		return
 	}
 	n += int(unsafe.Sizeof(file.snode.inode))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.state); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.state))
 	if err = binary.Read(cache, binary.BigEndian, &nameLen); err != nil {
 		return
 	}
@@ -61,10 +65,6 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 		return
 	}
 	n += int(unsafe.Sizeof(file.snode.algo))
-	if err = binary.Read(cache, binary.BigEndian, &file.snode.state); err != nil {
-		return
-	}
-	n += int(unsafe.Sizeof(file.snode.state))
 	if err = binary.Read(cache, binary.BigEndian, &file.snode.size); err != nil {
 		return
 	}
@@ -73,6 +73,10 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 		return
 	}
 	n += int(unsafe.Sizeof(file.snode.originSize))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.rows); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.rows))
 	if err = binary.Read(cache, binary.BigEndian, &extentLen); err != nil {
 		return
 	}
@@ -104,11 +108,29 @@ func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error)
 }
 
 func (l *Log) Replay(cache *bytes.Buffer) error {
-	n, err := l.logFile.segment.segFile.ReadAt(cache.Bytes(), LOG_START)
-	if err != nil {
-		return err
+	var off int64 = LOG_START
+	for {
+		pos, hole, err := l.replayData(cache, off)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if pos >= LOG_SIZE || hole >= HOLE_SIZE {
+			return nil
+		}
+		off += int64(pos)
 	}
-	if n != cache.Len() {
+}
+
+func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32, err error) {
+	hole = 0
+	pos, err = l.logFile.segment.segFile.ReadAt(data.Bytes(), offset)
+	if err != nil && err != io.EOF {
+		return 0, hole, err
+	}
+	if pos != data.Len() {
 		panic(any("Replay read error"))
 	}
 	l.logFile.segment.mutex.Lock()
@@ -117,44 +139,62 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 	l.logFile.name = "logfile"
 	l.logFile.segment.nodes[l.logFile.name] = l.logFile
 	magicLen := uint32(unsafe.Sizeof(l.logFile.snode.magic))
+	buffer := data.Bytes()
+	cache := bytes.NewBuffer(buffer)
 	for {
+		if hole >= HOLE_SIZE {
+			break
+		}
 		file := &BlockFile{
 			snode:   &Inode{},
 			segment: l.logFile.segment,
 		}
-		n, err = l.readInode(cache, file)
+		n, err := l.readInode(cache, file)
 		if err != nil {
-			return err
+			return 0, hole, err
 		}
 		if n == 0 {
-			if int(l.logFile.segment.super.blockSize-magicLen) == cache.Len() {
+			if int(l.logFile.segment.super.blockSize) == cache.Len() {
 				break
 			}
 			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.segment.super.blockSize-magicLen:])
+			hole += l.logFile.segment.super.blockSize
 			continue
 		}
 		seekLen := l.logFile.segment.super.blockSize - (uint32(n) % l.logFile.segment.super.blockSize)
+		if file.snode.state == REMOVE {
+			l.logFile.segment.nodes[file.name] = file
+		} else {
+			block := l.logFile.segment.nodes[file.name]
+			if (block == nil || block.snode.seq < file.snode.seq) &&
+				file.snode.state == RESIDENT {
+				extents := file.GetExtents()
+				for _, extent := range *extents {
+					l.logFile.segment.allocator.CheckAllocations(
+						extent.offset-DATA_START, extent.length)
+				}
+				file.snode.logExtents.length = uint32(n + int(seekLen))
+				file.snode.logExtents.offset = uint32(int(offset) + data.Cap() - cache.Len() - n)
+				l.allocator.CheckAllocations(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
+				l.logFile.segment.nodes[file.name] = file
+			}
+			if block == nil {
+				l.logFile.segment.lastInode++
+			}
+		}
 		if int(seekLen) == cache.Len() {
 			break
 		}
 		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
-		block := l.logFile.segment.nodes[file.name]
-		if (block == nil || block.snode.seq < file.snode.seq) &&
-			file.snode.state == RESIDENT {
-			extents := file.GetExtents()
-			for _, extent := range *extents {
-				l.logFile.segment.allocator.CheckAllocations(
-					extent.offset-DATA_START, extent.length)
-			}
-			l.logFile.segment.nodes[file.name] = file
-		}
-		if block == nil {
-			l.logFile.segment.lastInode++
-		} else {
-			logutil.Infof("block: %v seq: %d is overwritten", block.name, block.snode.seq)
-		}
 	}
-	return nil
+	nodes := l.logFile.segment.nodes
+	for _, file := range nodes {
+		if file.snode.state == REMOVE {
+			delete(l.logFile.segment.nodes, file.name)
+		}
+
+	}
+	return pos, hole, nil
 }
 
 func (l *Log) RemoveInode(file *BlockFile) error {
@@ -179,6 +219,9 @@ func (l *Log) Append(file *BlockFile) error {
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.inode); err != nil {
 		return err
 	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.state); err != nil {
+		return err
+	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, uint32(len([]byte(file.name)))); err != nil {
 		return err
 	}
@@ -191,13 +234,13 @@ func (l *Log) Append(file *BlockFile) error {
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.algo); err != nil {
 		return err
 	}
-	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.state); err != nil {
-		return err
-	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.size); err != nil {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.originSize); err != nil {
+		return err
+	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.rows); err != nil {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, uint64(len(file.snode.extents))); err != nil {
@@ -228,8 +271,29 @@ func (l *Log) Append(file *BlockFile) error {
 	if n, err := segment.segFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil || n != ibuffer.Len() {
 		return err
 	}
+	if file.snode.state == REMOVE {
+		err = l.CoverState(uint32(file.snode.logExtents.offset+LOG_START), REMOVE)
+		if err != nil {
+			return err
+		}
+	}
 	l.allocator.Free(file.snode.logExtents.offset, file.snode.logExtents.length)
 	file.snode.logExtents.offset = uint32(offset)
 	file.snode.logExtents.length = uint32(allocated)
+	return nil
+}
+
+func (l *Log) CoverState(start uint32, state StateType) error {
+	var (
+		err     error
+		ibuffer bytes.Buffer
+	)
+	segment := l.logFile.segment
+	if err = binary.Write(&ibuffer, binary.BigEndian, state); err != nil {
+		return err
+	}
+	if n, err := segment.segFile.WriteAt(ibuffer.Bytes(), int64(start+16)); err != nil || n != ibuffer.Len() {
+		return err
+	}
 	return nil
 }

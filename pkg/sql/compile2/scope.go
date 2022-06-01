@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"runtime"
 
+	"github.com/matrixorigin/matrixone/pkg/errno"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -36,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -46,11 +49,23 @@ import (
 
 func (s *Scope) CreateDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
+	if _, err := engine.Database(dbName, snapshot); err == nil {
+		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
+	}
 	return engine.Create(ts, dbName, 0, snapshot)
 }
 
 func (s *Scope) DropDatabase(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
-	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
+	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
+	if _, err := engine.Database(dbName, snapshot); err != nil {
+		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
+			return nil
+		}
+		return err
+	}
 	return engine.Delete(ts, dbName, snapshot)
 }
 
@@ -71,7 +86,15 @@ func (s *Scope) CreateTable(ts uint64, snapshot engine.Snapshot, engine engine.E
 	if err != nil {
 		return err
 	}
-	return dbSource.Create(ts, qry.GetTableDef().GetName(), append(exeCols, exeDefs...), snapshot)
+	tblName := qry.GetTableDef().GetName()
+	if relation, err := dbSource.Relation(tblName, snapshot); err == nil {
+		relation.Close(snapshot)
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
+	}
+	return dbSource.Create(ts, tblName, append(exeCols, exeDefs...), snapshot)
 }
 
 func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
@@ -80,10 +103,20 @@ func (s *Scope) DropTable(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 	dbName := qry.GetDatabase()
 	dbSource, err := engine.Database(dbName, snapshot)
 	if err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
 		return err
 	}
-
 	tblName := qry.GetTable()
+	if relation, err := dbSource.Relation(tblName, snapshot); err != nil {
+		if qry.GetIfExists() {
+			return nil
+		}
+		return err
+	} else {
+		relation.Close(snapshot)
+	}
 	return dbSource.Delete(ts, tblName, snapshot)
 }
 
@@ -161,36 +194,13 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
 	switch v := value.GetConstantValue().(type) {
 	case *plan.ConstantValue_Int64V:
-		switch typ {
-		case plan.Type_INT8:
-			return int8(v.Int64V)
-		case plan.Type_INT16:
-			return int16(v.Int64V)
-		case plan.Type_INT32:
-			return int32(v.Int64V)
-		case plan.Type_INT64:
-			return v.Int64V
-		}
+		return v.Int64V
 	case *plan.ConstantValue_Uint64V:
-		switch typ {
-		case plan.Type_UINT8:
-			return uint8(v.Uint64V)
-		case plan.Type_UINT16:
-			return uint16(v.Uint64V)
-		case plan.Type_UINT32:
-			return uint32(v.Uint64V)
-		case plan.Type_UINT64:
-			return v.Uint64V
-		}
+		return v.Uint64V
 	case *plan.ConstantValue_Float32V:
-		return v.Float32V
+		return float64(v.Float32V)
 	case *plan.ConstantValue_Float64V:
-		switch typ {
-		case plan.Type_FLOAT32:
-			return float32(v.Float64V)
-		case plan.Type_FLOAT64:
-			return v.Float64V
-		}
+		return v.Float64V
 	case *plan.ConstantValue_StringV:
 		return v.StringV
 	case *plan.ConstantValue_DateV:

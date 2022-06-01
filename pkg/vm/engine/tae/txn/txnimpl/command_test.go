@@ -82,9 +82,9 @@ func TestComposedCmd(t *testing.T) {
 	}
 	batCnt := 5
 
-	schema := catalog.MockSchema(4)
+	schema := catalog.MockSchema(4, 0)
 	for i := 0; i < batCnt; i++ {
-		data := compute.MockBatch(schema.Types(), (uint64(i)+1)*5, int(schema.PrimaryKey), nil)
+		data := catalog.MockData(schema, uint32((i+1)*5))
 		bat, err := compute.CopyToIBatch(data, uint64(txnbase.MaxNodeRows))
 		assert.Nil(t, err)
 		batCmd := txnbase.NewBatchCmd(bat, schema.Types())
@@ -137,25 +137,6 @@ func TestComposedCmd(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestAppendCmd(t *testing.T) {
-	infos := make([]*appendInfo, 0)
-	infos = append(infos, mockAppendInfo())
-	node := mockInsertNodeWithAppendInfo(infos)
-	cmd, _, err := node.MakeCommand(0, true)
-	assert.Nil(t, err)
-
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	checkAppendCmdIsEqual(t, cmd.(*AppendCmd), cmd2.(*AppendCmd))
 }
 
 func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *AppendCmd) {

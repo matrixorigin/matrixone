@@ -25,11 +25,12 @@ func lequal_D(d1, d2 interface{}, aScale, bScale int32) bool {
 }
 
 type LeOpFunc = func(d1, d2 interface{}, aScale, bScale int32) bool
+
 var LeOpFuncMap = map[int]LeOpFunc{}
 
 var LeOpFuncVec = []LeOpFunc{
 	lequal[int8], lequal[int16], lequal[int32], lequal[int64], lequal[uint8], lequal[uint16], lequal[uint32],
-	lequal[uint64], lequal[float32], lequal[float64], lequal[string], lequal_B, lequal[types.Date], 
+	lequal[uint64], lequal[float32], lequal[float64], lequal[string], lequal_B, lequal[types.Date],
 	lequal[types.Datetime], lequal[types.Decimal64], lequal_D,
 }
 
@@ -176,6 +177,7 @@ func NullLeNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 type LeFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var LeFuncMap = map[int]LeFunc{}
 
 var LeFuncVec = []LeFunc{
@@ -187,7 +189,7 @@ var LeFuncVec = []LeFunc{
 	ColLeConst[uint32], ColLeConst[uint64], ColLeConst[float32], ColLeConst[float64], ColLeConst[string], ColLeConst[bool],
 	ColLeConst[types.Date], ColLeConst[types.Datetime], ColLeConst[types.Decimal64], ColLeConst[types.Decimal128],
 
-	ColLeNull[int8], ColLeNull[int16], ColLeNull[int32], ColLeNull[int64], ColLeNull[uint8], ColLeNull[uint16], 
+	ColLeNull[int8], ColLeNull[int16], ColLeNull[int32], ColLeNull[int64], ColLeNull[uint8], ColLeNull[uint16],
 	ColLeNull[uint32], ColLeNull[uint64], ColLeNull[float32], ColLeNull[float64], ColLeNull[string], ColLeNull[bool],
 	ColLeNull[types.Date], ColLeNull[types.Datetime], ColLeNull[types.Decimal64], ColLeNull[types.Decimal128],
 

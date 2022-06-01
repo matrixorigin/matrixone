@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -161,7 +162,7 @@ func (node *appendableNode) OnLoad() {
 	}
 	var err error
 	schema := node.block.meta.GetSchema()
-	if node.data, err = node.file.LoadIBatch(schema.Types(), schema.BlockMaxRows); err != nil {
+	if node.data, err = node.file.LoadIBatch(schema.AllTypes(), schema.BlockMaxRows); err != nil {
 		node.exception.Store(err)
 	}
 }
@@ -280,34 +281,43 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	return
 }
 
+func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error) {
+	col, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
+	if err != nil {
+		return
+	}
+	defer closer()
+	vec, err := node.data.GetVectorByAttr(node.block.meta.GetSchema().HiddenKeyDef().Idx)
+	if err != nil {
+		return
+	}
+	_, err = vec.AppendVector(col, 0)
+	return
+}
+
 func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)
 		return
 	}
-	if node.data == nil {
-		vecs := make([]vector.IVector, len(bat.Vecs))
-		attrs := make([]int, len(bat.Vecs))
-		for i, vec := range bat.Vecs {
-			attrs[i] = i
-			vecs[i] = vector.NewVector(vec.Typ, uint64(node.block.meta.GetSchema().BlockMaxRows))
-		}
-		node.data, _ = batch.NewBatch(attrs, vecs)
-	}
+	schema := node.block.meta.GetSchema()
 	from = node.rows
-	for idx, attr := range node.data.GetAttrs() {
-		for i, a := range bat.Attrs {
-			if a == node.block.meta.GetSchema().ColDefs[idx].Name {
-				vec, err := node.data.GetVectorByAttr(attr)
-				if err != nil {
-					return 0, err
-				}
-				if _, err = vec.AppendVector(bat.Vecs[i], int(offset)); err != nil {
-					return from, err
-				}
-			}
+	for srcPos, attr := range bat.Attrs {
+		def := schema.ColDefs[schema.GetColIdx(attr)]
+		if def.IsHidden() {
+			continue
 		}
+		destVec, err := node.data.GetVectorByAttr(def.Idx)
+		if err != nil {
+			return from, err
+		}
+		if _, err = destVec.AppendVector(bat.Vecs[srcPos], int(offset)); err != nil {
+			return from, err
+		}
+	}
+	if err = node.FillHiddenColumn(from, length); err != nil {
+		return
 	}
 	node.rows += length
 	return

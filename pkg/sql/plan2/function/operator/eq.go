@@ -12,9 +12,8 @@ var dataTypeNum = 16
 
 type OrderedValue interface {
 	int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 | float64 | string |
-	types.Date | types.Datetime | types.Decimal64
+		types.Date | types.Datetime | types.Decimal64
 }
-
 
 type DataValue interface {
 	OrderedValue | bool | types.Decimal128
@@ -36,11 +35,12 @@ func equal_D(d1, d2 interface{}, aScale, bScale int32) bool {
 }
 
 type CompOpFunc = func(d1, d2 interface{}, aScale, bScale int32) bool
+
 var EqOpFuncMap = map[int]CompOpFunc{}
 
 var EqOpFuncVec = []CompOpFunc{
 	equal[int8], equal[int16], equal[int32], equal[int64], equal[uint8], equal[uint16], equal[uint32],
-	equal[uint64], equal[float32], equal[float64], equal[string], equal_B, equal[types.Date], 
+	equal[uint64], equal[float32], equal[float64], equal[string], equal_B, equal[types.Date],
 	equal[types.Datetime], equal[types.Decimal64], equal_D,
 }
 
@@ -51,6 +51,7 @@ func InitEqOpFuncMap() {
 }
 
 type StrCompOpFunc = func(d1, d2 interface{}) []bool
+
 var StrEqOpFuncMap = map[int]StrCompOpFunc{}
 
 var StrEqOpFuncVec = []StrCompOpFunc{
@@ -128,8 +129,7 @@ func InitStrEqOpFuncMap() {
 	}
 }
 
-
-func GetRetColLen[T DataValue](lv*vector.Vector) int {
+func GetRetColLen[T DataValue](lv *vector.Vector) int {
 	dataID := GetDatatypeID[T]()
 	if dataID != 10 {
 		return GetRetColLen_1[T](lv)
@@ -160,7 +160,7 @@ func GetRetCol[T DataValue](lv, rv *vector.Vector, colType int, FuncMap map[int]
 	if dataID != 10 {
 		return GetRetCol_1[T](lv, rv, colType, FuncMap)
 	} else {
-		return GetRetCol_2(lv, rv, colType, StrFuncMap)   
+		return GetRetCol_2(lv, rv, colType, StrFuncMap)
 	}
 }
 
@@ -275,6 +275,7 @@ func NullEqNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 type EqFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var EqFuncMap = map[int]EqFunc{}
 
 var EqFuncVec = []EqFunc{
@@ -286,7 +287,7 @@ var EqFuncVec = []EqFunc{
 	ColEqConst[uint32], ColEqConst[uint64], ColEqConst[float32], ColEqConst[float64], ColEqConst[string], ColEqConst[bool],
 	ColEqConst[types.Date], ColEqConst[types.Datetime], ColEqConst[types.Decimal64], ColEqConst[types.Decimal128],
 
-	ColEqNull[int8], ColEqNull[int16], ColEqNull[int32], ColEqNull[int64], ColEqNull[uint8], ColEqNull[uint16], 
+	ColEqNull[int8], ColEqNull[int16], ColEqNull[int32], ColEqNull[int64], ColEqNull[uint8], ColEqNull[uint16],
 	ColEqNull[uint32], ColEqNull[uint64], ColEqNull[float32], ColEqNull[float64], ColEqNull[string], ColEqNull[bool],
 	ColEqNull[types.Date], ColEqNull[types.Datetime], ColEqNull[types.Decimal64], ColEqNull[types.Decimal128],
 

@@ -149,7 +149,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				ctr.bat.Clean(proc.Mp)
 				return err
 			}
-			batch.Clean(bat, proc.Mp)
+			bat.Clean(proc.Mp)
 		}
 		count := len(ctr.bat.Zs)
 		for i := 0; i < count; i += UnitLimit {
@@ -305,8 +305,8 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			if cnt > 0 {
 				for _, pos := range ctr.poses {
 					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
-						batch.Clean(bat, proc.Mp)
-						batch.Clean(ctr.bat, proc.Mp)
+						bat.Clean(proc.Mp)
+						ctr.bat.Clean(proc.Mp)
 						return err
 					}
 
@@ -315,13 +315,13 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			for k := 0; k < n; k++ {
 				ctr.keys[k] = ctr.keys[k][:0]
 			}
-			batch.Clean(bat, proc.Mp)
+			bat.Clean(proc.Mp)
 		}
 	}
 }
 
 func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
-	defer batch.Clean(bat, proc.Mp)
+	defer bat.Clean(proc.Mp)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
@@ -391,12 +391,12 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
 						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp); err != nil {
-							batch.Clean(rbat, proc.Mp)
+							rbat.Clean(proc.Mp)
 							return err
 						}
 					} else {
 						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.Mp); err != nil {
-							batch.Clean(rbat, proc.Mp)
+							rbat.Clean(proc.Mp)
 							return err
 						}
 					}
@@ -410,12 +410,12 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					for j, rp := range ap.Result {
 						if rp.Rel == 0 {
 							if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp); err != nil {
-								batch.Clean(rbat, proc.Mp)
+								rbat.Clean(proc.Mp)
 								return err
 							}
 						} else {
 							if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp); err != nil {
-								batch.Clean(rbat, proc.Mp)
+								rbat.Clean(proc.Mp)
 								return err
 							}
 						}
@@ -427,12 +427,12 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
 						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp); err != nil {
-							batch.Clean(rbat, proc.Mp)
+							rbat.Clean(proc.Mp)
 							return err
 						}
 					} else {
 						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp); err != nil {
-							batch.Clean(rbat, proc.Mp)
+							rbat.Clean(proc.Mp)
 							return err
 						}
 					}

@@ -9,6 +9,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -26,14 +28,15 @@ var LtboolBool = []bool{false, false, false, true, false, false, true, false, fa
 var LtstringBool = []bool{false, true, true, false, false, false, true, false, false, false, false, false, true, true, true, false}
 
 type testLtFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var testLtFuncVec = []testLtFunc{
 	LtDataValue[int8], LtDataValue[int16], LtDataValue[int32], LtDataValue[int64],
 	LtDataValue[uint8], LtDataValue[uint16], LtDataValue[uint32], LtDataValue[uint64],
-	LtDataValue[float32], LtDataValue[float64], LtDataValue[types.Date], 
+	LtDataValue[float32], LtDataValue[float64], LtDataValue[types.Date],
 	LtDataValue[types.Datetime], LtDataValue[types.Decimal64], LtDataValue[bool], LtDataValue[string],
 }
 
-var LtretVec = [][]bool {
+var LtretVec = [][]bool{
 	LtintBool, LtintBool, LtintBool, LtintBool, LtuintBool, LtuintBool, LtuintBool, LtuintBool,
 	LtintBool, LtintBool, LtintBool, LtintBool, LtintBool, LtboolBool, LtstringBool,
 }
@@ -41,11 +44,11 @@ var LtretVec = [][]bool {
 func Test_ColLtCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
 		InitFuncMap()
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {
 			vec := testFuncVec[i]()
-			ret, err := testLtFuncVec[i](vec, proc); 
+			ret, err := testLtFuncVec[i](vec, proc)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -63,6 +66,6 @@ func Test_ColLtCol(t *testing.T) {
 				convey.So(nulls.Contains(ret.Nsp, uint64(retNotNullPosVec[i][j])), convey.ShouldEqual, false)
 			}
 		}
-		
+
 	})
 }

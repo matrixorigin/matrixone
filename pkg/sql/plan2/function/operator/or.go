@@ -82,11 +82,12 @@ func NullOrNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, e
 }
 
 type OrFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var OrFuncMap = map[int]OrFunc{}
 
-var OrFuncVec = []OrFunc {
-	ColOrCol, ColOrConst, ColOrNull, 
-	ConstOrCol, ConstOrConst, ConstOrNull, 
+var OrFuncVec = []OrFunc{
+	ColOrCol, ColOrConst, ColOrNull,
+	ConstOrCol, ConstOrConst, ConstOrNull,
 	NullOrCol, NullOrConst, NullOrNull,
 }
 

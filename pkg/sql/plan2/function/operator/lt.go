@@ -25,11 +25,12 @@ func less_D(d1, d2 interface{}, aScale, bScale int32) bool {
 }
 
 type LtOpFunc = func(d1, d2 interface{}, aScale, bScale int32) bool
+
 var LtOpFuncMap = map[int]LtOpFunc{}
 
 var LtOpFuncVec = []LtOpFunc{
 	less[int8], less[int16], less[int32], less[int64], less[uint8], less[uint16], less[uint32],
-	less[uint64], less[float32], less[float64], less[string], less_B, less[types.Date], 
+	less[uint64], less[float32], less[float64], less[string], less_B, less[types.Date],
 	less[types.Datetime], less[types.Decimal64], less_D,
 }
 
@@ -176,6 +177,7 @@ func NullLtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 type LtFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var LtFuncMap = map[int]LtFunc{}
 
 var LtFuncVec = []LtFunc{
@@ -187,7 +189,7 @@ var LtFuncVec = []LtFunc{
 	ColLtConst[uint32], ColLtConst[uint64], ColLtConst[float32], ColLtConst[float64], ColLtConst[string], ColLtConst[bool],
 	ColLtConst[types.Date], ColLtConst[types.Datetime], ColLtConst[types.Decimal64], ColLtConst[types.Decimal128],
 
-	ColLtNull[int8], ColLtNull[int16], ColLtNull[int32], ColLtNull[int64], ColLtNull[uint8], ColLtNull[uint16], 
+	ColLtNull[int8], ColLtNull[int16], ColLtNull[int32], ColLtNull[int64], ColLtNull[uint8], ColLtNull[uint16],
 	ColLtNull[uint32], ColLtNull[uint64], ColLtNull[float32], ColLtNull[float64], ColLtNull[string], ColLtNull[bool],
 	ColLtNull[types.Date], ColLtNull[types.Datetime], ColLtNull[types.Decimal64], ColLtNull[types.Decimal128],
 

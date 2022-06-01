@@ -1,5 +1,3 @@
-# This is a basic workflow to help you get started with Actions
-
 name: WeWork Robot
 
 # Controls when the workflow will run
@@ -68,9 +66,7 @@ jobs:
           cover_profile='profile.raw'
           raw_coverage="coverage.out"
           html_coverage="coverage.html"
-
           go test -v -tags matrixone_test -p 1 -covermode=count -coverprofile=$cover_profile -coverpkg=./pkg/... $test_scope | tee ut_report
-
           echo "ut finished"
           cat $cover_profile | egrep -v $(echo ${leave_out[*]} | tr " " "|") > $raw_coverage
           echo "raw_coverage finished"
@@ -79,11 +75,10 @@ jobs:
           echo "CODE_COVERAGE=$(awk '{if ($3>1) covered[$1] = true; all[$1] = true} END {print length(covered) / length(all)}' $cover_profile)" >> $GITHUB_ENV
           rm $cover_profile
           rm $raw_coverage
-
       - name: Archive Files
         run: |
           cd ${{ github.workspace }}
-          tar zcvf code_quality_reports.tar.gz coverage.html lint.out
+          zip -r code_quality_reports.zip coverage.html lint.out
       - name: Upload
         id: uploadCoverageFile
         uses: fjogeleit/http-request-action@v1
@@ -92,7 +87,7 @@ jobs:
           contentType: 'multipart/form-data'
           method: 'POST'
           data: '{}'
-          files: '{ "file": "${{ github.workspace }}/code_quality_reports.tar.gz" }'
+          files: '{ "file": "${{ github.workspace }}/code_quality_reports.zip" }'
 
       - name: Show Response
         run: |

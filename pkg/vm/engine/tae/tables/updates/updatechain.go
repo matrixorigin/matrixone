@@ -86,6 +86,22 @@ func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v any, n txnif.UpdateN
 	return
 }
 
+func (chain *ColumnChain) OnReplayUpdateNode(updateNode txnif.UpdateNode) {
+	updateNode.(*ColumnNode).AttachTo(chain)
+	chain.mvcc.TrySetMaxVisible(updateNode.(*ColumnNode).commitTs)
+	mask := updateNode.GetMask()
+	vals := updateNode.GetValues()
+	iterator := mask.Iterator()
+	for iterator.HasNext() {
+		row := iterator.Next()
+		val := vals[row]
+		err := chain.TryUpdateNodeLocked(row, val, updateNode)
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
 func (chain *ColumnChain) AddNodeLocked(txn txnif.AsyncTxn) txnif.UpdateNode {
 	node := NewColumnNode(txn, chain.id, nil)
 	node.AttachTo(chain)

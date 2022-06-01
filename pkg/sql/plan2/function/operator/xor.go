@@ -82,11 +82,12 @@ func NullXorNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 type XorFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var XorFuncMap = map[int]XorFunc{}
 
-var XorFuncVec = []XorFunc {
-	ColXorCol, ColXorConst, ColXorNull, 
-	ConstXorCol, ConstXorConst, ConstXorNull, 
+var XorFuncVec = []XorFunc{
+	ColXorCol, ColXorConst, ColXorNull,
+	ConstXorCol, ConstXorConst, ConstXorNull,
 	NullXorCol, NullXorConst, NullXorNull,
 }
 

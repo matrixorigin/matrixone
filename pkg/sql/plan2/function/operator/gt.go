@@ -25,11 +25,12 @@ func great_D(d1, d2 interface{}, aScale, bScale int32) bool {
 }
 
 type GtOpFunc = func(d1, d2 interface{}, aScale, bScale int32) bool
+
 var GtOpFuncMap = map[int]GtOpFunc{}
 
 var GtOpFuncVec = []GtOpFunc{
 	great[int8], great[int16], great[int32], great[int64], great[uint8], great[uint16], great[uint32],
-	great[uint64], great[float32], great[float64], great[string], great_B, great[types.Date], 
+	great[uint64], great[float32], great[float64], great[string], great_B, great[types.Date],
 	great[types.Datetime], great[types.Decimal64], great_D,
 }
 
@@ -116,7 +117,6 @@ func InitStrGtOpFuncMap() {
 	}
 }
 
-
 func ColGtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	n := GetRetColLen[T](lv)
 	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
@@ -177,6 +177,7 @@ func NullGtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 type GtFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var GtFuncMap = map[int]GtFunc{}
 
 var GtFuncVec = []GtFunc{
@@ -188,7 +189,7 @@ var GtFuncVec = []GtFunc{
 	ColGtConst[uint32], ColGtConst[uint64], ColGtConst[float32], ColGtConst[float64], ColGtConst[string], ColGtConst[bool],
 	ColGtConst[types.Date], ColGtConst[types.Datetime], ColGtConst[types.Decimal64], ColGtConst[types.Decimal128],
 
-	ColGtNull[int8], ColGtNull[int16], ColGtNull[int32], ColGtNull[int64], ColGtNull[uint8], ColGtNull[uint16], 
+	ColGtNull[int8], ColGtNull[int16], ColGtNull[int32], ColGtNull[int64], ColGtNull[uint8], ColGtNull[uint16],
 	ColGtNull[uint32], ColGtNull[uint64], ColGtNull[float32], ColGtNull[float64], ColGtNull[string], ColGtNull[bool],
 	ColGtNull[types.Date], ColGtNull[types.Datetime], ColGtNull[types.Decimal64], ColGtNull[types.Decimal128],
 

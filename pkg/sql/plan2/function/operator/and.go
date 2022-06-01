@@ -95,11 +95,12 @@ func InitFuncMap() {
 }
 
 type AndFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var AndFuncMap = map[int]AndFunc{}
 
-var AndFuncVec = []AndFunc {
-	ColAndCol, ColAndConst, ColAndNull, 
-	ConstAndCol, ConstAndConst, ConstAndNull, 
+var AndFuncVec = []AndFunc{
+	ColAndCol, ColAndConst, ColAndNull,
+	ConstAndCol, ConstAndConst, ConstAndNull,
 	NullAndCol, NullAndConst, NullAndNull,
 }
 

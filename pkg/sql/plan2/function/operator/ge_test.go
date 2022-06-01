@@ -9,6 +9,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -26,14 +28,15 @@ var GeboolBool = []bool{true, true, true, false, true, true, false, true, true}
 var GestringBool = []bool{true, false, false, true, true, true, false, true, true, true, true, true, false, false, false, true}
 
 type testGeFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var testGeFuncVec = []testGeFunc{
 	GeDataValue[int8], GeDataValue[int16], GeDataValue[int32], GeDataValue[int64],
 	GeDataValue[uint8], GeDataValue[uint16], GeDataValue[uint32], GeDataValue[uint64],
-	GeDataValue[float32], GeDataValue[float64], GeDataValue[types.Date], 
+	GeDataValue[float32], GeDataValue[float64], GeDataValue[types.Date],
 	GeDataValue[types.Datetime], GeDataValue[types.Decimal64], GeDataValue[bool], GeDataValue[string],
 }
 
-var GeretVec = [][]bool {
+var GeretVec = [][]bool{
 	GeintBool, GeintBool, GeintBool, GeintBool, GeuintBool, GeuintBool, GeuintBool, GeuintBool,
 	GeintBool, GeintBool, GeintBool, GeintBool, GeintBool, GeboolBool, GestringBool,
 }
@@ -41,11 +44,11 @@ var GeretVec = [][]bool {
 func Test_ColGeCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
 		InitFuncMap()
-		proc := process.New(mheap.New(nil))
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {
 			vec := testFuncVec[i]()
-			ret, err := testGeFuncVec[i](vec, proc); 
+			ret, err := testGeFuncVec[i](vec, proc)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -63,6 +66,6 @@ func Test_ColGeCol(t *testing.T) {
 				convey.So(nulls.Contains(ret.Nsp, uint64(retNotNullPosVec[i][j])), convey.ShouldEqual, false)
 			}
 		}
-		
+
 	})
 }

@@ -24,11 +24,12 @@ func nequal_D(d1, d2 interface{}, aScale, bScale int32) bool {
 }
 
 type NeOpFunc = func(d1, d2 interface{}, aScale, bScale int32) bool
+
 var NeOpFuncMap = map[int]NeOpFunc{}
 
 var NeOpFuncVec = []NeOpFunc{
 	nequal[int8], nequal[int16], nequal[int32], nequal[int64], nequal[uint8], nequal[uint16], nequal[uint32],
-	nequal[uint64], nequal[float32], nequal[float64], nequal[string], nequal_B, nequal[types.Date], 
+	nequal[uint64], nequal[float32], nequal[float64], nequal[string], nequal_B, nequal[types.Date],
 	nequal[types.Datetime], nequal[types.Decimal64], nequal_D,
 }
 
@@ -168,6 +169,7 @@ func NullNeNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 type NeFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var NeFuncMap = map[int]NeFunc{}
 
 var NeFuncVec = []NeFunc{
@@ -179,7 +181,7 @@ var NeFuncVec = []NeFunc{
 	ColNeConst[uint32], ColNeConst[uint64], ColNeConst[float32], ColNeConst[float64], ColNeConst[string], ColNeConst[bool],
 	ColNeConst[types.Date], ColNeConst[types.Datetime], ColNeConst[types.Decimal64], ColNeConst[types.Decimal128],
 
-	ColNeNull[int8], ColNeNull[int16], ColNeNull[int32], ColNeNull[int64], ColNeNull[uint8], ColNeNull[uint16], 
+	ColNeNull[int8], ColNeNull[int16], ColNeNull[int32], ColNeNull[int64], ColNeNull[uint8], ColNeNull[uint16],
 	ColNeNull[uint32], ColNeNull[uint64], ColNeNull[float32], ColNeNull[float64], ColNeNull[string], ColNeNull[bool],
 	ColNeNull[types.Date], ColNeNull[types.Datetime], ColNeNull[types.Decimal64], ColNeNull[types.Decimal128],
 

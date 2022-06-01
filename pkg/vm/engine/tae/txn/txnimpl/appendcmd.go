@@ -41,6 +41,7 @@ type AppendCmd struct {
 	*txnbase.BaseCustomizedCmd
 	*txnbase.ComposedCmd
 	Infos []*appendInfo
+	Ts    uint64
 	Node  InsertNode
 }
 
@@ -89,6 +90,13 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	sn, err = c.ComposedCmd.WriteTo(w)
 	n += sn
+	if err != nil {
+		return n, err
+	}
+	if err = binary.Write(w, binary.BigEndian, c.Node.GetTxn().GetCommitTS()); err != nil {
+		return
+	}
+	n += 8
 	return
 }
 
@@ -113,6 +121,12 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cc, sn, err := txnbase.BuildCommandFrom(r)
 	c.ComposedCmd = cc.(*txnbase.ComposedCmd)
 	n += sn
+	if err != nil {
+		return n, err
+	}
+	if err = binary.Read(r, binary.BigEndian, &c.Ts); err != nil {
+		return
+	}
 	return
 }
 

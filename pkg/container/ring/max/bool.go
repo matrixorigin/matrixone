@@ -145,7 +145,7 @@ func (r *BoolRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	}
 }
 
-func (r *BoolRing) BatchFill(start int64, os []uint8,   vps []uint64, zs []int64, vec *vector.Vector) {
+func (r *BoolRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]bool)
 	for i := range os {
 		j := vps[i] - 1

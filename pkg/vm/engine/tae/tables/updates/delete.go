@@ -213,7 +213,11 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 	if sn, err = w.Write(buf); err != nil {
 		return
 	}
-	n = int64(sn) + 4
+	n += int64(sn) + 4
+	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
+		return
+	}
+	n += 8
 	return
 }
 
@@ -229,7 +233,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
 		return
 	}
-	n = 4
+	n += 4
 	if cnt == 0 {
 		return
 	}
@@ -240,9 +244,18 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	n += int64(cnt)
 	node.mask = roaring.New()
 	err = node.mask.UnmarshalBinary(buf)
+	if err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
+		return
+	}
+	n += 4
 	return
 }
-
+func (node *DeleteNode) SetLogIndex(idx *wal.Index) {
+	node.logIndex = idx
+}
 func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewDeleteCmd(id, node)
 	return
@@ -262,7 +275,7 @@ func (node *DeleteNode) OnApply() (err error) {
 	if listener == nil {
 		return
 	}
-	err = listener(node.mask.Iterator(), node.commitTs)
+	err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.commitTs)
 	return
 }
 

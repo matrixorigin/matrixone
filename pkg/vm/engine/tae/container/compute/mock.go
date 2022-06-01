@@ -237,6 +237,12 @@ func (p *MockDataProvider) GetColumnProvider(colIdx int) *gvec.Vector {
 	return p.providers[colIdx]
 }
 
+func MockBatchWithAttrs(types []types.Type, attrs []string, rows uint64, uniqueIdx int, provider *MockDataProvider) *gbat.Batch {
+	bat := MockBatch(types, rows, uniqueIdx, provider)
+	bat.Attrs = attrs
+	return bat
+}
+
 func MockBatch(types []types.Type, rows uint64, uniqueIdx int, provider *MockDataProvider) *gbat.Batch {
 	attrs := make([]string, len(types))
 	for idx := range types {

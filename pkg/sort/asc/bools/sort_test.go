@@ -39,22 +39,6 @@ func generate() ([]bool, []int64) {
 	return xs, os
 }
 
-func TestSort(t *testing.T) {
-	vs, os := generate()
-	Sort(vs, os)
-	for i := 1; i < len(os); i++ {
-		require.GreaterOrEqual(t, vs[os[i]], vs[os[i-1]])
-	}
-}
-
-func TestHeapSort(t *testing.T) {
-	vs, os := generate()
-	heapSort(vs, os, 0, len(vs))
-	for i := 1; i < len(os); i++ {
-		require.GreaterOrEqual(t, vs[os[i]], vs[os[i-1]])
-	}
-}
-
 func TestMedianOfThree(t *testing.T) {
 	vs, os := generate()
 	medianOfThree(vs, os, 0, 1, 2)

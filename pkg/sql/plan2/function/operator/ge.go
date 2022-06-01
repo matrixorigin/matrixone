@@ -28,7 +28,7 @@ var GeOpFuncMap = map[int]CompOpFunc{}
 
 var GeOpFuncVec = []CompOpFunc{
 	gequal[int8], gequal[int16], gequal[int32], gequal[int64], gequal[uint8], gequal[uint16], gequal[uint32],
-	gequal[uint64], gequal[float32], gequal[float64], gequal[string], gequal_B, gequal[types.Date], 
+	gequal[uint64], gequal[float32], gequal[float64], gequal[string], gequal_B, gequal[types.Date],
 	gequal[types.Datetime], gequal[types.Decimal64], gequal_D,
 }
 
@@ -175,6 +175,7 @@ func NullGeNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 type GeFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
+
 var GeFuncMap = map[int]GeFunc{}
 
 var GeFuncVec = []GeFunc{
@@ -186,7 +187,7 @@ var GeFuncVec = []GeFunc{
 	ColGeConst[uint32], ColGeConst[uint64], ColGeConst[float32], ColGeConst[float64], ColGeConst[string], ColGeConst[bool],
 	ColGeConst[types.Date], ColGeConst[types.Datetime], ColGeConst[types.Decimal64], ColGeConst[types.Decimal128],
 
-	ColGeNull[int8], ColGeNull[int16], ColGeNull[int32], ColGeNull[int64], ColGeNull[uint8], ColGeNull[uint16], 
+	ColGeNull[int8], ColGeNull[int16], ColGeNull[int32], ColGeNull[int64], ColGeNull[uint8], ColGeNull[uint16],
 	ColGeNull[uint32], ColGeNull[uint64], ColGeNull[float32], ColGeNull[float64], ColGeNull[string], ColGeNull[bool],
 	ColGeNull[types.Date], ColGeNull[types.Datetime], ColGeNull[types.Decimal64], ColGeNull[types.Decimal128],
 

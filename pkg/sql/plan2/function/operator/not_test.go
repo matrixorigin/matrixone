@@ -8,6 +8,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -16,14 +18,15 @@ var NotboolVec = []bool{true, false, false}
 
 func Test_NotCol(t *testing.T) {
 	convey.Convey("Test not col operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		InitNotFuncMap()
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 1)
 		vec[0] = &vector.Vector{
 			Col: NotboolVec,
 			Nsp: &nulls.Nulls{},
 		}
 		nulls.Add(vec[0].Nsp, 2)
-		ret, err := Not(vec, proc); 
+		ret, err := Not(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -40,11 +43,12 @@ func Test_NotCol(t *testing.T) {
 
 func Test_NotConst(t *testing.T) {
 	convey.Convey("Test not const operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		InitNotFuncMap()
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 1)
 		vec[0] = InitConstVector()
 		vec[0].Col = []bool{true}
-		ret, err := Not(vec, proc); 
+		ret, err := Not(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -57,7 +61,7 @@ func Test_NotConst(t *testing.T) {
 		convey.So(data[0], convey.ShouldEqual, false)
 
 		vec[0].Col = []bool{false}
-		ret, err = Not(vec, proc); 
+		ret, err = Not(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -73,11 +77,12 @@ func Test_NotConst(t *testing.T) {
 
 func Test_NotNull(t *testing.T) {
 	convey.Convey("Test not null operator succ", t, func() {
-		proc := process.New(mheap.New(nil))
+		InitNotFuncMap()
+		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 1)
 		vec[0] = InitConstVector()
 		nulls.Add(vec[0].Nsp, 0)
-		ret, err := Not(vec, proc); 
+		ret, err := Not(vec, proc)
 		if err != nil {
 			log.Fatal(err)
 		}
