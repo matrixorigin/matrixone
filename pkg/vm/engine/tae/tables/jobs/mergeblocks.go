@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -105,6 +106,57 @@ func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uin
 		column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
 	} else {
 		column = mergesort.ShuffleColumn(vecs, *sortedIdx, fromLayout, toLayout)
+	}
+	return
+}
+
+//func (task *mergeBlocksTask)
+func mergeColumnWithOutSort(vecs []*vector.Vector, fromLayout, toLayout []uint32) (column []*vector.Vector, mapping []uint32) {
+	column = make([]*vector.Vector, len(toLayout))
+	totalRow := uint32(0)
+	for _, i := range fromLayout {
+		totalRow += i
+	}
+	mapping = make([]uint32, totalRow)
+	for i := range mapping {
+		mapping[i] = uint32(i)
+	}
+	fromIdx := 0
+	start := 0
+	end := 0
+	windowLength := 0
+	for i, toLength := range toLayout {
+		column[i] = vector.New(vecs[0].Typ)
+		for toLength != 0 {
+			left := fromLayout[fromIdx] - uint32(start)
+			if left == 0 {
+				fromIdx++
+				left = fromLayout[fromIdx]
+				start = 0
+			}
+			if left < toLength {
+				windowLength = int(left)
+			} else {
+				windowLength = int(toLength)
+			}
+			end = start + windowLength
+			window := vector.New(vecs[0].Typ)
+			vec := vector.Window(vecs[fromIdx], start, end, window)
+			vector.Append(column[i], vec.Col)
+			logutil.Infof(window.String())
+			if window.Nsp.Np != nil {
+				if column[i].Nsp.Np == nil {
+					column[i].Nsp.Np = roaring64.New()
+				}
+				iterator := window.Nsp.Np.Iterator()
+				for iterator.HasNext() {
+					row := iterator.Next()
+					column[i].Nsp.Np.Add(row + uint64(toLayout[i]-toLength) - uint64(start))
+				}
+			}
+			start += windowLength
+			toLength -= uint32(windowLength)
+		}
 	}
 	return
 }
