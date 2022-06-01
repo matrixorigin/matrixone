@@ -24,12 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/panjf2000/ants/v2"
 )
@@ -62,7 +60,7 @@ func main() {
 	defer tae.Close()
 	eng := moengine.NewEngine(tae)
 
-	var schema *catalog.Schema
+	schema := catalog.MockSchema(13, 12)
 	{
 		txn, _ := eng.StartTxn(nil)
 		err := eng.Create(0, dbName, 0, txn.GetCtx())
@@ -73,26 +71,19 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		tblInfo := moengine.MockTableInfo(4)
-		tblInfo.Columns[0].PrimaryKey = true
-		_, _, _, _, defs, _ := helper.UnTransfer(*tblInfo)
-		err = db.Create(0, tblInfo.Name, defs, txn.GetCtx())
+		defs, _ := moengine.SchemaToDefs(schema)
+		err = db.Create(0, schema.Name, defs, txn.GetCtx())
 		if err != nil {
 			panic(err)
-		}
-		{
-			db, _ := txn.(txnif.AsyncTxn).GetDatabase(dbName)
-			rel, _ := db.GetRelationByName(tblInfo.Name)
-			schema = rel.GetMeta().(*catalog.TableEntry).GetSchema()
 		}
 		if err := txn.Commit(); err != nil {
 			panic(err)
 		}
 	}
-	batchCnt := uint64(100)
-	batchRows := uint64(10000) * 1 / 2 * batchCnt
+	batchCnt := uint32(100)
+	batchRows := uint32(10000) * 1 / 2 * batchCnt
 	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
-	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, batchRows)
 	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {

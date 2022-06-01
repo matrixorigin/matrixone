@@ -44,7 +44,7 @@ func commitTxn(txn *txnbase.Txn) {
 }
 
 func TestColumnChain1(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -77,7 +77,7 @@ func TestColumnChain1(t *testing.T) {
 }
 
 func TestColumnChain2(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -193,7 +193,7 @@ func TestColumnChain2(t *testing.T) {
 
 func TestColumnChain3(t *testing.T) {
 	ncnt := 100
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -247,7 +247,7 @@ func TestColumnChain3(t *testing.T) {
 }
 
 func TestColumnChain4(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -349,7 +349,7 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()

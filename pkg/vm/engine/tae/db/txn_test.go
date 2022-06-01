@@ -95,80 +95,95 @@ func init() {
 		GoodRepertory: 100,
 	}
 
+	var err error
 	wareHouse = catalog.NewEmptySchema("WAREHOUSE")
-	wareHouse.PrimaryKey = 0
 	wareHouse.BlockMaxRows = 40000
 	wareHouse.SegmentMaxBlocks = 40
-	wareHouse.AppendCol("W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8})
-	wareHouse.AppendCol("W_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	wareHouse.AppendCol("W_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	wareHouse.AppendCol("W_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = wareHouse.AppendPKCol("W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8}, 0)
+	_ = wareHouse.AppendCol("W_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = wareHouse.AppendCol("W_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = wareHouse.AppendCol("W_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	if err = wareHouse.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	district = catalog.NewEmptySchema("DISTRICT")
-	district.PrimaryKey = 0
 	district.BlockMaxRows = 40000
 	district.SegmentMaxBlocks = 40
-	district.AppendCol("D_ID", types.Type{Oid: types.T_int16, Size: 2, Width: 16})
-	district.AppendCol("D_W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8})
-	district.AppendCol("D_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	district.AppendCol("D_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	district.AppendCol("D_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	district.AppendCol("D_NEXT_O_ID", types.Type{Oid: types.T_int64, Size: 8, Width: 64})
+	_ = district.AppendPKCol("D_ID", types.Type{Oid: types.T_int16, Size: 2, Width: 16}, 0)
+	_ = district.AppendCol("D_W_ID", types.Type{Oid: types.T_uint8, Size: 1, Width: 8})
+	_ = district.AppendCol("D_NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_STREET_1", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_STREET_2", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_CITY", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_STATE", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_ZIP", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = district.AppendCol("D_TAX", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = district.AppendCol("D_YTD", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = district.AppendCol("D_NEXT_O_ID", types.Type{Oid: types.T_int64, Size: 8, Width: 64})
+	if err = district.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	balance = catalog.NewEmptySchema("BALANCE")
-	balance.PrimaryKey = 0
 	balance.BlockMaxRows = 40000
 	balance.SegmentMaxBlocks = 40
-	balance.AppendCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	balance.AppendCol("BALANCE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = balance.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = balance.AppendCol("BALANCE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
 	// balance.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	if err = balance.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	user = catalog.NewEmptySchema("USER")
-	user.PrimaryKey = 0
 	user.BlockMaxRows = 40000
 	user.SegmentMaxBlocks = 40
-	user.AppendCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	user.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	user.AppendCol("BIRTH", types.Type{Oid: types.T_date, Size: 4, Width: 32})
-	user.AppendCol("ADDR", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	user.AppendCol("BALANCEID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = user.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = user.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = user.AppendCol("BIRTH", types.Type{Oid: types.T_date, Size: 4, Width: 32})
+	_ = user.AppendCol("ADDR", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = user.AppendCol("BALANCEID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	if err = user.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	goods = catalog.NewEmptySchema("GOODS")
-	goods.PrimaryKey = 0
 	goods.BlockMaxRows = 40000
 	goods.SegmentMaxBlocks = 40
-	goods.AppendCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	goods.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
-	goods.AppendCol("PRICE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
-	goods.AppendCol("DESC", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = goods.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = goods.AppendCol("NAME", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	_ = goods.AppendCol("PRICE", types.Type{Oid: types.T_float64, Size: 8, Width: 64})
+	_ = goods.AppendCol("DESC", types.Type{Oid: types.T_varchar, Size: 24, Width: 100})
+	if err = goods.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	repertory = catalog.NewEmptySchema("REPERTORY")
-	repertory.PrimaryKey = 0
 	repertory.BlockMaxRows = 40000
 	repertory.SegmentMaxBlocks = 40
-	repertory.AppendCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	repertory.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	repertory.AppendCol("COUNT", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = repertory.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = repertory.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = repertory.AppendCol("COUNT", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	if err = repertory.Finalize(false); err != nil {
+		panic(err)
+	}
 
 	deal = catalog.NewEmptySchema("DEAL")
-	deal.PrimaryKey = 0
 	deal.BlockMaxRows = 40000
 	deal.SegmentMaxBlocks = 40
-	deal.AppendCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	deal.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	deal.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
-	deal.AppendCol("QUANTITY", types.Type{Oid: types.T_uint32, Size: 4, Width: 32})
-	deal.AppendCol("DEALTIME", types.Type{Oid: types.T_datetime, Size: 8, Width: 64})
+	_ = deal.AppendPKCol("ID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64}, 0)
+	_ = deal.AppendCol("USERID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = deal.AppendCol("GOODID", types.Type{Oid: types.T_uint64, Size: 8, Width: 64})
+	_ = deal.AppendCol("QUANTITY", types.Type{Oid: types.T_uint32, Size: 4, Width: 32})
+	_ = deal.AppendCol("DEALTIME", types.Type{Oid: types.T_datetime, Size: 8, Width: 64})
+	if err = deal.Finalize(false); err != nil {
+		panic(err)
+	}
 }
 
 func NewApp1(mgr *txnbase.TxnManager, dbName string) *APP1 {
@@ -340,7 +355,7 @@ func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 			return
 		}
 	}
-	bat := compute.MockBatch(wareHouse.Types(), uint64(num), int(wareHouse.PrimaryKey), nil)
+	bat := catalog.MockData(wareHouse, uint32(num))
 	err = rel.Append(bat)
 	return
 }
@@ -411,7 +426,7 @@ func (app1 *APP1) Init(factor int) {
 	if err != nil {
 		panic(err)
 	}
-	balanceData := compute.MockBatch(balance.Types(), uint64(conf.Users), int(balance.PrimaryKey), nil)
+	balanceData := catalog.MockData(balance, uint32(conf.Users))
 	if err = balanceRel.Append(balanceData); err != nil {
 		panic(err)
 	}
@@ -422,7 +437,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider := compute.NewMockDataProvider()
 	provider.AddColumnProvider(4, balanceData.Vecs[0])
-	userData := compute.MockBatch(user.Types(), uint64(conf.Users), int(user.PrimaryKey), provider)
+	userData := compute.MockBatchWithAttrs(user.Types(), user.Attrs(), uint64(conf.Users), user.GetPrimaryKeyIdx(), provider)
 
 	for i := 0; i < conf.Users; i++ {
 		uid := compute.GetValue(userData.Vecs[0], uint32(i))
@@ -446,7 +461,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider.Reset()
 	provider.AddColumnProvider(2, price)
-	goodsData := compute.MockBatch(goods.Types(), uint64(conf.GoodKinds), int(goods.PrimaryKey), provider)
+	goodsData := compute.MockBatchWithAttrs(goods.Types(), goods.Attrs(), uint64(conf.GoodKinds), goods.GetPrimaryKeyIdx(), provider)
 	if err = goodsRel.Append(goodsData); err != nil {
 		panic(err)
 	}
@@ -466,7 +481,7 @@ func (app1 *APP1) Init(factor int) {
 	provider.Reset()
 	provider.AddColumnProvider(1, goodIds)
 	provider.AddColumnProvider(2, count)
-	repertoryData := compute.MockBatch(repertory.Types(), uint64(conf.GoodKinds), int(repertory.PrimaryKey), provider)
+	repertoryData := compute.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), uint64(conf.GoodKinds), repertory.GetPrimaryKeyIdx(), provider)
 	repertoryRel, err := db.GetRelationByName(repertory.Name)
 	if err != nil {
 		panic(err)
@@ -555,10 +570,9 @@ func TestWarehouse(t *testing.T) {
 func TestTxn7(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13)
+	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	schema.PrimaryKey = 12
 
 	bat := catalog.MockData(schema, 20)
 
@@ -590,10 +604,9 @@ func TestTxn7(t *testing.T) {
 
 func TestTxn8(t *testing.T) {
 	tae := initDB(t, nil)
-	schema := catalog.MockSchemaAll(13)
+	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	schema.PrimaryKey = 2
 
 	bat := catalog.MockData(schema, schema.BlockMaxRows*10)
 	bats := compute.SplitBatch(bat, 2)
@@ -610,14 +623,14 @@ func TestTxn8(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
-	pkv := compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 2)
+	pkv := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 2)
 	filter := handle.NewEQFilter(pkv)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
 	err = rel.Update(id, row, 3, int64(9999))
 	assert.NoError(t, err)
 
-	pkv = compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 3)
+	pkv = compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 3)
 	filter = handle.NewEQFilter(pkv)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -638,7 +651,7 @@ func TestTxn9(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
 
-	schema := catalog.MockSchemaAll(13)
+	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 4
 	expectRows := schema.BlockMaxRows * 5 / 2
@@ -698,7 +711,7 @@ func TestTxn9(t *testing.T) {
 		atomic.StoreUint32(&val, 1)
 		return nil
 	})
-	schema2 := catalog.MockSchemaAll(13)
+	schema2 := catalog.MockSchemaAll(13, 12)
 	_, _ = db.CreateRelation(schema2)
 	rel, _ := db.GetRelationByName(schema.Name)
 	err := rel.Append(bats[0])
@@ -730,7 +743,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
 	rel, _ = db.GetRelationByName(schema.Name)
-	v := compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 2)
+	v := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -744,7 +757,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
 	rel, _ = db.GetRelationByName(schema.Name)
-	v = compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 3)
+	v = compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 3)
 	filter = handle.NewEQFilter(v)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)

@@ -157,7 +157,7 @@ func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
 	case catalog.SystemTable_DB_Name:
 		return attrName == catalog.SystemDBAttr_Name
 	}
-	return int(schema.PrimaryKey) == colIdx
+	return schema.IsPartOfPK(colIdx)
 }
 
 func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {

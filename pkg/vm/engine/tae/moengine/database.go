@@ -16,7 +16,6 @@ package moengine
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -50,11 +49,10 @@ func (db *txnDatabase) Relation(name string, _ engine.Snapshot) (rel engine.Rela
 }
 
 func (db *txnDatabase) Create(_ uint64, name string, defs []engine.TableDef, _ engine.Snapshot) error {
-	info, err := helper.Transfer(db.handle.GetID(), 0, 0, name, defs)
+	schema, err := DefsToSchema(name, defs)
 	if err != nil {
 		return err
 	}
-	schema := TableInfoToSchema(&info)
 	schema.BlockMaxRows = 40000
 	schema.SegmentMaxBlocks = 20
 	_, err = db.handle.CreateRelation(schema)

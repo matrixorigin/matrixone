@@ -25,7 +25,7 @@ import (
 )
 
 func TestCompactBlockCmd(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
