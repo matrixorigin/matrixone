@@ -49,8 +49,11 @@ import (
 )
 
 var (
-	errorDatabaseIsNull             = goErrors.New("the database name is an empty string")
-	errorNoSuchGlobalSystemVariable = goErrors.New("there is no such global system variable")
+	errorDatabaseIsNull                            = goErrors.New("the database name is an empty string")
+	errorNoSuchGlobalSystemVariable                = goErrors.New("there is no such global system variable")
+	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
+	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
+	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
 )
 
 //tableInfos of a database
@@ -576,19 +579,79 @@ func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 }
 
 //handle SELECT DATABASE()
-func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
+func (mce *MysqlCmdExecutor) handleSelectDatabase(param string) error {
 	var err error = nil
 	ses := mce.GetSession()
 	proto := ses.protocol
 
 	col := new(MysqlColumn)
-	col.SetName("DATABASE()")
+	col.SetName(param)
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	ses.Mrs.AddColumn(col)
 	val := ses.protocol.GetDatabaseName()
 	if val == "" {
 		val = "NULL"
 	}
+	ses.Mrs.AddRow([]interface{}{val})
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
+//handle SELECT current_user()
+func (mce *MysqlCmdExecutor) handleSelectCurrentUser(param string) error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	col := new(MysqlColumn)
+	col.SetName(param)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	ses.Mrs.AddColumn(col)
+	val := ses.GetUserName()
+	host, _ := proto.Peer()
+	val = fmt.Sprintf("%s@%s", val, host)
+	ses.Mrs.AddRow([]interface{}{val})
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
+//handle SELECT XXX()
+func (mce *MysqlCmdExecutor) handleSelectXXX(param string) error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	col := new(MysqlColumn)
+	col.SetName(param + "()")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	ses.Mrs.AddColumn(col)
+	var val interface{}
+	switch param {
+	case "database":
+		val = ses.GetDatabaseName()
+		if val == "" {
+			val = "NULL"
+		}
+	case "current_user":
+		val = ses.GetUserName()
+		host, _ := proto.Peer()
+		val = fmt.Sprintf("%s@%s", val, host)
+	case "connection_id":
+		val = proto.ConnectionID()
+	}
+
 	ses.Mrs.AddRow([]interface{}{val})
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
@@ -820,9 +883,64 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 /*
 handle setvar
 */
-func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
+func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 	var err error = nil
-	proto := mce.GetSession().protocol
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	setVarFunc := func(system, global bool, name string, value interface{}) error {
+		if system {
+			if global {
+				err = ses.SetGlobalVar(name, value)
+				if err != nil {
+					return err
+				}
+			} else {
+				err = ses.SetSessionVar(name, value)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			err = ses.SetUserDefinedVar(name, value)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, assign := range sv.Assignments {
+		name := assign.Name
+		var value interface{}
+
+		//TODO: set var needs to be moved into plan2
+		//convert into definite type
+		value, err = GetSimpleExprValue(assign.Value)
+		if err != nil {
+			return err
+		}
+
+		//TODO : fix SET NAMES after parser is ready
+		if name == "names" {
+			//replaced into three system variable:
+			//character_set_client, character_set_connection, and character_set_results
+			replacedBy := []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			}
+			for _, rb := range replacedBy {
+				err = setVarFunc(assign.System, assign.Global, rb, value)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+		}
+	}
 
 	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
 	if err = proto.SendResponse(resp); err != nil {
@@ -878,7 +996,16 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
+		gsv := gSysVarsDefs[name]
 		row[1] = value
+		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
+			if value == 1 {
+				row[1] = "on"
+			} else {
+				row[1] = "off"
+			}
+		}
+
 		rows = append(rows, row)
 	}
 
@@ -1664,15 +1791,21 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				if len(sc.Exprs) == 1 {
 					if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
 						if un, ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
-							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
-								err = mce.handleSelectDatabase(st)
-								if err != nil {
-									goto handleFailed
-								}
-
-								//next statement
-								goto handleSucceeded
+							param := strings.ToLower(un.Parts[0])
+							switch param {
+							case "database":
+								fallthrough
+							case "current_user":
+								fallthrough
+							case "connection_id":
+								err = mce.handleSelectXXX(param)
 							}
+							if err != nil {
+								goto handleFailed
+							}
+
+							//next statement
+							goto handleSucceeded
 						}
 					} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
 						//TODO: fix multiple variables in single statement like `select @@a,@@b,@@c`
@@ -1695,7 +1828,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.ShowVariables, *tree.DropDatabase, *tree.Load,
 				*tree.Use, *tree.SetVar,
-				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Select:
 			case *tree.ShowColumns:
 				if t.Table.ToTableName().SchemaName == "" {
 					err = NewMysqlError(ER_NO_DB_ERROR)

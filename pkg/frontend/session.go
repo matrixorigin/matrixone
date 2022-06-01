@@ -205,7 +205,7 @@ func (ses *Session) SetGlobalVar(name string, value interface{}) error {
 // GetGlobalVar gets this value of the system variable in global
 func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 	if def, val, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		if def.Scope == ScopeSession {
+		if def.GetScope() == ScopeSession {
 			//empty
 			return nil, errorSystemVariableSessionEmpty
 		}
@@ -217,19 +217,19 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
-		if def.Scope == ScopeGlobal {
+		if def.GetScope() == ScopeGlobal {
 			return errorSystemVariableIsGlobal
 		}
 		//scope session & both
-		if !def.Dynamic {
+		if !def.GetDynamic() {
 			return errorSystemVariableIsReadOnly
 		}
 
-		cv, err := def.Type.Convert(value)
+		cv, err := def.GetType().Convert(value)
 		if err != nil {
 			return err
 		}
-		ses.sysVars[def.Name] = cv
+		ses.sysVars[def.GetName()] = cv
 	} else {
 		return errorSystemVariableDoesNotExist
 	}
@@ -240,7 +240,7 @@ func (ses *Session) SetSessionVar(name string, value interface{}) error {
 func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
 		ciname := strings.ToLower(name)
-		if def.Scope == ScopeGlobal {
+		if def.GetScope() == ScopeGlobal {
 			return gVal, nil
 		}
 		return ses.sysVars[ciname], nil
