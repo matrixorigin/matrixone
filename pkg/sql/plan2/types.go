@@ -15,6 +15,8 @@
 package plan2
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -80,4 +82,98 @@ type BinderContext struct {
 	// when we use buildUnresolvedName(), and the colName = 'a' and tableName = 'S', we reset tableName=''
 	// because the ProjectNode(after JoinNode) had coalesced the using cols
 	usingCols map[string]string
+}
+
+///////////////////////////////
+// Data structures for refactor
+///////////////////////////////
+
+type QueryBuilder struct {
+	qry            *plan.Query
+	bindingsByTag  map[int32]*Binding
+	bindingsByName map[string]*Binding
+	ctx            CompilerContext
+	scopeByNode    []*BindContext
+	nextTag        int32
+}
+
+type Binder interface {
+	BindExpr(string, tree.Expr, *BindContext) (*plan.Expr, error)
+	BindColRef(string, *tree.UnresolvedName, *BindContext) (*plan.Expr, error)
+	BindAggFunc(string, string, *tree.FuncExpr, *BindContext) (*plan.Expr, error)
+	BindWinFunc(string, string, *tree.FuncExpr, *BindContext) (*plan.Expr, error)
+}
+
+type baseBinder struct {
+	Binder
+	ctx CompilerContext
+}
+
+type TableBinder struct {
+	baseBinder
+}
+
+type AggregateBinder struct {
+	baseBinder
+	tableBinder  *TableBinder
+	groupBySize  int32
+	groupByMap   map[string]int32
+	aggregateMap map[string]int32
+	insideAgg    bool
+}
+
+var _ Binder = (*TableBinder)(nil)
+var _ Binder = (*AggregateBinder)(nil)
+
+const (
+	NotFound      int32 = math.MaxInt32
+	AmbiguousName int32 = math.MinInt32
+)
+
+type Binding struct {
+	tag         int32
+	nodeId      int32
+	table       string
+	cols        []string
+	types       []*plan.Type
+	colIdByName map[string]int32
+}
+
+type UsingColumnSet struct {
+	primary  *Binding
+	bindings []*Binding
+}
+
+//use for build select
+type BindContext struct {
+	binder Binder
+
+	groupTag     int32
+	aggregateTag int32
+	projectTag   int32
+
+	groups     []*plan.Expr
+	aggregates []*plan.Expr
+	projects   []*plan.Expr
+
+	groupByName     map[string]int32
+	aggregateByName map[string]int32
+	projectByName   map[string]int32
+
+	aliasMap map[string]tree.Expr
+
+	bindings       []*Binding
+	bindingsByTag  map[int32]*Binding
+	bindingsByName map[string]*Binding
+
+	corrCols []*plan.CorrColRef
+
+	// use for build subquery
+	subqueryIsCorrelated bool
+	// unused, commented out for now.
+	// subqueryIsScalar     bool
+
+	usingCols map[string][]*UsingColumnSet
+
+	parent *BindContext
 }

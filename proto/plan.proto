@@ -104,8 +104,9 @@ message ColRef {
 
 // Reference a correlated column in the proj list of a node.
 message CorrColRef {
-	int32 node_id = 1;
-	int32 col_pos = 2;
+	int32 rel_pos	= 1;
+	int32 col_pos	= 2;
+	int32 depth		= 3;
 }
 
 // ExprList is a type of Expr
