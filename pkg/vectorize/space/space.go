@@ -16,6 +16,7 @@ package space
 
 import (
 	"bytes"
+	"golang.org/x/exp/constraints"
 	"math"
 	"unicode"
 
@@ -59,26 +60,29 @@ func CountSpacesForSignedInt(originalVecCol interface{}) int64 {
 	}
 }
 
-func CountSpacesForFloat(originalVecCol interface{}) int64 {
+// todo: apply generics for sum, then modify this
+func CountSpacesForInt64(columnValues []int64) int64 {
+	result := sum.Int64Sum(columnValues)
+	if result < 0 {
+		return 0
+	} else {
+		return result
+	}
+}
+
+func CountSpacesForUint64(columnValues []uint64) int64 {
+	return int64(sum.Uint64Sum(columnValues))
+}
+
+func CountSpacesForFloat[T constraints.Float](columnValues []T) int64 {
 	var result int64
 
-	switch col := originalVecCol.(type) {
-	case []float32:
-		for _, i := range col {
-			if i < 0 {
-				continue
-			}
-
-			result += int64(math.Round(float64(i)))
+	for _, i := range columnValues {
+		if i < 0 {
+			continue
 		}
-	case []float64:
-		for _, i := range col {
-			if i < 0 {
-				continue
-			}
 
-			result += int64(math.Round(i))
-		}
+		result += int64(math.Round(float64(i)))
 	}
 
 	return result
@@ -259,6 +263,37 @@ func FillSpacesInt64(originalVecCol []int64, result *types.Bytes) *types.Bytes {
 	return result
 }
 
+func FillSpacesInteger[T constraints.Integer](originalVecCol []T, result *types.Bytes) *types.Bytes {
+	var offset uint32 = 0
+	for i, length := range originalVecCol {
+		result.Lengths[i] = uint32(length)
+		result.Offsets[i] = offset
+		offset += uint32(length)
+	}
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
+
+	return result
+}
+
+func FillSpacesFloat[T constraints.Float](originalVecCol []T, result *types.Bytes) *types.Bytes {
+	var offset uint32 = 0
+	for i, length := range originalVecCol {
+		roundLen := math.Round(float64(length))
+
+		result.Lengths[i] = uint32(roundLen)
+		result.Offsets[i] = offset
+		offset += uint32(roundLen)
+	}
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
+
+	return result
+}
 func FillSpacesFloat32(originalVecCol []float32, result *types.Bytes) *types.Bytes {
 	var offset uint32 = 0
 	for i, length := range originalVecCol {

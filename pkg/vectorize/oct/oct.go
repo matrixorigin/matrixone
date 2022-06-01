@@ -31,17 +31,17 @@ var (
 )
 
 func init() {
-	OctUint8 = oct[uint8]
-	OctUint16 = oct[uint16]
-	OctUint32 = oct[uint32]
-	OctUint64 = oct[uint64]
-	OctInt8 = oct[int8]
-	OctInt16 = oct[int16]
-	OctInt32 = oct[int32]
-	OctInt64 = oct[int64]
+	OctUint8 = Oct[uint8]
+	OctUint16 = Oct[uint16]
+	OctUint32 = Oct[uint32]
+	OctUint64 = Oct[uint64]
+	OctInt8 = Oct[int8]
+	OctInt16 = Oct[int16]
+	OctInt32 = Oct[int32]
+	OctInt64 = Oct[int64]
 }
 
-func oct[T constraints.Unsigned | constraints.Signed](xs []T, rs *types.Bytes) *types.Bytes {
+func Oct[T constraints.Unsigned | constraints.Signed](xs []T, rs *types.Bytes) *types.Bytes {
 	var cursor uint32
 
 	for idx := range xs {
