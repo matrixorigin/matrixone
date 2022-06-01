@@ -912,6 +912,7 @@ var builtins = map[int][]Function{
 	PI: {
 		{
 			Index:       0,
+			Volatile:    true,
 			Flag:        plan.Function_STRICT,
 			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{},
@@ -923,6 +924,7 @@ var builtins = map[int][]Function{
 	UTC_TIMESTAMP: {
 		{
 			Index:       0,
+			Volatile:    true,
 			Flag:        plan.Function_STRICT,
 			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{},
