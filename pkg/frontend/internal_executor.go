@@ -73,6 +73,7 @@ func (ie *internalExecutor) newCmdSession(opts ie.SessionOverrideOptions) *Sessi
 		guest.New(ie.pu.SV.GetGuestMmuLimitation(), ie.pu.HostMmu),
 		ie.pu.Mempool,
 		ie.pu,
+		gSysVariables,
 	)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
