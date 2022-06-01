@@ -174,65 +174,40 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, ctx *BindContext) (*Ex
 			return nil, err
 		}
 	}
+
+	var args []*Expr
+	for _, whenExpr := range astExpr.Whens {
+		condExpr, err := b.BindExpr(tree.String(whenExpr.Cond, dialect.MYSQL), whenExpr.Cond, ctx)
+		if err != nil {
+			return nil, err
+		}
+		if caseExpr != nil {
+			// rewrite "case col when 1 then '1' else '2'" to "case when col=1 then '1' else '2'"
+			condExpr, err = b.bindFuncExprImplByPlanExpr("=", []*Expr{caseExpr, condExpr}, ctx)
+			if err != nil {
+				return nil, err
+			}
+		}
+		args = append(args, condExpr)
+
+		valExpr, err := b.BindExpr(tree.String(whenExpr.Val, dialect.MYSQL), whenExpr.Val, ctx)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, valExpr)
+	}
+
 	if astExpr.Else != nil {
 		elseExpr, err = b.BindExpr(tree.String(astExpr.Else, dialect.MYSQL), astExpr.Else, ctx)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	whenList := make([]*Expr, len(astExpr.Whens))
-	for idx, whenExpr := range astExpr.Whens {
-		exprs := make([]*Expr, 2)
-		condExpr, err := b.BindExpr(tree.String(whenExpr.Cond, dialect.MYSQL), whenExpr.Cond, ctx)
-		if err != nil {
-			return nil, err
-		}
-		if caseExpr == nil {
-			// rewrite "case col when 1 then '1' else '2'" to "case when col=1 then '1' else '2'"
-			exprs[0], err = b.bindFuncExprImplByPlanExpr("=", []*Expr{caseExpr, condExpr}, ctx)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			exprs[0] = condExpr
-		}
-		valExpr, err := b.BindExpr(tree.String(whenExpr.Val, dialect.MYSQL), whenExpr.Val, ctx)
-		if err != nil {
-			return nil, err
-		}
-		exprs[1] = valExpr
-
-		whenList[idx] = &Expr{
-			Expr: &plan.Expr_List{
-				List: &plan.ExprList{
-					List: exprs,
-				},
-			},
-			Typ: &plan.Type{
-				Id: plan.Type_TUPLE,
-			},
-		}
-	}
-
-	whenExpr := &Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: whenList,
-			},
-		},
-		Typ: &plan.Type{
-			Id: plan.Type_TUPLE,
-		},
-	}
-
-	//we will use case(whenlist, else)
-	if elseExpr == nil {
-		// TODO how to deal with nil arg?
-		return b.bindFuncExprImplByPlanExpr("case", []*Expr{whenExpr}, ctx)
+		args = append(args, elseExpr)
 	} else {
-		return b.bindFuncExprImplByPlanExpr("case", []*Expr{whenExpr, elseExpr}, ctx)
+		args = append(args, getNullExpr())
 	}
+
+	return b.bindFuncExprImplByPlanExpr("case", args, ctx)
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, ctx *BindContext) (*Expr, error) {
@@ -591,6 +566,20 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 }
 
 // --- util functions ----
+
+func getNullExpr() *Expr {
+	return &Expr{
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Isnull: true,
+			},
+		},
+		Typ: &plan.Type{
+			Id:       plan.Type_ANY,
+			Nullable: true,
+		},
+	}
+}
 
 func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
 	argsType := []types.T{
