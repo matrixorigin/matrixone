@@ -90,7 +90,7 @@ type Function struct {
 	// Index is the function's location number of all the overloads with the same functionName.
 	Index int32
 
-	// Volatile function cannnot be fold
+	// Volatile function cannot be fold
 	Volatile bool
 
 	Flag plan.Function_FuncFlag
