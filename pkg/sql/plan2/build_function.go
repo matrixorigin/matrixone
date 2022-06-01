@@ -163,25 +163,25 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 	return
 }
 
-func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
-	argsType := []types.T{
-		types.T(expr.Typ.Id),
-		types.T(toType.Id),
-	}
-	_, funcId, _, err := function.GetFunctionByName("cast", argsType)
-	if err != nil {
-		return nil, err
-	}
-	return &Expr{
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: getFunctionObjRef(funcId, "cast"),
-				Args: []*Expr{expr},
-			},
-		},
-		Typ: toType,
-	}, nil
-}
+// func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
+// 	argsType := []types.T{
+// 		types.T(expr.Typ.Id),
+// 		types.T(toType.Id),
+// 	}
+// 	_, funcId, _, err := function.GetFunctionByName("cast", argsType)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return &Expr{
+// 		Expr: &plan.Expr_F{
+// 			F: &plan.Function{
+// 				Func: getFunctionObjRef(funcId, "cast"),
+// 				Args: []*Expr{expr},
+// 			},
+// 		},
+// 		Typ: toType,
+// 	}, nil
+// }
 
 func getFunctionObjRef(funcId int64, name string) *ObjectRef {
 	return &ObjectRef{
@@ -190,50 +190,50 @@ func getFunctionObjRef(funcId int64, name string) *ObjectRef {
 	}
 }
 
-func resetIntervalFunctionExprs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	strExpr := intervalExpr.Expr.(*plan.Expr_F).F.Args[0].Expr
-	intervalStr := strExpr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
-	intervalArray := strings.Split(intervalStr, " ")
+// func resetIntervalFunctionExprs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+// 	strExpr := intervalExpr.Expr.(*plan.Expr_F).F.Args[0].Expr
+// 	intervalStr := strExpr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+// 	intervalArray := strings.Split(intervalStr, " ")
 
-	intervalType, err := types.IntervalTypeOf(intervalArray[1])
-	if err != nil {
-		return nil, err
-	}
-	returnNum, returnType, err := types.NormalizeInterval(intervalArray[0], intervalType)
-	if err != nil {
-		return nil, err
-	}
+// 	intervalType, err := types.IntervalTypeOf(intervalArray[1])
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	returnNum, returnType, err := types.NormalizeInterval(intervalArray[0], intervalType)
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	return []*Expr{
-		dateExpr,
-		{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Value: &plan.Const_Ival{
-						Ival: returnNum,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:   plan.Type_INT64,
-				Size: 8,
-			},
-		},
-		{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Value: &plan.Const_Ival{
-						Ival: int64(returnType),
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:   plan.Type_INT64,
-				Size: 8,
-			},
-		},
-	}, nil
-}
+// 	return []*Expr{
+// 		dateExpr,
+// 		{
+// 			Expr: &plan.Expr_C{
+// 				C: &Const{
+// 					Value: &plan.Const_Ival{
+// 						Ival: returnNum,
+// 					},
+// 				},
+// 			},
+// 			Typ: &plan.Type{
+// 				Id:   plan.Type_INT64,
+// 				Size: 8,
+// 			},
+// 		},
+// 		{
+// 			Expr: &plan.Expr_C{
+// 				C: &Const{
+// 					Value: &plan.Const_Ival{
+// 						Ival: int64(returnType),
+// 					},
+// 				},
+// 			},
+// 			Typ: &plan.Type{
+// 				Id:   plan.Type_INT64,
+// 				Size: 8,
+// 			},
+// 		},
+// 	}, nil
+// }
 
 func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr, error) {
 	exprs, err := resetIntervalFunctionExprs(dateExpr, intervalExpr)
