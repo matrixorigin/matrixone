@@ -272,10 +272,10 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			count = cntv.(uint64)
 			return fmt.Errorf("stop iteration")
 		})
+		if found {
+			return
+		}
 		blockIt.Next()
-	}
-	if found {
-		return
 	}
 	err = catalog.ErrNotFound
 	return
