@@ -28,9 +28,12 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
-	// sql := "SELECT nation2.* FROM nation2 natural join region"
-	sql := `select date_add(date '2001-01-01', interval 1 day) as a`
+	// sql := "SELECT * FROM NATION where n_nationkey > 10"
+	// sql := "SELECT COUNT(n_nationkey) FROM NATION"
+	sql := "SELECT COUNT(*) FROM NATION a"
+	// sql := "SELECT n_nationkey, COUNT(*) AS TTT FROM NATION group by n_nationkey"
+	// sql := "select * from (select * from NATION order by n_nationkey) as x where n_nationkey > 10"
+	// sql := `select * from (select * from NATION order by n_nationkey) as x`
 	// sql := `SELECT REGION.* FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
