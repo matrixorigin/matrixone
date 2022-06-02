@@ -71,10 +71,14 @@ func (index *immutableIndex) Close() (err error) {
 }
 
 func (index *immutableIndex) Destroy() (err error) {
-	if err = index.zmReader.Destroy(); err != nil {
-		return
+	if index.zmReader != nil {
+		if err = index.zmReader.Destroy(); err != nil {
+			return
+		}
 	}
-	err = index.bfReader.Destroy()
+	if index.bfReader != nil {
+		err = index.bfReader.Destroy()
+	}
 	return
 }
 
