@@ -1282,10 +1282,7 @@ var operators = map[int][]Function{
 			Layout:    BINARY_LOGICAL_OPERATOR,
 			Args:      nil,
 			ReturnTyp: types.T_bool,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				_, _ = vs[0].Col.(*types.Bytes), vs[1].Col.(*types.Bytes)
-				return nil, nil
-			},
+			Fn:        operator.Like,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
 				if len(inputTypes) != 2 {
 					return false
