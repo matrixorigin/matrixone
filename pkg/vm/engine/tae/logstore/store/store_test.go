@@ -68,7 +68,8 @@ func TestAddrVersion(t *testing.T) {
 		assert.Nil(t, err)
 		_, err = s.AppendEntry(entry.GTUncommit, e)
 		assert.Nil(t, err)
-		e.WaitDone()
+		err := e.WaitDone()
+		assert.Nil(t, err)
 	}
 
 	testutils.WaitExpect(4000, func() bool {
