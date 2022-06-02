@@ -390,7 +390,7 @@ func TestCompactBlock1(t *testing.T) {
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	}
 
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 2)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.Filter{
 		Op:  handle.FilterEq,
 		Val: v,
@@ -438,7 +438,7 @@ func TestCompactBlock1(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := database.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
-		v = compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 3)
+		v = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 		filter.Val = v
 		id, _, err := rel.GetByFilter(&filter)
 		assert.Nil(t, err)
@@ -458,7 +458,7 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			rel, err := database.GetRelationByName(schema.Name)
 			assert.Nil(t, err)
-			v = compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 4)
+			v = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 4)
 			filter.Val = v
 			id, offset, err := rel.GetByFilter(&filter)
 			assert.Nil(t, err)
@@ -808,7 +808,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 			it := rel.MakeBlockIt()
 			for it.Valid() {
 				blk := it.GetBlock()
-				_, err := blk.GetColumnDataById(schema1.GetPrimaryKeyIdx(), nil, nil)
+				_, err := blk.GetColumnDataById(schema1.GetSingleSortKeyIdx(), nil, nil)
 				assert.Nil(t, err)
 				it.Next()
 			}
@@ -984,7 +984,7 @@ func TestMVCC1(t *testing.T) {
 	assert.Nil(t, err)
 
 	row := uint32(5)
-	expectVal := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], row)
+	expectVal := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], row)
 	filter := &handle.Filter{
 		Op:  handle.FilterEq,
 		Val: expectVal,
@@ -993,7 +993,7 @@ func TestMVCC1(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("id=%s,offset=%d", id, offset)
 	// Read uncommitted value
-	actualVal, err := rel.GetValue(id, offset, uint16(schema.GetPrimaryKeyIdx()))
+	actualVal, err := rel.GetValue(id, offset, uint16(schema.GetSingleSortKeyIdx()))
 	assert.Nil(t, err)
 	assert.Equal(t, expectVal, actualVal)
 	assert.Nil(t, txn.Commit())
@@ -1007,7 +1007,7 @@ func TestMVCC1(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("id=%s,offset=%d", id, offset)
 	// Read committed value
-	actualVal, err = rel.GetValue(id, offset, uint16(schema.GetPrimaryKeyIdx()))
+	actualVal, err = rel.GetValue(id, offset, uint16(schema.GetSingleSortKeyIdx()))
 	assert.Nil(t, err)
 	assert.Equal(t, expectVal, actualVal)
 
@@ -1020,11 +1020,11 @@ func TestMVCC1(t *testing.T) {
 	err = rel2.Append(bats[1])
 	assert.Nil(t, err)
 
-	val2 := compute.GetValue(bats[1].Vecs[schema.GetPrimaryKeyIdx()], row)
+	val2 := compute.GetValue(bats[1].Vecs[schema.GetSingleSortKeyIdx()], row)
 	filter.Val = val2
 	id, offset, err = rel2.GetByFilter(filter)
 	assert.Nil(t, err)
-	actualVal, err = rel2.GetValue(id, offset, uint16(schema.GetPrimaryKeyIdx()))
+	actualVal, err = rel2.GetValue(id, offset, uint16(schema.GetSingleSortKeyIdx()))
 	assert.Nil(t, err)
 	assert.Equal(t, val2, actualVal)
 
@@ -1051,7 +1051,7 @@ func TestMVCC1(t *testing.T) {
 		if bid.BlockID == id.BlockID {
 			var comp bytes.Buffer
 			var decomp bytes.Buffer
-			view, err := block.GetColumnDataById(schema.GetPrimaryKeyIdx(), &comp, &decomp)
+			view, err := block.GetColumnDataById(schema.GetSingleSortKeyIdx(), &comp, &decomp)
 			assert.Nil(t, err)
 			assert.Nil(t, view.DeleteMask)
 			assert.NotNil(t, view.GetColumnData())
@@ -1085,7 +1085,7 @@ func TestMVCC2(t *testing.T) {
 		assert.Nil(t, err)
 		err = rel.Append(bats[0])
 		assert.Nil(t, err)
-		val := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 5)
+		val := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 5)
 		filter := handle.Filter{
 			Op:  handle.FilterEq,
 			Val: val,
@@ -1102,7 +1102,7 @@ func TestMVCC2(t *testing.T) {
 		assert.Nil(t, err)
 		err = rel.Append(bats[1])
 		assert.Nil(t, err)
-		val := compute.GetValue(bats[1].Vecs[schema.GetPrimaryKeyIdx()], 5)
+		val := compute.GetValue(bats[1].Vecs[schema.GetSingleSortKeyIdx()], 5)
 		filter := handle.Filter{
 			Op:  handle.FilterEq,
 			Val: val,
@@ -1274,7 +1274,7 @@ func TestUnload2(t *testing.T) {
 		}
 		for i := 0; i < len(bats); i += 2 {
 			data := bats[i]
-			filter.Val = compute.GetValue(data.Vecs[schema1.GetPrimaryKeyIdx()], 0)
+			filter.Val = compute.GetValue(data.Vecs[schema1.GetSingleSortKeyIdx()], 0)
 			_, _, err := rel.GetByFilter(&filter)
 			assert.Nil(t, err)
 		}
@@ -1282,7 +1282,7 @@ func TestUnload2(t *testing.T) {
 		assert.Nil(t, err)
 		for i := 1; i < len(bats); i += 2 {
 			data := bats[i]
-			filter.Val = compute.GetValue(data.Vecs[schema1.GetPrimaryKeyIdx()], 0)
+			filter.Val = compute.GetValue(data.Vecs[schema1.GetSingleSortKeyIdx()], 0)
 			_, _, err := rel.GetByFilter(&filter)
 			assert.Nil(t, err)
 		}
@@ -1319,7 +1319,7 @@ func TestDelete1(t *testing.T) {
 		rel, err := db.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
 		assert.Equal(t, compute.LengthOfBatch(bat), int(rel.Rows()))
-		pkCol := bat.Vecs[schema.GetPrimaryKeyIdx()]
+		pkCol := bat.Vecs[schema.GetSingleSortKeyIdx()]
 		pkVal := compute.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
 		id, row, err = rel.GetByFilter(filter)
@@ -1335,7 +1335,7 @@ func TestDelete1(t *testing.T) {
 		rel, err := db.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
 		assert.Equal(t, compute.LengthOfBatch(bat)-1, int(rel.Rows()))
-		pkCol := bat.Vecs[schema.GetPrimaryKeyIdx()]
+		pkCol := bat.Vecs[schema.GetSingleSortKeyIdx()]
 		pkVal := compute.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
 		_, _, err = rel.GetByFilter(filter)
@@ -1367,17 +1367,17 @@ func TestDelete1(t *testing.T) {
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.Nil(t, err)
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(view.AppliedVec))
 
 		err = blk.RangeDelete(0, 0)
 		assert.Nil(t, err)
-		view, err = blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err = blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(0))
-		v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
+		v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
 		assert.Equal(t, data.ErrNotFound, err)
@@ -1392,11 +1392,11 @@ func TestDelete1(t *testing.T) {
 		assert.Equal(t, compute.LengthOfBatch(bat)-2, int(rel.Rows()))
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(0))
 		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(view.AppliedVec))
-		v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
+		v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
 		assert.Equal(t, data.ErrNotFound, err)
@@ -1446,7 +1446,7 @@ func TestLogIndex1(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
-		v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 3)
+		v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 		filter := handle.NewEQFilter(v)
 		id, offset, err = rel.GetByFilter(filter)
 		assert.Nil(t, err)
@@ -1491,7 +1491,7 @@ func TestLogIndex1(t *testing.T) {
 			t.Logf("%d: %s", i, index.String())
 		}
 
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(offset))
 		t.Log(view.AppliedVec.String())
@@ -1849,7 +1849,7 @@ func TestScan2(t *testing.T) {
 	blkIt := rel.MakeBlockIt()
 	for blkIt.Valid() {
 		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
 		actualRows += view.Length()
 		blkIt.Next()
@@ -1865,14 +1865,14 @@ func TestScan2(t *testing.T) {
 	blkIt = rel.MakeBlockIt()
 	for blkIt.Valid() {
 		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
 		actualRows += view.Length()
 		blkIt.Next()
 	}
 	assert.Equal(t, int(rows), actualRows)
 
-	pkv := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 5)
+	pkv := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 5)
 	filter := handle.NewEQFilter(pkv)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -1883,7 +1883,7 @@ func TestScan2(t *testing.T) {
 	blkIt = rel.MakeBlockIt()
 	for blkIt.Valid() {
 		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
 		view.ApplyDeletes()
 		actualRows += view.Length()
@@ -1892,7 +1892,7 @@ func TestScan2(t *testing.T) {
 	t.Log(actualRows)
 	assert.Equal(t, int(rows)-1, actualRows)
 
-	pkv = compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 8)
+	pkv = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 8)
 	filter = handle.NewEQFilter(pkv)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -1911,7 +1911,7 @@ func TestScan2(t *testing.T) {
 	blkIt = rel.MakeBlockIt()
 	for blkIt.Valid() {
 		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
 		view.ApplyDeletes()
 		actualRows += view.Length()
@@ -1938,11 +1938,11 @@ func TestUpdatePrimaryKey(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 2)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	err = rel.Update(id, row, uint16(schema.GetPrimaryKeyIdx()), v)
+	err = rel.Update(id, row, uint16(schema.GetSingleSortKeyIdx()), v)
 	assert.Error(t, err)
 	assert.NoError(t, txn.Commit())
 }
@@ -1966,7 +1966,7 @@ func TestADA(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -1990,7 +1990,7 @@ func TestADA(t *testing.T) {
 	rows := 0
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
 		vec := view.ApplyDeletes()
 		rows += vector.Length(vec)
@@ -2012,7 +2012,7 @@ func TestADA(t *testing.T) {
 	rows = 0
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
 		vec := view.ApplyDeletes()
 		rows += vector.Length(vec)
@@ -2075,7 +2075,7 @@ func TestADA(t *testing.T) {
 	it = rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, 4, view.Length())
 		assert.Equal(t, uint64(3), view.DeleteMask.GetCardinality())
@@ -2101,7 +2101,7 @@ func TestUpdateByFilter(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
 
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 2)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 	err = rel.UpdateByFilter(filter, 2, int32(2222))
 	assert.NoError(t, err)
@@ -2112,9 +2112,9 @@ func TestUpdateByFilter(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int32(2222), cv.(int32))
 
-	v = compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 3)
+	v = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(v)
-	err = rel.UpdateByFilter(filter, uint16(schema.GetPrimaryKeyIdx()), int64(333333))
+	err = rel.UpdateByFilter(filter, uint16(schema.GetSingleSortKeyIdx()), int64(333333))
 	assert.NoError(t, err)
 
 	assert.NoError(t, txn.Commit())
@@ -2141,7 +2141,7 @@ func TestGetByFilter(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	// Step 2
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 2)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 
 	// Step 3
@@ -2194,7 +2194,7 @@ func TestChaos1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 	var wg sync.WaitGroup
 	appendCnt := uint32(0)
@@ -2251,7 +2251,7 @@ func TestChaos1(t *testing.T) {
 	assert.Equal(t, int64(appendCnt-deleteCnt), rel.Rows())
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
-	view, err := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+	view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 	assert.Equal(t, int(appendCnt), view.Length())
 	view.ApplyDeletes()
 	t.Log(view.DeleteMask.String())
@@ -2272,7 +2272,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
 	bat := catalog.MockData(schema, 10)
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 3)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter := handle.NewEQFilter(v)
 
 	// Step 1
@@ -2342,7 +2342,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
 	bat := catalog.MockData(schema, 1)
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 
 	txn, _ := tae.StartTxn(nil)

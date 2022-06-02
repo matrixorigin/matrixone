@@ -404,7 +404,7 @@ func (n *insertNode) FillHiddenColumn(startRow, length uint32) (err error) {
 		return
 	}
 	defer closer()
-	vec, err := n.data.GetVectorByAttr(n.table.entry.GetSchema().HiddenKeyDef().Idx)
+	vec, err := n.data.GetVectorByAttr(n.table.entry.GetSchema().HiddenKey.Idx)
 	if err != nil {
 		return
 	}

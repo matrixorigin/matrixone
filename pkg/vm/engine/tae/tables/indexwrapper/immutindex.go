@@ -83,14 +83,14 @@ func (index *immutableIndex) Destroy() (err error) {
 }
 
 func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
+	entry := blk.GetMeta().(*catalog.BlockEntry)
 	file := blk.GetBlockFile()
 	idxMeta, err := file.LoadIndexMeta()
 	if err != nil {
 		return
 	}
 	metas := idxMeta.(*IndicesMeta)
-	entry := blk.GetMeta().(*catalog.BlockEntry)
-	colFile, err := file.OpenColumn(entry.GetSchema().GetPrimaryKeyIdx())
+	colFile, err := file.OpenColumn(entry.GetSchema().GetSingleSortKey().Idx)
 	if err != nil {
 		return
 	}

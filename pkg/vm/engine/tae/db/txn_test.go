@@ -418,7 +418,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider := compute.NewMockDataProvider()
 	provider.AddColumnProvider(4, balanceData.Vecs[0])
-	userData := compute.MockBatchWithAttrs(user.Types(), user.Attrs(), uint64(conf.Users), user.GetPrimaryKeyIdx(), provider)
+	userData := compute.MockBatchWithAttrs(user.Types(), user.Attrs(), uint64(conf.Users), user.GetSingleSortKeyIdx(), provider)
 
 	for i := 0; i < conf.Users; i++ {
 		uid := compute.GetValue(userData.Vecs[0], uint32(i))
@@ -442,7 +442,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider.Reset()
 	provider.AddColumnProvider(2, price)
-	goodsData := compute.MockBatchWithAttrs(goods.Types(), goods.Attrs(), uint64(conf.GoodKinds), goods.GetPrimaryKeyIdx(), provider)
+	goodsData := compute.MockBatchWithAttrs(goods.Types(), goods.Attrs(), uint64(conf.GoodKinds), goods.GetSingleSortKeyIdx(), provider)
 	if err = goodsRel.Append(goodsData); err != nil {
 		panic(err)
 	}
@@ -462,7 +462,7 @@ func (app1 *APP1) Init(factor int) {
 	provider.Reset()
 	provider.AddColumnProvider(1, goodIds)
 	provider.AddColumnProvider(2, count)
-	repertoryData := compute.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), uint64(conf.GoodKinds), repertory.GetPrimaryKeyIdx(), provider)
+	repertoryData := compute.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), uint64(conf.GoodKinds), repertory.GetSingleSortKeyIdx(), provider)
 	repertoryRel, err := db.GetRelationByName(repertory.Name)
 	if err != nil {
 		panic(err)
@@ -604,14 +604,14 @@ func TestTxn8(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
-	pkv := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 2)
+	pkv := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(pkv)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
 	err = rel.Update(id, row, 3, int64(9999))
 	assert.NoError(t, err)
 
-	pkv = compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 3)
+	pkv = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(pkv)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -724,7 +724,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
 	rel, _ = db.GetRelationByName(schema.Name)
-	v := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 2)
+	v := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -738,7 +738,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
 	rel, _ = db.GetRelationByName(schema.Name)
-	v = compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 3)
+	v = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(v)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)

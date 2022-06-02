@@ -39,7 +39,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(schema.HiddenKeyDef().Idx, nil, nil)
+			view, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
 			assert.NoError(t, err)
 			fp := blk.Fingerprint()
 			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
@@ -234,7 +234,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 		} else {
 			err = rel.UpdateByHiddenKey(v, 3, int64(9999))
 			assert.NoError(t, err)
-			err2 := rel.UpdateByHiddenKey(v, schema.HiddenKeyDef().Idx, v)
+			err2 := rel.UpdateByHiddenKey(v, schema.HiddenKey.Idx, v)
 			assert.ErrorIs(t, err2, data.ErrUpdateHiddenKey)
 		}
 		return
@@ -289,7 +289,7 @@ func TestHidden2(t *testing.T) {
 		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
+			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {
@@ -326,7 +326,7 @@ func TestHidden2(t *testing.T) {
 		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
+			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {
@@ -419,7 +419,7 @@ func TestHidden2(t *testing.T) {
 		for it.Valid() {
 			blk := it.GetBlock()
 			// hidden, err := blk.GetColumnDataById(0, nil, nil)
-			hidden, err := blk.GetColumnDataById(schema.HiddenKeyDef().Idx, nil, nil)
+			hidden, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
 			assert.NoError(t, err)
 			hidden.ApplyDeletes()
 			rows += hidden.Length()

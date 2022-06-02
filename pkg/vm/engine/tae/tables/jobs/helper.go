@@ -21,10 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
-func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumnData *vector.Vector) (err error) {
+func BuildAndFlushSingleIndex(file file.Block, meta *catalog.BlockEntry, columnData *vector.Vector) (err error) {
 	// write indexes, collect their meta, and refresh host's index holder
 	schema := meta.GetSchema()
-	pkColumn, err := file.OpenColumn(schema.GetPrimaryKeyIdx())
+	sortCol, err := file.OpenColumn(schema.GetSingleSortKey().Idx)
 	if err != nil {
 		return
 	}
@@ -33,15 +33,15 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	metas := indexwrapper.NewEmptyIndicesMeta()
 
 	zoneMapWriter := indexwrapper.NewZMWriter()
-	zmFile, err := pkColumn.OpenIndexFile(int(zmIdx))
+	zmFile, err := sortCol.OpenIndexFile(int(zmIdx))
 	if err != nil {
 		return err
 	}
-	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.GetPrimaryKeyIdx()), zmIdx)
+	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), zmIdx)
 	if err != nil {
 		return err
 	}
-	err = zoneMapWriter.AddValues(pkColumnData)
+	err = zoneMapWriter.AddValues(columnData)
 	if err != nil {
 		return err
 	}
@@ -52,15 +52,15 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	metas.AddIndex(*zmMeta)
 
 	bfWriter := indexwrapper.NewBFWriter()
-	sfFile, err := pkColumn.OpenIndexFile(int(sfIdx))
+	sfFile, err := sortCol.OpenIndexFile(int(sfIdx))
 	if err != nil {
 		return err
 	}
-	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.GetPrimaryKeyIdx()), sfIdx)
+	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), sfIdx)
 	if err != nil {
 		return err
 	}
-	err = bfWriter.AddValues(pkColumnData)
+	err = bfWriter.AddValues(columnData)
 	if err != nil {
 		return err
 	}

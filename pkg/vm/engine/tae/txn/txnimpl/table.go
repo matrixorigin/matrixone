@@ -52,8 +52,7 @@ type txnTable struct {
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
-
-	isHiddenPK bool
+	sortKey    *catalog.SortKey
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
@@ -65,7 +64,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
-		isHiddenPK:  entry.GetSchema().IsHiddenPK(),
+		sortKey:     entry.GetSchema().SortKey,
 	}
 	return tbl
 }
@@ -314,10 +313,14 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 }
 
 func (tbl *txnTable) Append(data *batch.Batch) error {
-	if !tbl.isHiddenPK {
-		err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().GetPrimaryKeyIdx()])
-		if err != nil {
-			return err
+	if tbl.sortKey != nil {
+		if tbl.sortKey.Size() == 1 {
+			err := tbl.BatchDedup(data.Vecs[tbl.sortKey.GetDef(0).Idx])
+			if err != nil {
+				return err
+			}
+		} else if tbl.sortKey.Size() > 1 {
+			panic("implement me")
 		}
 	}
 	if tbl.localSegment == nil {
@@ -517,10 +520,10 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 }
 
 func (tbl *txnTable) PreCommitDedup() (err error) {
-	if tbl.localSegment == nil || tbl.isHiddenPK {
+	if tbl.localSegment == nil || tbl.sortKey == nil || !tbl.sortKey.IsPrimary() {
 		return
 	}
-	pks := tbl.localSegment.GetPrimaryColumn()
+	pks := tbl.localSegment.GetSortColumn()
 	err = tbl.DoDedup(pks, true)
 	return
 }
@@ -603,7 +606,11 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
 	if tbl.localSegment != nil {
-		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().GetPrimaryKeyIdx()])
+		if tbl.sortKey.Size() == 1 {
+			err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.sortKey.GetSingleIdx()])
+		} else {
+			panic("implement me")
+		}
 	}
 	return
 }

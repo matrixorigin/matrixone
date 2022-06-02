@@ -61,46 +61,49 @@ type ColDef struct {
 	Hidden        int8
 	NullAbility   int8
 	AutoIncrement int8
-	PrimaryIdx    int8
+	SortIdx       int8
+	SortKey       int8
+	Primary       int8
 	Comment       string
 }
 
 func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
-func (def *ColDef) IsPrimary() bool { return def.PrimaryIdx >= 0 }
+func (def *ColDef) IsPrimary() bool { return def.Primary == int8(1) }
+func (def *ColDef) IsSortKey() bool { return def.SortKey == int8(1) }
 
-type CompoundPK struct {
-	Defs   []*ColDef
-	search map[int]int
+type SortKey struct {
+	Defs      []*ColDef
+	search    map[int]int
+	isPrimary bool
 }
 
-func NewCompoundPK() *CompoundPK {
-	return &CompoundPK{
+func NewSortKey() *SortKey {
+	return &SortKey{
 		Defs:   make([]*ColDef, 0),
 		search: make(map[int]int),
 	}
 }
 
-func (cpk *CompoundPK) AddDef(def *ColDef) (ok bool) {
+func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
 	_, found := cpk.search[def.Idx]
 	if found {
 		return false
 	}
+	if def.IsPrimary() {
+		cpk.isPrimary = true
+	}
 	cpk.Defs = append(cpk.Defs, def)
-	sort.Slice(cpk.Defs, func(i, j int) bool { return cpk.Defs[i].PrimaryIdx < cpk.Defs[j].PrimaryIdx })
-	cpk.search[def.Idx] = int(def.PrimaryIdx)
+	sort.Slice(cpk.Defs, func(i, j int) bool { return cpk.Defs[i].SortIdx < cpk.Defs[j].SortIdx })
+	cpk.search[def.Idx] = int(def.SortIdx)
 	return true
 }
 
-func (cpk *CompoundPK) Size() int              { return len(cpk.Defs) }
-func (cpk *CompoundPK) GetDef(pos int) *ColDef { return cpk.Defs[pos] }
-
-type SinglePK struct {
-	Idx int
-}
-
-func (uk *SinglePK) IsHidden(schema *Schema) bool {
-	return schema.ColDefs[uk.Idx].IsHidden()
-}
+func (cpk *SortKey) IsSinglePK() bool               { return cpk.isPrimary && cpk.Size() == 0 }
+func (cpk *SortKey) IsPrimary() bool                { return cpk.isPrimary }
+func (cpk *SortKey) Size() int                      { return len(cpk.Defs) }
+func (cpk *SortKey) GetDef(pos int) *ColDef         { return cpk.Defs[pos] }
+func (cpk *SortKey) HasColumn(idx int) (found bool) { _, found = cpk.search[idx]; return }
+func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
 
 type Schema struct {
 	Name             string
@@ -109,9 +112,9 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
-	SinglePK         *SinglePK
-	CompoundPK       *CompoundPK
-	HiddenIdx        int
+
+	SortKey   *SortKey
+	HiddenKey *ColDef
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -119,16 +122,16 @@ func NewEmptySchema(name string) *Schema {
 		Name:      name,
 		ColDefs:   make([]*ColDef, 0),
 		NameIndex: make(map[string]int),
-		HiddenIdx: -1,
 	}
 }
 
-func (s *Schema) HiddenKeyDef() *ColDef { return s.ColDefs[s.HiddenIdx] }
-
-func (s *Schema) IsSinglePK() bool { return s.SinglePK != nil }
+func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
+func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
+func (s *Schema) IsCompoundSortKey() bool { return s.SortKey != nil && s.SortKey.Size() > 1 }
 
 // Should be call only if IsSinglePK is checked
-func (s *Schema) GetPrimaryKeyIdx() int { return s.SinglePK.Idx }
+func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
+func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
 
 func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
@@ -180,7 +183,15 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 1
-		if err = binary.Read(r, binary.BigEndian, &def.PrimaryIdx); err != nil {
+		if err = binary.Read(r, binary.BigEndian, &def.SortIdx); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.Primary); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.SortKey); err != nil {
 			return
 		}
 		n += 1
@@ -228,7 +239,13 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if err = binary.Write(&w, binary.BigEndian, def.AutoIncrement); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, def.PrimaryIdx); err != nil {
+		if err = binary.Write(&w, binary.BigEndian, def.SortIdx); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.Primary); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
 			return
 		}
 	}
@@ -244,27 +261,39 @@ func (s *Schema) AppendColDef(def *ColDef) (err error) {
 		err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
 		return
 	}
-	if def.IsHidden() {
-		s.HiddenIdx = def.Idx
-	}
 	s.NameIndex[def.Name] = def.Idx
 	return
 }
 
+func (s *Schema) AppendSortKey(name string, typ types.Type, idx int, isPrimary bool) error {
+	def := &ColDef{
+		Name:    name,
+		Type:    typ,
+		SortIdx: int8(idx),
+		SortKey: int8(1),
+	}
+	if isPrimary {
+		def.Primary = int8(1)
+	}
+	return s.AppendColDef(def)
+}
+
 func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 	def := &ColDef{
-		Name:       name,
-		Type:       typ,
-		PrimaryIdx: int8(idx),
+		Name:    name,
+		Type:    typ,
+		SortIdx: int8(idx),
+		SortKey: int8(1),
+		Primary: int8(1),
 	}
 	return s.AppendColDef(def)
 }
 
 func (s *Schema) AppendCol(name string, typ types.Type) error {
 	def := &ColDef{
-		Name:       name,
-		Type:       typ,
-		PrimaryIdx: -1,
+		Name:    name,
+		Type:    typ,
+		SortIdx: -1,
 	}
 	return s.AppendColDef(def)
 }
@@ -275,42 +304,39 @@ func (s *Schema) String() string {
 }
 
 func (s *Schema) IsPartOfPK(idx int) bool {
-	if s.SinglePK != nil {
-		return s.SinglePK.Idx == idx
-	}
-	panic("implement me")
-}
-
-func (s *Schema) GetSinglePKType() types.Type {
-	return s.ColDefs[s.SinglePK.Idx].Type
+	return s.ColDefs[idx].IsPrimary()
 }
 
 func (s *Schema) GetSinglePKColDef() *ColDef {
-	return s.ColDefs[s.SinglePK.Idx]
+	return s.SortKey.GetDef(0)
 }
 
-func (s *Schema) IsHiddenPK() bool { return s.ColDefs[s.SinglePK.Idx].IsHidden() }
-
 func (s *Schema) Attrs() []string {
-	attrs := make([]string, len(s.ColDefs)-1)
-	for i, def := range s.ColDefs[:len(s.ColDefs)-1] {
-		attrs[i] = def.Name
+	attrs := make([]string, 0, len(s.ColDefs)-1)
+	for _, def := range s.ColDefs {
+		if def.IsHidden() {
+			continue
+		}
+		attrs = append(attrs, def.Name)
 	}
 	return attrs
 }
 
 func (s *Schema) Types() []types.Type {
-	ts := make([]types.Type, len(s.ColDefs)-1)
-	for i, def := range s.ColDefs[:len(s.ColDefs)-1] {
-		ts[i] = def.Type
+	ts := make([]types.Type, 0, len(s.ColDefs)-1)
+	for _, def := range s.ColDefs {
+		if def.IsHidden() {
+			continue
+		}
+		ts = append(ts, def.Type)
 	}
 	return ts
 }
 
 func (s *Schema) AllTypes() []types.Type {
-	ts := make([]types.Type, len(s.ColDefs))
-	for i, def := range s.ColDefs {
-		ts[i] = def.Type
+	ts := make([]types.Type, 0, len(s.ColDefs))
+	for _, def := range s.ColDefs {
+		ts = append(ts, def.Type)
 	}
 	return ts
 }
@@ -326,18 +352,17 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	}
 	if !rebuild {
 		hiddenDef := &ColDef{
-			Name:       HiddenColumnName,
-			Comment:    HiddenColumnComment,
-			Type:       HiddenColumnType,
-			Hidden:     int8(1),
-			PrimaryIdx: -1,
+			Name:    HiddenColumnName,
+			Comment: HiddenColumnComment,
+			Type:    HiddenColumnType,
+			Hidden:  int8(1),
 		}
 		if err = s.AppendColDef(hiddenDef); err != nil {
 			return
 		}
 	}
 
-	pkIdx := make([]int, 0)
+	sortIdx := make([]int, 0)
 	names := make(map[string]bool)
 	for idx, def := range s.ColDefs {
 		// Check column idx validility
@@ -352,53 +377,51 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 			return
 		}
 		names[def.Name] = true
-		if def.IsPrimary() {
-			pkIdx = append(pkIdx, idx)
+		if def.IsSortKey() {
+			sortIdx = append(sortIdx, idx)
 		}
 		if def.IsHidden() {
-			s.HiddenIdx = def.Idx
+			if s.HiddenKey != nil {
+				err = fmt.Errorf("%w: duplicated hidden column \"%s\"", ErrSchemaValidation, def.Name)
+				return
+			}
+			s.HiddenKey = def
 		}
 	}
 
-	if len(pkIdx) == 1 {
-		// One pk defined
-		def := s.ColDefs[pkIdx[0]]
-		if def.PrimaryIdx != 0 {
-			err = fmt.Errorf("%w: bad primary idx %d, should be 0", ErrSchemaValidation, def.PrimaryIdx)
+	if len(sortIdx) == 1 {
+		def := s.ColDefs[sortIdx[0]]
+		if def.SortIdx != 0 {
+			err = fmt.Errorf("%w: bad sort idx %d, should be 0", ErrSchemaValidation, def.SortIdx)
 			return
 		}
-		s.SinglePK = &SinglePK{Idx: def.Idx}
-		s.CompoundPK = nil
-	} else if len(pkIdx) == 0 {
-		// No pk specified
-		def := s.ColDefs[len(s.ColDefs)-1]
-		def.PrimaryIdx = 0
-		s.SinglePK = &SinglePK{Idx: def.Idx}
-		s.CompoundPK = nil
-	} else {
-		// Compound pk defined
-		s.CompoundPK = NewCompoundPK()
-		for _, idx := range pkIdx {
+		s.SortKey = NewSortKey()
+		s.SortKey.AddDef(def)
+	} else if len(sortIdx) > 1 {
+		s.SortKey = NewSortKey()
+		for _, idx := range sortIdx {
 			def := s.ColDefs[idx]
 			if def.Idx != idx {
 				err = fmt.Errorf("%w: bad column def", ErrSchemaValidation)
 				return
 			}
-			if ok := s.CompoundPK.AddDef(def); !ok {
-				err = fmt.Errorf("%w: duplicated primary idx specified", ErrSchemaValidation)
+			if ok := s.SortKey.AddDef(def); !ok {
+				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
 				return
 			}
 		}
-		for i, def := range s.CompoundPK.Defs {
-			if int(def.PrimaryIdx) != i {
-				err = fmt.Errorf("%w: duplicated primary idx specified", ErrSchemaValidation)
+		isPrimary := s.SortKey.Defs[0].IsPrimary()
+		for i, def := range s.SortKey.Defs {
+			if int(def.SortIdx) != i {
+				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
+				return
+			}
+			if def.IsPrimary() != isPrimary {
+				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
 				return
 			}
 		}
 	}
-	// if !s.ColDefs[s.HiddenIdx].IsHidden() {
-	// 	err = fmt.Errorf("%w: wrong hidden column idx", ErrSchemaValidation)
-	// }
 	return
 }
 
@@ -530,4 +553,13 @@ func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 	schema.SegmentMaxBlocks = 10
 	_ = schema.Finalize(false)
 	return schema
+}
+
+func GetAttrIdx(attrs []string, name string) int {
+	for i, attr := range attrs {
+		if attr == name {
+			return i
+		}
+	}
+	panic("logic error")
 }

@@ -183,10 +183,14 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
-		if !seg.table.isHiddenPK {
-			start := seg.rows
-			if err = seg.index.BatchInsert(data.Vecs[seg.table.GetSchema().GetPrimaryKeyIdx()], int(offset), int(appended), start, false); err != nil {
-				break
+		if seg.table.sortKey != nil {
+			if seg.table.sortKey.Size() == 1 {
+				start := seg.rows
+				if err = seg.index.BatchInsert(data.Vecs[seg.table.sortKey.GetDef(0).Idx], int(offset), int(appended), start, false); err != nil {
+					break
+				}
+			} else {
+				panic("implement me")
 			}
 		}
 		offset += appended
@@ -208,42 +212,57 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	if last == first {
 		node := seg.nodes[first]
 		err = node.RangeDelete(firstOffset, lastOffset)
-		if !seg.table.isHiddenPK {
-			if err == nil {
-				for i := firstOffset; i <= lastOffset; i++ {
-					v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
-					if err = seg.index.Delete(v); err != nil {
-						break
-					}
-				}
-			}
+		if err != nil {
+			return err
 		}
-	} else {
-		node := seg.nodes[first]
-		err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
-		node = seg.nodes[last]
-		err = node.RangeDelete(0, lastOffset)
-		if !seg.table.isHiddenPK {
-			for i := uint32(0); i <= lastOffset; i++ {
-				v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
+		if seg.table.sortKey == nil {
+			return err
+		}
+		if seg.table.sortKey.Size() == 1 {
+			for i := firstOffset; i <= lastOffset; i++ {
+				v, _ := node.GetValue(seg.table.sortKey.GetDef(0).Idx, i)
 				if err = seg.index.Delete(v); err != nil {
 					break
 				}
 			}
+		} else {
+			panic("implement me")
 		}
-		if last > first+1 && err == nil {
-			for i := first + 1; i < last; i++ {
-				node = seg.nodes[i]
-				if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
+		return err
+	}
+
+	node := seg.nodes[first]
+	err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
+	node = seg.nodes[last]
+	err = node.RangeDelete(0, lastOffset)
+	if seg.table.sortKey != nil {
+		if seg.table.sortKey.Size() == 1 {
+			for i := uint32(0); i <= lastOffset; i++ {
+				v, _ := node.GetValue(seg.table.sortKey.GetDef(0).Idx, i)
+				if err = seg.index.Delete(v); err != nil {
 					break
 				}
-				if !seg.table.isHiddenPK {
+			}
+		} else {
+			panic("implment me")
+		}
+	}
+	if last > first+1 && err == nil {
+		for i := first + 1; i < last; i++ {
+			node = seg.nodes[i]
+			if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
+				break
+			}
+			if seg.table.sortKey != nil {
+				if seg.table.sortKey.Size() == 1 {
 					for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
-						v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
+						v, _ := node.GetValue(seg.table.sortKey.GetSingleIdx(), i)
 						if err = seg.index.Delete(v); err != nil {
 							break
 						}
 					}
+				} else {
+					panic("implement me")
 				}
 			}
 		}
@@ -290,7 +309,7 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 }
 
 func (seg *localSegment) Update(row uint32, col uint16, value any) error {
-	if seg.table.entry.GetSchema().HiddenKeyDef().Idx == int(col) {
+	if seg.table.entry.GetSchema().HiddenKey.Idx == int(col) {
 		return data.ErrUpdateHiddenKey
 	}
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
@@ -302,10 +321,14 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
 	}
-	if !seg.table.isHiddenPK {
-		v, _ := n.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), row)
-		if err = seg.index.Delete(v); err != nil {
-			panic(err)
+	if seg.table.sortKey != nil {
+		if seg.table.sortKey.Size() == 1 {
+			v, _ := n.GetValue(seg.table.sortKey.GetSingleIdx(), row)
+			if err = seg.index.Delete(v); err != nil {
+				panic(err)
+			}
+		} else {
+			panic("implement me")
 		}
 	}
 
@@ -326,13 +349,17 @@ func (seg *localSegment) Rows() uint32 {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	if seg.table.isHiddenPK {
+	if seg.table.sortKey == nil {
 		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
 	} else {
-		if v, ok := filter.Val.([]byte); ok {
-			offset, err = seg.index.Search(string(v))
+		if seg.table.sortKey.Size() == 1 {
+			if v, ok := filter.Val.([]byte); ok {
+				offset, err = seg.index.Search(string(v))
+			} else {
+				offset, err = seg.index.Search(filter.Val)
+			}
 		} else {
-			offset, err = seg.index.Search(filter.Val)
+			panic("implement me")
 		}
 	}
 	if err == nil {
@@ -341,9 +368,12 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 	return
 }
 
-func (seg *localSegment) GetPrimaryColumn() *vector.Vector {
+func (seg *localSegment) GetSortColumn() *vector.Vector {
 	schema := seg.table.entry.GetSchema()
-	return seg.index.KeyToVector(schema.GetSinglePKType())
+	if schema.IsSingleSortKey() {
+		return seg.index.KeyToVector(schema.GetSingleSortKey().Type)
+	}
+	panic("not implemented")
 }
 
 func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {

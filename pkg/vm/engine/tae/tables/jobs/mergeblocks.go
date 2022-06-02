@@ -142,14 +142,16 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
 	for i, block := range task.compacted {
-		if entry.GetSchema().IsHiddenPK() {
+		if schema.SortKey == nil {
 			if view, err = block.GetColumnDataById(0, nil, nil); err != nil {
 				return
 			}
-		} else {
-			if view, err = block.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil); err != nil {
+		} else if schema.SortKey.Size() == 1 {
+			if view, err = block.GetColumnDataById(schema.SortKey.GetDef(0).Idx, nil, nil); err != nil {
 				return
 			}
+		} else if entry.GetSchema().SortKey.Size() > 1 {
+			panic("implement me")
 		}
 		vec := view.ApplyDeletes()
 		vecs = append(vecs, vec)
@@ -193,10 +195,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 
-		def := schema.GetSinglePKColDef()
-		if def.IsHidden() {
+		if schema.SortKey == nil {
 			continue
 		}
+		if schema.IsCompoundSortKey() {
+			panic("implement me")
+		}
+		def := schema.GetSingleSortKey()
 
 		// logutil.Infof("Flushing %s %v", meta.AsCommonID().String(), def)
 		closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
@@ -207,14 +212,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err = flushTask.WaitDone(); err != nil {
 			return
 		}
-		if err = BuildAndFlushBlockIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
+		if err = BuildAndFlushSingleIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
 			return
 		}
 		if err = meta.GetBlockData().ReplayData(); err != nil {
 			return
 		}
 	}
-	hidden := schema.HiddenKeyDef()
+	hidden := schema.HiddenKey
 	for i, blk := range task.createdBlks {
 		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[i])))
 		if err != nil {

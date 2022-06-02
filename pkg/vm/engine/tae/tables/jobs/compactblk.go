@@ -81,10 +81,10 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, clos
 	attrs := make([]string, 0, 4)
 	bat = batch.New(true, attrs)
 
+	schema := task.meta.GetSchema()
 	var view *model.ColumnView
-	hiddenDef := task.meta.GetSchema().HiddenKeyDef()
-	for _, def := range task.meta.GetSchema().ColDefs {
-		if hiddenDef.Idx == def.Idx {
+	for _, def := range schema.ColDefs {
+		if def.IsHidden() {
 			continue
 		}
 		view, err = task.compacted.GetColumnDataById(def.Idx, nil, nil)
@@ -95,9 +95,21 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, clos
 		bat.Vecs = append(bat.Vecs, vec)
 		bat.Attrs = append(bat.Attrs, def.Name)
 	}
-	// Merge sort only if hidden column is not primary key
-	if !hiddenDef.IsPrimary() {
-		if err = mergesort.SortBlockColumns(bat.Vecs, task.meta.GetSchema().GetPrimaryKeyIdx()); err != nil {
+	// Sort only if sort key is defined
+	if schema.SortKey != nil {
+		if schema.SortKey.Size() > 1 {
+			panic("implement me")
+		}
+		pkIdx := 0
+		for i, attr := range bat.Attrs {
+			idx := schema.GetColIdx(attr)
+			def := schema.ColDefs[idx]
+			if def.IsPrimary() {
+				pkIdx = i
+				break
+			}
+		}
+		if err = mergesort.SortBlockColumns(bat.Vecs, pkIdx); err != nil {
 			return
 		}
 	}

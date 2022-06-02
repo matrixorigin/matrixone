@@ -75,10 +75,11 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 			from, err = appender.node.ApplyAppend(bat, offset, length, txn)
 			return err
 		})
+		schema := appender.node.block.meta.GetSchema()
 
-		if !appender.node.block.meta.GetSchema().IsHiddenPK() {
+		if schema.IsSingleSortKey() {
 			keysCtx := new(index.KeysCtx)
-			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetPrimaryKeyIdx()]
+			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
 			keysCtx.Start = offset
 			keysCtx.Count = length
 			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
@@ -86,6 +87,8 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 			if err != nil {
 				panic(err)
 			}
+		} else if schema.IsCompoundSortKey() {
+			panic("implement me")
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 
@@ -103,16 +106,20 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 			return err
 		})
 
-		if !appender.node.block.meta.GetSchema().IsHiddenPK() {
+		schema := appender.node.block.meta.GetSchema()
+
+		if schema.IsSingleSortKey() {
 			keysCtx := new(index.KeysCtx)
-			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetPrimaryKeyIdx()]
+			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
 			keysCtx.Start = offset
 			keysCtx.Count = length
-			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), pks.String())
+			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
 			err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
 			if err != nil {
 				panic(err)
 			}
+		} else if schema.IsCompoundSortKey() {
+			panic("implement me")
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 		node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)

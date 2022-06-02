@@ -330,7 +330,11 @@ func (entry *SegmentEntry) Clone() CheckpointItem {
 func (entry *SegmentEntry) ReplayFile(cache *bytes.Buffer) {
 	colCnt := len(entry.table.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
-	indexCnt[entry.table.GetSchema().GetPrimaryKeyIdx()] = 2
+	if entry.table.GetSchema().IsSingleSortKey() {
+		indexCnt[entry.table.GetSchema().GetSingleSortKey().Idx] = 2
+	} else if entry.table.GetSchema().IsCompoundSortKey() {
+		panic("implement me")
+	}
 	if err := entry.GetSegmentData().GetSegmentFile().Replay(colCnt, indexCnt, cache); err != nil {
 		panic(err)
 	}
