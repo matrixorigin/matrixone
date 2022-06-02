@@ -107,8 +107,10 @@ type SharePart struct {
 	simdCsvLineArray [][]string
 
 	//storage
+	storage        engine.Engine
 	dbHandler      engine.Database
 	tableHandler   engine.Relation
+	dbName         string
 	tableName      string
 	txnHandler     *TxnHandler
 	oneTxnPerBatch bool
@@ -502,6 +504,8 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.dataColumnId2TableColumnId = handler.dataColumnId2TableColumnId
 	wHandler.batchSize = handler.batchSize
 	wHandler.attrName = handler.attrName
+	wHandler.storage = handler.storage
+	wHandler.dbName = handler.dbName
 	wHandler.dbHandler = handler.dbHandler
 	wHandler.tableHandler = handler.tableHandler
 	wHandler.tableName = handler.tableName
@@ -1336,6 +1340,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
+		dbHandler := handler.dbHandler
 		txnHandler := handler.txnHandler
 		tableHandler := handler.tableHandler
 		if !handler.skipWriteBatch {
@@ -1345,7 +1350,11 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				if err != nil {
 					goto handleError
 				}
-				tableHandler, err = handler.dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+				dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					goto handleError
+				}
+				tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
 				if err != nil {
 					goto handleError
 				}
@@ -1466,6 +1475,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				handler.ThreadInfo.SetCnt(1)
 				txnHandler := handler.txnHandler
 				tableHandler := handler.tableHandler
+				dbHandler := handler.dbHandler
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = InitTxnHandler(config.StorageEngine)
@@ -1473,8 +1483,12 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 						if err != nil {
 							goto handleError2
 						}
+						dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+						if err != nil {
+							goto handleError2
+						}
 						//new relation
-						tableHandler, err = handler.dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+						tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
 						if err != nil {
 							goto handleError2
 						}
@@ -1576,7 +1590,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	var m sync.Mutex
@@ -1613,9 +1627,11 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			load:                 load,
 			lineIdx:              0,
 			simdCsvLineArray:     make([][]string, curBatchSize),
+			storage:              ses.Pu.StorageEngine,
 			dbHandler:            dbHandler,
 			tableHandler:         tableHandler,
 			tableName:            string(load.Table.Name()),
+			dbName:               dbName,
 			txnHandler:           ses.GetTxnHandler(),
 			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
 			lineCount:            0,

@@ -358,7 +358,7 @@ func Test_load(t *testing.T) {
 			if i == 3 {
 				row2col = gostub.Stub(&row2colChoose, false)
 			}
-			_, err := mce.LoadLoop(cws[i], db, rel)
+			_, err := mce.LoadLoop(cws[i], db, rel, "")
 			if kases[i].fail {
 				convey.So(err, convey.ShouldBeError)
 			} else {
