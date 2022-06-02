@@ -138,7 +138,7 @@ func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) Delete(_ uint64, _ *vector.Vector, _ engine.Snapshot) error {
+func (r *relation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
 	panic(any("implement me"))
 }
 

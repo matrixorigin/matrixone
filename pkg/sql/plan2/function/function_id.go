@@ -151,6 +151,7 @@ const (
 	RTRIM      // RTRIM
 	SIGN       // SIGN
 	SIN        // SIN
+	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
 	STARCOUNT     // STARTCOUNT
@@ -267,7 +268,9 @@ var functionIdRegister = map[string]int32{
 	"reverse":       REVERSE,
 	"rtrim":         RTRIM,
 	"sin":           SIN,
+	"sinh":          SINH,
 	"space":         SPACE,
+	"tan":           TAN,
 	"weekday":       WEEKDAY,
 	"year":          YEAR,
 	"extract":       EXTRACT,

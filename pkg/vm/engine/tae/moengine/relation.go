@@ -122,7 +122,7 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) err
 	return rel.handle.Append(bat)
 }
 
-func (rel *txnRelation) Delete(_ uint64, _ *vector.Vector, _ engine.Snapshot) error {
+func (rel *txnRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
 	panic(any("implement me"))
 }
 
