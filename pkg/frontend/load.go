@@ -109,6 +109,7 @@ type SharePart struct {
 	//storage
 	dbHandler      engine.Database
 	tableHandler   engine.Relation
+	tableName      string
 	txnHandler     *TxnHandler
 	oneTxnPerBatch bool
 
@@ -503,6 +504,7 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.attrName = handler.attrName
 	wHandler.dbHandler = handler.dbHandler
 	wHandler.tableHandler = handler.tableHandler
+	wHandler.tableName = handler.tableName
 	wHandler.txnHandler = handler.txnHandler
 	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
@@ -1335,22 +1337,29 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
 		txnHandler := handler.txnHandler
+		tableHandler := handler.tableHandler
 		if !handler.skipWriteBatch {
 			if handler.oneTxnPerBatch {
 				txnHandler = InitTxnHandler(config.StorageEngine)
 				_, err = txnHandler.StartByAutocommitIfNeeded()
 				if err != nil {
-					return err
+					goto handleError
+				}
+				tableHandler, err = handler.dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					goto handleError
 				}
 			}
-			err = handler.tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+			err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
 			if handler.oneTxnPerBatch {
 				err = txnHandler.CommitAfterAutocommitOnly()
 				if err != nil {
-					return err
+					goto handleError
 				}
 			}
 		}
+
+	handleError:
 		handler.ThreadInfo.SetCnt(0)
 		if err == nil {
 			handler.result.Records += uint64(handler.batchSize)
@@ -1362,6 +1371,13 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		} else {
 			logutil.Errorf("write failed. err: %v", err)
 			handler.result.Skipped += uint64(handler.batchSize)
+		}
+
+		if handler.oneTxnPerBatch && err != nil {
+			err2 := txnHandler.RollbackAfterAutocommitOnly()
+			if err2 != nil {
+				logutil.Errorf("rollback failed.error:%v", err2)
+			}
 		}
 
 		handler.writeBatch += time.Since(wait_a)
@@ -1449,22 +1465,29 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
 				txnHandler := handler.txnHandler
+				tableHandler := handler.tableHandler
 				if !handler.skipWriteBatch {
 					if handler.oneTxnPerBatch {
 						txnHandler = InitTxnHandler(config.StorageEngine)
 						_, err = txnHandler.StartByAutocommitIfNeeded()
 						if err != nil {
-							return err
+							goto handleError2
+						}
+						//new relation
+						tableHandler, err = handler.dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+						if err != nil {
+							goto handleError2
 						}
 					}
-					err = handler.tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+					err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
 					if handler.oneTxnPerBatch {
 						err = txnHandler.CommitAfterAutocommitOnly()
 						if err != nil {
-							return err
+							goto handleError2
 						}
 					}
 				}
+			handleError2:
 				handler.ThreadInfo.SetCnt(0)
 				if err == nil {
 					handler.result.Records += uint64(needLen)
@@ -1476,6 +1499,13 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				} else {
 					logutil.Errorf("write failed. err:%v \n", err)
 					handler.result.Skipped += uint64(needLen)
+				}
+
+				if handler.oneTxnPerBatch && err != nil {
+					err2 := txnHandler.RollbackAfterAutocommitOnly()
+					if err2 != nil {
+						logutil.Errorf("rollback failed.error:%v", err2)
+					}
 				}
 			}
 		}
@@ -1585,6 +1615,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			simdCsvLineArray:     make([][]string, curBatchSize),
 			dbHandler:            dbHandler,
 			tableHandler:         tableHandler,
+			tableName:            string(load.Table.Name()),
 			txnHandler:           ses.GetTxnHandler(),
 			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
 			lineCount:            0,
