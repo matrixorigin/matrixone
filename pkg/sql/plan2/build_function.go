@@ -207,7 +207,13 @@ func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcId, "cast"),
-				Args: []*Expr{expr},
+				Args: []*Expr{expr, {
+					Expr: &plan.Expr_T{
+						T: &plan.TargetType{
+							Typ: toType,
+						},
+					},
+				}},
 			},
 		},
 		Typ: toType,

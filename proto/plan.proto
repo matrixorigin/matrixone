@@ -113,6 +113,11 @@ message ExprList {
 	repeated Expr list = 1;
 }
 
+// TargetType used in cast function as target type
+message TargetType {
+	Type typ = 1;
+}
+
 // Reference a subquery
 message SubQuery {
 	int32 node_id		= 1;
@@ -174,6 +179,7 @@ message Expr {
 		ExprList	list	= 9;
 		SubQuery	sub		= 10;
 		CorrColRef	corr	= 11;
+		TargetType  t		= 12;
 	}
 }
 
