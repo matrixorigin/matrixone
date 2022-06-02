@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,4 +53,47 @@ func DecodeHiddenKey(src []byte) (segmentId, blockId uint64, offset uint32) {
 	segmentId, blockId = DecodeBlockKeyPrefix(src[:12])
 	offset = binary.BigEndian.Uint32(src[12:])
 	return
+}
+
+func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
+	if w == nil {
+		w = new(bytes.Buffer)
+	} else {
+		w.Reset()
+	}
+	for _, val := range vals {
+		switch v := val.(type) {
+		case int8:
+			_, _ = w.Write(encoding.EncodeInt8(v))
+		case int16:
+			_, _ = w.Write(encoding.EncodeInt16(v))
+		case int32:
+			_, _ = w.Write(encoding.EncodeInt32(v))
+		case int64:
+			_, _ = w.Write(encoding.EncodeInt64(v))
+		case uint8:
+			_, _ = w.Write(encoding.EncodeUint8(v))
+		case uint16:
+			_, _ = w.Write(encoding.EncodeUint16(v))
+		case uint32:
+			_, _ = w.Write(encoding.EncodeUint32(v))
+		case uint64:
+			_, _ = w.Write(encoding.EncodeUint64(v))
+		case types.Decimal64:
+			_, _ = w.Write(encoding.EncodeDecimal64(v))
+		case types.Decimal128:
+			_, _ = w.Write(encoding.EncodeDecimal128(v))
+		case float32:
+			_, _ = w.Write(encoding.EncodeFloat32(v))
+		case float64:
+			_, _ = w.Write(encoding.EncodeFloat64(v))
+		case types.Date:
+			_, _ = w.Write(encoding.EncodeDate(v))
+		case types.Datetime:
+			_, _ = w.Write(encoding.EncodeDatetime(v))
+		case []byte:
+			_, _ = w.Write(v)
+		}
+	}
+	return w.Bytes()
 }
