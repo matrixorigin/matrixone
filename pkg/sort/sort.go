@@ -15,8 +15,11 @@
 package sort
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sort/asc/bools"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/decimal128s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/decimal64s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/float32s"
@@ -30,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/uint64s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/uint8s"
 	"github.com/matrixorigin/matrixone/pkg/sort/asc/varchar"
+	dbools "github.com/matrixorigin/matrixone/pkg/sort/desc/bools"
 	ddecimal128s "github.com/matrixorigin/matrixone/pkg/sort/desc/decimal128s"
 	ddecimal64s "github.com/matrixorigin/matrixone/pkg/sort/desc/decimal64s"
 	dfloat32s "github.com/matrixorigin/matrixone/pkg/sort/desc/float32s"
@@ -43,11 +47,16 @@ import (
 	duint64s "github.com/matrixorigin/matrixone/pkg/sort/desc/uint64s"
 	duint8s "github.com/matrixorigin/matrixone/pkg/sort/desc/uint8s"
 	dvarchar "github.com/matrixorigin/matrixone/pkg/sort/desc/varchar"
-	"unsafe"
 )
 
 func Sort(desc bool, os []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
+	case types.T_bool:
+		if desc {
+			dbools.Sort(vec.Col.([]bool), os)
+		} else {
+			bools.Sort(vec.Col.([]bool), os)
+		}
 	case types.T_int8:
 		if desc {
 			dint8s.Sort(vec.Col.([]int8), os)

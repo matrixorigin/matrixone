@@ -162,6 +162,8 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 
 func NewMax(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return max.NewBool(typ), nil
 	case types.T_int8:
 		return max.NewInt8(typ), nil
 	case types.T_int16:
@@ -198,6 +200,8 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 
 func NewMin(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return min.NewBool(typ), nil
 	case types.T_int8:
 		return min.NewInt8(typ), nil
 	case types.T_int16:

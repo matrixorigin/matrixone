@@ -41,6 +41,7 @@ const (
 	StarCountRing
 	ApproxCountDistinctRing
 	// Max
+	MaxBoolRing
 	MaxInt8Ring
 	MaxInt32Ring
 	MaxDateRing
@@ -57,6 +58,7 @@ const (
 	MaxDecimal128Ring
 	MaxStrRing
 	// Min
+	MinBoolRing
 	MinInt8Ring
 	MinInt32Ring
 	MinDateRing

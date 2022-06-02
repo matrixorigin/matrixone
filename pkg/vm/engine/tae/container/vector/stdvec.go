@@ -298,6 +298,8 @@ func (v *StdVector) appendWithOffset(offset, n int, vals any) error {
 		data = encoding.EncodeDateSlice(vals.([]types.Date)[offset : offset+n])
 	case types.T_datetime:
 		data = encoding.EncodeDatetimeSlice(vals.([]types.Datetime)[offset : offset+n])
+	case types.T_timestamp:
+		data = encoding.EncodeTimestampSlice(vals.([]types.Timestamp)[offset : offset+n])
 	default:
 		return ErrVecTypeNotSupport
 	}
@@ -608,6 +610,12 @@ func (v *StdVector) CopyToVector() (*gvec.Vector, error) {
 	case types.T_datetime:
 		col := make([]types.Datetime, length)
 		curCol := encoding.DecodeDatetimeSlice(v.Data)
+		copy(col, curCol[:length])
+		vec.Col = col
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
+	case types.T_timestamp:
+		col := make([]types.Timestamp, length)
+		curCol := encoding.DecodeTimestampSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
