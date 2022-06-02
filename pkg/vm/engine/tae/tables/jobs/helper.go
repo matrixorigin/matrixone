@@ -24,7 +24,7 @@ import (
 func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumnData *vector.Vector) (err error) {
 	// write indexes, collect their meta, and refresh host's index holder
 	schema := meta.GetSchema()
-	pkColumn, err := file.OpenColumn(int(schema.PrimaryKey))
+	pkColumn, err := file.OpenColumn(schema.GetPrimaryKeyIdx())
 	if err != nil {
 		return
 	}
@@ -37,7 +37,7 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	if err != nil {
 		return err
 	}
-	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.PrimaryKey), zmIdx)
+	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.GetPrimaryKeyIdx()), zmIdx)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,7 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	if err != nil {
 		return err
 	}
-	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.PrimaryKey), sfIdx)
+	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.GetPrimaryKeyIdx()), sfIdx)
 	if err != nil {
 		return err
 	}

@@ -50,14 +50,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.state = Eval
 		case Eval:
 			ctr.state = End
-			if ap.NeedEval {
-				for _, r := range ctr.bat.Rs {
-					ctr.bat.Vecs = append(ctr.bat.Vecs, r.Eval(ctr.bat.Zs))
+			if ctr.bat != nil {
+				if ap.NeedEval {
+					for _, r := range ctr.bat.Rs {
+						ctr.bat.Vecs = append(ctr.bat.Vecs, r.Eval(ctr.bat.Zs))
+					}
+					ctr.bat.Rs = nil
 				}
-				ctr.bat.Rs = nil
-			}
-			for i := range ctr.bat.Zs { // reset zs
-				ctr.bat.Zs[i] = 1
+				for i := range ctr.bat.Zs { // reset zs
+					ctr.bat.Zs[i] = 1
+				}
 			}
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
@@ -106,7 +108,7 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) error {
 		size := 0
 		for _, vec := range bat.Vecs {
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8, types.T_uint8, types.T_bool:
 				size += 1 + 1
 			case types.T_int16, types.T_uint16:
 				size += 2 + 1

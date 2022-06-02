@@ -1,3 +1,17 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package rule
 
 import (
@@ -7,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
 type ConstantFold struct {
@@ -14,8 +29,8 @@ type ConstantFold struct {
 }
 
 func NewConstantFlod() *ConstantFold {
-	bat := batch.NewWithSize(00000000)
-	bat.Zs = []int64{0}
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
 	return &ConstantFold{
 		bat: bat,
 	}
@@ -55,8 +70,19 @@ func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 	if !ok {
 		return e
 	}
+	overloadId := ef.F.Func.GetObj()
+	f, err := function.GetFunctionByID(overloadId)
+	if err != nil {
+		return e
+	}
+	if f.Volatile { // function cannot be fold
+		return e
+	}
 	for i := range ef.F.Args {
 		ef.F.Args[i] = r.constantFold(ef.F.Args[i])
+	}
+	if !isConstant(e) {
+		return e
 	}
 	vec, err := colexec.EvalExpr(r.bat, nil, e)
 	if err != nil {
@@ -105,5 +131,21 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 		}
 	default:
 		return nil
+	}
+}
+
+func isConstant(e *plan.Expr) bool {
+	switch ef := e.Expr.(type) {
+	case *plan.Expr_C:
+		return true
+	case *plan.Expr_F:
+		for i := range ef.F.Args {
+			if !isConstant(ef.F.Args[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
 	}
 }

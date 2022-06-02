@@ -327,9 +327,50 @@ func NegDecimal128(a Decimal128) (result Decimal128) {
 	return result
 }
 
+// this implementation is bad, tangling, but it works,
+// wrote 50+ test cases, hoping to mitigate the pain of  my conscience, it didn't
+// I failed to find an elegant approach to support scientific notation, what a pathetic loser...
+// decimalStringPreprocess convert input decimal string to its internal representation form,
+// for example:  			Decimal(10, 5)    --------> 	converted result
+// 			input:			"12345.6789" 						"1234567890"
+// 							"12345.67"							"1234567000"
+// 							"-12345.67"							"1234567000" neg == true
+// 							"12345.123451"  					"1234512345"
+//							"12345.123456"						"1234512345" carry == true, the result is rounded(round away from zero)
+// 							"0.12345e5"							"1234500000"
+//							"0.12345e6"							err == "out of range"
+// 							"0.12345e-3"						"12"
+// 							"0.12345E-3"						"12"
+//							"0.126"								"12" carry == true
 func decimalStringPreprocess(s string, precision, scale int32) (result []byte, carry bool, neg bool, err error) {
 	if s == "" {
-		return result, carry, neg, errors.New("invalid decimal string")
+		return []byte("0"), false, false, errors.New("invalid decimal string")
+	}
+	if len(s) >= 50 {
+		s = s[:50] // to prevent attack,
+	}
+	exponent := 0
+	if strings.Contains(s, "e") {
+		s2 := strings.Split(s, "e")
+		if len(s2) > 2 {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		exponent, err = strconv.Atoi(s2[1])
+		if err != nil {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		s = s2[0]
+	}
+	if strings.Contains(s, "E") {
+		s2 := strings.Split(s, "E")
+		if len(s2) > 2 {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		exponent, err = strconv.Atoi(s2[1])
+		if err != nil {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		s = s2[0]
 	}
 	parts := strings.Split(s, ".")
 	partsNumber := len(parts)
@@ -345,8 +386,44 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 				part0Bytes = part0Bytes[1:]
 			}
 		}
+		part0Bytes = []byte(strings.TrimLeft(string(part0Bytes), "0"))
+		if exponent > 0 {
+			lengthOfPart1Bytes := len(part1Bytes)
+			if lengthOfPart1Bytes > exponent {
+				part0Bytes = append(part0Bytes, part1Bytes[:exponent]...)
+				part1Bytes = part1Bytes[exponent:]
+			} else if lengthOfPart1Bytes == exponent {
+				part0Bytes = append(part0Bytes, part1Bytes...)
+				part1Bytes = []byte("")
+			} else {
+				paddingZeros := exponent - lengthOfPart1Bytes
+				part0Bytes = append(part0Bytes, part1Bytes...)
+				for i := 0; i < paddingZeros; i++ {
+					part0Bytes = append(part0Bytes, '0')
+				}
+				part1Bytes = []byte("")
+			}
+		}
+		if exponent < 0 {
+			exponentAbs := -exponent
+			lengthOfPart0Bytes := len(part0Bytes)
+			if lengthOfPart0Bytes > exponentAbs {
+				part1Bytes = append(part0Bytes[lengthOfPart0Bytes-exponentAbs:], part1Bytes...)
+				part0Bytes = part0Bytes[:lengthOfPart0Bytes-exponentAbs]
+			} else if lengthOfPart0Bytes == exponentAbs {
+				part1Bytes = append(part0Bytes, part1Bytes...)
+				part0Bytes = []byte("")
+			} else {
+				paddingZeros := exponentAbs - lengthOfPart0Bytes
+				part1Bytes = append(part0Bytes, part1Bytes...)
+				for i := 0; i < paddingZeros; i++ {
+					part1Bytes = append([]byte("0"), part1Bytes...)
+				}
+				part0Bytes = []byte("")
+			}
+		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123.45" is invalid for Decimal(5, 3)
-			return result, carry, neg, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
+			return []byte(""), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
 		}
 		if len(part1Bytes) > int(scale) {
 			for i := int(scale); i < len(part1Bytes); i++ {
@@ -366,7 +443,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 		}
 		result = append(part0Bytes, part1Bytes...)
 		return result, carry, neg, nil
-	} else if partsNumber == 1 { // this means the input string is of the form "123",
+	} else if partsNumber == 1 { // this means the input string is of the form "123", or "123e3", "123e-3"
 		part0Bytes := []byte(parts[0])
 		if part0Bytes[0] == '+' {
 			part0Bytes = part0Bytes[1:]
@@ -375,16 +452,59 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 			neg = true
 			part0Bytes = part0Bytes[1:]
 		}
-		if len(part0Bytes) > int(precision-scale) { // for example, input "123" is invalid for Decimal(5, 3)
-			return result, carry, neg, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
+		part0Bytes = []byte(strings.TrimLeft(string(part0Bytes), "0"))
+		if exponent > 0 {
+			for i := 0; i < int(scale)+exponent; i++ {
+				part0Bytes = append(part0Bytes, '0')
+			}
+			if len(part0Bytes) > int(precision) { // for example, input "52345e3" is invalid for Decimal(10, 3)
+				return []byte("0"), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
+			}
+			return part0Bytes, carry, neg, nil
+		} else if exponent < 0 {
+			exponentAbs := -exponent
+			lengthOfPart0Bytes := len(part0Bytes)
+			if lengthOfPart0Bytes < exponentAbs {
+				lengthOfPart0BytesPlusScale := lengthOfPart0Bytes + int(scale)
+				if lengthOfPart0BytesPlusScale < exponentAbs {
+					return []byte("0"), false, false, nil
+				} else {
+					for i := 0; i < int(scale); i++ {
+						part0Bytes = append(part0Bytes, '0')
+					}
+					remaining := part0Bytes[:lengthOfPart0BytesPlusScale-exponentAbs]
+					if len(part0Bytes) > lengthOfPart0BytesPlusScale-exponentAbs {
+						if part0Bytes[lengthOfPart0BytesPlusScale-exponentAbs] >= '5' && part0Bytes[lengthOfPart0BytesPlusScale-exponentAbs] <= '9' {
+							carry = true
+						}
+					}
+					return remaining, carry, neg, nil
+				}
+			} else {
+				paddingZeros := int(scale) - lengthOfPart0Bytes
+				if paddingZeros >= 0 {
+					for i := 0; i < paddingZeros; i++ {
+						part0Bytes = append(part0Bytes, '0')
+					}
+				} else {
+					if part0Bytes[scale] >= '5' && part0Bytes[scale] <= '9' {
+						carry = true
+					}
+					part0Bytes = part0Bytes[:scale]
+				}
+				return part0Bytes, carry, neg, nil
+			}
+		} else {
+			for i := 0; i < int(scale); i++ {
+				part0Bytes = append(part0Bytes, '0')
+			}
+			if len(part0Bytes) > int(precision) { // for example, input "12345678" is invalid for Decimal(10, 3)
+				return []byte("0"), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
+			}
+			return part0Bytes, carry, neg, nil
 		}
-		for i := 0; i < int(scale); i++ {
-			part0Bytes = append(part0Bytes, '0')
-		}
-		result = part0Bytes
-		return result, carry, neg, nil
 	} else {
-		return result, carry, neg, errors.New("invalid decimal string")
+		return []byte(""), false, false, errors.New("invalid decimal string")
 	}
 }
 

@@ -16,6 +16,8 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -186,7 +188,20 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 
 func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
-	//	case plan.Node_VALUE_SCAN:
+	case plan.Node_VALUE_SCAN:
+		ds := &Scope{Magic: Normal}
+		ds.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
+		bat := batch.NewWithSize(1)
+		{
+			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64})
+			bat.Vecs[0].Col = make([]int64, 1)
+			bat.InitZsOne(1)
+		}
+		ds.DataSource = &Source{Bat: bat}
+		//if n.RowsetData != nil {
+		//	init bat from n.RowsetData
+		//}
+		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
 		snap := engine.Snapshot(c.proc.Snapshot)
 		db, err := c.e.Database(n.ObjRef.SchemaName, snap)
@@ -372,6 +387,8 @@ func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileTop(n, ss)
+	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
+		return c.compileOrder(n, ss)
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset and limit

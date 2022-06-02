@@ -616,12 +616,11 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	row := make([]interface{}, 1)
 	if ve.System {
 		if ve.Global {
-			_, val, ok := gSysVariables.GetGlobalSysVar(ve.Name)
-			if ok {
-				row[0] = val
-			} else {
-				return errorNoSuchGlobalSystemVariable
+			val, err := ses.GetGlobalVar(ve.Name)
+			if err != nil {
+				return err
 			}
+			row[0] = val
 		} else {
 			val, err := ses.GetSessionVar(ve.Name)
 			if err != nil {
@@ -851,13 +850,21 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	ses.Mrs.AddColumn(col1)
 	ses.Mrs.AddColumn(col2)
 
+	var hasLike bool = false
+	var likePattern string = ""
+	if sv.Like != nil {
+		hasLike = true
+		likePattern = strings.ToLower(sv.Like.Right.String())
+	}
+
 	var sysVars map[string]interface{}
 	if sv.Global {
-		tmp := gSysVariables.CopySysVarsToSession()
 		sysVars = make(map[string]interface{})
-		for name := range tmp {
-			if _, val, ok := gSysVariables.GetGlobalSysVar(name); ok {
+		for name := range sysVars {
+			if val, err := ses.GetGlobalVar(name); err == nil {
 				sysVars[name] = val
+			} else if !goErrors.Is(err, errorSystemVariableSessionEmpty) {
+				return err
 			}
 		}
 	} else {
@@ -866,6 +873,9 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 
 	var rows [][]interface{}
 	for name, value := range sysVars {
+		if hasLike && !WildcardMatch(likePattern, name) {
+			continue
+		}
 		row := make([]interface{}, 2)
 		row[0] = name
 		row[1] = value

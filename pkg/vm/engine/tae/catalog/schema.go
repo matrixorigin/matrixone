@@ -60,17 +60,35 @@ type ColDef struct {
 	Hidden        int8
 	NullAbility   int8
 	AutoIncrement int8
+	PrimaryIdx    int8
 	Comment       string
 }
 
+func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
+func (def *ColDef) IsPrimary() bool { return def.PrimaryIdx >= 0 }
+
+type CompoundPK struct {
+	Idxes  []uint16
+	search map[uint16]bool
+}
+
+type SinglePK struct {
+	Idx int
+}
+
+func (uk *SinglePK) IsHidden(schema *Schema) bool {
+	return schema.ColDefs[uk.Idx].IsHidden()
+}
+
 type Schema struct {
-	Name             string         `json:"name"`
-	ColDefs          []*ColDef      `json:"cols"`
-	NameIndex        map[string]int `json:"nindex"`
-	BlockMaxRows     uint32         `json:"blkrows"`
-	PrimaryKey       int32          `json:"primarykey"`
-	SegmentMaxBlocks uint16         `json:"segblocks"`
-	Comment          string         `json:"comment"`
+	Name             string
+	ColDefs          []*ColDef
+	NameIndex        map[string]int
+	BlockMaxRows     uint32
+	SegmentMaxBlocks uint16
+	Comment          string
+	SinglePK         *SinglePK
+	CompoundPK       *CompoundPK
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -81,21 +99,26 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
+func (s *Schema) HiddenKeyDef() *ColDef { return s.ColDefs[len(s.ColDefs)-1] }
+
+func (s *Schema) IsSinglePK() bool { return s.SinglePK != nil }
+
+// Should be call only if IsSinglePK is checked
+func (s *Schema) GetPrimaryKeyIdx() int { return s.SinglePK.Idx }
+
 func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
-		return
-	}
-	if err = binary.Read(r, binary.BigEndian, &s.PrimaryKey); err != nil {
 		return
 	}
 	if err = binary.Read(r, binary.BigEndian, &s.SegmentMaxBlocks); err != nil {
 		return
 	}
+	n = 4 + 4
 	var sn int64
 	if s.Name, sn, err = common.ReadString(r); err != nil {
 		return
 	}
-	n = sn + 4 + 4 + 4 + 2
+	n += sn
 	if s.Comment, sn, err = common.ReadString(r); err != nil {
 		return
 	}
@@ -104,46 +127,50 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
 		return
 	}
+	n += 2
 	colBuf := make([]byte, encoding.TypeSize)
 	for i := uint16(0); i < colCnt; i++ {
 		if _, err = r.Read(colBuf); err != nil {
 			return
 		}
 		n += int64(encoding.TypeSize)
-		colDef := new(ColDef)
-		colDef.Type = encoding.DecodeType(colBuf)
-		if colDef.Name, sn, err = common.ReadString(r); err != nil {
+		def := new(ColDef)
+		def.Type = encoding.DecodeType(colBuf)
+		if def.Name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
 		n += sn
-		if colDef.Comment, sn, err = common.ReadString(r); err != nil {
+		if def.Comment, sn, err = common.ReadString(r); err != nil {
 			return
 		}
 		n += sn
-		if err = binary.Read(r, binary.BigEndian, &colDef.NullAbility); err != nil {
+		if err = binary.Read(r, binary.BigEndian, &def.NullAbility); err != nil {
 			return
 		}
 		n += 1
-		if err = binary.Read(r, binary.BigEndian, &colDef.Hidden); err != nil {
+		if err = binary.Read(r, binary.BigEndian, &def.Hidden); err != nil {
 			return
 		}
 		n += 1
-		if err = binary.Read(r, binary.BigEndian, &colDef.AutoIncrement); err != nil {
+		if err = binary.Read(r, binary.BigEndian, &def.AutoIncrement); err != nil {
 			return
 		}
 		n += 1
-		s.ColDefs = append(s.ColDefs, colDef)
-		colDef.Idx = int(i)
+		if err = binary.Read(r, binary.BigEndian, &def.PrimaryIdx); err != nil {
+			return
+		}
+		n += 1
+		if err = s.AppendColDef(def); err != nil {
+			return
+		}
 	}
+	err = s.Finalize(true)
 	return
 }
 
 func (s *Schema) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
 	if err = binary.Write(&w, binary.BigEndian, s.BlockMaxRows); err != nil {
-		return
-	}
-	if err = binary.Write(&w, binary.BigEndian, s.PrimaryKey); err != nil {
 		return
 	}
 	if err = binary.Write(&w, binary.BigEndian, s.SegmentMaxBlocks); err != nil {
@@ -158,23 +185,26 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {
 		return
 	}
-	for _, colDef := range s.ColDefs {
-		if _, err = w.Write(encoding.EncodeType(colDef.Type)); err != nil {
+	for _, def := range s.ColDefs {
+		if _, err = w.Write(encoding.EncodeType(def.Type)); err != nil {
 			return
 		}
-		if _, err = common.WriteString(colDef.Name, &w); err != nil {
+		if _, err = common.WriteString(def.Name, &w); err != nil {
 			return
 		}
-		if _, err = common.WriteString(colDef.Comment, &w); err != nil {
+		if _, err = common.WriteString(def.Comment, &w); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, colDef.NullAbility); err != nil {
+		if err = binary.Write(&w, binary.BigEndian, def.NullAbility); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, colDef.Hidden); err != nil {
+		if err = binary.Write(&w, binary.BigEndian, def.Hidden); err != nil {
 			return
 		}
-		if err = binary.Write(&w, binary.BigEndian, colDef.AutoIncrement); err != nil {
+		if err = binary.Write(&w, binary.BigEndian, def.AutoIncrement); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.PrimaryIdx); err != nil {
 			return
 		}
 	}
@@ -182,14 +212,34 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) AppendCol(name string, typ types.Type) {
-	colDef := &ColDef{
-		Name: name,
-		Type: typ,
-		Idx:  len(s.ColDefs),
+func (s *Schema) AppendColDef(def *ColDef) (err error) {
+	def.Idx = len(s.ColDefs)
+	s.ColDefs = append(s.ColDefs, def)
+	_, existed := s.NameIndex[def.Name]
+	if existed {
+		err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+		return
 	}
-	s.ColDefs = append(s.ColDefs, colDef)
-	s.NameIndex[name] = colDef.Idx
+	s.NameIndex[def.Name] = def.Idx
+	return
+}
+
+func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
+	def := &ColDef{
+		Name:       name,
+		Type:       typ,
+		PrimaryIdx: int8(idx),
+	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendCol(name string, typ types.Type) error {
+	def := &ColDef{
+		Name:       name,
+		Type:       typ,
+		PrimaryIdx: -1,
+	}
+	return s.AppendColDef(def)
 }
 
 func (s *Schema) String() string {
@@ -198,53 +248,108 @@ func (s *Schema) String() string {
 }
 
 func (s *Schema) IsPartOfPK(idx int) bool {
-	return int32(idx) == s.PrimaryKey
+	if s.SinglePK != nil {
+		return s.SinglePK.Idx == idx
+	}
+	panic("implement me")
 }
 
-func (s *Schema) GetPKType() types.Type {
-	return s.ColDefs[s.PrimaryKey].Type
+func (s *Schema) GetSinglePKType() types.Type {
+	return s.ColDefs[s.SinglePK.Idx].Type
 }
 
-func (s *Schema) GetPKColumnDef() *ColDef {
-	return s.ColDefs[s.PrimaryKey]
+func (s *Schema) GetSinglePKColDef() *ColDef {
+	return s.ColDefs[s.SinglePK.Idx]
 }
+
+func (s *Schema) IsHiddenPK() bool { return s.ColDefs[s.SinglePK.Idx].IsHidden() }
 
 func (s *Schema) Attrs() []string {
-	attrs := make([]string, len(s.ColDefs))
-	for i, colDef := range s.ColDefs {
-		attrs[i] = colDef.Name
+	attrs := make([]string, len(s.ColDefs)-1)
+	for i, def := range s.ColDefs[:len(s.ColDefs)-1] {
+		attrs[i] = def.Name
 	}
 	return attrs
 }
 
 func (s *Schema) Types() []types.Type {
-	ts := make([]types.Type, len(s.ColDefs))
-	for i, colDef := range s.ColDefs {
-		ts[i] = colDef.Type
+	ts := make([]types.Type, len(s.ColDefs)-1)
+	for i, def := range s.ColDefs[:len(s.ColDefs)-1] {
+		ts[i] = def.Type
 	}
 	return ts
 }
 
-func (s *Schema) Valid() bool {
+func (s *Schema) AllTypes() []types.Type {
+	ts := make([]types.Type, len(s.ColDefs))
+	for i, def := range s.ColDefs {
+		ts[i] = def.Type
+	}
+	return ts
+}
+
+func (s *Schema) Finalize(rebuild bool) (err error) {
 	if s == nil {
-		return false
+		err = fmt.Errorf("%w: nil schema", ErrSchemaValidation)
+		return
 	}
 	if len(s.ColDefs) == 0 {
-		return false
+		err = fmt.Errorf("%w: empty schema", ErrSchemaValidation)
+		return
+	}
+	if !rebuild {
+		hiddenDef := &ColDef{
+			Name:       HiddenColumnName,
+			Comment:    HiddenColumnComment,
+			Type:       HiddenColumnType,
+			Hidden:     int8(1),
+			PrimaryIdx: -1,
+		}
+		if err = s.AppendColDef(hiddenDef); err != nil {
+			return
+		}
 	}
 
+	pkIdx := make([]int, 0)
 	names := make(map[string]bool)
-	for idx, colDef := range s.ColDefs {
-		if idx != colDef.Idx {
-			return false
+	for idx, def := range s.ColDefs {
+		// Check column idx validility
+		if idx != def.Idx {
+			err = fmt.Errorf("%w: wrong column index %d specified for \"%s\"", ErrSchemaValidation, def.Idx, def.Name)
+			return
 		}
-		_, ok := names[colDef.Name]
+		// Check unique name
+		_, ok := names[def.Name]
 		if ok {
-			return false
+			err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+			return
 		}
-		names[colDef.Name] = true
+		names[def.Name] = true
+		if def.IsPrimary() {
+			pkIdx = append(pkIdx, idx)
+		}
 	}
-	return true
+
+	if len(pkIdx) == 1 {
+		// One pk defined
+		def := s.ColDefs[pkIdx[0]]
+		if def.PrimaryIdx != 0 {
+			err = fmt.Errorf("%w: bad primary idx %d, should be 0", ErrSchemaValidation, def.PrimaryIdx)
+			return
+		}
+		s.SinglePK = &SinglePK{Idx: def.Idx}
+		s.CompoundPK = nil
+	} else if len(pkIdx) == 0 {
+		// No pk specified
+		def := s.ColDefs[len(s.ColDefs)-1]
+		def.PrimaryIdx = 0
+		s.SinglePK = &SinglePK{Idx: def.Idx}
+		s.CompoundPK = nil
+	} else {
+		// Compound pk defined
+		panic("implement me")
+	}
+	return
 }
 
 // GetColIdx returns column index for the given column name
@@ -257,18 +362,23 @@ func (s *Schema) GetColIdx(attr string) int {
 	return idx
 }
 
-func MockSchema(colCnt int) *Schema {
+func MockSchema(colCnt int, pkIdx int) *Schema {
 	rand.Seed(time.Now().UnixNano())
 	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
-		schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
+		if pkIdx == i {
+			_ = schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+		} else {
+			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
+		}
 	}
+	_ = schema.Finalize(false)
 	return schema
 }
 
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
-func MockSchemaAll(colCnt int) *Schema {
+func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
@@ -360,12 +470,14 @@ func MockSchemaAll(colCnt int) *Schema {
 				Width: 100,
 			}
 		}
-		schema.AppendCol(name, typ)
+		if pkIdx == i {
+			_ = schema.AppendPKCol(name, typ, 0)
+		} else {
+			_ = schema.AppendCol(name, typ)
+		}
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
-	if colCnt > 0 {
-		schema.PrimaryKey = int32(colCnt) - 1
-	}
+	_ = schema.Finalize(false)
 	return schema
 }

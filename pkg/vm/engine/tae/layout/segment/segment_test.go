@@ -234,7 +234,7 @@ func TestBlockFile_GetExtents(t *testing.T) {
 		assert.Equal(t, extents[i+1].offset, extent.offset+extent.length)
 	}
 
-	assert.Equal(t, size, uint32(file.GetFileSize()))
+	assert.Equal(t, size, uint32(file.GetInode().GetFileSize()))
 
 }
 

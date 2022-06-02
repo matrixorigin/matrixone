@@ -881,3 +881,49 @@ func FormatLineInBatch(bat *batch.Batch, rowIndex int) []string {
 	}
 	return res
 }
+
+// WildcardMatch implements wildcard pattern match algorithm.
+// pattern and target are ascii characters
+// TODO: add \_ and \%
+func WildcardMatch(pattern, target string) bool {
+	var p int = 0
+	var t int = 0
+	var positionOfPercentPlusOne int = -1
+	var positionOfTargetEncounterPercent int = -1
+	plen := len(pattern)
+	tlen := len(target)
+	for t < tlen {
+		//%
+		if p < plen && pattern[p] == '%' {
+			p++
+			positionOfPercentPlusOne = p
+			if p >= plen {
+				//pattern end with %
+				return true
+			}
+			//means % matches empty
+			positionOfTargetEncounterPercent = t
+		} else if p < plen && (pattern[p] == '_' || pattern[p] == target[t]) { //match or _
+			p++
+			t++
+		} else {
+			if positionOfPercentPlusOne == -1 {
+				//have not matched a %
+				return false
+			}
+			if positionOfTargetEncounterPercent == -1 {
+				return false
+			}
+			//backtrace to last % position + 1
+			p = positionOfPercentPlusOne
+			//means % matches multiple characters
+			positionOfTargetEncounterPercent++
+			t = positionOfTargetEncounterPercent
+		}
+	}
+	//skip %
+	for p < plen && pattern[p] == '%' {
+		p++
+	}
+	return p >= plen
+}

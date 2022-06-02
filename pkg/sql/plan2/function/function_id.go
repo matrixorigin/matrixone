@@ -60,6 +60,7 @@ const (
 	BASE64_DECODE     // BASE64_DECODE
 	BASE64_ENCODE     // BASE64_ENCODE
 	BIT_AND           // BIT_AND
+	BIT_LENGTH        // BIT_LENGTH
 	BIT_NOT           // BIT_NOT
 	BIT_OR            // BIT_OR
 	BIT_XOR           // BIT_XOR
@@ -87,87 +88,98 @@ const (
 	DATEADD           // DATEADD
 	DATEDIFF          // DATEDIFF
 	DENSE_RANK        // DENSE_RANK
-	ENDSWITH          // ENDSWITH
-	EXP               // EXP
-	FIRST_VALUE       // FIRST_VALUE
-	FLOOR             // FLOOR
-	GREATEST          // GREATEST
-	GROUPING_ID       // GROUPING_ID
-	HASH              // HASH
-	HASH_AGG          // HASH_AGG
-	HEX_DECODE        // HEX_DECODE
-	HEX_ENCODE        // HEX_ENCODE
-	IFF               // IFF
-	IFNULL            // IFNULL
-	ILIKE             // ILIKE
-	ILIKE_ALL         // ILIKE_ALL
-	ILIKE_ANY         // ILIKE_ANY
-	IN                // IN
-	LAG               // LAG
-	LAST_VALUE        // LAST_VALUE
-	LEAD              // LEAD
-	LEAST             // LEAST
-	LEFT              // LEFT
-	LENGTH            // LENGTH
-	LIKE              // LIKE
-	LIKE_ALL          // LIKE_ALL
-	LIKE_ANY          // LIKE_ANY
-	LN                // LN
-	LOG               // LOG
-	LOWER             // LOWER
-	LPAD              // LPAD
-	LTRIM             // LTRIM
-	MAX               // MAX
-	MEDIAN            // MEDIAN
-	MIN               // MIN
-	MODE              // MODE
-	NORMAL            // NORMAL
-	NTH_VALUE         // NTH_VALUE
-	NTILE             // NTILE
-	NULLIF            // NULLIF
-	PERCENT_RANK      // PERCENT_RANK
-	POSITION          // POSITION
-	POW               // POW
-	RADIAN            // RADIAN
-	RANDOM            // RANDOM
-	RANK              // RANK
-	REGEXP            // REGEXP
-	REGEXP_REPLACE    // REGEXP_REPLACE
-	REGEXP_SUBSTR     // REGEXP_SUBSTR
-	REPEAT            // REPEAT
-	REPLACE           // REPLACE
-	RIGHT             // RIGHT
-	ROUND             // ROUND
-	ROW_NUMBER        // ROW_NUMBER
-	RPAD              // RPAD
-	RTRIM             // RTRIM
-	SIGN              // SIGN
-	SIN               // SIN
-	SPLIT             // SPLIT
-	STARCOUNT         // STARTCOUNT
-	STARTSWITH        // STARTSWITH
-	STDDEV_POP        // STDDEV_POP
-	STDDEV_SAMPLE     // STDDEV_SAMPLE
-	SUBSTR            // SUBSTR
-	SUM               // SUM
-	TAN               // TAN
-	TO_INTERVAL       // TO_INTERVAL
-	TRANSLATE         // TRANSLATE
-	TRIM              // TRIM
-	UNIFORM           // UNIFORM
-	UPPER             // UPPER
-	VAR_POP           // VAR_POP
-	VAR_SAMPLE        // VAR_SAMPLE
+	EMPTY
+	ENDSWITH // ENDSWITH
+	EXP      // EXP
+	FINDINSET
+	FIRST_VALUE // FIRST_VALUE
+	FLOOR       // FLOOR
+	GREATEST    // GREATEST
+	GROUPING_ID // GROUPING_ID
+	HASH        // HASH
+	HASH_AGG    // HASH_AGG
+	HEX_DECODE  // HEX_DECODE
+	HEX_ENCODE  // HEX_ENCODE
+	IFF         // IFF
+	IFNULL      // IFNULL
+	ILIKE       // ILIKE
+	ILIKE_ALL   // ILIKE_ALL
+	ILIKE_ANY   // ILIKE_ANY
+	IN          // IN
+	LAG         // LAG
+	LAST_VALUE  // LAST_VALUE
+	LEAD        // LEAD
+	LEAST       // LEAST
+	LEFT        // LEFT
+	LENGTH      // LENGTH
+	LENGTH_UTF8
+	LIKE     // LIKE
+	LIKE_ALL // LIKE_ALL
+	LIKE_ANY // LIKE_ANY
+	LN       // LN
+	LOG      // LOG
+	LOWER    // LOWER
+	LPAD     // LPAD
+	LTRIM    // LTRIM
+	MAX      // MAX
+	MEDIAN   // MEDIAN
+	MIN      // MIN
+	MODE     // MODE
+	MONTH
+	NORMAL         // NORMAL
+	NTH_VALUE      // NTH_VALUE
+	NTILE          // NTILE
+	NULLIF         // NULLIF
+	PERCENT_RANK   // PERCENT_RANK
+	PI             // PI
+	POSITION       // POSITION
+	POW            // POW
+	RADIAN         // RADIAN
+	RANDOM         // RANDOM
+	RANK           // RANK
+	REGEXP         // REGEXP
+	REGEXP_REPLACE // REGEXP_REPLACE
+	REGEXP_SUBSTR  // REGEXP_SUBSTR
+	REPEAT         // REPEAT
+	REPLACE        // REPLACE
+	REVERSE
+	RIGHT      // RIGHT
+	ROUND      // ROUND
+	ROW_NUMBER // ROW_NUMBER
+	RPAD       // RPAD
+	RTRIM      // RTRIM
+	SIGN       // SIGN
+	SIN        // SIN
+	SPACE
+	SPLIT         // SPLIT
+	STARCOUNT     // STARTCOUNT
+	STARTSWITH    // STARTSWITH
+	STDDEV_POP    // STDDEV_POP
+	STDDEV_SAMPLE // STDDEV_SAMPLE
+	SUBSTR        // SUBSTR
+	SUM           // SUM
+	TAN           // TAN
+	TO_INTERVAL   // TO_INTERVAL
+	TRANSLATE     // TRANSLATE
+	TRIM          // TRIM
+	UNIFORM       // UNIFORM
+	UTC_TIMESTAMP
+	UPPER      // UPPER
+	VAR_POP    // VAR_POP
+	VAR_SAMPLE // VAR_SAMPLE
 
 	EXISTS // EXISTS
 	ALL    // ALL
 	ANY    // ANY
 
 	DATE      // DATE
+	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
+	OCT
 	SUBSTRING // SUBSTRING
-	YEAR      // YEAR
+	WEEKDAY
+	YEAR // YEAR
 
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
@@ -220,11 +232,44 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	// builtin
-	"extract":   EXTRACT,
-	"year":      YEAR,
-	"substr":    SUBSTRING,
-	"substring": SUBSTRING,
-	"iff":       IFF,
-	"date_add":  DATE_ADD,
-	"date_sub":  DATE_SUB,
+	// binary functions
+	"endswith":   ENDSWITH,
+	"findinset":  FINDINSET,
+	"power":      POW,
+	"startswith": STARTSWITH,
+	// variadic functions
+	"ceil":          CEIL,
+	"ceiling":       CEIL,
+	"floor":         FLOOR,
+	"lpad":          LPAD,
+	"pi":            PI,
+	"round":         ROUND,
+	"rpad":          RPAD,
+	"substr":        SUBSTRING,
+	"substring":     SUBSTRING,
+	"utc_timestamp": UTC_TIMESTAMP,
+	"abs":           ABS,
+	"acos":          ACOS,
+	"bit_length":    BIT_LENGTH,
+	"date":          DATE,
+	"dayofyear":     DAYOFYEAR,
+	"exp":           EXP,
+	"empty":         EMPTY,
+	"length":        LENGTH,
+	"lengthutf8":    LENGTH_UTF8,
+	"ln":            LN,
+	"log":           LOG,
+	"ltrim":         LTRIM,
+	"month":         MONTH,
+	"oct":           OCT,
+	"reverse":       REVERSE,
+	"rtrim":         RTRIM,
+	"sin":           SIN,
+	"space":         SPACE,
+	"weekday":       WEEKDAY,
+	"year":          YEAR,
+	"extract":       EXTRACT,
+	"iff":           IFF,
+	"date_add":      DATE_ADD,
+	"date_sub":      DATE_SUB,
 }
