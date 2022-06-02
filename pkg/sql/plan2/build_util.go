@@ -377,13 +377,52 @@ func buildUnresolvedName(query *Query, node *Node, colName string, tableName str
 
 //if table == ""  => select * from tbl
 //if table is not empty => select a.* from a,b on a.id = b.id
-func unfoldStar(node *Node, list *plan.ExprList, table string) error {
-	for _, col := range node.ProjectList {
-		if len(table) == 0 || table == col.TableName {
-			list.List = append(list.List, col)
+func unfoldStar(query *Query, node *Node, list *plan.ExprList, table string) error {
+	// if node is TABLE_SCAN, we unfold star from tableDef (because this node have no children)
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		if len(table) == 0 || table == node.TableDef.Name {
+			for i, col := range node.TableDef.Cols {
+				list.List = append(list.List, &Expr{
+					Typ:       col.Typ,
+					ColName:   col.Name,
+					TableName: node.TableDef.Name,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: 0,
+							ColPos: int32(i),
+						},
+					},
+				})
+			}
+		}
+	} else {
+		// other case, we unfold star from Children's projectionList. like unresolvename
+		for idx, child := range node.Children {
+			for _, col := range query.Nodes[child].ProjectList {
+				if len(table) == 0 || table == col.TableName {
+					if idx > 0 {
+						// like `select * from a join b`.  we unfoldStar in joinNode,
+						// we will reset col.ColPos to child's index
+						resetColPos(col, int32(idx))
+					}
+					list.List = append(list.List, col)
+				}
+			}
 		}
 	}
+
 	return nil
+}
+
+func resetColPos(col *plan.Expr, newPos int32) {
+	switch expr := col.Expr.(type) {
+	case *plan.Expr_Col:
+		expr.Col.ColPos = newPos
+	case *plan.Expr_F:
+		for _, e := range expr.F.Args {
+			resetColPos(e, newPos)
+		}
+	}
 }
 
 func getResolveTable(dbName string, tableName string, ctx CompilerContext, binderCtx *BinderContext) (*ObjectRef, *TableDef, bool) {
