@@ -52,7 +52,6 @@ type txnTable struct {
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
-	sortKey    *catalog.SortKey
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
@@ -64,7 +63,6 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
-		sortKey:     entry.GetSchema().SortKey,
 	}
 	return tbl
 }
@@ -313,15 +311,13 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 }
 
 func (tbl *txnTable) Append(data *batch.Batch) error {
-	if tbl.sortKey != nil {
-		if tbl.sortKey.Size() == 1 {
-			err := tbl.BatchDedup(data.Vecs[tbl.sortKey.GetDef(0).Idx])
-			if err != nil {
-				return err
-			}
-		} else if tbl.sortKey.Size() > 1 {
-			panic("implement me")
+	if tbl.schema.IsSinglePK() {
+		err := tbl.BatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()])
+		if err != nil {
+			return err
 		}
+	} else if tbl.schema.IsCompoundPK() {
+		panic("implement me")
 	}
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
@@ -520,10 +516,10 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 }
 
 func (tbl *txnTable) PreCommitDedup() (err error) {
-	if tbl.localSegment == nil || tbl.sortKey == nil || !tbl.sortKey.IsPrimary() {
+	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	pks := tbl.localSegment.GetSortColumn()
+	pks := tbl.localSegment.GetPKColumn()
 	err = tbl.DoDedup(pks, true)
 	return
 }
@@ -605,12 +601,13 @@ func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
-	if tbl.localSegment != nil {
-		if tbl.sortKey.Size() == 1 {
-			err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.sortKey.GetSingleIdx()])
-		} else {
-			panic("implement me")
-		}
+	if tbl.localSegment == nil {
+		return
+	}
+	if tbl.schema.IsSinglePK() {
+		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
+	} else {
+		panic("implement me")
 	}
 	return
 }

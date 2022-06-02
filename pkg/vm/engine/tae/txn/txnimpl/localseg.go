@@ -183,15 +183,13 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
-		if seg.table.sortKey != nil {
-			if seg.table.sortKey.Size() == 1 {
-				start := seg.rows
-				if err = seg.index.BatchInsert(data.Vecs[seg.table.sortKey.GetDef(0).Idx], int(offset), int(appended), start, false); err != nil {
-					break
-				}
-			} else {
-				panic("implement me")
+		if seg.table.schema.IsSinglePK() {
+			start := seg.rows
+			if err = seg.index.BatchInsert(data.Vecs[seg.table.schema.GetSingleSortKeyIdx()], int(offset), int(appended), start, false); err != nil {
+				break
 			}
+		} else if seg.table.schema.IsCompoundPK() {
+			panic("implement me")
 		}
 		offset += appended
 		seg.rows += appended
@@ -215,17 +213,19 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 		if err != nil {
 			return err
 		}
-		if seg.table.sortKey == nil {
+		if !seg.table.schema.HasPK() {
+			// If no pk defined
 			return err
-		}
-		if seg.table.sortKey.Size() == 1 {
+		} else if seg.table.schema.IsSinglePK() {
+			// one pk key
 			for i := firstOffset; i <= lastOffset; i++ {
-				v, _ := node.GetValue(seg.table.sortKey.GetDef(0).Idx, i)
+				v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
 				if err = seg.index.Delete(v); err != nil {
 					break
 				}
 			}
 		} else {
+			// compound pk keys
 			panic("implement me")
 		}
 		return err
@@ -235,17 +235,15 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
 	node = seg.nodes[last]
 	err = node.RangeDelete(0, lastOffset)
-	if seg.table.sortKey != nil {
-		if seg.table.sortKey.Size() == 1 {
-			for i := uint32(0); i <= lastOffset; i++ {
-				v, _ := node.GetValue(seg.table.sortKey.GetDef(0).Idx, i)
-				if err = seg.index.Delete(v); err != nil {
-					break
-				}
+	if seg.table.schema.IsSinglePK() {
+		for i := uint32(0); i <= lastOffset; i++ {
+			v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+			if err = seg.index.Delete(v); err != nil {
+				break
 			}
-		} else {
-			panic("implment me")
 		}
+	} else if seg.table.schema.IsCompoundPK() {
+		panic("implment me")
 	}
 	if last > first+1 && err == nil {
 		for i := first + 1; i < last; i++ {
@@ -253,17 +251,15 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 			if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
 				break
 			}
-			if seg.table.sortKey != nil {
-				if seg.table.sortKey.Size() == 1 {
-					for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
-						v, _ := node.GetValue(seg.table.sortKey.GetSingleIdx(), i)
-						if err = seg.index.Delete(v); err != nil {
-							break
-						}
+			if seg.table.schema.IsSinglePK() {
+				for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
+					v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+					if err = seg.index.Delete(v); err != nil {
+						break
 					}
-				} else {
-					panic("implement me")
 				}
+			} else if seg.table.schema.IsCompoundPK() {
+				panic("implement me")
 			}
 		}
 	}
@@ -321,15 +317,13 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
 	}
-	if seg.table.sortKey != nil {
-		if seg.table.sortKey.Size() == 1 {
-			v, _ := n.GetValue(seg.table.sortKey.GetSingleIdx(), row)
-			if err = seg.index.Delete(v); err != nil {
-				panic(err)
-			}
-		} else {
-			panic("implement me")
+	if seg.table.schema.IsSinglePK() {
+		v, _ := n.GetValue(seg.table.schema.GetSingleSortKeyIdx(), row)
+		if err = seg.index.Delete(v); err != nil {
+			panic(err)
 		}
+	} else if seg.table.schema.IsCompoundPK() {
+		panic("implement me")
 	}
 
 	vec := vector.New(window.Vecs[col].Typ)
@@ -349,18 +343,16 @@ func (seg *localSegment) Rows() uint32 {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	if seg.table.sortKey == nil {
+	if !seg.table.schema.HasPK() {
 		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
-	} else {
-		if seg.table.sortKey.Size() == 1 {
-			if v, ok := filter.Val.([]byte); ok {
-				offset, err = seg.index.Search(string(v))
-			} else {
-				offset, err = seg.index.Search(filter.Val)
-			}
+	} else if seg.table.schema.IsSinglePK() {
+		if v, ok := filter.Val.([]byte); ok {
+			offset, err = seg.index.Search(string(v))
 		} else {
-			panic("implement me")
+			offset, err = seg.index.Search(filter.Val)
 		}
+	} else if seg.table.schema.IsCompoundPK() {
+		panic("implement me")
 	}
 	if err == nil {
 		id = seg.entry.AsCommonID()
@@ -368,9 +360,9 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 	return
 }
 
-func (seg *localSegment) GetSortColumn() *vector.Vector {
+func (seg *localSegment) GetPKColumn() *vector.Vector {
 	schema := seg.table.entry.GetSchema()
-	if schema.IsSingleSortKey() {
+	if schema.IsSinglePK() {
 		return seg.index.KeyToVector(schema.GetSingleSortKey().Type)
 	}
 	panic("not implemented")

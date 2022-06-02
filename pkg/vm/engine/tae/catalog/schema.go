@@ -98,7 +98,7 @@ func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
 	return true
 }
 
-func (cpk *SortKey) IsSinglePK() bool               { return cpk.isPrimary && cpk.Size() == 0 }
+func (cpk *SortKey) IsSinglePK() bool               { return cpk.isPrimary && cpk.Size() == 1 }
 func (cpk *SortKey) IsPrimary() bool                { return cpk.isPrimary }
 func (cpk *SortKey) Size() int                      { return len(cpk.Defs) }
 func (cpk *SortKey) GetDef(pos int) *ColDef         { return cpk.Defs[pos] }
@@ -127,11 +127,20 @@ func NewEmptySchema(name string) *Schema {
 
 func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
 func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
+func (s *Schema) IsCompoundPK() bool      { return s.IsCompoundSortKey() && s.SortKey.IsPrimary() }
 func (s *Schema) IsCompoundSortKey() bool { return s.SortKey != nil && s.SortKey.Size() > 1 }
+func (s *Schema) HasPK() bool             { return s.SortKey != nil && s.SortKey.IsPrimary() }
 
 // Should be call only if IsSinglePK is checked
 func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
 func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
+
+func (s *Schema) GetSortKeyCnt() int {
+	if s.SortKey == nil {
+		return 0
+	}
+	return s.SortKey.Size()
+}
 
 func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
