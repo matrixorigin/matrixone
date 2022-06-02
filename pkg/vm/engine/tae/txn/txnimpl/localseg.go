@@ -361,19 +361,19 @@ func (seg *localSegment) Rows() uint32 {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+	id = seg.entry.AsCommonID()
 	if !seg.table.schema.HasPK() {
 		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
-	} else if seg.table.schema.IsSinglePK() {
+		return
+	}
+	if seg.table.schema.IsSinglePK() {
 		if v, ok := filter.Val.([]byte); ok {
 			offset, err = seg.index.Search(string(v))
 		} else {
 			offset, err = seg.index.Search(filter.Val)
 		}
 	} else if seg.table.schema.IsCompoundPK() {
-		panic("implement me")
-	}
-	if err == nil {
-		id = seg.entry.AsCommonID()
+		offset, err = seg.index.Search(string(filter.Val.([]byte)))
 	}
 	return
 }
@@ -383,8 +383,11 @@ func (seg *localSegment) GetPKColumn() *vector.Vector {
 	return seg.index.KeyToVector(schema.GetSortKeyType())
 }
 
-func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {
-	return seg.index.BatchDedup(col)
+func (seg *localSegment) BatchDedup(keys ...*vector.Vector) error {
+	if len(keys) == 1 {
+		return seg.index.BatchDedup(keys[0])
+	}
+	return seg.index.BatchDedupCompound(model.EncodeTypedVals, keys...)
 }
 
 func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {

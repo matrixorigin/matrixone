@@ -144,8 +144,8 @@ func (h *txnRelation) Rows() int64                      { return int64(h.table.e
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
-func (h *txnRelation) BatchDedup(col *vector.Vector) error {
-	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
+func (h *txnRelation) BatchDedup(cols ...*vector.Vector) error {
+	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), cols...)
 }
 
 func (h *txnRelation) Append(data *batch.Batch) error {

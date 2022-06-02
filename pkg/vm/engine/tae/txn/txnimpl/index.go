@@ -31,6 +31,7 @@ import (
 type TableIndex interface {
 	io.Closer
 	BatchDedup(*gvec.Vector) error
+	BatchDedupCompound(model.CompoundKeyEncoder, ...*gvec.Vector) error
 	BatchInsert(*gvec.Vector, int, int, uint32, bool) error
 	BatchInsertCompound(int, int, uint32, bool, model.CompoundKeyEncoder, ...*gvec.Vector) error
 	Insert(any, uint32) error
@@ -421,6 +422,22 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 		return vector.ErrVecTypeNotSupport
 	}
 	return nil
+}
+
+func (idx *simpleTableIndex) BatchDedupCompound(encoder model.CompoundKeyEncoder, cols ...*gvec.Vector) (err error) {
+	key := gvec.New(catalog.CompoundKeyType)
+	vs := make([]any, len(cols))
+	var buf bytes.Buffer
+	for i := 0; i < gvec.Length(cols[0]); i++ {
+		buf.Reset()
+		for j := range vs {
+			vs[i] = compute.GetValue(cols[j], uint32(i))
+		}
+		v := encoder(&buf, vs...)
+		compute.AppendValue(key, v)
+	}
+	err = idx.BatchDedup(key)
+	return
 }
 
 // TODO: rewrite

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -310,14 +311,23 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	return nil
 }
 
-func (tbl *txnTable) Append(data *batch.Batch) error {
+func (tbl *txnTable) GetSortColumns(data *batch.Batch) []*vector.Vector {
+	vs := make([]*vector.Vector, tbl.schema.GetSortKeyCnt())
+	for i := range vs {
+		vs[i] = data.Vecs[tbl.schema.SortKey.Defs[i].Idx]
+	}
+	return vs
+}
+
+func (tbl *txnTable) Append(data *batch.Batch) (err error) {
 	if tbl.schema.IsSinglePK() {
-		err := tbl.BatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()])
-		if err != nil {
-			return err
+		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
+			return
 		}
 	} else if tbl.schema.IsCompoundPK() {
-		panic("implement me")
+		if err = tbl.DoBatchDedup(tbl.GetSortColumns(data)...); err != nil {
+			return
+		}
 	}
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
@@ -585,18 +595,29 @@ func (tbl *txnTable) DoDedup(pks *vector.Vector, preCommit bool) (err error) {
 	return
 }
 
-func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
+func (tbl *txnTable) DoBatchDedup(keys ...*vector.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	err = index.BatchInsert(pks, 0, vector.Length(pks), 0, true)
-	if err != nil {
-		return
-	}
-	if tbl.localSegment != nil {
-		if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
+	if tbl.schema.IsSinglePK() {
+		if err = index.BatchInsert(keys[0], 0, vector.Length(keys[0]), 0, true); err != nil {
+			return
+		}
+	} else {
+		if err = index.BatchInsertCompound(0, vector.Length(keys[0]), 0, true, model.EncodeTypedVals, keys...); err != nil {
 			return
 		}
 	}
-	err = tbl.DoDedup(pks, false)
+
+	if tbl.localSegment != nil {
+		if err = tbl.localSegment.BatchDedup(keys...); err != nil {
+			return
+		}
+	}
+
+	if tbl.schema.IsSinglePK() {
+		err = tbl.DoDedup(keys[0], false)
+	} else {
+		panic("implement me")
+	}
 	return
 }
 
@@ -605,8 +626,9 @@ func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
 		return
 	}
 	if tbl.schema.IsSinglePK() {
-		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
+		err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	} else {
+		err = tbl.localSegment.BatchDedup(tbl.GetSortColumns(bat)...)
 		panic("implement me")
 	}
 	return

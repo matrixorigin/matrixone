@@ -66,7 +66,7 @@ func (rel *TxnRelation) GetCardinality(attr string) int64                       
 func (rel *TxnRelation) Schema() any                                                          { return nil }
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                                      { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                          { return nil }
-func (rel *TxnRelation) BatchDedup(col *vector.Vector) error                                  { return nil }
+func (rel *TxnRelation) BatchDedup(cols ...*vector.Vector) error                              { return nil }
 func (rel *TxnRelation) Append(data *batch.Batch) error                                       { return nil }
 func (rel *TxnRelation) GetMeta() any                                                         { return nil }
 func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)                 { return }
