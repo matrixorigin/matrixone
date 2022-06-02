@@ -43,9 +43,9 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		pkDef.Names = append(pkDef.Names, schema.GetSinglePKColDef().Name)
 		defs = append(defs, pkDef)
 	} else {
-		for _, idx := range schema.CompoundPK.Idxes {
+		for _, def := range schema.CompoundPK.Defs {
 			pkDef := new(engine.PrimaryIndexDef)
-			pkDef.Names = append(pkDef.Names, schema.ColDefs[idx].Name)
+			pkDef.Names = append(pkDef.Names, def.Name)
 			defs = append(defs, pkDef)
 		}
 	}

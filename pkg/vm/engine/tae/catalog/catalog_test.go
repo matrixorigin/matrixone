@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -31,6 +32,33 @@ import (
 const (
 	ModuleName = "TAECATALOG"
 )
+
+func TestCompoundPKSchema(t *testing.T) {
+	schema := NewEmptySchema(t.Name())
+	err := schema.AppendPKCol("pk1", types.T_int32.ToType(), 1)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk2", types.T_int32.ToType(), 2)
+	assert.NoError(t, err)
+	err = schema.Finalize(false)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, schema.CompoundPK.Size())
+	assert.Equal(t, int8(0), schema.CompoundPK.GetDef(0).PrimaryIdx)
+	assert.Equal(t, int8(1), schema.CompoundPK.GetDef(1).PrimaryIdx)
+	assert.Equal(t, int8(2), schema.CompoundPK.GetDef(2).PrimaryIdx)
+	assert.Equal(t, "pk0", schema.CompoundPK.GetDef(0).Name)
+	assert.Equal(t, "pk1", schema.CompoundPK.GetDef(1).Name)
+	assert.Equal(t, "pk2", schema.CompoundPK.GetDef(2).Name)
+
+	schema = NewEmptySchema(t.Name())
+	err = schema.AppendPKCol("pk1", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.Finalize(false)
+	assert.ErrorIs(t, err, ErrSchemaValidation)
+}
 
 func TestCreateDB1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)

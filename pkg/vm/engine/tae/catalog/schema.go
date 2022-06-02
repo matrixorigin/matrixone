@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -68,9 +69,30 @@ func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
 func (def *ColDef) IsPrimary() bool { return def.PrimaryIdx >= 0 }
 
 type CompoundPK struct {
-	Idxes  []uint16
-	search map[uint16]bool
+	Defs   []*ColDef
+	search map[int]int
 }
+
+func NewCompoundPK() *CompoundPK {
+	return &CompoundPK{
+		Defs:   make([]*ColDef, 0),
+		search: make(map[int]int),
+	}
+}
+
+func (cpk *CompoundPK) AddDef(def *ColDef) (ok bool) {
+	_, found := cpk.search[def.Idx]
+	if found {
+		return false
+	}
+	cpk.Defs = append(cpk.Defs, def)
+	sort.Slice(cpk.Defs, func(i, j int) bool { return cpk.Defs[i].PrimaryIdx < cpk.Defs[j].PrimaryIdx })
+	cpk.search[def.Idx] = int(def.PrimaryIdx)
+	return true
+}
+
+func (cpk *CompoundPK) Size() int              { return len(cpk.Defs) }
+func (cpk *CompoundPK) GetDef(pos int) *ColDef { return cpk.Defs[pos] }
 
 type SinglePK struct {
 	Idx int
@@ -355,7 +377,24 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		s.CompoundPK = nil
 	} else {
 		// Compound pk defined
-		panic("implement me")
+		s.CompoundPK = NewCompoundPK()
+		for _, idx := range pkIdx {
+			def := s.ColDefs[idx]
+			if def.Idx != idx {
+				err = fmt.Errorf("%w: bad column def", ErrSchemaValidation)
+				return
+			}
+			if ok := s.CompoundPK.AddDef(def); !ok {
+				err = fmt.Errorf("%w: duplicated primary idx specified", ErrSchemaValidation)
+				return
+			}
+		}
+		for i, def := range s.CompoundPK.Defs {
+			if int(def.PrimaryIdx) != i {
+				err = fmt.Errorf("%w: duplicated primary idx specified", ErrSchemaValidation)
+				return
+			}
+		}
 	}
 	// if !s.ColDefs[s.HiddenIdx].IsHidden() {
 	// 	err = fmt.Errorf("%w: wrong hidden column idx", ErrSchemaValidation)
