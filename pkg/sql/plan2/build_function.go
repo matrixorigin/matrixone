@@ -241,6 +241,20 @@ func resetIntervalFunctionExprs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, er
 		return nil, err
 	}
 
+	// rewrite "date '2020-10-10' - interval 1 Hour" to date_add(datetime, 1, hour)
+	if dateExpr.Typ.Id == plan.Type_DATE {
+		switch returnType {
+		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
+		default:
+			dateExpr, err = appendCastExpr(dateExpr, &plan.Type{
+				Id:   plan.Type_DATETIME,
+				Size: 8,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	return []*Expr{
 		dateExpr,
 		{
