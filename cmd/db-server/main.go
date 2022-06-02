@@ -18,9 +18,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"math"
 	"os"
 	"os/signal"
@@ -28,6 +25,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
