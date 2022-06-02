@@ -8,6 +8,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
+type CompoundKeyEncoder = func(*bytes.Buffer, ...any) []byte
+
 // [48 Bit (BlockID) + 48 Bit (SegmentID)]
 func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
 	buf := make([]byte, 12)

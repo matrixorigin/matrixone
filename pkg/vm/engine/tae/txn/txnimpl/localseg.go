@@ -184,12 +184,23 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		if seg.table.schema.IsSinglePK() {
-			start := seg.rows
-			if err = seg.index.BatchInsert(data.Vecs[seg.table.schema.GetSingleSortKeyIdx()], int(offset), int(appended), start, false); err != nil {
+			if err = seg.index.BatchInsert(data.Vecs[seg.table.schema.GetSingleSortKeyIdx()], int(offset), int(appended), seg.rows, false); err != nil {
 				break
 			}
 		} else if seg.table.schema.IsCompoundPK() {
-			panic("implement me")
+			keys := make([]*vector.Vector, seg.table.schema.GetSortKeyCnt())
+			for i := range keys {
+				keys[i] = data.Vecs[seg.table.schema.SortKey.Defs[i].Idx]
+			}
+			if err = seg.index.BatchInsertCompound(
+				int(offset),
+				int(appended),
+				seg.rows,
+				false,
+				model.EncodeTypedVals,
+				keys...); err != nil {
+				break
+			}
 		}
 		offset += appended
 		seg.rows += appended
@@ -201,6 +212,33 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		}
 	}
 	return err
+}
+
+func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (err error) {
+	for i := from; i <= to; i++ {
+		v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		if err = seg.index.Delete(v); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func (seg *localSegment) DeleteCompoundIndex(from, to uint32, node InsertNode) (err error) {
+	var buf bytes.Buffer
+	vs := make([]any, seg.table.schema.GetSortKeyCnt())
+	for i := from; i <= to; i++ {
+		buf.Reset()
+		for j := range vs {
+			v, _ := node.GetValue(seg.table.schema.SortKey.Defs[j].Idx, i)
+			vs[j] = v
+		}
+		key := model.EncodeTypedVals(&buf, vs...)
+		if err = seg.index.Delete(key); err != nil {
+			break
+		}
+	}
+	return
 }
 
 func (seg *localSegment) RangeDelete(start, end uint32) error {
@@ -216,17 +254,13 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 		if !seg.table.schema.HasPK() {
 			// If no pk defined
 			return err
-		} else if seg.table.schema.IsSinglePK() {
+		}
+		if seg.table.schema.IsSinglePK() {
 			// one pk key
-			for i := firstOffset; i <= lastOffset; i++ {
-				v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
-				if err = seg.index.Delete(v); err != nil {
-					break
-				}
-			}
+			err = seg.DeleteSingleIndex(firstOffset, lastOffset, node)
 		} else {
 			// compound pk keys
-			panic("implement me")
+			err = seg.DeleteCompoundIndex(firstOffset, lastOffset, node)
 		}
 		return err
 	}
@@ -236,12 +270,7 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	node = seg.nodes[last]
 	err = node.RangeDelete(0, lastOffset)
 	if seg.table.schema.IsSinglePK() {
-		for i := uint32(0); i <= lastOffset; i++ {
-			v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
-			if err = seg.index.Delete(v); err != nil {
-				break
-			}
-		}
+		err = seg.DeleteSingleIndex(0, lastOffset, node)
 	} else if seg.table.schema.IsCompoundPK() {
 		panic("implment me")
 	}
@@ -252,14 +281,9 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 				break
 			}
 			if seg.table.schema.IsSinglePK() {
-				for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
-					v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
-					if err = seg.index.Delete(v); err != nil {
-						break
-					}
-				}
+				err = seg.DeleteSingleIndex(0, txnbase.MaxNodeRows, node)
 			} else if seg.table.schema.IsCompoundPK() {
-				panic("implement me")
+				err = seg.DeleteCompoundIndex(0, txnbase.MaxNodeRows, node)
 			}
 		}
 	}
@@ -362,10 +386,7 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 
 func (seg *localSegment) GetPKColumn() *vector.Vector {
 	schema := seg.table.entry.GetSchema()
-	if schema.IsSinglePK() {
-		return seg.index.KeyToVector(schema.GetSingleSortKey().Type)
-	}
-	panic("implement me")
+	return seg.index.KeyToVector(schema.GetSortKeyType())
 }
 
 func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {
