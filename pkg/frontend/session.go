@@ -69,6 +69,7 @@ func (ts *TxnState) isState(s int) bool {
 }
 
 func (ts *TxnState) switchToState(s int, err error) {
+	logutil.Infof("switch from %d to %d", ts.state, s)
 	ts.fromState = ts.state
 	ts.state = s
 	ts.err = err
@@ -96,7 +97,7 @@ var _ moengine.Txn = &TaeTxnDumpImpl{}
 type TaeTxnDumpImpl struct {
 }
 
-func InitTaeTxnImpl() *TaeTxnDumpImpl {
+func InitTaeTxnDumpImpl() *TaeTxnDumpImpl {
 	return &TaeTxnDumpImpl{}
 }
 
@@ -136,7 +137,7 @@ type TxnHandler struct {
 
 func InitTxnHandler(storage engine.Engine) *TxnHandler {
 	return &TxnHandler{
-		taeTxn:   InitTaeTxnImpl(),
+		taeTxn:   InitTaeTxnDumpImpl(),
 		txnState: InitTxnState(),
 		storage:  storage,
 	}
@@ -345,6 +346,7 @@ func (th *TxnHandler) getTxnStateString() string {
 // IsInTaeTxn checks the session executes a txn
 func (th *TxnHandler) IsInTaeTxn() bool {
 	st := th.getTxnState()
+	logutil.Infof("current txn state %d", st)
 	if st == TxnAutocommit || st == TxnBegan {
 		return true
 	}
@@ -372,11 +374,13 @@ func (th *TxnHandler) createTxn(beganErr, autocommitErr error) (moengine.Txn, er
 			err = errorTaeTxnInIllegalState
 		}
 		if txn == nil {
-			txn = InitTaeTxnImpl()
+			txn = InitTaeTxnDumpImpl()
 		}
 	} else {
-		txn = InitTaeTxnImpl()
+		txn = InitTaeTxnDumpImpl()
 	}
+
+	logutil.Infof("txn id %d", txn.GetID())
 	return txn, err
 }
 
@@ -412,6 +416,7 @@ func (th *TxnHandler) StartByAutocommitIfNeeded() (bool, error) {
 	if th.IsInTaeTxn() {
 		return false, nil
 	}
+	logutil.Infof("need create new txn")
 	err = th.StartByAutocommit()
 	return true, err
 }
@@ -433,7 +438,9 @@ func (th *TxnHandler) commit(option int) error {
 	case TxnBegan:
 		switch option {
 		case TxnCommitAfterBegan:
+			x := th.taeTxn.GetID()
 			err = th.taeTxn.Commit()
+			logutil.Infof("commit1 %d", x)
 		case TxnCommitAfterAutocommit:
 			err = errorIsNotAutocommitTxn
 		case TxnCommitAfterAutocommitOnly:
@@ -446,7 +453,9 @@ func (th *TxnHandler) commit(option int) error {
 		case TxnCommitAfterBegan:
 			err = errorIsNotBeginCommitTxn
 		case TxnCommitAfterAutocommit, TxnCommitAfterAutocommitOnly:
+			x := th.taeTxn.GetID()
 			err = th.taeTxn.Commit()
+			logutil.Infof("commit2 %d", x)
 		}
 	case TxnInit, TxnEnd:
 		err = errorTaeTxnHasNotBeenBegan
@@ -549,11 +558,11 @@ func (th *TxnHandler) CleanTxn() error {
 	logutil.Infof("clean tae txn")
 	switch th.txnState.getState() {
 	case TxnInit, TxnEnd:
-		th.taeTxn = InitTaeTxnImpl()
+		th.taeTxn = InitTaeTxnDumpImpl()
 		th.txnState.switchToState(TxnInit, nil)
 	case TxnErr:
 		logutil.Errorf("clean txn. Get error:%v txnError:%v", th.txnState.getError(), th.taeTxn.GetError())
-		th.taeTxn = InitTaeTxnImpl()
+		th.taeTxn = InitTaeTxnDumpImpl()
 		th.txnState.switchToState(TxnInit, nil)
 	}
 	return nil

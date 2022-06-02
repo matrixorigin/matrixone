@@ -1649,6 +1649,15 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		return nil, err
 	}
 
+	//TODO: remove it after tae is ready
+	if handler.oneTxnPerBatch {
+		txnHandler := ses.GetTxnHandler()
+		err = txnHandler.CommitAfterAutocommitOnly()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	wg := sync.WaitGroup{}
 
 	/*
