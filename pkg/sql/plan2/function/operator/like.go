@@ -38,7 +38,6 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 	}
 
 	switch {
-	// 1. []string Reg expr
 	case !lv.IsScalar() && rv.IsScalar():
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_bool}, int64(len(lvs.Offsets)*rtl))
 		if err != nil {
@@ -73,7 +72,6 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 		vector.SetCol(vec, col)
 		return vec, nil
-	// 2. string Reg expr
 	case lv.IsScalar() && rv.IsScalar(): // in our design, this case should deal while pruning extends.
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_bool})
 		rs := make([]int64, 1)
@@ -89,7 +87,6 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 		vector.SetCol(vec, col)
 		return vec, nil
-	// 3. string Reg []expr
 	case lv.IsScalar() && !rv.IsScalar():
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_bool}, int64(len(rvs.Offsets)*rtl))
 		if err != nil {
@@ -124,7 +121,6 @@ func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 		}
 		vector.SetCol(vec, col)
 		return vec, nil
-	// 4. []string Reg []expr
 	case !lv.IsScalar() && !rv.IsScalar():
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_bool}, int64(len(lvs.Offsets)*rtl))
 		if err != nil {
