@@ -264,7 +264,7 @@ func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, nod
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 0,
-							ColPos: int32(i),
+							ColPos: int32(projNodeIdx),
 						},
 					},
 				}
