@@ -72,6 +72,14 @@ func (c *compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 	return nil
 }
 
+func (c *compile) setAffectedRows(n uint64) {
+	c.affectRows = n
+}
+
+func (c *compile) GetAffectedRows() uint64 {
+	return c.affectRows
+}
+
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *compile) Run(ts uint64) (err error) {
 	defer func() {
@@ -105,6 +113,13 @@ func (c *compile) Run(ts uint64) (err error) {
 		return c.scope.CreateIndex(ts, c.proc.Snapshot, c.e)
 	case DropIndex:
 		return c.scope.DropIndex(ts, c.proc.Snapshot, c.e)
+	case Deletion:
+		affectedRows, err := c.scope.Delete(ts, c.proc.Snapshot, c.e)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
 	}
 	return nil
 }
@@ -158,22 +173,44 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	rs := &Scope{
-		PreScopes: ss,
-		Magic:     Merge,
+	var rs *Scope
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		rs = &Scope{
+			PreScopes: ss,
+			Magic:     Deletion,
+		}
+	default:
+		rs = &Scope{
+			PreScopes: ss,
+			Magic:     Merge,
+		}
 	}
+
 	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.Merge,
 		Arg: &merge.Argument{},
 	})
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op: overload.Output,
-		Arg: &output.Argument{
-			Data: c.u,
-			Func: c.fill,
-		},
-	})
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  overload.Deletion,
+			Arg: scp,
+		})
+	default:
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op: overload.Output,
+			Arg: &output.Argument{
+				Data: c.u,
+				Func: c.fill,
+			},
+		})
+	}
 
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
@@ -283,6 +320,12 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		ss = c.compileSort(n, ss)
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	case plan.Node_DELETE:
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		return ss, nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}
