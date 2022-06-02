@@ -27,8 +27,6 @@ import (
 )
 
 func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *Expr, isAgg bool, err error) {
-	name = strings.ToLower(name)
-
 	// deal with special function
 	switch name {
 	case "+", "-":
@@ -43,7 +41,7 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *
 			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
 			return
 		}
-	case "and", "or", "not":
+	case "and", "or", "not", "xor":
 		if err := convertValueIntoBool(name, exprs, true); err != nil {
 			return nil, false, err
 		}
@@ -100,14 +98,47 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *
 	return
 }
 
+func rewriteStarToCol(query *Query, node *Node) (string, error) {
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return node.TableDef.Cols[0].Name, nil
+	} else {
+		for _, child := range node.Children {
+			for _, col := range query.Nodes[child].ProjectList {
+				return col.ColName, nil
+			}
+		}
+	}
+	return "", errors.New(errno.InvalidColumnReference, "can not find any column when rewrite count(*) to starcount(col)")
+}
+
 func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (resultExpr *Expr, isAgg bool, err error) {
-	name = strings.ToLower(name)
+	// name = strings.ToLower(name)
 	args := make([]*Expr, len(astExprs))
-	// deal with special function
+	// deal with special function [rewrite some ast function expr]
 	switch name {
 	case "extract":
+		// rewrite args[0]
 		kindExpr := astExprs[0].(*tree.UnresolvedName)
 		astExprs[0] = tree.NewNumVal(constant.MakeString(kindExpr.Parts[0]), kindExpr.Parts[0], false)
+	case "count":
+		// count(*) : astExprs[0].(type) is *tree.NumVal
+		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
+		switch astExprs[0].(type) {
+		case *tree.NumVal:
+			// rewrite count(*) to starcount(col_name)
+			name = "starcount"
+			var countColName string
+			countColName, err = rewriteStarToCol(query, node)
+			if err != nil {
+				return
+			}
+			var newCountCol *tree.UnresolvedName
+			newCountCol, err = tree.NewUnresolvedName(countColName)
+			if err != nil {
+				return
+			}
+			astExprs[0] = newCountCol
+		}
 	}
 
 	isAgg = true
@@ -130,27 +161,36 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 		resultExpr, err = appendCastExpr(args[0], &plan.Type{
 			Id: plan.Type_DATE,
 		})
+		return
 	case "interval":
 		resultExpr, err = appendCastExpr(args[0], &plan.Type{
 			Id: plan.Type_INTERVAL,
 		})
-	default:
-		resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, args)
-		if paramIsAgg {
-			node.AggList = append(node.AggList, resultExpr)
-			resultExpr = &Expr{
-				Typ: resultExpr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: -2,
-						ColPos: int32(len(node.AggList) - 1),
-					},
-				},
-			}
-			isAgg = true
+		return
+	case "date_add", "date_sub":
+		if len(args) != 2 {
+			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
+		}
+		args, err = resetIntervalFunctionExprs(args[0], args[1])
+		if err != nil {
+			return
 		}
 	}
 
+	resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, args)
+	if paramIsAgg {
+		node.AggList = append(node.AggList, resultExpr)
+		resultExpr = &Expr{
+			Typ: resultExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &ColRef{
+					RelPos: -2,
+					ColPos: int32(len(node.AggList) - 1),
+				},
+			},
+		}
+		isAgg = true
+	}
 	return
 }
 
@@ -167,7 +207,13 @@ func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcId, "cast"),
-				Args: []*Expr{expr},
+				Args: []*Expr{expr, {
+					Expr: &plan.Expr_T{
+						T: &plan.TargetType{
+							Typ: toType,
+						},
+					},
+				}},
 			},
 		},
 		Typ: toType,
@@ -181,7 +227,7 @@ func getFunctionObjRef(funcId int64, name string) *ObjectRef {
 	}
 }
 
-func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr, error) {
+func resetIntervalFunctionExprs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 	strExpr := intervalExpr.Expr.(*plan.Expr_F).F.Args[0].Expr
 	intervalStr := strExpr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
 	intervalArray := strings.Split(intervalStr, " ")
@@ -195,13 +241,21 @@ func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr
 		return nil, err
 	}
 
-	// only support date operator now
-	namesMap := map[string]string{
-		"+": "date_add",
-		"-": "date_sub",
+	// rewrite "date '2020-10-10' - interval 1 Hour" to date_add(datetime, 1, hour)
+	if dateExpr.Typ.Id == plan.Type_DATE {
+		switch returnType {
+		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
+		default:
+			dateExpr, err = appendCastExpr(dateExpr, &plan.Type{
+				Id:   plan.Type_DATETIME,
+				Size: 8,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
-
-	exprs := []*Expr{
+	return []*Expr{
 		dateExpr,
 		{
 			Expr: &plan.Expr_C{
@@ -229,8 +283,20 @@ func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr
 				Size: 8,
 			},
 		},
+	}, nil
+}
+
+func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr, error) {
+	exprs, err := resetIntervalFunctionExprs(dateExpr, intervalExpr)
+	if err != nil {
+		return nil, err
 	}
 
+	// only support date operator now
+	namesMap := map[string]string{
+		"+": "date_add",
+		"-": "date_sub",
+	}
 	resultExpr, _, err := getFunctionExprByNameAndPlanExprs(namesMap[name], exprs)
 
 	return resultExpr, err

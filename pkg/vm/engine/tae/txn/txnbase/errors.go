@@ -22,10 +22,6 @@ var (
 	ErrTxnNotRollbacking   = errors.New("tae: txn not rollbacking")
 	ErrTxnNotActive        = errors.New("tae: txn not active")
 	ErrTxnCannotRollback   = errors.New("tae: txn cannot txn rollback")
-	ErrTxnDBNotSpecified   = errors.New("tae: database not specified")
-
-	ErrNotFound   = errors.New("tae: not found")
-	ErrDuplicated = errors.New("tae: duplicated ")
 
 	ErrDDLDropCreated = errors.New("tae: DDL cannot drop created in a txn")
 )

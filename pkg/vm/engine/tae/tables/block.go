@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -57,12 +56,13 @@ type dataBlock struct {
 	mvcc      *updates.MVCCHandle
 	nice      uint32
 	ckpTs     uint64
+	prefix    []byte
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
-	indexCnt[int(meta.GetSchema().PrimaryKey)] = 2
+	indexCnt[meta.GetSchema().GetPrimaryKeyIdx()] = 2
 	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
 	if err != nil {
 		panic(err)
@@ -88,13 +88,15 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		mvcc:      updates.NewMVCCHandle(meta),
 		scheduler: scheduler,
 		bufMgr:    bufMgr,
+		prefix:    meta.MakeKey(),
 	}
 	if meta.IsAppendable() {
-		block.mvcc.SetDeletesListener(block.ABlkApplyDeleteToIndex)
+		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetPKType())
+		block.index = indexwrapper.NewMutableIndex(block.meta.GetSchema().GetSinglePKType())
 	} else {
+		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		block.index = indexwrapper.NewImmutableIndex()
 	}
 	return block
@@ -102,16 +104,20 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
-		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
+		w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().GetPrimaryKeyIdx()))
 		defer common.GPool.Free(w.MNode)
 		keysCtx := new(index.KeysCtx)
 		keysCtx.Keys = &w.Vector
 		keysCtx.Start = 0
 		keysCtx.Count = uint32(movec.Length(&w.Vector))
-		err = blk.index.BatchUpsert(keysCtx, 0, 0)
+		if !blk.meta.GetSchema().IsHiddenPK() {
+			err = blk.index.BatchUpsert(keysCtx, 0, 0)
+		}
 		return
 	}
-	err = blk.index.ReadFrom(blk)
+	if !blk.meta.GetSchema().IsHiddenPK() {
+		err = blk.index.ReadFrom(blk)
+	}
 	return
 }
 
@@ -296,6 +302,16 @@ func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
 	return int(blk.file.ReadRows())
 }
 
+//for replay
+func (blk *dataBlock) GetRowsOnReplay() uint64 {
+	rows := uint64(blk.mvcc.GetTotalRow())
+	fileRows := uint64(blk.file.ReadRows())
+	if rows > fileRows {
+		return rows
+	}
+	return fileRows
+}
+
 //for test
 func (blk *dataBlock) Flush() {
 	blk.node.OnUnload()
@@ -404,7 +420,7 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 }
 
 func (blk *dataBlock) GetPKColumnDataOptimized(ts uint64) (view *model.ColumnView, err error) {
-	pkIdx := int(blk.meta.GetSchema().PrimaryKey)
+	pkIdx := blk.meta.GetSchema().GetPrimaryKeyIdx()
 	wrapper, err := blk.getVectorWrapper(pkIdx)
 	if err != nil {
 		return view, err
@@ -502,6 +518,10 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 }
 
 func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
+	if blk.meta.GetSchema().HiddenKeyDef().Idx == int(colIdx) {
+		err = data.ErrUpdateHiddenKey
+		return
+	}
 	return blk.updateWithFineLock(txn, row, colIdx, v)
 }
 
@@ -586,7 +606,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v an
 			err = nil
 		}
 	} else {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 	}
 	blk.mvcc.RUnlock()
 	if v != nil || err != nil {
@@ -685,7 +705,7 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 		return
 	}
 	err = nil
-	pkColumn, err := blk.getVectorWrapper(int(blk.meta.GetSchema().PrimaryKey))
+	pkColumn, err := blk.getVectorWrapper(blk.meta.GetSchema().GetPrimaryKeyIdx())
 	if err != nil {
 		return
 	}
@@ -693,7 +713,7 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 	col := &pkColumn.Vector
 	offset, existed := compute.CheckRowExists(col, filter.Val, nil)
 	if !existed {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 
@@ -713,17 +733,30 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
+	if blk.meta.GetSchema().IsHiddenPK() {
+		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
+		return
+	}
 	if blk.meta.IsAppendable() {
 		return blk.ablkGetByFilter(txn.GetStartTS(), filter)
 	}
 	return blk.blkGetByFilter(txn.GetStartTS(), filter)
 }
 
-func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err error) {
+func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+	return
+}
+
+func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+	if blk.meta.GetSchema().IsHiddenPK() {
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+		return
+	}
 	var row uint32
 	err = blk.node.DoWithPin(func() (err error) {
 		blk.mvcc.RLock()
-		vec, err := blk.node.data.GetVectorByAttr(int(blk.meta.GetSchema().PrimaryKey))
+		vec, err := blk.node.data.GetVectorByAttr(blk.meta.GetSchema().GetPrimaryKeyIdx())
 		if err != nil {
 			blk.mvcc.RUnlock()
 			return err
@@ -743,6 +776,7 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 				}
 			}
 		}
+		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 		return
 	})
 	return
@@ -750,10 +784,31 @@ func (blk *dataBlock) ABlkApplyDeleteToIndex(gen common.RowGen, ts uint64) (err 
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask *roaring.Bitmap) (err error) {
 	if blk.meta.IsAppendable() {
+		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		_, err = blk.index.BatchDedup(pks, rowmask)
-		return
+		keyselects, err := blk.index.BatchDedup(pks, rowmask)
+		// If duplicated with active rows
+		// TODO: index should store ts to identify w-w
+		if err != nil {
+			return err
+		}
+		// Check with deletes map
+		// If txn start ts is bigger than deletes max ts, skip scanning deletes
+		if ts > blk.index.GetMaxDeleteTS() {
+			return err
+		}
+		it := keyselects.Iterator()
+		for it.HasNext() {
+			row := it.Next()
+			key := compute.GetValue(pks, row)
+			if blk.index.HasDeleteFrom(key, ts) {
+				err = txnif.TxnWWConflictErr
+				break
+			}
+		}
+
+		return err
 	}
 	if blk.index == nil {
 		panic("index not found")
@@ -772,7 +827,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 	defer view.Free()
 	deduplicate := func(v any, _ uint32) error {
 		if _, existed := compute.CheckRowExists(view.AppliedVec, v, view.DeleteMask); existed {
-			return txnbase.ErrDuplicated
+			return data.ErrDuplicate
 		}
 		return nil
 	}

@@ -17,7 +17,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-const DefaultReplayCacheSize = common.G
+const DefaultReplayCacheSize = 2 * common.M
 
 type Replayer struct {
 	DataFactory  *tables.DataFactory
@@ -139,10 +139,10 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 		if err != nil {
 			panic(err)
 		}
-		attrs := make([]string, len(tb.GetSchema().ColDefs))
-		for i := range attrs {
-			attrs[i] = tb.GetSchema().ColDefs[i].Name
-		}
+		// attrs := make([]string, len(tb.GetSchema().ColDefs))
+		// for i := range attrs {
+		// 	attrs[i] = tb.GetSchema().ColDefs[i].Name
+		// }
 		seg, err := tb.GetSegmentByID(id.SegmentID)
 		if err != nil {
 			panic(err)
@@ -163,7 +163,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 		}
 		start := info.GetSrcOff()
 		end := start + info.GetSrcLen() - 1
-		bat, err := db.window(attrs, data, deletes, start, end)
+		bat, err := db.window(tb.GetSchema(), data, deletes, start, end)
 		if err != nil {
 			panic(err)
 		}
@@ -181,10 +181,14 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 	}
 }
 
-func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap, start, end uint32) (*gbat.Batch, error) {
-	ret := gbat.New(true, attrs)
-	for i, attr := range data.GetAttrs() {
-		src, err := data.GetVectorByAttr(attr)
+func (db *DB) window(schema *catalog.Schema, data batch.IBatch, deletes *roaring.Bitmap, start, end uint32) (*gbat.Batch, error) {
+	ret := gbat.New(true, []string{})
+	for _, attrId := range data.GetAttrs() {
+		def := schema.ColDefs[attrId]
+		if def.IsHidden() {
+			continue
+		}
+		src, err := data.GetVectorByAttr(attrId)
 		if err != nil {
 			return nil, err
 		}
@@ -194,7 +198,8 @@ func (db *DB) window(attrs []string, data batch.IBatch, deletes *roaring.Bitmap,
 		}
 		deletes := common.BM32Window(deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
-		ret.Vecs[i] = srcVec
+		ret.Vecs = append(ret.Vecs, srcVec)
+		ret.Attrs = append(ret.Attrs, def.Name)
 	}
 	return ret, nil
 }

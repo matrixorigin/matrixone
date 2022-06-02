@@ -16,6 +16,8 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -69,6 +71,14 @@ func (c *compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 	return nil
 }
 
+func (c *compile) setAffectedRows(n uint64) {
+	c.affectRows = n
+}
+
+func (c *compile) GetAffectedRows() uint64 {
+	return c.affectRows
+}
+
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *compile) Run(ts uint64) (err error) {
 	defer func() {
@@ -81,7 +91,7 @@ func (c *compile) Run(ts uint64) (err error) {
 		return nil
 	}
 
-	PrintScope(nil, []*Scope{c.scope})
+	//	PrintScope(nil, []*Scope{c.scope})
 
 	switch c.scope.Magic {
 	case Normal:
@@ -102,6 +112,13 @@ func (c *compile) Run(ts uint64) (err error) {
 		return c.scope.CreateIndex(ts, c.proc.Snapshot, c.e)
 	case DropIndex:
 		return c.scope.DropIndex(ts, c.proc.Snapshot, c.e)
+	case Deletion:
+		affectedRows, err := c.scope.Delete(ts, c.proc.Snapshot, c.e)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
 	}
 	return nil
 }
@@ -155,22 +172,44 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	rs := &Scope{
-		PreScopes: ss,
-		Magic:     Merge,
+	var rs *Scope
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		rs = &Scope{
+			PreScopes: ss,
+			Magic:     Deletion,
+		}
+	default:
+		rs = &Scope{
+			PreScopes: ss,
+			Magic:     Merge,
+		}
 	}
+
 	rs.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, len(ss))
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  overload.Merge,
 		Arg: &merge.Argument{},
 	})
-	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op: overload.Output,
-		Arg: &output.Argument{
-			Data: c.u,
-			Func: c.fill,
-		},
-	})
+	switch qry.StmtType {
+	case plan.Query_DELETE:
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  overload.Deletion,
+			Arg: scp,
+		})
+	default:
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op: overload.Output,
+			Arg: &output.Argument{
+				Data: c.u,
+				Func: c.fill,
+			},
+		})
+	}
 
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
@@ -186,7 +225,20 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 
 func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
-	//	case plan.Node_VALUE_SCAN:
+	case plan.Node_VALUE_SCAN:
+		ds := &Scope{Magic: Normal}
+		ds.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
+		bat := batch.NewWithSize(1)
+		{
+			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_int64})
+			bat.Vecs[0].Col = make([]int64, 1)
+			bat.InitZsOne(1)
+		}
+		ds.DataSource = &Source{Bat: bat}
+		//if n.RowsetData != nil {
+		//	init bat from n.RowsetData
+		//}
+		return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 	case plan.Node_TABLE_SCAN:
 		snap := engine.Snapshot(c.proc.Snapshot)
 		db, err := c.e.Database(n.ObjRef.SchemaName, snap)
@@ -228,8 +280,11 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		ss = c.compileGroup(n, ss)
+		rewriteExprListForAggNode(n.WhereList, int32(len(n.GroupBy)))
+		rewriteExprListForAggNode(n.ProjectList, int32(len(n.GroupBy)))
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	case plan.Node_JOIN:
+		needSwap, joinTyp := joinType(n, ns)
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err
@@ -238,7 +293,10 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		if err != nil {
 			return nil, err
 		}
-		return c.compileSort(n, c.compileJoin(n, ss, children)), nil
+		if needSwap {
+			return c.compileSort(n, c.compileJoin(n, children, ss, joinTyp)), nil
+		}
+		return c.compileSort(n, c.compileJoin(n, ss, children, joinTyp)), nil
 	case plan.Node_SORT:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
@@ -246,6 +304,12 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		ss = c.compileSort(n, ss)
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	case plan.Node_DELETE:
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		return ss, nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}
@@ -274,7 +338,7 @@ func (c *compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
+func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range ss {
 		chp := &Scope{
@@ -293,6 +357,10 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 					},
 				})
 			}
+			chp.Instructions = append(chp.Instructions, vm.Instruction{
+				Op:  overload.Merge,
+				Arg: &merge.Argument{},
+			})
 		}
 		rs[i] = &Scope{
 			Magic:     Remote,
@@ -314,8 +382,8 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 			},
 		})
 	}
-	switch n.JoinType {
-	case plan.Node_INNER, plan.Node_SEMI:
+	switch joinTyp {
+	case plan.Node_INNER:
 		if len(n.OnList) == 0 {
 			for i := range rs {
 				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
@@ -330,6 +398,13 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope) []*S
 					Arg: constructJoin(n, c.proc),
 				})
 			}
+		}
+	case plan.Node_SEMI:
+		for i := range rs {
+			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+				Op:  overload.Semi,
+				Arg: constructSemi(n, c.proc),
+			})
 		}
 	case plan.Node_OUTER:
 		for i := range rs {
@@ -355,6 +430,8 @@ func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileTop(n, ss)
+	case n.Limit == nil && n.Offset == nil && len(n.OrderBy) > 0: // top
+		return c.compileOrder(n, ss)
 	case n.Limit == nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset
 		return c.compileOffset(n, c.compileOrder(n, ss))
 	case n.Limit != nil && n.Offset != nil && len(n.OrderBy) > 0: // order and offset and limit
@@ -513,4 +590,38 @@ func (c *compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
 		})
 	}
 	return []*Scope{rs}
+}
+
+func rewriteExprListForAggNode(es []*plan.Expr, groupSize int32) {
+	for i := range es {
+		ce, ok := es[i].Expr.(*plan.Expr_Col)
+		if !ok {
+			continue
+		}
+		if ce.Col.RelPos == -2 {
+			ce.Col.ColPos += groupSize
+		}
+	}
+}
+
+func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
+	left, right := ns[n.Children[0]], ns[n.Children[1]]
+	switch {
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_INNER
+	case left.JoinType == plan.Node_SEMI && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_SEMI
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_SEMI:
+		return true, plan.Node_SEMI
+	case left.JoinType == plan.Node_OUTER && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_OUTER
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_OUTER:
+		return true, plan.Node_OUTER
+	case left.JoinType == plan.Node_ANTI && right.JoinType == plan.Node_INNER:
+		return false, plan.Node_ANTI
+	case left.JoinType == plan.Node_INNER && right.JoinType == plan.Node_ANTI:
+		return true, plan.Node_ANTI
+	default:
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v-%v' not support now", left.JoinType, right.JoinType)))
+	}
 }

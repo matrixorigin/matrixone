@@ -2,6 +2,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"testing"
 
 	"github.com/fagongzi/goetty/buf"
@@ -474,7 +475,7 @@ func Test_mce(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -570,7 +571,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -605,7 +606,7 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 
 		mce := NewMysqlCmdExecutor()
@@ -614,11 +615,17 @@ func Test_mce_selfhandle(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.Mrs = &MysqlResultSet{}
-		err = mce.handleMaxAllowedPacket()
+		st1, err := parsers.ParseOne(dialect.MYSQL, "select @@max_allowed_packet")
+		convey.So(err, convey.ShouldBeNil)
+		sv1 := st1.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
+		err = mce.handleSelectVariables(sv1)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.Mrs = &MysqlResultSet{}
-		err = mce.handleVersionComment()
+		st2, err := parsers.ParseOne(dialect.MYSQL, "select @@version_comment")
+		convey.So(err, convey.ShouldBeNil)
+		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
+		err = mce.handleSelectVariables(sv2)
 		convey.So(err, convey.ShouldBeNil)
 
 		ses.Mrs = &MysqlResultSet{}
@@ -678,7 +685,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 
 		// mce := NewMysqlCmdExecutor()
@@ -745,7 +752,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		epochgc := getPCI()
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 		ses.Mrs = &MysqlResultSet{}
 
 		convey.So(getDataFromPipeline(ses, nil), convey.ShouldBeNil)
@@ -928,16 +935,20 @@ func Test_handleSelectVariables(t *testing.T) {
 			t.Error(err)
 		}
 
-		v := "tx_isolation"
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		ses := &Session{Mrs: &MysqlResultSet{}, protocol: proto}
+		ses := NewSession(proto, nil, nil, nil, nil, gSysVariables)
+		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
+		st2, err := parsers.ParseOne(dialect.MYSQL, "select @@tx_isolation")
+		convey.So(err, convey.ShouldBeNil)
+		sv2 := st2.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
+		convey.So(mce.handleSelectVariables(sv2), convey.ShouldBeNil)
 
-		convey.So(mce.handleSelectVariables(v), convey.ShouldBeNil)
-
-		v = ""
-		convey.So(mce.handleSelectVariables(v), convey.ShouldNotBeNil)
+		st3, err := parsers.ParseOne(dialect.MYSQL, "select @@XXX")
+		convey.So(err, convey.ShouldBeNil)
+		sv3 := st3.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.VarExpr)
+		convey.So(mce.handleSelectVariables(sv3), convey.ShouldNotBeNil)
 
 	})
 }
@@ -960,11 +971,13 @@ func Test_handleShowVariables(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		ses := &Session{Mrs: &MysqlResultSet{}, protocol: proto}
+		ses := NewSession(proto, nil, nil, nil, nil, gSysVariables)
+		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
 
-		convey.So(mce.handleShowVariables(nil), convey.ShouldBeNil)
+		sv := &tree.ShowVariables{Global: true}
+		convey.So(mce.handleShowVariables(sv), convey.ShouldBeNil)
 	})
 }
 

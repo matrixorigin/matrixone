@@ -22,66 +22,66 @@ import (
 )
 
 var (
-	Int8Sub                = numericSub[int8]
-	Int8SubScalar          = numericSubScalar[int8]
-	Int8SubByScalar        = numericSubByScalar[int8]
-	Int16Sub               = numericSub[int16]
-	Int16SubScalar         = numericSubScalar[int16]
-	Int16SubByScalar       = numericSubByScalar[int16]
-	Int32Sub               = numericSub[int32]
-	Int32SubScalar         = numericSubScalar[int32]
-	Int32SubByScalar       = numericSubByScalar[int32]
-	Int64Sub               = numericSub[int64]
-	Int64SubScalar         = numericSubScalar[int64]
-	Int64SubByScalar       = numericSubByScalar[int64]
-	Uint8Sub               = numericSub[uint8]
-	Uint8SubScalar         = numericSubScalar[uint8]
-	Uint8SubByScalar       = numericSubByScalar[uint8]
-	Uint16Sub              = numericSub[uint16]
-	Uint16SubScalar        = numericSubScalar[uint16]
-	Uint16SubByScalar      = numericSubByScalar[uint16]
-	Uint32Sub              = numericSub[uint32]
-	Uint32SubScalar        = numericSubScalar[uint32]
-	Uint32SubByScalar      = numericSubByScalar[uint32]
-	Uint64Sub              = numericSub[uint64]
-	Uint64SubScalar        = numericSubScalar[uint64]
-	Uint64SubByScalar      = numericSubByScalar[uint64]
-	Float32Sub             = numericSub[float32]
-	Float32SubScalar       = numericSubScalar[float32]
-	Float32SubByScalar     = numericSubByScalar[float32]
-	Float64Sub             = numericSub[float64]
-	Float64SubScalar       = numericSubScalar[float64]
-	Float64SubByScalar     = numericSubByScalar[float64]
-	Int8SubSels            = numericSubSels[int8]
-	Int8SubScalarSels      = numericSubScalarSels[int8]
-	Int8SubByScalarSels    = numericSubByScalarSels[int8]
-	Int16SubSels           = numericSubSels[int16]
-	Int16SubScalarSels     = numericSubScalarSels[int16]
-	Int16SubByScalarSels   = numericSubByScalarSels[int16]
-	Int32SubSels           = numericSubSels[int32]
-	Int32SubScalarSels     = numericSubScalarSels[int32]
-	Int32SubByScalarSels   = numericSubByScalarSels[int32]
-	Int64SubSels           = numericSubSels[int64]
-	Int64SubScalarSels     = numericSubScalarSels[int64]
-	Int64SubByScalarSels   = numericSubByScalarSels[int64]
-	Uint8SubSels           = numericSubSels[uint8]
-	Uint8SubScalarSels     = numericSubScalarSels[uint8]
-	Uint8SubByScalarSels   = numericSubByScalarSels[uint8]
-	Uint16SubSels          = numericSubSels[uint16]
-	Uint16SubScalarSels    = numericSubScalarSels[uint16]
-	Uint16SubByScalarSels  = numericSubByScalarSels[uint16]
-	Uint32SubSels          = numericSubSels[uint32]
-	Uint32SubScalarSels    = numericSubScalarSels[uint32]
-	Uint32SubByScalarSels  = numericSubByScalarSels[uint32]
-	Uint64SubSels          = numericSubSels[uint64]
-	Uint64SubScalarSels    = numericSubScalarSels[uint64]
-	Uint64SubByScalarSels  = numericSubByScalarSels[uint64]
-	Float32SubSels         = numericSubSels[float32]
-	Float32SubScalarSels   = numericSubScalarSels[float32]
-	Float32SubByScalarSels = numericSubByScalarSels[float32]
-	Float64SubSels         = numericSubSels[float64]
-	Float64SubScalarSels   = numericSubScalarSels[float64]
-	Float64SubByScalarSels = numericSubByScalarSels[float64]
+	Int8Sub                = Numeric[int8]
+	Int8SubScalar          = NumericScalar[int8]
+	Int8SubByScalar        = NumericByScalar[int8]
+	Int16Sub               = Numeric[int16]
+	Int16SubScalar         = NumericScalar[int16]
+	Int16SubByScalar       = NumericByScalar[int16]
+	Int32Sub               = Numeric[int32]
+	Int32SubScalar         = NumericScalar[int32]
+	Int32SubByScalar       = NumericByScalar[int32]
+	Int64Sub               = Numeric[int64]
+	Int64SubScalar         = NumericScalar[int64]
+	Int64SubByScalar       = NumericByScalar[int64]
+	Uint8Sub               = Numeric[uint8]
+	Uint8SubScalar         = NumericScalar[uint8]
+	Uint8SubByScalar       = NumericByScalar[uint8]
+	Uint16Sub              = Numeric[uint16]
+	Uint16SubScalar        = NumericScalar[uint16]
+	Uint16SubByScalar      = NumericByScalar[uint16]
+	Uint32Sub              = Numeric[uint32]
+	Uint32SubScalar        = NumericScalar[uint32]
+	Uint32SubByScalar      = NumericByScalar[uint32]
+	Uint64Sub              = Numeric[uint64]
+	Uint64SubScalar        = NumericScalar[uint64]
+	Uint64SubByScalar      = NumericByScalar[uint64]
+	Float32Sub             = Numeric[float32]
+	Float32SubScalar       = NumericScalar[float32]
+	Float32SubByScalar     = NumericByScalar[float32]
+	Float64Sub             = Numeric[float64]
+	Float64SubScalar       = NumericScalar[float64]
+	Float64SubByScalar     = NumericByScalar[float64]
+	Int8SubSels            = NumericSels[int8]
+	Int8SubScalarSels      = NumericScalarSels[int8]
+	Int8SubByScalarSels    = NumericByScalarSels[int8]
+	Int16SubSels           = NumericSels[int16]
+	Int16SubScalarSels     = NumericScalarSels[int16]
+	Int16SubByScalarSels   = NumericByScalarSels[int16]
+	Int32SubSels           = NumericSels[int32]
+	Int32SubScalarSels     = NumericScalarSels[int32]
+	Int32SubByScalarSels   = NumericByScalarSels[int32]
+	Int64SubSels           = NumericSels[int64]
+	Int64SubScalarSels     = NumericScalarSels[int64]
+	Int64SubByScalarSels   = NumericByScalarSels[int64]
+	Uint8SubSels           = NumericSels[uint8]
+	Uint8SubScalarSels     = NumericScalarSels[uint8]
+	Uint8SubByScalarSels   = NumericByScalarSels[uint8]
+	Uint16SubSels          = NumericSels[uint16]
+	Uint16SubScalarSels    = NumericScalarSels[uint16]
+	Uint16SubByScalarSels  = NumericByScalarSels[uint16]
+	Uint32SubSels          = NumericSels[uint32]
+	Uint32SubScalarSels    = NumericScalarSels[uint32]
+	Uint32SubByScalarSels  = NumericByScalarSels[uint32]
+	Uint64SubSels          = NumericSels[uint64]
+	Uint64SubScalarSels    = NumericScalarSels[uint64]
+	Uint64SubByScalarSels  = NumericByScalarSels[uint64]
+	Float32SubSels         = NumericSels[float32]
+	Float32SubScalarSels   = NumericScalarSels[float32]
+	Float32SubByScalarSels = NumericByScalarSels[float32]
+	Float64SubSels         = NumericSels[float64]
+	Float64SubScalarSels   = NumericScalarSels[float64]
+	Float64SubByScalarSels = NumericByScalarSels[float64]
 
 	Decimal64Sub              = decimal64Sub
 	Decimal64SubSels          = decimal64SubSels
@@ -96,84 +96,84 @@ var (
 	Decimal128SubByScalar     = decimal128SubByScalar
 	Decimal128SubByScalarSels = decimal128SubByScalarSels
 
-	Int32Int64Sub         = numericSubBigSmall[int64, int32]
-	Int32Int64SubSels     = numericSubSelsBigSmall[int64, int32]
-	Int16Int64Sub         = numericSubBigSmall[int64, int16]
-	Int16Int64SubSels     = numericSubSelsBigSmall[int64, int16]
-	Int8Int64Sub          = numericSubBigSmall[int64, int8]
-	Int8Int64SubSels      = numericSubSelsBigSmall[int64, int8]
-	Int16Int32Sub         = numericSubBigSmall[int32, int16]
-	Int16Int32SubSels     = numericSubSelsBigSmall[int32, int16]
-	Int8Int32Sub          = numericSubBigSmall[int32, int8]
-	Int8Int32SubSels      = numericSubSelsBigSmall[int32, int8]
-	Int8Int16Sub          = numericSubBigSmall[int16, int8]
-	Int8Int16SubSels      = numericSubSelsBigSmall[int16, int8]
-	Uint32Uint64Sub       = numericSubBigSmall[uint64, uint32]
-	Uint32Uint64SubSels   = numericSubSelsBigSmall[uint64, uint32]
-	Uint16Uint64Sub       = numericSubBigSmall[uint64, uint16]
-	Uint16Uint64SubSels   = numericSubSelsBigSmall[uint64, uint16]
-	Uint8Uint64Sub        = numericSubBigSmall[uint64, uint8]
-	Uint8Uint64SubSels    = numericSubSelsBigSmall[uint64, uint8]
-	Uint16Uint32Sub       = numericSubBigSmall[uint32, uint16]
-	Uint16Uint32SubSels   = numericSubSelsBigSmall[uint32, uint16]
-	Uint8Uint32Sub        = numericSubBigSmall[uint32, uint8]
-	Uint8Uint32SubSels    = numericSubSelsBigSmall[uint32, uint8]
-	Uint8Uint16Sub        = numericSubBigSmall[uint16, uint8]
-	Uint8Uint16SubSels    = numericSubSelsBigSmall[uint16, uint8]
-	Float32Float64Sub     = numericSubBigSmall[float64, float32]
-	Float32Float64SubSels = numericSubSelsBigSmall[float64, float32]
+	Int32Int64Sub         = NumericBigSmall[int64, int32]
+	Int32Int64SubSels     = NumericSelsBigSmall[int64, int32]
+	Int16Int64Sub         = NumericBigSmall[int64, int16]
+	Int16Int64SubSels     = NumericSelsBigSmall[int64, int16]
+	Int8Int64Sub          = NumericBigSmall[int64, int8]
+	Int8Int64SubSels      = NumericSelsBigSmall[int64, int8]
+	Int16Int32Sub         = NumericBigSmall[int32, int16]
+	Int16Int32SubSels     = NumericSelsBigSmall[int32, int16]
+	Int8Int32Sub          = NumericBigSmall[int32, int8]
+	Int8Int32SubSels      = NumericSelsBigSmall[int32, int8]
+	Int8Int16Sub          = NumericBigSmall[int16, int8]
+	Int8Int16SubSels      = NumericSelsBigSmall[int16, int8]
+	Uint32Uint64Sub       = NumericBigSmall[uint64, uint32]
+	Uint32Uint64SubSels   = NumericSelsBigSmall[uint64, uint32]
+	Uint16Uint64Sub       = NumericBigSmall[uint64, uint16]
+	Uint16Uint64SubSels   = NumericSelsBigSmall[uint64, uint16]
+	Uint8Uint64Sub        = NumericBigSmall[uint64, uint8]
+	Uint8Uint64SubSels    = NumericSelsBigSmall[uint64, uint8]
+	Uint16Uint32Sub       = NumericBigSmall[uint32, uint16]
+	Uint16Uint32SubSels   = NumericSelsBigSmall[uint32, uint16]
+	Uint8Uint32Sub        = NumericBigSmall[uint32, uint8]
+	Uint8Uint32SubSels    = NumericSelsBigSmall[uint32, uint8]
+	Uint8Uint16Sub        = NumericBigSmall[uint16, uint8]
+	Uint8Uint16SubSels    = NumericSelsBigSmall[uint16, uint8]
+	Float32Float64Sub     = NumericBigSmall[float64, float32]
+	Float32Float64SubSels = NumericSelsBigSmall[float64, float32]
 )
 
-func numericSub[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
+func Numeric[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = x - ys[i]
 	}
 	return rs
 }
 
-func numericSubSels[T constraints.Integer | constraints.Float](xs, ys, rs []T, sels []int64) []T {
+func NumericSels[T constraints.Integer | constraints.Float](xs, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = xs[sel] - ys[sel]
 	}
 	return rs
 }
 
-func numericSubScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
+func NumericScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = x - y
 	}
 	return rs
 }
 
-func numericSubScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
+func NumericScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = x - ys[sel]
 	}
 	return rs
 }
 
-func numericSubByScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
+func NumericByScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = y - x
 	}
 	return rs
 }
 
-func numericSubByScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
+func NumericByScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = ys[sel] - x
 	}
 	return rs
 }
 
-func numericSubBigSmall[TBig, TSmall constraints.Integer | constraints.Float](xs []TBig, ys []TSmall, rs []TBig) []TBig {
+func NumericBigSmall[TBig, TSmall constraints.Integer | constraints.Float](xs []TBig, ys []TSmall, rs []TBig) []TBig {
 	for i, x := range xs {
 		rs[i] = x - TBig(ys[i])
 	}
 	return rs
 }
 
-func numericSubSelsBigSmall[TBig, TSmall constraints.Integer | constraints.Float](xs []TBig, ys []TSmall, rs []TBig, sels []int64) []TBig {
+func NumericSelsBigSmall[TBig, TSmall constraints.Integer | constraints.Float](xs []TBig, ys []TSmall, rs []TBig, sels []int64) []TBig {
 	for i, sel := range sels {
 		rs[i] = xs[sel] - TBig(ys[sel])
 	}

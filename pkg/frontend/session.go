@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"strings"
 )
 
 var (
@@ -166,9 +167,13 @@ type Session struct {
 	txnCompileCtx *TxnCompilerContext
 	storage       engine.Engine
 	sql           string
+
+	sysVars         map[string]interface{}
+	userDefinedVars map[string]interface{}
+	gSysVars        *GlobalSystemVariables
 }
 
-func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit) *Session {
+func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
 	txnHandler := InitTxnHandler(config.StorageEngine)
 	return &Session{
 		protocol: proto,
@@ -183,17 +188,96 @@ func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempo
 		},
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
-		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:       config.StorageEngine,
+		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
+		storage:         config.StorageEngine,
+		sysVars:         gSysVars.CopySysVarsToSession(),
+		userDefinedVars: make(map[string]interface{}),
+		gSysVars:        gSysVars,
 	}
 }
 
-func (ses *Session) GetEpochgc() *PDCallbackImpl {
-	return ses.pdHook
+// SetGlobalVar sets the value of system variable in global.
+//used by SET GLOBAL
+func (ses *Session) SetGlobalVar(name string, value interface{}) error {
+	return ses.gSysVars.SetGlobalSysVar(name, value)
+}
+
+// GetGlobalVar gets this value of the system variable in global
+func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
+	if def, val, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+		if def.Scope == ScopeSession {
+			//empty
+			return nil, errorSystemVariableSessionEmpty
+		}
+		return val, nil
+	}
+	return nil, errorSystemVariableDoesNotExist
+}
+
+// SetSessionVar sets the value of system variable in session
+func (ses *Session) SetSessionVar(name string, value interface{}) error {
+	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+		if def.Scope == ScopeGlobal {
+			return errorSystemVariableIsGlobal
+		}
+		//scope session & both
+		if !def.Dynamic {
+			return errorSystemVariableIsReadOnly
+		}
+
+		cv, err := def.Type.Convert(value)
+		if err != nil {
+			return err
+		}
+		ses.sysVars[def.Name] = cv
+	} else {
+		return errorSystemVariableDoesNotExist
+	}
+	return nil
+}
+
+// GetSessionVar gets this value of the system variable in session
+func (ses *Session) GetSessionVar(name string) (interface{}, error) {
+	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+		ciname := strings.ToLower(name)
+		if def.Scope == ScopeGlobal {
+			return gVal, nil
+		}
+		return ses.sysVars[ciname], nil
+	} else {
+		return nil, errorSystemVariableDoesNotExist
+	}
+}
+
+func (ses *Session) CopyAllSessionVars() map[string]interface{} {
+	cp := make(map[string]interface{})
+	for k, v := range ses.sysVars {
+		cp[k] = v
+	}
+	return cp
+}
+
+// SetUserDefinedVar sets the user defined variable to the value in session
+func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+	ses.userDefinedVars[strings.ToLower(name)] = value
+	return nil
+}
+
+// GetUserDefinedVar gets value of the user defined variable
+func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+	val, ok := ses.userDefinedVars[strings.ToLower(name)]
+	if !ok {
+		return SystemVariableNullType{}, nil, nil
+	}
+	return InitSystemVariableStringType(name), val, nil
 }
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
 	return ses.txnHandler
+}
+
+func (ses *Session) GetEpochgc() *PDCallbackImpl {
+	return ses.pdHook
 }
 
 func (ses *Session) GetTxnCompilerContext() *TxnCompilerContext {
@@ -559,6 +643,91 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		Cols: defs,
 	}
 	return obj, tableDef
+}
+
+func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
+	if len(dbName) == 0 {
+		dbName = tcc.DefaultDatabase()
+	}
+
+	//open database
+	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get database %v error %v", dbName, err)
+		return nil
+	}
+
+	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
+	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
+
+	//open table
+	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get table %v error %v", tableName, err)
+		return nil
+	}
+
+	priKeys := relation.GetPrimaryKeys(tcc.txnHandler.GetTxn().GetCtx())
+	if len(priKeys) == 0 {
+		return nil
+	}
+
+	var priDefs []*plan2.ColDef = nil
+	for _, key := range priKeys {
+		priDefs = append(priDefs, &plan2.ColDef{
+			Name: key.Name,
+			Typ: &plan2.Type{
+				Id:        plan.Type_TypeId(key.Type.Oid),
+				Width:     key.Type.Width,
+				Precision: key.Type.Precision,
+				Scale:     key.Type.Scale,
+				Size:      key.Type.Size,
+			},
+			Primary: key.Primary,
+		})
+	}
+	return priDefs
+}
+
+func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
+	if len(dbName) == 0 {
+		dbName = tcc.DefaultDatabase()
+	}
+
+	//open database
+	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get database %v error %v", dbName, err)
+		return nil
+	}
+
+	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
+	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
+
+	//open table
+	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get table %v error %v", tableName, err)
+		return nil
+	}
+
+	hideKey := relation.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
+	if hideKey == nil {
+		return nil
+	}
+
+	hideDef := &plan2.ColDef{
+		Name: hideKey.Name,
+		Typ: &plan2.Type{
+			Id:        plan.Type_TypeId(hideKey.Type.Oid),
+			Width:     hideKey.Type.Width,
+			Precision: hideKey.Type.Precision,
+			Scale:     hideKey.Type.Scale,
+			Size:      hideKey.Type.Size,
+		},
+		Primary: hideKey.Primary,
+	}
+	return hideDef
 }
 
 func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.Cost {

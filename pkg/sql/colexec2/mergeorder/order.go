@@ -56,10 +56,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			ctr.state = Eval
 		case Eval:
-			for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-				vector.Clean(ctr.bat.Vecs[i], proc.Mp)
+			if ctr.bat != nil {
+				for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
+					vector.Clean(ctr.bat.Vecs[i], proc.Mp)
+				}
+				ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 			}
-			ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
 			ctr.state = End

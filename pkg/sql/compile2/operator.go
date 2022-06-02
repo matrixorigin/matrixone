@@ -16,6 +16,8 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/left"
@@ -40,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
@@ -110,6 +114,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Data: arg.Data,
 			Func: arg.Func,
 		}
+	case *dispatch.Argument:
 	case *connector.Argument:
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
@@ -121,6 +126,21 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
 		E: colexec.RewriteFilterExprList(n.WhereList),
 	}
+}
+
+func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
+	dbSource, err := eg.Database(n.ObjRef.DbName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &deletion.Argument{
+		TableSource: relation,
+		Keys:        n.DeleteInfo.DeleteKeys,
+	}, nil
 }
 
 func constructProjection(n *plan.Node) *projection.Argument {
@@ -137,7 +157,7 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	fs := make([]top.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = top.Descending
 		}
 	}
@@ -164,6 +184,33 @@ func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
 		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
 	}
 	return &join.Argument{
+		IsPreBuild: false,
+		Conditions: conds,
+		Result:     result,
+	}
+}
+
+func constructSemi(n *plan.Node, proc *process.Process) *semi.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	conds := make([][]semi.Condition, 2)
+	{
+		conds[0] = make([]semi.Condition, len(n.OnList))
+		conds[1] = make([]semi.Condition, len(n.OnList))
+	}
+	for i, expr := range n.OnList {
+		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
+		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
+		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
+		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+	}
+	return &semi.Argument{
 		IsPreBuild: false,
 		Conditions: conds,
 		Result:     result,
@@ -233,7 +280,7 @@ func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	fs := make([]order.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = order.Descending
 		}
 	}
@@ -297,7 +344,7 @@ func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
 	fs := make([]top.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = top.Descending
 		}
 	}
@@ -331,7 +378,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 	fs := make([]order.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
-		if e.Collation == "DESC" {
+		if e.Flag == plan.OrderBySpec_DESC {
 			fs[i].Type = order.Descending
 		}
 	}

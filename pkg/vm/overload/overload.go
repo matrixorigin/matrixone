@@ -16,6 +16,7 @@ package overload
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,6 +45,7 @@ import (
 var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Top:        top.String,
 	Join:       join.String,
+	Semi:       semi.String,
 	Left:       left.String,
 	Limit:      limit.String,
 	Order:      order.String,
@@ -62,11 +65,13 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	MergeOrder:  mergeorder.String,
 	MergeGroup:  mergegroup.String,
 	MergeOffset: mergeoffset.String,
+	Deletion:    deletion.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Top:        top.Prepare,
 	Join:       join.Prepare,
+	Semi:       semi.Prepare,
 	Left:       left.Prepare,
 	Limit:      limit.Prepare,
 	Order:      order.Prepare,
@@ -86,11 +91,14 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	MergeOrder:  mergeorder.Prepare,
 	MergeGroup:  mergegroup.Prepare,
 	MergeOffset: mergeoffset.Prepare,
+
+	Deletion: deletion.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Top:        top.Call,
 	Join:       join.Call,
+	Semi:       semi.Call,
 	Left:       left.Call,
 	Limit:      limit.Call,
 	Order:      order.Call,
@@ -110,4 +118,6 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	MergeOrder:  mergeorder.Call,
 	MergeGroup:  mergegroup.Call,
 	MergeOffset: mergeoffset.Call,
+
+	Deletion: deletion.Call,
 }

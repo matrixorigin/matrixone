@@ -17,6 +17,7 @@ package engine
 import (
 	"encoding/json"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -75,6 +76,14 @@ func (trel *TpeRelation) Nodes(_ engine.Snapshot) engine.Nodes {
 		logutil.Infof("readCtx table %s index %d thisStoreID %v onStore %v all_nodes_tpe \n %v \n", trel.desc.Name, i, trel.storeID, node.Addr, node)
 	}
 	return trel.nodes
+}
+
+func (trel *TpeRelation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
+	panic(any("implement me"))
+}
+
+func (rtrel *TpeRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
+	panic(any("implement me"))
 }
 
 func (trel *TpeRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
@@ -208,6 +217,10 @@ func (trel *TpeRelation) Write(_ uint64, batch *batch.Batch, _ engine.Snapshot) 
 		return err
 	}
 	return nil
+}
+
+func (trel *TpeRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+	panic(any("implement me"))
 }
 
 func (trel *TpeRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {

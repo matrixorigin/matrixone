@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sync"
 
-	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -32,7 +31,7 @@ type syncBase struct {
 	syncing                      map[uint32]uint64
 	checkpointed, synced, ckpCnt *syncMap
 	uncommits                    map[uint32][]uint64
-	addrs                        map[uint32]map[int]common.ClosedInterval //group-version-glsn range
+	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 }
 
@@ -130,7 +129,7 @@ func newSyncBase() *syncBase {
 		synced:        newSyncMap(),
 		ckpCnt:        newSyncMap(),
 		uncommits:     make(map[uint32][]uint64),
-		addrs:         make(map[uint32]map[int]common.ClosedInterval),
+		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
 	}
 }
@@ -153,7 +152,7 @@ func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) 
 		return 0, errors.New("group not existed")
 	}
 	for ver, interval := range versionsMap {
-		if interval.Contains(common.ClosedInterval{Start: lsn, End: lsn}) {
+		if interval.Contains(*common.NewClosedIntervalsByInt(lsn)) {
 			return ver, nil
 		}
 	}
@@ -216,16 +215,15 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	addr := v.Info.(*VFileAddress)
 	versionRanges, ok := base.addrs[addr.Group]
 	if !ok {
-		versionRanges = make(map[int]common.ClosedInterval)
+		versionRanges = make(map[int]common.ClosedIntervals)
 	}
 	interval, ok := versionRanges[addr.Version]
 	if !ok {
-		interval = common.ClosedInterval{}
+		interval = *common.NewClosedIntervals()
 	}
-	interval.TryMerge(common.ClosedInterval{Start: 0, End: addr.LSN})
+	interval.TryMerge(*common.NewClosedIntervalsByInt(addr.LSN))
 	versionRanges[addr.Version] = interval
 	base.addrs[addr.Group] = versionRanges
-	// fmt.Printf("versionsMap is %v\n", base.addrs)
 	return nil
 }
 

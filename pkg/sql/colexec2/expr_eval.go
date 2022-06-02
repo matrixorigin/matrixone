@@ -29,21 +29,25 @@ import (
 )
 
 var (
+	constBType = types.Type{Oid: types.T_bool}
 	constIType = types.Type{Oid: types.T_int64}
 	constDType = types.Type{Oid: types.T_float64}
 	constSType = types.Type{Oid: types.T_varchar}
 )
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+	var vec *vector.Vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		var vec *vector.Vector
 		if t.C.GetIsnull() {
-			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.Id)})
+			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())})
 			nulls.Add(vec.Nsp, 0)
 		} else {
 			switch t.C.GetValue().(type) {
+			case *plan.Const_Bval:
+				vec = vector.NewConst(constBType)
+				vec.Col = []bool{t.C.GetBval()}
 			case *plan.Const_Ival:
 				vec = vector.NewConst(constIType)
 				vec.Col = []int64{t.C.GetIval()}
@@ -58,10 +62,20 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 					Offsets: []uint32{0},
 					Lengths: []uint32{uint32(len(sval))},
 				}
+			default:
+				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
 		}
 		vec.Length = len(bat.Zs)
 		return vec, nil
+	case *plan.Expr_T:
+		// return a vector recorded type information but without real data
+		return vector.New(types.Type{
+			Oid:       types.T(t.T.Typ.GetId()),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
+		}), nil
 	case *plan.Expr_Col:
 		return bat.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
@@ -70,21 +84,20 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		if err != nil {
 			return nil, err
 		}
-		// for test, remove it finally
-		if f.IsAggregate() {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "aggregate function's eval shouldn't reach here")
-		}
-		//
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
 			v, err := EvalExpr(bat, proc, t.F.Args[i])
 			if err != nil {
 				return nil, err
 			}
-			v.Length = len(bat.Zs)
 			vs[i] = v
 		}
-		return f.VecFn(vs, proc)
+		vec, err = f.VecFn(vs, proc)
+		if err != nil {
+			return nil, err
+		}
+		vec.Length = len(bat.Zs)
+		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))

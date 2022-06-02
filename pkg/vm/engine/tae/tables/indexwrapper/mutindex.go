@@ -46,10 +46,15 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts u
 	return
 }
 
+func (idx *mutableIndex) HasDeleteFrom(key any, fromTs uint64) bool {
+	return idx.deletes.HasDeleteFrom(key, fromTs)
+}
+
 func (idx *mutableIndex) IsKeyDeleted(key any, ts uint64) (deleted, existed bool) {
 	return idx.deletes.IsKeyDeleted(key, ts)
 }
 
+func (idx *mutableIndex) GetMaxDeleteTS() uint64 { return idx.deletes.GetMaxTS() }
 func (idx *mutableIndex) Delete(key any, ts uint64) (err error) {
 	defer func() {
 		err = TranslateError(err)

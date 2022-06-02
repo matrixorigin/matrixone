@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
@@ -43,7 +44,7 @@ func commitTxn(txn *txnbase.Txn) {
 }
 
 func TestColumnChain1(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -76,7 +77,7 @@ func TestColumnChain1(t *testing.T) {
 }
 
 func TestColumnChain2(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -106,7 +107,7 @@ func TestColumnChain2(t *testing.T) {
 	txn2.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
 	n2 := chain.AddNode(txn2)
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
-	assert.Equal(t, txnbase.ErrDuplicated, err)
+	assert.Equal(t, txnif.TxnWWConflictErr, err)
 	err = chain.TryUpdateNodeLocked(4, int32(44), n2)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, chain.view.RowCnt())
@@ -116,7 +117,7 @@ func TestColumnChain2(t *testing.T) {
 	_ = n1.ApplyCommit(nil)
 
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
-	assert.Equal(t, txnbase.ErrDuplicated, err)
+	assert.Equal(t, txnif.TxnWWConflictErr, err)
 
 	assert.Equal(t, 1, chain.view.links[1].Depth())
 	assert.Equal(t, 1, chain.view.links[2].Depth())
@@ -192,7 +193,7 @@ func TestColumnChain2(t *testing.T) {
 
 func TestColumnChain3(t *testing.T) {
 	ncnt := 100
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -246,7 +247,7 @@ func TestColumnChain3(t *testing.T) {
 }
 
 func TestColumnChain4(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -348,7 +349,7 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()

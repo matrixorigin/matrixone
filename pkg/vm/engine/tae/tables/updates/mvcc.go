@@ -33,7 +33,7 @@ type MVCCHandle struct {
 	maxVisible      uint64
 	appends         []*AppendNode
 	changes         uint32
-	deletesListener func(common.RowGen, uint64) error
+	deletesListener func(uint64, common.RowGen, uint64) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -54,11 +54,11 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	return node
 }
 
-func (n *MVCCHandle) SetDeletesListener(l func(common.RowGen, uint64) error) {
+func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, uint64) error) {
 	n.deletesListener = l
 }
 
-func (n *MVCCHandle) GetDeletesListener() func(common.RowGen, uint64) error {
+func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, uint64) error {
 	return n.deletesListener
 }
 
@@ -231,6 +231,15 @@ func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (index
 func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (row uint32, visible bool, err error) {
 	_, row, visible, err = n.getMaxVisibleRowLocked(ts)
 	return
+}
+
+//for replay
+func (n *MVCCHandle) GetTotalRow() uint32 {
+	if len(n.appends) == 0 {
+		return 0
+	}
+	delets := n.deletes.cnt
+	return n.appends[len(n.appends)-1].maxRow - delets
 }
 
 func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool, error) {

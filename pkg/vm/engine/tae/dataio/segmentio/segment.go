@@ -17,13 +17,14 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 var SegmentFileIOFactory = func(name string, id uint64) file.Segment {
@@ -73,9 +74,10 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 }
 
 func (sf *segmentFile) replayInfo(stat *fileStat, file *segment.BlockFile) {
-	stat.size = file.GetFileSize()
-	stat.originSize = file.GetOriginSize()
-	stat.algo = file.GetAlgo()
+	meta := file.GetInode()
+	stat.size = meta.GetFileSize()
+	stat.originSize = meta.GetOriginSize()
+	stat.algo = meta.GetAlgo()
 	stat.name = file.GetName()
 }
 
@@ -115,37 +117,44 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 		}
 		switch tmpName[1] {
 		case "blk":
-			sf.replayInfo(bf.columns[col].data.stat, file)
 			if ts == 0 {
 				bf.columns[col].ts = 0
 				bf.columns[col].data.file[0] = file
+				sf.replayInfo(bf.columns[col].data.stat, file)
 				break
 			}
 			if bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
 				bf.columns[col].data.file[0] = file
+				sf.replayInfo(bf.columns[col].data.stat, file)
+			}
+			if bf.ts <= ts {
+				bf.ts = ts
+				bf.rows = file.GetInode().GetRows()
 			}
 		case "update":
-			sf.replayInfo(bf.columns[col].updates.stat, file)
 			if ts == 0 {
 				bf.columns[col].ts = 0
 				bf.columns[col].updates.file[0] = file
+				sf.replayInfo(bf.columns[col].updates.stat, file)
 				break
 			}
 			if bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
 				bf.columns[col].updates.file[0] = file
+				sf.replayInfo(bf.columns[col].updates.stat, file)
 			}
 		case "del":
-			sf.replayInfo(bf.deletes.stat, file)
 			if ts == 0 {
 				bf.ts = 0
 				bf.deletes.file[0] = file
+				sf.replayInfo(bf.deletes.stat, file)
 				break
 			}
 			if bf.ts < ts {
 				bf.ts = ts
 				bf.deletes.file[0] = file
+				sf.replayInfo(bf.deletes.stat, file)
 			}
 		default:
 			panic(any("No Support"))

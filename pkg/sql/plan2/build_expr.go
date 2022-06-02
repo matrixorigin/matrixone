@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"go/constant"
 	"math"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -117,11 +116,13 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 	case *tree.ParenExpr:
 		resultExpr, isAgg, err = buildExpr(astExpr.Expr, ctx, query, node, binderCtx, needAgg)
 	case *tree.OrExpr:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("OR", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("or", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+	case *tree.XorExpr:
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("xor", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case *tree.NotExpr:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("NOT", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("not", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 	case *tree.AndExpr:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("AND", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("and", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case *tree.UnaryExpr:
 		resultExpr, isAgg, err = buildUnaryExpr(astExpr, ctx, query, node, binderCtx, needAgg)
 	case *tree.BinaryExpr:
@@ -137,13 +138,13 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 	case *tree.CastExpr:
 		resultExpr, isAgg, err = buildCastExpr(astExpr, ctx, query, node, binderCtx, needAgg)
 	case *tree.IsNullExpr:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("IFNULL", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("ifnull", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 	case *tree.IsNotNullExpr:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("IFNULL", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("ifnull", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 		if err != nil {
 			return
 		}
-		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("NOT", []*Expr{resultExpr})
+		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("not", []*Expr{resultExpr})
 	case *tree.Tuple:
 		exprs := make([]*Expr, 0, len(astExpr.Exprs))
 		for _, ast := range astExpr.Exprs {
@@ -167,8 +168,6 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 		resultExpr, isAgg, err = buildCaseExpr(astExpr, ctx, query, node, binderCtx, needAgg)
 	case *tree.IntervalExpr:
 		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", stmt))
-	case *tree.XorExpr:
-		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", stmt))
 	case *tree.Subquery:
 		resultExpr, err = buildSubQuery(astExpr, ctx, query, node, binderCtx)
 		isAgg = needAgg
@@ -185,7 +184,7 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 	case tree.UnqualifiedStar:
 		// select * from table
 		list := &plan.ExprList{}
-		err = unfoldStar(node, list, "")
+		err = unfoldStar(query, node, list, "")
 		if err != nil {
 			return
 		}
@@ -287,7 +286,7 @@ func buildCaseExpr(astExpr *tree.CaseExpr, ctx CompilerContext, query *Query, no
 		isAgg = isAgg && paramIsAgg
 		args = append(args, elseExpr)
 	}
-	return getFunctionExprByNameAndPlanExprs("CASE", args)
+	return getFunctionExprByNameAndPlanExprs("case", args)
 }
 
 func buildColRefExpr(astExpr *tree.UnresolvedName, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (expr *Expr, err error) {
@@ -297,7 +296,7 @@ func buildColRefExpr(astExpr *tree.UnresolvedName, ctx CompilerContext, query *Q
 		if astExpr.Star {
 			table := astExpr.Parts[0]
 			list := &plan.ExprList{}
-			err = unfoldStar(node, list, table)
+			err = unfoldStar(query, node, list, table)
 			if err != nil {
 				return
 			}
@@ -338,7 +337,7 @@ func buildRangeCond(astExpr *tree.RangeCond, ctx CompilerContext, query *Query, 
 			return nil, false, err
 		}
 		isAgg = isAgg && paramIsAgg
-		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("OR", []*Expr{left, right})
+		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("or", []*Expr{left, right})
 		return resultExpr, isAgg, err
 	} else {
 		left, paramIsAgg, err := getFunctionExprByNameAndAstExprs(">=", []tree.Expr{astExpr.Left, astExpr.From}, ctx, query, node, binderCtx, needAgg)
@@ -351,7 +350,7 @@ func buildRangeCond(astExpr *tree.RangeCond, ctx CompilerContext, query *Query, 
 			return nil, false, err
 		}
 		isAgg = isAgg && paramIsAgg
-		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("AND", []*Expr{left, right})
+		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("and", []*Expr{left, right})
 		return resultExpr, isAgg, err
 	}
 }
@@ -361,37 +360,7 @@ func buildFunctionExpr(astExpr *tree.FuncExpr, ctx CompilerContext, query *Query
 	if !ok {
 		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function expr '%v' is not support now", astExpr))
 	}
-	funcName := strings.ToUpper(funcReference.Parts[0])
-
-	// TODO confirm: change count(*) to count(col_name)  but count(*) funcReference.Star is false why?
-	// if funcName == "COUNT" && funcReference.Star {
-	// 	funObjRef := getFunctionObjRef(funcName)
-	// 	return &Expr{
-	// 		Expr: &plan.Expr_F{
-	// 			F: &plan.Function{
-	// 				Func: funObjRef,
-	// 				Args: []*Expr{
-	// 					{
-	// 						Expr: &plan.Expr_C{
-	// 							C: &Const{
-	// 								Isnull: false,
-	// 								Value: &plan.Const_Ival{
-	// 									Ival: 1,
-	// 								},
-	// 							},
-	// 						},
-	// 						Typ: &plan.Type{
-	// 							Id: plan.Type_INT64,
-	// 						},
-	// 					}},
-	// 			},
-	// 		},
-	// 		Typ: &plan.Type{
-	// 			Id: plan.Type_INT64,
-	// 		},
-	// 	}, nil
-	// }
-
+	funcName := funcReference.Parts[0]
 	return getFunctionExprByNameAndAstExprs(funcName, astExpr.Exprs, ctx, query, node, binderCtx, needAgg)
 }
 
@@ -410,22 +379,22 @@ func buildComparisonExpr(astExpr *tree.ComparisonExpr, ctx CompilerContext, quer
 	case tree.NOT_EQUAL:
 		return getFunctionExprByNameAndAstExprs("<>", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case tree.LIKE:
-		return getFunctionExprByNameAndAstExprs("LIKE", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		return getFunctionExprByNameAndAstExprs("like", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case tree.NOT_LIKE:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("LIKE", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("like", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 		if err != nil {
 			return
 		}
-		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("NOT", []*Expr{resultExpr})
+		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("not", []*Expr{resultExpr})
 		return
 	case tree.IN:
-		return getFunctionExprByNameAndAstExprs("IN", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		return getFunctionExprByNameAndAstExprs("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case tree.NOT_IN:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("IN", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 		if err != nil {
 			return nil, false, err
 		}
-		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("NOT", []*Expr{resultExpr})
+		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("not", []*Expr{resultExpr})
 		return
 	}
 	return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
@@ -434,9 +403,9 @@ func buildComparisonExpr(astExpr *tree.ComparisonExpr, ctx CompilerContext, quer
 func buildUnaryExpr(astExpr *tree.UnaryExpr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (expr *Expr, isAgg bool, err error) {
 	switch astExpr.Op {
 	case tree.UNARY_MINUS:
-		return getFunctionExprByNameAndAstExprs("UNARY_MINUS", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
+		return getFunctionExprByNameAndAstExprs("unary_minus", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 	case tree.UNARY_PLUS:
-		return getFunctionExprByNameAndAstExprs("UNARY_PLUS", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
+		return getFunctionExprByNameAndAstExprs("unary_plus", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 	case tree.UNARY_TILDE:
 		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 	case tree.UNARY_MARK:
@@ -467,6 +436,20 @@ func buildBinaryExpr(astExpr *tree.BinaryExpr, ctx CompilerContext, query *Query
 
 func buildNumVal(val constant.Value) (*Expr, error) {
 	switch val.Kind() {
+	case constant.Unknown:
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
+				},
+			},
+			Typ: &plan.Type{
+				Id:        plan.Type_ANY,
+				Nullable:  true,
+				Width:     0,
+				Precision: 0,
+			},
+		}, nil
 	case constant.Bool:
 		boolValue := constant.BoolVal(val)
 		return &Expr{

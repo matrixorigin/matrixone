@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -33,6 +34,7 @@ type TableEntry struct {
 	entries   map[uint64]*common.DLNode
 	link      *common.Link
 	tableData data.Table
+	rows      uint64
 }
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
@@ -106,6 +108,18 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		link:    new(common.Link),
 		entries: make(map[uint64]*common.DLNode),
 	}
+}
+
+func (entry *TableEntry) GetRows() uint64 {
+	return atomic.LoadUint64(&entry.rows)
+}
+
+func (entry *TableEntry) AddRows(delta uint64) uint64 {
+	return atomic.AddUint64(&entry.rows, delta)
+}
+
+func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
+	return atomic.AddUint64(&entry.rows, ^(delta - 1))
 }
 
 func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error) {

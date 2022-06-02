@@ -179,7 +179,14 @@ func (v *StdVector) SetValue(idx int, val any) error {
 		data := encoding.EncodeFloat64(val.(float64))
 		copy(v.Data[start:start+int(v.Type.Size)], data)
 		return nil
-	// case types.T_decimal:
+	case types.T_decimal64:
+		data := encoding.EncodeDecimal64(val.(types.Decimal64))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_decimal128:
+		data := encoding.EncodeDecimal128(val.(types.Decimal128))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
 	case types.T_date:
 		data := encoding.EncodeDate(val.(types.Date))
 		copy(v.Data[start:start+int(v.Type.Size)], data)
@@ -226,7 +233,10 @@ func (v *StdVector) GetValue(idx int) (any, error) {
 		return encoding.DecodeFloat32(data), nil
 	case types.T_float64:
 		return encoding.DecodeFloat64(data), nil
-	// case types.T_decimal:
+	case types.T_decimal64:
+		return encoding.DecodeDecimal64(data), nil
+	case types.T_decimal128:
+		return encoding.DecodeDecimal128(data), nil
 	case types.T_date:
 		return encoding.DecodeDate(data), nil
 	case types.T_datetime:
@@ -276,9 +286,10 @@ func (v *StdVector) appendWithOffset(offset, n int, vals any) error {
 		data = encoding.EncodeUint32Slice(vals.([]uint32)[offset : offset+n])
 	case types.T_uint64:
 		data = encoding.EncodeUint64Slice(vals.([]uint64)[offset : offset+n])
-
 	case types.T_decimal64:
 		data = encoding.EncodeDecimal64Slice(vals.([]types.Decimal64)[offset : offset+n])
+	case types.T_decimal128:
+		data = encoding.EncodeDecimal128Slice(vals.([]types.Decimal128)[offset : offset+n])
 	case types.T_float32:
 		data = encoding.EncodeFloat32Slice(vals.([]float32)[offset : offset+n])
 	case types.T_float64:
@@ -287,6 +298,8 @@ func (v *StdVector) appendWithOffset(offset, n int, vals any) error {
 		data = encoding.EncodeDateSlice(vals.([]types.Date)[offset : offset+n])
 	case types.T_datetime:
 		data = encoding.EncodeDatetimeSlice(vals.([]types.Datetime)[offset : offset+n])
+	case types.T_timestamp:
+		data = encoding.EncodeTimestampSlice(vals.([]types.Timestamp)[offset : offset+n])
 	default:
 		return ErrVecTypeNotSupport
 	}
@@ -564,13 +577,6 @@ func (v *StdVector) CopyToVector() (*gvec.Vector, error) {
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
-
-	case types.T_decimal64:
-		col := make([]types.Decimal64, length)
-		curCol := encoding.DecodeDecimal64Slice(v.Data)
-		copy(col, curCol[:length])
-		vec.Col = col
-		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_float32:
 		col := make([]float32, length)
 		curCol := encoding.DecodeFloat32Slice(v.Data)
@@ -583,6 +589,18 @@ func (v *StdVector) CopyToVector() (*gvec.Vector, error) {
 		copy(col[0:], curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
+	case types.T_decimal64:
+		col := make([]types.Decimal64, length)
+		curCol := encoding.DecodeDecimal64Slice(v.Data)
+		copy(col, curCol[:length])
+		vec.Col = col
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
+	case types.T_decimal128:
+		col := make([]types.Decimal128, length)
+		curCol := encoding.DecodeDecimal128Slice(v.Data)
+		copy(col, curCol[:length])
+		vec.Col = col
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_date:
 		col := make([]types.Date, length)
 		curCol := encoding.DecodeDateSlice(v.Data)
@@ -592,6 +610,12 @@ func (v *StdVector) CopyToVector() (*gvec.Vector, error) {
 	case types.T_datetime:
 		col := make([]types.Datetime, length)
 		curCol := encoding.DecodeDatetimeSlice(v.Data)
+		copy(col, curCol[:length])
+		vec.Col = col
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
+	case types.T_timestamp:
+		col := make([]types.Timestamp, length)
+		curCol := encoding.DecodeTimestampSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})

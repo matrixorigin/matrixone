@@ -49,6 +49,8 @@ type Index interface {
 	Delete(key any, ts uint64) error
 	GetActiveRow(key any) (row uint32, err error)
 	IsKeyDeleted(key any, ts uint64) (deleted, existed bool)
+	HasDeleteFrom(key any, fromTs uint64) bool
+	GetMaxDeleteTS() uint64
 
 	ReadFrom(data.Block) error
 	WriteTo(data.Block) error
