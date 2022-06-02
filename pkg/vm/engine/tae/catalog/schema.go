@@ -89,6 +89,7 @@ type Schema struct {
 	Comment          string
 	SinglePK         *SinglePK
 	CompoundPK       *CompoundPK
+	HiddenIdx        int
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -96,10 +97,11 @@ func NewEmptySchema(name string) *Schema {
 		Name:      name,
 		ColDefs:   make([]*ColDef, 0),
 		NameIndex: make(map[string]int),
+		HiddenIdx: -1,
 	}
 }
 
-func (s *Schema) HiddenKeyDef() *ColDef { return s.ColDefs[len(s.ColDefs)-1] }
+func (s *Schema) HiddenKeyDef() *ColDef { return s.ColDefs[s.HiddenIdx] }
 
 func (s *Schema) IsSinglePK() bool { return s.SinglePK != nil }
 
@@ -220,6 +222,9 @@ func (s *Schema) AppendColDef(def *ColDef) (err error) {
 		err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
 		return
 	}
+	if def.IsHidden() {
+		s.HiddenIdx = def.Idx
+	}
 	s.NameIndex[def.Name] = def.Idx
 	return
 }
@@ -328,6 +333,9 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		if def.IsPrimary() {
 			pkIdx = append(pkIdx, idx)
 		}
+		if def.IsHidden() {
+			s.HiddenIdx = def.Idx
+		}
 	}
 
 	if len(pkIdx) == 1 {
@@ -349,6 +357,9 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		// Compound pk defined
 		panic("implement me")
 	}
+	// if !s.ColDefs[s.HiddenIdx].IsHidden() {
+	// 	err = fmt.Errorf("%w: wrong hidden column idx", ErrSchemaValidation)
+	// }
 	return
 }
 
