@@ -36,7 +36,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 
-	if err := p.TableSource.Delete(p.Ts, batch.GetVector(bat, p.Keys[0]), proc.Snapshot); err != nil {
+	if err := p.TableSource.Delete(p.Ts, batch.GetVector(bat, p.Keys[0]), p.Keys[0], proc.Snapshot); err != nil {
 		return false, err
 	}
 

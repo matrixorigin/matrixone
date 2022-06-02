@@ -39,7 +39,7 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	}
 
 	// gets a new vector to store our result
-	resultVec, err := process.Get(proc, 24*int64(len(strs.Lengths)), origVecs[0].Typ)
+	resultVec, err := proc.AllocVector(origVecs[0].Typ, 24*int64(len(strs.Lengths)))
 	if err != nil {
 		return nil, err
 	}

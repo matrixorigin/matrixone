@@ -152,7 +152,7 @@ type Relation interface {
 
 	Write(uint64, *batch.Batch, Snapshot) error
 
-	Delete(uint64, *vector.Vector, Snapshot) error
+	Delete(uint64, *vector.Vector, string, Snapshot) error
 
 	AddTableDef(uint64, TableDef, Snapshot) error
 	DelTableDef(uint64, TableDef, Snapshot) error

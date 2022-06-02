@@ -41,7 +41,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.Id)})
+			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())})
 			nulls.Add(vec.Nsp, 0)
 		} else {
 			switch t.C.GetValue().(type) {
@@ -68,6 +68,14 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		}
 		vec.Length = len(bat.Zs)
 		return vec, nil
+	case *plan.Expr_T:
+		// return a vector recorded type information but without real data
+		return vector.New(types.Type{
+			Oid:       types.T(t.T.Typ.GetId()),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
+		}), nil
 	case *plan.Expr_Col:
 		return bat.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
