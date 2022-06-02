@@ -96,10 +96,7 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, clos
 		bat.Attrs = append(bat.Attrs, def.Name)
 	}
 	// Sort only if sort key is defined
-	if schema.SortKey != nil {
-		if schema.SortKey.Size() > 1 {
-			panic("implement me")
-		}
+	if schema.IsSingleSortKey() {
 		pkIdx := 0
 		for i, attr := range bat.Attrs {
 			idx := schema.GetColIdx(attr)
@@ -112,6 +109,8 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, clos
 		if err = mergesort.SortBlockColumns(bat.Vecs, pkIdx); err != nil {
 			return
 		}
+	} else if schema.IsCompoundSortKey() {
+		panic("implement me")
 	}
 	// Prepare hidden column data
 	hidden, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, blkKey, 0, uint32(compute.LengthOfBatch(bat)))

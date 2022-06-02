@@ -77,7 +77,7 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 		})
 		schema := appender.node.block.meta.GetSchema()
 
-		if schema.IsSingleSortKey() {
+		if schema.IsSinglePK() {
 			keysCtx := new(index.KeysCtx)
 			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
 			keysCtx.Start = offset
@@ -87,7 +87,7 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 			if err != nil {
 				panic(err)
 			}
-		} else if schema.IsCompoundSortKey() {
+		} else if schema.IsCompoundPK() {
 			panic("implement me")
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
@@ -108,7 +108,7 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 
 		schema := appender.node.block.meta.GetSchema()
 
-		if schema.IsSingleSortKey() {
+		if schema.IsSinglePK() {
 			keysCtx := new(index.KeysCtx)
 			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
 			keysCtx.Start = offset
@@ -118,7 +118,7 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 			if err != nil {
 				panic(err)
 			}
-		} else if schema.IsCompoundSortKey() {
+		} else if schema.IsCompoundPK() {
 			panic("implement me")
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))

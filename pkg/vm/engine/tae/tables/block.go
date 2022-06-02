@@ -98,9 +98,9 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		if meta.GetSchema().IsSingleSortKey() {
-			block.index = indexwrapper.NewMutableIndex(meta.GetSchema().SortKey.GetDef(0).Type)
-		} else if meta.GetSchema().IsCompoundSortKey() {
+		if meta.GetSchema().IsSinglePK() {
+			block.index = indexwrapper.NewMutableIndex(meta.GetSchema().GetSingleSortKey().Type)
+		} else if meta.GetSchema().IsCompoundPK() {
 			panic("implement me")
 		}
 	} else {
@@ -112,15 +112,15 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
-		if blk.meta.GetSchema().IsSingleSortKey() {
-			w, _ := blk.getVectorWrapper(int(blk.meta.GetSchema().GetSingleSortKeyIdx()))
+		if blk.meta.GetSchema().IsSinglePK() {
+			w, _ := blk.getVectorWrapper(blk.meta.GetSchema().GetSingleSortKeyIdx())
 			defer common.GPool.Free(w.MNode)
 			keysCtx := new(index.KeysCtx)
 			keysCtx.Keys = &w.Vector
 			keysCtx.Start = 0
 			keysCtx.Count = uint32(movec.Length(&w.Vector))
 			err = blk.index.BatchUpsert(keysCtx, 0, 0)
-		} else if blk.meta.GetSchema().IsCompoundSortKey() {
+		} else if blk.meta.GetSchema().IsCompoundPK() {
 			panic("implement me")
 		}
 		return
@@ -761,36 +761,42 @@ func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint6
 }
 
 func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
-	if blk.meta.GetSchema().SortKey == nil {
+	// No pk defined
+	if !blk.meta.GetSchema().HasPK() {
 		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 		return
 	}
-	var row uint32
-	err = blk.node.DoWithPin(func() (err error) {
-		blk.mvcc.RLock()
-		vec, err := blk.node.data.GetVectorByAttr(blk.meta.GetSchema().GetSingleSortKeyIdx())
-		if err != nil {
+	// If any pk defined, update index
+	if blk.meta.GetSchema().IsSinglePK() {
+		var row uint32
+		err = blk.node.DoWithPin(func() (err error) {
+			blk.mvcc.RLock()
+			vec, err := blk.node.data.GetVectorByAttr(blk.meta.GetSchema().GetSingleSortKeyIdx())
+			if err != nil {
+				blk.mvcc.RUnlock()
+				return err
+			}
 			blk.mvcc.RUnlock()
-			return err
-		}
-		blk.mvcc.RUnlock()
-		blk.mvcc.Lock()
-		defer blk.mvcc.Unlock()
-		// chain := blk.mvcc.GetDeleteChain()
-		var currRow uint32
-		if gen.HasNext() {
-			row = gen.Next()
-			v, _ := vec.GetValue(int(row))
-			currRow, err = blk.index.GetActiveRow(v)
-			if err != nil || currRow == row {
-				if err = blk.index.Delete(v, ts); err != nil {
-					return
+			blk.mvcc.Lock()
+			defer blk.mvcc.Unlock()
+			// chain := blk.mvcc.GetDeleteChain()
+			var currRow uint32
+			if gen.HasNext() {
+				row = gen.Next()
+				v, _ := vec.GetValue(int(row))
+				currRow, err = blk.index.GetActiveRow(v)
+				if err != nil || currRow == row {
+					if err = blk.index.Delete(v, ts); err != nil {
+						return
+					}
 				}
 			}
-		}
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-		return
-	})
+			blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+			return
+		})
+	} else {
+		panic("implement me")
+	}
 	return
 }
 
