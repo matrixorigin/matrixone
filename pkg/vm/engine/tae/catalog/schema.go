@@ -447,6 +447,31 @@ func (s *Schema) GetColIdx(attr string) int {
 	return idx
 }
 
+func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
+	rand.Seed(time.Now().UnixNano())
+	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
+	prefix := "mock_"
+	m := make(map[int]int)
+	for i, idx := range pkIdx {
+		m[idx] = i
+	}
+	for i := 0; i < colCnt; i++ {
+		if pos, ok := m[i]; ok {
+			if err := schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, pos); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err := schema.Finalize(false); err != nil {
+		panic(err)
+	}
+	return schema
+}
+
 func MockSchema(colCnt int, pkIdx int) *Schema {
 	rand.Seed(time.Now().UnixNano())
 	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))

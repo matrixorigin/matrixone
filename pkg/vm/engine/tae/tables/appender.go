@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -76,10 +77,14 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 			return err
 		})
 		schema := appender.node.block.meta.GetSchema()
-
-		if schema.IsSinglePK() {
+		if schema.HasPK() {
 			keysCtx := new(index.KeysCtx)
-			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+			if schema.IsSinglePK() {
+				keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+			} else {
+				cols := appender.node.block.GetSortColumns(schema, bat)
+				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+			}
 			keysCtx.Start = offset
 			keysCtx.Count = length
 			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
@@ -87,8 +92,6 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 			if err != nil {
 				panic(err)
 			}
-		} else if schema.IsCompoundPK() {
-			panic("implement me")
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 
@@ -107,10 +110,15 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 		})
 
 		schema := appender.node.block.meta.GetSchema()
-
-		if schema.IsSinglePK() {
+		if schema.HasPK() {
 			keysCtx := new(index.KeysCtx)
-			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+
+			if schema.IsSinglePK() {
+				keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+			} else {
+				cols := appender.node.block.GetSortColumns(schema, bat)
+				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+			}
 			keysCtx.Start = offset
 			keysCtx.Count = length
 			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
@@ -118,8 +126,6 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 			if err != nil {
 				panic(err)
 			}
-		} else if schema.IsCompoundPK() {
-			panic("implement me")
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 		node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)

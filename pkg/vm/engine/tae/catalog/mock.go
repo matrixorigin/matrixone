@@ -198,7 +198,7 @@ func MockData(schema *Schema, rows uint32) *batch.Batch {
 		sortKey := schema.GetSingleSortKey()
 		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), sortKey.Idx, nil)
 	} else if schema.IsCompoundSortKey() {
-		panic("implement me")
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
 	} else {
 		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
 	}

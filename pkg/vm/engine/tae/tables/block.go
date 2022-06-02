@@ -34,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
+	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -65,7 +67,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	if meta.GetSchema().IsSingleSortKey() {
 		indexCnt[meta.GetSchema().GetSingleSortKeyIdx()] = 2
 	} else if meta.GetSchema().IsCompoundSortKey() {
-		panic("implement me")
+		indexCnt[meta.GetSchema().SortKey.Defs[0].Idx] = 2
 	}
 	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
 	if err != nil {
@@ -882,4 +884,11 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.
 	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs)
 	blk.mvcc.RUnlock()
 	return
+}
+func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *gbat.Batch) []*gvec.Vector {
+	vs := make([]*gvec.Vector, schema.GetSortKeyCnt())
+	for i := range vs {
+		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
+	}
+	return vs
 }
