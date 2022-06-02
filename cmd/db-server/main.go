@@ -28,7 +28,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
@@ -52,7 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	tpeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -137,14 +135,6 @@ func removeEpoch(epoch uint64) {
 			fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 		}
 	}
-	/*
-		if tpe, ok := config.StorageEngine.(*tpeEngine.TpeEngine); ok {
-			err = tpe.RemoveDeletedTable(epoch)
-			if err != nil {
-				fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
-			}
-		}
-	*/
 }
 
 type aoeHandler struct {
@@ -192,7 +182,7 @@ func initAoe(configFilePath string) *aoeHandler {
 		os.Exit(StartCubeExit)
 	}
 
-	//aoe & tpe: address for computation
+	//aoe: address for computation
 	addr := cfg.CubeConfig.AdvertiseClientAddr
 	if len(addr) != 0 {
 		logutil.Infof("compile init address from cube AdvertiseClientAddr %s", addr)
@@ -250,67 +240,6 @@ func closeAoe(aoe *aoeHandler) {
 	aoe.kvStorage.Close()
 	aoe.aoeStorage.Close()
 	aoe.cube.Close()
-}
-
-func initTpe(configFilePath string, args []string) *tpeHandler {
-	aoe := initAoe(configFilePath)
-	tpeConf := &tpeEngine.TpeConfig{}
-	tpeConf.PBKV = nil
-	tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
-	tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
-	tpeConf.MultiNode = config.GlobalSystemVariables.GetTpeMultiNode()
-	tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
-	tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
-	tpeConf.TpeScanTimeout = time.Duration(config.GlobalSystemVariables.GetTpeScanTimeout())
-	tpeConf.TpeScanTryCount = int(config.GlobalSystemVariables.GetTpeScanTryCount())
-	tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
-	configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
-	if configKvTyp == "memorykv" {
-		tpeConf.KvType = tuplecodec.KV_MEMORY
-	} else if configKvTyp == "cubekv" {
-		tpeConf.KvType = tuplecodec.KV_CUBE
-		tpeConf.Cube = aoe.cube
-	} else {
-		logutil.Infof("there is no such kvType %s \n", configKvTyp)
-		os.Exit(CreateTpeExit)
-	}
-	configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
-	if configSerializeTyp == "concise" {
-		tpeConf.SerialType = tuplecodec.ST_CONCISE
-	} else if configSerializeTyp == "json" {
-		tpeConf.SerialType = tuplecodec.ST_JSON
-	} else if configSerializeTyp == "flat" {
-		tpeConf.SerialType = tuplecodec.ST_FLAT
-	} else {
-		logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
-		os.Exit(CreateTpeExit)
-	}
-	te, err := tpeEngine.NewTpeEngine(tpeConf)
-	if err != nil {
-		logutil.Infof("create tpe error:%v\n", err)
-		os.Exit(CreateTpeExit)
-	}
-	err = te.Open()
-	if err != nil {
-		logutil.Infof("open tpe error:%v\n", err)
-		os.Exit(CreateTpeExit)
-	}
-
-	//test storage aoe_storage
-	config.StorageEngine = te
-
-	//test cluster nodes
-	config.ClusterNodes = engine.Nodes{}
-	err = tpeEngine.DumpDatabaseInfo(config.StorageEngine, args)
-	if err != nil {
-		logutil.Errorf("%s", err)
-	}
-
-	return &tpeHandler{aoe: aoe}
-}
-
-func closeTpe(tpe *tpeHandler) {
-	closeAoe(tpe.aoe)
 }
 
 func initTae() *taeHandler {
@@ -419,7 +348,6 @@ func main() {
 	port = config.GlobalSystemVariables.GetPortOfRpcServerInComputationEngine()
 
 	var aoe *aoeHandler
-	var tpe *tpeHandler
 	var tae *taeHandler
 	if engineName == "aoe" {
 		aoe = initAoe(configFilePath)
@@ -433,9 +361,6 @@ func main() {
 			os.Exit(InitCatalogExit)
 		}
 		fmt.Println("Initialize the TAE engine Done")
-	} else if engineName == "tpe" {
-		tpe = initTpe(configFilePath, args)
-		port = tpe.aoe.port
 	} else {
 		logutil.Errorf("undefined engine %s", engineName)
 		os.Exit(LoadConfigExit)
@@ -480,8 +405,6 @@ func main() {
 		closeAoe(aoe)
 	} else if engineName == "tae" {
 		closeTae(tae)
-	} else if engineName == "tpe" {
-		closeTpe(tpe)
 	}
 }
 
