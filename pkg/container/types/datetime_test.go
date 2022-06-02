@@ -165,7 +165,9 @@ func TestUnix(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		time, _ := ParseDatetime(c.time)
+		// a local datetime is needed
+		ts, _ := ParseTimestamp(c.time, 6)
+		time := Datetime(ts)
 		unix_time := time.UnixTimestamp()
 		if unix_time != c.timestamp {
 			t.Errorf("UnixTimestamp want %d but got %d ", c.timestamp, unix_time)
