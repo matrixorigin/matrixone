@@ -35,6 +35,7 @@ import (
 const (
 	METRIC_DB       = "system_metrics"
 	SQL_CREATE_DB   = "create database if not exists " + METRIC_DB
+	SQL_DROP_DB     = "drop database if exists " + METRIC_DB
 	ALL_IN_ONE_MODE = "monolithic"
 )
 
@@ -149,6 +150,9 @@ func initTables(ieFactory func() ie.InternalExecutor) {
 		if err := exec.Exec(sql, ie.NewOptsBuilder().Finish()); err != nil {
 			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
+	}
+	if getForceInit() {
+		mustExec(SQL_DROP_DB)
 	}
 	mustExec(SQL_CREATE_DB)
 	var gatherCost, createCost time.Duration

@@ -30,6 +30,7 @@ var (
 	configRawHistBufLimit int32 = envOrDefaultInt[int32]("MO_METRIC_RAWHIST_BUF_LIMIT", 4096)
 	configGatherInterval  int64 = envOrDefaultInt[int64]("MO_METRIC_GATHER_INTERVAL", 15000) // 15s
 	configExportToProm    int32 = envOrDefaultBool("MO_METRIC_EXPORT_TO_PROM", 1)
+	configForceReinit     int32 = envOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
 )
 
 func initConfigByParamaterUnit(pu *config.ParameterUnit) {
@@ -70,13 +71,11 @@ func envOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
 	return T(i)
 }
 
-func getRawHistBufLimit() int32 {
-	return atomic.LoadInt32(&configRawHistBufLimit)
-}
+func getRawHistBufLimit() int32 { return atomic.LoadInt32(&configRawHistBufLimit) }
 
-func getExportToProm() bool {
-	return atomic.LoadInt32(&configExportToProm) != 0
-}
+func getExportToProm() bool { return atomic.LoadInt32(&configExportToProm) != 0 }
+
+func getForceInit() bool { return atomic.LoadInt32(&configForceReinit) != 0 }
 
 func getGatherInterval() time.Duration {
 	return time.Duration(atomic.LoadInt64(&configGatherInterval)) * time.Millisecond
