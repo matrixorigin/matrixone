@@ -241,6 +241,13 @@ func (seg *localSegment) DeleteCompoundIndex(from, to uint32, node InsertNode) (
 	return
 }
 
+func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
+	if seg.table.schema.IsSinglePK() {
+		return seg.DeleteSingleIndex(from, to, node)
+	}
+	return seg.DeleteCompoundIndex(from, to, node)
+}
+
 func (seg *localSegment) RangeDelete(start, end uint32) error {
 	first, firstOffset := seg.GetLocalPhysicalAxis(start)
 	last, lastOffset := seg.GetLocalPhysicalAxis(end)
@@ -255,35 +262,27 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 			// If no pk defined
 			return err
 		}
-		if seg.table.schema.IsSinglePK() {
-			// one pk key
-			err = seg.DeleteSingleIndex(firstOffset, lastOffset, node)
-		} else {
-			// compound pk keys
-			err = seg.DeleteCompoundIndex(firstOffset, lastOffset, node)
-		}
+		err = seg.DeleteFromIndex(firstOffset, lastOffset, node)
 		return err
 	}
 
 	node := seg.nodes[first]
 	err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
 	node = seg.nodes[last]
-	err = node.RangeDelete(0, lastOffset)
-	if seg.table.schema.IsSinglePK() {
-		err = seg.DeleteSingleIndex(0, lastOffset, node)
-	} else if seg.table.schema.IsCompoundPK() {
-		panic("implment me")
+	if err = node.RangeDelete(0, lastOffset); err != nil {
+		return err
 	}
-	if last > first+1 && err == nil {
+	if err = seg.DeleteFromIndex(0, lastOffset, node); err != nil {
+		return err
+	}
+	if last > first+1 {
 		for i := first + 1; i < last; i++ {
 			node = seg.nodes[i]
 			if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
 				break
 			}
-			if seg.table.schema.IsSinglePK() {
-				err = seg.DeleteSingleIndex(0, txnbase.MaxNodeRows, node)
-			} else if seg.table.schema.IsCompoundPK() {
-				err = seg.DeleteCompoundIndex(0, txnbase.MaxNodeRows, node)
+			if err = seg.DeleteFromIndex(0, txnbase.MaxNodeRows, node); err != nil {
+				break
 			}
 		}
 	}
@@ -341,13 +340,8 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
 	}
-	if seg.table.schema.IsSinglePK() {
-		v, _ := n.GetValue(seg.table.schema.GetSingleSortKeyIdx(), row)
-		if err = seg.index.Delete(v); err != nil {
-			panic(err)
-		}
-	} else if seg.table.schema.IsCompoundPK() {
-		panic("implement me")
+	if err = seg.DeleteFromIndex(row, row, n); err != nil {
+		return err
 	}
 
 	vec := vector.New(window.Vecs[col].Typ)
