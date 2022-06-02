@@ -15,8 +15,11 @@
 package store
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -108,6 +111,60 @@ func (info *checkpointInfo) GetCkpCnt() uint64 {
 	return cnt
 }
 
+func (info *checkpointInfo) WriteTo(w io.Writer) (n int64, err error) {
+	sn, err := info.ranges.WriteTo(w)
+	n += sn
+	if err != nil {
+		return
+	}
+	length := uint64(len(info.partial))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 8
+	for lsn, partialInfo := range info.partial {
+		if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+			return
+		}
+		n += 8
+		sn, err = partialInfo.WriteTo(w)
+		n += sn
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (info *checkpointInfo) ReadFrom(r io.Reader) (n int64, err error) {
+	info.ranges = common.NewClosedIntervals()
+	sn, err := info.ranges.ReadFrom(r)
+	n += sn
+	if err != nil {
+		return
+	}
+	length := uint64(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 8
+	for i := 0; i < int(length); i++ {
+		lsn := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+			return
+		}
+		n += 8
+		partial := newPartialCkpInfo(0)
+		sn, err = partial.ReadFrom(r)
+		n += sn
+		if err != nil {
+			return
+		}
+		info.partial[lsn] = partial
+	}
+	return
+}
+
 type syncMap struct {
 	*sync.RWMutex
 	ids map[uint32]uint64
@@ -133,6 +190,70 @@ func newSyncBase() *syncBase {
 		addrmu:        sync.RWMutex{},
 	}
 }
+
+func (base *syncBase) WritePostCommitEntry(w io.Writer) (n int64, err error) {
+	//checkpointing
+	length := uint32(len(base.checkpointing))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 4
+	for groupID, ckpInfo := range base.checkpointing {
+		if err = binary.Write(w, binary.BigEndian, groupID); err != nil {
+			return
+		}
+		n += 4
+		sn, err := ckpInfo.WriteTo(w)
+		n += sn
+		if err != nil {
+			return n, err
+		}
+	}
+	return
+}
+
+func (base *syncBase) ReadPostCommitEntry(r io.Reader) (n int64, err error) {
+	//checkpointing
+	length := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 4
+	for i := 0; i < int(length); i++ {
+		groupID := uint32(0)
+		if err = binary.Read(r, binary.BigEndian, &groupID); err != nil {
+			return
+		}
+		n += 4
+		ckpInfo := newCheckpointInfo()
+		sn, err := ckpInfo.ReadFrom(r)
+		n += sn
+		if err != nil {
+			return n, err
+		}
+	}
+	return
+}
+func (base *syncBase) MarshalPostCommitEntry() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = base.WritePostCommitEntry(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
+func (base *syncBase) MakePostCommitEntry() entry.Entry {
+	e := entry.GetBase()
+	e.SetType(entry.ETPostCommit)
+	buf, err := base.MarshalPostCommitEntry()
+	if err != nil {
+		panic(err)
+	}
+	e.Unmarshal(buf)
+	return e
+}
+
 func (base *syncBase) OnReplay(r *replayer) {
 	base.addrs = r.addrs
 	base.groupLSN = r.groupLSN

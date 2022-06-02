@@ -30,6 +30,7 @@ const (
 	ETCheckpoint
 	ETUncommitted
 	ETTxn
+	ETPostCommit
 	ETCustomizedStart
 )
 

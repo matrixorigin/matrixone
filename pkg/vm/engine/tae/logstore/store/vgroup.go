@@ -15,7 +15,9 @@
 package store
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -112,6 +114,33 @@ func (info *partialCkpInfo) MergeCommandInfos(cmds *entry.CommandInfo) {
 	for _, csn := range cmds.CommandIds {
 		info.ckps.Add(csn)
 	}
+}
+
+func (info *partialCkpInfo) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, info.size); err != nil {
+		return
+	}
+	n += 4
+	ckpsn, err := info.ckps.WriteTo(w)
+	n += ckpsn
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (info *partialCkpInfo) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &info.size); err != nil {
+		return
+	}
+	n += 4
+	info.ckps = roaring.New()
+	ckpsn, err := info.ckps.ReadFrom(r)
+	n += ckpsn
+	if err != nil {
+		return
+	}
+	return
 }
 
 func newcommitGroup(v *vInfo, gid uint32) *commitGroup {
