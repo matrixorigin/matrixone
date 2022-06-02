@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	compile1 "github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -59,7 +58,7 @@ var (
 //tableInfos of a database
 type TableInfoCache struct {
 	db         string
-	tableInfos map[string]aoe.TableInfo
+	tableInfos map[string][]ColumnInfo
 }
 
 type MysqlCmdExecutor struct {
@@ -767,45 +766,83 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 
 	//TODO:fix it on tae
 
-	db := ses.GetDatabaseName()
-	if db == "" {
+	dbName := ses.GetDatabaseName()
+	if dbName == "" {
 		return NewMysqlError(ER_NO_DB_ERROR)
 	}
 
 	//Get table infos for the database from the cube
 	//case 1: there are no table infos for the db
 	//case 2: db changed
-	if mce.tableInfos == nil || mce.db != db {
-		if ses.Pu.ClusterCatalog == nil {
-			return fmt.Errorf("need cluster catalog")
-		}
-		tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(db)
-		if err != nil {
-			return err
-		}
+	var attrs []ColumnInfo
+	if ses.IsTaeEngine() {
+		if mce.tableInfos == nil || mce.db != dbName {
+			txnHandler := ses.GetTxnHandler()
+			_, err = txnHandler.StartByAutocommitIfNeeded()
+			if err != nil {
+				return err
+			}
 
-		mce.db = ses.GetDatabaseName()
-		mce.tableInfos = make(map[string]aoe.TableInfo)
+			eng := ses.GetStorage()
+			db, err := eng.Database(dbName, txnHandler.GetTxn().GetCtx())
+			if err != nil {
+				return err
+			}
 
-		//cache these info in the executor
-		for _, table := range tableInfos {
-			mce.tableInfos[table.Name] = table
+			names := db.Relations(txnHandler.GetTxn().GetCtx())
+			for _, name := range names {
+				table, err := db.Relation(name, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					return err
+				}
+				defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
+				for _, def := range defs {
+					if attr, ok := def.(*engine.AttributeDef); ok {
+						attrs = append(attrs, &engineColumnInfo{
+							name: attr.Attr.Name,
+							typ:  attr.Attr.Type,
+						})
+					}
+				}
+			}
+		}
+	} else {
+		if mce.tableInfos == nil || mce.db != dbName {
+			if ses.Pu.ClusterCatalog == nil {
+				return fmt.Errorf("need cluster catalog")
+			}
+			tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(dbName)
+			if err != nil {
+				return err
+			}
+
+			mce.db = ses.GetDatabaseName()
+			mce.tableInfos = make(map[string][]ColumnInfo)
+
+			//cache these info in the executor
+			for _, table := range tableInfos {
+				var infos []ColumnInfo
+				for _, column := range table.Columns {
+					infos = append(infos, &aoeColumnInfo{info: column})
+				}
+				mce.tableInfos[table.Name] = infos
+
+			}
 		}
 	}
 
-	var attrs []aoe.ColumnInfo
-	table, ok := mce.tableInfos[tableName]
+	cols, ok := mce.tableInfos[tableName]
 	if !ok {
 		//just give the empty info when there is no such table.
-		attrs = make([]aoe.ColumnInfo, 0)
+		attrs = make([]ColumnInfo, 0)
 	} else {
-		attrs = table.Columns
+		attrs = cols
 	}
 
 	for _, c := range attrs {
 		col := new(MysqlColumn)
-		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(c.Type.Oid, col)
+		col.SetName(c.GetName())
+		err = convertEngineTypeToMysqlType(c.GetType(), col)
 		if err != nil {
 			return err
 		}
@@ -1782,7 +1819,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.ShowVariables, *tree.DropDatabase, *tree.Load,
 				*tree.Use, *tree.SetVar,
-				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.Select:
+				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			case *tree.ShowColumns:
 				if t.Table.ToTableName().SchemaName == "" {
 					err = NewMysqlError(ER_NO_DB_ERROR)

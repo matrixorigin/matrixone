@@ -593,7 +593,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	return true
 }
 
-func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (engine.Relation, error) {
 	if len(dbName) == 0 {
 		dbName = tcc.DefaultDatabase()
 	}
@@ -602,7 +602,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
-		return nil, nil
+		return nil, err
 	}
 
 	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
@@ -612,9 +612,16 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	table, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
 	if err != nil {
 		logutil.Errorf("get table %v error %v", tableName, err)
+		return nil, err
+	}
+	return table, nil
+}
+
+func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	table, err := tcc.getRelation(dbName, tableName)
+	if err != nil {
 		return nil, nil
 	}
-
 	engineDefs := table.TableDefs(tcc.txnHandler.GetTxn().GetCtx())
 
 	var defs []*plan2.ColDef
@@ -646,24 +653,8 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
-	}
-
-	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
-		return nil
-	}
-
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
-
-	//open table
-	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
-	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil
 	}
 
@@ -690,24 +681,8 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
-	if len(dbName) == 0 {
-		dbName = tcc.DefaultDatabase()
-	}
-
-	//open database
-	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	relation, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
-		logutil.Errorf("get database %v error %v", dbName, err)
-		return nil
-	}
-
-	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
-	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
-
-	//open table
-	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
-	if err != nil {
-		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil
 	}
 
@@ -731,5 +706,12 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 }
 
 func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.Cost {
-	return &plan2.Cost{}
+	dbName := obj.GetSchemaName()
+	tableName := obj.GetObjName()
+	table, err := tcc.getRelation(dbName, tableName)
+	if err != nil {
+		return nil
+	}
+	rows := table.Rows()
+	return &plan2.Cost{Card: float64(rows)}
 }
