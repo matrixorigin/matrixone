@@ -36,6 +36,7 @@ const (
 	CONCAT                 // ||
 	AND                    // AND
 	OR                     // OR
+	XOR                    // XOR
 	NOT                    // NOT
 	CAST                   // CAST
 
@@ -203,6 +204,7 @@ var functionIdRegister = map[string]int32{
 	"not":         NOT,
 	"and":         AND,
 	"or":          OR,
+	"xor":         XOR,
 	"like":        LIKE,
 	"between":     BETWEEN,
 	"in":          IN,

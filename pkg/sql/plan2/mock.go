@@ -214,6 +214,14 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 	return m.objects[name], m.tables[name]
 }
 
+func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*ColDef {
+	return nil
+}
+
+func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *ColDef {
+	return nil
+}
+
 func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 	c := &Cost{}
 	div := 1.0

@@ -141,6 +141,8 @@ func (t T) ToType() Type {
 
 	typ.Oid = t
 	switch t {
+	case T_bool:
+		typ.Size = 1
 	case T_int8:
 		typ.Size = 1
 	case T_int16:
@@ -228,6 +230,8 @@ func (t T) String() string {
 // OidString returns T string
 func (t T) OidString() string {
 	switch t {
+	case T_bool:
+		return "T_bool"
 	case T_int64:
 		return "T_int64"
 	case T_int32:
@@ -271,6 +275,8 @@ func (t T) OidString() string {
 // GoType returns go type string for T
 func (t T) GoType() string {
 	switch t {
+	case T_bool:
+		return "bool"
 	case T_int64:
 		return "int64"
 	case T_int32:
@@ -323,7 +329,7 @@ func (t T) GoGoType() string {
 // TypeLen returns type's length whose type oid is T
 func (t T) TypeLen() int {
 	switch t {
-	case T_int8:
+	case T_int8, T_bool:
 		return 1
 	case T_int16:
 		return 2
@@ -359,7 +365,7 @@ func (t T) TypeLen() int {
 
 func (t T) FixedLength() int {
 	switch t {
-	case T_int8, T_uint8:
+	case T_int8, T_uint8, T_bool:
 		return 1
 	case T_int16, T_uint16:
 		return 2
