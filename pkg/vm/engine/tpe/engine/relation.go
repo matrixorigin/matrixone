@@ -219,7 +219,7 @@ func (trel *TpeRelation) Write(_ uint64, batch *batch.Batch, _ engine.Snapshot) 
 	return nil
 }
 
-func (trel *TpeRelation) Delete(_ uint64, _ *vector.Vector, _ engine.Snapshot) error {
+func (trel *TpeRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
 	panic(any("implement me"))
 }
 
