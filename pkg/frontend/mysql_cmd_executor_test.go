@@ -611,8 +611,6 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
-		err = mce.handleSelectDatabase(nil)
-		convey.So(err, convey.ShouldBeNil)
 
 		ses.Mrs = &MysqlResultSet{}
 		st1, err := parsers.ParseOne(dialect.MYSQL, "select @@max_allowed_packet")

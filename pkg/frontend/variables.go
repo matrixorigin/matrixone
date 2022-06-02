@@ -843,6 +843,17 @@ func (gsv *GlobalSystemVariables) GetGlobalSysVar(name string) (SystemVariable, 
 	return SystemVariable{}, nil, false
 }
 
+// get the definition of the system variable
+func (gsv *GlobalSystemVariables) GetDefinitionOfSysVar(name string) (SystemVariable, bool) {
+	gsv.mu.Lock()
+	defer gsv.mu.Unlock()
+	name = strings.ToLower(name)
+	if v, ok := gSysVarsDefs[name]; ok {
+		return v, ok
+	}
+	return SystemVariable{}, false
+}
+
 // set global dynamic variable by SET GLOBAL
 func (gsv *GlobalSystemVariables) SetGlobalSysVar(name string, value interface{}) error {
 	gsv.mu.Lock()

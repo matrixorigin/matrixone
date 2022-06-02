@@ -578,55 +578,6 @@ func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	return nil
 }
 
-//handle SELECT DATABASE()
-func (mce *MysqlCmdExecutor) handleSelectDatabase(param string) error {
-	var err error = nil
-	ses := mce.GetSession()
-	proto := ses.protocol
-
-	col := new(MysqlColumn)
-	col.SetName(param)
-	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	ses.Mrs.AddColumn(col)
-	val := ses.protocol.GetDatabaseName()
-	if val == "" {
-		val = "NULL"
-	}
-	ses.Mrs.AddRow([]interface{}{val})
-
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
-
-	if err = proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return nil
-}
-
-//handle SELECT current_user()
-func (mce *MysqlCmdExecutor) handleSelectCurrentUser(param string) error {
-	var err error = nil
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
-
-	col := new(MysqlColumn)
-	col.SetName(param)
-	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	ses.Mrs.AddColumn(col)
-	val := ses.GetUserName()
-	host, _ := proto.Peer()
-	val = fmt.Sprintf("%s@%s", val, host)
-	ses.Mrs.AddRow([]interface{}{val})
-
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
-
-	if err = proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return nil
-}
-
 //handle SELECT XXX()
 func (mce *MysqlCmdExecutor) handleSelectXXX(param string) error {
 	var err error = nil
@@ -996,7 +947,10 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
-		gsv := gSysVarsDefs[name]
+		gsv, ok := gSysVariables.GetDefinitionOfSysVar(name)
+		if !ok {
+			return errorSystemVariableDoesNotExist
+		}
 		row[1] = value
 		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
 			if value == 1 {
