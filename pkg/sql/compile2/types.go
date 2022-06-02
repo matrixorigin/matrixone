@@ -35,6 +35,7 @@ const (
 	DropDatabase
 	DropTable
 	DropIndex
+	Deletion
 )
 
 // Address is the ip:port of local node
@@ -89,7 +90,8 @@ type compile struct {
 	//fill is a result writer runs a callback function.
 	//fill will be called when result data is ready.
 	fill func(interface{}, *batch.Batch) error
-
+	//affectRows stores the number of rows affected while insert / update / delete
+	affectRows uint64
 	// db current database name.
 	db string
 	// uid the user who initiated the sql.

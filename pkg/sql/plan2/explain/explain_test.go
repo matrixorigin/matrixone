@@ -218,12 +218,12 @@ func TestDMLUpdate(t *testing.T) {
 
 func TestDMLDelete(t *testing.T) {
 	sqls := []string{
-		"explain DELETE FROM NATION",
-		"explain verbose DELETE FROM NATION",
-		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10",
-		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10",
-		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
-		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		//"explain DELETE FROM NATION",
+		//"explain verbose DELETE FROM NATION",
+		//"explain DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		//"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		//"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		//"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
 	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
