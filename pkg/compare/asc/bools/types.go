@@ -12,33 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package host
+package bools
 
 import (
-	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func New(limit int64) *Mmu {
-	return &Mmu{
-		limit: limit,
-	}
-}
-
-func (m *Mmu) Size() int64 {
-	return atomic.LoadInt64(&m.size)
-}
-
-func (m *Mmu) Free(size int64) {
-	atomic.AddInt64(&m.size, size*-1)
-}
-
-func (m *Mmu) Alloc(size int64) error {
-	if atomic.LoadInt64(&m.size)+size > m.limit {
-		return mmu.OutOfMemory
-	}
-	for v := atomic.LoadInt64(&m.size); !atomic.CompareAndSwapInt64(&m.size, v, v+size); v = atomic.LoadInt64(&m.size) {
-	}
-	return nil
+type compare struct {
+	xs [][]bool
+	ns []*nulls.Nulls
+	vs []*vector.Vector
 }
