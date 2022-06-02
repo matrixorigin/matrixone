@@ -1129,7 +1129,7 @@ func TestMVCC2(t *testing.T) {
 		var decomp bytes.Buffer
 		for it.Valid() {
 			block := it.GetBlock()
-			view, err := block.GetColumnDataByName(schema.GetSinglePKColDef().Name, &comp, &decomp)
+			view, err := block.GetColumnDataByName(schema.GetSingleSortKey().Name, &comp, &decomp)
 			assert.Nil(t, err)
 			assert.Nil(t, view.DeleteMask)
 			t.Log(view.AppliedVec.String())
@@ -1196,7 +1196,7 @@ func TestUnload1(t *testing.T) {
 			it := rel.MakeBlockIt()
 			for it.Valid() {
 				blk := it.GetBlock()
-				view, err := blk.GetColumnDataByName(schema.GetSinglePKColDef().Name, nil, nil)
+				view, err := blk.GetColumnDataByName(schema.GetSingleSortKey().Name, nil, nil)
 				assert.Nil(t, err)
 				assert.Equal(t, int(schema.BlockMaxRows), vector.Length(view.AppliedVec))
 				it.Next()

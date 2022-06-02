@@ -89,8 +89,8 @@ func (_ *txnRelation) Index() []*engine.IndexTableDef {
 func (rel *txnRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	attrs := make([]engine.Attribute, 1)
-	attrs[0].Name = schema.GetSinglePKColDef().Name
-	attrs[0].Type = schema.GetSinglePKColDef().Type
+	attrs[0].Name = schema.HiddenKey.Name
+	attrs[0].Type = schema.HiddenKey.Type
 	return attrs, true
 }
 

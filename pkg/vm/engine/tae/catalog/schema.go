@@ -307,10 +307,6 @@ func (s *Schema) IsPartOfPK(idx int) bool {
 	return s.ColDefs[idx].IsPrimary()
 }
 
-func (s *Schema) GetSinglePKColDef() *ColDef {
-	return s.SortKey.GetDef(0)
-}
-
 func (s *Schema) Attrs() []string {
 	attrs := make([]string, 0, len(s.ColDefs)-1)
 	for _, def := range s.ColDefs {
