@@ -73,9 +73,6 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 		}
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
-		return false, nil
-	}
 	defer bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
 	if len(ctr.aggVecs) == 0 {
@@ -124,6 +121,9 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 				return false, err
 			}
 		}
+	}
+	if len(bat.Zs) == 0 {
+		return false, nil
 	}
 	if err := ctr.processH0(bat, ap, proc); err != nil {
 		ctr.bat.Clean(proc.Mp)
