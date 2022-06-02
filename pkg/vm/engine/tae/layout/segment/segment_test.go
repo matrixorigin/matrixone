@@ -270,7 +270,7 @@ func TestSegment_Replay2(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	var file *BlockFile
-	for i := 0; i < 5120; i++ {
+	for i := 0; i < INODE_NUM/2; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
@@ -278,7 +278,7 @@ func TestSegment_Replay2(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	for i := 5120; i < 10240; i++ {
+	for i := INODE_NUM/2; i < INODE_NUM; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
@@ -293,7 +293,7 @@ func TestSegment_Replay2(t *testing.T) {
 	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
-	assert.Equal(t, 10241, len(seg1.nodes))
+	assert.Equal(t, INODE_NUM+1, len(seg1.nodes))
 	checkSegment(t, &seg, &seg1)
 }
 

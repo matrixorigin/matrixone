@@ -99,7 +99,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 	}
 
 	seg = SegmentFileIOOpenFactory(name, id)
-	cache := bytes.NewBuffer(make([]byte, 10240*4096))
+	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err := seg.Replay(colCnt, indexCnt, cache)
 	assert.Nil(t, err)
 	for i := 0; i < 20; i++ {
