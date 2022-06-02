@@ -16,6 +16,7 @@ package log
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"golang.org/x/exp/constraints"
 	"math"
 )
 
@@ -189,6 +190,18 @@ func logFloat64Pure(xs []float64, rs []float64) LogResult {
 			nulls.Add(result.Nsp, uint64(i))
 		} else {
 			result.Result[i] = math.Log(n)
+		}
+	}
+	return result
+}
+
+func Log[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) LogResult {
+	result := LogResult{Result: resultValues, Nsp: new(nulls.Nulls)}
+	for i, n := range inputValues {
+		if n <= 0 {
+			nulls.Add(result.Nsp, uint64(i))
+		} else {
+			resultValues[i] = math.Log(float64(n))
 		}
 	}
 	return result
