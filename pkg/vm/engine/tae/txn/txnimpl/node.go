@@ -518,7 +518,7 @@ func (n *insertNode) Window(start, end uint32) (bat *gbat.Batch, err error) {
 		}
 		srcVec, err2 := src.Window(start, end+1).CopyToVector()
 		if err2 != nil {
-			panic(err)
+			panic(err2)
 		}
 		deletes := common.BM32Window(n.deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
