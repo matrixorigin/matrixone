@@ -365,7 +365,7 @@ func (seg *localSegment) GetPKColumn() *vector.Vector {
 	if schema.IsSinglePK() {
 		return seg.index.KeyToVector(schema.GetSingleSortKey().Type)
 	}
-	panic("not implemented")
+	panic("implement me")
 }
 
 func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {

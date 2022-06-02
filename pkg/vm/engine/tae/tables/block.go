@@ -98,10 +98,8 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		if meta.GetSchema().IsSinglePK() {
-			block.index = indexwrapper.NewMutableIndex(meta.GetSchema().GetSingleSortKey().Type)
-		} else if meta.GetSchema().IsCompoundPK() {
-			panic("implement me")
+		if meta.GetSchema().HasPK() {
+			block.index = indexwrapper.NewMutableIndex(meta.GetSchema().GetSortKeyType())
 		}
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)

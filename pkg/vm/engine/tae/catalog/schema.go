@@ -125,6 +125,12 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
+func (s *Schema) GetSortKeyType() types.Type {
+	if s.IsSinglePK() {
+		return s.GetSingleSortKey().Type
+	}
+	return CompoundKeyType
+}
 func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
 func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
 func (s *Schema) IsCompoundPK() bool      { return s.IsCompoundSortKey() && s.SortKey.IsPrimary() }

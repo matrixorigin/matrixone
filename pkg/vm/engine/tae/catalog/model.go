@@ -26,7 +26,10 @@ const (
 	ETColDef
 )
 
-var HiddenColumnType types.Type
+var (
+	HiddenColumnType types.Type
+	CompoundKeyType  types.Type
+)
 
 const (
 	HiddenColumnName    = "PADDR"
@@ -114,6 +117,9 @@ func init() {
 		Size:  16,
 		Width: 128,
 	}
+
+	CompoundKeyType = types.T_varchar.ToType()
+	CompoundKeyType.Width = 100
 
 	SystemDBSchema = NewEmptySchema(SystemTable_DB_Name)
 	t := types.Type{
