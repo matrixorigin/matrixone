@@ -19,7 +19,6 @@ import (
 	"testing"
 )
 
-
 func makeIbuffer(l int) []int64 {
 	buf := make([]int64, l)
 	for i := range buf {

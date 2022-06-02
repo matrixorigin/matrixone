@@ -126,6 +126,13 @@ void float32AddArm(GoFloat32* x, GoFloat32* y, GoFloat32* r, int len) {
 
 void float64AddArm(GoFloat64* x, GoFloat64* y, GoFloat64* r, int len) {
 	int i = 0;
+#ifdef __aarch64__
+	float64x2_t re;
+	for (; i <= len - 2; i += 2) {
+		re = vaddq_f64(*(float64x2_t*)(x + i), *(float64x2_t*)(y + i));
+		vst1q_f64((float64_t*)(r + i), re);
+	}
+#endif
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *(y + i);
 }
 
@@ -221,6 +228,13 @@ void float32AddScalarArm(GoFloat32* x, GoFloat32* y, GoFloat32* r, int len) {
 
 void float64AddScalarArm(GoFloat64* x, GoFloat64* y, GoFloat64* r, int len) {
 	int i = 0;
+#ifdef __aarch64__
+	float64x2_t dup = vdupq_n_f64(*(float64_t*)y),re;
+	for (; i <= len - 2; i += 2) {
+		re= vaddq_f64(*(float64x2_t*)(x + i), dup);
+		vst1q_f64((float64_t*)(r + i), re);
+	}
+#endif
 	for (; i < len; ++i)  *(r + i) = *(x + i) + *y;
 }
 */
