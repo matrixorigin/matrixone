@@ -392,6 +392,16 @@ message Node {
 	ObjectRef obj_ref	= 18;
 	RowsetData rowset_data = 19;
 	string extra_options   = 20;
+	DeleteInfo delete_info = 21;
+}
+
+message DeleteInfo {
+	enum DeleteType {
+		FILTER_DEFAULT = 0;
+		FILTER_PRIMARY = 1;
+	}
+	DeleteType delete_type = 1;
+	repeated string delete_keys = 2;
 }
 
 message Query {
