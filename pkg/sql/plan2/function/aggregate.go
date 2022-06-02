@@ -182,6 +182,15 @@ var aggregates = map[int][]Function{
 			ReturnTyp:     types.T_decimal128,
 			AggregateInfo: aggregate.Max,
 		},
+		{
+			Index:         16,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_bool},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_bool,
+			AggregateInfo: aggregate.Max,
+		},
 	},
 	MIN: {
 		{
@@ -326,6 +335,15 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal128},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal128,
+			AggregateInfo: aggregate.Min,
+		},
+		{
+			Index:         16,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_bool},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_bool,
 			AggregateInfo: aggregate.Min,
 		},
 	},

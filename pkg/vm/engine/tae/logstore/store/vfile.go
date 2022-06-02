@@ -141,7 +141,7 @@ func (vf *vFile) Close() error {
 }
 
 func (vf *vFile) Commit() {
-	// fmt.Printf("Committing %s\n", vf.Name())
+	logutil.Infof("Committing %s\n", vf.Name())
 	vf.wg.Wait()
 	// vf.WriteMeta()
 	err := vf.Sync()
@@ -156,7 +156,7 @@ func (vf *vFile) Commit() {
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
 	vf.vInfo.close()
-	fmt.Printf("sync-%s\n", vf.String())
+	// fmt.Printf("sync-%s\n", vf.String())
 	// vf.FreeMeta()
 }
 
