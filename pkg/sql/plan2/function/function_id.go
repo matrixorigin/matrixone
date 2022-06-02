@@ -150,6 +150,7 @@ const (
 	RTRIM      // RTRIM
 	SIGN       // SIGN
 	SIN        // SIN
+	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
 	STARCOUNT     // STARTCOUNT
@@ -272,4 +273,6 @@ var functionIdRegister = map[string]int32{
 	"iff":           IFF,
 	"date_add":      DATE_ADD,
 	"date_sub":      DATE_SUB,
+	"tan":           TAN,
+	"sinh":          SINH,
 }
