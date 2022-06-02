@@ -278,7 +278,7 @@ func TestSegment_Replay2(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	for i := INODE_NUM/2; i < INODE_NUM; i++ {
+	for i := INODE_NUM / 2; i < INODE_NUM; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
