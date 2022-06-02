@@ -36,6 +36,7 @@ const (
 	CONCAT                 // ||
 	AND                    // AND
 	OR                     // OR
+	XOR                    // XOR
 	NOT                    // NOT
 	CAST                   // CAST
 
@@ -150,6 +151,7 @@ const (
 	RTRIM      // RTRIM
 	SIGN       // SIGN
 	SIN        // SIN
+	SINH       //SINH
 	SPACE
 	SPLIT         // SPLIT
 	STARCOUNT     // STARTCOUNT
@@ -203,6 +205,7 @@ var functionIdRegister = map[string]int32{
 	"not":         NOT,
 	"and":         AND,
 	"or":          OR,
+	"xor":         XOR,
 	"like":        LIKE,
 	"between":     BETWEEN,
 	"in":          IN,
@@ -265,7 +268,9 @@ var functionIdRegister = map[string]int32{
 	"reverse":       REVERSE,
 	"rtrim":         RTRIM,
 	"sin":           SIN,
+	"sinh":          SINH,
 	"space":         SPACE,
+	"tan":           TAN,
 	"weekday":       WEEKDAY,
 	"year":          YEAR,
 	"extract":       EXTRACT,

@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -62,6 +63,11 @@ func GetSels(proc *Process) []int64 {
 
 func PutSels(sels []int64, proc *Process) {
 	proc.Reg.Ss = append(proc.Reg.Ss, sels)
+}
+
+func (proc *Process) GetBoolTyp(typ types.Type) (typ2 types.Type) {
+	typ.Oid = types.T_bool
+	return typ
 }
 
 func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {

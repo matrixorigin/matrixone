@@ -41,7 +41,7 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *
 			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
 			return
 		}
-	case "and", "or", "not":
+	case "and", "or", "not", "xor":
 		if err := convertValueIntoBool(name, exprs, true); err != nil {
 			return nil, false, err
 		}
@@ -207,7 +207,13 @@ func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcId, "cast"),
-				Args: []*Expr{expr},
+				Args: []*Expr{expr, {
+					Expr: &plan.Expr_T{
+						T: &plan.TargetType{
+							Typ: toType,
+						},
+					},
+				}},
 			},
 		},
 		Typ: toType,
@@ -235,6 +241,20 @@ func resetIntervalFunctionExprs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, er
 		return nil, err
 	}
 
+	// rewrite "date '2020-10-10' - interval 1 Hour" to date_add(datetime, 1, hour)
+	if dateExpr.Typ.Id == plan.Type_DATE {
+		switch returnType {
+		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
+		default:
+			dateExpr, err = appendCastExpr(dateExpr, &plan.Type{
+				Id:   plan.Type_DATETIME,
+				Size: 8,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	return []*Expr{
 		dateExpr,
 		{

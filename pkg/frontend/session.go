@@ -645,6 +645,91 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	return obj, tableDef
 }
 
+func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
+	if len(dbName) == 0 {
+		dbName = tcc.DefaultDatabase()
+	}
+
+	//open database
+	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get database %v error %v", dbName, err)
+		return nil
+	}
+
+	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
+	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
+
+	//open table
+	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get table %v error %v", tableName, err)
+		return nil
+	}
+
+	priKeys := relation.GetPrimaryKeys(tcc.txnHandler.GetTxn().GetCtx())
+	if len(priKeys) == 0 {
+		return nil
+	}
+
+	var priDefs []*plan2.ColDef = nil
+	for _, key := range priKeys {
+		priDefs = append(priDefs, &plan2.ColDef{
+			Name: key.Name,
+			Typ: &plan2.Type{
+				Id:        plan.Type_TypeId(key.Type.Oid),
+				Width:     key.Type.Width,
+				Precision: key.Type.Precision,
+				Scale:     key.Type.Scale,
+				Size:      key.Type.Size,
+			},
+			Primary: key.Primary,
+		})
+	}
+	return priDefs
+}
+
+func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *plan2.ColDef {
+	if len(dbName) == 0 {
+		dbName = tcc.DefaultDatabase()
+	}
+
+	//open database
+	db, err := tcc.txnHandler.GetStorage().Database(dbName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get database %v error %v", dbName, err)
+		return nil
+	}
+
+	tableNames := db.Relations(tcc.txnHandler.GetTxn().GetCtx())
+	logutil.Infof("dbName %v tableNames %v", dbName, tableNames)
+
+	//open table
+	relation, err := db.Relation(tableName, tcc.txnHandler.GetTxn().GetCtx())
+	if err != nil {
+		logutil.Errorf("get table %v error %v", tableName, err)
+		return nil
+	}
+
+	hideKey := relation.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
+	if hideKey == nil {
+		return nil
+	}
+
+	hideDef := &plan2.ColDef{
+		Name: hideKey.Name,
+		Typ: &plan2.Type{
+			Id:        plan.Type_TypeId(hideKey.Type.Oid),
+			Width:     hideKey.Type.Width,
+			Precision: hideKey.Type.Precision,
+			Scale:     hideKey.Type.Scale,
+			Size:      hideKey.Type.Size,
+		},
+		Primary: hideKey.Primary,
+	}
+	return hideDef
+}
+
 func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.Cost {
 	return &plan2.Cost{}
 }

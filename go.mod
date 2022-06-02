@@ -20,6 +20,7 @@ require (
 	github.com/lni/goutils v1.3.0
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220511071845-cfc4bac02bb4
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
+	github.com/minio/minio-go/v7 v7.0.27
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/plar/go-adaptive-radix-tree v1.0.4
@@ -35,7 +36,16 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-require github.com/golang/protobuf v1.5.2 // indirect
+require (
+	github.com/golang/protobuf v1.5.2 // indirect
+	github.com/google/uuid v1.1.2 // indirect
+	github.com/klauspost/cpuid v1.3.1 // indirect
+	github.com/minio/md5-simd v1.1.0 // indirect
+	github.com/minio/sha256-simd v0.1.1 // indirect
+	github.com/mitchellh/go-homedir v1.1.0 // indirect
+	github.com/rs/xid v1.2.1 // indirect
+	gopkg.in/ini.v1 v1.57.0 // indirect
+)
 
 require (
 	cloud.google.com/go v0.99.0 // indirect
