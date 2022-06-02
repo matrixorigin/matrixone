@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sync"
 
-	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -225,7 +224,6 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	interval.TryMerge(*common.NewClosedIntervalsByInt(addr.LSN))
 	versionRanges[addr.Version] = interval
 	base.addrs[addr.Group] = versionRanges
-	// fmt.Printf("versionsMap is %v\n", base.addrs)
 	return nil
 }
 
