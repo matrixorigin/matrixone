@@ -319,6 +319,8 @@ func (tbl *txnTable) GetSortColumns(data *batch.Batch) []*vector.Vector {
 	return vs
 }
 
+// func (tbl *txnTable)
+
 func (tbl *txnTable) Append(data *batch.Batch) (err error) {
 	if tbl.schema.IsSinglePK() {
 		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
@@ -597,27 +599,18 @@ func (tbl *txnTable) DoDedup(pks *vector.Vector, preCommit bool) (err error) {
 
 func (tbl *txnTable) DoBatchDedup(keys ...*vector.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	if tbl.schema.IsSinglePK() {
-		if err = index.BatchInsert(keys[0], 0, vector.Length(keys[0]), 0, true); err != nil {
-			return
-		}
-	} else {
-		if err = index.BatchInsertCompound(0, vector.Length(keys[0]), 0, true, model.EncodeTypedVals, keys...); err != nil {
-			return
-		}
+	key := model.EncodeCompoundColumn(keys...)
+	if err = index.BatchInsert(key, 0, vector.Length(key), 0, true); err != nil {
+		return
 	}
 
 	if tbl.localSegment != nil {
-		if err = tbl.localSegment.BatchDedup(keys...); err != nil {
+		if err = tbl.localSegment.BatchDedup(key); err != nil {
 			return
 		}
 	}
 
-	if tbl.schema.IsSinglePK() {
-		err = tbl.DoDedup(keys[0], false)
-	} else {
-		panic("implement me")
-	}
+	err = tbl.DoDedup(key, false)
 	return
 }
 
@@ -628,7 +621,8 @@ func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
 	if tbl.schema.IsSinglePK() {
 		err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	} else {
-		err = tbl.localSegment.BatchDedup(tbl.GetSortColumns(bat)...)
+		key := model.EncodeCompoundColumn(tbl.GetSortColumns(bat)...)
+		err = tbl.localSegment.BatchDedup(key)
 		panic("implement me")
 	}
 	return

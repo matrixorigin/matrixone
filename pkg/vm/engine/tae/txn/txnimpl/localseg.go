@@ -188,17 +188,9 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 				break
 			}
 		} else if seg.table.schema.IsCompoundPK() {
-			keys := make([]*vector.Vector, seg.table.schema.GetSortKeyCnt())
-			for i := range keys {
-				keys[i] = data.Vecs[seg.table.schema.SortKey.Defs[i].Idx]
-			}
-			if err = seg.index.BatchInsertCompound(
-				int(offset),
-				int(appended),
-				seg.rows,
-				false,
-				model.EncodeTypedVals,
-				keys...); err != nil {
+			cols := seg.table.GetSortColumns(data)
+			key := model.EncodeCompoundColumn(cols...)
+			if err = seg.index.BatchInsert(key, int(offset), int(appended), seg.rows, false); err != nil {
 				break
 			}
 		}
@@ -383,11 +375,8 @@ func (seg *localSegment) GetPKColumn() *vector.Vector {
 	return seg.index.KeyToVector(schema.GetSortKeyType())
 }
 
-func (seg *localSegment) BatchDedup(keys ...*vector.Vector) error {
-	if len(keys) == 1 {
-		return seg.index.BatchDedup(keys[0])
-	}
-	return seg.index.BatchDedupCompound(model.EncodeTypedVals, keys...)
+func (seg *localSegment) BatchDedup(key *vector.Vector) error {
+	return seg.index.BatchDedup(key)
 }
 
 func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {

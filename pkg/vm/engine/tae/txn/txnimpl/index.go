@@ -15,25 +15,20 @@
 package txnimpl
 
 import (
-	"bytes"
 	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	idata "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type TableIndex interface {
 	io.Closer
 	BatchDedup(*gvec.Vector) error
-	BatchDedupCompound(model.CompoundKeyEncoder, ...*gvec.Vector) error
 	BatchInsert(*gvec.Vector, int, int, uint32, bool) error
-	BatchInsertCompound(int, int, uint32, bool, model.CompoundKeyEncoder, ...*gvec.Vector) error
 	Insert(any, uint32) error
 	Delete(any) error
 	Search(any) (uint32, error)
@@ -116,28 +111,6 @@ func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 		return 0, idata.ErrNotFound
 	}
 	return uint32(row), nil
-}
-
-func (idx *simpleTableIndex) BatchInsertCompound(
-	start int,
-	count int,
-	row uint32,
-	dedupCol bool,
-	encoder model.CompoundKeyEncoder,
-	keys ...*gvec.Vector) (err error) {
-	pk := gvec.New(catalog.CompoundKeyType)
-	vs := make([]any, len(keys))
-	var buf bytes.Buffer
-	for i := 0; i < gvec.Length(keys[0]); i++ {
-		buf.Reset()
-		for j := range vs {
-			vs[i] = compute.GetValue(keys[j], uint32(i))
-		}
-		v := encoder(&buf, vs...)
-		compute.AppendValue(pk, v)
-	}
-	err = idx.BatchInsert(pk, start, count, row, dedupCol)
-	return
 }
 
 func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row uint32, dedupCol bool) error {
@@ -422,22 +395,6 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 		return vector.ErrVecTypeNotSupport
 	}
 	return nil
-}
-
-func (idx *simpleTableIndex) BatchDedupCompound(encoder model.CompoundKeyEncoder, cols ...*gvec.Vector) (err error) {
-	key := gvec.New(catalog.CompoundKeyType)
-	vs := make([]any, len(cols))
-	var buf bytes.Buffer
-	for i := 0; i < gvec.Length(cols[0]); i++ {
-		buf.Reset()
-		for j := range vs {
-			vs[i] = compute.GetValue(cols[j], uint32(i))
-		}
-		v := encoder(&buf, vs...)
-		compute.AppendValue(key, v)
-	}
-	err = idx.BatchDedup(key)
-	return
 }
 
 // TODO: rewrite

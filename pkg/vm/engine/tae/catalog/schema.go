@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type IndexT uint16
@@ -129,7 +130,7 @@ func (s *Schema) GetSortKeyType() types.Type {
 	if s.IsSinglePK() {
 		return s.GetSingleSortKey().Type
 	}
-	return CompoundKeyType
+	return model.CompoundKeyType
 }
 func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
 func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }

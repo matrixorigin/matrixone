@@ -5,8 +5,17 @@ import (
 	"encoding/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 )
+
+var CompoundKeyType types.Type
+
+func init() {
+	CompoundKeyType = types.T_varchar.ToType()
+	CompoundKeyType.Width = 100
+}
 
 type CompoundKeyEncoder = func(*bytes.Buffer, ...any) []byte
 
@@ -98,4 +107,24 @@ func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
 		}
 	}
 	return w.Bytes()
+}
+
+// TODO: use buffer pool for cc
+func EncodeCompoundColumn(cols ...*vector.Vector) (cc *vector.Vector) {
+	if len(cols) == 1 {
+		cc = cols[0]
+		return
+	}
+	cc = vector.New(CompoundKeyType)
+	var buf bytes.Buffer
+	vs := make([]any, len(cols))
+	for row := 0; row < vector.Length(cols[0]); row++ {
+		buf.Reset()
+		for i := range vs {
+			vs[i] = compute.GetValue(cols[i], uint32(row))
+		}
+		v := EncodeTypedVals(&buf, vs...)
+		compute.AppendValue(cc, v)
+	}
+	return cc
 }
