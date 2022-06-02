@@ -174,6 +174,11 @@ func (v *Vector) IsScalarNull() bool {
 	return v.IsConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
 }
 
+// ConstVectorIsNull checks whether a const vector is null
+func (v *Vector) ConstVectorIsNull() bool {
+	return v.Nsp != nil && nulls.Contains(v.Nsp, 0)
+}
+
 func Reset(v *Vector) {
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:

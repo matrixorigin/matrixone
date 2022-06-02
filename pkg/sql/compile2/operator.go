@@ -16,6 +16,8 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -124,6 +126,21 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
 		E: colexec.RewriteFilterExprList(n.WhereList),
 	}
+}
+
+func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
+	dbSource, err := eg.Database(n.ObjRef.DbName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &deletion.Argument{
+		TableSource: relation,
+		Keys:        n.DeleteInfo.DeleteKeys,
+	}, nil
 }
 
 func constructProjection(n *plan.Node) *projection.Argument {
