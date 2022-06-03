@@ -64,9 +64,7 @@ type dataBlock struct {
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
-	if meta.GetSchema().IsSingleSortKey() {
-		indexCnt[meta.GetSchema().GetSingleSortKeyIdx()] = 2
-	} else if meta.GetSchema().IsCompoundSortKey() {
+	if meta.GetSchema().HasSortKey() {
 		indexCnt[meta.GetSchema().SortKey.Defs[0].Idx] = 2
 	}
 	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
@@ -135,10 +133,8 @@ func (blk *dataBlock) ReplayData() (err error) {
 		err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}
-	if blk.meta.GetSchema().IsSingleSortKey() {
+	if blk.meta.GetSchema().HasSortKey() {
 		err = blk.index.ReadFrom(blk)
-	} else if blk.meta.GetSchema().IsSingleSortKey() {
-		panic("implement me")
 	}
 	return
 }

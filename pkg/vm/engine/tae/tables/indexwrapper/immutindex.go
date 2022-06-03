@@ -90,7 +90,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 		return
 	}
 	metas := idxMeta.(*IndicesMeta)
-	colFile, err := file.OpenColumn(entry.GetSchema().GetSingleSortKey().Idx)
+	colFile, err := file.OpenColumn(entry.GetSchema().SortKey.Defs[0].Idx)
 	if err != nil {
 		return
 	}

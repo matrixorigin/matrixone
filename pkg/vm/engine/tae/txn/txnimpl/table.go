@@ -623,7 +623,6 @@ func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
 	} else {
 		key := model.EncodeCompoundColumn(tbl.GetSortColumns(bat)...)
 		err = tbl.localSegment.BatchDedup(key)
-		panic("implement me")
 	}
 	return
 }
