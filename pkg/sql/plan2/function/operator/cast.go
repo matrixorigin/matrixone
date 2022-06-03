@@ -899,7 +899,7 @@ func isUnsignedInteger(t types.T) bool {
 
 //  isFloat: return true if the types.T is floating Point Types
 func isFloat(t types.T) bool {
-	if t == types.T_int32 || t == types.T_int64 {
+	if t == types.T_float32 || t == types.T_float64 {
 		return true
 	}
 	return false
