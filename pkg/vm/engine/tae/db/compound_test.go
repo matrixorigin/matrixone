@@ -18,7 +18,7 @@ func TestCompoundPK1(t *testing.T) {
 	assert.Equal(t, 2, schema.GetSortKeyCnt())
 	assert.Equal(t, 2, schema.SortKey.Defs[0].Idx)
 	assert.Equal(t, 0, schema.SortKey.Defs[1].Idx)
-	schema.BlockMaxRows = 5
+	schema.BlockMaxRows = 10
 	bat := catalog.MockData(schema, 8)
 	c2 := []int32{1, 2, 1, 2, 1, 2, 1, 2}
 	c0 := []int32{2, 3, 4, 5, 1, 2, 3, 2}
@@ -71,5 +71,26 @@ func TestCompoundPK1(t *testing.T) {
 	filter = handle.NewEQFilter(model.EncodeTuple(nil, 3, bat.Vecs[2], bat.Vecs[0]))
 	err = rel.DeleteByFilter(filter)
 	assert.NoError(t, err)
+
+	it = rel.MakeBlockIt()
+	rows = 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(0, nil, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		rows += view.Length()
+		it.Next()
+	}
+	assert.Equal(t, 7, rows)
+	_, _, err = rel.GetByFilter(filter)
+	assert.ErrorIs(t, err, data.ErrNotFound)
+
 	assert.NoError(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	assert.Equal(t, int64(7), rel.Rows())
 }

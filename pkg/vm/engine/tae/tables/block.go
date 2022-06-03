@@ -818,7 +818,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 				for i := range vals {
 					vals[i], _ = vecs[i].GetValue(int(row))
 				}
-				v := model.EncodeTypedVals(&w, vals)
+				v := model.EncodeTypedVals(&w, vals...)
 				currRow, err = blk.index.GetActiveRow(v)
 				if err != nil || currRow == row {
 					if err = blk.index.Delete(v, ts); err != nil {
