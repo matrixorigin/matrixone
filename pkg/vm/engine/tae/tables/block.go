@@ -112,17 +112,27 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
+		if !blk.meta.GetSchema().HasPK() {
+			return
+		}
+		keysCtx := new(index.KeysCtx)
 		if blk.meta.GetSchema().IsSinglePK() {
 			w, _ := blk.getVectorWrapper(blk.meta.GetSchema().GetSingleSortKeyIdx())
 			defer common.GPool.Free(w.MNode)
-			keysCtx := new(index.KeysCtx)
 			keysCtx.Keys = &w.Vector
-			keysCtx.Start = 0
-			keysCtx.Count = uint32(movec.Length(&w.Vector))
-			err = blk.index.BatchUpsert(keysCtx, 0, 0)
-		} else if blk.meta.GetSchema().IsCompoundPK() {
-			panic("implement me")
+		} else {
+			sortKeys := blk.meta.GetSchema().SortKey
+			vs := make([]*gvec.Vector, sortKeys.Size())
+			for i := range vs {
+				w, _ := blk.getVectorWrapper(sortKeys.Defs[i].Idx)
+				vs[i] = &w.Vector
+				defer common.GPool.Free(w.MNode)
+			}
+			keysCtx.Keys = model.EncodeCompoundColumn(vs...)
 		}
+		keysCtx.Start = 0
+		keysCtx.Count = uint32(movec.Length(keysCtx.Keys))
+		err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}
 	if blk.meta.GetSchema().IsSingleSortKey() {

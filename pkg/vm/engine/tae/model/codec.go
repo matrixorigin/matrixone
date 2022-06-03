@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 )
@@ -109,7 +109,7 @@ func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
 	return w.Bytes()
 }
 
-func EncodeTuple(w *bytes.Buffer, row uint32, cols ...*vector.Vector) []byte {
+func EncodeTuple(w *bytes.Buffer, row uint32, cols ...*movec.Vector) []byte {
 	vs := make([]any, len(cols))
 	for i := range vs {
 		vs[i] = compute.GetValue(cols[i], row)
@@ -118,15 +118,15 @@ func EncodeTuple(w *bytes.Buffer, row uint32, cols ...*vector.Vector) []byte {
 }
 
 // TODO: use buffer pool for cc
-func EncodeCompoundColumn(cols ...*vector.Vector) (cc *vector.Vector) {
+func EncodeCompoundColumn(cols ...*movec.Vector) (cc *movec.Vector) {
 	if len(cols) == 1 {
 		cc = cols[0]
 		return
 	}
-	cc = vector.New(CompoundKeyType)
+	cc = movec.New(CompoundKeyType)
 	var buf bytes.Buffer
 	vs := make([]any, len(cols))
-	for row := 0; row < vector.Length(cols[0]); row++ {
+	for row := 0; row < movec.Length(cols[0]); row++ {
 		buf.Reset()
 		for i := range vs {
 			vs[i] = compute.GetValue(cols[i], uint32(row))
