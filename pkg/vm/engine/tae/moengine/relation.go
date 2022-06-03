@@ -17,9 +17,11 @@ package moengine
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -98,6 +100,7 @@ func (rel *txnRelation) GetPrimaryKeys(_ engine.Snapshot) (attrs []*engine.Attri
 		attr.Type = def.Type
 		attrs = append(attrs, attr)
 	}
+	logutil.Debugf("GetPrimaryKeys: %v", attrs[0])
 	return
 }
 
@@ -106,6 +109,7 @@ func (rel *txnRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
 	key := new(engine.Attribute)
 	key.Name = schema.HiddenKey.Name
 	key.Type = schema.HiddenKey.Type
+	logutil.Debugf("GetHideKey: %v", key)
 	return key
 }
 
@@ -132,8 +136,36 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) err
 	return rel.handle.Append(bat)
 }
 
-func (rel *txnRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
-	panic(any("implement me"))
+func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engine.Snapshot) error {
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	logutil.Debugf("Delete col: %v", col)
+	if schema.HasPK() {
+		if len(schema.SortKey.Defs) > 1 {
+			panic(any("not support"))
+		}
+		if schema.SortKey.Defs[0].Name == col {
+			for i := 0; i < vector.Length(data); i++ {
+				v := compute.GetValue(data, uint32(i))
+				filter := handle.NewEQFilter(v)
+				err := rel.handle.DeleteByFilter(filter)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		panic(any("key not found"))
+	}
+	if schema.HiddenKey.Name == col {
+		for i := 0; i < vector.Length(data); i++ {
+			v := compute.GetValue(data, uint32(i))
+			if err := rel.handle.DeleteByHiddenKey(v); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	panic(any("key not found"))
 }
 
 func (rel *txnRelation) NewReader(num int, _ extend.Extend, _ []byte, _ engine.Snapshot) (rds []engine.Reader) {
