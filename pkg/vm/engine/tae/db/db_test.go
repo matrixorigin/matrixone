@@ -413,14 +413,14 @@ func TestCompactBlock1(t *testing.T) {
 		t.Log(blkMeta.String())
 		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, db.Scheduler)
 		assert.Nil(t, err)
-		data, _, closer, err := task.PrepareData(blkMeta.MakeKey())
+		preparer, err := task.PrepareData(blkMeta.MakeKey())
 		assert.Nil(t, err)
-		assert.NotNil(t, data)
-		defer closer()
+		assert.NotNil(t, preparer.Columns)
+		defer preparer.Close()
 		for col := 0; col < len(bat.Vecs); col++ {
 			for row := 0; row < vector.Length(bat.Vecs[0]); row++ {
 				exp := compute.GetValue(bat.Vecs[col], uint32(row))
-				act := compute.GetValue(data.Vecs[col], uint32(row))
+				act := compute.GetValue(preparer.Columns.Vecs[col], uint32(row))
 				assert.Equal(t, exp, act)
 			}
 		}
@@ -448,10 +448,10 @@ func TestCompactBlock1(t *testing.T) {
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		data, _, closer, err := task.PrepareData(blkMeta.MakeKey())
+		preparer, err := task.PrepareData(blkMeta.MakeKey())
 		assert.Nil(t, err)
-		defer closer()
-		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
+		defer preparer.Close()
+		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(preparer.Columns.Vecs[0]))
 		{
 			txn, _ := db.StartTxn(nil)
 			database, err := txn.GetDatabase("db")
@@ -470,10 +470,10 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 		assert.Nil(t, err)
-		data, _, closer, err = task.PrepareData(blkMeta.MakeKey())
+		preparer, err = task.PrepareData(blkMeta.MakeKey())
 		assert.Nil(t, err)
-		defer closer()
-		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
+		defer preparer.Close()
+		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(preparer.Columns.Vecs[0]))
 		var maxTs uint64
 		{
 			txn, _ := db.StartTxn(nil)
@@ -487,10 +487,10 @@ func TestCompactBlock1(t *testing.T) {
 			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
 			task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 			assert.Nil(t, err)
-			data, _, closer, err := task.PrepareData(blkMeta.MakeKey())
+			preparer, err := task.PrepareData(blkMeta.MakeKey())
 			assert.Nil(t, err)
-			defer closer()
-			assert.Equal(t, vector.Length(bat.Vecs[0])-2, vector.Length(data.Vecs[0]))
+			defer preparer.Close()
+			assert.Equal(t, vector.Length(bat.Vecs[0])-2, vector.Length(preparer.Columns.Vecs[0]))
 			t.Log(blk.String())
 			maxTs = txn.GetStartTS()
 		}
