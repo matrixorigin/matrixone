@@ -37,4 +37,6 @@ const (
 	MergeOrder
 	MergeGroup
 	MergeOffset
+
+	Deletion
 )
