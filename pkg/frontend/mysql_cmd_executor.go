@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -2034,8 +2035,14 @@ func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch 
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
-func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
-	var resp *Response = nil
+func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.NewPanicError(e)
+			resp = NewGeneralErrorResponse(COM_QUERY, err)
+		}
+	}()
+
 	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()
