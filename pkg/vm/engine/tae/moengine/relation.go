@@ -140,9 +140,6 @@ func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engi
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
 	if schema.HasPK() {
-		if len(schema.SortKey.Defs) > 1 {
-			panic(any("not support"))
-		}
 		if schema.SortKey.Defs[0].Name == col {
 			for i := 0; i < vector.Length(data); i++ {
 				v := compute.GetValue(data, uint32(i))
