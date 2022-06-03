@@ -5,11 +5,39 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/stretchr/testify/assert"
 )
+
+func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema) {
+	txn, _ := e.StartTxn(nil)
+	db, _ := txn.GetDatabase(dbName)
+	rel, _ := db.GetRelationByName(schema.Name)
+
+	var metas []*catalog.BlockEntry
+	it := rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		if blk.Rows() < int(schema.BlockMaxRows) {
+			it.Next()
+			continue
+		}
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		metas = append(metas, meta)
+		it.Next()
+	}
+	for _, meta := range metas {
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit())
+}
 
 func TestCompoundPK1(t *testing.T) {
 	tae := initDB(t, nil)
@@ -18,7 +46,7 @@ func TestCompoundPK1(t *testing.T) {
 	assert.Equal(t, 2, schema.GetSortKeyCnt())
 	assert.Equal(t, 2, schema.SortKey.Defs[0].Idx)
 	assert.Equal(t, 0, schema.SortKey.Defs[1].Idx)
-	schema.BlockMaxRows = 10
+	schema.BlockMaxRows = 5
 	bat := catalog.MockData(schema, 8)
 	c2 := []int32{1, 2, 1, 2, 1, 2, 1, 2}
 	c0 := []int32{2, 3, 4, 5, 1, 2, 3, 2}
@@ -93,4 +121,56 @@ func TestCompoundPK1(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
 	assert.Equal(t, int64(7), rel.Rows())
+
+	it = rel.MakeBlockIt()
+	rows = 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(0, nil, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		rows += view.Length()
+		it.Next()
+	}
+	assert.Equal(t, 7, rows)
+
+	bat2 := catalog.MockData(schema, 5)
+	c2_1 := []int32{3, 4, 3, 4, 3}
+	c0_1 := []int32{1, 2, 3, 1, 2}
+	vector.SetCol(bat2.Vecs[2], c2_1)
+	vector.SetCol(bat2.Vecs[0], c0_1)
+	err = rel.Append(bat2)
+	assert.NoError(t, err)
+
+	it = rel.MakeBlockIt()
+	rows = 0
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataById(0, nil, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		rows += view.Length()
+		it.Next()
+	}
+	assert.Equal(t, 12, rows)
+
+	assert.NoError(t, txn.Commit())
+
+	compactBlocks(t, tae, "db", schema)
+
+	// TODO
+	// txn, _ = tae.StartTxn(nil)
+	// db, _ = txn.GetDatabase("db")
+	// rel, _ = db.GetRelationByName(schema.Name)
+	// assert.Equal(t, int64(12), rel.Rows())
+
+	// id, row, err = rel.GetByFilter(filter)
+	// assert.ErrorIs(t, err, data.ErrNotFound)
+	// filter = handle.NewEQFilter(model.EncodeTuple(nil, 4, bat.Vecs[2], bat.Vecs[0]))
+	// id, row, err = rel.GetByFilter(filter)
+	// assert.NoError(t, err)
+	// err = rel.Append(bat)
+	// assert.ErrorIs(t, err, data.ErrDuplicate)
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
