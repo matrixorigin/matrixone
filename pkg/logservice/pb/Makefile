@@ -1,3 +1,3 @@
 .PHONY: gen
 gen:
-	protoc --go_out=. heartbeat.proto
+	protoc --gogofaster_out=. heartbeat.proto
