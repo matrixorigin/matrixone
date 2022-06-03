@@ -62,7 +62,7 @@ func TestEngine(t *testing.T) {
 	attr := rel.GetPrimaryKeys(nil)
 	key := attr[0]
 	bat = catalog.MockData(schema, 20)
-	err = rel.Delete(0, bat.Vecs[12], key.Name,nil)
+	err = rel.Delete(0, bat.Vecs[12], key.Name, nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
@@ -138,7 +138,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	attr := rel.GetPrimaryKeys(nil)
 	assert.Nil(t, attr)
 	key := rel.GetHideKey(nil)
-	err = rel.Delete(0, delete.Vecs[0], key.Name,nil)
+	err = rel.Delete(0, delete.Vecs[0], key.Name, nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
