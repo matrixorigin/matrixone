@@ -24,19 +24,21 @@ import (
 	"sync"
 )
 
-const INODE_NUM = 10240
+const INODE_NUM = 4096
+const INODE_SIZE = 512
 const BLOCK_SIZE = 4096
 const SIZE = 4 * 1024 * 1024 * 1024
-const LOG_START = 2 * 4096
-const DATA_START = LOG_START + BLOCK_SIZE*INODE_NUM
+const LOG_START = 2 * INODE_SIZE
+const DATA_START = LOG_START + INODE_SIZE*INODE_NUM
 const DATA_SIZE = SIZE - DATA_START
 const LOG_SIZE = DATA_START - LOG_START
-const HOLE_SIZE = 512 * BLOCK_SIZE
+const HOLE_SIZE = 512 * INODE_SIZE
 const MAGIC = 0xFFFFFFFF
 
 type SuperBlock struct {
 	version   uint64
 	blockSize uint32
+	inodeSize uint32
 	colCnt    uint32
 	lognode   *Inode
 	state     StateType
@@ -61,6 +63,7 @@ func (s *Segment) Init(name string) error {
 	s.super = SuperBlock{
 		version:   1,
 		blockSize: BLOCK_SIZE,
+		inodeSize: INODE_SIZE,
 	}
 	log := &Inode{
 		magic: MAGIC,
@@ -136,7 +139,7 @@ func (s *Segment) Mount() {
 	s.log.seq = seq + 1
 	s.nodes[logFile.name] = s.log.logFile
 	s.allocator = NewBitmapAllocator(DATA_SIZE, s.GetPageSize())
-	s.log.allocator = NewBitmapAllocator(LOG_SIZE, s.GetPageSize())
+	s.log.allocator = NewBitmapAllocator(LOG_SIZE, s.GetInodeSize())
 }
 
 func (s *Segment) Unmount() {
@@ -162,6 +165,7 @@ func (s *Segment) Replay(cache *bytes.Buffer) error {
 	s.super = SuperBlock{
 		version:   1,
 		blockSize: BLOCK_SIZE,
+		inodeSize: INODE_SIZE,
 	}
 	log := &Inode{
 		magic: MAGIC,
@@ -272,6 +276,10 @@ func (s *Segment) Free(fd *BlockFile) {
 
 func (s *Segment) GetPageSize() uint32 {
 	return s.super.blockSize
+}
+
+func (s *Segment) GetInodeSize() uint32 {
+	return s.super.inodeSize
 }
 
 func (s *Segment) Sync() error {
