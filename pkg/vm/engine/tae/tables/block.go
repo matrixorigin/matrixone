@@ -34,8 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -120,7 +119,7 @@ func (blk *dataBlock) ReplayData() (err error) {
 			keysCtx.Keys = &w.Vector
 		} else {
 			sortKeys := blk.meta.GetSchema().SortKey
-			vs := make([]*gvec.Vector, sortKeys.Size())
+			vs := make([]*movec.Vector, sortKeys.Size())
 			for i := range vs {
 				w, _ := blk.getVectorWrapper(sortKeys.Defs[i].Idx)
 				vs[i] = &w.Vector
@@ -924,8 +923,8 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.
 	blk.mvcc.RUnlock()
 	return
 }
-func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *gbat.Batch) []*gvec.Vector {
-	vs := make([]*gvec.Vector, schema.GetSortKeyCnt())
+func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *mobat.Batch) []*movec.Vector {
+	vs := make([]*movec.Vector, schema.GetSortKeyCnt())
 	for i := range vs {
 		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
 	}
