@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -77,7 +78,7 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
-func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, closer func(), err error) {
+func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, sortCol *vector.Vector, closer func(), err error) {
 	attrs := make([]string, 0, 4)
 	bat = batch.New(true, attrs)
 
@@ -96,21 +97,26 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (bat *batch.Batch, clos
 		bat.Attrs = append(bat.Attrs, def.Name)
 	}
 	// Sort only if sort key is defined
-	if schema.IsSingleSortKey() {
-		pkIdx := 0
-		for i, attr := range bat.Attrs {
-			idx := schema.GetColIdx(attr)
-			def := schema.ColDefs[idx]
-			if def.IsPrimary() {
-				pkIdx = i
-				break
+	if schema.HasSortKey() {
+		var vecs []*vector.Vector
+		var idx int
+		if schema.IsSingleSortKey() {
+			vecs = bat.Vecs
+			idx = schema.SortKey.Defs[0].Idx
+			sortCol = bat.Vecs[idx]
+		} else {
+			vecs = append(vecs, bat.Vecs...)
+			cols := make([]*vector.Vector, schema.SortKey.Size())
+			for i := range cols {
+				cols[i] = bat.Vecs[schema.SortKey.Defs[i].Idx]
 			}
+			sortCol = model.EncodeCompoundColumn(cols...)
+			idx = len(vecs)
+			vecs = append(vecs, sortCol)
 		}
-		if err = mergesort.SortBlockColumns(bat.Vecs, pkIdx); err != nil {
+		if err = mergesort.SortBlockColumns(vecs, idx); err != nil {
 			return
 		}
-	} else if schema.IsCompoundSortKey() {
-		panic("implement me")
 	}
 	// Prepare hidden column data
 	hidden, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, blkKey, 0, uint32(compute.LengthOfBatch(bat)))
@@ -133,7 +139,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
-	data, closer, err := task.PrepareData(newMeta.MakeKey())
+	data, sortCol, closer, err := task.PrepareData(newMeta.MakeKey())
 	if err != nil {
 		return
 	}
@@ -144,7 +150,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	newBlkData := newMeta.GetBlockData()
 	blockFile := newBlkData.GetBlockFile()
 
-	ioTask := NewFlushBlkTask(tasks.WaitableCtx, blockFile, task.txn.GetStartTS(), newMeta, data)
+	ioTask := NewFlushBlkTask(tasks.WaitableCtx, blockFile, task.txn.GetStartTS(), newMeta, data, sortCol)
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}

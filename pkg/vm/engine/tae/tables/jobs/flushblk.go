@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -24,18 +25,26 @@ import (
 
 type flushBlkTask struct {
 	*tasks.BaseTask
-	data *batch.Batch
-	meta *catalog.BlockEntry
-	file file.Block
-	ts   uint64
+	data    *batch.Batch
+	sortCol *vector.Vector
+	meta    *catalog.BlockEntry
+	file    file.Block
+	ts      uint64
 }
 
-func NewFlushBlkTask(ctx *tasks.Context, bf file.Block, ts uint64, meta *catalog.BlockEntry, data *batch.Batch) *flushBlkTask {
+func NewFlushBlkTask(
+	ctx *tasks.Context,
+	bf file.Block,
+	ts uint64,
+	meta *catalog.BlockEntry,
+	data *batch.Batch,
+	sortCol *vector.Vector) *flushBlkTask {
 	task := &flushBlkTask{
-		ts:   ts,
-		data: data,
-		meta: meta,
-		file: bf,
+		ts:      ts,
+		data:    data,
+		meta:    meta,
+		file:    bf,
+		sortCol: sortCol,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -44,15 +53,10 @@ func NewFlushBlkTask(ctx *tasks.Context, bf file.Block, ts uint64, meta *catalog
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() (err error) {
-	if task.meta.GetSchema().IsSingleSortKey() {
-		def := task.meta.GetSchema().GetSingleSortKey()
-		i := catalog.GetAttrIdx(task.data.Attrs, def.Name)
-		sortColumnData := task.data.Vecs[i]
-		if err = BuildAndFlushSingleIndex(task.file, task.meta, sortColumnData); err != nil {
+	if task.sortCol != nil {
+		if err = BuildAndFlushIndex(task.file, task.meta, task.sortCol); err != nil {
 			return
 		}
-	} else if task.meta.GetSchema().IsCompoundSortKey() {
-		panic("implement me")
 	}
 	if err = task.file.WriteBatch(task.data, task.ts); err != nil {
 		return

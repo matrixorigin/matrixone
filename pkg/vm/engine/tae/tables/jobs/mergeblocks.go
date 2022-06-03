@@ -212,7 +212,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err = flushTask.WaitDone(); err != nil {
 			return
 		}
-		if err = BuildAndFlushSingleIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
+		if err = BuildAndFlushIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
 			return
 		}
 		if err = meta.GetBlockData().ReplayData(); err != nil {

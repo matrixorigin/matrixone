@@ -21,10 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
-func BuildAndFlushSingleIndex(file file.Block, meta *catalog.BlockEntry, columnData *vector.Vector) (err error) {
+func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData *vector.Vector) (err error) {
 	// write indexes, collect their meta, and refresh host's index holder
 	schema := meta.GetSchema()
-	sortCol, err := file.OpenColumn(schema.GetSingleSortKey().Idx)
+	sortCol, err := file.OpenColumn(schema.SortKey.Defs[0].Idx)
 	if err != nil {
 		return
 	}
