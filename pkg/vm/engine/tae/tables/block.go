@@ -779,9 +779,8 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 			blk.mvcc.RUnlock()
 			blk.mvcc.Lock()
 			defer blk.mvcc.Unlock()
-			// chain := blk.mvcc.GetDeleteChain()
 			var currRow uint32
-			if gen.HasNext() {
+			for gen.HasNext() {
 				row = gen.Next()
 				v, _ := vec.GetValue(int(row))
 				currRow, err = blk.index.GetActiveRow(v)
@@ -795,7 +794,41 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 			return
 		})
 	} else {
-		panic("implement me")
+		var row uint32
+		err = blk.node.DoWithPin(func() (err error) {
+			var w bytes.Buffer
+			sortKeys := blk.meta.GetSchema().SortKey
+			vals := make([]any, sortKeys.Size())
+			vecs := make([]vector.IVector, sortKeys.Size())
+			blk.mvcc.RLock()
+			for i := range vecs {
+				vec, err := blk.node.data.GetVectorByAttr(sortKeys.Defs[i].Idx)
+				if err != nil {
+					blk.mvcc.RUnlock()
+					return err
+				}
+				vecs[i] = vec
+			}
+			blk.mvcc.RUnlock()
+			blk.mvcc.Lock()
+			defer blk.mvcc.Unlock()
+			var currRow uint32
+			for gen.HasNext() {
+				row = gen.Next()
+				for i := range vals {
+					vals[i], _ = vecs[i].GetValue(int(row))
+				}
+				v := model.EncodeTypedVals(&w, vals)
+				currRow, err = blk.index.GetActiveRow(v)
+				if err != nil || currRow == row {
+					if err = blk.index.Delete(v, ts); err != nil {
+						return
+					}
+				}
+			}
+			blk.meta.GetSegment().GetTable().RemoveRows(deleted)
+			return
+		})
 	}
 	return
 }

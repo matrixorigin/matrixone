@@ -6,6 +6,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -51,5 +53,23 @@ func TestCompoundPK1(t *testing.T) {
 		it.Next()
 	}
 	assert.Equal(t, 8, rows)
+	assert.NoError(t, txn.Commit())
+
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+
+	filter := handle.NewEQFilter(model.EncodeTuple(nil, 2, bat.Vecs[2], bat.Vecs[0]))
+	id, row, err := rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(2), row)
+	err = rel.Update(id, row, 1, int32(999))
+	assert.NoError(t, err)
+
+	filter = handle.NewEQFilter(model.EncodeTuple(nil, 3, bat.Vecs[2], bat.Vecs[0]))
+	err = rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }

@@ -109,6 +109,14 @@ func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
 	return w.Bytes()
 }
 
+func EncodeTuple(w *bytes.Buffer, row uint32, cols ...*vector.Vector) []byte {
+	vs := make([]any, len(cols))
+	for i := range vs {
+		vs[i] = compute.GetValue(cols[i], row)
+	}
+	return EncodeTypedVals(w, vs...)
+}
+
 // TODO: use buffer pool for cc
 func EncodeCompoundColumn(cols ...*vector.Vector) (cc *vector.Vector) {
 	if len(cols) == 1 {
