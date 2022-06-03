@@ -139,20 +139,6 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) err
 func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engine.Snapshot) error {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
-	if schema.HasPK() {
-		if schema.SortKey.Defs[0].Name == col {
-			for i := 0; i < vector.Length(data); i++ {
-				v := compute.GetValue(data, uint32(i))
-				filter := handle.NewEQFilter(v)
-				err := rel.handle.DeleteByFilter(filter)
-				if err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		panic(any("key not found"))
-	}
 	if schema.HiddenKey.Name == col {
 		for i := 0; i < vector.Length(data); i++ {
 			v := compute.GetValue(data, uint32(i))
@@ -162,7 +148,21 @@ func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engi
 		}
 		return nil
 	}
-	panic(any("key not found"))
+	if !schema.HasPK() || schema.IsCompoundSortKey() {
+		panic(any("No valid primary key found"))
+	}
+	if schema.SortKey.Defs[0].Name == col {
+		for i := 0; i < vector.Length(data); i++ {
+			v := compute.GetValue(data, uint32(i))
+			filter := handle.NewEQFilter(v)
+			err := rel.handle.DeleteByFilter(filter)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	panic(any("Key not found"))
 }
 
 func (rel *txnRelation) NewReader(num int, _ extend.Extend, _ []byte, _ engine.Snapshot) (rds []engine.Reader) {
