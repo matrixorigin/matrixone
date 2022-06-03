@@ -70,6 +70,7 @@ func (idx *mutableIndex) Delete(key any, ts uint64) (err error) {
 func (idx *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
 	defer func() {
 		err = TranslateError(err)
+		// logutil.Infof("[Trace][GetActiveRow] key=%v: err=%v", key, err)
 	}()
 	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed

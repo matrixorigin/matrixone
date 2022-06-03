@@ -45,6 +45,7 @@ type SecondaryIndex interface {
 	Contains(key any) bool
 	ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool
 	String() string
+	Size() int
 }
 
 type MutipleRowsIndex interface {

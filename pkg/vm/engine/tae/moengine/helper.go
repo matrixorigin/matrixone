@@ -38,16 +38,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		}
 		defs = append(defs, def)
 	}
-	if schema.SinglePK != nil {
-		pkDef := new(engine.PrimaryIndexDef)
-		pkDef.Names = append(pkDef.Names, schema.GetSinglePKColDef().Name)
-		defs = append(defs, pkDef)
-	} else {
-		for _, idx := range schema.CompoundPK.Idxes {
-			pkDef := new(engine.PrimaryIndexDef)
-			pkDef.Names = append(pkDef.Names, schema.ColDefs[idx].Name)
-			defs = append(defs, pkDef)
+	if schema.SortKey != nil && schema.SortKey.IsPrimary() {
+		pk := new(engine.PrimaryIndexDef)
+		for _, def := range schema.SortKey.Defs {
+			pk.Names = append(pk.Names, def.Name)
 		}
+		defs = append(defs, pk)
 	}
 	return
 }

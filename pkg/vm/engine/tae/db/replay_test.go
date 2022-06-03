@@ -562,7 +562,7 @@ func TestReplay3(t *testing.T) {
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockData(schema, 1)
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 
 	txn, err := tae.StartTxn(nil)
