@@ -87,16 +87,26 @@ func (_ *txnRelation) Index() []*engine.IndexTableDef {
 	panic(any("implement me"))
 }
 
-func (rel *txnRelation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
+func (rel *txnRelation) GetPrimaryKeys(_ engine.Snapshot) (attrs []*engine.Attribute) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	attrs := make([]*engine.Attribute, 1)
-	attrs[0].Name = schema.GetSinglePKColDef().Name
-	attrs[0].Type = schema.GetSinglePKColDef().Type
-	return attrs
+	if !schema.HasPK() {
+		return
+	}
+	for _, def := range schema.SortKey.Defs {
+		attr := new(engine.Attribute)
+		attr.Name = def.Name
+		attr.Type = def.Type
+		attrs = append(attrs, attr)
+	}
+	return
 }
 
 func (rel *txnRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
-	panic(any("implement me"))
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	key := new(engine.Attribute)
+	key.Name = schema.HiddenKey.Name
+	key.Type = schema.HiddenKey.Type
+	return key
 }
 
 func (rel *txnRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
@@ -104,7 +114,7 @@ func (rel *txnRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribut
 	attrs := make([]engine.Attribute, 1)
 	attrs[0].Name = schema.HiddenKey.Name
 	attrs[0].Type = schema.HiddenKey.Type
-	return attrs, true
+	return attrs, false
 }
 
 func (rel *txnRelation) Attribute() []engine.Attribute {
