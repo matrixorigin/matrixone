@@ -380,7 +380,6 @@ func (th *TxnHandler) createTxn(beganErr, autocommitErr error) (moengine.Txn, er
 		txn = InitTaeTxnDumpImpl()
 	}
 
-	logutil.Infof("txn id %d", txn.GetID())
 	return txn, err
 }
 
@@ -438,9 +437,7 @@ func (th *TxnHandler) commit(option int) error {
 	case TxnBegan:
 		switch option {
 		case TxnCommitAfterBegan:
-			x := th.taeTxn.GetID()
 			err = th.taeTxn.Commit()
-			logutil.Infof("commit1 %d", x)
 		case TxnCommitAfterAutocommit:
 			err = errorIsNotAutocommitTxn
 		case TxnCommitAfterAutocommitOnly:
@@ -453,9 +450,7 @@ func (th *TxnHandler) commit(option int) error {
 		case TxnCommitAfterBegan:
 			err = errorIsNotBeginCommitTxn
 		case TxnCommitAfterAutocommit, TxnCommitAfterAutocommitOnly:
-			x := th.taeTxn.GetID()
 			err = th.taeTxn.Commit()
-			logutil.Infof("commit2 %d", x)
 		}
 	case TxnInit, TxnEnd:
 		err = errorTaeTxnHasNotBeenBegan
