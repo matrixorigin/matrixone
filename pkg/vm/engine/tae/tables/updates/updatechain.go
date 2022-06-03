@@ -28,10 +28,10 @@ import (
 type ColumnChain struct {
 	*common.Link
 	*sync.RWMutex
-	id         *common.ID
-	view       *ColumnView
-	controller *MVCCHandle
-	cnt        uint32
+	id   *common.ID
+	view *ColumnView
+	mvcc *MVCCHandle
+	cnt  uint32
 }
 
 func MockColumnUpdateChain() *ColumnChain {
@@ -44,17 +44,17 @@ func MockColumnUpdateChain() *ColumnChain {
 	return chain
 }
 
-func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, controller *MVCCHandle) *ColumnChain {
+func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, mvcc *MVCCHandle) *ColumnChain {
 	if rwlocker == nil {
 		rwlocker = new(sync.RWMutex)
 	}
-	id := *controller.GetID()
+	id := *mvcc.GetID()
 	id.Idx = colIdx
 	chain := &ColumnChain{
-		Link:       new(common.Link),
-		RWMutex:    rwlocker,
-		controller: controller,
-		id:         &id,
+		Link:    new(common.Link),
+		RWMutex: rwlocker,
+		mvcc:    mvcc,
+		id:      &id,
 	}
 	chain.view = NewColumnView()
 	return chain
@@ -68,22 +68,38 @@ func (chain *ColumnChain) SetUpdateCnt(cnt uint32) {
 	atomic.StoreUint32(&chain.cnt, cnt)
 }
 
-func (chain *ColumnChain) GetMeta() *catalog.BlockEntry { return chain.controller.meta }
+func (chain *ColumnChain) GetMeta() *catalog.BlockEntry { return chain.mvcc.meta }
 func (chain *ColumnChain) GetBlockID() *common.ID       { id := chain.id.AsBlockID(); return &id }
 func (chain *ColumnChain) GetID() *common.ID            { return chain.id }
 func (chain *ColumnChain) GetColumnIdx() uint16         { return chain.id.Idx }
-func (chain *ColumnChain) GetController() *MVCCHandle   { return chain.controller }
+func (chain *ColumnChain) GetController() *MVCCHandle   { return chain.mvcc }
 
 func (chain *ColumnChain) GetColumnName() string {
-	return chain.controller.meta.GetSchema().ColDefs[chain.id.Idx].Name
+	return chain.mvcc.meta.GetSchema().ColDefs[chain.id.Idx].Name
 }
 
-func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v interface{}, n txnif.UpdateNode) (err error) {
+func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v any, n txnif.UpdateNode) (err error) {
 	if err = chain.PrepareUpdate(row, n); err != nil {
 		return
 	}
 	err = n.UpdateLocked(row, v)
 	return
+}
+
+func (chain *ColumnChain) OnReplayUpdateNode(updateNode txnif.UpdateNode) {
+	updateNode.(*ColumnNode).AttachTo(chain)
+	chain.mvcc.TrySetMaxVisible(updateNode.(*ColumnNode).commitTs)
+	mask := updateNode.GetMask()
+	vals := updateNode.GetValues()
+	iterator := mask.Iterator()
+	for iterator.HasNext() {
+		row := iterator.Next()
+		val := vals[row]
+		err := chain.TryUpdateNodeLocked(row, val, updateNode)
+		if err != nil {
+			panic(err)
+		}
+	}
 }
 
 func (chain *ColumnChain) AddNodeLocked(txn txnif.AsyncTxn) txnif.UpdateNode {
@@ -158,15 +174,15 @@ func (chain *ColumnChain) StringLocked() string {
 	// return msg
 }
 
-func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v interface{}, err error) {
+func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v any, err error) {
 	return chain.view.GetValue(row, ts)
 }
 
-func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]interface{}) {
+func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]any, error) {
 	return chain.view.CollectUpdates(ts)
 }
 
-func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, indexes []*wal.Index) {
+func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]any, indexes []*wal.Index, err error) {
 	var merged *ColumnNode
 	chain.LoopChainLocked(func(n *ColumnNode) bool {
 		n.RLock()
@@ -186,9 +202,13 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			txn := n.txn
 			n.RUnlock()
 			state := txn.GetTxnState(true)
+			// logutil.Infof("[%d, %d] -- wait --> %s: %d", startTs, endTs, txn.Repr(), state)
 			// 3.1.1. Rollbacked. Skip it and go to next
 			if state == txnif.TxnStateRollbacked {
 				return true
+			} else if state == txnif.TxnStateUnknown {
+				err = txnif.TxnInternalErr
+				return false
 			}
 			// 3.1.2. Committed
 			n.RLock()

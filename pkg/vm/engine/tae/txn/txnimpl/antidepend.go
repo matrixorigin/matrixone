@@ -138,9 +138,11 @@ func (checker *warChecker) check() (err error) {
 				eTxn := entry.GetTxn()
 				entry.RUnlock()
 				state := eTxn.GetTxnState(true)
-				if state != txnif.TxnStateRollbacked {
+				if state == txnif.TxnStateCommitted {
 					logutil.Infof("TxnRWConflictErr Found:[%s]<===RW===[%s]", eTxn.String(), checker.txn.String())
 					return txnif.TxnRWConflictErr
+				} else if state == txnif.TxnStateUnknown {
+					return txnif.TxnInternalErr
 				}
 				entry.RLock()
 			}

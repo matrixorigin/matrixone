@@ -398,7 +398,7 @@ func TestCAQ(t *testing.T) {
 func TestAQ(t *testing.T) {
 	testCases := []testCase{
 		{sql: "create table in_out (name varchar(40), age int unsigned, incomes int, expenses int, money decimal(10,2), money2 decimal(20, 2));"},
-		{sql: "insert into in_out values ('a', 20, 2500, 1300, 12.34, 123.45), ('b', 25, 5000, 800, 12.34, 123.45), ('c', 15, 0, 700, 12.34, 123.45), ('d', 50, 12000, 1000, 12.34, 123.45), ('e', 37, 22000, 7000, 12.34, 123.45);"},
+		{sql: "insert into in_out values ('a', 20, 2500, 1300, 12.34, 123.45), ('b', 25, 5000, 800, 23.45, 234.56), ('c', 15, 0, 700, 34.56, 345.67), ('d', 50, 12000, 1000, 45.67, 456.78), ('e', 37, 22000, 7000, 56.78, 567.89);"},
 
 		{sql: "select count(name) from in_out;", res: executeResult{
 			attr: []string{"count(name)"},
@@ -430,7 +430,13 @@ func TestAQ(t *testing.T) {
 		{sql: "select sum(money), sum(money2) from in_out;", res: executeResult{
 			attr: []string{"sum(money)", "sum(money2)"},
 			data: [][]string{
-				{"6170", "{61725 0}"}, // 'cause the DecimalToString function will only be called at the frontend
+				{"17280", "{172835 0}"}, // 'cause the DecimalToString function will only be called at the frontend
+			},
+		}},
+		{sql: "select max(money), max(money2), avg(money), avg(money2) from in_out;", res: executeResult{
+			attr: []string{"max(money)", "max(money2)", "avg(money)", "avg(money2)"},
+			data: [][]string{
+				{"5678", "{56789 0}", "{3456 0}", "{34567 0}"}, // 'cause the DecimalToString function will only be called at the frontend
 			},
 		}},
 	}

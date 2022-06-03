@@ -3,7 +3,6 @@ package txnimpl
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -20,7 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-const LocalSegmentStartID = math.MaxUint64 / 2
+const (
+	// Note: Do not edit this id!!!
+	LocalSegmentStartID uint64 = 1 << 47
+)
 
 var localSegmentIdAlloc *common.IdAlloctor
 
@@ -79,21 +81,19 @@ func (seg *localSegment) registerInsertNode() {
 	seg.nodes = append(seg.nodes, n)
 }
 
-func (seg *localSegment) ApplyAppend() {
-	var err error
+func (seg *localSegment) ApplyAppend() (err error) {
 	for _, ctx := range seg.appends {
 		var (
 			destOff    uint32
 			appendNode txnif.AppendNode
 		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, seg.table.store.txn); err != nil {
+		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, uint32(compute.LengthOfBatch(bat)), seg.table.store.txn); err != nil {
 			return
 		}
 		ctx.driver.Close()
 		id := ctx.driver.GetID()
-		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
-		logutil.Debugf(info.String())
+		ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
 		if err = appendNode.PrepareCommit(); err != nil {
 			return
 		}
@@ -102,6 +102,7 @@ func (seg *localSegment) ApplyAppend() {
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
 	}
+	return
 }
 
 func (seg *localSegment) PrepareApply() (err error) {
@@ -144,7 +145,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		ctx := &appendCtx{
 			driver: appender,
 			node:   node,
-			start:  appended,
+			start:  node.OffsetWithDeletes(appended),
 			count:  toAppendWithDeletes,
 		}
 		id := appender.GetID()
@@ -182,9 +183,16 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
-		start := seg.rows
-		if err = seg.index.BatchInsert(data.Vecs[seg.table.GetSchema().PrimaryKey], int(offset), int(appended), start, false); err != nil {
-			break
+		if seg.table.schema.IsSinglePK() {
+			if err = seg.index.BatchInsert(data.Vecs[seg.table.schema.GetSingleSortKeyIdx()], int(offset), int(appended), seg.rows, false); err != nil {
+				break
+			}
+		} else if seg.table.schema.IsCompoundPK() {
+			cols := seg.table.GetSortColumns(data)
+			key := model.EncodeCompoundColumn(cols...)
+			if err = seg.index.BatchInsert(key, int(offset), int(appended), seg.rows, false); err != nil {
+				break
+			}
 		}
 		offset += appended
 		seg.rows += appended
@@ -198,6 +206,40 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 	return err
 }
 
+func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (err error) {
+	for i := from; i <= to; i++ {
+		v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		if err = seg.index.Delete(v); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func (seg *localSegment) DeleteCompoundIndex(from, to uint32, node InsertNode) (err error) {
+	var buf bytes.Buffer
+	vs := make([]any, seg.table.schema.GetSortKeyCnt())
+	for i := from; i <= to; i++ {
+		buf.Reset()
+		for j := range vs {
+			v, _ := node.GetValue(seg.table.schema.SortKey.Defs[j].Idx, i)
+			vs[j] = v
+		}
+		key := model.EncodeTypedVals(&buf, vs...)
+		if err = seg.index.Delete(key); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
+	if seg.table.schema.IsSinglePK() {
+		return seg.DeleteSingleIndex(from, to, node)
+	}
+	return seg.DeleteCompoundIndex(from, to, node)
+}
+
 func (seg *localSegment) RangeDelete(start, end uint32) error {
 	first, firstOffset := seg.GetLocalPhysicalAxis(start)
 	last, lastOffset := seg.GetLocalPhysicalAxis(end)
@@ -205,37 +247,34 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	if last == first {
 		node := seg.nodes[first]
 		err = node.RangeDelete(firstOffset, lastOffset)
-		if err == nil {
-			for i := firstOffset; i <= lastOffset; i++ {
-				v, _ := node.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), i)
-				if err = seg.index.Delete(v); err != nil {
-					break
-				}
-			}
+		if err != nil {
+			return err
 		}
-	} else {
-		node := seg.nodes[first]
-		err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
-		node = seg.nodes[last]
-		err = node.RangeDelete(0, lastOffset)
-		for i := uint32(0); i <= lastOffset; i++ {
-			v, _ := node.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), i)
-			if err = seg.index.Delete(v); err != nil {
+		if !seg.table.schema.HasPK() {
+			// If no pk defined
+			return err
+		}
+		err = seg.DeleteFromIndex(firstOffset, lastOffset, node)
+		return err
+	}
+
+	node := seg.nodes[first]
+	err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
+	node = seg.nodes[last]
+	if err = node.RangeDelete(0, lastOffset); err != nil {
+		return err
+	}
+	if err = seg.DeleteFromIndex(0, lastOffset, node); err != nil {
+		return err
+	}
+	if last > first+1 {
+		for i := first + 1; i < last; i++ {
+			node = seg.nodes[i]
+			if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
 				break
 			}
-		}
-		if last > first+1 && err == nil {
-			for i := first + 1; i < last; i++ {
-				node = seg.nodes[i]
-				if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
-					break
-				}
-				for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
-					v, _ := node.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), i)
-					if err = seg.index.Delete(v); err != nil {
-						break
-					}
-				}
+			if err = seg.DeleteFromIndex(0, txnbase.MaxNodeRows, node); err != nil {
+				break
 			}
 		}
 	}
@@ -280,7 +319,10 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 	return n.IsRowDeleted(noffset)
 }
 
-func (seg *localSegment) Update(row uint32, col uint16, value interface{}) error {
+func (seg *localSegment) Update(row uint32, col uint16, value any) error {
+	if seg.table.entry.GetSchema().HiddenKey.Idx == int(col) {
+		return data.ErrUpdateHiddenKey
+	}
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	window, err := n.Window(uint32(noffset), uint32(noffset))
@@ -290,9 +332,8 @@ func (seg *localSegment) Update(row uint32, col uint16, value interface{}) error
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
 	}
-	v, _ := n.GetValue(int(seg.table.entry.GetSchema().PrimaryKey), row)
-	if err = seg.index.Delete(v); err != nil {
-		panic(err)
+	if err = seg.DeleteFromIndex(row, row, n); err != nil {
+		return err
 	}
 
 	vec := vector.New(window.Vecs[col].Typ)
@@ -312,20 +353,30 @@ func (seg *localSegment) Rows() uint32 {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	offset, err = seg.index.Find(filter.Val)
-	if err == nil {
-		id = seg.entry.AsCommonID()
+	id = seg.entry.AsCommonID()
+	if !seg.table.schema.HasPK() {
+		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
+		return
+	}
+	if seg.table.schema.IsSinglePK() {
+		if v, ok := filter.Val.([]byte); ok {
+			offset, err = seg.index.Search(string(v))
+		} else {
+			offset, err = seg.index.Search(filter.Val)
+		}
+	} else if seg.table.schema.IsCompoundPK() {
+		offset, err = seg.index.Search(string(filter.Val.([]byte)))
 	}
 	return
 }
 
-func (seg *localSegment) GetPrimaryColumn() *vector.Vector {
+func (seg *localSegment) GetPKColumn() *vector.Vector {
 	schema := seg.table.entry.GetSchema()
-	return seg.index.KeyToVector(schema.ColDefs[schema.PrimaryKey].Type)
+	return seg.index.KeyToVector(schema.GetSortKeyType())
 }
 
-func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {
-	return seg.index.BatchDedup(col)
+func (seg *localSegment) BatchDedup(key *vector.Vector) error {
+	return seg.index.BatchDedup(key)
 }
 
 func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
@@ -351,7 +402,7 @@ func (seg *localSegment) GetBlockRows(blk *catalog.BlockEntry) int {
 	return int(n.Rows())
 }
 
-func (seg *localSegment) GetValue(row uint32, col uint16) (interface{}, error) {
+func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
 	h, err := seg.table.store.nodesMgr.TryPin(n, time.Second)

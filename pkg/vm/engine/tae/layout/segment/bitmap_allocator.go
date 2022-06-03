@@ -99,6 +99,9 @@ func (b *BitmapAllocator) markAllocFree0(start, length uint64, free bool) {
 	if end > p2align(length, BITS_PER_UNIT) {
 		end = p2align(length, BITS_PER_UNIT)
 	}
+	if int(bitpos) >= len(b.level0)-1 {
+		return
+	}
 	for {
 		if pos >= end {
 			break
@@ -167,9 +170,12 @@ func (b *BitmapAllocator) markLevel1(start, length uint64, free bool) {
 		panic(any("length align error"))
 	}
 	idx := uint64(0)
-	idxEnd := length / BITS_PER_UNITSET
+	idxEnd := (length - start) / BITS_PER_UNITSET
 	for {
 		if idx >= idxEnd {
+			break
+		}
+		if (start+(idx+1)*BITS_PER_UNITSET)/BITS_PER_UNIT > uint64(len(b.level0)) {
 			break
 		}
 		b.markUnitLevel1(start+idx*BITS_PER_UNITSET, start+(idx+1)*BITS_PER_UNITSET, free)
@@ -188,6 +194,18 @@ func (b *BitmapAllocator) getBitPos(val uint64, start uint32) uint32 {
 		break
 	}
 	return start
+}
+
+func (b *BitmapAllocator) CheckAllocations(start uint32, len uint32) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	pos := start / b.pageSize
+	end := pos + len/b.pageSize
+	b.markAllocFree0(uint64(pos), uint64(end), false)
+	l0start := p2align(uint64(pos), BITS_PER_UNITSET)
+	l0end := p2roundup(uint64(end), BITS_PER_UNITSET)
+	b.markLevel1(l0start, l0end, false)
+	b.lastPos = uint64(start)
 }
 
 func (b *BitmapAllocator) Free(start uint32, len uint32) {

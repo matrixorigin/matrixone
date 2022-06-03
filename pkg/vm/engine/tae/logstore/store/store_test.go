@@ -34,6 +34,58 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestAddrVersion(t *testing.T) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+	defer s.Close()
+
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	for i := 0; i < 10; i++ {
+		e := entry.GetBase()
+		uncommitInfo := &entry.Info{
+			Group: entry.GTUncommit,
+			Uncommits: []entry.Tid{{
+				Group: 11,
+				Tid:   1,
+			}},
+		}
+		e.SetType(entry.ETUncommitted)
+		e.SetInfo(uncommitInfo)
+		n := common.GPool.Alloc(common.K)
+		copy(n.GetBuf(), buf)
+		err = e.UnmarshalFromNode(n, true)
+		assert.Nil(t, err)
+		_, err = s.AppendEntry(entry.GTUncommit, e)
+		assert.Nil(t, err)
+		err := e.WaitDone()
+		assert.Nil(t, err)
+	}
+
+	testutils.WaitExpect(4000, func() bool {
+		t.Log(s.GetSynced(entry.GTUncommit))
+		return s.GetSynced(entry.GTUncommit) == 10
+	})
+	s.addrmu.RLock()
+	defer s.addrmu.RUnlock()
+	assert.Equal(t, 5, len(s.addrs[entry.GTUncommit]))
+	t.Log(s.addrs[entry.GTUncommit])
+	for version, lsns := range s.addrs[entry.GTUncommit] {
+		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version)*2 - 1)))
+		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version) * 2)))
+	}
+}
+
 func TestStore(t *testing.T) {
 	dir := "/tmp/logstore/teststore"
 	name := "mock"
@@ -454,7 +506,7 @@ func TestReplay(t *testing.T) {
 	s.Close()
 
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		t.Logf("%s", payload)
 	}
 	r := newReplayer(a)
@@ -663,7 +715,7 @@ func TestLoad(t *testing.T) {
 
 	fmt.Printf("\n***********replay***********\n\n")
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		fmt.Printf("%s", payload)
 	}
 	err = s.Replay(a)

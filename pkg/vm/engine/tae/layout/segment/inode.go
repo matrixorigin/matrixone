@@ -31,9 +31,26 @@ type Inode struct {
 	algo       uint8
 	size       uint64
 	originSize uint64
+	rows       uint32
 	mutex      sync.RWMutex
 	extents    []Extent
 	logExtents Extent
 	state      StateType
 	seq        uint64
+}
+
+func (i *Inode) GetFileSize() int64 {
+	return int64(i.size)
+}
+
+func (i *Inode) GetOriginSize() int64 {
+	return int64(i.originSize)
+}
+
+func (i *Inode) GetAlgo() uint8 {
+	return i.algo
+}
+
+func (i *Inode) GetRows() uint32 {
+	return i.rows
 }

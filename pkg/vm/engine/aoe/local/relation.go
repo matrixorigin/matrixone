@@ -16,6 +16,7 @@ package local
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
@@ -77,6 +78,14 @@ func (r *localRoRelation) Close(_ engine.Snapshot) {
 	r.impl.Close()
 }
 
+func (r *localRoRelation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
+	panic(any("implement me"))
+}
+
+func (r *localRoRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
+	panic(any("implement me"))
+}
+
 func (r *localRoRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	return nil, false
 }
@@ -104,6 +113,10 @@ func (r *localRoRelation) Attribute() []engine.Attribute {
 
 func (r *localRoRelation) Write(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
 	panic("not supported")
+}
+
+func (r *localRoRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+	panic(any("implement me"))
 }
 
 func (r *localRoRelation) AddAttribute(_ uint64, _ engine.TableDef) error {

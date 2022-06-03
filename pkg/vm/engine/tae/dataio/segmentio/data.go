@@ -17,9 +17,13 @@ package segmentio
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+	"sync"
 )
 
+const UPGRADE_FILE_NUM = 10
+
 type dataFile struct {
+	mutex  sync.RWMutex
 	colBlk *columnBlock
 	file   []*segment.BlockFile
 	buf    []byte
@@ -85,13 +89,18 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 		df.stat.originSize = int64(len(df.buf))
 		return
 	}
-	df.colBlk.mutex.RLock()
+	df.mutex.RLock()
 	file := df.file[len(df.file)-1]
-	df.colBlk.mutex.RUnlock()
+	df.mutex.RUnlock()
+	if df.colBlk != nil && df.colBlk.block.rows > 0 {
+		file.SetRows(df.colBlk.block.rows)
+	}
 	err = file.GetSegement().Append(file, buf)
-	df.stat.algo = file.GetAlgo()
-	df.stat.originSize = file.GetOriginSize()
-	df.stat.size = file.GetFileSize()
+	meta := file.GetInode()
+	df.stat.algo = meta.GetAlgo()
+	df.stat.originSize = meta.GetOriginSize()
+	df.stat.size = meta.GetFileSize()
+	df.upgradeFile()
 	return
 }
 
@@ -105,11 +114,26 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	if bufLen == 0 {
 		return 0, nil
 	}
-	df.colBlk.mutex.RLock()
+	df.mutex.RLock()
 	file := df.file[len(df.file)-1]
-	df.colBlk.mutex.RUnlock()
+	df.mutex.RUnlock()
 	n, err = file.Read(buf)
 	return n, nil
+}
+
+func (df *dataFile) upgradeFile() {
+	if len(df.file) < UPGRADE_FILE_NUM {
+		return
+	}
+	go func() {
+		df.mutex.Lock()
+		releaseFile := df.file[:len(df.file)-1]
+		df.file = df.file[len(df.file)-1 : len(df.file)]
+		df.mutex.Unlock()
+		for _, file := range releaseFile {
+			df.colBlk.block.seg.GetSegmentFile().ReleaseFile(file)
+		}
+	}()
 }
 
 func (df *dataFile) GetFileType() common.FileType {

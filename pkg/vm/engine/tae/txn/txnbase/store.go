@@ -33,11 +33,12 @@ func (store *NoopTxnStore) PrepareRollback() error                          { re
 func (store *NoopTxnStore) PreCommit() error                                { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                            { return nil }
 func (store *NoopTxnStore) ApplyRollback() error                            { return nil }
+func (store *NoopTxnStore) PreApplyCommit() error                           { return nil }
 func (store *NoopTxnStore) ApplyCommit() error                              { return nil }
 
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
 
-func (store *NoopTxnStore) CreateRelation(dbId uint64, def interface{}) (rel handle.Relation, err error) {
+func (store *NoopTxnStore) CreateRelation(dbId uint64, def any) (rel handle.Relation, err error) {
 	return
 }
 func (store *NoopTxnStore) DropRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
@@ -65,15 +66,15 @@ func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) 
 }
 func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)   { return }
 func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, *vector.Vector) (err error)    { return }
-func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, interface{}) (err error) {
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...*vector.Vector) (err error) { return }
+func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
 func (store *NoopTxnStore) RangeDelete(uint64, *common.ID, uint32, uint32) (err error) { return }
 func (store *NoopTxnStore) GetByFilter(uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }
-func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v interface{}, err error) {
+func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v any, err error) {
 	return
 }
 

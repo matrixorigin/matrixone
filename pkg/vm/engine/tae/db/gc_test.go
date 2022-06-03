@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -57,11 +56,11 @@ func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.
 func TestGCBlock1(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13)
+	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
 	schema.SegmentMaxBlocks = 2
 
-	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, schema.BlockMaxRows)
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
@@ -85,15 +84,15 @@ func TestGCBlock1(t *testing.T) {
 	err = meta.GetSegment().RemoveEntry(meta)
 	assert.Nil(t, err)
 	blkData := meta.GetBlockData()
-	assert.Equal(t, 1, tae.MTBufMgr.Count())
+	assert.Equal(t, 3, tae.MTBufMgr.Count())
 	err = blkData.Destroy()
 	assert.Nil(t, err)
-	assert.Equal(t, 0, tae.MTBufMgr.Count())
+	assert.Equal(t, 2, tae.MTBufMgr.Count())
 
-	assert.Equal(t, 2, idxCommon.MockIndexBufferManager.Count())
 	err = task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().Destroy()
 	assert.Nil(t, err)
-	assert.Equal(t, 0, idxCommon.MockIndexBufferManager.Count())
+	assert.Equal(t, 0, tae.MTBufMgr.Count())
+	t.Log(tae.MTBufMgr.String())
 }
 
 func TestAutoGC1(t *testing.T) {
@@ -106,13 +105,12 @@ func TestAutoGC1(t *testing.T) {
 	opts.CheckpointCfg.CatalogUnCkpLimit = 1
 	tae := initDB(t, opts)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13)
-	schema.PrimaryKey = 3
+	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 4
 
-	totalRows := uint64(schema.BlockMaxRows * 21 / 2)
-	bat := compute.MockBatch(schema.Types(), totalRows, int(schema.PrimaryKey), nil)
+	totalRows := schema.BlockMaxRows * 21 / 2
+	bat := catalog.MockData(schema, totalRows)
 	bats := compute.SplitBatch(bat, 100)
 	pool, _ := ants.NewPool(50)
 	{

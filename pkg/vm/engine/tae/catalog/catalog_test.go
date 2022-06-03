@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -31,6 +32,33 @@ import (
 const (
 	ModuleName = "TAECATALOG"
 )
+
+func TestCompoundPKSchema(t *testing.T) {
+	schema := NewEmptySchema(t.Name())
+	err := schema.AppendPKCol("pk1", types.T_int32.ToType(), 1)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk2", types.T_int32.ToType(), 2)
+	assert.NoError(t, err)
+	err = schema.Finalize(false)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, schema.SortKey.Size())
+	assert.Equal(t, int8(0), schema.SortKey.GetDef(0).SortIdx)
+	assert.Equal(t, int8(1), schema.SortKey.GetDef(1).SortIdx)
+	assert.Equal(t, int8(2), schema.SortKey.GetDef(2).SortIdx)
+	assert.Equal(t, "pk0", schema.SortKey.GetDef(0).Name)
+	assert.Equal(t, "pk1", schema.SortKey.GetDef(1).Name)
+	assert.Equal(t, "pk2", schema.SortKey.GetDef(2).Name)
+
+	schema = NewEmptySchema(t.Name())
+	err = schema.AppendPKCol("pk1", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.Finalize(false)
+	assert.ErrorIs(t, err, ErrSchemaValidation)
+}
 
 func TestCreateDB1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -133,7 +161,7 @@ func TestTableEntry1(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(db1.String())
 
-	schema := MockSchema(2)
+	schema := MockSchema(2, 0)
 	schema.Name = "tb1"
 	tb1, err := db1.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -206,13 +234,13 @@ func TestTableEntry2(t *testing.T) {
 	name := "db1"
 	db, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
-	schema := MockSchema(2)
+	schema := MockSchema(2, 0)
 	schema.Name = "tb1"
 	_, err = db.CreateRelation(schema)
 	assert.Nil(t, err)
 
 	for i := 0; i < 1000; i++ {
-		s := MockSchema(1)
+		s := MockSchema(1, 0)
 		s.Name = fmt.Sprintf("xx%d", i)
 		_, err = db.CreateRelation(s)
 		assert.Nil(t, err)
@@ -313,7 +341,7 @@ func TestTable1(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(tbName)
 		if err == ErrNotFound {
-			schema := MockSchema(1)
+			schema := MockSchema(1, 0)
 			schema.Name = tbName
 			if rel, err = db.CreateRelation(schema); err != nil {
 				return
@@ -391,7 +419,7 @@ func TestCommand(t *testing.T) {
 	assert.Equal(t, db.DeleteAt, eCmd.entry.DeleteAt)
 	assert.Equal(t, db.ID, eCmd.entry.ID)
 
-	schema := MockSchemaAll(13)
+	schema := MockSchemaAll(13, 0)
 	tb := NewTableEntry(db, schema, nil, nil)
 	tb.CreateAt = common.NextGlobalSeqNum()
 	tb.ID = common.NextGlobalSeqNum()
@@ -454,7 +482,7 @@ func TestSegment1(t *testing.T) {
 	txn1, _ := txnMgr.StartTxn(nil)
 	db, err := catalog.CreateDBEntry(name, txn1)
 	assert.Nil(t, err)
-	schema := MockSchema(1)
+	schema := MockSchema(1, 0)
 	schema.Name = tbName
 	tb, err := db.CreateTableEntry(schema, txn1, nil)
 	assert.Nil(t, err)

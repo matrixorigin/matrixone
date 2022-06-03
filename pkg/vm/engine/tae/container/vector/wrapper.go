@@ -98,7 +98,7 @@ func (v *VectorWrapper) Clean(p *process.Process) {
 	panic("readonly")
 }
 
-func (v *VectorWrapper) SetCol(col interface{}) {
+func (v *VectorWrapper) SetCol(col any) {
 	panic("readonly")
 }
 
@@ -111,7 +111,7 @@ func (v *VectorWrapper) FreeMemory() {
 	}
 }
 
-func (v *VectorWrapper) Append(n int, vals interface{}) error {
+func (v *VectorWrapper) Append(n int, vals any) error {
 	return ErrVecWriteRo
 }
 
@@ -127,11 +127,11 @@ func (v *VectorWrapper) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *VectorWrapper) SetValue(idx int, val interface{}) error {
+func (v *VectorWrapper) SetValue(idx int, val any) error {
 	return ErrVecWriteRo
 }
 
-func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
+func (v *VectorWrapper) GetValue(idx int) (any, error) {
 	if idx >= v.Length() || idx < 0 {
 		return nil, ErrVecInvalidOffset
 	}
@@ -168,7 +168,7 @@ func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
 	case types.T_sel:
 		return v.Col.([]int64)[idx], nil
 	case types.T_tuple:
-		return v.Col.([][]interface{})[idx], nil
+		return v.Col.([][]any)[idx], nil
 	default:
 		return nil, ErrVecTypeNotSupport
 	}

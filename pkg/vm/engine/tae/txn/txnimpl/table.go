@@ -18,13 +18,17 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -42,6 +46,7 @@ type txnTable struct {
 	updateNodes  map[common.ID]txnif.UpdateNode
 	deleteNodes  map[common.ID]txnif.DeleteNode
 	entry        *catalog.TableEntry
+	schema       *catalog.Schema
 	logs         []wal.LogEntry
 	maxSegId     uint64
 	maxBlkId     uint64
@@ -54,6 +59,7 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 	tbl := &txnTable{
 		store:       store,
 		entry:       entry,
+		schema:      entry.GetSchema(),
 		updateNodes: make(map[common.ID]txnif.UpdateNode),
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
@@ -88,6 +94,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
+		// logutil.Infof("%d-%d",csn,cmd.GetType())
 		if err != nil {
 			return err
 		}
@@ -109,11 +116,17 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 	if meta, err = tbl.entry.GetSegmentByID(id); err != nil {
 		return
 	}
+	var ok bool
 	meta.RLock()
-	if !meta.TxnCanRead(tbl.store.txn, meta.RWMutex) {
-		err = txnbase.ErrNotFound
-	}
+	ok, err = meta.TxnCanRead(tbl.store.txn, meta.RWMutex)
 	meta.RUnlock()
+	if err != nil {
+		return
+	}
+	if !ok {
+		err = data.ErrNotFound
+		return
+	}
 	seg = newSegment(tbl, meta)
 	return
 }
@@ -251,7 +264,7 @@ func (tbl *txnTable) IsDeleted() bool {
 }
 
 func (tbl *txnTable) GetSchema() *catalog.Schema {
-	return tbl.entry.GetSchema()
+	return tbl.schema
 }
 
 func (tbl *txnTable) GetMeta() *catalog.TableEntry {
@@ -298,10 +311,25 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	return nil
 }
 
-func (tbl *txnTable) Append(data *batch.Batch) error {
-	err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().PrimaryKey])
-	if err != nil {
-		return err
+func (tbl *txnTable) GetSortColumns(data *batch.Batch) []*vector.Vector {
+	vs := make([]*vector.Vector, tbl.schema.GetSortKeyCnt())
+	for i := range vs {
+		vs[i] = data.Vecs[tbl.schema.SortKey.Defs[i].Idx]
+	}
+	return vs
+}
+
+// func (tbl *txnTable)
+
+func (tbl *txnTable) Append(data *batch.Batch) (err error) {
+	if tbl.schema.IsSinglePK() {
+		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
+			return
+		}
+	} else if tbl.schema.IsCompoundPK() {
+		if err = tbl.DoBatchDedup(tbl.GetSortColumns(data)...); err != nil {
+			return
+		}
 	}
 	if tbl.localSegment == nil {
 		tbl.localSegment = newLocalSegment(tbl)
@@ -338,15 +366,15 @@ func (tbl *txnTable) RangeDelete(id *common.ID, start, end uint32) (err error) {
 	node := tbl.deleteNodes[*id]
 	if node != nil {
 		chain := node.GetChain().(*updates.DeleteChain)
-		controller := chain.GetController()
-		writeLock := controller.GetExclusiveLock()
-		err = controller.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
+		mvcc := chain.GetController()
+		mvcc.Lock()
+		err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS())
 		if err == nil {
-			if err = controller.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
+			if err = mvcc.CheckNotUpdated(start, end, tbl.store.txn.GetStartTS()); err == nil {
 				node.RangeDeleteLocked(start, end)
 			}
 		}
-		writeLock.Unlock()
+		mvcc.Unlock()
 		if err != nil {
 			seg, _ := tbl.entry.GetSegmentByID(id.SegmentID)
 			blk, _ := seg.GetBlockEntryByID(id.BlockID)
@@ -399,17 +427,20 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 		}
 		blockIt.Next()
 	}
+	if err == nil && id == nil {
+		err = data.ErrNotFound
+	}
 	return
 }
 
-func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v interface{}, err error) {
+func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, err error) {
 	if tbl.localSegment == nil {
 		return
 	}
 	return tbl.localSegment.GetValue(row, col)
 }
 
-func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interface{}, err error) {
+func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err error) {
 	if isLocalSegment(id) {
 		return tbl.localSegment.GetValue(row, col)
 	}
@@ -425,20 +456,24 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interfac
 	return block.GetValue(tbl.store.txn, row, col)
 }
 
-func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v interface{}) (err error) {
+func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v any) (err error) {
 	chain := node.GetChain().(*updates.ColumnChain)
-	controller := chain.GetController()
-	sharedLock := controller.GetSharedLock()
-	if err = controller.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
+	mvcc := chain.GetController()
+	mvcc.RLock()
+	if err = mvcc.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
 		chain.Lock()
 		err = chain.TryUpdateNodeLocked(row, v, node)
 		chain.Unlock()
 	}
-	sharedLock.Unlock()
+	mvcc.RUnlock()
 	return
 }
 
-func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}) (err error) {
+func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err error) {
+	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
+		err = data.ErrUpdateUniqueKey
+		return
+	}
 	if isLocalSegment(id) {
 		return tbl.UpdateLocalValue(row, col, v)
 	}
@@ -478,7 +513,7 @@ func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v interface{}
 // 3. Build a new row
 // 4. Delete the row in the node
 // 5. Append the new row
-func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value interface{}) (err error) {
+func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value any) (err error) {
 	if tbl.localSegment != nil {
 		err = tbl.localSegment.Update(row, col, value)
 	}
@@ -492,23 +527,27 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 	return tbl.localSegment.Rows()
 }
 
-func (tbl *txnTable) PreCommitDededup() (err error) {
-	if tbl.localSegment == nil {
+func (tbl *txnTable) PreCommitDedup() (err error) {
+	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	pks := tbl.localSegment.GetPrimaryColumn()
+	pks := tbl.localSegment.GetPKColumn()
+	err = tbl.DoDedup(pks, true)
+	return
+}
+
+func (tbl *txnTable) DoDedup(pks *vector.Vector, preCommit bool) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
-		if seg.GetID() < tbl.maxSegId {
+		if preCommit && seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
 			seg.RLock()
-			uncreated := seg.IsCreatedUncommitted()
-			dropped := seg.IsDroppedCommitted()
+			invalid := seg.IsDroppedCommitted() || seg.InTxnOrRollbacked()
 			seg.RUnlock()
-			if uncreated || dropped {
+			if invalid {
 				segIt.Next()
 				continue
 			}
@@ -526,23 +565,29 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload().(*catalog.BlockEntry)
-			if blk.GetID() < tbl.maxBlkId {
+			if preCommit && blk.GetID() < tbl.maxBlkId {
 				return
 			}
 			{
 				blk.RLock()
-				uncreated := blk.IsCreatedUncommitted()
-				dropped := blk.IsDroppedCommitted()
+				invalid := blk.IsDroppedCommitted() || blk.InTxnOrRollbacked()
 				blk.RUnlock()
-				if uncreated || dropped {
+				if invalid {
 					blkIt.Next()
 					continue
 				}
 			}
 			// logutil.Infof("%s: %d-%d, %d-%d: %s", tbl.txn.String(), tbl.maxSegId, tbl.maxBlkId, seg.GetID(), blk.GetID(), pks.String())
 			blkData := blk.GetBlockData()
-			// TODO: Add a new batch dedup method later
-			if err = blkData.BatchDedup(tbl.store.txn, pks); err != nil {
+			var rowmask *roaring.Bitmap
+			if len(tbl.deleteNodes) > 0 {
+				fp := blk.AsCommonID()
+				dn := tbl.deleteNodes[*fp]
+				if dn != nil {
+					rowmask = dn.GetRowMaskRefLocked()
+				}
+			}
+			if err = blkData.BatchDedup(tbl.store.txn, pks, rowmask); err != nil {
 				return
 			}
 			blkIt.Next()
@@ -552,47 +597,32 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 	return
 }
 
-func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
+func (tbl *txnTable) DoBatchDedup(keys ...*vector.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	err = index.BatchInsert(pks, 0, vector.Length(pks), 0, true)
-	if err != nil {
+	key := model.EncodeCompoundColumn(keys...)
+	if err = index.BatchInsert(key, 0, vector.Length(key), 0, true); err != nil {
 		return
 	}
-	// if tbl.localSegment != nil {
-	// 	if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
-	// 		return
-	// 	}
-	// }
-	h := newRelation(tbl)
-	segIt := h.MakeSegmentIt()
-	for segIt.Valid() {
-		seg := segIt.GetSegment()
-		if err = seg.BatchDedup(pks); err == txnbase.ErrDuplicated {
-			break
+
+	if tbl.localSegment != nil {
+		if err = tbl.localSegment.BatchDedup(key); err != nil {
+			return
 		}
-		if err == data.ErrPossibleDuplicate {
-			err = nil
-			blkIt := seg.MakeBlockIt()
-			for blkIt.Valid() {
-				block := blkIt.GetBlock()
-				if err = block.BatchDedup(pks); err != nil {
-					break
-				}
-				blkIt.Next()
-			}
-		}
-		if err != nil {
-			break
-		}
-		segIt.Next()
 	}
-	segIt.Close()
+
+	err = tbl.DoDedup(key, false)
 	return
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
-	if tbl.localSegment != nil {
-		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().PrimaryKey])
+	if tbl.localSegment == nil {
+		return
+	}
+	if tbl.schema.IsSinglePK() {
+		err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
+	} else {
+		key := model.EncodeCompoundColumn(tbl.GetSortColumns(bat)...)
+		err = tbl.localSegment.BatchDedup(key)
 	}
 	return
 }
@@ -606,10 +636,11 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 	return
 }
 
-func (tbl *txnTable) ApplyAppend() {
+func (tbl *txnTable) ApplyAppend() (err error) {
 	if tbl.localSegment != nil {
-		tbl.localSegment.ApplyAppend()
+		err = tbl.localSegment.ApplyAppend()
 	}
+	return
 }
 
 func (tbl *txnTable) PreCommit() (err error) {
@@ -623,6 +654,18 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	for _, node := range tbl.txnEntries {
 		if err = node.PrepareCommit(); err != nil {
 			break
+		}
+	}
+	return
+}
+
+func (tbl *txnTable) PreApplyCommit() (err error) {
+	if err = tbl.ApplyAppend(); err != nil {
+		return
+	}
+	for _, dn := range tbl.deleteNodes {
+		if err = dn.OnApply(); err != nil {
+			return
 		}
 	}
 	return

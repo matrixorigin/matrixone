@@ -64,8 +64,8 @@ func NewAppendCmd(id uint32, app *AppendNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		append:  app,
 		cmdType: txnbase.CmdAppend,
-		dest:    app.controller.meta.AsCommonID(),
-		dbid:    app.controller.meta.GetSegment().GetTable().GetDB().ID,
+		dest:    app.mvcc.meta.AsCommonID(),
+		dbid:    app.mvcc.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -75,8 +75,8 @@ func NewDeleteCmd(id uint32, del *DeleteNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		delete:  del,
 		cmdType: txnbase.CmdDelete,
-		dest:    del.chain.controller.meta.AsCommonID(),
-		dbid:    del.chain.controller.meta.GetSegment().GetTable().GetDB().ID,
+		dest:    del.chain.mvcc.meta.AsCommonID(),
+		dbid:    del.chain.mvcc.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -86,8 +86,8 @@ func NewUpdateCmd(id uint32, update *ColumnNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		update:  update,
 		cmdType: txnbase.CmdUpdate,
-		dest:    update.chain.controller.meta.AsCommonID(),
-		dbid:    update.chain.controller.meta.GetSegment().GetTable().GetDB().ID,
+		dest:    update.chain.mvcc.meta.AsCommonID(),
+		dbid:    update.chain.mvcc.meta.GetSegment().GetTable().GetDB().ID,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl

@@ -36,10 +36,12 @@ const (
 const (
 	DefaultRing = iota
 	AvgRing
+	AvgDecimalRing
 	CountRing
 	StarCountRing
 	ApproxCountDistinctRing
 	// Max
+	MaxBoolRing
 	MaxInt8Ring
 	MaxInt32Ring
 	MaxDateRing
@@ -52,8 +54,11 @@ const (
 	MaxUInt64Ring
 	MaxFloat32Ring
 	MaxFloat64Ring
+	MaxDecimal64Ring
+	MaxDecimal128Ring
 	MaxStrRing
 	// Min
+	MinBoolRing
 	MinInt8Ring
 	MinInt32Ring
 	MinDateRing
@@ -66,6 +71,8 @@ const (
 	MinUInt64Ring
 	MinFloat32Ring
 	MinFloat64Ring
+	MinDecimal64Ring
+	MinDecimal128Ring
 	MinStrRing
 	// Sum
 	SumIntRing

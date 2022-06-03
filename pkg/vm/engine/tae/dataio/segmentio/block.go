@@ -17,6 +17,9 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+	"sync"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,8 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"sync"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
 type blockFile struct {
@@ -50,6 +52,9 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
+	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
+		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -58,6 +63,27 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 			cnt = indexCnt[i]
 		}
 		bf.columns[i] = newColumnBlock(bf, cnt, i)
+	}
+	bf.Ref()
+	return bf
+}
+
+func replayBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+	bf := &blockFile{
+		seg:     seg,
+		id:      id,
+		columns: make([]*columnBlock, colCnt),
+	}
+	bf.deletes = newDeletes(bf)
+	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.OnZeroCB = bf.close
+	for i := range bf.columns {
+		cnt := 0
+		if indexCnt != nil {
+			cnt = indexCnt[i]
+		}
+		bf.columns[i] = openColumnBlock(bf, cnt, i)
 	}
 	bf.Ref()
 	return bf
@@ -88,6 +114,12 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
+	if bf.deletes.file != nil {
+		bf.deletes.mutex.Lock()
+		defer bf.deletes.mutex.Unlock()
+		bf.deletes.file = append(bf.deletes.file,
+			bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)))
+	}
 	return
 }
 
@@ -111,14 +143,14 @@ func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
 	return
 }
 
-func (bf *blockFile) LoadIndexMeta() (*idxCommon.IndicesMeta, error) {
+func (bf *blockFile) LoadIndexMeta() (any, error) {
 	size := bf.indexMeta.Stat().Size()
 	buf := make([]byte, size)
 	_, err := bf.indexMeta.Read(buf)
 	if err != nil {
 		return nil, err
 	}
-	indices := idxCommon.NewEmptyIndicesMeta()
+	indices := indexwrapper.NewEmptyIndicesMeta()
 	if err = indices.Unmarshal(buf); err != nil {
 		return nil, err
 	}
@@ -137,14 +169,6 @@ func (bf *blockFile) OpenColumn(colIdx int) (colBlk file.ColumnBlock, err error)
 
 func (bf *blockFile) Close() error {
 	return nil
-}
-
-func (bf *blockFile) removeData(data *dataFile) {
-	if data.file != nil {
-		for _, file := range data.file {
-			bf.seg.GetSegmentFile().ReleaseFile(file)
-		}
-	}
 }
 
 func (bf *blockFile) Destroy() error {
@@ -276,7 +300,7 @@ func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
 	return
 }
 
-func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) (err error) {
+func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
 	attrs := bat.GetAttrs()
 	var w bytes.Buffer
 	if deletes != nil {

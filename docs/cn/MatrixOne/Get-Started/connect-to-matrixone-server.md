@@ -4,7 +4,7 @@
 
 请确保你已经完成了单机版MatrixOne或者分布式MatrixOne集群的安装部署。
 
-[安装单机版MatrixOne](install-standalone-matrixone.zh.md)
+[安装单机版MatrixOne](install-standalone-matrixone.md)
 
 [部署分布式MatrixOne集群](install-distributed-matrixone.md)
 

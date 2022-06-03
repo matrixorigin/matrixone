@@ -17,6 +17,7 @@ package overload
 const (
 	Top = iota
 	Join
+	Semi
 	Left
 	Limit
 	Merge
@@ -26,6 +27,7 @@ const (
 	Offset
 	Product
 	Restrict
+	Dispatch
 	Connector
 	Projection
 	Complement
@@ -35,4 +37,6 @@ const (
 	MergeOrder
 	MergeGroup
 	MergeOffset
+
+	Deletion
 )

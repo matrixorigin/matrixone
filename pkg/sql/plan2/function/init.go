@@ -2,9 +2,10 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"reflect"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -60,7 +61,7 @@ func appendFunction(fid int, newFunction Function) error {
 	fs := functionRegister[fid]
 
 	requiredIndex := len(fs)
-	if newFunction.Index != requiredIndex {
+	if int(newFunction.Index) != requiredIndex {
 		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex))
 	}
 

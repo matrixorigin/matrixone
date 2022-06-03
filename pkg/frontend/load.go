@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,9 +108,13 @@ type SharePart struct {
 	simdCsvLineArray [][]string
 
 	//storage
-	dbHandler    engine.Database
-	tableHandler engine.Relation
-	txnHandler   *TxnHandler
+	storage        engine.Engine
+	dbHandler      engine.Database
+	tableHandler   engine.Relation
+	dbName         string
+	tableName      string
+	txnHandler     *TxnHandler
+	oneTxnPerBatch bool
 
 	//result of load
 	result *LoadResult
@@ -499,9 +505,13 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.dataColumnId2TableColumnId = handler.dataColumnId2TableColumnId
 	wHandler.batchSize = handler.batchSize
 	wHandler.attrName = handler.attrName
+	wHandler.storage = handler.storage
+	wHandler.dbName = handler.dbName
 	wHandler.dbHandler = handler.dbHandler
 	wHandler.tableHandler = handler.tableHandler
+	wHandler.tableName = handler.tableName
 	wHandler.txnHandler = handler.txnHandler
+	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
@@ -1331,9 +1341,35 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
+		dbHandler := handler.dbHandler
+		txnHandler := handler.txnHandler
+		tableHandler := handler.tableHandler
 		if !handler.skipWriteBatch {
-			err = handler.tableHandler.Write(handler.timestamp, handler.batchData, handler.txnHandler.GetTxn().GetCtx())
+			if handler.oneTxnPerBatch {
+				txnHandler = InitTxnHandler(config.StorageEngine)
+				_, err = txnHandler.StartByAutocommitIfNeeded()
+				if err != nil {
+					goto handleError
+				}
+				dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					goto handleError
+				}
+				tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					goto handleError
+				}
+			}
+			err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+			if handler.oneTxnPerBatch {
+				err = txnHandler.CommitAfterAutocommitOnly()
+				if err != nil {
+					goto handleError
+				}
+			}
 		}
+
+	handleError:
 		handler.ThreadInfo.SetCnt(0)
 		if err == nil {
 			handler.result.Records += uint64(handler.batchSize)
@@ -1345,6 +1381,13 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		} else {
 			logutil.Errorf("write failed. err: %v", err)
 			handler.result.Skipped += uint64(handler.batchSize)
+		}
+
+		if handler.oneTxnPerBatch && err != nil {
+			err2 := txnHandler.RollbackAfterAutocommitOnly()
+			if err2 != nil {
+				logutil.Errorf("rollback failed.error:%v", err2)
+			}
 		}
 
 		handler.writeBatch += time.Since(wait_a)
@@ -1431,9 +1474,35 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				wait_a := time.Now()
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
+				txnHandler := handler.txnHandler
+				tableHandler := handler.tableHandler
+				dbHandler := handler.dbHandler
 				if !handler.skipWriteBatch {
-					err = handler.tableHandler.Write(handler.timestamp, handler.batchData, handler.txnHandler.GetTxn().GetCtx())
+					if handler.oneTxnPerBatch {
+						txnHandler = InitTxnHandler(config.StorageEngine)
+						_, err = txnHandler.StartByAutocommitIfNeeded()
+						if err != nil {
+							goto handleError2
+						}
+						dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+						if err != nil {
+							goto handleError2
+						}
+						//new relation
+						tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+						if err != nil {
+							goto handleError2
+						}
+					}
+					err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+					if handler.oneTxnPerBatch {
+						err = txnHandler.CommitAfterAutocommitOnly()
+						if err != nil {
+							goto handleError2
+						}
+					}
 				}
+			handleError2:
 				handler.ThreadInfo.SetCnt(0)
 				if err == nil {
 					handler.result.Records += uint64(needLen)
@@ -1445,6 +1514,13 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				} else {
 					logutil.Errorf("write failed. err:%v \n", err)
 					handler.result.Skipped += uint64(needLen)
+				}
+
+				if handler.oneTxnPerBatch && err != nil {
+					err2 := txnHandler.RollbackAfterAutocommitOnly()
+					if err2 != nil {
+						logutil.Errorf("rollback failed.error:%v", err2)
+					}
 				}
 			}
 		}
@@ -1515,7 +1591,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	var m sync.Mutex
@@ -1552,9 +1628,13 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			load:                 load,
 			lineIdx:              0,
 			simdCsvLineArray:     make([][]string, curBatchSize),
+			storage:              ses.Pu.StorageEngine,
 			dbHandler:            dbHandler,
 			tableHandler:         tableHandler,
+			tableName:            string(load.Table.Name()),
+			dbName:               dbName,
 			txnHandler:           ses.GetTxnHandler(),
+			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
 			lineCount:            0,
 			batchSize:            curBatchSize,
 			result:               result,
@@ -1615,6 +1695,15 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	err = initParseLineHandler(handler)
 	if err != nil {
 		return nil, err
+	}
+
+	//TODO: remove it after tae is ready
+	if handler.oneTxnPerBatch {
+		txnHandler := ses.GetTxnHandler()
+		err = txnHandler.CommitAfterAutocommitOnly()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	wg := sync.WaitGroup{}

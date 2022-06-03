@@ -46,7 +46,7 @@ type replayer struct {
 	applyEntry      ApplyHandle
 
 	//syncbase
-	addrs    map[uint32]map[int]common.ClosedInterval
+	addrs    map[uint32]map[int]common.ClosedIntervals
 	groupLSN map[uint32]uint64
 
 	//vinfo
@@ -68,13 +68,13 @@ func (r *replayer) updateaddrs(groupId uint32, version int, lsn uint64) {
 	}
 	m, ok := r.addrs[groupId]
 	if !ok {
-		m = make(map[int]common.ClosedInterval)
+		m = make(map[int]common.ClosedIntervals)
 	}
 	interval, ok := m[version]
 	if !ok {
-		interval = common.ClosedInterval{}
+		interval = *common.NewClosedIntervals()
 	}
-	interval.TryMerge(common.ClosedInterval{Start: lsn, End: lsn})
+	interval.TryMerge(*common.NewClosedIntervalsByInt(lsn))
 	m[version] = interval
 	r.addrs[groupId] = m
 }
@@ -93,7 +93,7 @@ func newReplayer(h ApplyHandle) *replayer {
 		checkpoints:     make([]*replayEntry, 0),
 		mergeFuncs:      make(map[uint32]func(pre []byte, curr []byte) []byte),
 		applyEntry:      h,
-		addrs:           make(map[uint32]map[int]common.ClosedInterval),
+		addrs:           make(map[uint32]map[int]common.ClosedIntervals),
 		groupLSN:        make(map[uint32]uint64),
 		vinfoAddrs:      make(map[uint32]map[uint64]int),
 	}
@@ -154,7 +154,7 @@ type replayEntry struct {
 	tid uint64
 	// checkpointRange *common.ClosedInterval
 	payload []byte
-	info    interface{}
+	info    any
 }
 
 func (r *replayEntry) String() string {

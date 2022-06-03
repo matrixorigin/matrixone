@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
@@ -147,7 +148,9 @@ func (entry *BlockEntry) AsCommonID() *common.ID {
 
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
-
+func (entry *BlockEntry) GetFileTs() (uint64, error) {
+	return entry.GetBlockData().GetBlockFile().ReadTS()
+}
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	entry.RLock()
 	currOp := entry.CurrOp
@@ -207,4 +210,8 @@ func (entry *BlockEntry) CloneCreate() CheckpointItem {
 
 func (entry *BlockEntry) DestroyData() (err error) {
 	return entry.blkData.Destroy()
+}
+
+func (entry *BlockEntry) MakeKey() []byte {
+	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
 }

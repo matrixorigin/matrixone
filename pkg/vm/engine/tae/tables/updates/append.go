@@ -28,34 +28,37 @@ import (
 
 type AppendNode struct {
 	sync.RWMutex
-	commitTs   uint64
-	txn        txnif.AsyncTxn
-	logIndex   *wal.Index
-	maxRow     uint32
-	controller *MVCCHandle
-	id         *common.ID
+	commitTs uint64
+	txn      txnif.AsyncTxn
+	logIndex *wal.Index
+	maxRow   uint32
+	mvcc     *MVCCHandle
+	id       *common.ID
 }
 
-func MockAppendNode(ts uint64, maxRow uint32, controller *MVCCHandle) *AppendNode {
+func MockAppendNode(ts uint64, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
-		commitTs:   ts,
-		maxRow:     maxRow,
-		controller: controller,
+		commitTs: ts,
+		maxRow:   maxRow,
+		mvcc:     mvcc,
 	}
 }
 
-func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, controller *MVCCHandle) *AppendNode {
+func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
 	ts := uint64(0)
 	if txn != nil {
 		ts = txn.GetCommitTS()
 	}
 	n := &AppendNode{
-		txn:        txn,
-		maxRow:     maxRow,
-		commitTs:   ts,
-		controller: controller,
+		txn:      txn,
+		maxRow:   maxRow,
+		commitTs: ts,
+		mvcc:     mvcc,
 	}
 	return n
+}
+func (n *AppendNode) SetLogIndex(idx *wal.Index) {
+	n.logIndex = idx
 }
 func (n *AppendNode) GetID() *common.ID {
 	return n.id
@@ -75,16 +78,16 @@ func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 	}
 	n.txn = nil
 	n.logIndex = index
-	if n.controller != nil {
+	if n.mvcc != nil {
 		logutil.Debugf("Set MaxCommitTS=%d, MaxVisibleRow=%d", n.commitTs, n.maxRow)
-		n.controller.SetMaxVisible(n.commitTs)
+		n.mvcc.SetMaxVisible(n.commitTs)
 	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	return nil
 }
 
 func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
-	cn, err := w.Write(txnbase.MarshalID(node.controller.GetID()))
+	cn, err := w.Write(txnbase.MarshalID(node.mvcc.GetID()))
 	if err != nil {
 		return
 	}
@@ -92,7 +95,11 @@ func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, node.maxRow); err != nil {
 		return
 	}
-	n = 4
+	n += 4
+	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
+		return
+	}
+	n += 8
 	return
 }
 
@@ -107,7 +114,11 @@ func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &node.maxRow); err != nil {
 		return
 	}
-	n = 4
+	n += 4
+	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
+		return
+	}
+	n += 8
 	return
 }
 

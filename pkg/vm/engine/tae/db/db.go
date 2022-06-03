@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -70,7 +71,7 @@ func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 func (db *DB) GetTxnByCtx(ctx []byte) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxnByCtx(ctx)
 	if txn == nil {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 	}
 	return
 }
@@ -78,7 +79,7 @@ func (db *DB) GetTxnByCtx(ctx []byte) (txn txnif.AsyncTxn, err error) {
 func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 	}
 	return
 }

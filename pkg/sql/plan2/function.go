@@ -98,7 +98,7 @@ var BuiltinFunctions = [...]*FunctionSig{
 	// Functions
 	{"ABS", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYNUMBER}, []int8{0}},
 	{"ACOS", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
-	{"ADDDATE", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_INTERVAL}, []int8{0, 1}},
+	{"ADDDATE", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_ANY, plan.Type_INT8}, []int8{0, 1, 2}},
 	{"ADDTIME", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_TIME}, []int8{0, 1}},
 	{"AES_DECRYPT", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
 	{"AES_ENCRYPT", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
@@ -142,14 +142,17 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"CURRENT_DATE", plan.Function_STABLE, NOPARAMETER_FUNCTION, []plan.Type_TypeId{plan.Type_DATE}, []int8{}},
 	{"CURRENT_TIMESTAMP", plan.Function_STABLE, NOPARAMETER_FUNCTION, []plan.Type_TypeId{plan.Type_TIMESTAMP}, []int8{}},
 
+	{"DATE", plan.Function_STRICT, DATE_INTERVAL_EXPRESSION, []plan.Type_TypeId{plan.Type_DATE, plan.Type_VARCHAR}, []int8{1}},
 	{"DATE_FROM_PARTS", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_DATE, plan.Type_INT32}, []int8{1, 1, 1}},
 	{"DATE_PART", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_INT32, plan.Type_VARCHAR, plan.Type_ANYTIME}, []int8{1, 2}},
-	{"DATEADD", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_VARCHAR, plan.Type_INT64}, []int8{1, 2, 0}},
+	{"DATE_ADD", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_ANY, plan.Type_INT8}, []int8{0, 1, 2}},
 	{"DATEDIFF", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_INT64, plan.Type_VARCHAR, plan.Type_ANYTIME}, []int8{1, 2, 2}},
+	{"DATE_SUB", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_ANY, plan.Type_INT8}, []int8{0, 1, 2}},
 	{"DENSE_RANK", plan.Function_WIN, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_INT32}, []int8{}},
 
 	{"ENDSWITH", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_VARCHAR}, []int8{1, 1}},
 	{"EXP", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
+	{"EXTRACT", plan.Function_STRICT, EXTRACT_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_VARCHAR}, []int8{1, 0}},
 
 	{"FIRST_VALUE", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
 	{"FLOOR", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYNUMBER, plan.Type_INT32}, []int8{0, -1}},
@@ -169,6 +172,7 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"ILIKE_ALL", plan.Function_STRICT | plan.Function_VARARG, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
 	{"ILIKE_ANY", plan.Function_STRICT | plan.Function_VARARG, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
 	{"IN", plan.Function_STRICT, IN_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ANY, plan.Type_ARRAY}, []int8{1, 2}},
+	{"INTERVAL", plan.Function_STRICT, DATE_INTERVAL_EXPRESSION, []plan.Type_TypeId{plan.Type_INTERVAL, plan.Type_VARCHAR}, []int8{1}},
 
 	{"LAG", plan.Function_WIN, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANY, plan.Type_INT32, plan.Type_ANY}, []int8{1, 2}},
 	{"LAST_VALUE", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
@@ -219,10 +223,12 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"STARTSWITH", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_VARCHAR}, []int8{1, 1}},
 	{"STDDEV_POP", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
 	{"STDDEV_SAMPLE", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
-	{"SUBSTR", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_INT32}, []int8{0, 0, -1}},
+	{"SUBSTR", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_INT32}, []int8{0, 1, -1}},
+	{"SUBSTRING", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_INT32}, []int8{0, 1, -1}},
 	{"SUM", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYNUMBER, plan.Type_ANYNUMBER}, []int8{1}},
 
 	{"TAN", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
+	{"TIMESTAMPADD", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_INT8, plan.Type_ANY}, []int8{1, 2, 0}},
 	{"TO_INTERVAL", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_INTERVAL, plan.Type_INT32, plan.Type_VARCHAR}, []int8{1, 2}},
 	{"TRANSLATE", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
 	{"TRIM", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
@@ -234,13 +240,7 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"VAR_SAMPLE", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
 
 	// add for subquery
-	{"EXISTS", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 	{"ALL", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 	{"ANY", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
-
-	// add for tpch
-	{"DATE", plan.Function_STRICT, DATE_INTERVAL_EXPRESSION, []plan.Type_TypeId{plan.Type_DATE, plan.Type_VARCHAR}, []int8{1}},
-	{"INTERVAL", plan.Function_STRICT, DATE_INTERVAL_EXPRESSION, []plan.Type_TypeId{plan.Type_INTERVAL, plan.Type_VARCHAR}, []int8{1}},
-	{"EXTRACT", plan.Function_STRICT, EXTRACT_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_VARCHAR}, []int8{1, 0}},
-	{"SUBSTRING", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_ANYINT}, []int8{0, 1, 1}},
+	{"EXISTS", plan.Function_STRICT, EXISTS_ANY_PREDICATE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 }

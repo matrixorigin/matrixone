@@ -16,9 +16,9 @@ package moengine
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -27,10 +27,16 @@ var (
 	_ engine.Relation = (*txnRelation)(nil)
 )
 
+const ADDR = "localhost:20000"
+
 func newRelation(h handle.Relation) *txnRelation {
-	return &txnRelation{
+	r := &txnRelation{
 		handle: h,
 	}
+	r.nodes = append(r.nodes, engine.Node{
+		Addr: ADDR,
+	})
+	return r
 }
 
 func (rel *txnRelation) ID(_ engine.Snapshot) string {
@@ -40,7 +46,7 @@ func (rel *txnRelation) ID(_ engine.Snapshot) string {
 func (rel *txnRelation) Close(_ engine.Snapshot) {}
 
 func (rel *txnRelation) Nodes(_ engine.Snapshot) (nodes engine.Nodes) {
-	return
+	return rel.nodes
 }
 
 func (_ *txnRelation) Size(_ string) int64 {
@@ -52,25 +58,24 @@ func (_ *txnRelation) CardinalNumber(_ string) int64 {
 }
 
 func (_ *txnRelation) CreateIndex(_ uint64, _ []engine.TableDef) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (_ *txnRelation) DropIndex(_ uint64, _ string) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (_ *txnRelation) AddTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (_ *txnRelation) DelTableDef(u uint64, def engine.TableDef, _ engine.Snapshot) error {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func (rel *txnRelation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
-	info := SchemaToTableInfo(schema)
-	_, _, _, _, defs, _ := helper.UnTransfer(info)
+	defs, _ := SchemaToDefs(schema)
 	return defs
 }
 
@@ -79,15 +84,37 @@ func (rel *txnRelation) Rows() int64 {
 }
 
 func (_ *txnRelation) Index() []*engine.IndexTableDef {
-	panic("implement me")
+	panic(any("implement me"))
+}
+
+func (rel *txnRelation) GetPrimaryKeys(_ engine.Snapshot) (attrs []*engine.Attribute) {
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	if !schema.HasPK() {
+		return
+	}
+	for _, def := range schema.SortKey.Defs {
+		attr := new(engine.Attribute)
+		attr.Name = def.Name
+		attr.Type = def.Type
+		attrs = append(attrs, attr)
+	}
+	return
+}
+
+func (rel *txnRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	key := new(engine.Attribute)
+	key.Name = schema.HiddenKey.Name
+	key.Type = schema.HiddenKey.Type
+	return key
 }
 
 func (rel *txnRelation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	attrs := make([]engine.Attribute, 1)
-	attrs[0].Name = schema.ColDefs[schema.PrimaryKey].Name
-	attrs[0].Type = schema.ColDefs[schema.PrimaryKey].Type
-	return attrs, true
+	attrs[0].Name = schema.HiddenKey.Name
+	attrs[0].Type = schema.HiddenKey.Type
+	return attrs, false
 }
 
 func (rel *txnRelation) Attribute() []engine.Attribute {
@@ -103,6 +130,10 @@ func (rel *txnRelation) Attribute() []engine.Attribute {
 
 func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	return rel.handle.Append(bat)
+}
+
+func (rel *txnRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+	panic(any("implement me"))
 }
 
 func (rel *txnRelation) NewReader(num int, _ extend.Extend, _ []byte, _ engine.Snapshot) (rds []engine.Reader) {

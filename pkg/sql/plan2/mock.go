@@ -47,8 +47,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 	moSchema := make(map[string][]col)
 
 	schemas := map[string]map[string][]col{
-		"tpch": tpchSchema,
-		"mo":   moSchema,
+		"tpch":       tpchSchema,
+		"mo_catalog": moSchema,
 	}
 
 	tpchSchema["nation"] = []col{
@@ -212,6 +212,14 @@ func (m *MockCompilerContext) DefaultDatabase() string {
 func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectRef, *TableDef) {
 	name := strings.ToLower(tableName)
 	return m.objects[name], m.tables[name]
+}
+
+func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*ColDef {
+	return nil
+}
+
+func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *ColDef {
+	return nil
 }
 
 func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {

@@ -35,17 +35,9 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 
 	// get database name
 	if len(stmt.Table.SchemaName) == 0 {
-		createTable.Database = ctx.DefaultDatabase()
+		createTable.Database = ""
 	} else {
 		createTable.Database = string(stmt.Table.SchemaName)
-	}
-
-	// get table name
-	if !stmt.IfNotExists {
-		_, def := ctx.Resolve(createTable.Database, createTable.TableDef.Name)
-		if def != nil {
-			return nil, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table '%v' exist", createTable.TableDef.Name))
-		}
 	}
 
 	// set tableDef
@@ -217,6 +209,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			},
 		})
 	}
+
 	return nil
 }
 
@@ -225,22 +218,13 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 	}
 	if len(stmt.Names) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("support drop one table now"))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one table now")
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {
 		dropTable.Database = ctx.DefaultDatabase()
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
-	if !stmt.IfExists {
-		if !ctx.DatabaseExists(dropTable.Database) {
-			return nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("database '%v' doesn't exist", dropTable.Database))
-		}
-		_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
-		if tableDef == nil {
-			return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", dropTable.Table))
-		}
-	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -259,11 +243,6 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 		IfNotExists: stmt.IfNotExists,
 		Database:    string(stmt.Name),
 	}
-	if !stmt.IfNotExists {
-		if ctx.DatabaseExists(createDb.Database) {
-			return nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("database '%v' exist", createDb.Database))
-		}
-	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -281,12 +260,6 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 	dropDb := &plan.DropDatabase{
 		IfExists: stmt.IfExists,
 		Database: string(stmt.Name),
-	}
-
-	if !stmt.IfExists {
-		if !ctx.DatabaseExists(dropDb.Database) {
-			return nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("database '%v' doesn't exist", dropDb.Database))
-		}
 	}
 
 	return &Plan{

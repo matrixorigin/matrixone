@@ -62,8 +62,8 @@ func init() {
 	pools = make([]sync.Pool, len(PageSizes))
 	for idx := range PageSizes {
 		pools[idx] = sync.Pool{
-			New: func(i int) func() interface{} {
-				return func() interface{} {
+			New: func(i int) func() any {
+				return func() any {
 					n := &MemNode{
 						idx: uint8(i),
 						Buf: make([]byte, PageSizes[i]),
@@ -121,12 +121,12 @@ type poolWrapper struct {
 	idx   int
 }
 
-func (p *poolWrapper) Get() interface{} {
+func (p *poolWrapper) Get() any {
 	atomic.AddUint64(&p.count, uint64(1))
 	return p.Pool.Get()
 }
 
-func (p *poolWrapper) Put(x interface{}) {
+func (p *poolWrapper) Put(x any) {
 	atomic.AddUint64(&p.count, ^uint64(0))
 	p.Pool.Put(x)
 }

@@ -43,7 +43,7 @@ func (blk *dataBlock) FlushColumnDataClosure(ts uint64, colIdx int, colData *gve
 	}
 }
 
-func (blk *dataBlock) ABlkFlushDataClosure(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) tasks.FuncT {
+func (blk *dataBlock) ABlkFlushDataClosure(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) tasks.FuncT {
 	return func() error {
 		return blk.ABlkFlushData(ts, bat, masks, vals, deletes)
 	}
@@ -61,7 +61,10 @@ func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
 	if endTs <= ckpTs {
 		return
 	}
-	view := blk.CollectChangesInRange(ckpTs+1, endTs)
+	view, err := blk.CollectChangesInRange(ckpTs+1, endTs)
+	if err != nil {
+		return
+	}
 	cnt := 0
 	for _, idxes := range view.ColLogIndexes {
 		cnt += len(idxes)
@@ -85,12 +88,21 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	if endTs <= ckpTs {
 		return
 	}
-	indexes := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
-	view := blk.CollectChangesInRange(ckpTs+1, endTs)
+	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, endTs+1)
+	if err != nil {
+		return
+	}
+	view, err := blk.CollectChangesInRange(ckpTs+1, endTs+1)
+	if err != nil {
+		return
+	}
 	for _, idxes := range view.ColLogIndexes {
 		if err = blk.scheduler.Checkpoint(idxes); err != nil {
 			return
 		}
+		// for _, index := range idxes {
+		// 	logutil.Infof("Ckp1Index  %s", index.String())
+		// }
 	}
 	if err = blk.scheduler.Checkpoint(indexes); err != nil {
 		return
@@ -100,6 +112,9 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	}
 	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, len(indexes), blk.meta.String())
 	// for _, index := range indexes {
+	// 	logutil.Infof("Ckp1Index  %s", index.String())
+	// }
+	// for _, index := range view.DeleteLogIndexes {
 	// 	logutil.Infof("Ckp1Index  %s", index.String())
 	// }
 	blk.SetMaxCheckpointTS(endTs)
@@ -144,8 +159,11 @@ func (blk *dataBlock) ForceCompact() (err error) {
 		return
 	}
 	blk.mvcc.RLock()
-	maxRow, _ := blk.mvcc.GetMaxVisibleRowLocked(ts)
+	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
+	if err != nil {
+		return
+	}
 	view, err := blk.node.GetColumnsView(maxRow)
 	if err != nil {
 		return
@@ -165,7 +183,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	return
 }
 
-func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) (err error) {
+func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
 	flushTs := blk.node.GetBlockMaxFlushTS()
 	if ts <= flushTs {
 		logutil.Infof("FLUSH ABLK | [%s] | CANCELLED | (Stale Request: Already Flushed)", blk.meta.String())

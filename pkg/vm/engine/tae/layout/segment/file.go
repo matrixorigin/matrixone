@@ -31,26 +31,14 @@ func (b *BlockFile) GetSegement() *Segment {
 	return b.segment
 }
 
-func (b *BlockFile) GetInode() uint64 {
-	return b.snode.inode
-}
-
-func (b *BlockFile) GetFileSize() int64 {
+func (b *BlockFile) GetInode() *Inode {
 	b.snode.mutex.RLock()
 	defer b.snode.mutex.RUnlock()
-	return int64(b.snode.size)
+	return b.snode
 }
 
-func (b *BlockFile) GetOriginSize() int64 {
-	b.snode.mutex.RLock()
-	defer b.snode.mutex.RUnlock()
-	return int64(b.snode.originSize)
-}
-
-func (b *BlockFile) GetAlgo() uint8 {
-	b.snode.mutex.RLock()
-	defer b.snode.mutex.RUnlock()
-	return b.snode.algo
+func (b *BlockFile) SetRows(rows uint32) {
+	b.snode.rows = rows
 }
 
 func (b *BlockFile) GetName() string {

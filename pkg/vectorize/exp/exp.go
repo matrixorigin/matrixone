@@ -15,6 +15,7 @@
 package exp
 
 import (
+	"golang.org/x/exp/constraints"
 	"math"
 )
 
@@ -116,4 +117,11 @@ func expFloat64(xs []float64, rs []float64) []float64 {
 
 func Exponential(value float64) float64 {
 	return math.Exp(value)
+}
+
+func Exp[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) []float64 {
+	for i, n := range inputValues {
+		resultValues[i] = math.Exp(float64(n))
+	}
+	return resultValues
 }

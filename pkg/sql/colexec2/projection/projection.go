@@ -40,7 +40,10 @@ func Prepare(_ *process.Process, _ interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
 	ap := arg.(*Argument)
@@ -53,13 +56,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			return false, err
 		}
 		rbat.Vecs[i] = vec
+	}
+	for _, vec := range rbat.Vecs {
 		for k := 0; k < len(bat.Vecs); k++ {
 			if vec == bat.Vecs[k] {
-				bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
+				bat.Vecs = append(bat.Vecs[:k], bat.Vecs[k+1:]...)
 				break
 			}
 		}
 	}
+	rbat.Zs = bat.Zs
 	bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = rbat
 	return false, nil

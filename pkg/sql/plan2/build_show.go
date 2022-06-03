@@ -25,31 +25,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+const MO_CATALOG_DB_NAME = "mo_catalog"
+
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
 		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", stmt.Name))
 	}
 
-	sql := fmt.Sprintf("SELECT md.datname as `Database` FROM mo_database md WHERE md.datname = '%s'", stmt.Name)
+	sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
 func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Plan, error) {
 	sql := `
 		SELECT mc.* 
-			FROM mo_tables mt JOIN mo_columns mc 
+			FROM %s.mo_tables mt JOIN %s.mo_columns mc 
 				ON mt.relname = mc.att_relname 
 		WHERE mt.reldatabase = '%s' AND mt.relname = '%s'
 	`
-	dbName := ctx.DefaultDatabase()
 	tblName := stmt.Name.Parts[0]
+	dbName := ctx.DefaultDatabase()
+	if stmt.Name.NumParts == 2 {
+		dbName = stmt.Name.Parts[1]
+	}
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
 		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
 	}
 
-	sql = fmt.Sprintf(sql, dbName, tblName)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	// log.Println(sql)
 
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
@@ -60,7 +65,7 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
 	ddlType := plan.DataDefinition_SHOW_DATABASES
-	sql := "SELECT datname `Database` FROM mo_database"
+	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
@@ -93,7 +98,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TABLES
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM mo_tables WHERE reldatabase = '%s'", dbName, dbName)
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM %s.mo_tables WHERE reldatabase = '%s'", dbName, MO_CATALOG_DB_NAME, dbName)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
@@ -132,9 +137,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 
-	sql = fmt.Sprintf(sql, dbName, tblName)
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSql(ctx, sql, stmt.Where, ddlType)
@@ -163,14 +168,14 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 		Global: stmt.Global,
 	}
 	if stmt.Like != nil {
-		expr, err := buildComparisonExpr(stmt.Like, ctx, nil, nil, nil)
+		expr, _, err := buildComparisonExpr(stmt.Like, ctx, nil, nil, nil, false)
 		if err != nil {
 			return nil, err
 		}
 		showVariables.Where = append(showVariables.Where, expr)
 	}
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil, nil)
+		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil, nil, false)
 		if err != nil {
 			return nil, err
 		}

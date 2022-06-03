@@ -8,6 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -81,27 +82,27 @@ func (db *txnDB) Close() error {
 	return err
 }
 
-func (db *txnDB) BatchDedup(id uint64, pks *vector.Vector) (err error) {
+func (db *txnDB) BatchDedup(id uint64, pks ...*vector.Vector) (err error) {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
 
-	return table.BatchDedup(pks)
+	return table.DoBatchDedup(pks...)
 }
 
-func (db *txnDB) Append(id uint64, data *batch.Batch) error {
+func (db *txnDB) Append(id uint64, bat *batch.Batch) error {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
-	return table.Append(data)
+	return table.Append(bat)
 }
 
 func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
@@ -110,7 +111,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32) (err error) {
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
 	return table.RangeDelete(id, start, end)
 }
@@ -121,36 +122,36 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 		return
 	}
 	if table.IsDeleted() {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 	return table.GetByFilter(filter)
 }
 
-func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v interface{}, err error) {
+func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return
 	}
 	if table.IsDeleted() {
-		err = txnbase.ErrNotFound
+		err = data.ErrNotFound
 		return
 	}
 	return table.GetValue(id, row, colIdx)
 }
 
-func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
+func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err error) {
 	table, err := db.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
 	}
 	if table.IsDeleted() {
-		return txnbase.ErrNotFound
+		return data.ErrNotFound
 	}
 	return table.Update(id, row, colIdx, v)
 }
 
-func (db *txnDB) CreateRelation(def interface{}) (relation handle.Relation, err error) {
+func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 	db.store.IncreateWriteCnt()
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
@@ -323,7 +324,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 
 func (db *txnDB) PreCommit() (err error) {
 	for _, table := range db.tables {
-		if err = table.PreCommitDededup(); err != nil {
+		if err = table.PreCommitDedup(); err != nil {
 			return
 		}
 	}
@@ -347,9 +348,6 @@ func (db *txnDB) PrepareCommit() (err error) {
 			break
 		}
 	}
-	for _, table := range db.tables {
-		table.ApplyAppend()
-	}
 	if db.dropEntry != nil {
 		if err = db.dropEntry.PrepareCommit(); err != nil {
 			return
@@ -358,6 +356,16 @@ func (db *txnDB) PrepareCommit() (err error) {
 
 	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 
+	return
+}
+
+func (db *txnDB) PreApplyCommit() (err error) {
+	for _, table := range db.tables {
+		// table.ApplyAppend()
+		if err = table.PreApplyCommit(); err != nil {
+			return
+		}
+	}
 	return
 }
 
@@ -373,7 +381,7 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 	}
 	for _, table := range db.tables {
 		if err = table.CollectCmd(cmdMgr); err != nil {
-			panic(err)
+			return
 		}
 	}
 	if db.dropEntry != nil {

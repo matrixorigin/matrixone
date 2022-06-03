@@ -15,18 +15,18 @@
 package sm
 
 type OnFinCB = func()
-type EnqueueOp = func(interface{}) interface{}
-type OnItemsCB = func(...interface{})
+type EnqueueOp = func(any) any
+type OnItemsCB = func(...any)
 
 type Queue interface {
 	Start()
 	Stop()
-	Enqueue(interface{}) (interface{}, error)
+	Enqueue(any) (any, error)
 }
 
 type StateMachine interface {
 	Start()
 	Stop()
-	EnqueueRecevied(interface{}) (interface{}, error)
-	EnqueueCheckpoint(interface{}) (interface{}, error)
+	EnqueueRecevied(any) (any, error)
+	EnqueueCheckpoint(any) (any, error)
 }

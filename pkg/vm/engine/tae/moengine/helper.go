@@ -15,87 +15,63 @@
 package moengine
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-func SchemaToTableInfo(schema *catalog.Schema) aoe.TableInfo {
-	tblInfo := aoe.TableInfo{
-		Name:    schema.Name,
-		Columns: make([]aoe.ColumnInfo, 0),
-		Indices: make([]aoe.IndexInfo, 0),
+func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
+	if schema.Comment != "" {
+		commentDef := new(engine.CommentDef)
+		commentDef.Comment = schema.Comment
+		defs = append(defs, commentDef)
 	}
-	for idx, colDef := range schema.ColDefs {
-		col := aoe.ColumnInfo{
-			Name: colDef.Name,
-			Type: colDef.Type,
+	for _, col := range schema.ColDefs {
+		if col.IsHidden() {
+			continue
 		}
-		if idx == int(schema.PrimaryKey) {
-			col.PrimaryKey = true
+		def := &engine.AttributeDef{
+			Attr: engine.Attribute{
+				Name:    col.Name,
+				Type:    col.Type,
+				Primary: col.IsPrimary(),
+			},
 		}
-		tblInfo.Columns = append(tblInfo.Columns, col)
+		defs = append(defs, def)
 	}
-	return tblInfo
+	if schema.SortKey != nil && schema.SortKey.IsPrimary() {
+		pk := new(engine.PrimaryIndexDef)
+		for _, def := range schema.SortKey.Defs {
+			pk.Names = append(pk.Names, def.Name)
+		}
+		defs = append(defs, pk)
+	}
+	return
 }
 
-func MockTableInfo(colCnt int) *aoe.TableInfo {
-	tblInfo := &aoe.TableInfo{
-		Name:    "mocktbl",
-		Columns: make([]aoe.ColumnInfo, 0),
-		Indices: make([]aoe.IndexInfo, 0),
+func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, err error) {
+	schema = catalog.NewEmptySchema(name)
+	pkMap := make(map[string]int)
+	for _, def := range defs {
+		if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
+			for i, name := range pkDef.Names {
+				pkMap[name] = i
+			}
+			break
+		}
 	}
-	prefix := "mock_"
-	indexId := 0
-	for i := 0; i < colCnt; i++ {
-		name := fmt.Sprintf("%s%d", prefix, i)
-		colInfo := aoe.ColumnInfo{
-			Name: name,
+	for _, def := range defs {
+		if attrDef, ok := def.(*engine.AttributeDef); ok {
+			if idx, ok := pkMap[attrDef.Attr.Name]; ok {
+				if err = schema.AppendPKCol(attrDef.Attr.Name, attrDef.Attr.Type, idx); err != nil {
+					return
+				}
+			} else {
+				if err = schema.AppendCol(attrDef.Attr.Name, attrDef.Attr.Type); err != nil {
+					return
+				}
+			}
 		}
-		if i == 1 {
-			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
-		} else {
-			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
-		}
-		indexId++
-		indexInfo := aoe.IndexInfo{
-			Type:    aoe.IndexT(catalog.ZoneMap),
-			Columns: []uint64{uint64(i)},
-			Name:    fmt.Sprintf("idx-%d", indexId),
-		}
-		tblInfo.Columns = append(tblInfo.Columns, colInfo)
-		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
 	}
-	return tblInfo
-}
-
-func MockIndexInfo() *aoe.IndexInfo {
-	idxInfo := aoe.IndexInfo{
-		Type:    aoe.IndexT(catalog.ZoneMap),
-		Columns: []uint64{uint64(0)},
-		Name:    fmt.Sprintf("idx-%d", 0),
-	}
-	return &idxInfo
-}
-
-func TableInfoToSchema(info *aoe.TableInfo) *catalog.Schema {
-	schema := catalog.NewEmptySchema(info.Name)
-	for idx, colInfo := range info.Columns {
-		newInfo := &catalog.ColDef{
-			Name: colInfo.Name,
-			Idx:  idx,
-			Type: colInfo.Type,
-		}
-		if colInfo.PrimaryKey {
-			schema.PrimaryKey = int32(idx)
-			logutil.Debugf("Table to schema, schema.PrimaryKey is %d, its name is %v.", schema.PrimaryKey, colInfo.Name)
-		}
-		schema.NameIndex[newInfo.Name] = len(schema.ColDefs)
-		schema.ColDefs = append(schema.ColDefs, newInfo)
-	}
-
-	return schema
+	schema.Finalize(false)
+	return
 }

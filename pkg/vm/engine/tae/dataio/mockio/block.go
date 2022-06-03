@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
 type blockFile struct {
@@ -105,14 +105,14 @@ func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
 	return
 }
 
-func (bf *blockFile) LoadIndexMeta() (*idxCommon.IndicesMeta, error) {
+func (bf *blockFile) LoadIndexMeta() (any, error) {
 	size := bf.indexMeta.Stat().Size()
 	buf := make([]byte, size)
 	_, err := bf.indexMeta.Read(buf)
 	if err != nil {
 		return nil, err
 	}
-	indices := idxCommon.NewEmptyIndicesMeta()
+	indices := indexwrapper.NewEmptyIndicesMeta()
 	if err = indices.Unmarshal(buf); err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
 	return
 }
 
-func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) (err error) {
+func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
 	attrs := bat.GetAttrs()
 	var w bytes.Buffer
 	if deletes != nil {

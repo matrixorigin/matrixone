@@ -21,63 +21,69 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
+	constBType = types.Type{Oid: types.T_bool}
 	constIType = types.Type{Oid: types.T_int64}
 	constDType = types.Type{Oid: types.T_float64}
 	constSType = types.Type{Oid: types.T_varchar}
 )
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+	var vec *vector.Vector
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
-		var vec *vector.Vector
 		if t.C.GetIsnull() {
-			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.Id)})
+			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())})
 			nulls.Add(vec.Nsp, 0)
 		} else {
 			switch t.C.GetValue().(type) {
-			case *plan.Const_Dval:
-				vec = vector.NewConst(constIType)
-				data := mempool.Alloc(proc.Mp.Mp, 8)
-				cs := encoding.DecodeInt64Slice(data)
-				cs = cs[:1]
-				cs[0] = t.C.GetIval()
+			case *plan.Const_Bval:
+				vec = vector.NewConst(constBType)
+				vec.Col = []bool{t.C.GetBval()}
 			case *plan.Const_Ival:
+				vec = vector.NewConst(constIType)
+				vec.Col = []int64{t.C.GetIval()}
+			case *plan.Const_Dval:
 				vec = vector.NewConst(constDType)
-				data := mempool.Alloc(proc.Mp.Mp, 8)
-				cs := encoding.DecodeFloat64Slice(data)
-				cs = cs[:1]
-				cs[0] = t.C.GetDval()
+				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Sval:
 				vec = vector.NewConst(constSType)
-				vec.Col = []string{t.C.GetSval()}
+				sval := t.C.GetSval()
+				vec.Col = &types.Bytes{
+					Data:    []byte(sval),
+					Offsets: []uint32{0},
+					Lengths: []uint32{uint32(len(sval))},
+				}
+			default:
+				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
 		}
 		vec.Length = len(bat.Zs)
 		return vec, nil
+	case *plan.Expr_T:
+		// return a vector recorded type information but without real data
+		return vector.New(types.Type{
+			Oid:       types.T(t.T.Typ.GetId()),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
+		}), nil
 	case *plan.Expr_Col:
 		return bat.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
-		fid, overloadIndex := int(t.F.Func.GetSchema()), int(t.F.Func.GetDb())
-		f, err := function.GetFunctionByIndex(fid, overloadIndex)
+		overloadId := t.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
 		if err != nil {
 			return nil, err
 		}
-		// for test, remove it finally
-		if f.IsAggregate() {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "aggregate function's eval shouldn't reach here")
-		}
-		//
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
 			v, err := EvalExpr(bat, proc, t.F.Args[i])
@@ -86,9 +92,40 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			}
 			vs[i] = v
 		}
-		return f.VecFn(vs, proc)
+		vec, err = f.VecFn(vs, proc)
+		if err != nil {
+			return nil, err
+		}
+		vec.Length = len(bat.Zs)
+		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))
+	}
+}
+
+// RewriteFilterExprList will convert an expression list to be an AndExpr
+func RewriteFilterExprList(list []*plan.Expr) *plan.Expr {
+	l := len(list)
+	if l == 0 {
+		return nil
+	} else if l == 1 {
+		return list[0]
+	} else {
+		left := list[0]
+		right := RewriteFilterExprList(list[1:])
+		return &plan.Expr{
+			Typ:  left.Typ,
+			Expr: makeAndExpr(left, right),
+		}
+	}
+}
+
+func makeAndExpr(left, right *plan.Expr) *plan.Expr_F {
+	return &plan.Expr_F{
+		F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: function.AndFunctionEncodedID},
+			Args: []*plan.Expr{left, right},
+		},
 	}
 }

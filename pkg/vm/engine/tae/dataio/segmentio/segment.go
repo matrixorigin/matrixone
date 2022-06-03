@@ -15,16 +15,24 @@
 package segmentio
 
 import (
+	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
-	"sync"
 )
 
 var SegmentFileIOFactory = func(name string, id uint64) file.Segment {
 	return newSegmentFile(name, id)
+}
+
+var SegmentFileIOOpenFactory = func(name string, id uint64) file.Segment {
+	return openSegment(name, id)
 }
 
 type segmentFile struct {
@@ -37,6 +45,24 @@ type segmentFile struct {
 	seg    *segment.Segment
 }
 
+func openSegment(name string, id uint64) *segmentFile {
+	sf := &segmentFile{
+		blocks: make(map[uint64]*blockFile),
+		name:   name,
+	}
+	sf.seg = &segment.Segment{}
+	err := sf.seg.Open(sf.name)
+	if err != nil {
+		return nil
+	}
+	sf.id = &common.ID{
+		SegmentID: id,
+	}
+	sf.Ref()
+	sf.OnZeroCB = sf.close
+	return sf
+}
+
 func (sf *segmentFile) RemoveBlock(id uint64) {
 	sf.Lock()
 	defer sf.Unlock()
@@ -45,6 +71,97 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 		return
 	}
 	delete(sf.blocks, id)
+}
+
+func (sf *segmentFile) replayInfo(stat *fileStat, file *segment.BlockFile) {
+	meta := file.GetInode()
+	stat.size = meta.GetFileSize()
+	stat.originSize = meta.GetOriginSize()
+	stat.algo = meta.GetAlgo()
+	stat.name = file.GetName()
+}
+
+func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+	err := sf.seg.Replay(cache)
+	if err != nil {
+		return err
+	}
+	nodes := sf.seg.GetNodes()
+	sf.Lock()
+	defer sf.Unlock()
+	for name, file := range nodes {
+		tmpName := strings.Split(name, ".")
+		fileName := strings.Split(tmpName[0], "_")
+		if len(fileName) < 2 {
+			continue
+		}
+		id, err := strconv.ParseUint(fileName[1], 10, 32)
+		if err != nil {
+			return err
+		}
+		bf := sf.blocks[id]
+		if bf == nil {
+			bf = replayBlock(id, sf, colCnt, indexCnt)
+			sf.blocks[id] = bf
+		}
+		col, err := strconv.ParseUint(fileName[0], 10, 32)
+		if err != nil {
+			return err
+		}
+		var ts uint64 = 0
+		if len(fileName) > 2 {
+			ts, err = strconv.ParseUint(fileName[2], 10, 64)
+			if err != nil {
+				return err
+			}
+		}
+		switch tmpName[1] {
+		case "blk":
+			if ts == 0 {
+				bf.columns[col].ts = 0
+				bf.columns[col].data.file[0] = file
+				sf.replayInfo(bf.columns[col].data.stat, file)
+				break
+			}
+			if bf.columns[col].ts < ts {
+				bf.columns[col].ts = ts
+				bf.columns[col].data.file[0] = file
+				sf.replayInfo(bf.columns[col].data.stat, file)
+			}
+			if bf.ts <= ts {
+				bf.ts = ts
+				bf.rows = file.GetInode().GetRows()
+			}
+		case "update":
+			if ts == 0 {
+				bf.columns[col].ts = 0
+				bf.columns[col].updates.file[0] = file
+				sf.replayInfo(bf.columns[col].updates.stat, file)
+				break
+			}
+			if bf.columns[col].ts < ts {
+				bf.columns[col].ts = ts
+				bf.columns[col].updates.file[0] = file
+				sf.replayInfo(bf.columns[col].updates.stat, file)
+			}
+		case "del":
+			if ts == 0 {
+				bf.ts = 0
+				bf.deletes.file[0] = file
+				sf.replayInfo(bf.deletes.stat, file)
+				break
+			}
+			if bf.ts < ts {
+				bf.ts = ts
+				bf.deletes.file[0] = file
+				sf.replayInfo(bf.deletes.stat, file)
+			}
+		default:
+			panic(any("No Support"))
+		}
+
+	}
+	return nil
 }
 
 func newSegmentFile(name string, id uint64) *segmentFile {

@@ -31,7 +31,7 @@ type syncBase struct {
 	syncing                      map[uint32]uint64
 	checkpointed, synced, ckpCnt *syncMap
 	uncommits                    map[uint32][]uint64
-	addrs                        map[uint32]map[int]common.ClosedInterval //group-version-glsn range
+	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 }
 
@@ -93,6 +93,14 @@ func (info *checkpointInfo) GetCheckpointed() uint64 {
 	return info.ranges.Intervals[0].End
 }
 
+func (info *checkpointInfo) String() string {
+	s := fmt.Sprintf("range %v, partial ", info.ranges)
+	for lsn, partial := range info.partial {
+		s = fmt.Sprintf("%s[%d-%v]", s, lsn, partial)
+	}
+	return s
+}
+
 func (info *checkpointInfo) GetCkpCnt() uint64 {
 	cnt := uint64(0)
 	cnt += uint64(info.ranges.GetCardinality())
@@ -121,7 +129,7 @@ func newSyncBase() *syncBase {
 		synced:        newSyncMap(),
 		ckpCnt:        newSyncMap(),
 		uncommits:     make(map[uint32][]uint64),
-		addrs:         make(map[uint32]map[int]common.ClosedInterval),
+		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
 	}
 }
@@ -133,6 +141,7 @@ func (base *syncBase) OnReplay(r *replayer) {
 	}
 	for groupId, ckps := range r.checkpointrange {
 		base.checkpointed.ids[groupId] = ckps.GetCheckpointed()
+		base.checkpointing[groupId] = ckps
 	}
 }
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {
@@ -143,7 +152,7 @@ func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) 
 		return 0, errors.New("group not existed")
 	}
 	for ver, interval := range versionsMap {
-		if interval.Contains(common.ClosedInterval{Start: lsn, End: lsn}) {
+		if interval.Contains(*common.NewClosedIntervalsByInt(lsn)) {
 			return ver, nil
 		}
 	}
@@ -199,23 +208,22 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 		}
 		// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
 	default:
-		base.syncing[v.Group] = v.GroupLSN
 	}
+	base.syncing[v.Group] = v.GroupLSN
 	base.addrmu.Lock()
 	defer base.addrmu.Unlock()
 	addr := v.Info.(*VFileAddress)
 	versionRanges, ok := base.addrs[addr.Group]
 	if !ok {
-		versionRanges = make(map[int]common.ClosedInterval)
+		versionRanges = make(map[int]common.ClosedIntervals)
 	}
 	interval, ok := versionRanges[addr.Version]
 	if !ok {
-		interval = common.ClosedInterval{}
+		interval = *common.NewClosedIntervals()
 	}
-	interval.TryMerge(common.ClosedInterval{Start: 0, End: addr.LSN})
+	interval.TryMerge(*common.NewClosedIntervalsByInt(addr.LSN))
 	versionRanges[addr.Version] = interval
 	base.addrs[addr.Group] = versionRanges
-	// fmt.Printf("versionsMap is %v\n", base.addrs)
 	return nil
 }
 
@@ -265,6 +273,7 @@ func (base *syncBase) OnCommit() {
 	for group, checkpointing := range base.checkpointing {
 		checkpointingId := checkpointing.GetCheckpointed()
 		ckpcnt := checkpointing.GetCkpCnt()
+		// logutil.Infof("G%d-%v",group,checkpointing)
 		checkpointedId := base.GetCheckpointed(group)
 		if checkpointingId > checkpointedId {
 			base.SetCheckpointed(group, checkpointingId)

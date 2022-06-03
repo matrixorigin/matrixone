@@ -38,7 +38,7 @@ type TxnManager struct {
 	TxnStoreFactory  TxnStoreFactory
 	TxnFactory       TxnFactory
 	ActiveMask       *roaring64.Bitmap
-	Execption        *atomic.Value
+	Exception        *atomic.Value
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnManager {
@@ -52,7 +52,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		ActiveMask:      roaring64.New(),
-		Execption:       new(atomic.Value),
+		Exception:       new(atomic.Value),
 	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
 	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
@@ -84,7 +84,7 @@ func (mgr *TxnManager) StatSafeTS() (ts uint64) {
 }
 
 func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
-	if exp := mgr.Execption.Load(); exp != nil {
+	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
 		logutil.Warnf("StartTxn: %v", err)
 		return
@@ -135,12 +135,19 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 	txn.SetError(txn.PrepareCommit())
 }
 
+func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
+	if err := txn.PreApplyCommit(); err != nil {
+		txn.SetError(err)
+		mgr.OnException(err)
+	}
+}
+
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 	_ = txn.PrepareRollback()
 }
 
 // TODO
-func (mgr *TxnManager) onPreparing(items ...interface{}) {
+func (mgr *TxnManager) onPreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
@@ -171,6 +178,8 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 				_ = op.Txn.ToRollbackingLocked(ts)
 				op.Txn.Unlock()
 				mgr.onPreparRollback(op.Txn)
+			} else {
+				mgr.onPreApplyCommit(op.Txn)
 			}
 		} else {
 			mgr.onPreparRollback(op.Txn)
@@ -183,43 +192,41 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 }
 
 // TODO
-func (mgr *TxnManager) onCommit(items ...interface{}) {
+func (mgr *TxnManager) onCommit(items ...any) {
+	var err error
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		switch op.Op {
 		case OpCommit:
-			if err := op.Txn.ApplyCommit(); err != nil {
-				panic(err)
+			if err = op.Txn.ApplyCommit(); err != nil {
+				mgr.OnException(err)
+				logutil.Warnf("ApplyCommit %s: %v", op.Txn.Repr(), err)
 			}
 		case OpRollback:
-			if err := op.Txn.ApplyRollback(); err != nil {
-				panic(err)
+			if err = op.Txn.ApplyRollback(); err != nil {
+				mgr.OnException(err)
+				logutil.Warnf("ApplyRollback %s: %v", op.Txn.Repr(), err)
 			}
 		}
 		// Here only wait the txn to be done. The err returned can be access via op.Txn.GetError()
-		_ = op.Txn.WaitDone()
+		_ = op.Txn.WaitDone(err)
 		logutil.Debugf("%s Done", op.Repr())
 	}
 	logutil.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
 }
 
-func (mgr *TxnManager) TryStoreException(new error) (err error) {
-	old := mgr.Execption.Load()
+func (mgr *TxnManager) OnException(new error) {
+	old := mgr.Exception.Load()
 	for old == nil {
-		if mgr.Execption.CompareAndSwap(old, new) {
-			err = new
+		if mgr.Exception.CompareAndSwap(old, new) {
 			break
 		}
-		old = mgr.Execption.Load()
-		if old != nil {
-			err = old.(error)
-		}
+		old = mgr.Exception.Load()
 	}
-	return
 }
 
 func (mgr *TxnManager) Stop() {
 	mgr.StateMachine.Stop()
-	_ = mgr.TryStoreException(common.ClosedErr)
+	mgr.OnException(common.ClosedErr)
 }

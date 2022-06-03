@@ -21,12 +21,12 @@ require (
 	github.com/lni/goutils v1.3.1-0.20220404072553-ddb2075d2587
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220511071845-cfc4bac02bb4
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
+	github.com/minio/minio-go/v7 v7.0.27
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
 	github.com/sirupsen/logrus v1.8.1
-	github.com/smartystreets/assertions v1.2.0
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.1
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
@@ -49,11 +49,18 @@ require (
 	github.com/hashicorp/go-sockaddr v1.0.0 // indirect
 	github.com/hashicorp/golang-lru v0.5.1 // indirect
 	github.com/hashicorp/memberlist v0.3.1 // indirect
+	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/miekg/dns v1.1.26 // indirect
+	github.com/minio/md5-simd v1.1.0 // indirect
+	github.com/minio/sha256-simd v0.1.1 // indirect
+	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.14 // indirect
+	github.com/rs/xid v1.2.1 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
+	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
+	gopkg.in/ini.v1 v1.57.0 // indirect
 )
 
 require (

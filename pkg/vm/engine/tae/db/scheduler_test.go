@@ -98,10 +98,10 @@ func TestCheckpoint1(t *testing.T) {
 	opts.CheckpointCfg.ExecutionInterval = 1
 	db := initDB(t, opts)
 	defer db.Close()
-	schema := catalog.MockSchema(13)
+	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, schema.BlockMaxRows)
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -142,22 +142,20 @@ func TestCheckpoint2(t *testing.T) {
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.IndexCapacity = 1000000
 	opts.CacheCfg.TxnCapacity = 1000000
-	opts.CacheCfg.InsertCapacity = 200
+	opts.CacheCfg.InsertCapacity = 400
 	// opts.CheckpointCfg = new(options.CheckpointCfg)
 	// opts.CheckpointCfg.ScannerInterval = 10
 	// opts.CheckpointCfg.ExecutionLevels = 2
 	// opts.CheckpointCfg.ExecutionInterval = 1
 	tae := initDB(t, opts)
 	defer tae.Close()
-	schema1 := catalog.MockSchema(4)
+	schema1 := catalog.MockSchema(4, 2)
 	schema1.BlockMaxRows = 10
 	schema1.SegmentMaxBlocks = 2
-	schema1.PrimaryKey = 2
-	schema2 := catalog.MockSchema(4)
+	schema2 := catalog.MockSchema(4, 2)
 	schema2.BlockMaxRows = 10
 	schema2.SegmentMaxBlocks = 2
-	schema2.PrimaryKey = 2
-	bat := compute.MockBatch(schema1.Types(), uint64(schema1.BlockMaxRows)*2, int(schema1.PrimaryKey), nil)
+	bat := catalog.MockData(schema1, schema1.BlockMaxRows*2)
 	bats := compute.SplitBatch(bat, 10)
 	var (
 		meta1 *catalog.TableEntry
@@ -175,10 +173,11 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	doAppend := func(data *gbat.Batch, name string) {
-		txn, _ := tae.StartTxn(nil)
+		txn, err := tae.StartTxn(nil)
+		assert.NoError(t, err)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(name)
-		err := rel.Append(data)
+		err = rel.Append(data)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -236,10 +235,10 @@ func TestCheckpoint2(t *testing.T) {
 
 func TestSchedule1(t *testing.T) {
 	db := initDB(t, nil)
-	schema := catalog.MockSchema(13)
+	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, schema.BlockMaxRows)
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")

@@ -114,12 +114,13 @@ func newMockTableHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *TableEntry)
 	}
 }
 
+func (it *mockSegIt) GetError() error            { return nil }
 func (it *mockSegIt) Valid() bool                { return false }
 func (it *mockSegIt) Next()                      {}
 func (it *mockSegIt) Close() error               { return nil }
 func (it *mockSegIt) GetSegment() handle.Segment { return nil }
 
-func (h *mockDBHandle) CreateRelation(def interface{}) (rel handle.Relation, err error) {
+func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) {
 	schema := def.(*Schema)
 	tbl, err := h.entry.CreateTableEntry(schema, h.Txn, nil)
 	if err != nil {
@@ -193,5 +194,12 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 }
 
 func MockData(schema *Schema, rows uint32) *batch.Batch {
-	return compute.MockBatch(schema.Types(), uint64(rows), int(schema.PrimaryKey), nil)
+	if schema.IsSingleSortKey() {
+		sortKey := schema.GetSingleSortKey()
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), sortKey.Idx, nil)
+	} else if schema.IsCompoundSortKey() {
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
+	} else {
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
+	}
 }

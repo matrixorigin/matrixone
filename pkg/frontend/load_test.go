@@ -181,7 +181,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -347,7 +347,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -358,11 +358,18 @@ func Test_load(t *testing.T) {
 			if i == 3 {
 				row2col = gostub.Stub(&row2colChoose, false)
 			}
-			_, err := mce.LoadLoop(cws[i], db, rel)
+			_, err = ses.txnHandler.StartByAutocommitIfNeeded()
+			convey.So(err, convey.ShouldBeNil)
+
+			_, err := mce.LoadLoop(cws[i], db, rel, "T")
 			if kases[i].fail {
 				convey.So(err, convey.ShouldBeError)
+				//err = ses.txnHandler.RollbackAfterAutocommitOnly()
+				//convey.So(err, convey.ShouldBeNil)
 			} else {
 				convey.So(err, convey.ShouldBeNil)
+				//err = ses.txnHandler.CommitAfterAutocommitOnly()
+				//convey.So(err, convey.ShouldBeNil)
 			}
 
 			if i == 3 {

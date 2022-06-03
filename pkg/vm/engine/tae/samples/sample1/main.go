@@ -53,12 +53,11 @@ func main() {
 	tae, _ := db.Open(sampleDir, nil)
 	defer tae.Close()
 
-	schema := catalog.MockSchemaAll(10)
+	schema := catalog.MockSchemaAll(10, 3)
 	schema.BlockMaxRows = 80000
 	schema.SegmentMaxBlocks = 5
-	schema.PrimaryKey = 3
-	batchCnt := uint64(200)
-	batchRows := uint64(schema.BlockMaxRows) * 1 / 20 * batchCnt
+	batchCnt := uint32(200)
+	batchRows := schema.BlockMaxRows * 1 / 20 * batchCnt
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
@@ -67,7 +66,7 @@ func main() {
 			panic(err)
 		}
 	}
-	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, batchRows)
 	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {

@@ -36,8 +36,8 @@ var (
 
 type IVectorWriter interface {
 	io.Closer
-	SetValue(int, interface{}) error
-	Append(int, interface{}) error
+	SetValue(int, any) error
+	Append(int, any) error
 	AppendVector(*ro.Vector, int) (int, error)
 }
 

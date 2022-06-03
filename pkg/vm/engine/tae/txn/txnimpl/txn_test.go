@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -71,11 +72,11 @@ func getNodes() int {
 	return 5 * 2
 }
 
-func makeTable(t *testing.T, dir string, colCnt int, bufSize uint64) *txnTable {
+func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) *txnTable {
 	mgr := buffer.NewNodeManager(bufSize, nil)
 	driver := wal.NewDriver(dir, "store", nil)
 	id := common.NextGlobalSeqNum()
-	schema := catalog.MockSchemaAll(colCnt)
+	schema := catalog.MockSchemaAll(colCnt, pkIdx)
 	rel := mockTestRelation(id, schema)
 	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
 	store := newStore(nil, driver, mgr, nil)
@@ -85,10 +86,9 @@ func makeTable(t *testing.T, dir string, colCnt int, bufSize uint64) *txnTable {
 
 func TestInsertNode(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	tbl := makeTable(t, dir, 2, common.K*6)
+	tbl := makeTable(t, dir, 2, 1, common.K*6)
 	defer tbl.store.driver.Close()
-	tbl.GetSchema().PrimaryKey = 1
-	bat := compute.MockBatch(tbl.GetSchema().Types(), common.K, int(tbl.GetSchema().PrimaryKey), nil)
+	bat := catalog.MockData(tbl.GetSchema(), uint32(common.K))
 	p, _ := ants.NewPool(5)
 
 	var wg sync.WaitGroup
@@ -151,16 +151,15 @@ func TestTable(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchemaAll(3)
+	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
-	schema.PrimaryKey = 2
 	{
 		txn, _ := mgr.StartTxn(nil)
 		db, err := txn.CreateDatabase("db")
 		assert.Nil(t, err)
 		rel, _ := db.CreateRelation(schema)
-		bat := compute.MockBatch(schema.Types(), common.K*100, int(schema.PrimaryKey), nil)
+		bat := catalog.MockData(schema, uint32(common.K*100))
 		bats := compute.SplitBatch(bat, 100)
 		for _, data := range bats {
 			err := rel.Append(data)
@@ -188,12 +187,11 @@ func TestUpdateUncommitted(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchemaAll(3)
+	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
-	schema.PrimaryKey = 1
 
-	bat := compute.MockBatch(schema.Types(), 1000, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, 1000)
 	bats := compute.SplitBatch(bat, 2)
 
 	txn, _ := mgr.StartTxn(nil)
@@ -222,10 +220,9 @@ func TestAppend(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchemaAll(3)
+	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
-	schema.PrimaryKey = 1
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -234,7 +231,7 @@ func TestAppend(t *testing.T) {
 	tbl, _ := tDB.getOrSetTable(rel.ID())
 	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
 	brows := rows / 3
-	bat := compute.MockBatch(tbl.GetSchema().Types(), rows, int(tbl.GetSchema().PrimaryKey), nil)
+	bat := catalog.MockData(tbl.GetSchema(), uint32(rows))
 
 	bats := compute.SplitBatch(bat, 3)
 
@@ -269,17 +266,16 @@ func TestIndex(t *testing.T) {
 	assert.Nil(t, err)
 	err = index.Insert("one", 10)
 	assert.Nil(t, err)
-	row, err := index.Find("one")
+	row, err := index.Search("one")
 	assert.Nil(t, err)
 	assert.Equal(t, 10, int(row))
 	err = index.Delete("one")
 	assert.Nil(t, err)
-	_, err = index.Find("one")
+	_, err = index.Search("one")
 	assert.NotNil(t, err)
 
-	schema := catalog.MockSchemaAll(14)
-	schema.PrimaryKey = 1
-	bat := compute.MockBatch(schema.Types(), 500, int(schema.PrimaryKey), nil)
+	schema := catalog.MockSchemaAll(14, 1)
+	bat := catalog.MockData(schema, 500)
 
 	idx := NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[0])
@@ -298,8 +294,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchDedup(window)
 	assert.NotNil(t, err)
 
-	schema.PrimaryKey = 12
-	bat = compute.MockBatch(schema.Types(), 500, int(schema.PrimaryKey), nil)
+	schema = catalog.MockSchemaAll(14, 12)
+	bat = catalog.MockData(schema, 500)
 	idx = NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[12])
 	assert.Nil(t, err)
@@ -320,12 +316,11 @@ func TestLoad(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchemaAll(14)
+	schema := catalog.MockSchemaAll(14, 13)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
-	schema.PrimaryKey = 13
 
-	bat := compute.MockBatch(schema.Types(), 60000, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, 60000)
 	bats := compute.SplitBatch(bat, 5)
 
 	txn, _ := mgr.StartTxn(nil)
@@ -351,12 +346,11 @@ func TestNodeCommand(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchemaAll(14)
+	schema := catalog.MockSchemaAll(14, 13)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
-	schema.PrimaryKey = 13
 
-	bat := compute.MockBatch(schema.Types(), 15000, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, 15000)
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -510,7 +504,7 @@ func TestTxnManager1(t *testing.T) {
 	lock := sync.Mutex{}
 	seqs := make([]int, 0)
 
-	txn.SetPrepareCommitFn(func(i interface{}) error {
+	txn.SetPrepareCommitFn(func(_ txnif.AsyncTxn) error {
 		time.Sleep(time.Millisecond * 100)
 		lock.Lock()
 		seqs = append(seqs, 2)
@@ -523,7 +517,7 @@ func TestTxnManager1(t *testing.T) {
 		defer wg.Done()
 		txn2, _ := mgr.StartTxn(nil)
 		txn2.MockIncWriteCnt()
-		txn2.SetPrepareCommitFn(func(i interface{}) error {
+		txn2.SetPrepareCommitFn(func(_ txnif.AsyncTxn) error {
 			lock.Lock()
 			seqs = append(seqs, 4)
 			lock.Unlock()
@@ -582,7 +576,7 @@ func TestTransaction1(t *testing.T) {
 
 	txn1, _ := mgr.StartTxn(nil)
 	name := "db"
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	db, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
 	_, err = db.CreateRelation(schema)
@@ -600,7 +594,7 @@ func TestTransaction1(t *testing.T) {
 	db3, err := txn3.GetDatabase(name)
 	assert.Nil(t, err)
 	t.Log(db3.String())
-	schema = catalog.MockSchema(1)
+	schema = catalog.MockSchema(1, 0)
 	rel, err := db3.CreateRelation(schema)
 	assert.Nil(t, err)
 	t.Log(rel.String())
@@ -630,7 +624,7 @@ func TestTransaction2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(db.String())
 
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
 	t.Log(rel.String())
@@ -684,7 +678,7 @@ func TestTransaction3(t *testing.T) {
 			name := fmt.Sprintf("db-%d", i)
 			db, err := txn.CreateDatabase(name)
 			assert.Nil(t, err)
-			schema := catalog.MockSchemaAll(13)
+			schema := catalog.MockSchemaAll(13, 12)
 			_, err = db.CreateRelation(schema)
 			assert.Nil(t, err)
 			err = txn.Commit()
@@ -709,7 +703,7 @@ func TestSegment1(t *testing.T) {
 
 	txn1, _ := mgr.StartTxn(nil)
 	name := "db"
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	db, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
@@ -783,7 +777,7 @@ func TestSegment2(t *testing.T) {
 
 	txn1, _ := mgr.StartTxn(nil)
 	db, _ := txn1.CreateDatabase("db")
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
 	segCnt := 10
 	for i := 0; i < segCnt; i++ {
@@ -813,7 +807,7 @@ func TestBlock1(t *testing.T) {
 
 	txn1, _ := mgr.StartTxn(nil)
 	db, _ := txn1.CreateDatabase("db")
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
 	seg, _ := rel.CreateSegment()
 
@@ -857,13 +851,12 @@ func TestDedup1(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchemaAll(4)
+	schema := catalog.MockSchemaAll(4, 2)
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 4
-	schema.PrimaryKey = 2
 	cnt := uint64(10)
 	rows := uint64(schema.BlockMaxRows) / 2 * cnt
-	bat := compute.MockBatch(schema.Types(), rows, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, uint32(rows))
 	bats := compute.SplitBatch(bat, int(cnt))
 	{
 		txn, _ := mgr.StartTxn(nil)
@@ -877,9 +870,9 @@ func TestDedup1(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(bats[0])
-		assert.Nil(t, err)
+		assert.NoError(t, err)
 		err = rel.Append(bats[0])
-		assert.NotNil(t, err)
+		assert.ErrorIs(t, err, data.ErrDuplicate)
 		assert.Nil(t, txn.Rollback())
 	}
 
@@ -896,7 +889,7 @@ func TestDedup1(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(bats[0])
-		assert.NotNil(t, err)
+		assert.ErrorIs(t, err, data.ErrDuplicate)
 		assert.Nil(t, txn.Rollback())
 	}
 	{
@@ -925,10 +918,9 @@ func TestDedup1(t *testing.T) {
 		assert.Nil(t, txn3.Commit())
 
 		err = rel.Append(bats[3])
-		assert.Nil(t, err)
-		err = txn.Commit()
-		t.Log(txn.String())
-		assert.NotNil(t, err)
+		// TODO: should be w-w error
+		assert.Error(t, err)
+		_ = txn.Rollback()
 	}
 	t.Log(c.SimplePPString(common.PPL1))
 }
