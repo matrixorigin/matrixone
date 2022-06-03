@@ -42,9 +42,10 @@ type compactor struct {
 	//tid-cid map
 	//partial ckp
 	//ckp ranges
-	gIntervals map[uint32]*common.ClosedIntervals
-	tidCidMap  map[uint32]map[uint64]uint64
-	partialCKP map[uint32]map[uint64]*partialCkpInfo
+	gIntervals     map[uint32]*common.ClosedIntervals
+	tidCidMap      map[uint32]map[uint64]uint64
+	partialCKP     map[uint32]map[uint64]*partialCkpInfo
+	ckpInfoVersion int
 }
 
 func newCompactor() *compactor {
@@ -354,8 +355,11 @@ func newcheckpointGroup(v *vInfo, gid uint32) *checkpointGroup {
 		baseGroup: newbaseGroup(v, gid),
 	}
 }
-func (g *checkpointGroup) OnCheckpoint(any)                 {} //ckp info
-func (g *checkpointGroup) IsCovered(c *compactor) bool      { return false }
+func (g *checkpointGroup) OnCheckpoint(any) {} //ckp info
+func (g *checkpointGroup) IsCovered(c *compactor) bool {
+	//TODO: not compact ckp entry with payload
+	return g.vInfo.ckpInfoVersion <= c.ckpInfoVersion
+}
 func (g *checkpointGroup) MergeCheckpointInfo(c *compactor) {}
 func (g *checkpointGroup) IsCheckpointGroup() bool {
 	return true

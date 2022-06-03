@@ -290,12 +290,12 @@ func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
 			return err
 		}
 	}
-	vf.OnReplay(r)
+	// vf.OnReplay(r)
 	return nil
 }
 
 func (vf *vFile) OnNewEntry(int) {}
-func (vf *vFile) OnNewCommit(info *entry.Info) {
+func (vf *vFile) OnLogInfo(info *entry.Info) {
 	err := vf.Log(info)
 	if err != nil {
 		panic(err)

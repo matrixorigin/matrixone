@@ -102,7 +102,7 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 	if cfg == nil {
 		cfg = &StoreCfg{}
 	}
-	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, &bs.storeInfo)
+	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, &bs.storeInfo, bs.OnCommitVFile)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +436,7 @@ func (bs *baseStore) Close() error {
 }
 
 func (bs *baseStore) Checkpoint(e entry.Entry) (err error) {
-	if e.IsCheckpoint() {
+	if !e.IsCheckpoint() {
 		return errors.New("wrong entry type")
 	}
 	_, err = bs.AppendEntry(entry.GTCKp, e)
@@ -536,4 +536,13 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 		return nil, err
 	}
 	return s.file.Load(ver, groupId, lsn)
+}
+
+func (s *baseStore) OnCommitVFile(vf VFile) {
+	e := s.MakePostCommitEntry(vf.Id())
+	s.AppendEntry(entry.GTInternal, e)
+	err := e.WaitDone()
+	if err != nil {
+		panic(err)
+	}
 }

@@ -85,7 +85,20 @@ func (info *checkpointInfo) UpdateWithCommandInfo(lsn uint64, cmds *entry.Comman
 		delete(info.partial, lsn)
 	}
 }
-
+func (info *checkpointInfo) MergeCheckpointInfo(ockp *checkpointInfo) {
+	info.ranges.TryMerge(*ockp.ranges)
+	for lsn, ockpinfo := range ockp.partial {
+		ckpinfo, ok := info.partial[lsn]
+		if !ok {
+			info.partial[lsn] = ockpinfo
+		} else {
+			if ckpinfo.size != ockpinfo.size {
+				panic("logic err")
+			}
+			ckpinfo.ckps.Or(ockpinfo.ckps)
+		}
+	}
+}
 func (info *checkpointInfo) GetCheckpointed() uint64 {
 	if info.ranges == nil || len(info.ranges.Intervals) == 0 {
 		return 0
@@ -243,7 +256,13 @@ func (base *syncBase) MarshalPostCommitEntry() (buf []byte, err error) {
 	return
 }
 
-func (base *syncBase) MakePostCommitEntry() entry.Entry {
+func (base *syncBase) UnarshalPostCommitEntry(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := base.ReadPostCommitEntry(bbuf)
+	return err
+}
+
+func (base *syncBase) MakePostCommitEntry(id int) entry.Entry {
 	e := entry.GetBase()
 	e.SetType(entry.ETPostCommit)
 	buf, err := base.MarshalPostCommitEntry()
@@ -251,6 +270,10 @@ func (base *syncBase) MakePostCommitEntry() entry.Entry {
 		panic(err)
 	}
 	e.Unmarshal(buf)
+	info := &entry.Info{}
+	info.PostCommitVersion = id
+	info.Group = entry.GTInternal
+	e.SetInfo(info)
 	return e
 }
 
@@ -260,9 +283,17 @@ func (base *syncBase) OnReplay(r *replayer) {
 	for k, v := range r.groupLSN {
 		base.synced.ids[k] = v
 	}
+	if r.ckpEntry != nil {
+		base.UnarshalPostCommitEntry(r.ckpEntry.payload)
+	}
 	for groupId, ckps := range r.checkpointrange {
-		base.checkpointed.ids[groupId] = ckps.GetCheckpointed()
-		base.checkpointing[groupId] = ckps
+		ckpInfo,ok:=base.checkpointing[groupId] 
+		if !ok{
+			base.checkpointing[groupId] = ckps
+		} else {
+			ckpInfo.MergeCheckpointInfo(ckps)
+		}
+		base.checkpointed.ids[groupId] = base.checkpointing[groupId].GetCheckpointed()
 	}
 }
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {

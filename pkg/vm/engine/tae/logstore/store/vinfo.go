@@ -29,8 +29,9 @@ import (
 type vInfo struct {
 	vf *vFile
 
-	groups  map[uint32]VGroup
-	groupmu sync.RWMutex
+	groups         map[uint32]VGroup
+	groupmu        sync.RWMutex
+	ckpInfoVersion int //the max version covered by the post commit entry
 	// Commits     map[uint32]*common.ClosedInterval
 	// Checkpoints map[uint32]*common.ClosedIntervals
 	// UncommitTxn map[uint32][]uint64 // 2% uncommit txn
@@ -157,6 +158,9 @@ func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 			}
 		}
 	}
+	if c.ckpInfoVersion < info.ckpInfoVersion {
+		c.ckpInfoVersion = info.ckpInfoVersion
+	}
 	return
 }
 
@@ -201,6 +205,8 @@ func (info *vInfo) onLog(infos []*entry.Info) {
 			err = info.LogCheckpoint(vi)
 		case entry.GTUncommit:
 			err = info.LogUncommitInfo(vi)
+		case entry.GTInternal:
+			err = info.LogInternalInfo(vi)
 		default:
 			err = info.LogCommit(vi)
 		}
@@ -234,7 +240,13 @@ func (info *vInfo) Log(v any) error {
 	// fmt.Printf("%p|addrs are %v\n", info, info.Addrs)
 	return nil
 }
-
+func (info *vInfo) LogInternalInfo(entryInfo *entry.Info) error {
+	id := entryInfo.PostCommitVersion
+	if info.ckpInfoVersion < id {
+		info.ckpInfoVersion = id
+	}
+	return nil
+}
 func (info *vInfo) LogUncommitInfo(entryInfo *entry.Info) error {
 	g, ok := info.groups[entryInfo.Group]
 	if !ok {

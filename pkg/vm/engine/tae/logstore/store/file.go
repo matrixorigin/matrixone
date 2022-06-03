@@ -76,11 +76,12 @@ type rotateFile struct {
 
 	wg sync.WaitGroup
 
-	bsInfo *storeInfo
+	bsInfo         *storeInfo
+	postCommitFunc func(VFile)
 }
 
 func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChecker,
-	historyFactory HistoryFactory, bsInfo *storeInfo) (*rotateFile, error) {
+	historyFactory HistoryFactory, bsInfo *storeInfo, postCommitFunc func(VFile)) (*rotateFile, error) {
 	var err error
 	if mu == nil {
 		mu = new(sync.RWMutex)
@@ -102,14 +103,15 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	}
 
 	rf := &rotateFile{
-		RWMutex:     mu,
-		dir:         dir,
-		name:        name,
-		uncommitted: make([]*vFile, 0),
-		checker:     rotateChecker,
-		commitQueue: make(chan *vFile, 10000),
-		history:     historyFactory(),
-		bsInfo:      bsInfo,
+		RWMutex:        mu,
+		dir:            dir,
+		name:           name,
+		uncommitted:    make([]*vFile, 0),
+		checker:        rotateChecker,
+		commitQueue:    make(chan *vFile, 10000),
+		history:        historyFactory(),
+		bsInfo:         bsInfo,
+		postCommitFunc: postCommitFunc,
 	}
 	if !newDir {
 		files, err := ioutil.ReadDir(dir)
@@ -200,6 +202,7 @@ func (rf *rotateFile) commitLoop() {
 			file.Commit()
 			rf.commitFile()
 			rf.commitWg.Done()
+			rf.postCommitFunc(file)
 		}
 	}
 }
