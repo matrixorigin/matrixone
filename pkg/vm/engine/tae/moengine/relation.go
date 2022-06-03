@@ -149,7 +149,6 @@ func (rel *txnRelation) Delete(_ uint64, vector *vector.Vector, col string, _ en
 			for i := 0; i < vector.Length; i++ {
 				v := compute.GetValue(vector, uint32(i))
 				filter := handle.NewEQFilter(v)
-				rel.handle.GetByFilter(filter)
 				id, row, err := rel.handle.GetByFilter(filter)
 				if err != nil {
 					return err
