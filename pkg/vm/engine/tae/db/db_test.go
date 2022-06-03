@@ -2252,6 +2252,7 @@ func TestChaos1(t *testing.T) {
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
+	assert.NoError(t, err)
 	assert.Equal(t, int(appendCnt), view.Length())
 	view.ApplyDeletes()
 	t.Log(view.DeleteMask.String())
