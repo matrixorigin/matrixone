@@ -208,8 +208,8 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 		}
 		// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
 	default:
-		base.syncing[v.Group] = v.GroupLSN
 	}
+	base.syncing[v.Group] = v.GroupLSN
 	base.addrmu.Lock()
 	defer base.addrmu.Unlock()
 	addr := v.Info.(*VFileAddress)
