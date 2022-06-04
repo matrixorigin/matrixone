@@ -50,6 +50,7 @@ type TxnReader interface {
 	GetStore() TxnStore
 	String() string
 	Repr() string
+	GetLSN() uint64
 }
 
 type TxnHandle interface {
@@ -171,6 +172,7 @@ type TxnStore interface {
 	Txn2PC
 	io.Closer
 	BindTxn(AsyncTxn)
+	GetLSN() uint64
 
 	BatchDedup(dbId, id uint64, pks ...*vector.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)

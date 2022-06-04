@@ -17,6 +17,7 @@ package db
 import (
 	"sync"
 	"testing"
+	"time"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -28,6 +29,26 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+func printCheckpointStats(t *testing.T, tae *DB) {
+	t.Logf("GetCheckpointedLSN: %d", tae.Wal.GetCheckpointed())
+	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
+}
+
+func enableCheckpoint(in *options.Options) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 10
+	opts.CheckpointCfg.ExecutionLevels = 5
+	opts.CheckpointCfg.ExecutionInterval = 1
+	opts.CheckpointCfg.CatalogCkpInterval = 5
+	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	return opts
+}
 
 func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
@@ -145,4 +166,34 @@ func TestAutoGC1(t *testing.T) {
 	// assert.Equal(t, 12, cnt)
 	t.Logf("BlockCnt %d, Expect 12", cnt)
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
+}
+
+// Test Steps
+// 1. Create a table w/o data and commit
+// 2. Drop the table and commit
+func TestGCTable(t *testing.T) {
+	opts := enableCheckpoint(nil)
+	tae := initDB(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, 12)
+
+	// 1. Create a table without data
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	_, _ = db.CreateRelation(schema)
+	assert.NoError(t, txn.Commit())
+
+	// 2. Drop the table
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	_, err := db.DropRelationByName(schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	now := time.Now()
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Scheduler.GetCheckpointedLSN() == txn.GetLSN()
+	})
+
+	t.Logf("Takes: %s", time.Since(now))
+	printCheckpointStats(t, tae)
 }

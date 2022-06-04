@@ -19,6 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+func MakeTableScopes(entries ...*catalog.TableEntry) (scopes []common.ID) {
+	for _, entry := range entries {
+		scopes = append(scopes, *entry.AsCommonID())
+	}
+	return
+}
+
 func MakeSegmentScopes(entries ...*catalog.SegmentEntry) (scopes []common.ID) {
 	for _, entry := range entries {
 		scopes = append(scopes, *entry.AsCommonID())

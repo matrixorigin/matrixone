@@ -172,7 +172,7 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	entry.RUnlock()
 	if gcNeeded {
 		scopes := MakeBlockScopes(entry)
-		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry))
+		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry, GCType_Block))
 		logutil.Infof("[GCBLK] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err == tasks.ErrScheduleScopeConflict {
@@ -201,7 +201,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	entry.RUnlock()
 	if gcNeeded {
 		scopes := MakeSegmentScopes(entry)
-		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry))
+		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry, GCType_Segment))
 		logutil.Infof("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err != tasks.ErrScheduleScopeConflict {
@@ -217,7 +217,28 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err error) {
 	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
+		return
 	}
+	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
+	gcNeeded := false
+	entry.RLock()
+	if entry.IsDroppedCommitted() {
+		if logIndex := entry.GetLogIndex(); logIndex != nil {
+			gcNeeded = checkpointed >= logIndex.LSN
+		}
+	}
+	entry.RUnlock()
+	if !gcNeeded {
+		return
+	}
+
+	scopes := MakeTableScopes(entry)
+	_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcTableClosure(entry, GCType_Table))
+	logutil.Infof("[GCTABLE] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+	if err != nil {
+		err = nil
+	}
+	err = catalog.ErrStopCurrRecur
 	return
 }
 
