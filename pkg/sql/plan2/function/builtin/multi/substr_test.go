@@ -241,6 +241,7 @@ func makeProcess() *process.Process {
 	return process.New(mheap.New(gm))
 }
 
+// Construct vector parameter of substring function
 func makeSubStrVectors(src string, start int64, length int64, withLength bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	srcBytes := &types.Bytes{
