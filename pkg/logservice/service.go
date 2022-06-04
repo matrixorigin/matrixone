@@ -14,8 +14,10 @@
 
 package logservice
 
+import (
+	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
+)
+
 type Lsn = uint64
 
-type LogRecord struct {
-	Data []byte
-}
+type LogRecord = rpc.LogRecord

@@ -1,0 +1,52 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+option go_package = "/rpc";
+
+message LogRecord {
+  uint64 Index = 1;
+  bytes Data   = 2;
+};
+
+message Request {
+  enum MethodType {
+    CREATE       = 0;
+    DESTROY      = 1;
+    APPEND       = 2;
+    READ         = 3;
+    TRUNCATE     = 4;
+    GET_TRUNCATE = 5;
+  }
+
+  MethodType Method   = 1;
+  string Name         = 2;
+  uint64 ShardID      = 3;
+  uint64 Index        = 4;
+  uint64 MaxSize      = 5;
+  uint64 Timeout      = 6;
+  uint64 PayloadSize  = 7;
+};
+
+message Response {
+  enum ErrorCode {
+    NoError        = 0;
+    Timeout        = 1;
+    InvalidShard   = 2;
+    InvalidTimeout = 3;
+  }
+  ErrorCode Error  = 1;
+  uint64 ShardID   = 2;
+  uint64 Index     = 3;
+  repeated LogRecord LogRecords = 4;
+};
