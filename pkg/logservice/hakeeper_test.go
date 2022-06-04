@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"testing"
 
-	sm "github.com/lni/dragonboat/v3/statemachine"
+	sm "github.com/lni/dragonboat/v4/statemachine"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -76,13 +76,13 @@ func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 	tsm1 := newHAKeeperStateMachine(0, 1).(*haKeeperSM)
 	tsm1.GlobalID = 100
 
-	result, err := tsm1.Update(cmd)
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
 	assert.Equal(t, uint64(101), tsm1.GlobalID)
 
 	tsm1.GlobalID = 200
-	result, err = tsm1.Update(cmd)
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	data := make([]byte, 8)
 	binaryEnc.PutUint64(data, 101)
@@ -93,17 +93,17 @@ func TestHAKeeperQueryLogShardID(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
 	tsm1 := newHAKeeperStateMachine(0, 1).(*haKeeperSM)
 	tsm1.GlobalID = 100
-	result, err := tsm1.Update(cmd)
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
 
 	cmd = getQueryLogShardIDCmd("test1")
-	result, err = tsm1.Update(cmd)
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
 
 	cmd = getQueryLogShardIDCmd("test2")
-	result, err = tsm1.Update(cmd)
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{}, result)
 }

@@ -17,7 +17,7 @@ package logservice
 import (
 	"io"
 
-	sm "github.com/lni/dragonboat/v3/statemachine"
+	sm "github.com/lni/dragonboat/v4/statemachine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -107,7 +107,8 @@ func (h *haKeeperSM) Close() error {
 	return nil
 }
 
-func (h *haKeeperSM) Update(cmd []byte) (sm.Result, error) {
+func (h *haKeeperSM) Update(e sm.Entry) (sm.Result, error) {
+	cmd := e.Cmd
 	if _, ok := isCreateLogShardCmd(cmd); ok {
 		return h.handleCreateLogShardCmd(cmd)
 	}

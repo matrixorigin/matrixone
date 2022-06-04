@@ -20,11 +20,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/lni/dragonboat/v3"
-	"github.com/lni/dragonboat/v3/client"
-	"github.com/lni/dragonboat/v3/config"
-	pb "github.com/lni/dragonboat/v3/raftpb"
-	sm "github.com/lni/dragonboat/v3/statemachine"
+	"github.com/lni/dragonboat/v4"
+	"github.com/lni/dragonboat/v4/client"
+	"github.com/lni/dragonboat/v4/config"
+	pb "github.com/lni/dragonboat/v4/raftpb"
+	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/lni/goutils/syncutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -89,7 +89,7 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 	}
 }
 
-type LogStore struct {
+type logStore struct {
 	cfg     Config
 	nh      *dragonboat.NodeHost
 	stopper *syncutil.Stopper
@@ -101,7 +101,7 @@ type LogStore struct {
 	}
 }
 
-func NewLogStore(cfg Config) (*LogStore, error) {
+func newLogStore(cfg Config) (*logStore, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func NewLogStore(cfg Config) (*LogStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	ls := &LogStore{
+	ls := &logStore{
 		cfg:     cfg,
 		nh:      nh,
 		stopper: syncutil.NewStopper(),
@@ -123,7 +123,7 @@ func NewLogStore(cfg Config) (*LogStore, error) {
 	return ls, nil
 }
 
-func (l *LogStore) Close() error {
+func (l *logStore) Close() error {
 	l.stopper.Stop()
 	if l.nh != nil {
 		l.nh.Close()
@@ -131,7 +131,7 @@ func (l *LogStore) Close() error {
 	return nil
 }
 
-func (l *LogStore) GetServiceAddress(nhID string) (string, bool) {
+func (l *logStore) GetServiceAddress(nhID string) (string, bool) {
 	r, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
@@ -145,41 +145,41 @@ func (l *LogStore) GetServiceAddress(nhID string) (string, bool) {
 	return md.serviceAddress, true
 }
 
-func (l *LogStore) GetShardInfo(shardID uint64) (dragonboat.ClusterView, bool) {
+func (l *logStore) GetShardInfo(shardID uint64) (dragonboat.ShardView, bool) {
 	r, ok := l.nh.GetNodeHostRegistry()
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
 	}
-	ci, ok := r.GetClusterInfo(shardID)
+	ci, ok := r.GetShardInfo(shardID)
 	if !ok {
-		return dragonboat.ClusterView{}, false
+		return dragonboat.ShardView{}, false
 	}
 	return ci, true
 }
 
-func (l *LogStore) StartHAKeeperReplica(replicaID uint64,
+func (l *logStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(defaultHAKeeperShardID, replicaID)
 	// TODO: add another API for joining
-	return l.nh.StartCluster(initialReplicas, false, newHAKeeperStateMachine, raftConfig)
+	return l.nh.StartReplica(initialReplicas, false, newHAKeeperStateMachine, raftConfig)
 }
 
-func (l *LogStore) StartReplica(shardID uint64, replicaID uint64,
+func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	if shardID == defaultHAKeeperShardID {
 		return ErrInvalidShardID
 	}
 	raftConfig := getRaftConfig(shardID, replicaID)
 	// TODO: add another API for joining
-	return l.nh.StartConcurrentCluster(initialReplicas, false, newStateMachine, raftConfig)
+	return l.nh.StartConcurrentReplica(initialReplicas, false, newStateMachine, raftConfig)
 }
 
-func (l *LogStore) propose(ctx context.Context,
+func (l *logStore) propose(ctx context.Context,
 	session *client.Session, cmd []byte) (sm.Result, error) {
 	for {
 		result, err := l.nh.SyncPropose(ctx, session, cmd)
 		if err != nil {
-			if errors.Is(err, dragonboat.ErrClusterNotReady) {
+			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
 				continue
 			}
@@ -189,12 +189,12 @@ func (l *LogStore) propose(ctx context.Context,
 	}
 }
 
-func (l *LogStore) read(ctx context.Context,
+func (l *logStore) read(ctx context.Context,
 	shardID uint64, query interface{}) (interface{}, error) {
 	for {
 		result, err := l.nh.SyncRead(ctx, shardID, query)
 		if err != nil {
-			if errors.Is(err, dragonboat.ErrClusterNotReady) {
+			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
 				continue
 			}
@@ -204,7 +204,7 @@ func (l *LogStore) read(ctx context.Context,
 	}
 }
 
-func (l *LogStore) GetOrExtendDNLease(ctx context.Context,
+func (l *logStore) GetOrExtendDNLease(ctx context.Context,
 	shardID uint64, dnID uint64) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetLeaseHolderCmd(dnID)
@@ -212,7 +212,7 @@ func (l *LogStore) GetOrExtendDNLease(ctx context.Context,
 	return err
 }
 
-func (l *LogStore) TruncateLog(ctx context.Context,
+func (l *logStore) TruncateLog(ctx context.Context,
 	shardID uint64, index Lsn) error {
 	session := l.nh.GetNoOPSession(shardID)
 	cmd := getSetTruncatedIndexCmd(index)
@@ -230,7 +230,7 @@ func (l *LogStore) TruncateLog(ctx context.Context,
 	return nil
 }
 
-func (l *LogStore) Append(ctx context.Context,
+func (l *logStore) Append(ctx context.Context,
 	shardID uint64, cmd []byte) (Lsn, error) {
 	if !isUserUpdate(cmd) {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not user update"))
@@ -250,7 +250,7 @@ func (l *LogStore) Append(ctx context.Context,
 	return result.Value, nil
 }
 
-func (l *LogStore) GetTruncatedIndex(ctx context.Context,
+func (l *logStore) GetTruncatedIndex(ctx context.Context,
 	shardID uint64) (uint64, error) {
 	v, err := l.read(ctx, shardID, truncatedIndexTag)
 	if err != nil {
@@ -259,7 +259,7 @@ func (l *LogStore) GetTruncatedIndex(ctx context.Context,
 	return v.(uint64), nil
 }
 
-func (l *LogStore) getLeaseHolderID(ctx context.Context,
+func (l *logStore) getLeaseHolderID(ctx context.Context,
 	shardID uint64, entries []pb.Entry) (uint64, error) {
 	if len(entries) == 0 {
 		panic("empty entries")
@@ -276,7 +276,7 @@ func (l *LogStore) getLeaseHolderID(ctx context.Context,
 	return v.(uint64), nil
 }
 
-func (l *LogStore) decodeCmd(e pb.Entry) []byte {
+func (l *logStore) decodeCmd(e pb.Entry) []byte {
 	if e.Type == pb.ApplicationEntry {
 		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected entry type"))
 	}
@@ -296,7 +296,7 @@ func isRaftInternalEntry(e pb.Entry) bool {
 	return e.Type == pb.ConfigChangeEntry || e.Type == pb.MetadataEntry
 }
 
-func (l *LogStore) filterEntries(ctx context.Context,
+func (l *logStore) filterEntries(ctx context.Context,
 	shardID uint64, entries []pb.Entry) ([]LogRecord, error) {
 	if len(entries) == 0 {
 		return []LogRecord{}, nil
@@ -338,7 +338,7 @@ func getNextIndex(entries []pb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
 	return firstIndex
 }
 
-func (l *LogStore) QueryLog(ctx context.Context, shardID uint64,
+func (l *logStore) QueryLog(ctx context.Context, shardID uint64,
 	firstIndex Lsn, maxSize uint64) ([]LogRecord, Lsn, error) {
 	v, err := l.read(ctx, shardID, indexTag)
 	if err != nil {
@@ -368,7 +368,7 @@ func (l *LogStore) QueryLog(ctx context.Context, shardID uint64,
 	}
 }
 
-func (l *LogStore) truncationWorker() {
+func (l *logStore) truncationWorker() {
 	for {
 		select {
 		case <-l.stopper.ShouldStop():
@@ -382,7 +382,7 @@ func (l *LogStore) truncationWorker() {
 }
 
 // TODO: add tests for this
-func (l *LogStore) truncateLog() error {
+func (l *logStore) truncateLog() error {
 	l.mu.Lock()
 	pendings := l.mu.pendingTruncate
 	l.mu.pendingTruncate = make(map[uint64]struct{})
@@ -422,7 +422,7 @@ func (l *LogStore) truncateLog() error {
 	return nil
 }
 
-func (l *LogStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
+func (l *logStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
 	m := heartbeat.LogStoreHeartbeat{
 		UUID:           l.cfg.NodeHostID,
 		RaftAddress:    l.cfg.RaftAddress,
@@ -434,7 +434,7 @@ func (l *LogStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
 		SkipLogInfo: true,
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
-	for _, ci := range nhi.ClusterInfoList {
+	for _, ci := range nhi.ShardInfoList {
 		shardInfo := &heartbeat.ShardInfo{
 			ShardID:  ci.ShardID,
 			Replicas: ci.Nodes,

@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/lni/dragonboat/v3"
+	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
@@ -61,15 +61,15 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := NewLogStore(cfg)
+	store, err := newLogStore(cfg)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.Close())
 	}()
 }
 
-func getTestStore(cfg Config) (*LogStore, error) {
-	store, err := NewLogStore(cfg)
+func getTestStore(cfg Config) (*logStore, error) {
+	store, err := newLogStore(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := NewLogStore(cfg)
+	store, err := newLogStore(cfg)
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
@@ -107,7 +107,7 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 	}()
 }
 
-func runStoreTest(t *testing.T, fn func(*testing.T, *LogStore)) {
+func runStoreTest(t *testing.T, fn func(*testing.T, *logStore)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -128,7 +128,7 @@ func getTestUserEntry() []byte {
 }
 
 func TestGetOrExtendLease(t *testing.T) {
-	fn := func(t *testing.T, store *LogStore) {
+	fn := func(t *testing.T, store *logStore) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -137,7 +137,7 @@ func TestGetOrExtendLease(t *testing.T) {
 }
 
 func TestAppendLog(t *testing.T) {
-	fn := func(t *testing.T, store *LogStore) {
+	fn := func(t *testing.T, store *logStore) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -150,7 +150,7 @@ func TestAppendLog(t *testing.T) {
 }
 
 func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
-	fn := func(t *testing.T, store *LogStore) {
+	fn := func(t *testing.T, store *logStore) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -165,7 +165,7 @@ func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
 }
 
 func TestTruncateLog(t *testing.T) {
-	fn := func(t *testing.T, store *LogStore) {
+	fn := func(t *testing.T, store *logStore) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -180,7 +180,7 @@ func TestTruncateLog(t *testing.T) {
 }
 
 func TestGetTruncatedIndex(t *testing.T) {
-	fn := func(t *testing.T, store *LogStore) {
+	fn := func(t *testing.T, store *logStore) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		index, err := store.GetTruncatedIndex(ctx, 1)
@@ -199,7 +199,7 @@ func TestGetTruncatedIndex(t *testing.T) {
 }
 
 func TestQueryLog(t *testing.T) {
-	fn := func(t *testing.T, store *LogStore) {
+	fn := func(t *testing.T, store *logStore) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -257,7 +257,7 @@ func TestStoreServiceAddressAndShardInfoCanBeQueried(t *testing.T) {
 		GossipAddress:       "127.0.0.1:9011",
 		GossipSeedAddresses: []string{"127.0.0.1:9001"},
 	}
-	store1, err := NewLogStore(cfg1)
+	store1, err := newLogStore(cfg1)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store1.Close())
@@ -266,7 +266,7 @@ func TestStoreServiceAddressAndShardInfoCanBeQueried(t *testing.T) {
 	peers1[1] = store1.nh.ID()
 	assert.NoError(t, store1.StartReplica(1, 1, peers1))
 
-	store2, err := NewLogStore(cfg2)
+	store2, err := newLogStore(cfg2)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store2.Close())
