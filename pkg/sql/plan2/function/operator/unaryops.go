@@ -36,7 +36,7 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 		resValues := make([]T, 1)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
 		//nulls.Reset(srcVector.Nsp)
-		vector.SetCol(srcVector, neg.NumericNeg[T](srcValues, resValues))
+		vector.SetCol(srcVector, neg.NumericNeg(srcValues, resValues))
 		return resVector, nil
 	} else {
 		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
@@ -45,7 +45,7 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 		}
 		resValues := encoding.DecodeFixedSlice[T](resVector.Data, resultElementSize)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(srcVector, neg.NumericNeg[T](srcValues, resValues))
+		vector.SetCol(srcVector, neg.NumericNeg(srcValues, resValues))
 		return resVector, nil
 	}
 }

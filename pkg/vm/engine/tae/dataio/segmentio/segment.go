@@ -53,7 +53,7 @@ func openSegment(name string, id uint64) *segmentFile {
 	sf.seg = &segment.Segment{}
 	err := sf.seg.Open(sf.name)
 	if err != nil {
-		return nil
+		panic(any(err.Error()))
 	}
 	sf.id = &common.ID{
 		SegmentID: id,
@@ -172,7 +172,7 @@ func newSegmentFile(name string, id uint64) *segmentFile {
 	sf.seg = &segment.Segment{}
 	err := sf.seg.Init(sf.name)
 	if err != nil {
-		return nil
+		panic(any(err.Error()))
 	}
 	sf.seg.Mount()
 	sf.id = &common.ID{

@@ -37,7 +37,7 @@ func Mult[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		vec := proc.AllocScalarVector(lv.Typ)
 		rs := make([]T, 1)
 		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-		vector.SetCol(vec, mul.NumericMul[T](lvs, rvs, rs))
+		vector.SetCol(vec, mul.NumericMul(lvs, rvs, rs))
 		return vec, nil
 	case lv.IsScalar() && !lv.IsScalar():
 		vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(rvs)))
@@ -46,7 +46,7 @@ func Mult[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, rv.Nsp)
-		vector.SetCol(vec, mul.NumericMulScalar[T](lvs[0], rvs, rs))
+		vector.SetCol(vec, mul.NumericMulScalar(lvs[0], rvs, rs))
 		return vec, nil
 	case !lv.IsScalar() && rv.IsScalar():
 		vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))

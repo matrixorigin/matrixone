@@ -172,7 +172,7 @@ type TxnStore interface {
 	io.Closer
 	BindTxn(AsyncTxn)
 
-	BatchDedup(dbId, id uint64, pks *vector.Vector) error
+	BatchDedup(dbId, id uint64, pks ...*vector.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)
 	LogBlockID(dbId, tid, bid uint64)
 

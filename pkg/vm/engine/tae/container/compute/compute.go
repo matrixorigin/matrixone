@@ -286,11 +286,11 @@ func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 	return nil
 }
 
-func ForEachValue(col *gvec.Vector, reversed bool, op func(v any) error) (err error) {
+func ForEachValue(col *gvec.Vector, reversed bool, op func(v any, row uint32) error) (err error) {
 	if reversed {
 		for i := gvec.Length(col) - 1; i >= 0; i-- {
 			v := GetValue(col, uint32(i))
-			if err = op(v); err != nil {
+			if err = op(v, uint32(i)); err != nil {
 				return
 			}
 		}
@@ -298,7 +298,7 @@ func ForEachValue(col *gvec.Vector, reversed bool, op func(v any) error) (err er
 	}
 	for i := 0; i < gvec.Length(col); i++ {
 		v := GetValue(col, uint32(i))
-		if err = op(v); err != nil {
+		if err = op(v, uint32(i)); err != nil {
 			return
 		}
 	}

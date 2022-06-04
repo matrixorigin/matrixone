@@ -117,6 +117,8 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 		resultExpr, isAgg, err = buildExpr(astExpr.Expr, ctx, query, node, binderCtx, needAgg)
 	case *tree.OrExpr:
 		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("or", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+	case *tree.XorExpr:
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("xor", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case *tree.NotExpr:
 		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("not", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 	case *tree.AndExpr:
@@ -166,8 +168,6 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 		resultExpr, isAgg, err = buildCaseExpr(astExpr, ctx, query, node, binderCtx, needAgg)
 	case *tree.IntervalExpr:
 		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", stmt))
-	case *tree.XorExpr:
-		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", stmt))
 	case *tree.Subquery:
 		resultExpr, err = buildSubQuery(astExpr, ctx, query, node, binderCtx)
 		isAgg = needAgg
@@ -436,6 +436,20 @@ func buildBinaryExpr(astExpr *tree.BinaryExpr, ctx CompilerContext, query *Query
 
 func buildNumVal(val constant.Value) (*Expr, error) {
 	switch val.Kind() {
+	case constant.Unknown:
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
+				},
+			},
+			Typ: &plan.Type{
+				Id:        plan.Type_ANY,
+				Nullable:  true,
+				Width:     0,
+				Precision: 0,
+			},
+		}, nil
 	case constant.Bool:
 		boolValue := constant.BoolVal(val)
 		return &Expr{
