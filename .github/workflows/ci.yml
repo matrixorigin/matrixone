@@ -90,7 +90,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           mv log head-log
           mv report head-report
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; echo "Job-Status=1" >> $GITHUB_ENV; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; fi
 
 
       - uses: actions/checkout@v2
@@ -232,7 +232,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           mv log head-log
           mv report head-report
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; echo "Job-Status=1" >> $GITHUB_ENV; exit 1; fi
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; fi
 
 
       - uses: actions/checkout@v2

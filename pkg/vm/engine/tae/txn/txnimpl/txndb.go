@@ -82,7 +82,7 @@ func (db *txnDB) Close() error {
 	return err
 }
 
-func (db *txnDB) BatchDedup(id uint64, pks *vector.Vector) (err error) {
+func (db *txnDB) BatchDedup(id uint64, pks ...*vector.Vector) (err error) {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
@@ -91,7 +91,7 @@ func (db *txnDB) BatchDedup(id uint64, pks *vector.Vector) (err error) {
 		return data.ErrNotFound
 	}
 
-	return table.BatchDedup(pks)
+	return table.DoBatchDedup(pks...)
 }
 
 func (db *txnDB) Append(id uint64, bat *batch.Batch) error {

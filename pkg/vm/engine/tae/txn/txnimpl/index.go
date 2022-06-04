@@ -85,7 +85,6 @@ func (idx *simpleTableIndex) Insert(v any, row uint32) error {
 	idx.tree[v] = row
 	return nil
 }
-
 func (idx *simpleTableIndex) Delete(vv any) error {
 	idx.Lock()
 	defer idx.Unlock()

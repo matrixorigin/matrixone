@@ -364,6 +364,19 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		}
 	}
 
+	if isUnsignedInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal128 {
+		switch lv.Typ.Oid {
+		case types.T_uint8:
+			return CastSpecialu4[uint8](lv, rv, proc)
+		case types.T_uint16:
+			return CastSpecialu4[uint16](lv, rv, proc)
+		case types.T_uint32:
+			return CastSpecialu4[uint32](lv, rv, proc)
+		case types.T_uint64:
+			return CastSpecialu4[uint64](lv, rv, proc)
+		}
+	}
+
 	// sametype
 	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_decimal64 {
 		return CastDecimal64AsDecimal64(lv, rv, proc)
@@ -477,7 +490,7 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]T2, 1)
-		if _, err := typecast.NumericToNumeric[T1, T2](lvs, rs); err != nil {
+		if _, err := typecast.NumericToNumeric(lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -491,7 +504,7 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 		return nil, err
 	}
 	rs := encoding.DecodeFixedSlice[T2](vec.Data, rtl)
-	if _, err := typecast.NumericToNumeric[T1, T2](lvs, rs); err != nil {
+	if _, err := typecast.NumericToNumeric(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -517,7 +530,7 @@ func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
 	}
 
-	if _, err := typecast.BytesToInt[T](col, rs); err != nil {
+	if _, err := typecast.BytesToInt(col, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -542,7 +555,7 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 		}
 		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
 	}
-	if _, err := typecast.BytesToFloat[T](col, rs); err != nil {
+	if _, err := typecast.BytesToFloat(col, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -560,7 +573,7 @@ func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = typecast.IntToBytes[T](lvs, col); err != nil {
+	if col, err = typecast.IntToBytes(lvs, col); err != nil {
 		return nil, err
 	}
 	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
@@ -586,7 +599,7 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = typecast.FloatToBytes[T](lvs, col); err != nil {
+	if col, err = typecast.FloatToBytes(lvs, col); err != nil {
 		return nil, err
 	}
 	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
@@ -631,16 +644,17 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 	return vec, nil
 }
 
-//  CastSpecials4: Cast converts signed integer to decimal128 ,Contains the following:
-// (int8 /int16/int32/int64) to decimal128
-func CastSpecials4[T int8 | int16 | int32 | int64](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func CastSpecialIntToDecimal[T constraints.Integer](
+	lv, rv *vector.Vector,
+	i2d func(xs []T, rs []types.Decimal128) ([]types.Decimal128, error),
+	proc *process.Process) (*vector.Vector, error) {
 	resultScale := int32(0)
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
 	lvs := lv.Col.([]T)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
 		rs := make([]types.Decimal128, 1)
-		if _, err := typecast.IntToDecimal128[T](lvs, rs); err != nil {
+		if _, err := i2d(lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -654,12 +668,24 @@ func CastSpecials4[T int8 | int16 | int32 | int64](lv, rv *vector.Vector, proc *
 	}
 	rs := encoding.DecodeDecimal128Slice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := typecast.IntToDecimal128[T](lvs, rs); err != nil {
+	if _, err := i2d(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
 	return vec, nil
+}
+
+//  CastSpecials4: Cast converts signed integer to decimal128 ,Contains the following:
+// (int8/int16/int32/int64) to decimal128
+func CastSpecials4[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CastSpecialIntToDecimal(lv, rv, typecast.IntToDecimal128[T], proc)
+}
+
+//  CastSpecialu4: Cast converts signed integer to decimal128 ,Contains the following:
+// (uint8/uint16/uint32/uint64) to decimal128
+func CastSpecialu4[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CastSpecialIntToDecimal(lv, rv, typecast.UintToDecimal128[T], proc)
 }
 
 //  CastVarcharAsDate : Cast converts varchar to date type

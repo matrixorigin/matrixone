@@ -66,7 +66,7 @@ func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) 
 }
 func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)   { return }
 func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, *vector.Vector) (err error)    { return }
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...*vector.Vector) (err error) { return }
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }

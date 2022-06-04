@@ -108,7 +108,7 @@ func (store *txnStore) BindTxn(txn txnif.AsyncTxn) {
 	store.txn = txn
 }
 
-func (store *txnStore) BatchDedup(dbId, id uint64, pks *vector.Vector) (err error) {
+func (store *txnStore) BatchDedup(dbId, id uint64, pks ...*vector.Vector) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pks *vector.Vector) (err erro
 	// 	return txnbase.ErrNotFound
 	// }
 
-	return db.BatchDedup(id, pks)
+	return db.BatchDedup(id, pks...)
 }
 
 func (store *txnStore) Append(dbId, id uint64, data *batch.Batch) error {

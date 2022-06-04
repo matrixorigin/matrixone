@@ -727,7 +727,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDb)
 	if err != nil {
 		return err
 	}
@@ -1620,6 +1620,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var ret interface{}
 	var runner ComputationRunner
 	var selfHandle = false
+	var fromLoadData = false
 	var txnErr error
 
 	for _, cw := range cws {
@@ -1651,6 +1652,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err != nil {
 				goto handleFailed
 			}
+			logutil.Infof("start autocommit txn in default")
 		}
 
 		switch st := stmt.(type) {
@@ -1745,6 +1747,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err != nil {
 				goto handleFailed
 			}
+			fromLoadData = true
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -1964,9 +1967,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		}
 	handleSucceeded:
-		txnErr = txnHandler.CommitAfterAutocommitOnly()
-		if txnErr != nil {
-			return txnErr
+		if !fromLoadData {
+			txnErr = txnHandler.CommitAfterAutocommitOnly()
+			if txnErr != nil {
+				return txnErr
+			}
 		}
 		goto handleNext
 	handleFailed:

@@ -237,7 +237,7 @@ func TestLogTable(t *testing.T) {
 	assert.Equal(t, meta.GetSchema().Name, entryCmd.Table.GetSchema().Name)
 	assert.Equal(t, meta.GetSchema().BlockMaxRows, entryCmd.Table.GetSchema().BlockMaxRows)
 	assert.Equal(t, meta.GetSchema().SegmentMaxBlocks, entryCmd.Table.GetSchema().SegmentMaxBlocks)
-	assert.Equal(t, meta.GetSchema().GetPrimaryKeyIdx(), entryCmd.Table.GetSchema().GetPrimaryKeyIdx())
+	assert.Equal(t, meta.GetSchema().GetSingleSortKeyIdx(), entryCmd.Table.GetSchema().GetSingleSortKeyIdx())
 	assert.Equal(t, meta.GetSchema().Types(), entryCmd.Table.GetSchema().Types())
 }
 

@@ -137,6 +137,7 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 
 func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
 	if err := txn.PreApplyCommit(); err != nil {
+		txn.SetError(err)
 		mgr.OnException(err)
 	}
 }
