@@ -171,11 +171,15 @@ func TestAutoGC1(t *testing.T) {
 // Test Steps
 // 1. Create a table w/o data and commit
 // 2. Drop the table and commit
+// 3. Create a table w one appendable block data and commit
+// 4. Drop the table and commit
 func TestGCTable(t *testing.T) {
 	opts := enableCheckpoint(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
 
 	// 1. Create a table without data
 	txn, _ := tae.StartTxn(nil)
@@ -189,11 +193,40 @@ func TestGCTable(t *testing.T) {
 	_, err := db.DropRelationByName(schema.Name)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
+
+	dbEntry, _ := tae.Catalog.GetDatabaseByID(db.GetID())
 	now := time.Now()
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Scheduler.GetCheckpointedLSN() == txn.GetLSN()
+		return dbEntry.CoarseTableCnt() == 0
 	})
+	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
+	t.Logf("Takes: %s", time.Since(now))
+	printCheckpointStats(t, tae)
 
+	bat := catalog.MockData(schema, schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1))
+	bats := compute.SplitBatch(bat, 4)
+
+	// 3. Create a table and append 7 rows
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err = rel.Append(bats[0])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// 4. Drop the table
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	_, err = db.DropRelationByName(schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	dbEntry, _ = tae.Catalog.GetDatabaseByID(db.GetID())
+	now = time.Now()
+	testutils.WaitExpect(1000, func() bool {
+		return dbEntry.CoarseTableCnt() == 0
+	})
+	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
 	t.Logf("Takes: %s", time.Since(now))
 	printCheckpointStats(t, tae)
 }

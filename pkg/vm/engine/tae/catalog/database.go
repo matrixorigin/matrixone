@@ -212,6 +212,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		if nn.Length() == 0 {
 			delete(e.nameNodes, table.GetSchema().Name)
 		}
+		delete(e.entries, table.GetID())
 	}
 	return
 }

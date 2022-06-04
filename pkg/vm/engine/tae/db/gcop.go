@@ -89,10 +89,22 @@ func gcSegmentClosure(entry *catalog.SegmentEntry, gct GCType) tasks.FuncT {
 // TODO
 func gcTableClosure(entry *catalog.TableEntry, gct GCType) tasks.FuncT {
 	return func() (err error) {
+		scopes := make([]common.ID, 0)
 		logutil.Infof("[GCTABLE] | %s | Started", entry.String())
 		defer func() {
-			logutil.Infof("[GCTABLE] | %s | Ended: %v", entry.String(), err)
+			logutil.Infof("[GCTABLE] | %s | Ended: %v | SEGS=%s", entry.String(), err, common.IDArraryString(scopes))
 		}()
+		dbEntry := entry.GetDB()
+		it := entry.MakeSegmentIt(false)
+		for it.Valid() {
+			seg := it.Get().GetPayload().(*catalog.SegmentEntry)
+			scopes = append(scopes, *seg.AsCommonID())
+			if err = gcSegmentClosure(seg, gct)(); err != nil {
+				return
+			}
+			it.Next()
+		}
+		err = dbEntry.RemoveEntry(entry)
 		return
 	}
 }
