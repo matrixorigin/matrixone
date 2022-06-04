@@ -140,13 +140,7 @@ func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engi
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
 	if schema.HiddenKey.Name == col {
-		for i := 0; i < vector.Length(data); i++ {
-			v := compute.GetValue(data, uint32(i))
-			if err := rel.handle.DeleteByHiddenKey(v); err != nil {
-				return err
-			}
-		}
-		return nil
+		return rel.handle.DeleteByHiddenKeys(data)
 	}
 	if !schema.HasPK() || schema.IsCompoundSortKey() {
 		panic(any("No valid primary key found"))
