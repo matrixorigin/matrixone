@@ -58,6 +58,7 @@ func testFileService(t *testing.T, newFS func() FileService) {
 
 		buf1 := new(bytes.Buffer)
 		var r io.ReadCloser
+		buf2 := make([]byte, 4)
 		vec := IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -68,6 +69,7 @@ func testFileService(t *testing.T, newFS func() FileService) {
 				1: {
 					Offset: 2,
 					Size:   4,
+					Data:   buf2,
 				},
 				2: {
 					Offset: 7,
@@ -93,6 +95,7 @@ func testFileService(t *testing.T, newFS func() FileService) {
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("34"), vec.Entries[0].Data)
 		assert.Equal(t, []byte("3456"), vec.Entries[1].Data)
+		assert.Equal(t, []byte("3456"), buf2)
 		assert.Equal(t, []byte("8"), vec.Entries[2].Data)
 		assert.Equal(t, []byte("1"), vec.Entries[3].Data)
 		content, err := io.ReadAll(r)
