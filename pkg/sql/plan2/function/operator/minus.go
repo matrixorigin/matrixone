@@ -37,7 +37,7 @@ func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, 
 		resultValues := make([]T, 1)
 		//nulls.Reset(resultVector.Nsp) ; i think this is good
 		nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, sub.Numeric[T](lvs, rvs, resultValues))
+		vector.SetCol(resultVector, sub.Numeric(lvs, rvs, resultValues))
 		return resultVector, nil
 	case lv.IsScalar() && !rv.IsScalar():
 		resultVector, err := proc.AllocVector(lv.Typ, int64(resultElementSize*len(rvs)))
@@ -46,7 +46,7 @@ func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, 
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, sub.NumericScalar[T](lvs[0], rvs, resultValues))
+		vector.SetCol(resultVector, sub.NumericScalar(lvs[0], rvs, resultValues))
 		return resultVector, nil
 	case !lv.IsScalar() && rv.IsScalar():
 		resultVector, err := proc.AllocVector(lv.Typ, int64(resultElementSize*len(lvs)))
@@ -55,7 +55,7 @@ func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, 
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, sub.NumericScalar[T](rvs[0], lvs, resultValues))
+		vector.SetCol(resultVector, sub.NumericScalar(rvs[0], lvs, resultValues))
 		return resultVector, nil
 	default:
 		resultVector, err := proc.AllocVector(lv.Typ, int64(resultElementSize*len(lvs)))
@@ -64,7 +64,7 @@ func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, 
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, sub.Numeric[T](lvs, rvs, resultValues))
+		vector.SetCol(resultVector, sub.Numeric(lvs, rvs, resultValues))
 		return resultVector, nil
 	}
 }
