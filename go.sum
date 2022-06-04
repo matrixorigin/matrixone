@@ -447,9 +447,13 @@ github.com/labstack/echo/v4 v4.5.0/go.mod h1:czIriw4a0C1dFun+ObrXp7ok03xON0N1awS
 github.com/labstack/gommon v0.3.0/go.mod h1:MULnywXg0yavhxWKc+lOruYdAhDwPK9wf0OL7NoOu+k=
 github.com/lni/dragonboat/v3 v3.1.1-0.20220531071603-855530305a40 h1:IuZln/orkTTs2gjJ1vnyxVzFLrvemnqz8LLpmay47NI=
 github.com/lni/dragonboat/v3 v3.1.1-0.20220531071603-855530305a40/go.mod h1:NoMUyHUO5fQQfzc6cTjDBqm+0OwUfJcfjoxEZy4NTYM=
+github.com/lni/dragonboat/v3 v3.1.1-0.20220604071910-5b0963b41bb9 h1:q37qyLAcWLntKv9hIzmrA1ftYdR2hAmsGIGXBF4U0/8=
+github.com/lni/dragonboat/v3 v3.1.1-0.20220604071910-5b0963b41bb9/go.mod h1:Mq+vPemqINVEvv4YhvWnFsXpLDee2W9LTjOjYCmSacs=
 github.com/lni/goutils v1.3.0/go.mod h1:PUPtBAnZlRPUKWUXCsYkIRWubJbtNHpTAee0sczhlf4=
 github.com/lni/goutils v1.3.1-0.20220404072553-ddb2075d2587 h1:mOi2+cNVAfGSO6gZ0zUi+gnGLv6JfDP25EYfQkmZzFA=
 github.com/lni/goutils v1.3.1-0.20220404072553-ddb2075d2587/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
+github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 h1:6gzI38ZJmbzZ7oZebXz6jII0uVK+MZ3+ds+7mIt1ioI=
+github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4/go.mod h1:LIHvF0fflR+zyXUQFQOiHPpKANf3UIr7DFIv5CBPOoU=
 github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f/go.mod h1:Z98QaAJnPYmgpw5VsksNdEPKpHDp4yeHTTvfHbX5JWE=
 github.com/lni/vfs v0.2.1-0.20220408085249-8be85be1c3c1 h1:350K9Ph9R+ExT49poOnsNa8Ev3yb0YZgODfeBsLATHc=
 github.com/lni/vfs v0.2.1-0.20220408085249-8be85be1c3c1/go.mod h1:LOatfyR8Xeej1jbXybwYGVfCccR0u+BQRG9xg7BD7xo=

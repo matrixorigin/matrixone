@@ -79,8 +79,8 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 
 func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 	return config.Config{
-		ClusterID:           shardID,
-		NodeID:              replicaID,
+		ShardID:             shardID,
+		ReplicaID:           replicaID,
 		CheckQuorum:         true,
 		PreVote:             true,
 		ElectionRTT:         10,
@@ -436,7 +436,7 @@ func (l *LogStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ClusterInfoList {
 		shardInfo := &heartbeat.ShardInfo{
-			ShardID:  ci.ClusterID,
+			ShardID:  ci.ShardID,
 			Replicas: ci.Nodes,
 			Epoch:    ci.ConfigChangeIndex,
 			LeaderID: ci.LeaderID,
