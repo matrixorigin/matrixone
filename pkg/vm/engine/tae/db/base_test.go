@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"io/ioutil"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -18,7 +20,8 @@ import (
 )
 
 const (
-	ModuleName = "TAEDB"
+	ModuleName    = "TAEDB"
+	defaultTestDB = "db"
 )
 
 func initDB(t *testing.T, opts *options.Options) *DB {
@@ -81,6 +84,12 @@ func dropRelation(t *testing.T, e *DB, dbName, name string) {
 }
 
 func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
+	txn, db, rel := createRelationNoCommit(t, e, dbName, schema, createDB)
+	assert.NoError(t, txn.Commit())
+	return
+}
+
+func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (txn txnif.AsyncTxn, db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	if createDB {
@@ -92,7 +101,6 @@ func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, 
 	}
 	rel, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
 	return
 }
 
@@ -118,6 +126,45 @@ func createRelationAndAppend(
 	assert.NoError(t, err)
 	assert.Nil(t, txn.Commit())
 	return
+}
+
+func getRelation(t *testing.T, e *DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(dbName)
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(tblName)
+	assert.NoError(t, err)
+	return
+}
+
+func getDefaultRelation(t *testing.T, e *DB, name string) (txn txnif.AsyncTxn, rel handle.Relation) {
+	return getRelation(t, e, defaultTestDB, name)
+}
+
+func getOneBlock(rel handle.Relation) handle.Block {
+	it := rel.MakeBlockIt()
+	return it.GetBlock()
+}
+
+func getOneBlockMeta(rel handle.Relation) *catalog.BlockEntry {
+	it := rel.MakeBlockIt()
+	return it.GetBlock().GetMeta().(*catalog.BlockEntry)
+}
+
+func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
+	it := rel.MakeBlockIt()
+	var err error
+	for it.Valid() {
+		if err = fn(it.GetBlock()); err != nil {
+			if errors.Is(err, handle.ErrIteratorEnd) {
+				return
+			} else {
+				panic(err)
+			}
+		}
+		it.Next()
+	}
 }
 
 func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
