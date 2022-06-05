@@ -62,7 +62,6 @@ func TestMetric(t *testing.T) {
 				prevSqlKind = createTbl
 			case createTbl:
 				require.True(t, strings.HasPrefix(sql, insertRow), "income sql: %s", sql)
-				prevSqlKind = insertRow
 				goto GOON
 			default:
 				require.True(t, false, "unknow sql kind %s", sql)

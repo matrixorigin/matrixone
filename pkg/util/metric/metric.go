@@ -119,7 +119,7 @@ func StopMetricSync() {
 		moExporter = nil
 	}
 	if statusSvr != nil {
-		statusSvr.Shutdown(context.TODO())
+		_ = statusSvr.Shutdown(context.TODO())
 		statusSvr = nil
 	}
 }
