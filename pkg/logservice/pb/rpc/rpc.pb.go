@@ -22,72 +22,102 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
-type Request_MethodType int32
+type MethodType int32
 
 const (
-	Request_CREATE       Request_MethodType = 0
-	Request_DESTROY      Request_MethodType = 1
-	Request_APPEND       Request_MethodType = 2
-	Request_READ         Request_MethodType = 3
-	Request_TRUNCATE     Request_MethodType = 4
-	Request_GET_TRUNCATE Request_MethodType = 5
+	MethodType_CREATE       MethodType = 0
+	MethodType_DESTROY      MethodType = 1
+	MethodType_APPEND       MethodType = 2
+	MethodType_READ         MethodType = 3
+	MethodType_TRUNCATE     MethodType = 4
+	MethodType_GET_TRUNCATE MethodType = 5
+	MethodType_CONNECT      MethodType = 6
+	MethodType_DISCONNECT   MethodType = 7
+	MethodType_CONNECT_RO   MethodType = 8
 )
 
-var Request_MethodType_name = map[int32]string{
+var MethodType_name = map[int32]string{
 	0: "CREATE",
 	1: "DESTROY",
 	2: "APPEND",
 	3: "READ",
 	4: "TRUNCATE",
 	5: "GET_TRUNCATE",
+	6: "CONNECT",
+	7: "DISCONNECT",
+	8: "CONNECT_RO",
 }
 
-var Request_MethodType_value = map[string]int32{
+var MethodType_value = map[string]int32{
 	"CREATE":       0,
 	"DESTROY":      1,
 	"APPEND":       2,
 	"READ":         3,
 	"TRUNCATE":     4,
 	"GET_TRUNCATE": 5,
+	"CONNECT":      6,
+	"DISCONNECT":   7,
+	"CONNECT_RO":   8,
 }
 
-func (x Request_MethodType) String() string {
-	return proto.EnumName(Request_MethodType_name, int32(x))
+func (x MethodType) String() string {
+	return proto.EnumName(MethodType_name, int32(x))
 }
 
-func (Request_MethodType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{1, 0}
+func (MethodType) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{0}
 }
 
-type Response_ErrorCode int32
+type ErrorCode int32
 
 const (
-	Response_NoError        Response_ErrorCode = 0
-	Response_Timeout        Response_ErrorCode = 1
-	Response_InvalidShard   Response_ErrorCode = 2
-	Response_InvalidTimeout Response_ErrorCode = 3
+	ErrorCode_NoError            ErrorCode = 0
+	ErrorCode_Timeout            ErrorCode = 1
+	ErrorCode_InvalidShard       ErrorCode = 2
+	ErrorCode_InvalidTimeout     ErrorCode = 3
+	ErrorCode_InvalidPayload     ErrorCode = 4
+	ErrorCode_InvalidPayloadSize ErrorCode = 5
+	ErrorCode_OutOfRange         ErrorCode = 6
+	ErrorCode_Rejected           ErrorCode = 7
+	ErrorCode_ShardNotReady      ErrorCode = 8
+	ErrorCode_SystemClosed       ErrorCode = 9
+	ErrorCode_ReplicaRemoved     ErrorCode = 10
 )
 
-var Response_ErrorCode_name = map[int32]string{
-	0: "NoError",
-	1: "Timeout",
-	2: "InvalidShard",
-	3: "InvalidTimeout",
+var ErrorCode_name = map[int32]string{
+	0:  "NoError",
+	1:  "Timeout",
+	2:  "InvalidShard",
+	3:  "InvalidTimeout",
+	4:  "InvalidPayload",
+	5:  "InvalidPayloadSize",
+	6:  "OutOfRange",
+	7:  "Rejected",
+	8:  "ShardNotReady",
+	9:  "SystemClosed",
+	10: "ReplicaRemoved",
 }
 
-var Response_ErrorCode_value = map[string]int32{
-	"NoError":        0,
-	"Timeout":        1,
-	"InvalidShard":   2,
-	"InvalidTimeout": 3,
+var ErrorCode_value = map[string]int32{
+	"NoError":            0,
+	"Timeout":            1,
+	"InvalidShard":       2,
+	"InvalidTimeout":     3,
+	"InvalidPayload":     4,
+	"InvalidPayloadSize": 5,
+	"OutOfRange":         6,
+	"Rejected":           7,
+	"ShardNotReady":      8,
+	"SystemClosed":       9,
+	"ReplicaRemoved":     10,
 }
 
-func (x Response_ErrorCode) String() string {
-	return proto.EnumName(Response_ErrorCode_name, int32(x))
+func (x ErrorCode) String() string {
+	return proto.EnumName(ErrorCode_name, int32(x))
 }
 
-func (Response_ErrorCode) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{2, 0}
+func (ErrorCode) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{1}
 }
 
 type LogRecord struct {
@@ -143,13 +173,15 @@ func (m *LogRecord) GetData() []byte {
 }
 
 type Request struct {
-	Method      Request_MethodType `protobuf:"varint,1,opt,name=Method,proto3,enum=Request_MethodType" json:"Method,omitempty"`
-	Name        string             `protobuf:"bytes,2,opt,name=Name,proto3" json:"Name,omitempty"`
-	ShardID     uint64             `protobuf:"varint,3,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
-	Index       uint64             `protobuf:"varint,4,opt,name=Index,proto3" json:"Index,omitempty"`
-	MaxSize     uint64             `protobuf:"varint,5,opt,name=MaxSize,proto3" json:"MaxSize,omitempty"`
-	Timeout     uint64             `protobuf:"varint,6,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
-	PayloadSize uint64             `protobuf:"varint,7,opt,name=PayloadSize,proto3" json:"PayloadSize,omitempty"`
+	Method      MethodType `protobuf:"varint,1,opt,name=Method,proto3,enum=MethodType" json:"Method,omitempty"`
+	Name        string     `protobuf:"bytes,2,opt,name=Name,proto3" json:"Name,omitempty"`
+	ShardID     uint64     `protobuf:"varint,3,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
+	Index       uint64     `protobuf:"varint,4,opt,name=Index,proto3" json:"Index,omitempty"`
+	MaxSize     uint64     `protobuf:"varint,5,opt,name=MaxSize,proto3" json:"MaxSize,omitempty"`
+	Timeout     int64      `protobuf:"varint,6,opt,name=Timeout,proto3" json:"Timeout,omitempty"`
+	DNShardID   uint64     `protobuf:"varint,7,opt,name=DNShardID,proto3" json:"DNShardID,omitempty"`
+	DNID        uint64     `protobuf:"varint,8,opt,name=DNID,proto3" json:"DNID,omitempty"`
+	PayloadSize uint64     `protobuf:"varint,9,opt,name=PayloadSize,proto3" json:"PayloadSize,omitempty"`
 }
 
 func (m *Request) Reset()         { *m = Request{} }
@@ -185,11 +217,11 @@ func (m *Request) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Request proto.InternalMessageInfo
 
-func (m *Request) GetMethod() Request_MethodType {
+func (m *Request) GetMethod() MethodType {
 	if m != nil {
 		return m.Method
 	}
-	return Request_CREATE
+	return MethodType_CREATE
 }
 
 func (m *Request) GetName() string {
@@ -220,9 +252,23 @@ func (m *Request) GetMaxSize() uint64 {
 	return 0
 }
 
-func (m *Request) GetTimeout() uint64 {
+func (m *Request) GetTimeout() int64 {
 	if m != nil {
 		return m.Timeout
+	}
+	return 0
+}
+
+func (m *Request) GetDNShardID() uint64 {
+	if m != nil {
+		return m.DNShardID
+	}
+	return 0
+}
+
+func (m *Request) GetDNID() uint64 {
+	if m != nil {
+		return m.DNID
 	}
 	return 0
 }
@@ -235,10 +281,11 @@ func (m *Request) GetPayloadSize() uint64 {
 }
 
 type Response struct {
-	Error      Response_ErrorCode `protobuf:"varint,1,opt,name=Error,proto3,enum=Response_ErrorCode" json:"Error,omitempty"`
-	ShardID    uint64             `protobuf:"varint,2,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
-	Index      uint64             `protobuf:"varint,3,opt,name=Index,proto3" json:"Index,omitempty"`
-	LogRecords []*LogRecord       `protobuf:"bytes,4,rep,name=LogRecords,proto3" json:"LogRecords,omitempty"`
+	Method    MethodType `protobuf:"varint,1,opt,name=Method,proto3,enum=MethodType" json:"Method,omitempty"`
+	Error     ErrorCode  `protobuf:"varint,2,opt,name=Error,proto3,enum=ErrorCode" json:"Error,omitempty"`
+	ShardID   uint64     `protobuf:"varint,3,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
+	Index     uint64     `protobuf:"varint,4,opt,name=Index,proto3" json:"Index,omitempty"`
+	LastIndex uint64     `protobuf:"varint,5,opt,name=LastIndex,proto3" json:"LastIndex,omitempty"`
 }
 
 func (m *Response) Reset()         { *m = Response{} }
@@ -274,11 +321,18 @@ func (m *Response) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Response proto.InternalMessageInfo
 
-func (m *Response) GetError() Response_ErrorCode {
+func (m *Response) GetMethod() MethodType {
+	if m != nil {
+		return m.Method
+	}
+	return MethodType_CREATE
+}
+
+func (m *Response) GetError() ErrorCode {
 	if m != nil {
 		return m.Error
 	}
-	return Response_NoError
+	return ErrorCode_NoError
 }
 
 func (m *Response) GetShardID() uint64 {
@@ -295,51 +349,104 @@ func (m *Response) GetIndex() uint64 {
 	return 0
 }
 
-func (m *Response) GetLogRecords() []*LogRecord {
+func (m *Response) GetLastIndex() uint64 {
 	if m != nil {
-		return m.LogRecords
+		return m.LastIndex
+	}
+	return 0
+}
+
+type LogRecordResponse struct {
+	Records []*LogRecord `protobuf:"bytes,1,rep,name=Records,proto3" json:"Records,omitempty"`
+}
+
+func (m *LogRecordResponse) Reset()         { *m = LogRecordResponse{} }
+func (m *LogRecordResponse) String() string { return proto.CompactTextString(m) }
+func (*LogRecordResponse) ProtoMessage()    {}
+func (*LogRecordResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{3}
+}
+func (m *LogRecordResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *LogRecordResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_LogRecordResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *LogRecordResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_LogRecordResponse.Merge(m, src)
+}
+func (m *LogRecordResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *LogRecordResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_LogRecordResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_LogRecordResponse proto.InternalMessageInfo
+
+func (m *LogRecordResponse) GetRecords() []*LogRecord {
+	if m != nil {
+		return m.Records
 	}
 	return nil
 }
 
 func init() {
-	proto.RegisterEnum("Request_MethodType", Request_MethodType_name, Request_MethodType_value)
-	proto.RegisterEnum("Response_ErrorCode", Response_ErrorCode_name, Response_ErrorCode_value)
+	proto.RegisterEnum("MethodType", MethodType_name, MethodType_value)
+	proto.RegisterEnum("ErrorCode", ErrorCode_name, ErrorCode_value)
 	proto.RegisterType((*LogRecord)(nil), "LogRecord")
 	proto.RegisterType((*Request)(nil), "Request")
 	proto.RegisterType((*Response)(nil), "Response")
+	proto.RegisterType((*LogRecordResponse)(nil), "LogRecordResponse")
 }
 
 func init() { proto.RegisterFile("rpc.proto", fileDescriptor_77a6da22d6a3feb1) }
 
 var fileDescriptor_77a6da22d6a3feb1 = []byte{
-	// 403 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x74, 0x52, 0xcb, 0xae, 0x93, 0x40,
-	0x18, 0x66, 0xb8, 0x96, 0xbf, 0xcd, 0x09, 0x19, 0x5d, 0xcc, 0x8a, 0x10, 0x56, 0x55, 0x13, 0x4c,
-	0x8e, 0xf1, 0x01, 0x6a, 0x21, 0xa6, 0xd1, 0x83, 0xcd, 0x14, 0x17, 0xea, 0xc2, 0x8c, 0x65, 0xe2,
-	0x69, 0xd2, 0x76, 0x70, 0xa0, 0xa6, 0xf5, 0x29, 0x7c, 0x11, 0xdf, 0xc3, 0x65, 0x97, 0xae, 0x8c,
-	0x69, 0x5f, 0xc4, 0x30, 0x50, 0xca, 0xe6, 0xec, 0xe6, 0xbb, 0xfc, 0xb7, 0x0f, 0xc0, 0x95, 0xc5,
-	0x32, 0x2a, 0xa4, 0xa8, 0x44, 0xf8, 0x12, 0xdc, 0xb7, 0xe2, 0x2b, 0xe5, 0x4b, 0x21, 0x73, 0xfc,
-	0x18, 0xac, 0xd9, 0x36, 0xe7, 0x7b, 0x82, 0x02, 0x34, 0x36, 0x69, 0x03, 0x30, 0x06, 0x33, 0x66,
-	0x15, 0x23, 0x7a, 0x80, 0xc6, 0x23, 0xaa, 0xde, 0xe1, 0x2f, 0x1d, 0x1c, 0xca, 0xbf, 0xed, 0x78,
-	0x59, 0xe1, 0x67, 0x60, 0xdf, 0xf1, 0xea, 0x5e, 0xe4, 0xaa, 0xec, 0xe6, 0xf6, 0x51, 0xd4, 0x2a,
-	0x51, 0x43, 0x67, 0x87, 0x82, 0xd3, 0xd6, 0x52, 0x37, 0x4b, 0xd9, 0x86, 0xab, 0x66, 0x2e, 0x55,
-	0x6f, 0x4c, 0xc0, 0x59, 0xdc, 0x33, 0x99, 0xcf, 0x62, 0x62, 0xa8, 0xc1, 0x17, 0x78, 0x5d, 0xc8,
-	0xec, 0x2f, 0x44, 0xc0, 0xb9, 0x63, 0xfb, 0xc5, 0xea, 0x07, 0x27, 0x56, 0xe3, 0x6f, 0x61, 0xad,
-	0x64, 0xab, 0x0d, 0x17, 0xbb, 0x8a, 0xd8, 0x8d, 0xd2, 0x42, 0x1c, 0xc0, 0x70, 0xce, 0x0e, 0x6b,
-	0xc1, 0x72, 0x55, 0xe7, 0x28, 0xb5, 0x4f, 0x85, 0x9f, 0x00, 0xae, 0xfb, 0x62, 0x00, 0x7b, 0x4a,
-	0x93, 0x49, 0x96, 0x78, 0x1a, 0x1e, 0x82, 0x13, 0x27, 0x8b, 0x8c, 0xbe, 0xfb, 0xe0, 0xa1, 0x5a,
-	0x98, 0xcc, 0xe7, 0x49, 0x1a, 0x7b, 0x3a, 0x1e, 0x80, 0x49, 0x93, 0x49, 0xec, 0x19, 0x78, 0x04,
-	0x83, 0x8c, 0xbe, 0x4f, 0xa7, 0x75, 0x81, 0x89, 0x3d, 0x18, 0xbd, 0x4e, 0xb2, 0xcf, 0x1d, 0x63,
-	0x85, 0x7f, 0x11, 0x0c, 0x28, 0x2f, 0x0b, 0xb1, 0x2d, 0x39, 0x7e, 0x02, 0x56, 0x22, 0xa5, 0x90,
-	0xbd, 0xbc, 0x1a, 0x25, 0x52, 0xf4, 0x54, 0xe4, 0x9c, 0x36, 0x8e, 0x7e, 0x34, 0xfa, 0x03, 0xd1,
-	0x18, 0xfd, 0x68, 0x9e, 0x02, 0x74, 0x9f, 0xb3, 0x24, 0x66, 0x60, 0x8c, 0x87, 0xb7, 0x10, 0x75,
-	0x14, 0xed, 0xa9, 0xe1, 0x1b, 0x70, 0xbb, 0x79, 0xf5, 0x8d, 0xa9, 0x50, 0xb0, 0x39, 0xb8, 0xcd,
-	0xcd, 0x43, 0xf5, 0x31, 0xb3, 0xed, 0x77, 0xb6, 0x5e, 0xe5, 0x6a, 0xb4, 0xa7, 0x63, 0x0c, 0x37,
-	0x2d, 0x73, 0x71, 0x19, 0xaf, 0xfc, 0xdf, 0x27, 0x1f, 0x1d, 0x4f, 0x3e, 0xfa, 0x77, 0xf2, 0xd1,
-	0xcf, 0xb3, 0xaf, 0x1d, 0xcf, 0xbe, 0xf6, 0xe7, 0xec, 0x6b, 0x1f, 0xcd, 0xe7, 0xb2, 0x58, 0x7e,
-	0xb1, 0xd5, 0xef, 0xf6, 0xe2, 0x7f, 0x00, 0x00, 0x00, 0xff, 0xff, 0xca, 0x1d, 0xc3, 0xb0, 0x7b,
-	0x02, 0x00, 0x00,
+	// 544 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x53, 0xbd, 0x8e, 0xd3, 0x4c,
+	0x14, 0xcd, 0x6c, 0x1c, 0xff, 0xdc, 0xec, 0x17, 0xcd, 0x8e, 0x3e, 0x21, 0x17, 0x2b, 0xcb, 0x0a,
+	0x14, 0xd1, 0x16, 0x41, 0x0a, 0xa2, 0xa0, 0x0c, 0xb6, 0x85, 0x22, 0xed, 0x3a, 0xd1, 0xc4, 0x14,
+	0xd0, 0xac, 0x86, 0xcc, 0xb0, 0x1b, 0x94, 0x64, 0x8c, 0xed, 0xac, 0x36, 0x3c, 0x01, 0x25, 0x6f,
+	0xc0, 0xeb, 0x50, 0xa1, 0x2d, 0x29, 0x51, 0xf2, 0x16, 0x54, 0x68, 0xc6, 0x76, 0x12, 0x3a, 0xe8,
+	0xe6, 0x9c, 0x33, 0x77, 0xce, 0xb9, 0xf7, 0x6a, 0xc0, 0xc9, 0xd2, 0x59, 0x3f, 0xcd, 0x64, 0x21,
+	0xbb, 0xcf, 0xc1, 0xb9, 0x94, 0x37, 0x54, 0xcc, 0x64, 0xc6, 0xc9, 0xff, 0xd0, 0x1a, 0xad, 0xb8,
+	0xb8, 0x77, 0x91, 0x8f, 0x7a, 0x06, 0x2d, 0x01, 0x21, 0x60, 0x84, 0xac, 0x60, 0xee, 0x89, 0x8f,
+	0x7a, 0xa7, 0x54, 0x9f, 0xbb, 0xbf, 0x10, 0x58, 0x54, 0x7c, 0x5c, 0x8b, 0xbc, 0x20, 0x8f, 0xc1,
+	0xbc, 0x12, 0xc5, 0xad, 0xe4, 0xba, 0xac, 0x33, 0x68, 0xf7, 0x4b, 0x98, 0x6c, 0x52, 0x41, 0x2b,
+	0x49, 0x3d, 0x12, 0xb3, 0xa5, 0xd0, 0x8f, 0x38, 0x54, 0x9f, 0x89, 0x0b, 0xd6, 0xf4, 0x96, 0x65,
+	0x7c, 0x14, 0xba, 0x4d, 0x6d, 0x58, 0xc3, 0x43, 0x10, 0xe3, 0x38, 0x88, 0x0b, 0xd6, 0x15, 0xbb,
+	0x9f, 0xce, 0x3f, 0x09, 0xb7, 0x55, 0xde, 0xaf, 0xa0, 0x52, 0x92, 0xf9, 0x52, 0xc8, 0x75, 0xe1,
+	0x9a, 0x3e, 0xea, 0x35, 0x69, 0x0d, 0xc9, 0x39, 0x38, 0x61, 0x5c, 0xbb, 0x58, 0xba, 0xea, 0x40,
+	0xe8, 0xd6, 0xe2, 0x51, 0xe8, 0xda, 0x5a, 0xd0, 0x67, 0xe2, 0x43, 0x7b, 0xc2, 0x36, 0x0b, 0xc9,
+	0xb8, 0x76, 0x72, 0xb4, 0x74, 0x4c, 0x75, 0xbf, 0x22, 0xb0, 0xa9, 0xc8, 0x53, 0xb9, 0xca, 0xc5,
+	0xdf, 0x75, 0xef, 0x43, 0x2b, 0xca, 0x32, 0x99, 0xe9, 0xf6, 0x3b, 0x03, 0xe8, 0x6b, 0x14, 0x48,
+	0x2e, 0x68, 0x29, 0xfc, 0xf3, 0x2c, 0xce, 0xc1, 0xb9, 0x64, 0x79, 0x51, 0x2a, 0xe5, 0x34, 0x0e,
+	0x44, 0xf7, 0x05, 0x9c, 0xed, 0xb7, 0xba, 0x4f, 0xfa, 0x44, 0xad, 0x4c, 0x31, 0xb9, 0x8b, 0xfc,
+	0x66, 0xaf, 0x3d, 0x80, 0xfe, 0xe1, 0x52, 0x2d, 0x5d, 0x7c, 0x46, 0x00, 0x87, 0x0e, 0x08, 0x80,
+	0x19, 0xd0, 0x68, 0x98, 0x44, 0xb8, 0x41, 0xda, 0x60, 0x85, 0xd1, 0x34, 0xa1, 0xe3, 0x37, 0x18,
+	0x29, 0x61, 0x38, 0x99, 0x44, 0x71, 0x88, 0x4f, 0x88, 0x0d, 0x06, 0x8d, 0x86, 0x21, 0x6e, 0x92,
+	0x53, 0xb0, 0x13, 0xfa, 0x3a, 0x0e, 0x54, 0x81, 0x41, 0x30, 0x9c, 0xbe, 0x8a, 0x92, 0xeb, 0x3d,
+	0xd3, 0x52, 0x4f, 0x04, 0xe3, 0x38, 0x8e, 0x82, 0x04, 0x9b, 0xa4, 0x03, 0x10, 0x8e, 0xa6, 0x35,
+	0xb6, 0x14, 0xae, 0xc0, 0x35, 0x1d, 0x63, 0xfb, 0xe2, 0x3b, 0x02, 0x67, 0x3f, 0x28, 0x55, 0x1a,
+	0x4b, 0x0d, 0xcb, 0x28, 0xd5, 0x86, 0x31, 0x52, 0x36, 0xa3, 0xd5, 0x1d, 0x5b, 0xcc, 0xb9, 0x9e,
+	0x19, 0x3e, 0x21, 0x04, 0x3a, 0x15, 0x53, 0xdf, 0x6a, 0x1e, 0x71, 0xd5, 0x2e, 0xb1, 0x41, 0x1e,
+	0x01, 0xf9, 0x93, 0x53, 0xfb, 0xc5, 0x2d, 0x95, 0x64, 0xbc, 0x2e, 0xc6, 0xef, 0x29, 0x5b, 0xdd,
+	0x08, 0x6c, 0xaa, 0xb6, 0xa8, 0xf8, 0x20, 0x66, 0x85, 0xe0, 0xd8, 0x22, 0x67, 0xf0, 0x9f, 0x36,
+	0x8a, 0x65, 0x41, 0x05, 0xe3, 0x1b, 0x6c, 0xab, 0x08, 0xd3, 0x4d, 0x5e, 0x88, 0x65, 0xb0, 0x90,
+	0xb9, 0xe0, 0xd8, 0x51, 0x76, 0x54, 0xa4, 0x8b, 0xf9, 0x8c, 0x51, 0xb1, 0x94, 0x77, 0x82, 0x63,
+	0x78, 0xe9, 0x7d, 0xdb, 0x7a, 0xe8, 0x61, 0xeb, 0xa1, 0x9f, 0x5b, 0x0f, 0x7d, 0xd9, 0x79, 0x8d,
+	0x87, 0x9d, 0xd7, 0xf8, 0xb1, 0xf3, 0x1a, 0x6f, 0x8d, 0xa7, 0x59, 0x3a, 0x7b, 0x67, 0xea, 0x3f,
+	0xf9, 0xec, 0x77, 0x00, 0x00, 0x00, 0xff, 0xff, 0x57, 0x11, 0x18, 0x2b, 0xa0, 0x03, 0x00, 0x00,
 }
 
 func (m *LogRecord) Marshal() (dAtA []byte, err error) {
@@ -400,6 +507,16 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.PayloadSize != 0 {
 		i = encodeVarintRpc(dAtA, i, uint64(m.PayloadSize))
 		i--
+		dAtA[i] = 0x48
+	}
+	if m.DNID != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.DNID))
+		i--
+		dAtA[i] = 0x40
+	}
+	if m.DNShardID != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.DNShardID))
+		i--
 		dAtA[i] = 0x38
 	}
 	if m.Timeout != 0 {
@@ -457,10 +574,58 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if len(m.LogRecords) > 0 {
-		for iNdEx := len(m.LogRecords) - 1; iNdEx >= 0; iNdEx-- {
+	if m.LastIndex != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.LastIndex))
+		i--
+		dAtA[i] = 0x28
+	}
+	if m.Index != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.Index))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.ShardID != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.Error != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.Error))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Method != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.Method))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *LogRecordResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *LogRecordResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LogRecordResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.Records) > 0 {
+		for iNdEx := len(m.Records) - 1; iNdEx >= 0; iNdEx-- {
 			{
-				size, err := m.LogRecords[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				size, err := m.Records[iNdEx].MarshalToSizedBuffer(dAtA[:i])
 				if err != nil {
 					return 0, err
 				}
@@ -468,23 +633,8 @@ func (m *Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 				i = encodeVarintRpc(dAtA, i, uint64(size))
 			}
 			i--
-			dAtA[i] = 0x22
+			dAtA[i] = 0xa
 		}
-	}
-	if m.Index != 0 {
-		i = encodeVarintRpc(dAtA, i, uint64(m.Index))
-		i--
-		dAtA[i] = 0x18
-	}
-	if m.ShardID != 0 {
-		i = encodeVarintRpc(dAtA, i, uint64(m.ShardID))
-		i--
-		dAtA[i] = 0x10
-	}
-	if m.Error != 0 {
-		i = encodeVarintRpc(dAtA, i, uint64(m.Error))
-		i--
-		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
@@ -541,6 +691,12 @@ func (m *Request) Size() (n int) {
 	if m.Timeout != 0 {
 		n += 1 + sovRpc(uint64(m.Timeout))
 	}
+	if m.DNShardID != 0 {
+		n += 1 + sovRpc(uint64(m.DNShardID))
+	}
+	if m.DNID != 0 {
+		n += 1 + sovRpc(uint64(m.DNID))
+	}
 	if m.PayloadSize != 0 {
 		n += 1 + sovRpc(uint64(m.PayloadSize))
 	}
@@ -553,6 +709,9 @@ func (m *Response) Size() (n int) {
 	}
 	var l int
 	_ = l
+	if m.Method != 0 {
+		n += 1 + sovRpc(uint64(m.Method))
+	}
 	if m.Error != 0 {
 		n += 1 + sovRpc(uint64(m.Error))
 	}
@@ -562,8 +721,20 @@ func (m *Response) Size() (n int) {
 	if m.Index != 0 {
 		n += 1 + sovRpc(uint64(m.Index))
 	}
-	if len(m.LogRecords) > 0 {
-		for _, e := range m.LogRecords {
+	if m.LastIndex != 0 {
+		n += 1 + sovRpc(uint64(m.LastIndex))
+	}
+	return n
+}
+
+func (m *LogRecordResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Records) > 0 {
+		for _, e := range m.Records {
 			l = e.Size()
 			n += 1 + l + sovRpc(uint64(l))
 		}
@@ -723,7 +894,7 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.Method |= Request_MethodType(b&0x7F) << shift
+				m.Method |= MethodType(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -831,12 +1002,50 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.Timeout |= uint64(b&0x7F) << shift
+				m.Timeout |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
 		case 7:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShardID", wireType)
+			}
+			m.DNShardID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DNShardID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DNID", wireType)
+			}
+			m.DNID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DNID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field PayloadSize", wireType)
 			}
@@ -907,6 +1116,25 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Method", wireType)
+			}
+			m.Method = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Method |= MethodType(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Error", wireType)
 			}
 			m.Error = 0
@@ -919,12 +1147,12 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.Error |= Response_ErrorCode(b&0x7F) << shift
+				m.Error |= ErrorCode(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-		case 2:
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ShardID", wireType)
 			}
@@ -943,7 +1171,7 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
-		case 3:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Index", wireType)
 			}
@@ -962,9 +1190,78 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
-		case 4:
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LastIndex", wireType)
+			}
+			m.LastIndex = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.LastIndex |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipRpc(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *LogRecordResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowRpc
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: LogRecordResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: LogRecordResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field LogRecords", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Records", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -991,8 +1288,8 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.LogRecords = append(m.LogRecords, &LogRecord{})
-			if err := m.LogRecords[len(m.LogRecords)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.Records = append(m.Records, &LogRecord{})
+			if err := m.Records[len(m.Records)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

@@ -14,39 +14,58 @@
 syntax = "proto3";
 option go_package = "/rpc";
 
+enum MethodType {
+  CREATE       = 0;
+  DESTROY      = 1;
+  APPEND       = 2;
+  READ         = 3;
+  TRUNCATE     = 4;
+  GET_TRUNCATE = 5;
+  CONNECT      = 6;
+  CONNECT_RO   = 7;
+}
+
 message LogRecord {
   uint64 Index = 1;
   bytes Data   = 2;
 };
 
 message Request {
-  enum MethodType {
-    CREATE       = 0;
-    DESTROY      = 1;
-    APPEND       = 2;
-    READ         = 3;
-    TRUNCATE     = 4;
-    GET_TRUNCATE = 5;
-  }
-
   MethodType Method   = 1;
   string Name         = 2;
   uint64 ShardID      = 3;
   uint64 Index        = 4;
   uint64 MaxSize      = 5;
-  uint64 Timeout      = 6;
-  uint64 PayloadSize  = 7;
+  int64 Timeout       = 6;
+
+  uint64 DNShardID    = 7;
+  uint64 DNID         = 8;
+
+  uint64 PayloadSize  = 9;
 };
 
+enum ErrorCode {
+  NoError            = 0;
+  Timeout            = 1;
+  InvalidShard       = 2;
+  InvalidTimeout     = 3;
+  InvalidPayload     = 4;
+  InvalidPayloadSize = 5;
+  OutOfRange         = 6;
+  Rejected           = 7;
+  ShardNotReady      = 8;
+  SystemClosed       = 9;
+  ReplicaRemoved     = 10;
+}
+
 message Response {
-  enum ErrorCode {
-    NoError        = 0;
-    Timeout        = 1;
-    InvalidShard   = 2;
-    InvalidTimeout = 3;
-  }
-  ErrorCode Error  = 1;
-  uint64 ShardID   = 2;
-  uint64 Index     = 3;
-  repeated LogRecord LogRecords = 4;
+  MethodType Method  = 1;     
+  ErrorCode Error    = 2;
+  uint64 ShardID     = 3;
+  uint64 Index       = 4;
+  uint64 LastIndex   = 5;
+};
+
+message LogRecordResponse {
+  repeated LogRecord Records = 1;
 };
