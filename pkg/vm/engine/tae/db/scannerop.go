@@ -184,7 +184,8 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	entry.RUnlock()
 	if gcNeeded {
 		scopes := MakeBlockScopes(entry)
-		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry, GCType_Block))
+		// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry, GCType_Block))
+		_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcBlockClosure(entry, GCType_Block))
 		logutil.Infof("[GCBLK] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err == tasks.ErrScheduleScopeConflict {
@@ -193,9 +194,9 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 			err = nil
 		}
 	} else {
+		blkData := entry.GetBlockData()
 		ts, terminated := entry.GetTerminationTS()
-		if terminated {
-			blkData := entry.GetBlockData()
+		if terminated && blkData.GetMaxCheckpointTS() < ts {
 			_, err = monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, entry.AsCommonID(), blkData.CheckpointWALClosure(ts))
 			if err != nil {
 				logutil.Warnf("CheckpointWALClosure %s: %v", entry.Repr(), err)
@@ -223,7 +224,8 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	entry.RUnlock()
 	if gcNeeded {
 		scopes := MakeSegmentScopes(entry)
-		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry, GCType_Segment))
+		_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcSegmentClosure(entry, GCType_Segment))
+		// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry, GCType_Segment))
 		logutil.Infof("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err != tasks.ErrScheduleScopeConflict {
@@ -255,7 +257,8 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 	}
 
 	scopes := MakeTableScopes(entry)
-	_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcTableClosure(entry, GCType_Table))
+	// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcTableClosure(entry, GCType_Table))
+	_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcTableClosure(entry, GCType_Table))
 	logutil.Infof("[GCTABLE] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
 	if err != nil {
 		err = nil
@@ -283,7 +286,8 @@ func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err erro
 	}
 
 	scopes := MakeDBScopes(entry)
-	_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcDatabaseClosure(entry))
+	_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcDatabaseClosure(entry))
+	// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcDatabaseClosure(entry))
 	logutil.Infof("[GCDB] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
 	if err != nil {
 		err = nil
