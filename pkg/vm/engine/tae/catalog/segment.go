@@ -21,6 +21,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -282,9 +283,16 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 func (entry *SegmentEntry) PrepareRollback() (err error) {
 	entry.RLock()
 	currOp := entry.CurrOp
+	logutil.Infof("PrepareRollback %s", entry.StringLocked())
 	entry.RUnlock()
 	if currOp == OpCreate {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
+			return
+		}
+		//TODO: maybe scheduled?
+		// entry.GetCatalog().GetScheduler().ScheduleScopedFn(nil, tasks.IOTask, entry.AsCommonID(), entry.DestroyData)
+		if err = entry.DestroyData(); err != nil {
+			logutil.Fatalf("Cannot destory uncommitted segment [%s] data: %v", entry.Repr(), err)
 			return
 		}
 	}
@@ -378,5 +386,8 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 }
 
 func (entry *SegmentEntry) DestroyData() (err error) {
-	return entry.segData.Destory()
+	if entry.segData != nil {
+		err = entry.segData.Destory()
+	}
+	return
 }
