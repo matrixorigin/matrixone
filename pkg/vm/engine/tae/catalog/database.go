@@ -357,5 +357,5 @@ func (entry *DBEntry) IsActive() bool {
 	entry.RLock()
 	dropped := entry.IsDroppedCommitted()
 	entry.RUnlock()
-	return dropped != true
+	return !dropped
 }

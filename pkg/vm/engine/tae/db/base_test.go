@@ -7,7 +7,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
@@ -102,7 +101,7 @@ func createRelationAndAppend(
 	e *DB,
 	dbName string,
 	schema *catalog.Schema,
-	bat *batch.Batch,
+	bat *gbat.Batch,
 	createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)

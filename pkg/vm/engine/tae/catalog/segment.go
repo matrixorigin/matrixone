@@ -402,5 +402,5 @@ func (entry *SegmentEntry) IsActive() bool {
 	entry.RLock()
 	dropped := entry.IsDroppedCommitted()
 	entry.RUnlock()
-	return dropped != true
+	return !dropped
 }

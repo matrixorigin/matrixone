@@ -225,7 +225,7 @@ func (entry *BlockEntry) IsActive() bool {
 	entry.RLock()
 	dropped := entry.IsDroppedCommitted()
 	entry.RUnlock()
-	return dropped != true
+	return !dropped
 }
 
 // Coarse API: no consistency check
