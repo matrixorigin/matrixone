@@ -97,11 +97,7 @@ func TestAppend(t *testing.T) {
 }
 
 func TestAppend2(t *testing.T) {
-	opts := new(options.Options)
-	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 10
-	opts.CheckpointCfg.ExecutionLevels = 2
-	opts.CheckpointCfg.ExecutionInterval = 10
+	opts := enableCheckpoint(nil)
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 3)
@@ -179,13 +175,7 @@ func TestAppend2(t *testing.T) {
 }
 
 func TestAppend3(t *testing.T) {
-	opts := new(options.Options)
-	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 10
-	opts.CheckpointCfg.ExecutionLevels = 2
-	opts.CheckpointCfg.ExecutionInterval = 10
-	opts.CheckpointCfg.CatalogCkpInterval = 10
-	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	opts := enableCheckpoint(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 0)
@@ -696,13 +686,7 @@ func TestCompactBlock2(t *testing.T) {
 }
 
 func TestAutoCompactABlk1(t *testing.T) {
-	opts := new(options.Options)
-	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 10
-	opts.CheckpointCfg.ExecutionLevels = 5
-	opts.CheckpointCfg.ExecutionInterval = 1
-	opts.CheckpointCfg.CatalogCkpInterval = 10
-	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	opts := enableCheckpoint(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
@@ -752,12 +736,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.InsertCapacity = common.K * 5
 	opts.CacheCfg.TxnCapacity = common.M
-	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 2
-	opts.CheckpointCfg.ExecutionLevels = 2
-	opts.CheckpointCfg.ExecutionInterval = 2
-	opts.CheckpointCfg.CatalogCkpInterval = 1
-	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	opts = enableCheckpoint(opts)
 	db := initDB(t, opts)
 	defer db.Close()
 

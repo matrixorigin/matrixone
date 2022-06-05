@@ -76,7 +76,9 @@ func enableCheckpoint(in *options.Options) (opts *options.Options) {
 
 func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
-		defer wg.Done()
+		if wg != nil {
+			defer wg.Done()
+		}
 		txn, _ := e.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(name)
@@ -88,7 +90,9 @@ func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *s
 
 func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
-		defer wg.Done()
+		if wg != nil {
+			defer wg.Done()
+		}
 		txn, _ := e.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(name)
@@ -100,7 +104,9 @@ func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.
 
 func tryAppendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
-		defer wg.Done()
+		if wg != nil {
+			defer wg.Done()
+		}
 		txn, _ := e.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, err := database.GetRelationByName(name)
@@ -159,13 +165,7 @@ func TestGCBlock1(t *testing.T) {
 }
 
 func TestAutoGC1(t *testing.T) {
-	opts := new(options.Options)
-	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 10
-	opts.CheckpointCfg.ExecutionLevels = 5
-	opts.CheckpointCfg.ExecutionInterval = 1
-	opts.CheckpointCfg.CatalogCkpInterval = 5
-	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	opts := enableCheckpoint(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
