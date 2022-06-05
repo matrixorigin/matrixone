@@ -32,10 +32,8 @@ func TestCatalog1(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
 
-	txn, _ := db.StartTxn(nil)
 	schema := catalog.MockSchema(1, 0)
-	database, _ := txn.CreateDatabase("db")
-	rel, _ := database.CreateRelation(schema)
+	txn, _, rel := createRelationNoCommit(t, db, defaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
 	seg, _ := rel.CreateSegment()
 	blk, err := seg.CreateBlock()
@@ -43,9 +41,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
-	txn, _ = db.StartTxn(nil)
-	database, _ = txn.GetDatabase("db")
-	rel, _ = database.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, db, schema.Name)
 	sseg, err := rel.GetSegment(seg.GetID())
 	assert.Nil(t, err)
 	t.Log(sseg.String())
@@ -60,10 +56,7 @@ func TestCatalog1(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn, _ = db.StartTxn(nil)
-		database, _ = txn.GetDatabase("db")
-		rel, _ = database.GetRelationByName(schema.Name)
-		t.Log(txn.String())
+		txn, rel = getDefaultRelation(t, db, schema.Name)
 		it := rel.MakeBlockIt()
 		cnt := 0
 		for it.Valid() {
