@@ -160,14 +160,12 @@ func TestUnix(t *testing.T) {
 		time      string
 		timestamp int64
 	}{
-		{"1955-08-25 17:21:34", -452961506},
-		{"2012-01-25 17:21:34", 1327483294},
+		{"1955-08-25 09:21:34", -452961506},
+		{"2012-01-25 09:21:34", 1327483294},
 	}
 
 	for _, c := range cases {
-		// a local datetime is needed
-		ts, _ := ParseTimestamp(c.time, 6)
-		time := Datetime(ts)
+		time, _ := ParseDatetime(c.time)
 		unix_time := time.UnixTimestamp()
 		if unix_time != c.timestamp {
 			t.Errorf("UnixTimestamp want %d but got %d ", c.timestamp, unix_time)
