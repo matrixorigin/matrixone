@@ -52,26 +52,15 @@ func (processor *calibrationOp) PreExecute() error  { return nil }
 func (processor *calibrationOp) PostExecute() error { return nil }
 
 func (processor *calibrationOp) onTable(tableEntry *catalog.TableEntry) (err error) {
-	tableEntry.RLock()
-	dropped := tableEntry.IsDroppedCommitted()
-	tableEntry.RUnlock()
-	if dropped {
-		// logutil.Infof("Noop for table %s: table was dropped", tableEntry.String())
+	if !tableEntry.IsActive() {
 		err = catalog.ErrStopCurrRecur
 	}
 	return
 }
 
 func (processor *calibrationOp) onSegment(segmentEntry *catalog.SegmentEntry) (err error) {
-	tableEntry := segmentEntry.GetTable()
-	tableEntry.RLock()
-	dropped := tableEntry.IsDroppedCommitted()
-	tableEntry.RUnlock()
-	if dropped {
-		// logutil.Infof("Noop for segment %s: table was dropped", segmentEntry.Repr())
-		processor.blkCntOfSegment = 0
+	if !segmentEntry.IsActive() {
 		err = catalog.ErrStopCurrRecur
-		return
 	}
 	processor.blkCntOfSegment = 0
 	return
@@ -93,12 +82,8 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 }
 
 func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err error) {
-	tableEntry := blockEntry.GetSegment().GetTable()
-	tableEntry.RLock()
-	dropped := tableEntry.IsDroppedCommitted()
-	tableEntry.RUnlock()
-	if dropped {
-		// logutil.Infof("Noop for block %s: table was dropped", blockEntry.Repr())
+	if !blockEntry.IsActive() {
+		// logutil.Infof("Noop for block %s: table or db was dropped", blockEntry.Repr())
 		processor.blkCntOfSegment = 0
 		return
 	}
@@ -106,11 +91,6 @@ func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err err
 	blockEntry.RLock()
 	// 1. Skip uncommitted entries
 	if !blockEntry.IsCommitted() {
-		blockEntry.RUnlock()
-		return nil
-	}
-	// 2. Skip committed dropped entries
-	if blockEntry.IsDroppedCommitted() {
 		blockEntry.RUnlock()
 		return nil
 	}
@@ -213,12 +193,8 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 			err = nil
 		}
 	} else {
-		tableEntry := entry.GetSegment().GetTable()
-		tableEntry.RLock()
-		dropped := tableEntry.IsDroppedCommitted()
-		ts := tableEntry.DeleteAt
-		tableEntry.RUnlock()
-		if dropped {
+		ts, terminated := entry.GetTerminationTS()
+		if terminated {
 			blkData := entry.GetBlockData()
 			_, err = monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, entry.AsCommonID(), blkData.CheckpointWALClosure(ts))
 			if err != nil {
@@ -289,8 +265,29 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err error) {
-	if catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
+		return
 	}
+	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
+	gcNeeded := false
+	entry.RLock()
+	if entry.IsDroppedCommitted() {
+		if logIndex := entry.GetLogIndex(); logIndex != nil {
+			gcNeeded = checkpointed >= logIndex.LSN
+		}
+	}
+	entry.RUnlock()
+	if !gcNeeded {
+		return
+	}
+
+	scopes := MakeDBScopes(entry)
+	_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcDatabaseClosure(entry))
+	logutil.Infof("[GCDB] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+	if err != nil {
+		err = nil
+	}
+	err = catalog.ErrStopCurrRecur
 	return
 }

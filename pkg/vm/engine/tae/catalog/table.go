@@ -349,3 +349,15 @@ func (entry *TableEntry) CloneCreate() CheckpointItem {
 	}
 	return cloned
 }
+
+// Coarse API: no consistency check
+func (entry *TableEntry) IsActive() bool {
+	db := entry.GetDB()
+	if !db.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return dropped != true
+}

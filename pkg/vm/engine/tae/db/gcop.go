@@ -112,10 +112,21 @@ func gcTableClosure(entry *catalog.TableEntry, gct GCType) tasks.FuncT {
 // TODO
 func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 	return func() (err error) {
+		scopes := make([]common.ID, 0)
 		logutil.Infof("[GCDB] | %s | Started", entry.String())
 		defer func() {
-			logutil.Infof("[GCDB] | %s | Ended: %v", entry.String(), err)
+			logutil.Infof("[GCDB] | %s | Ended: %v | TABLES=%s", entry.String(), err, common.IDArraryString(scopes))
 		}()
+		it := entry.MakeTableIt(false)
+		for it.Valid() {
+			table := it.Get().GetPayload().(*catalog.TableEntry)
+			scopes = append(scopes, *table.AsCommonID())
+			if err = gcTableClosure(table, GCType_DB)(); err != nil {
+				return
+			}
+			it.Next()
+		}
+		err = entry.GetCatalog().RemoveEntry(entry)
 		return
 	}
 }

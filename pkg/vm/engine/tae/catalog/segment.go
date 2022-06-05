@@ -391,3 +391,15 @@ func (entry *SegmentEntry) DestroyData() (err error) {
 	}
 	return
 }
+
+// Coarse API: no consistency check
+func (entry *SegmentEntry) IsActive() bool {
+	table := entry.GetTable()
+	if !table.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return dropped != true
+}

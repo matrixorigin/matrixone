@@ -15,6 +15,7 @@
 package db
 
 import (
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -209,4 +210,112 @@ func TestGCTable(t *testing.T) {
 	names = getSegmentFileNames(tae.Dir)
 	assert.Equal(t, 0, len(names))
 	// t.Log(common.GPool.String())
+}
+
+// Test Steps
+// 1. Create a db with 2 tables w/o data
+// 2. Drop the db
+func TestGCDB(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	defer tae.Close()
+
+	schema1 := catalog.MockSchema(13, 12)
+	schema1.BlockMaxRows = 10
+	schema1.SegmentMaxBlocks = 2
+	schema2 := catalog.MockSchema(13, 12)
+	schema2.BlockMaxRows = 10
+	schema2.SegmentMaxBlocks = 2
+
+	createRelation(t, tae, "db", schema1, true)
+	createRelation(t, tae, "db", schema2, false)
+	dropDB(t, tae, "db")
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Catalog.CoarseDBCnt() == 1
+	})
+	printCheckpointStats(t, tae)
+	assert.Equal(t, 1, tae.Catalog.CoarseDBCnt())
+
+	bat1 := catalog.MockData(schema1, schema1.BlockMaxRows*3-1)
+	bat2 := catalog.MockData(schema2, schema2.BlockMaxRows*3-1)
+
+	createRelation(t, tae, "db", schema1, true)
+	createRelation(t, tae, "db", schema2, false)
+	appendClosure(t, bat1, schema1.Name, tae, nil)()
+	appendClosure(t, bat2, schema2.Name, tae, nil)()
+	dropDB(t, tae, "db")
+
+	testutils.WaitExpect(2000, func() bool {
+		return tae.Catalog.CoarseDBCnt() == 1
+	})
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	assert.Equal(t, 1, tae.Catalog.CoarseDBCnt())
+	names := getSegmentFileNames(tae.Dir)
+	assert.Equal(t, 0, len(names))
+
+	createRelation(t, tae, "db", schema1, true)
+	createRelation(t, tae, "db", schema2, false)
+	appendClosure(t, bat1, schema1.Name, tae, nil)()
+	appendClosure(t, bat2, schema2.Name, tae, nil)()
+	compactBlocks(t, tae, "db", schema1, true)
+	compactBlocks(t, tae, "db", schema2, true)
+	dropDB(t, tae, "db")
+
+	testutils.WaitExpect(2000, func() bool {
+		return tae.Catalog.CoarseDBCnt() == 1
+	})
+	assert.Equal(t, 1, tae.Catalog.CoarseDBCnt())
+	names = getSegmentFileNames(tae.Dir)
+	assert.Equal(t, 0, len(names))
+
+	createDB(t, tae, "db")
+
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(4)
+	routine := func() {
+		defer wg.Done()
+		schema := catalog.MockSchema(3, 2)
+		schema.BlockMaxRows = 10
+		schema.SegmentMaxBlocks = 2
+		bat := catalog.MockData(schema, schema.BlockMaxRows*uint32(rand.Intn(4)+1)-1)
+		txn, _ := tae.StartTxn(nil)
+		db, err := txn.GetDatabase("db")
+		if err != nil {
+			_ = txn.Rollback()
+			return
+		}
+		rel, err := db.CreateRelation(schema)
+		assert.NoError(t, err)
+		err = txn.Commit()
+		if err != nil {
+			return
+		}
+
+		txn, _ = tae.StartTxn(nil)
+		db, err = txn.GetDatabase("db")
+		if err != nil {
+			_ = txn.Rollback()
+			return
+		}
+		rel, err = db.GetRelationByName(schema.Name)
+		assert.NoError(t, err)
+		err = rel.Append(bat)
+		assert.NoError(t, err)
+		_ = txn.Commit()
+	}
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		_ = pool.Submit(routine)
+	}
+	dropDB(t, tae, "db")
+	wg.Wait()
+
+	testutils.WaitExpect(5000, func() bool {
+		return tae.Catalog.CoarseDBCnt() == 1
+	})
+	assert.Equal(t, 1, tae.Catalog.CoarseDBCnt())
+	names = getSegmentFileNames(tae.Dir)
+	assert.Equal(t, 0, len(names))
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	printCheckpointStats(t, tae)
 }

@@ -55,6 +55,22 @@ func printCheckpointStats(t *testing.T, tae *DB) {
 	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
 }
 
+func createDB(t *testing.T, e *DB, dbName string) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.CreateDatabase(dbName)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
+func dropDB(t *testing.T, e *DB, dbName string) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	_, err = txn.DropDatabase(dbName)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+}
+
 func dropRelation(t *testing.T, e *DB, dbName, name string) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
@@ -170,16 +186,23 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 		metas = append(metas, meta)
 		it.Next()
 	}
+	_ = txn.Commit()
 	for _, meta := range metas {
+		txn, _ = e.StartTxn(nil)
+		db, _ = txn.GetDatabase(dbName)
+		rel, _ = db.GetRelationByName(schema.Name)
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec()
-		if !skipConflict {
+		if skipConflict {
+			if err != nil {
+				_ = txn.Rollback()
+			} else {
+				_ = txn.Commit()
+			}
+		} else {
 			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit())
 		}
-	}
-	err := txn.Commit()
-	if !skipConflict {
-		assert.NoError(t, err)
 	}
 }
