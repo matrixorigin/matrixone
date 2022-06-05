@@ -442,3 +442,5 @@ func (store *txnStore) PrepareRollback() error {
 
 	return err
 }
+
+func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }

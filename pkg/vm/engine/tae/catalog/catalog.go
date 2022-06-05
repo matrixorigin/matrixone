@@ -606,6 +606,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 		if nn.Length() == 0 {
 			delete(catalog.nameNodes, database.name)
 		}
+		delete(catalog.entries, database.GetID())
 	}
 	return nil
 }

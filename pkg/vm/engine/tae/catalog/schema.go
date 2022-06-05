@@ -475,7 +475,7 @@ func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
 
 func MockSchema(colCnt int, pkIdx int) *Schema {
 	rand.Seed(time.Now().UnixNano())
-	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
+	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)+rand.Intn(10000)))
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
@@ -489,6 +489,7 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 }
 
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
+// pkIdx == -1 means no pk defined
 func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
 	prefix := "mock_"

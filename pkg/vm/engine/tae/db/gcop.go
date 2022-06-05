@@ -21,58 +21,112 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-// Destroy is not thread-safe
-func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
-	return func() error {
-		logutil.Debugf("[GCBLK] | %s | Started", entry.Repr())
-		segment := entry.GetSegment()
-		segment.RLock()
-		segDropped := segment.IsDroppedCommitted()
-		segment.RUnlock()
+type GCType int16
 
-		err := entry.DestroyData()
-		if err != nil {
-			return err
+const (
+	GCType_Block GCType = iota
+	GCType_Segment
+	GCType_Table
+	GCType_DB
+)
+
+// Destroy is not thread-safe
+func gcBlockClosure(entry *catalog.BlockEntry, gct GCType) tasks.FuncT {
+	return func() (err error) {
+		logutil.Debugf("[GCBLK] | %s | Started", entry.Repr())
+		defer func() {
+			if err == nil {
+				logutil.Infof("[GCBLK] | %s | Removed", entry.Repr())
+			} else {
+				logutil.Warnf("Cannot remove block %s, maybe removed before", entry.String())
+			}
+		}()
+		segment := entry.GetSegment()
+
+		if err = entry.DestroyData(); err != nil {
+			return
 		}
-		if !segDropped && entry.IsAppendable() {
-			return nil
+		// For appendable segment, keep all soft-deleted blocks until the segment is soft-deleted
+		if gct == GCType_Block && entry.IsAppendable() {
+			return
 		}
 		err = segment.RemoveEntry(entry)
-		logutil.Infof("[GCBLK] | %s | Removed", entry.Repr())
-		if err != nil {
-			logutil.Warnf("Cannot remove block %s, maybe removed before", entry.String())
-			return err
-		}
-		return nil
+		return
 	}
 }
 
 // Destroy is not thread-safe
-func gcSegmentClosure(entry *catalog.SegmentEntry) tasks.FuncT {
-	return func() error {
-		logutil.Debugf("[GCSEG] | %s | Started", entry.Repr())
-		table := entry.GetTable()
+func gcSegmentClosure(entry *catalog.SegmentEntry, gct GCType) tasks.FuncT {
+	return func() (err error) {
 		scopes := make([]common.ID, 0)
+		logutil.Debugf("[GCSEG] | %s | Started", entry.Repr())
+		defer func() {
+			if err != nil {
+				logutil.Warnf("Cannot remove segment %s, maybe removed before: %v", entry.String(), err)
+			} else {
+				logutil.Infof("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
+			}
+		}()
+		table := entry.GetTable()
 		it := entry.MakeBlockIt(false)
 		for it.Valid() {
 			blk := it.Get().GetPayload().(*catalog.BlockEntry)
 			scopes = append(scopes, *blk.AsCommonID())
-			err := gcBlockClosure(blk)()
+			err = gcBlockClosure(blk, gct)()
 			if err != nil {
-				return err
+				return
 			}
 			it.Next()
 		}
-		err := entry.DestroyData()
-		if err != nil {
-			return err
+		if err = entry.DestroyData(); err != nil {
+			return
 		}
 		err = table.RemoveEntry(entry)
-		logutil.Infof("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
-		if err != nil {
-			logutil.Warnf("Cannot remove segment %s, maybe removed before", entry.String())
-			return err
+		return
+	}
+}
+
+// TODO
+func gcTableClosure(entry *catalog.TableEntry, gct GCType) tasks.FuncT {
+	return func() (err error) {
+		scopes := make([]common.ID, 0)
+		logutil.Infof("[GCTABLE] | %s | Started", entry.String())
+		defer func() {
+			logutil.Infof("[GCTABLE] | %s | Ended: %v | SEGS=%s", entry.String(), err, common.IDArraryString(scopes))
+		}()
+		dbEntry := entry.GetDB()
+		it := entry.MakeSegmentIt(false)
+		for it.Valid() {
+			seg := it.Get().GetPayload().(*catalog.SegmentEntry)
+			scopes = append(scopes, *seg.AsCommonID())
+			if err = gcSegmentClosure(seg, gct)(); err != nil {
+				return
+			}
+			it.Next()
 		}
-		return nil
+		err = dbEntry.RemoveEntry(entry)
+		return
+	}
+}
+
+// TODO
+func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
+	return func() (err error) {
+		scopes := make([]common.ID, 0)
+		logutil.Infof("[GCDB] | %s | Started", entry.String())
+		defer func() {
+			logutil.Infof("[GCDB] | %s | Ended: %v | TABLES=%s", entry.String(), err, common.IDArraryString(scopes))
+		}()
+		it := entry.MakeTableIt(false)
+		for it.Valid() {
+			table := it.Get().GetPayload().(*catalog.TableEntry)
+			scopes = append(scopes, *table.AsCommonID())
+			if err = gcTableClosure(table, GCType_DB)(); err != nil {
+				return
+			}
+			it.Next()
+		}
+		err = entry.GetCatalog().RemoveEntry(entry)
+		return
 	}
 }
