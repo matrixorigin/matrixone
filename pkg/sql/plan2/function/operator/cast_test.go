@@ -24,6 +24,13 @@ import (
 )
 
 func TestCastSameType(t *testing.T) {
+	makeTempVectors := func(src interface{}, destType types.T, srcIsConst bool) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeVector(src, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -34,73 +41,143 @@ func TestCastSameType(t *testing.T) {
 	}{
 		{
 			name:       "Test01",
-			vecs:       makeVectors(int8(-23), types.T_int8, true),
+			vecs:       makeTempVectors(int8(-23), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{-23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test02",
-			vecs:       makeVectors(int16(-23), types.T_int16, true),
+			vecs:       makeTempVectors(int16(-23), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{-23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test03",
-			vecs:       makeVectors(int32(-23), types.T_int32, true),
+			vecs:       makeTempVectors(int32(-23), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{-23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test04",
-			vecs:       makeVectors(int64(-23), types.T_int64, true),
+			vecs:       makeTempVectors(int64(-23), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{-23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test05",
-			vecs:       makeVectors(uint8(23), types.T_uint8, true),
+			vecs:       makeTempVectors(uint8(23), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test06",
-			vecs:       makeVectors(uint16(23), types.T_uint16, true),
+			vecs:       makeTempVectors(uint16(23), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test07",
-			vecs:       makeVectors(uint32(23), types.T_uint32, true),
+			vecs:       makeTempVectors(uint32(23), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test08",
-			vecs:       makeVectors(uint64(23), types.T_uint64, true),
+			vecs:       makeTempVectors(uint64(23), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{23},
 			wantScalar: true,
 		},
 		{
 			name:       "Test09",
-			vecs:       makeVectors(float32(23.5), types.T_float32, true),
+			vecs:       makeTempVectors(float32(23.5), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{23.5},
 			wantScalar: true,
 		},
 		{
 			name:       "Test10",
-			vecs:       makeVectors(float64(23.5), types.T_float64, true),
+			vecs:       makeTempVectors(float64(23.5), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{23.5},
 			wantScalar: true,
+		},
+		{
+			name:       "Test11",
+			vecs:       makeTempVectors(int8(-23), types.T_int8, false),
+			proc:       procs,
+			wantValues: []int8{-23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test12",
+			vecs:       makeTempVectors(int16(-23), types.T_int16, false),
+			proc:       procs,
+			wantValues: []int16{-23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test13",
+			vecs:       makeTempVectors(int32(-23), types.T_int32, false),
+			proc:       procs,
+			wantValues: []int32{-23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors(int64(-23), types.T_int64, false),
+			proc:       procs,
+			wantValues: []int64{-23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors(uint8(23), types.T_uint8, false),
+			proc:       procs,
+			wantValues: []uint8{23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors(uint16(23), types.T_uint16, false),
+			proc:       procs,
+			wantValues: []uint16{23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test17",
+			vecs:       makeTempVectors(uint32(23), types.T_uint32, false),
+			proc:       procs,
+			wantValues: []uint32{23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test18",
+			vecs:       makeTempVectors(uint64(23), types.T_uint64, false),
+			proc:       procs,
+			wantValues: []uint64{23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test19",
+			vecs:       makeTempVectors(float32(23.5), types.T_float32, false),
+			proc:       procs,
+			wantValues: []float32{23.5},
+			wantScalar: false,
+		},
+		{
+			name:       "Test20",
+			vecs:       makeTempVectors(float64(23.5), types.T_float64, false),
+			proc:       procs,
+			wantValues: []float64{23.5},
+			wantScalar: false,
 		},
 	}
 
@@ -110,15 +187,20 @@ func TestCastSameType(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-
 			require.Equal(t, c.wantValues, castRes.Col)
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
 	}
-
 }
 
 func TestCastSameType2(t *testing.T) {
+	makeTempVectors := func(src interface{}, destType types.T, srcIsConst bool) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeVector(src, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
 	procs := makeProcess()
 	//types.Date | types.Datetime | types.Timestamp
 	cases := []struct {
@@ -130,24 +212,45 @@ func TestCastSameType2(t *testing.T) {
 	}{
 		{
 			name:       "Test01",
-			vecs:       makeVectors(types.Date(729848), types.T_date, true),
+			vecs:       makeTempVectors(types.Date(729848), types.T_date, true),
 			proc:       procs,
 			wantValues: []types.Date{729848},
 			wantScalar: true,
 		},
 		{
 			name:       "Test02",
-			vecs:       makeVectors(types.Datetime(66122056321728512), types.T_datetime, true),
+			vecs:       makeTempVectors(types.Datetime(66122056321728512), types.T_datetime, true),
 			proc:       procs,
 			wantValues: []types.Datetime{66122056321728512},
 			wantScalar: true,
 		},
 		{
 			name:       "Test03",
-			vecs:       makeVectors(types.Timestamp(66122026122739712), types.T_timestamp, true),
+			vecs:       makeTempVectors(types.Timestamp(66122026122739712), types.T_timestamp, true),
 			proc:       procs,
 			wantValues: []types.Timestamp{66122026122739712},
 			wantScalar: true,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeTempVectors(types.Date(729848), types.T_date, false),
+			proc:       procs,
+			wantValues: []types.Date{729848},
+			wantScalar: false,
+		},
+		{
+			name:       "Test05",
+			vecs:       makeTempVectors(types.Datetime(66122056321728512), types.T_datetime, false),
+			proc:       procs,
+			wantValues: []types.Datetime{66122056321728512},
+			wantScalar: false,
+		},
+		{
+			name:       "Test06",
+			vecs:       makeTempVectors(types.Timestamp(66122026122739712), types.T_timestamp, false),
+			proc:       procs,
+			wantValues: []types.Timestamp{66122026122739712},
+			wantScalar: false,
 		},
 	}
 	for _, c := range cases {
@@ -156,7 +259,6 @@ func TestCastSameType2(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-
 			require.Equal(t, c.wantValues, castRes.Col)
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
@@ -174,6 +276,14 @@ func TestCastLeftToRight(t *testing.T) {
 	// uint64 -> (int8/int16/int32/int64/uint8/uint16/uint32/float32/float64)
 	// float32 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float64)
 	// float64 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float32)
+
+	makeTempVectors := func(src interface{}, destType types.T, srcIsConst bool) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeVector(src, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -184,700 +294,700 @@ func TestCastLeftToRight(t *testing.T) {
 	}{
 		{
 			name:       "Test01",
-			vecs:       makeVectors(int8(125), types.T_int8, true),
+			vecs:       makeTempVectors(int8(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test02",
-			vecs:       makeVectors(int8(125), types.T_int16, true),
+			vecs:       makeTempVectors(int8(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test03",
-			vecs:       makeVectors(int8(125), types.T_int32, true),
+			vecs:       makeTempVectors(int8(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test04",
-			vecs:       makeVectors(int8(125), types.T_int64, true),
+			vecs:       makeTempVectors(int8(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test05",
-			vecs:       makeVectors(int8(125), types.T_uint8, true),
+			vecs:       makeTempVectors(int8(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test06",
-			vecs:       makeVectors(int8(125), types.T_uint16, true),
+			vecs:       makeTempVectors(int8(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test07",
-			vecs:       makeVectors(int8(125), types.T_uint32, true),
+			vecs:       makeTempVectors(int8(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test08",
-			vecs:       makeVectors(int8(125), types.T_uint64, true),
+			vecs:       makeTempVectors(int8(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test09",
-			vecs:       makeVectors(int8(125), types.T_float32, true),
+			vecs:       makeTempVectors(int8(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test10",
-			vecs:       makeVectors(int8(125), types.T_float64, true),
+			vecs:       makeTempVectors(int8(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test11",
-			vecs:       makeVectors(int16(125), types.T_int8, true),
+			vecs:       makeTempVectors(int16(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test12",
-			vecs:       makeVectors(int16(125), types.T_int16, true),
+			vecs:       makeTempVectors(int16(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test13",
-			vecs:       makeVectors(int16(125), types.T_int32, true),
+			vecs:       makeTempVectors(int16(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test14",
-			vecs:       makeVectors(int16(125), types.T_int64, true),
+			vecs:       makeTempVectors(int16(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test15",
-			vecs:       makeVectors(int16(125), types.T_uint8, true),
+			vecs:       makeTempVectors(int16(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test16",
-			vecs:       makeVectors(int16(125), types.T_uint16, true),
+			vecs:       makeTempVectors(int16(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test17",
-			vecs:       makeVectors(int16(125), types.T_uint32, true),
+			vecs:       makeTempVectors(int16(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test18",
-			vecs:       makeVectors(int16(125), types.T_uint64, true),
+			vecs:       makeTempVectors(int16(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test19",
-			vecs:       makeVectors(int16(125), types.T_float32, true),
+			vecs:       makeTempVectors(int16(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test20",
-			vecs:       makeVectors(int16(125), types.T_float64, true),
+			vecs:       makeTempVectors(int16(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test21",
-			vecs:       makeVectors(int32(125), types.T_int8, true),
+			vecs:       makeTempVectors(int32(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test22",
-			vecs:       makeVectors(int32(125), types.T_int16, true),
+			vecs:       makeTempVectors(int32(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test23",
-			vecs:       makeVectors(int32(125), types.T_int32, true),
+			vecs:       makeTempVectors(int32(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test24",
-			vecs:       makeVectors(int32(125), types.T_int64, true),
+			vecs:       makeTempVectors(int32(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test25",
-			vecs:       makeVectors(int32(125), types.T_uint8, true),
+			vecs:       makeTempVectors(int32(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test26",
-			vecs:       makeVectors(int32(125), types.T_uint16, true),
+			vecs:       makeTempVectors(int32(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test27",
-			vecs:       makeVectors(int32(125), types.T_uint32, true),
+			vecs:       makeTempVectors(int32(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test28",
-			vecs:       makeVectors(int32(125), types.T_uint64, true),
+			vecs:       makeTempVectors(int32(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test29",
-			vecs:       makeVectors(int32(125), types.T_float32, true),
+			vecs:       makeTempVectors(int32(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test30",
-			vecs:       makeVectors(int32(125), types.T_float64, true),
+			vecs:       makeTempVectors(int32(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test31",
-			vecs:       makeVectors(int64(125), types.T_int8, true),
+			vecs:       makeTempVectors(int64(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test32",
-			vecs:       makeVectors(int64(125), types.T_int16, true),
+			vecs:       makeTempVectors(int64(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test33",
-			vecs:       makeVectors(int64(125), types.T_int32, true),
+			vecs:       makeTempVectors(int64(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test34",
-			vecs:       makeVectors(int64(125), types.T_int64, true),
+			vecs:       makeTempVectors(int64(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test35",
-			vecs:       makeVectors(int64(125), types.T_uint8, true),
+			vecs:       makeTempVectors(int64(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test36",
-			vecs:       makeVectors(int64(125), types.T_uint16, true),
+			vecs:       makeTempVectors(int64(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test37",
-			vecs:       makeVectors(int64(125), types.T_uint32, true),
+			vecs:       makeTempVectors(int64(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test38",
-			vecs:       makeVectors(int64(125), types.T_uint64, true),
+			vecs:       makeTempVectors(int64(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test39",
-			vecs:       makeVectors(int64(125), types.T_float32, true),
+			vecs:       makeTempVectors(int64(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test40",
-			vecs:       makeVectors(int64(125), types.T_float64, true),
+			vecs:       makeTempVectors(int64(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test41",
-			vecs:       makeVectors(uint8(125), types.T_int8, true),
+			vecs:       makeTempVectors(uint8(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test42",
-			vecs:       makeVectors(uint8(125), types.T_int16, true),
+			vecs:       makeTempVectors(uint8(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test43",
-			vecs:       makeVectors(uint8(125), types.T_int32, true),
+			vecs:       makeTempVectors(uint8(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test44",
-			vecs:       makeVectors(uint8(125), types.T_int64, true),
+			vecs:       makeTempVectors(uint8(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test45",
-			vecs:       makeVectors(uint8(125), types.T_uint8, true),
+			vecs:       makeTempVectors(uint8(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test46",
-			vecs:       makeVectors(uint8(125), types.T_uint16, true),
+			vecs:       makeTempVectors(uint8(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test47",
-			vecs:       makeVectors(uint8(125), types.T_uint32, true),
+			vecs:       makeTempVectors(uint8(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test48",
-			vecs:       makeVectors(uint8(125), types.T_uint64, true),
+			vecs:       makeTempVectors(uint8(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test49",
-			vecs:       makeVectors(uint8(125), types.T_float32, true),
+			vecs:       makeTempVectors(uint8(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test50",
-			vecs:       makeVectors(uint8(125), types.T_float64, true),
+			vecs:       makeTempVectors(uint8(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test51",
-			vecs:       makeVectors(uint16(125), types.T_int8, true),
+			vecs:       makeTempVectors(uint16(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test52",
-			vecs:       makeVectors(uint16(125), types.T_int16, true),
+			vecs:       makeTempVectors(uint16(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test53",
-			vecs:       makeVectors(uint16(125), types.T_int32, true),
+			vecs:       makeTempVectors(uint16(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test54",
-			vecs:       makeVectors(uint16(125), types.T_int64, true),
+			vecs:       makeTempVectors(uint16(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test55",
-			vecs:       makeVectors(uint16(125), types.T_uint8, true),
+			vecs:       makeTempVectors(uint16(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test56",
-			vecs:       makeVectors(uint16(125), types.T_uint16, true),
+			vecs:       makeTempVectors(uint16(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test57",
-			vecs:       makeVectors(uint16(125), types.T_uint32, true),
+			vecs:       makeTempVectors(uint16(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test58",
-			vecs:       makeVectors(uint16(125), types.T_uint64, true),
+			vecs:       makeTempVectors(uint16(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test59",
-			vecs:       makeVectors(uint16(125), types.T_float32, true),
+			vecs:       makeTempVectors(uint16(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test60",
-			vecs:       makeVectors(uint16(125), types.T_float64, true),
+			vecs:       makeTempVectors(uint16(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test61",
-			vecs:       makeVectors(uint32(125), types.T_int8, true),
+			vecs:       makeTempVectors(uint32(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test62",
-			vecs:       makeVectors(uint32(125), types.T_int16, true),
+			vecs:       makeTempVectors(uint32(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test63",
-			vecs:       makeVectors(uint32(125), types.T_int32, true),
+			vecs:       makeTempVectors(uint32(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test64",
-			vecs:       makeVectors(uint32(125), types.T_int64, true),
+			vecs:       makeTempVectors(uint32(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test65",
-			vecs:       makeVectors(uint32(125), types.T_uint8, true),
+			vecs:       makeTempVectors(uint32(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test66",
-			vecs:       makeVectors(uint32(125), types.T_uint16, true),
+			vecs:       makeTempVectors(uint32(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test67",
-			vecs:       makeVectors(uint32(125), types.T_uint32, true),
+			vecs:       makeTempVectors(uint32(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test68",
-			vecs:       makeVectors(uint32(125), types.T_uint64, true),
+			vecs:       makeTempVectors(uint32(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test69",
-			vecs:       makeVectors(uint32(125), types.T_float32, true),
+			vecs:       makeTempVectors(uint32(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test70",
-			vecs:       makeVectors(uint32(125), types.T_float64, true),
+			vecs:       makeTempVectors(uint32(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test71",
-			vecs:       makeVectors(uint64(125), types.T_int8, true),
+			vecs:       makeTempVectors(uint64(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test72",
-			vecs:       makeVectors(uint64(125), types.T_int16, true),
+			vecs:       makeTempVectors(uint64(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test73",
-			vecs:       makeVectors(uint64(125), types.T_int32, true),
+			vecs:       makeTempVectors(uint64(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test74",
-			vecs:       makeVectors(uint64(125), types.T_int64, true),
+			vecs:       makeTempVectors(uint64(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test75",
-			vecs:       makeVectors(uint64(125), types.T_uint8, true),
+			vecs:       makeTempVectors(uint64(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test76",
-			vecs:       makeVectors(uint64(125), types.T_uint16, true),
+			vecs:       makeTempVectors(uint64(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test77",
-			vecs:       makeVectors(uint64(125), types.T_uint32, true),
+			vecs:       makeTempVectors(uint64(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test78",
-			vecs:       makeVectors(uint64(125), types.T_uint64, true),
+			vecs:       makeTempVectors(uint64(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test79",
-			vecs:       makeVectors(uint64(125), types.T_float32, true),
+			vecs:       makeTempVectors(uint64(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test80",
-			vecs:       makeVectors(uint64(125), types.T_float64, true),
+			vecs:       makeTempVectors(uint64(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test81",
-			vecs:       makeVectors(float32(125), types.T_int8, true),
+			vecs:       makeTempVectors(float32(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test82",
-			vecs:       makeVectors(float32(125), types.T_int16, true),
+			vecs:       makeTempVectors(float32(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test83",
-			vecs:       makeVectors(float32(125), types.T_int32, true),
+			vecs:       makeTempVectors(float32(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test84",
-			vecs:       makeVectors(float32(125), types.T_int64, true),
+			vecs:       makeTempVectors(float32(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test85",
-			vecs:       makeVectors(float32(125), types.T_uint8, true),
+			vecs:       makeTempVectors(float32(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test86",
-			vecs:       makeVectors(float32(125), types.T_uint16, true),
+			vecs:       makeTempVectors(float32(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test87",
-			vecs:       makeVectors(float32(125), types.T_uint32, true),
+			vecs:       makeTempVectors(float32(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test88",
-			vecs:       makeVectors(float32(125), types.T_uint64, true),
+			vecs:       makeTempVectors(float32(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test89",
-			vecs:       makeVectors(float32(125), types.T_float32, true),
+			vecs:       makeTempVectors(float32(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test90",
-			vecs:       makeVectors(float32(125), types.T_float64, true),
+			vecs:       makeTempVectors(float32(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test91",
-			vecs:       makeVectors(float64(125), types.T_int8, true),
+			vecs:       makeTempVectors(float64(125), types.T_int8, true),
 			proc:       procs,
 			wantValues: []int8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test92",
-			vecs:       makeVectors(float64(125), types.T_int16, true),
+			vecs:       makeTempVectors(float64(125), types.T_int16, true),
 			proc:       procs,
 			wantValues: []int16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test93",
-			vecs:       makeVectors(float64(125), types.T_int32, true),
+			vecs:       makeTempVectors(float64(125), types.T_int32, true),
 			proc:       procs,
 			wantValues: []int32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test94",
-			vecs:       makeVectors(float64(125), types.T_int64, true),
+			vecs:       makeTempVectors(float64(125), types.T_int64, true),
 			proc:       procs,
 			wantValues: []int64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test95",
-			vecs:       makeVectors(float64(125), types.T_uint8, true),
+			vecs:       makeTempVectors(float64(125), types.T_uint8, true),
 			proc:       procs,
 			wantValues: []uint8{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test96",
-			vecs:       makeVectors(float64(125), types.T_uint16, true),
+			vecs:       makeTempVectors(float64(125), types.T_uint16, true),
 			proc:       procs,
 			wantValues: []uint16{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test97",
-			vecs:       makeVectors(float64(125), types.T_uint32, true),
+			vecs:       makeTempVectors(float64(125), types.T_uint32, true),
 			proc:       procs,
 			wantValues: []uint32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test98",
-			vecs:       makeVectors(float64(125), types.T_uint64, true),
+			vecs:       makeTempVectors(float64(125), types.T_uint64, true),
 			proc:       procs,
 			wantValues: []uint64{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test99",
-			vecs:       makeVectors(float64(125), types.T_float32, true),
+			vecs:       makeTempVectors(float64(125), types.T_float32, true),
 			proc:       procs,
 			wantValues: []float32{125},
 			wantScalar: true,
 		},
 		{
 			name:       "Test100",
-			vecs:       makeVectors(float64(125), types.T_float64, true),
+			vecs:       makeTempVectors(float64(125), types.T_float64, true),
 			proc:       procs,
 			wantValues: []float64{125},
 			wantScalar: true,
@@ -897,11 +1007,349 @@ func TestCastLeftToRight(t *testing.T) {
 	}
 }
 
-func makeVectors(src interface{}, destType types.T, isSrcConst bool) []*vector.Vector {
-	vectors := make([]*vector.Vector, 2)
-	vectors[0] = makeVector(src, true)
-	vectors[1] = makeTypeVector(destType)
-	return vectors
+func TestCastSpecials1Int(t *testing.T) {
+	// (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
+
+	makeTempVectors := func(src string, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeStringVector(src, srcType, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_int8),
+			proc:       procs,
+			wantValues: []int8{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_int16),
+			proc:       procs,
+			wantValues: []int16{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test03",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test05",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_uint8),
+			proc:       procs,
+			wantValues: []uint8{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test06",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_uint16),
+			proc:       procs,
+			wantValues: []uint16{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test07",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_uint32),
+			proc:       procs,
+			wantValues: []uint32{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test08",
+			vecs:       makeTempVectors("15", types.T_varchar, true, types.T_uint64),
+			proc:       procs,
+			wantValues: []uint64{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test09",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_int8),
+			proc:       procs,
+			wantValues: []int8{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test10",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_int16),
+			proc:       procs,
+			wantValues: []int16{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test11",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test12",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test13",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_uint8),
+			proc:       procs,
+			wantValues: []uint8{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_uint16),
+			proc:       procs,
+			wantValues: []uint16{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_uint32),
+			proc:       procs,
+			wantValues: []uint32{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeTempVectors("15", types.T_char, true, types.T_uint64),
+			proc:       procs,
+			wantValues: []uint64{15},
+			wantScalar: true,
+		},
+		{
+			name:       "Test17",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_int8),
+			proc:       procs,
+			wantValues: []int8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test18",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_int16),
+			proc:       procs,
+			wantValues: []int16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test19",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test20",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test21",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_uint8),
+			proc:       procs,
+			wantValues: []uint8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test22",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_uint16),
+			proc:       procs,
+			wantValues: []uint16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test23",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_uint32),
+			proc:       procs,
+			wantValues: []uint32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test24",
+			vecs:       makeTempVectors("15", types.T_varchar, false, types.T_uint64),
+			proc:       procs,
+			wantValues: []uint64{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test25",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_int8),
+			proc:       procs,
+			wantValues: []int8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test26",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_int16),
+			proc:       procs,
+			wantValues: []int16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test27",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_int32),
+			proc:       procs,
+			wantValues: []int32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test28",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_int64),
+			proc:       procs,
+			wantValues: []int64{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test29",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_uint8),
+			proc:       procs,
+			wantValues: []uint8{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test30",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_uint16),
+			proc:       procs,
+			wantValues: []uint16{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test31",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_uint32),
+			proc:       procs,
+			wantValues: []uint32{15},
+			wantScalar: false,
+		},
+		{
+			name:       "Test32",
+			vecs:       makeTempVectors("15", types.T_char, false, types.T_uint64),
+			proc:       procs,
+			wantValues: []uint64{15},
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
+func TestCastSpecials1Float(t *testing.T) {
+	// (char / varhcar) -> (float32 / float64)
+	makeTempVectors := func(src string, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeStringVector(src, srcType, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("15.23", types.T_varchar, true, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("15.23", types.T_varchar, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
+		{
+			name:       "Test03",
+			vecs:       makeTempVectors("15.23", types.T_char, true, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: true,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeTempVectors("15.23", types.T_char, true, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: true,
+		},
+		{
+			name:       "Test05",
+			vecs:       makeTempVectors("15.23", types.T_varchar, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test06",
+			vecs:       makeTempVectors("15.23", types.T_varchar, false, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test07",
+			vecs:       makeTempVectors("15.23", types.T_char, false, types.T_float32),
+			proc:       procs,
+			wantValues: []float32{15.23},
+			wantScalar: false,
+		},
+		{
+			name:       "Test08",
+			vecs:       makeTempVectors("15.23", types.T_char, false, types.T_float64),
+			proc:       procs,
+			wantValues: []float64{15.23},
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
 }
 
 func makeTypeVector(t types.T) *vector.Vector {
@@ -914,6 +1362,7 @@ func makeTypeVector(t types.T) *vector.Vector {
 	}
 }
 
+// make vector for type of int8,int16,int32,int64,uint8,uint16,uint32,uint64,date,datetime,timestamp
 func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 	var typeOid types.T
 	var col interface{}
@@ -963,7 +1412,34 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 		Col:     col,
 		Nsp:     &nulls.Nulls{},
 		Typ:     types.Type{Oid: typeOid},
-		IsConst: true,
-		Length:  10,
+		IsConst: isSrcConst,
+		Length:  1,
 	}
+}
+
+// make vector for type of char and varchar
+func makeStringVector(src string, t types.T, isConst bool) *vector.Vector {
+	srcBytes := &types.Bytes{
+		Data:    []byte(src),
+		Offsets: []uint32{0},
+		Lengths: []uint32{uint32(len(src))},
+	}
+	if t == types.T_char {
+		return &vector.Vector{
+			Col:     srcBytes,
+			Nsp:     &nulls.Nulls{},
+			Typ:     types.Type{Oid: types.T_char, Size: 24},
+			IsConst: isConst,
+			Length:  1,
+		}
+	} else if t == types.T_varchar {
+		return &vector.Vector{
+			Col:     srcBytes,
+			Nsp:     &nulls.Nulls{},
+			Typ:     types.Type{Oid: types.T_varchar, Size: 24},
+			IsConst: isConst,
+			Length:  1,
+		}
+	}
+	return nil
 }
