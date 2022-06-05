@@ -70,9 +70,9 @@ func TestMetric(t *testing.T) {
 		}
 	GOON:
 		client := http.Client{
-			Timeout: 2 * time.Second,
+			Timeout: 120 * time.Second,
 		}
-		r, err := client.Get("http://0.0.0.0:7001/metrics")
+		r, err := client.Get("http://127.0.0.1:7001/metrics")
 		require.Nil(t, err)
 		require.Equal(t, r.StatusCode, 200)
 
@@ -97,9 +97,9 @@ func TestMetricNoProm(t *testing.T) {
 		defer StopMetricSync()
 
 		client := http.Client{
-			Timeout: 2 * time.Second,
+			Timeout: 120 * time.Second,
 		}
-		_, err := client.Get("http://0.0.0.0:7001/metrics")
+		_, err := client.Get("http://127.0.0.1:7001/metrics")
 		require.NotNil(t, err)
 		require.Contains(t, err.Error(), "connection refused")
 

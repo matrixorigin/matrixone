@@ -38,7 +38,8 @@ func TestUnixTimestamp(t *testing.T) {
 	}
 	rs := make([]int64, 3)
 
-	want := []int64{1641046980, 1641133380, 1641219780}
+	// UTC-8
+	want := []int64{1641075780, 1641162180, 1641248580}
 
 	got := unixTimestamp(xs, rs)
 	if !reflect.DeepEqual(got, want) {

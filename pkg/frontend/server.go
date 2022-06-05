@@ -21,8 +21,6 @@ import (
 	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 )
 
 //RelationName counter for the new connection
@@ -73,10 +71,6 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 		logutil.Panicf("start server failed with %+v", err)
 	}
 
-	ieFactory := func() ie.InternalExecutor {
-		return NewIternalExecutor(pu, pdHook)
-	}
-	metric.InitMetric(ieFactory, pu, pdHook.Id, metric.ALL_IN_ONE_MODE)
 	return &MOServer{
 		addr: addr,
 		app:  app,

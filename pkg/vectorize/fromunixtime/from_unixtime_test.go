@@ -34,9 +34,9 @@ func TestFromUnixTimestamp(t *testing.T) {
 	xs := []int64{1641046980, 1641133380, 1641219780}
 	rs := make([]types.Datetime, 3)
 	want := []types.Datetime{
-		mustDatetime("2022-01-01 22:23:00"),
-		mustDatetime("2022-01-02 22:23:00"),
-		mustDatetime("2022-01-03 22:23:00"),
+		mustDatetime("2022-01-01 14:23:00"),
+		mustDatetime("2022-01-02 14:23:00"),
+		mustDatetime("2022-01-03 14:23:00"),
 	}
 
 	got := unixToDatetime(xs, rs)
