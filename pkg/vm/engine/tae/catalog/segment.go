@@ -270,6 +270,7 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 		return ErrNotFound
 	} else {
 		entry.link.Delete(n)
+		delete(entry.entries, block.GetID())
 	}
 	return nil
 }

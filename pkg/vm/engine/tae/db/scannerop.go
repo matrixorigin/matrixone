@@ -225,15 +225,15 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	if gcNeeded {
 		scopes := MakeSegmentScopes(entry)
 		_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcSegmentClosure(entry, GCType_Segment))
-		// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry, GCType_Segment))
 		logutil.Infof("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err != tasks.ErrScheduleScopeConflict {
 			// logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
 			// }
 			err = nil
+		} else {
+			err = catalog.ErrStopCurrRecur
 		}
-		err = catalog.ErrStopCurrRecur
 	}
 	return
 }
@@ -262,8 +262,9 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 	logutil.Infof("[GCTABLE] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
 	if err != nil {
 		err = nil
+	} else {
+		err = catalog.ErrStopCurrRecur
 	}
-	err = catalog.ErrStopCurrRecur
 	return
 }
 
@@ -291,7 +292,8 @@ func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err erro
 	logutil.Infof("[GCDB] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
 	if err != nil {
 		err = nil
+	} else {
+		err = catalog.ErrStopCurrRecur
 	}
-	err = catalog.ErrStopCurrRecur
 	return
 }

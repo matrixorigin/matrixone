@@ -62,7 +62,7 @@ func gcSegmentClosure(entry *catalog.SegmentEntry, gct GCType) tasks.FuncT {
 		logutil.Debugf("[GCSEG] | %s | Started", entry.Repr())
 		defer func() {
 			if err != nil {
-				logutil.Warnf("Cannot remove segment %s, maybe removed before", entry.String())
+				logutil.Warnf("Cannot remove segment %s, maybe removed before: %v", entry.String(), err)
 			} else {
 				logutil.Infof("[GCSEG] | %s | BLKS=%s | Removed", entry.Repr(), common.IDArraryString(scopes))
 			}
