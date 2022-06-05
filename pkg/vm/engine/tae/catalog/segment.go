@@ -293,7 +293,7 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 		//TODO: maybe scheduled?
 		// entry.GetCatalog().GetScheduler().ScheduleScopedFn(nil, tasks.IOTask, entry.AsCommonID(), entry.DestroyData)
 		if err = entry.DestroyData(); err != nil {
-			logutil.Fatalf("Cannot destory uncommitted segment [%s] data: %v", entry.Repr(), err)
+			logutil.Fatalf("Cannot destroy uncommitted segment [%s] data: %v", entry.Repr(), err)
 			return
 		}
 	}
