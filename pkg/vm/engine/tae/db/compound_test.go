@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema) {
+func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, _ := e.StartTxn(nil)
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
@@ -34,9 +34,14 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema) {
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec()
+		if !skipConflict {
+			assert.NoError(t, err)
+		}
+	}
+	err := txn.Commit()
+	if !skipConflict {
 		assert.NoError(t, err)
 	}
-	assert.NoError(t, txn.Commit())
 }
 
 func TestCompoundPK1(t *testing.T) {
@@ -156,7 +161,7 @@ func TestCompoundPK1(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 
-	compactBlocks(t, tae, "db", schema)
+	compactBlocks(t, tae, "db", schema, false)
 
 	// TODO
 	// txn, _ = tae.StartTxn(nil)

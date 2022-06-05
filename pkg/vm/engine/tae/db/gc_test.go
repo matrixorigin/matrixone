@@ -15,6 +15,9 @@
 package db
 
 import (
+	"io/ioutil"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +36,27 @@ import (
 func printCheckpointStats(t *testing.T, tae *DB) {
 	t.Logf("GetCheckpointedLSN: %d", tae.Wal.GetCheckpointed())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
+}
+
+func getSegmentFileNames(dir string) (names map[uint64]string) {
+	names = make(map[uint64]string)
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		panic(err)
+	}
+	for _, f := range files {
+		name := f.Name()
+		segName := strings.TrimSuffix(name, ".seg")
+		if segName == name {
+			continue
+		}
+		id, err := strconv.ParseUint(segName, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+		names[id] = name
+	}
+	return
 }
 
 func enableCheckpoint(in *options.Options) (opts *options.Options) {
@@ -71,6 +95,24 @@ func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.
 		err := rel.Append(data)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
+	}
+}
+
+func tryAppendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+	return func() {
+		defer wg.Done()
+		txn, _ := e.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, err := database.GetRelationByName(name)
+		if err != nil {
+			_ = txn.Rollback()
+			return
+		}
+		if err = rel.Append(data); err != nil {
+			_ = txn.Rollback()
+			return
+		}
+		_ = txn.Commit()
 	}
 }
 
@@ -203,7 +245,7 @@ func TestGCTable(t *testing.T) {
 	t.Logf("Takes: %s", time.Since(now))
 	printCheckpointStats(t, tae)
 
-	bat := catalog.MockData(schema, schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1))
+	bat := catalog.MockData(schema, schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)-1)
 	bats := compute.SplitBatch(bat, 4)
 
 	// 3. Create a table and append 7 rows
@@ -213,6 +255,9 @@ func TestGCTable(t *testing.T) {
 	err = rel.Append(bats[0])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
+
+	names := getSegmentFileNames(tae.Dir)
+	assert.Equal(t, 1, len(names))
 
 	// 4. Drop the table
 	txn, _ = tae.StartTxn(nil)
@@ -229,4 +274,77 @@ func TestGCTable(t *testing.T) {
 	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
 	t.Logf("Takes: %s", time.Since(now))
 	printCheckpointStats(t, tae)
+	names = getSegmentFileNames(tae.Dir)
+	assert.Equal(t, 0, len(names))
+
+	// 5. Create a table and append 3 block
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, err = db.CreateRelation(schema)
+	assert.NoError(t, err)
+	err = rel.Append(bat)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	names = getSegmentFileNames(tae.Dir)
+	t.Log(names)
+	assert.Equal(t, 2, len(names))
+	printCheckpointStats(t, tae)
+
+	compactBlocks(t, tae, "db", schema, true)
+
+	// 6. Drop the table
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	_, err = db.DropRelationByName(schema.Name)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	testutils.WaitExpect(200, func() bool {
+		return dbEntry.CoarseTableCnt() == 0
+	})
+	names = getSegmentFileNames(tae.Dir)
+	printCheckpointStats(t, tae)
+	t.Log(names)
+	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
+	names = getSegmentFileNames(tae.Dir)
+	assert.Equal(t, 0, len(names))
+
+	// 7. Create a table
+	txn, _ = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	_, err = db.CreateRelation(schema)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// 8. Append blocks and drop
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(5)
+	bat = catalog.MockData(schema, schema.BlockMaxRows*10)
+	bats = compute.SplitBatch(bat, 20)
+	for i := range bats[:10] {
+		wg.Add(1)
+		pool.Submit(tryAppendClosure(t, bats[i], schema.Name, tae, &wg))
+	}
+	wg.Add(1)
+	pool.Submit(func() {
+		defer wg.Done()
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		_, err := db.DropRelationByName(schema.Name)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit())
+	})
+	for i := range bats[10:] {
+		wg.Add(1)
+		pool.Submit(tryAppendClosure(t, bats[i+10], schema.Name, tae, &wg))
+	}
+	wg.Wait()
+	printCheckpointStats(t, tae)
+	testutils.WaitExpect(2000, func() bool {
+		return dbEntry.CoarseTableCnt() == 0
+	})
+	printCheckpointStats(t, tae)
+	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
+	names = getSegmentFileNames(tae.Dir)
+	assert.Equal(t, 0, len(names))
+	// t.Log(common.GPool.String())
 }

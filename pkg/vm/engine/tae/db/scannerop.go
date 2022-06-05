@@ -41,6 +41,7 @@ func newCalibrationOp(db *DB) *calibrationOp {
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
 	}
+	processor.TableFn = processor.onTable
 	processor.BlockFn = processor.onBlock
 	processor.SegmentFn = processor.onSegment
 	processor.PostSegmentFn = processor.onPostSegment
@@ -50,7 +51,28 @@ func newCalibrationOp(db *DB) *calibrationOp {
 func (processor *calibrationOp) PreExecute() error  { return nil }
 func (processor *calibrationOp) PostExecute() error { return nil }
 
+func (processor *calibrationOp) onTable(tableEntry *catalog.TableEntry) (err error) {
+	tableEntry.RLock()
+	dropped := tableEntry.IsDroppedCommitted()
+	tableEntry.RUnlock()
+	if dropped {
+		// logutil.Infof("Noop for table %s: table was dropped", tableEntry.String())
+		err = catalog.ErrStopCurrRecur
+	}
+	return
+}
+
 func (processor *calibrationOp) onSegment(segmentEntry *catalog.SegmentEntry) (err error) {
+	tableEntry := segmentEntry.GetTable()
+	tableEntry.RLock()
+	dropped := tableEntry.IsDroppedCommitted()
+	tableEntry.RUnlock()
+	if dropped {
+		// logutil.Infof("Noop for segment %s: table was dropped", segmentEntry.Repr())
+		processor.blkCntOfSegment = 0
+		err = catalog.ErrStopCurrRecur
+		return
+	}
 	processor.blkCntOfSegment = 0
 	return
 }
@@ -71,6 +93,16 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 }
 
 func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err error) {
+	tableEntry := blockEntry.GetSegment().GetTable()
+	tableEntry.RLock()
+	dropped := tableEntry.IsDroppedCommitted()
+	tableEntry.RUnlock()
+	if dropped {
+		// logutil.Infof("Noop for block %s: table was dropped", blockEntry.Repr())
+		processor.blkCntOfSegment = 0
+		return
+	}
+
 	blockEntry.RLock()
 	// 1. Skip uncommitted entries
 	if !blockEntry.IsCommitted() {
@@ -179,6 +211,20 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 			// 	logutil.Infof("Schedule | [GC BLK] | %s | Err=%s | Scopes=%s", entry.String(), err, scopes)
 			// }
 			err = nil
+		}
+	} else {
+		tableEntry := entry.GetSegment().GetTable()
+		tableEntry.RLock()
+		dropped := tableEntry.IsDroppedCommitted()
+		ts := tableEntry.DeleteAt
+		tableEntry.RUnlock()
+		if dropped {
+			blkData := entry.GetBlockData()
+			_, err = monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, entry.AsCommonID(), blkData.CheckpointWALClosure(ts))
+			if err != nil {
+				logutil.Warnf("CheckpointWALClosure %s: %v", entry.Repr(), err)
+				err = nil
+			}
 		}
 	}
 	return
