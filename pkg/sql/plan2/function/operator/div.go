@@ -181,7 +181,7 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	case lv.IsScalar() && !rv.IsScalar():
 		if !nulls.Any(rv.Nsp) {
 			for _, v := range rvs {
-				if int64(v) != 0 {
+				if int64(v) == 0 {
 					return nil, ErrDivByZero
 				}
 			}

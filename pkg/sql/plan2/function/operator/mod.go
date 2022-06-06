@@ -104,7 +104,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, lv.Nsp)
-		mod.IntModByScalar(rvs[0], lvs, rs)
+		vector.SetCol(vec, mod.IntModByScalar(rvs[0], lvs, rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
@@ -218,7 +218,7 @@ func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, lv.Nsp)
-		mod.FloatModByScalar(rvs[0], lvs, rs)
+		vector.SetCol(vec, mod.FloatModByScalar(rvs[0], lvs, rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
