@@ -116,7 +116,9 @@ func TestTimestamp_String2(t *testing.T) {
 	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr8)
 }
 
-func TestParseTimestamp(t *testing.T) {
+/*
+// todo(broc): delete this
+func TestParseTimestampOrphaned(t *testing.T) {
 	a, err := ParseTimestamp("0001-01-01 00:00:00", 6)
 	require.NoError(t, err)
 	require.Equal(t, int64(a)+(localTZ<<20), int64(0))
@@ -132,4 +134,36 @@ func TestParseTimestamp(t *testing.T) {
 	a, err = ParseTimestamp("0001-01-01 00:00:00.123456", 3)
 	require.NoError(t, err)
 	require.Equal(t, int64(a)+(localTZ<<20), int64(123000))
+}
+
+*/
+
+func TestParseTimestamp(t *testing.T) {
+	a, err := ParseTimestamp("1970-01-01 00:00:01", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue), int64(a))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.123", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue+123000), int64(a))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.123456", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue+123456), int64(a))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.123456", 3)
+	require.NoError(t, err)
+	require.Equal(t, int64(a), int64(TimestampMinValue+123000))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.12356", 3)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue+124000), int64(a))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.12345", 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue), int64(a))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.52345", 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue+1<<20), int64(a))
 }
