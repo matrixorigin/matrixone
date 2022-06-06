@@ -66,21 +66,23 @@ type rotateFile struct {
 	history     History
 	commitMu    sync.RWMutex
 
-	commitWg     sync.WaitGroup
-	commitCtx    context.Context
-	commitCancel context.CancelFunc
-	commitQueue  chan *vFile
+	commitWg        sync.WaitGroup
+	commitCtx       context.Context
+	commitCancel    context.CancelFunc
+	commitQueue     chan *vFile
+	postCommitQueue chan *vFile
 
 	nextVer uint64
 	idAlloc common.IdAllocator
 
 	wg sync.WaitGroup
 
-	bsInfo *storeInfo
+	bsInfo         *storeInfo
+	postCommitFunc func(VFile)
 }
 
 func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChecker,
-	historyFactory HistoryFactory, bsInfo *storeInfo) (*rotateFile, error) {
+	historyFactory HistoryFactory, bsInfo *storeInfo, postCommitFunc func(VFile)) (*rotateFile, error) {
 	var err error
 	if mu == nil {
 		mu = new(sync.RWMutex)
@@ -102,14 +104,16 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	}
 
 	rf := &rotateFile{
-		RWMutex:     mu,
-		dir:         dir,
-		name:        name,
-		uncommitted: make([]*vFile, 0),
-		checker:     rotateChecker,
-		commitQueue: make(chan *vFile, 10000),
-		history:     historyFactory(),
-		bsInfo:      bsInfo,
+		RWMutex:         mu,
+		dir:             dir,
+		name:            name,
+		uncommitted:     make([]*vFile, 0),
+		checker:         rotateChecker,
+		commitQueue:     make(chan *vFile, 10000),
+		postCommitQueue: make(chan *vFile, 10000),
+		history:         historyFactory(),
+		bsInfo:          bsInfo,
+		postCommitFunc:  postCommitFunc,
 	}
 	if !newDir {
 		files, err := ioutil.ReadDir(dir)
@@ -159,6 +163,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	rf.commitCtx, rf.commitCancel = context.WithCancel(context.Background())
 	rf.wg.Add(1)
 	go rf.commitLoop()
+	go rf.postCommitLoop()
 	return rf, err
 }
 
@@ -200,6 +205,20 @@ func (rf *rotateFile) commitLoop() {
 			file.Commit()
 			rf.commitFile()
 			rf.commitWg.Done()
+			rf.postCommitQueue <- file
+		}
+	}
+}
+
+func (rf *rotateFile) postCommitLoop() {
+	for {
+		select {
+		case <-rf.commitCtx.Done():
+			return
+		case file := <-rf.postCommitQueue:
+			if rf.postCommitFunc != nil {
+				rf.postCommitFunc(file)
+			}
 		}
 	}
 }
@@ -220,6 +239,7 @@ func (rf *rotateFile) Close() error {
 	rf.wg.Wait()
 	for _, vf := range rf.uncommitted {
 		vf.Close()
+		return nil
 	}
 	return nil
 }
