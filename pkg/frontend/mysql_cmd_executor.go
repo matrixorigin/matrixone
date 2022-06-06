@@ -53,6 +53,7 @@ var (
 	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
 	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
 	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
+	errorFunctionIsNotSupported                    = goErrors.New("function is not supported")
 )
 
 //tableInfos of a database
@@ -600,6 +601,8 @@ func (mce *MysqlCmdExecutor) handleSelectXXX(param string) error {
 		val = fmt.Sprintf("%s@%s", val, host)
 	case "connection_id":
 		val = proto.ConnectionID()
+	default:
+		return errorFunctionIsNotSupported
 	}
 
 	ses.Mrs.AddRow([]interface{}{val})
