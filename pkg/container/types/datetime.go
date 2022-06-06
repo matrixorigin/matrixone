@@ -164,6 +164,14 @@ func (dt Datetime) UTC() Datetime {
 	return Datetime((dt.sec() - localTZ) << 20)
 }
 
+func (dt Datetime) UnixTimestamp() int64 {
+	return dt.sec() - unixEpoch
+}
+
+func FromUnix(time int64) Datetime {
+	return Datetime((time + unixEpoch) << 20)
+}
+
 func Now() Datetime {
 	t := gotime.Now()
 	wall := *(*uint64)(unsafe.Pointer(&t))
