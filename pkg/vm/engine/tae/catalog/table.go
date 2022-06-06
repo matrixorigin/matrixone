@@ -110,6 +110,15 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	}
 }
 
+func (entry *TableEntry) IsVirtual() bool {
+	if !entry.db.IsSystemDB() {
+		return false
+	}
+	return entry.schema.Name == SystemTable_DB_Name ||
+		entry.schema.Name == SystemTable_Table_Name ||
+		entry.schema.Name == SystemTable_Columns_Name
+}
+
 func (entry *TableEntry) GetRows() uint64 {
 	return atomic.LoadUint64(&entry.rows)
 }

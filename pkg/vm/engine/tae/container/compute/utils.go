@@ -114,6 +114,10 @@ func EncodeKey(key any, typ types.Type) ([]byte, error) {
 		} else {
 			panic("unsupported type")
 		}
+	case types.T_decimal64:
+		return encoding.EncodeDecimal64(key.(types.Decimal64)), nil
+	case types.T_decimal128:
+		return encoding.EncodeDecimal128(key.(types.Decimal128)), nil
 	case types.T_float32:
 		if v, ok := key.(float32); ok {
 			return encoding.EncodeFloat32(v), nil
@@ -269,6 +273,38 @@ func ProcessVector(vec *vector.Vector, offset uint32, length uint32, task func(v
 		}
 	case types.T_uint64:
 		vs := vec.Col.([]uint64)[offset:]
+		if keyselects == nil {
+			for i, v := range vs {
+				if err := task(v, uint32(i)); err != nil {
+					return err
+				}
+			}
+		} else {
+			for _, idx := range idxes {
+				v := vs[idx]
+				if err := task(v, idx); err != nil {
+					return err
+				}
+			}
+		}
+	case types.T_decimal64:
+		vs := vec.Col.([]types.Decimal64)[offset:]
+		if keyselects == nil {
+			for i, v := range vs {
+				if err := task(v, uint32(i)); err != nil {
+					return err
+				}
+			}
+		} else {
+			for _, idx := range idxes {
+				v := vs[idx]
+				if err := task(v, idx); err != nil {
+					return err
+				}
+			}
+		}
+	case types.T_decimal128:
+		vs := vec.Col.([]types.Decimal128)[offset:]
 		if keyselects == nil {
 			for i, v := range vs {
 				if err := task(v, uint32(i)); err != nil {
