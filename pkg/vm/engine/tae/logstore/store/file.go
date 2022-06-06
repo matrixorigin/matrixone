@@ -66,10 +66,11 @@ type rotateFile struct {
 	history     History
 	commitMu    sync.RWMutex
 
-	commitWg     sync.WaitGroup
-	commitCtx    context.Context
-	commitCancel context.CancelFunc
-	commitQueue  chan *vFile
+	commitWg        sync.WaitGroup
+	commitCtx       context.Context
+	commitCancel    context.CancelFunc
+	commitQueue     chan *vFile
+	postCommitQueue chan *vFile
 
 	nextVer uint64
 	idAlloc common.IdAllocator
@@ -103,15 +104,16 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	}
 
 	rf := &rotateFile{
-		RWMutex:        mu,
-		dir:            dir,
-		name:           name,
-		uncommitted:    make([]*vFile, 0),
-		checker:        rotateChecker,
-		commitQueue:    make(chan *vFile, 10000),
-		history:        historyFactory(),
-		bsInfo:         bsInfo,
-		postCommitFunc: postCommitFunc,
+		RWMutex:         mu,
+		dir:             dir,
+		name:            name,
+		uncommitted:     make([]*vFile, 0),
+		checker:         rotateChecker,
+		commitQueue:     make(chan *vFile, 10000),
+		postCommitQueue: make(chan *vFile, 10000),
+		history:         historyFactory(),
+		bsInfo:          bsInfo,
+		postCommitFunc:  postCommitFunc,
 	}
 	if !newDir {
 		files, err := ioutil.ReadDir(dir)
@@ -161,6 +163,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 	rf.commitCtx, rf.commitCancel = context.WithCancel(context.Background())
 	rf.wg.Add(1)
 	go rf.commitLoop()
+	go rf.postCommitLoop()
 	return rf, err
 }
 
@@ -202,9 +205,19 @@ func (rf *rotateFile) commitLoop() {
 			file.Commit()
 			rf.commitFile()
 			rf.commitWg.Done()
-			if rf.postCommitFunc!= nil{
+			rf.postCommitQueue <- file
+		}
+	}
+}
 
-			rf.postCommitFunc(file)
+func (rf *rotateFile) postCommitLoop() {
+	for {
+		select {
+		case <-rf.commitCtx.Done():
+			return
+		case file := <-rf.postCommitQueue:
+			if rf.postCommitFunc != nil {
+				rf.postCommitFunc(file)
 			}
 		}
 	}
@@ -226,6 +239,7 @@ func (rf *rotateFile) Close() error {
 	rf.wg.Wait()
 	for _, vf := range rf.uncommitted {
 		vf.Close()
+	return nil
 	}
 	return nil
 }

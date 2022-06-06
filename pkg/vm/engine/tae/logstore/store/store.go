@@ -76,6 +76,7 @@ type baseStore struct {
 	common.ClosedState
 	dir, name       string
 	flushWg         sync.WaitGroup
+	flushWgMu       *sync.RWMutex
 	flushCtx        context.Context
 	flushCancel     context.CancelFunc
 	flushQueue      chan entry.Entry
@@ -98,6 +99,7 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 		commitQueue:     make(chan []*batch, DefaultMaxCommitSize*100),
 		postCommitQueue: make(chan []*batch, DefaultMaxCommitSize*100),
 		mu:              &sync.RWMutex{},
+		flushWgMu:       &sync.RWMutex{},
 	}
 	if cfg == nil {
 		cfg = &StoreCfg{}
@@ -417,7 +419,9 @@ func (bs *baseStore) Close() error {
 	if !bs.TryClose() {
 		return nil
 	}
+	bs.flushWgMu.RLock()
 	bs.flushWg.Wait()
+	bs.flushWgMu.RUnlock()
 	bs.flushCancel()
 	bs.wg.Wait()
 	fmt.Printf("***********************\n")
@@ -470,11 +474,13 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 	if bs.IsClosed() {
 		return 0, common.ClosedErr
 	}
+	bs.flushWgMu.Lock()
 	bs.flushWg.Add(1)
 	if bs.IsClosed() {
 		bs.flushWg.Done()
 		return 0, common.ClosedErr
 	}
+	bs.flushWgMu.Unlock()
 	bs.mu.Lock()
 	lsn := bs.AllocateLsn(groupId)
 	v1 := e.GetInfo()
