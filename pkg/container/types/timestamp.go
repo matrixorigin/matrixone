@@ -76,108 +76,6 @@ func (ts Timestamp) String2(precision int32) string {
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
-// ParseTimestamp will parse a string to be a Timestamp
-// Support Format:
-// 1. all the Date value
-// 2. yyyy-mm-dd hh:mm:ss(.msec)
-// 3. yyyymmddhhmmss(.msec)
-// todo(broc) delete this once ParseTimestamp is well tested
-func ParseTimestampOrphaned(s string, precision int32) (Timestamp, error) {
-	if len(s) < 14 {
-		if d, err := ParseDate(s); err == nil {
-			return Timestamp(d.ToTime()), nil
-		}
-		return -1, errIncorrectDatetimeValue
-	}
-	var year int32
-	var month, day, hour, minute, second uint8
-	var msec uint32 = 0
-
-	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
-	if s[4] == '-' {
-		if len(s) < 19 {
-			return -1, errIncorrectDatetimeValue
-		}
-		month = (s[5]-'0')*10 + (s[6] - '0')
-		if s[7] != '-' {
-			return -1, errIncorrectDatetimeValue
-		}
-		day = (s[8]-'0')*10 + (s[9] - '0')
-		if s[10] != ' ' {
-			return -1, errIncorrectDatetimeValue
-		}
-		if !validDate(year, month, day) {
-			return -1, errIncorrectDatetimeValue
-		}
-		hour = (s[11]-'0')*10 + (s[12] - '0')
-		if s[13] != ':' {
-			return -1, errIncorrectDatetimeValue
-		}
-		minute = (s[14]-'0')*10 + (s[15] - '0')
-		if s[16] != ':' {
-			return -1, errIncorrectDatetimeValue
-		}
-		second = (s[17]-'0')*10 + (s[18] - '0')
-		if !validTimeInDay(hour, minute, second) {
-			return -1, errIncorrectDatetimeValue
-		}
-		if len(s) > 19 {
-			// for a timestamp string like "2020-01-01 11:11:11.123"
-			// the microseconds part .123 should be interpreted as 123000 microseconds, so we need to pad zeros
-			if len(s) > 20 && s[19] == '.' {
-				msecStr := s[20:]
-				lengthMsecStr := len(msecStr)
-				if lengthMsecStr > int(precision) {
-					msecStr = msecStr[:precision]
-				}
-				padZeros := microSecondsDigits - len(msecStr)
-				for i := 0; i < padZeros; i++ {
-					msecStr = msecStr + string('0')
-				}
-				m, err := strconv.ParseUint(msecStr, 10, 32)
-				if err != nil {
-					return -1, errIncorrectDatetimeValue
-				}
-				msec = uint32(m)
-			} else {
-				return -1, errIncorrectDatetimeValue
-			}
-		}
-	} else {
-		month = (s[4]-'0')*10 + (s[5] - '0')
-		day = (s[6]-'0')*10 + (s[7] - '0')
-		hour = (s[8]-'0')*10 + (s[9] - '0')
-		minute = (s[10]-'0')*10 + (s[11] - '0')
-		second = (s[12]-'0')*10 + (s[13] - '0')
-		if len(s) > 14 {
-			// for a timestamp string like "20200101111111.123"
-			// the microseconds part .123 should be interpreted as 123000 microseconds, so we need to pad zeros
-			if len(s) > 15 && s[14] == '.' {
-				msecStr := s[15:]
-				lengthMsecStr := len(msecStr)
-				if lengthMsecStr > microSecondsDigits {
-					msecStr = msecStr[:microSecondsDigits]
-				} else {
-					padZeros := microSecondsDigits - lengthMsecStr
-					for i := 0; i < padZeros; i++ {
-						msecStr = msecStr + string('0')
-					}
-				}
-				m, err := strconv.ParseUint(msecStr, 10, 32)
-				if err != nil {
-					return -1, errIncorrectDatetimeValue
-				}
-				msec = uint32(m)
-			} else {
-				return -1, errIncorrectDatetimeValue
-			}
-		}
-	}
-	result := FromClockUTC(year, month, day, hour, minute, second, msec)
-
-	return result, nil
-}
-
 var (
 	errIncorrectTimestampValue = errors.New(errno.DataException, "Incorrect timestamp value")
 	errTimestampOutOfRange     = errors.New(errno.DataException, "timestamp out of range")
@@ -223,6 +121,11 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	return msecs, carry, nil
 }
 
+// ParseTimestamp will parse a string to be a Timestamp
+// Support Format:
+// 1. all the Date value
+// 2. yyyy-mm-dd hh:mm:ss(.msec)
+// 3. yyyymmddhhmmss(.msec)
 func ParseTimestamp(s string, precision int32) (Timestamp, error) {
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
