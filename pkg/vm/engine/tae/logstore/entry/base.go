@@ -55,7 +55,8 @@ type Info struct {
 
 	GroupLSN uint64
 
-	Info any
+	PostCommitVersion int
+	Info              any
 }
 
 func (info *Info) Marshal() []byte {
@@ -64,6 +65,9 @@ func (info *Info) Marshal() []byte {
 	binary.BigEndian.PutUint32(buf[pos:pos+4], info.Group)
 	pos += 4
 	binary.BigEndian.PutUint64(buf[pos:pos+8], info.TxnId)
+	pos += 8
+
+	binary.BigEndian.PutUint64(buf[pos:pos+8], uint64(info.PostCommitVersion))
 	pos += 8
 
 	length := uint64(len(info.Checkpoints))
@@ -155,6 +159,9 @@ func Unmarshal(buf []byte) *Info {
 	pos += 4
 	info.TxnId = binary.BigEndian.Uint64(buf[pos : pos+8])
 	pos += 8
+	id := binary.BigEndian.Uint64(buf[pos : pos+8])
+	pos += 8
+	info.PostCommitVersion = int(id)
 
 	length := binary.BigEndian.Uint64(buf[pos : pos+8])
 	pos += 8
