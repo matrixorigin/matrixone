@@ -341,13 +341,13 @@ func TestSegment_Replay(t *testing.T) {
 	ret = 0xFFFFFFFFFFFFFFF8 - level1[l1pos]
 	assert.Equal(t, 0, int(ret))
 	l0pos = 2048000 / seg.GetPageSize() / BITS_PER_UNIT
-	file = seg.nodes[fmt.Sprintf("test_1.blk")]
+	file = seg.nodes["test_1.blk"]
 	seg.ReleaseFile(file)
 	ret = 0xFFF0000000000000 - level0[l0pos]
 	assert.Equal(t, 0, int(ret))
 	ret = 0xFFFFFFFFFFFFFFF9 - level1[l1pos]
 	assert.Equal(t, 0, int(ret))
-	file = seg.nodes[fmt.Sprintf("test_2.blk")]
+	file = seg.nodes["test_2.blk"]
 	seg.ReleaseFile(file)
 	assert.Equal(t, 3, int(level0[l0pos+1]))
 	ret = 0xFFFFFFFFFFFFFFFB - level1[l1pos]
