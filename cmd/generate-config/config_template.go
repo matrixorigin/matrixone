@@ -529,10 +529,6 @@ func checkValues(dataType string, domainType string, values []string) bool {
 				return true
 			}
 
-			if len(values) != 1 {
-				return false
-			}
-
 			low := strings.ToLower(values[0])
 			if !isInSlice(low, boolFalseOptions) && !isInSlice(low, boolTrueOptions) {
 				return false

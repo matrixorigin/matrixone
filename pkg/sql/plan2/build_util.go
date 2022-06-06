@@ -227,11 +227,11 @@ func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, nod
 		// select * from R join S using(a, b)
 		// we get projectList as :  [a, b, r1, r2, r3, s1, s2]
 		if ok {
-			node.ProjectList[colIdx] = colExpr
-			projectNode.ProjectList[colIdx] = colExpr
+			node.ProjectList[colIdx] = DeepCopyExpr(colExpr)
+			projectNode.ProjectList[colIdx] = DeepCopyExpr(colExpr)
 		} else {
-			node.ProjectList[projNodeIdx] = colExpr
-			projectNode.ProjectList[projNodeIdx] = colExpr
+			node.ProjectList[projNodeIdx] = DeepCopyExpr(colExpr)
+			projectNode.ProjectList[projNodeIdx] = DeepCopyExpr(colExpr)
 			projNodeIdx++
 		}
 		joinNodeIdx++

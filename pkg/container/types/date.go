@@ -42,11 +42,13 @@ const (
 
 var startupTime time.Time
 var localTZ int64
+var unixEpoch int64 // second unit, 1970-1-1 00:00:00 since 1-1-1 00:00:00
 
 func init() {
 	startupTime = time.Now()
 	_, offset := startupTime.Zone()
 	localTZ = int64(offset)
+	unixEpoch = FromClock(1970, 1, 1, 0, 0, 0, 0).sec()
 }
 
 var (
@@ -370,4 +372,11 @@ func (d Date) ToTime() Datetime {
 func (d Date) Month() uint8 {
 	_, month, _, _ := d.Calendar(true)
 	return month
+}
+
+func LastDay(year uint16, month uint8) int {
+	if isLeap(int32(year)) {
+		return int(leapYearMonthDays[month-1])
+	}
+	return int(flatYearMonthDays[month-1])
 }
