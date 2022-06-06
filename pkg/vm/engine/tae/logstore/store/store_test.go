@@ -18,17 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"math/rand"
 	"os"
 	"sync"
 	"testing"
-	"time"
-
-	// "time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -250,7 +246,7 @@ func TestStore(t *testing.T) {
 	}
 	buf := bs.Bytes()
 
-	entryPerGroup := 5000
+	entryPerGroup := 1000
 	groupCnt := 1
 	worker, _ := ants.NewPool(groupCnt)
 	fwg.Add(entryPerGroup * groupCnt)
@@ -670,19 +666,14 @@ func TestLoad(t *testing.T) {
 				err := e.entry.WaitDone()
 				assert.Nil(t, err)
 				infoin := e.entry.GetInfo()
-				fmt.Printf("entry is %s", e.entry.GetPayload())
+				t.Logf("entry is %s", e.entry.GetPayload())
 				if infoin != nil {
 					info := infoin.(*entry.Info)
-					var loadedEntry entry.Entry
-					for i := 0; i < 5; i++ {
-						loadedEntry, err = s.Load(info.Group, e.lsn)
-						if err == nil {
-							fmt.Printf("loaded entry is %s", loadedEntry.GetPayload())
-							break
-						}
-						fmt.Printf("%d-%d:%v\n", info.Group, info.GroupLSN, err)
-						time.Sleep(time.Millisecond * 500)
-					}
+					testutils.WaitExpect(400, func() bool {
+						_, err = s.Load(info.Group, e.lsn)
+						return err == nil
+					})
+					_, err = s.Load(info.Group, e.lsn)
 					assert.Nil(t, err)
 					t.Logf("synced %d", s.GetSynced(info.Group))
 					t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
@@ -730,7 +721,7 @@ func TestLoad(t *testing.T) {
 						entry: e,
 						lsn:   lsn,
 					}
-					fmt.Printf("alloc %d-%d\n", entry.GTUncommit, lsn)
+					t.Logf("alloc %d-%d", entry.GTUncommit, lsn)
 				case 49: //ckp entry
 					e.SetType(entry.ETCheckpoint)
 					checkpointInfo := &entry.Info{
@@ -758,7 +749,7 @@ func TestLoad(t *testing.T) {
 						entry: e,
 						lsn:   lsn,
 					}
-					fmt.Printf("alloc %d-%d\n", entry.GTCKp, lsn)
+					t.Logf("alloc %d-%d", entry.GTCKp, lsn)
 				case 20, 21, 22, 23: //txn entry
 					e.SetType(entry.ETTxn)
 					txnInfo := &entry.Info{
@@ -779,7 +770,7 @@ func TestLoad(t *testing.T) {
 						lsn:   lsn,
 					}
 					ckp = lsn
-					fmt.Printf("alloc %d-%d\n", groupNo, lsn)
+					t.Logf("alloc %d-%d", groupNo, lsn)
 				case 26, 28: //flush entry
 					e.SetType(entry.ETFlush)
 					payload := make([]byte, 0)
@@ -791,7 +782,7 @@ func TestLoad(t *testing.T) {
 						entry: e,
 						lsn:   lsn,
 					}
-					fmt.Printf("alloc %d-%d\n", entry.GTNoop, lsn)
+					t.Logf("alloc %d-%d", entry.GTNoop, lsn)
 				default: //commit entry
 					e.SetType(entry.ETCustomizedStart)
 					commitInterval := &entry.Info{}
@@ -810,7 +801,7 @@ func TestLoad(t *testing.T) {
 						lsn:   lsn,
 					}
 					ckp = lsn
-					fmt.Printf("alloc %d-%d\n", groupNo, lsn)
+					t.Logf("alloc %d-%d", groupNo, lsn)
 				}
 				ch <- entrywithlsn
 			}
@@ -836,7 +827,7 @@ func TestLoad(t *testing.T) {
 	fmt.Printf("\n***********replay***********\n\n")
 	s, _ = NewBaseStore(dir, name, cfg)
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
-		fmt.Printf("%s", payload)
+		t.Logf("%s", payload)
 	}
 	err = s.Replay(a)
 	assert.Nil(t, err)
@@ -852,23 +843,16 @@ func TestLoad(t *testing.T) {
 		err := e.entry.WaitDone()
 		assert.Nil(t, err)
 		infoin := e.entry.GetInfo()
-		fmt.Printf("entry is %s", e.entry.GetPayload())
+		t.Logf("entry is %s", e.entry.GetPayload())
 		if infoin != nil {
 			info := infoin.(*entry.Info)
-			var loadedEntry entry.Entry
-			for i := 0; i < 5; i++ {
-				loadedEntry, err = s.Load(info.Group, e.lsn)
-				if err == nil {
-					fmt.Printf("loaded entry is %s", loadedEntry.GetPayload())
-					break
-				}
-				fmt.Printf("%d-%d:%v\n", info.Group, info.GroupLSN, err)
-				time.Sleep(time.Millisecond * 500)
+			if info.Group != entry.GTNoop {
+				_, err = s.Load(info.Group, e.lsn)
+				assert.Nil(t, err)
+				t.Logf("synced %d", s.GetSynced(info.Group))
+				t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
+				t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
 			}
-			assert.Nil(t, err)
-			t.Logf("synced %d", s.GetSynced(info.Group))
-			t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-			t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
 		}
 	}
 
