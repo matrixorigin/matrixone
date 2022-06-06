@@ -62,4 +62,5 @@ type txnReader struct {
 	compressed   []*bytes.Buffer
 	decompressed []*bytes.Buffer
 	zs           []int64
+	latency      int64
 }
