@@ -215,6 +215,10 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 	return nil, errorSystemVariableDoesNotExist
 }
 
+func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
+	return ses.txnCompileCtx
+}
+
 // SetSessionVar sets the value of system variable in session
 func (ses *Session) SetSessionVar(name string, value interface{}) error {
 	if def, _, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
@@ -565,8 +569,17 @@ func (th *TxnHandler) CleanTxn() error {
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
+type QueryType int
+
+const (
+	TXN_DEFAULT QueryType = iota
+	TXN_DELETE
+	TXN_UPDATE
+)
+
 type TxnCompilerContext struct {
 	dbName     string
+	QryTyp     QueryType
 	txnHandler *TxnHandler
 }
 
@@ -574,7 +587,11 @@ func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	if len(db) == 0 {
 		db = "mo_catalog"
 	}
-	return &TxnCompilerContext{txnHandler: txn, dbName: db}
+	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
+}
+
+func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
+	tcc.QryTyp = qryTyp
 }
 
 func (tcc *TxnCompilerContext) SetDatabase(db string) {
@@ -634,6 +651,18 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Primary: attr.Attr.Primary,
 			})
 		}
+	}
+	if tcc.QryTyp != TXN_DEFAULT {
+		hideKey := table.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
+		defs = append(defs, &plan2.ColDef{
+			Name: hideKey.Name,
+			Typ: &plan2.Type{
+				Id:        plan.Type_TypeId(hideKey.Type.Oid),
+				Width:     hideKey.Type.Width,
+				Precision: hideKey.Type.Precision,
+			},
+			Primary: hideKey.Primary,
+		})
 	}
 
 	//convert
