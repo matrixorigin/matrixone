@@ -94,7 +94,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 							}
 							expr.TableName = ""
 							expr.ColName = alias
-							aggNode.ProjectList = append(aggNode.ProjectList, expr)
+							aggNode.ProjectList = append(aggNode.ProjectList, DeepCopyExpr(expr))
 						}
 						selectList = append(selectList, expr)
 					}
