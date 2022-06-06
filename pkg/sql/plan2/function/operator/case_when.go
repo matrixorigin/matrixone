@@ -61,7 +61,7 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 	return false
 }
 
-// CwFn1 is fn of uint / int / float / bool
+// CwFn1 is fn for uint / int / float / bool
 func CwFn1[T Ret](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var t = types.T_bool.ToType() // result vector's type
 	l := vector.Length(vs[0])
@@ -110,6 +110,9 @@ func CwFn1[T Ret](vs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 				var j uint64
 				temp := make([]uint64, 0, l)
 				for j = 0; j < uint64(l); j++ {
+					if flag[j] {
+						continue
+					}
 					if whencols[j] {
 						temp = append(temp, j)
 						flag[j] = true
@@ -118,6 +121,9 @@ func CwFn1[T Ret](vs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 				nulls.Add(rs.Nsp, temp...)
 			} else {
 				for j := 0; j < l; j++ {
+					if flag[j] {
+						continue
+					}
 					if whencols[j] {
 						rscols[j] = thencols[0]
 						flag[j] = true
@@ -130,6 +136,9 @@ func CwFn1[T Ret](vs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 				temp := make([]uint64, 0, l)
 				for j = 0; j < uint64(l); j++ {
 					if whencols[j] {
+						if flag[j] {
+							continue
+						}
 						if nulls.Contains(thenv.Nsp, j) {
 							temp = append(temp, j)
 						} else {
@@ -142,6 +151,9 @@ func CwFn1[T Ret](vs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			} else {
 				for j := 0; j < l; j++ {
 					if whencols[j] {
+						if flag[j] {
+							continue
+						}
 						rscols[j] = thencols[j]
 						flag[j] = true
 					}

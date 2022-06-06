@@ -193,13 +193,28 @@ func TestCwFn1(t *testing.T) {
 		{
 			info: "when a = 1 then null, when a = 2 then null, else null", proc: newProc(),
 			vs: []*vector.Vector{
-				makeInt64Vector([]int64{1, 2, 3, 4}, nil),
+				makeBoolVector([]bool{false, false, false, false}),
 				makeScalarNull(4),
-				makeInt64Vector([]int64{1, 2, 3, 4}, nil),
+				makeBoolVector([]bool{false, false, false, false}),
 				makeScalarNull(4),
 				makeScalarNull(4),
 			},
 			match: false,
+		},
+
+		{
+			// special case 1
+			info: "when a = 1 then 1, when a = 1 then 2, else null", proc: newProc(),
+			vs: []*vector.Vector{
+				makeBoolVector([]bool{true, true, false, false}),
+				makeScalarInt64(1, 4),
+				makeBoolVector([]bool{false, true, true, false}),
+				makeScalarInt64(2, 4),
+				makeScalarNull(4),
+			},
+			match:  true,
+			err:    false,
+			expect: makeInt64Vector([]int64{1, 1, 2, 0}, []uint64{3}),
 		},
 	}
 
@@ -223,6 +238,8 @@ func TestCwFn1(t *testing.T) {
 				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {
 				require.NoError(t, ergot)
+				//println(fmt.Sprintf("e: %v", tc.expect.Col))
+				//println(fmt.Sprintf("g: %v", got.Col))
 				if tc.expect.IsScalar() {
 					require.True(t, got.IsScalar())
 					if tc.expect.IsScalarNull() {
