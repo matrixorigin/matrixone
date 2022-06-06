@@ -102,10 +102,6 @@ type logStore struct {
 }
 
 func newLogStore(cfg Config) (*logStore, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	cfg.Fill()
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
 		return nil, err
@@ -129,6 +125,10 @@ func (l *logStore) Close() error {
 		l.nh.Close()
 	}
 	return nil
+}
+
+func (l *logStore) ID() string {
+	return l.nh.ID()
 }
 
 func (l *logStore) GetServiceAddress(nhID string) (string, bool) {

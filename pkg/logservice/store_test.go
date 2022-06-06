@@ -49,12 +49,14 @@ func TestRaftConfig(t *testing.T) {
 }
 
 func getStoreTestConfig() Config {
-	return Config{
+	cfg := Config{
 		RTTMillisecond:      10,
 		GossipSeedAddresses: []string{"127.0.0.1:9000"},
 		DeploymentID:        1,
 		FS:                  vfs.NewStrictMem(),
 	}
+	cfg.Fill()
+	return cfg
 }
 
 func TestStoreCanBeCreatedAndClosed(t *testing.T) {
@@ -257,6 +259,8 @@ func TestStoreServiceAddressAndShardInfoCanBeQueried(t *testing.T) {
 		GossipAddress:       "127.0.0.1:9011",
 		GossipSeedAddresses: []string{"127.0.0.1:9001"},
 	}
+	cfg1.Fill()
+	cfg2.Fill()
 	store1, err := newLogStore(cfg1)
 	assert.NoError(t, err)
 	defer func() {

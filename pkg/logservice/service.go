@@ -24,6 +24,7 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/lni/goutils/netutil"
 	"github.com/lni/goutils/syncutil"
+
 	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
 )
 
@@ -43,6 +44,11 @@ type Service struct {
 }
 
 func NewService(cfg Config) (*Service, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	cfg.Fill()
+
 	store, err := newLogStore(cfg)
 	if err != nil {
 		return nil, err
@@ -66,6 +72,10 @@ func (s *Service) Close() error {
 	s.stopper.Stop()
 	s.connStopper.Stop()
 	return s.store.Close()
+}
+
+func (s *Service) ID() string {
+	return s.store.ID()
 }
 
 func (s *Service) startServer() error {
@@ -169,7 +179,7 @@ func (s *Service) handle(req rpc.Request,
 	case rpc.MethodType_TRUNCATE:
 		return s.handleTruncate(req), rpc.LogRecordResponse{}
 	case rpc.MethodType_GET_TRUNCATE:
-		return s.handleGetTruncateIndex(req), rpc.LogRecordResponse{}
+		return s.handleGetTruncatedIndex(req), rpc.LogRecordResponse{}
 	case rpc.MethodType_CONNECT:
 		return s.handleConnect(req), rpc.LogRecordResponse{}
 	case rpc.MethodType_CONNECT_RO:
@@ -246,7 +256,7 @@ func (s *Service) handleTruncate(req rpc.Request) rpc.Response {
 	return resp
 }
 
-func (s *Service) handleGetTruncateIndex(req rpc.Request) rpc.Response {
+func (s *Service) handleGetTruncatedIndex(req rpc.Request) rpc.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
