@@ -1283,7 +1283,7 @@ var operators = map[int][]Function{
 			Args:      nil,
 			ReturnTyp: types.T_bool,
 			Fn:        operator.Like,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) != 2 {
 					return false
 				}
@@ -1450,7 +1450,7 @@ var operators = map[int][]Function{
 			Flag:      plan.Function_STRICT,
 			Layout:    IN_PREDICATE,
 			ReturnTyp: types.T_bool,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 2 && inputTypes[1] == types.T_tuple {
 					return true
 				}
@@ -1465,7 +1465,7 @@ var operators = map[int][]Function{
 			Flag:      plan.Function_STRICT,
 			Layout:    EXISTS_ANY_PREDICATE,
 			ReturnTyp: types.T_bool,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				return len(inputTypes) == 1
 			},
 		},
@@ -3691,9 +3691,104 @@ var operators = map[int][]Function{
 			Index:       0,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
-			Args:        []types.T{types.T_int64},
+			ReturnTyp:   types.T_int8,
+			Fn:          operator.CwFn1[int8],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_int16,
+			Fn:          operator.CwFn1[int16],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_int32,
+			Fn:          operator.CwFn1[int32],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       3,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int64,
-			Fn:          operator.CwFn[int64],
+			Fn:          operator.CwFn1[int64],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       4,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint8,
+			Fn:          operator.CwFn1[uint8],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       5,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint16,
+			Fn:          operator.CwFn1[uint16],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       6,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint32,
+			Fn:          operator.CwFn1[uint32],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       7,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint64,
+			Fn:          operator.CwFn1[uint64],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       8,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_float32,
+			Fn:          operator.CwFn1[float32],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       9,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_float64,
+			Fn:          operator.CwFn1[float64],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       10,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_bool,
+			Fn:          operator.CwFn1[bool],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       11,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_date,
+			Fn:          operator.CwFn1[types.Date],
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       12,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_datetime,
+			Fn:          operator.CwFn1[types.Datetime],
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 	},
@@ -3704,7 +3799,7 @@ var operators = map[int][]Function{
 			Layout:    STANDARD_FUNCTION,
 			Args:      []types.T{types.T_any, types.T_any, types.T_any},
 			ReturnTyp: types.T_any,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				return true
 			},
 			Fn: nil,
