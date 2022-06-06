@@ -408,7 +408,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		return
 	}
 
-	logEntry, err := store.cmdMgr.ApplyTxnRecord()
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
 	if err != nil {
 		return
 	}
@@ -442,3 +442,5 @@ func (store *txnStore) PrepareRollback() error {
 
 	return err
 }
+
+func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }

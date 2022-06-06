@@ -110,6 +110,15 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	}
 }
 
+func (entry *TableEntry) IsVirtual() bool {
+	if !entry.db.IsSystemDB() {
+		return false
+	}
+	return entry.schema.Name == SystemTable_DB_Name ||
+		entry.schema.Name == SystemTable_Table_Name ||
+		entry.schema.Name == SystemTable_Columns_Name
+}
+
 func (entry *TableEntry) GetRows() uint64 {
 	return atomic.LoadUint64(&entry.rows)
 }
@@ -166,6 +175,7 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 		return ErrNotFound
 	} else {
 		entry.link.Delete(n)
+		delete(entry.entries, segment.GetID())
 	}
 	return nil
 }
@@ -245,6 +255,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		if err = processor.OnSegment(segment); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil
+				segIt.Next()
 				continue
 			}
 			break
@@ -253,7 +264,12 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload().(*BlockEntry)
 			if err = processor.OnBlock(block); err != nil {
-				return
+				if err == ErrStopCurrRecur {
+					err = nil
+					blkIt.Next()
+					continue
+				}
+				break
 			}
 			blkIt.Next()
 		}
@@ -348,4 +364,16 @@ func (entry *TableEntry) CloneCreate() CheckpointItem {
 		db:        entry.db,
 	}
 	return cloned
+}
+
+// Coarse API: no consistency check
+func (entry *TableEntry) IsActive() bool {
+	db := entry.GetDB()
+	if !db.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
 }

@@ -17,6 +17,7 @@ package frontend
 import (
 	goErrors "errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -161,6 +162,8 @@ type Session struct {
 
 	Pu *config.ParameterUnit
 
+	IsInternal bool
+
 	ep *tree.ExportParam
 
 	closeRef      *CloseExportData
@@ -213,6 +216,10 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 		return val, nil
 	}
 	return nil, errorSystemVariableDoesNotExist
+}
+
+func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
+	return ses.txnCompileCtx
 }
 
 // SetSessionVar sets the value of system variable in session
@@ -565,8 +572,17 @@ func (th *TxnHandler) CleanTxn() error {
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
+type QueryType int
+
+const (
+	TXN_DEFAULT QueryType = iota
+	TXN_DELETE
+	TXN_UPDATE
+)
+
 type TxnCompilerContext struct {
 	dbName     string
+	QryTyp     QueryType
 	txnHandler *TxnHandler
 }
 
@@ -574,7 +590,11 @@ func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 	if len(db) == 0 {
 		db = "mo_catalog"
 	}
-	return &TxnCompilerContext{txnHandler: txn, dbName: db}
+	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
+}
+
+func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
+	tcc.QryTyp = qryTyp
 }
 
 func (tcc *TxnCompilerContext) SetDatabase(db string) {
@@ -634,6 +654,18 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Primary: attr.Attr.Primary,
 			})
 		}
+	}
+	if tcc.QryTyp != TXN_DEFAULT {
+		hideKey := table.GetHideKey(tcc.txnHandler.GetTxn().GetCtx())
+		defs = append(defs, &plan2.ColDef{
+			Name: hideKey.Name,
+			Typ: &plan2.Type{
+				Id:        plan.Type_TypeId(hideKey.Type.Oid),
+				Width:     hideKey.Type.Width,
+				Precision: hideKey.Type.Precision,
+			},
+			Primary: hideKey.Primary,
+		})
 	}
 
 	//convert

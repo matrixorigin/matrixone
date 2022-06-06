@@ -23,6 +23,6 @@ type Argument struct {
 	Ts           uint64
 	TableSource  engine.Relation
 	M            sync.Mutex
-	Keys         []string
+	UseDeleteKey string
 	AffectedRows uint64
 }

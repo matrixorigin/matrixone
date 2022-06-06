@@ -26,6 +26,7 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
+func (store *NoopTxnStore) GetLSN() uint64                                  { return 0 }
 func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                      {}
 func (store *NoopTxnStore) Close() error                                    { return nil }
 func (store *NoopTxnStore) Append(dbId, id uint64, data *batch.Batch) error { return nil }

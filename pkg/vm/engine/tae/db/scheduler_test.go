@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -172,15 +171,6 @@ func TestCheckpoint2(t *testing.T) {
 		t.Log(meta2.String())
 		assert.Nil(t, txn.Commit())
 	}
-	doAppend := func(data *gbat.Batch, name string) {
-		txn, err := tae.StartTxn(nil)
-		assert.NoError(t, err)
-		db, _ := txn.GetDatabase("db")
-		rel, _ := db.GetRelationByName(name)
-		err = rel.Append(data)
-		assert.Nil(t, err)
-		assert.Nil(t, txn.Commit())
-	}
 	for i, data := range bats[0:8] {
 		var name string
 		if i%2 == 0 {
@@ -188,7 +178,7 @@ func TestCheckpoint2(t *testing.T) {
 		} else {
 			name = schema2.Name
 		}
-		doAppend(data, name)
+		appendClosure(t, data, name, tae, nil)()
 	}
 	var meta *catalog.BlockEntry
 	testutils.WaitExpect(1000, func() bool {
@@ -196,8 +186,9 @@ func TestCheckpoint2(t *testing.T) {
 	})
 	assert.Equal(t, uint64(4), tae.Wal.GetPenddingCnt())
 	t.Log(tae.Wal.GetPenddingCnt())
-	doAppend(bats[8], schema1.Name)
+	appendClosure(t, bats[8], schema1.Name, tae, nil)()
 	// t.Log(tae.MTBufMgr.String())
+
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, err := txn.GetDatabase("db")
@@ -216,6 +207,7 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
+
 	// testutils.WaitExpect(1000, func() bool {
 	// 	return tae.Wal.GetPenddingCnt() == 1
 	// })
@@ -247,20 +239,7 @@ func TestSchedule1(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	{
-		txn, _ := db.StartTxn(nil)
-		database, _ := txn.GetDatabase("db")
-		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
-		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
-		factory := jobs.CompactBlockTaskFactory(blkMeta, db.Scheduler)
-		ctx := tasks.Context{Waitable: true}
-		task, err := db.Scheduler.ScheduleTxnTask(&ctx, tasks.DataCompactionTask, factory)
-		assert.Nil(t, err)
-		err = task.WaitDone()
-		assert.Nil(t, err)
-	}
+	compactBlocks(t, db, "db", schema, false)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	db.Close()
 }

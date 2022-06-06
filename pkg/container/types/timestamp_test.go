@@ -46,27 +46,8 @@ func TestTimestamp_String(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr3)
 
-	resultStr4 := a.String2(3)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123", resultStr4)
-
-	resultStr5 := a.String2(6)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr5)
-
-	a, err = ParseTimestamp("2012-01-01 11:11:11.123456", 3)
-	resultStr6 := a.String2(0)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11", resultStr6)
-
-	resultStr7 := a.String2(3)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123", resultStr7)
-
-	resultStr8 := a.String2(6)
-	require.NoError(t, err)
-	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr8)
 }
+
 func TestTimestamp_String2(t *testing.T) {
 	a, err := ParseTimestamp("2012-01-01 11:11:11", 6)
 	require.NoError(t, err)
@@ -117,19 +98,37 @@ func TestTimestamp_String2(t *testing.T) {
 }
 
 func TestParseTimestamp(t *testing.T) {
-	a, err := ParseTimestamp("0001-01-01 00:00:00", 6)
+	a, err := ParseTimestamp("1970-01-01 00:00:01", 6)
 	require.NoError(t, err)
-	require.Equal(t, int64(a)+(localTZ<<20), int64(0))
+	require.Equal(t, int64(TimestampMinValue), int64(a))
 
-	a, err = ParseTimestamp("0001-01-01 00:00:00.123", 6)
+	a, err = ParseTimestamp("1970-01-01 00:00:01.123", 6)
 	require.NoError(t, err)
-	require.Equal(t, int64(a)+(localTZ<<20), int64(123000))
+	require.Equal(t, int64(TimestampMinValue+123000), int64(a))
 
-	a, err = ParseTimestamp("0001-01-01 00:00:00.123456", 6)
+	a, err = ParseTimestamp("1970-01-01 00:00:01.123456", 6)
 	require.NoError(t, err)
-	require.Equal(t, int64(a)+(localTZ<<20), int64(123456))
+	require.Equal(t, int64(TimestampMinValue+123456), int64(a))
 
-	a, err = ParseTimestamp("0001-01-01 00:00:00.123456", 3)
+	a, err = ParseTimestamp("1970-01-01 00:00:01.123456", 3)
 	require.NoError(t, err)
-	require.Equal(t, int64(a)+(localTZ<<20), int64(123000))
+	require.Equal(t, int64(a), int64(TimestampMinValue+123000))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.12356", 3)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue+124000), int64(a))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.12345", 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue), int64(a))
+
+	a, err = ParseTimestamp("1970-01-01 00:00:01.52345", 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(TimestampMinValue+1<<20), int64(a))
+
+	a, err = ParseTimestamp("1966-01-01 00:00:01.52345", 0)
+	require.Error(t, err)
+
+	a, err = ParseTimestamp("2966-01-01 00:00:01.52345", 0)
+	require.Error(t, err)
 }

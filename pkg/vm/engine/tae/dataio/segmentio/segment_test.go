@@ -121,9 +121,6 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
 		t.Log(string(dbuf))
-		if block.ReadRows() < 1 {
-			t.Log(string(dbuf))
-		}
 		assert.Equal(t, 1, int(block.ReadRows()))
 
 		dataFile.Unref()
