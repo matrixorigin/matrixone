@@ -144,9 +144,7 @@ func (h *history) TryTruncate() error {
 	toDelete := make([]entryWrapper, 0, 4)
 	h.mu.RLock()
 	entries := make([]VFile, len(h.entries))
-	for i, entry := range h.entries {
-		entries[i] = entry
-	}
+	copy(entries, h.entries)
 	h.mu.RUnlock()
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
@@ -154,10 +152,10 @@ func (h *history) TryTruncate() error {
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		err := e.LoadMeta()
-		if err != nil {
-			return err
-		}
+		// err := e.LoadMeta()
+		// if err != nil {
+		// 	return err
+		// }
 		wrapper := entryWrapper{entry: e}
 		if e.IsToDelete(c) {
 			wrapper.offset = i

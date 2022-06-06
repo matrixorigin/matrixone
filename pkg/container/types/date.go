@@ -373,3 +373,10 @@ func (d Date) Month() uint8 {
 	_, month, _, _ := d.Calendar(true)
 	return month
 }
+
+func LastDay(year uint16, month uint8) int {
+	if isLeap(int32(year)) {
+		return int(leapYearMonthDays[month-1])
+	}
+	return int(flatYearMonthDays[month-1])
+}

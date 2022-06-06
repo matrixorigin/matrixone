@@ -333,7 +333,7 @@ func (n *insertNode) OnUnload() {
 	}
 }
 
-func (n *insertNode) execUnload() (entry wal.LogEntry) {
+func (n *insertNode) execUnload() (en wal.LogEntry) {
 	if n.IsTransient() {
 		return
 	}
@@ -343,8 +343,13 @@ func (n *insertNode) execUnload() (entry wal.LogEntry) {
 	if n.data == nil {
 		return
 	}
-	entry = n.makeLogEntry()
-	if seq, err := n.driver.AppendEntry(wal.GroupUC, entry); err != nil {
+	en = n.makeLogEntry()
+	info := &entry.Info{
+		Group:     entry.GTUncommit,
+		Uncommits: []entry.Tid{{Group: wal.GroupC, Tid: n.table.store.txn.GetID()}},
+	}
+	en.SetInfo(info)
+	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
 		panic(err)
 	} else {
 		atomic.StoreUint64(&n.lsn, seq)

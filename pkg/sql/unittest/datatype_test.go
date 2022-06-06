@@ -246,7 +246,7 @@ func TestDatetimeType(t *testing.T) {
 		{sql: "select * from tbl2;", res: executeResult{
 			attr: []string{"a"},
 			data: [][]string{
-				{"2018-04-28 10:21:15"}, {"2017-04-28 03:05:01"}, {"2025-07-16 16:39:58"}, {"2021-12-03 14:56:33"}, {"null"},
+				{"2018-04-28 10:21:15.123000"}, {"2017-04-28 03:05:01.456000"}, {"2025-07-16 16:39:58.567000"}, {"2021-12-03 14:56:33.890000"}, {"null"},
 			},
 		}, com: "that is disputed. what does the msec do?"},
 		{sql: "select * from tbl3;", res: executeResult{
