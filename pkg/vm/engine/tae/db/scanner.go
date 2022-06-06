@@ -143,6 +143,10 @@ func (scanner *dbScanner) onSegment(entry *catalog.SegmentEntry) (err error) {
 }
 
 func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
+	if entry.IsVirtual() {
+		err = catalog.ErrStopCurrRecur
+		return
+	}
 	scanner.tablemask.Clear()
 	for i, op := range scanner.ops {
 		// If the specified op was masked OnDatabase. skip it
@@ -166,10 +170,10 @@ func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
 }
 
 func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
-	if entry.IsSystemDB() {
-		err = catalog.ErrStopCurrRecur
-		return
-	}
+	// if entry.IsSystemDB() {
+	// 	err = catalog.ErrStopCurrRecur
+	// 	return
+	// }
 	scanner.dbmask.Clear()
 	for i, op := range scanner.ops {
 		err = op.OnDatabase(entry)
