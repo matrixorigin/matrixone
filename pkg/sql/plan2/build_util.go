@@ -1115,7 +1115,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			Sub: &plan.SubQuery{
 				NodeId:       item.Sub.GetNodeId(),
 				IsCorrelated: item.Sub.GetIsCorrelated(),
-				IsScalar:     item.Sub.GetIsCorrelated(),
+				IsScalar:     item.Sub.GetIsScalar(),
 			},
 		}
 	case *plan.Expr_Corr:
