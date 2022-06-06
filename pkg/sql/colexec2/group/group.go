@@ -89,7 +89,7 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
 				}
 			}
-			return false, nil
+			return false, err
 		}
 		ctr.aggVecs[i].vec = vec
 		ctr.aggVecs[i].needFree = true
