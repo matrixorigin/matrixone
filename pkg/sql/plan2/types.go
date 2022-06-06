@@ -89,41 +89,94 @@ type BinderContext struct {
 ///////////////////////////////
 
 type QueryBuilder struct {
-	qry            *plan.Query
+	qry     *plan.Query
+	compCtx CompilerContext
+
+	ctxByNode  []*BindContext
+	tagsByNode [][]int32
+	nextTag    int32
+}
+
+type UsingColumnSet struct {
+	primary  *Binding
+	bindings map[string]*Binding
+}
+
+type BindContext struct {
+	binder Binder
+
+	cteTables map[string]*plan.TableDef
+
+	groupTag     int32
+	aggregateTag int32
+	projectTag   int32
+
+	groups     []*plan.Expr
+	aggregates []*plan.Expr
+	projects   []*plan.Expr
+	results    []*plan.Expr
+
+	headings []string
+
+	groupMapByAst     map[string]int32
+	aggregateMapByAst map[string]int32
+	projectMapByExpr  map[string]int32
+
+	aliasMap map[string]int32
+
+	bindings       []*Binding
 	bindingsByTag  map[int32]*Binding
 	bindingsByName map[string]*Binding
-	ctx            CompilerContext
-	scopeByNode    []*BindContext
-	nextTag        int32
+
+	corrCols []*plan.CorrColRef
+
+	usingCols       [][]*UsingColumnSet
+	usingColsByName map[string][]*UsingColumnSet
+
+	parent *BindContext
 }
 
 type Binder interface {
-	BindExpr(string, tree.Expr, *BindContext) (*plan.Expr, error)
-	BindColRef(string, *tree.UnresolvedName, *BindContext) (*plan.Expr, error)
-	BindAggFunc(string, string, *tree.FuncExpr, *BindContext) (*plan.Expr, error)
-	BindWinFunc(string, string, *tree.FuncExpr, *BindContext) (*plan.Expr, error)
+	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
+	BindColRef(*tree.UnresolvedName, int32) (*plan.Expr, error)
+	BindAggFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
+	BindWinFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
 }
 
 type baseBinder struct {
-	Binder
-	ctx CompilerContext
+	impl      Binder
+	ctx       *BindContext
+	boundCols []string
 }
 
 type TableBinder struct {
 	baseBinder
 }
 
+type GroupBinder struct {
+	baseBinder
+}
+
 type AggregateBinder struct {
 	baseBinder
-	tableBinder  *TableBinder
-	groupBySize  int32
-	groupByMap   map[string]int32
-	aggregateMap map[string]int32
-	insideAgg    bool
+	tableBinder *TableBinder
+	insideAgg   bool
+}
+
+type SelectBinder struct {
+	baseBinder
+	agg *AggregateBinder
+}
+
+type OrderBinder struct {
+	*SelectBinder
+	selectList tree.SelectExprs
 }
 
 var _ Binder = (*TableBinder)(nil)
+var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*AggregateBinder)(nil)
+var _ Binder = (*SelectBinder)(nil)
 
 const (
 	NotFound      int32 = math.MaxInt32
@@ -136,44 +189,6 @@ type Binding struct {
 	table       string
 	cols        []string
 	types       []*plan.Type
+	refCnts     []uint
 	colIdByName map[string]int32
-}
-
-type UsingColumnSet struct {
-	primary  *Binding
-	bindings []*Binding
-}
-
-//use for build select
-type BindContext struct {
-	binder Binder
-
-	groupTag     int32
-	aggregateTag int32
-	projectTag   int32
-
-	groups     []*plan.Expr
-	aggregates []*plan.Expr
-	projects   []*plan.Expr
-
-	groupByName     map[string]int32
-	aggregateByName map[string]int32
-	projectByName   map[string]int32
-
-	aliasMap map[string]tree.Expr
-
-	bindings       []*Binding
-	bindingsByTag  map[int32]*Binding
-	bindingsByName map[string]*Binding
-
-	corrCols []*plan.CorrColRef
-
-	// use for build subquery
-	subqueryIsCorrelated bool
-	// unused, commented out for now.
-	// subqueryIsScalar     bool
-
-	usingCols map[string][]*UsingColumnSet
-
-	parent *BindContext
 }

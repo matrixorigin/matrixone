@@ -20,33 +20,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (b *AggregateBinder) BindExpr(alias string, astExpr tree.Expr, ctx *BindContext) (*plan.Expr, error) {
-	if colPos, ok := b.groupByMap[alias]; ok {
+func NewAggregateBinder(ctx *BindContext) *AggregateBinder {
+	b := &AggregateBinder{
+		insideAgg: false,
+	}
+	b.impl = b
+	b.ctx = ctx
+
+	return b
+}
+
+func (b *AggregateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	astStr := tree.String(astExpr, dialect.MYSQL)
+
+	if colPos, ok := b.ctx.groupMapByAst[astStr]; ok {
 		return &plan.Expr{
-			Typ:       ctx.groups[colPos].Typ,
-			TableName: ctx.groups[colPos].TableName,
-			ColName:   alias,
+			Typ: b.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: ctx.groupTag,
+					RelPos: b.ctx.groupTag,
 					ColPos: colPos,
 				},
 			},
 		}, nil
 	}
 
-	if colPos, ok := b.aggregateMap[alias]; ok {
+	if colPos, ok := b.ctx.aggregateMapByAst[astStr]; ok {
 		if !b.insideAgg {
 			return &plan.Expr{
-				Typ:       ctx.aggregates[colPos].Typ,
-				TableName: ctx.aggregates[colPos].TableName,
-				ColName:   alias,
+				Typ: b.ctx.aggregates[colPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: ctx.aggregateTag,
+						RelPos: b.ctx.aggregateTag,
 						ColPos: colPos,
 					},
 				},
@@ -56,55 +65,41 @@ func (b *AggregateBinder) BindExpr(alias string, astExpr tree.Expr, ctx *BindCon
 		}
 	}
 
-	expr, err := b.bindExprImpl(alias, astExpr, ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return expr, nil
+	return b.baseBindExpr(astExpr, depth)
 }
 
-func (b *AggregateBinder) BindColRef(alias string, astExpr *tree.UnresolvedName, ctx *BindContext) (*plan.Expr, error) {
-	if colId, ok := ctx.groupByName[alias]; ok {
-		return &plan.Expr{
-			Typ: ctx.groups[colId].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: ctx.groupTag,
-					ColPos: colId,
-				},
-			},
-		}, nil
-	}
-
+func (b *AggregateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
 	if b.insideAgg {
-		return b.tableBinder.BindColRef(alias, astExpr, ctx)
+		return b.baseBindColRef(astExpr, depth)
+	} else {
+		return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL)))
 	}
-
-	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q does not exist", alias))
 }
 
-func (b *AggregateBinder) BindAggFunc(alias, funcName string, astExpr *tree.FuncExpr, ctx *BindContext) (*plan.Expr, error) {
+func (b *AggregateBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (expr *plan.Expr, err error) {
 	if b.insideAgg {
 		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot be nested")
 	}
 
 	b.insideAgg = true
-	expr, err := b.bindFuncExprImpl(funcName, astExpr, ctx)
+	expr, err = b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	b.insideAgg = false
 
 	if err != nil {
-		ctx.aggregates = append(ctx.aggregates, expr)
-		ctx.aggregateByName[alias] = int32(len(ctx.aggregates)) - 1
+		return
 	}
 
-	return expr, err
+	astStr := tree.String(astExpr, dialect.MYSQL)
+	b.ctx.aggregateMapByAst[astStr] = int32(len(b.ctx.aggregates))
+	b.ctx.aggregates = append(b.ctx.aggregates, expr)
+
+	return
 }
 
-func (b *AggregateBinder) BindWinFunc(alias, funcName string, astExpr *tree.FuncExpr, scope *BindContext) (*plan.Expr, error) {
+func (b *AggregateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot contain window function calls")
 	} else {
-		return nil, errors.New(errno.GroupingError, "window functions not allowed here")
+		return nil, errors.New(errno.WindowingError, "window functions not allowed here")
 	}
 }

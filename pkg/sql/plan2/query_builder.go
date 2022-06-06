@@ -1,0 +1,598 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan2
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
+
+func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (nodeId int32, err error) {
+	// build CTEs
+	err = builder.buildCTE(stmt.With, ctx)
+	if err != nil {
+		return
+	}
+
+	var clause *tree.SelectClause
+
+	switch selectClause := stmt.Select.(type) {
+	case *tree.SelectClause:
+		clause = selectClause
+		break
+	case *tree.ParenSelect:
+		return builder.buildSelect(selectClause.Select, ctx)
+	default:
+		return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
+	}
+
+	// build FROM clause
+	nodeId, err = builder.buildFrom(clause.From.Tables, ctx)
+	if err != nil {
+		return
+	}
+
+	ctx.binder = NewTableBinder(ctx)
+
+	// get headings
+	var newSelectExprs tree.SelectExprs
+	for _, selectExpr := range clause.Exprs {
+		switch expr := selectExpr.Expr.(type) {
+		case *tree.UnqualifiedStar:
+			cols, names, err := ctx.unfoldStar("")
+			if err != nil {
+				return 0, err
+			}
+			newSelectExprs = append(newSelectExprs, cols...)
+			ctx.headings = append(ctx.headings, names...)
+
+		case *tree.UnresolvedName:
+			if expr.Star {
+				cols, names, err := ctx.unfoldStar(expr.Parts[0])
+				if err != nil {
+					return 0, err
+				}
+				newSelectExprs = append(newSelectExprs, cols...)
+				ctx.headings = append(ctx.headings, names...)
+			} else {
+				if len(selectExpr.As) > 0 {
+					ctx.headings = append(ctx.headings, string(selectExpr.As))
+				} else {
+					ctx.headings = append(ctx.headings, expr.Parts[0])
+				}
+
+				ctx.qualifyColumnNames(expr)
+				newSelectExprs = append(newSelectExprs, tree.SelectExpr{
+					Expr: expr,
+					As:   selectExpr.As,
+				})
+			}
+
+		default:
+			if len(selectExpr.As) > 0 {
+				ctx.headings = append(ctx.headings, string(selectExpr.As))
+			} else {
+				ctx.headings = append(ctx.headings, "")
+			}
+
+			ctx.qualifyColumnNames(expr)
+			newSelectExprs = append(newSelectExprs, tree.SelectExpr{
+				Expr: expr,
+				As:   selectExpr.As,
+			})
+		}
+	}
+	clause.Exprs = newSelectExprs
+
+	// build WHERE clause
+	if clause.Where != nil {
+		whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
+		if err != nil {
+			return 0, err
+		}
+
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType:  plan.Node_PROJECT,
+			Children:  []int32{nodeId},
+			WhereList: whereList,
+		}, ctx)
+	}
+
+	ctx.groupTag = builder.genNewTag()
+	ctx.aggregateTag = builder.genNewTag()
+	ctx.projectTag = builder.genNewTag()
+
+	// build GROUP BY clause
+	if clause.GroupBy != nil {
+		groupBinder := NewGroupBinder(ctx)
+		for _, group := range clause.GroupBy {
+			_, err := groupBinder.BindExpr(group, 0, true)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+
+	// build HAVING clause
+	var havingList []*plan.Expr
+	aggBinder := NewAggregateBinder(ctx)
+	if clause.Having != nil {
+		ctx.binder = aggBinder
+		havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	// build SELECT clause
+	selectBinder := NewSelectBinder(ctx, aggBinder)
+	ctx.binder = selectBinder
+	for _, selectExpr := range clause.Exprs {
+		ctx.qualifyColumnNames(selectExpr.Expr)
+		expr, err := selectBinder.BindExpr(selectExpr.Expr, 0, true)
+		if err != nil {
+			return 0, err
+		}
+
+		alias := string(selectExpr.As)
+		if len(alias) > 0 {
+			ctx.aliasMap[alias] = int32(len(ctx.projects))
+		}
+		ctx.projects = append(ctx.projects, expr)
+	}
+
+	resultLen := len(ctx.projects)
+	for i, proj := range ctx.projects {
+		exprStr := proj.String()
+		if _, ok := ctx.projectMapByExpr[exprStr]; !ok {
+			ctx.projectMapByExpr[exprStr] = int32(i)
+		}
+	}
+
+	// build ORDER BY clause
+	var orderBys []*plan.OrderBySpec
+	if stmt.OrderBy != nil {
+		orderBinder := NewOrderBinder(selectBinder, clause.Exprs)
+		orderBys = make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+
+		for _, order := range stmt.OrderBy {
+			expr, err := orderBinder.BindExpr(order.Expr)
+			if err != nil {
+				return 0, err
+			}
+
+			orderBy := &plan.OrderBySpec{
+				Expr: expr,
+			}
+
+			switch order.Direction {
+			case tree.DefaultDirection:
+				orderBy.Flag = plan.OrderBySpec_INTERNAL
+			case tree.Ascending:
+				orderBy.Flag = plan.OrderBySpec_ASC
+			case tree.Descending:
+				orderBy.Flag = plan.OrderBySpec_DESC
+			}
+
+			orderBys = append(orderBys, orderBy)
+		}
+	}
+
+	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(selectBinder.boundCols) > 0 {
+		return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", selectBinder.boundCols[0]))
+	}
+
+	// append AGG node
+	if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_AGG,
+			Children: []int32{nodeId},
+			GroupBy:  ctx.groups,
+			AggList:  ctx.aggregates,
+		}, ctx, ctx.groupTag, ctx.aggregateTag)
+
+		if len(havingList) > 0 {
+			nodeId = builder.appendNode(&plan.Node{
+				NodeType:  plan.Node_AGG,
+				Children:  []int32{nodeId},
+				WhereList: havingList,
+			}, ctx)
+		}
+	}
+
+	// append PROJECT node
+	nodeId = builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: ctx.projects,
+		Children:    []int32{nodeId},
+	}, ctx, ctx.projectTag)
+
+	// append SORT node
+	if len(orderBys) > 0 {
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_SORT,
+			Children: []int32{nodeId},
+			OrderBy:  orderBys,
+		}, ctx)
+	}
+
+	// append result PROJECT node
+	if len(ctx.projects) > resultLen {
+		for i := 0; i < resultLen; i++ {
+			ctx.results = append(ctx.results, &plan.Expr{
+				Typ: ctx.projects[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: ctx.projectTag,
+						ColPos: int32(i),
+					},
+				},
+			})
+		}
+
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			ProjectList: ctx.results,
+			Children:    []int32{nodeId},
+		}, ctx)
+	}
+
+	return
+}
+
+func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext, tags ...int32) int32 {
+	nodeId := int32(len(builder.qry.Nodes))
+	node.NodeId = nodeId
+	builder.qry.Nodes = append(builder.qry.Nodes, node)
+	builder.ctxByNode = append(builder.ctxByNode, ctx)
+	builder.tagsByNode = append(builder.tagsByNode, tags)
+	return nodeId
+}
+
+func (builder *QueryBuilder) buildCTE(withExpr *tree.With, ctx *BindContext) error {
+	if withExpr == nil {
+		return nil
+	}
+
+	var err error
+	for _, cte := range withExpr.CTEs {
+		var nodeId int32
+		subCtx := NewBindContext(builder, ctx)
+
+		switch stmt := cte.Stmt.(type) {
+		case *tree.Select:
+			nodeId, err = builder.buildSelect(stmt, subCtx)
+		case *tree.ParenSelect:
+			nodeId, err = builder.buildSelect(stmt.Select, subCtx)
+		default:
+			err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		}
+		if err != nil {
+			return err
+		}
+
+		// add a projection node
+		alias := string(cte.Name.Alias)
+
+		tableDef := &TableDef{
+			Name: alias,
+			Cols: make([]*ColDef, len(subCtx.headings)),
+		}
+
+		if len(ctx.headings) < len(cte.Name.Cols) {
+			return errors.New(errno.InvalidColumnReference, "CTE table column length not match")
+		}
+
+		var col string
+		for i, heading := range subCtx.headings {
+			if i < len(cte.Name.Cols) {
+				col = string(cte.Name.Cols[i])
+			} else {
+				col = heading
+			}
+
+			tableDef.Cols[i] = &ColDef{
+				Name: col,
+				Typ:  subCtx.projects[i].Typ,
+			}
+		}
+
+		// set cte table to binderCtx
+		ctx.cteTables[alias] = tableDef
+		// append node
+		cteNodeId := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_MATERIAL,
+			Children: []int32{nodeId},
+		}, subCtx)
+
+		// set cte table node_id to step
+		builder.qry.Steps = append(builder.qry.Steps, cteNodeId)
+	}
+
+	return nil
+}
+
+func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (nodeId int32, err error) {
+	if len(stmt) == 1 {
+		nodeId, err = builder.buildTable(stmt[0], ctx)
+		return
+	}
+
+	var rightChildId int32
+	leftCtx := NewBindContext(builder, ctx)
+	rightCtx := NewBindContext(builder, ctx)
+
+	nodeId, err = builder.buildTable(stmt[0], leftCtx)
+	if err != nil {
+		return
+	}
+
+	rightChildId, err = builder.buildTable(stmt[0], rightCtx)
+	if err != nil {
+		return
+	}
+
+	nodeId = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{nodeId, rightChildId},
+		JoinType: plan.Node_INNER,
+	}, nil)
+
+	// build the rest table with preNode as join step by step
+	for i := 2; i < len(stmt); i++ {
+		newCtx := NewBindContext(builder, ctx)
+
+		builder.ctxByNode[nodeId] = newCtx
+		leftCtx.parent = newCtx
+		rightCtx.parent = newCtx
+		newCtx.mergeContext(leftCtx)
+		newCtx.mergeContext(rightCtx)
+
+		rightCtx := NewBindContext(builder, ctx)
+		rightChildId, err = builder.buildTable(stmt[i], rightCtx)
+		if err != nil {
+			return
+		}
+
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{nodeId, rightChildId},
+			JoinType: plan.Node_INNER,
+		}, nil)
+
+		leftCtx = newCtx
+	}
+
+	builder.ctxByNode[nodeId] = ctx
+	leftCtx.parent = ctx
+	rightCtx.parent = ctx
+	ctx.mergeContext(leftCtx)
+	ctx.mergeContext(rightCtx)
+
+	return
+}
+
+func (builder *QueryBuilder) bindTableRef(schema string, table string, compCtx CompilerContext, ctx *BindContext) (*ObjectRef, *TableDef, bool) {
+	// FIXME: do CTEs have database/schema name?
+	tableDef, ok := ctx.cteTables[table]
+	for !ok && ctx.parent != nil {
+		ctx = ctx.parent
+		tableDef, ok = ctx.cteTables[table]
+	}
+
+	if ok {
+		return &plan.ObjectRef{
+			SchemaName: schema,
+			ObjName:    table,
+		}, tableDef, true
+	}
+
+	objRef, tableDef := compCtx.Resolve(schema, table)
+	return objRef, tableDef, false
+}
+
+func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeId int32, err error) {
+	switch tbl := stmt.(type) {
+	case *tree.Select:
+		newCtx := NewBindContext(builder, ctx)
+		nodeId, err = builder.buildSelect(tbl, newCtx)
+		if len(newCtx.corrCols) > 0 {
+			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("correlated subquery in FROM clause is not yet supported"))
+		}
+		return
+
+	case *tree.TableName:
+		schema := string(tbl.SchemaName)
+		table := string(tbl.ObjectName)
+		if strings.ToLower(table) == "dual" { //special table name
+			nodeId = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_VALUE_SCAN,
+			}, ctx)
+		} else {
+			// FIXME
+			obj, tableDef, isCte := builder.bindTableRef(schema, table, builder.compCtx, ctx)
+			if tableDef == nil {
+				return 0, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table '%v' does not exist", table))
+			}
+
+			var nodeType plan.Node_NodeType
+			if isCte {
+				nodeType = plan.Node_MATERIAL_SCAN
+			} else {
+				nodeType = plan.Node_TABLE_SCAN
+			}
+
+			nodeId = builder.appendNode(&plan.Node{
+				NodeType: nodeType,
+				ObjRef:   obj,
+				TableDef: tableDef,
+			}, ctx, builder.genNewTag())
+		}
+		return
+
+	case *tree.JoinTableExpr:
+		return builder.buildJoinTable(tbl, ctx)
+
+	case *tree.ParenTableExpr:
+		return builder.buildTable(tbl.Expr, ctx)
+
+	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
+		if _, ok := tbl.Expr.(*tree.Select); ok {
+			if tbl.As.Alias == "" {
+				return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("subquery in FROM must have an alias: %T", stmt))
+			}
+		}
+
+		nodeId, err = builder.buildTable(tbl.Expr, ctx)
+		if err != nil {
+			return
+		}
+
+		err = builder.addBinding(nodeId, tbl.As, ctx)
+
+		return
+
+	case *tree.StatementSource:
+		// log.Printf("StatementSource")
+		return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+	}
+	// Values table not support
+	return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+}
+
+func (builder *QueryBuilder) genNewTag() int32 {
+	builder.nextTag++
+	return builder.nextTag
+}
+
+func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ctx *BindContext) error {
+	node := builder.qry.Nodes[nodeId]
+
+	if node.NodeType == plan.Node_VALUE_SCAN {
+		return nil
+	}
+
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN {
+		if len(alias.Cols) > len(node.TableDef.Cols) {
+			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
+		}
+
+		var table string
+		if alias.Alias != "" {
+			table = string(alias.Alias)
+		} else {
+			table = node.TableDef.Name
+		}
+
+		if _, ok := ctx.bindingsByName[table]; ok {
+			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
+		}
+
+		cols := make([]string, len(node.TableDef.Cols))
+		types := make([]*plan.Type, len(node.TableDef.Cols))
+
+		for i, col := range node.TableDef.Cols {
+			if i < len(alias.Cols) {
+				cols[i] = string(alias.Cols[i])
+			} else {
+				cols[i] = col.Name
+			}
+			types[i] = col.Typ
+		}
+
+		binding := NewBinding(builder.tagsByNode[nodeId][0], nodeId, table, cols, types)
+		ctx.bindingsByTag[binding.tag] = binding
+		ctx.bindingsByName[table] = binding
+	} else {
+		// Subquery
+		if len(alias.Cols) > len(node.ProjectList) {
+			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.ProjectList), len(alias.Cols)))
+		}
+
+		table := string(alias.Alias)
+		if _, ok := ctx.bindingsByName[table]; ok {
+			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
+		}
+
+		headings := builder.ctxByNode[nodeId].headings
+
+		cols := make([]string, len(headings))
+		types := make([]*plan.Type, len(headings))
+
+		for i, col := range headings {
+			if i < len(alias.Cols) {
+				cols[i] = string(alias.Cols[i])
+			} else {
+				cols[i] = col
+			}
+			types[i] = node.ProjectList[i].Typ
+		}
+
+		subCtx := builder.ctxByNode[nodeId]
+		binding := NewBinding(subCtx.projectTag, nodeId, table, cols, types)
+		ctx.bindingsByTag[binding.tag] = binding
+		ctx.bindingsByName[table] = binding
+	}
+
+	return nil
+}
+
+func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (nodeId int32, err error) {
+	var joinType plan.Node_JoinFlag
+
+	// todo need confirm
+	switch tbl.JoinType {
+	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
+		joinType = plan.Node_INNER
+	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
+		joinType = plan.Node_LEFT
+	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
+		joinType = plan.Node_RIGHT
+	case tree.JOIN_TYPE_FULL:
+		joinType = plan.Node_OUTER
+	}
+
+	leftCtx := NewBindContext(builder, ctx)
+	rightCtx := NewBindContext(builder, ctx)
+
+	leftChildId, err := builder.buildTable(tbl.Left, leftCtx)
+	if err != nil {
+		return
+	}
+
+	rightChildId, err := builder.buildTable(tbl.Right, rightCtx)
+	if err != nil {
+		return
+	}
+
+	ctx.mergeContext(leftCtx)
+	ctx.mergeContext(rightCtx)
+
+	nodeId = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{leftChildId, rightChildId},
+		JoinType: joinType,
+	}, ctx)
+
+	// TODO: handle JOIN conditions
+
+	return
+}

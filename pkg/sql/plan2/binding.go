@@ -28,11 +28,12 @@ func (b *Binding) FindColumn(col string) int32 {
 
 func NewBinding(tag, nodeId int32, table string, cols []string, types []*plan.Type) *Binding {
 	binding := &Binding{
-		tag:    tag,
-		nodeId: nodeId,
-		table:  table,
-		cols:   cols,
-		types:  types,
+		tag:     tag,
+		nodeId:  nodeId,
+		table:   table,
+		cols:    cols,
+		types:   types,
+		refCnts: make([]uint, len(cols)),
 	}
 
 	binding.colIdByName = make(map[string]int32)

@@ -29,13 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
-func (b *baseBinder) splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
+func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
 	conds := splitConjunctiveCondition(astExpr)
 	exprs := make([]*plan.Expr, len(conds))
 
 	for i, cond := range conds {
-		alias := tree.String(cond, dialect.MYSQL)
-		expr, err := b.bindExprImpl(alias, cond, ctx)
+		expr, err := ctx.binder.BindExpr(cond, 0, true)
 		if err != nil {
 			return nil, err
 		}
@@ -45,54 +44,54 @@ func (b *baseBinder) splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) 
 	return exprs, nil
 }
 
-func (b *baseBinder) bindExprImpl(alias string, astExpr tree.Expr, ctx *BindContext) (expr *Expr, err error) {
-	switch astExpr := astExpr.(type) {
+func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, err error) {
+	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
-		expr, err = b.bindNumVal(astExpr)
+		expr, err = b.bindNumVal(exprImpl)
 	case *tree.ParenExpr:
-		expr, err = b.BindExpr(alias, astExpr.Expr, ctx)
+		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
 	case *tree.OrExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("or", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		expr, err = b.bindFuncExprImplByAstExpr("or", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
 	case *tree.NotExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("not", []tree.Expr{astExpr.Expr}, ctx)
+		expr, err = b.bindFuncExprImplByAstExpr("not", []tree.Expr{exprImpl.Expr}, depth)
 	case *tree.AndExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("and", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		expr, err = b.bindFuncExprImplByAstExpr("and", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
 	case *tree.UnaryExpr:
-		expr, err = b.bindUnaryExpr(astExpr, ctx)
+		expr, err = b.bindUnaryExpr(exprImpl, depth)
 	case *tree.BinaryExpr:
-		expr, err = b.bindBinaryExpr(astExpr, ctx)
+		expr, err = b.bindBinaryExpr(exprImpl, depth)
 	case *tree.ComparisonExpr:
-		expr, err = b.bindComparisonExpr(astExpr, ctx)
+		expr, err = b.bindComparisonExpr(exprImpl, depth)
 	case *tree.FuncExpr:
-		expr, err = b.bindFuncExpr(alias, astExpr, ctx)
+		expr, err = b.bindFuncExpr(exprImpl, depth)
 	case *tree.RangeCond:
-		expr, err = b.bindRangeCond(astExpr, ctx)
+		expr, err = b.bindRangeCond(exprImpl, depth)
 	case *tree.UnresolvedName:
-		expr, err = b.BindColRef(alias, astExpr, ctx)
+		expr, err = b.impl.BindColRef(exprImpl, depth)
 	case *tree.CastExpr:
-		expr, err = b.BindExpr(tree.String(astExpr.Expr, dialect.MYSQL), astExpr.Expr, ctx)
+		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
 		if err != nil {
 			return
 		}
 		var typ *Type
-		typ, err = getTypeFromAst(astExpr.Type)
+		typ, err = getTypeFromAst(exprImpl.Type)
 		if err != nil {
 			return
 		}
 		expr, err = appendCastExpr(expr, typ)
 	case *tree.IsNullExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("ifnull", []tree.Expr{astExpr.Expr}, ctx)
+		expr, err = b.bindFuncExprImplByAstExpr("ifnull", []tree.Expr{exprImpl.Expr}, depth)
 	case *tree.IsNotNullExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("ifnull", []tree.Expr{astExpr.Expr}, ctx)
+		expr, err = b.bindFuncExprImplByAstExpr("ifnull", []tree.Expr{exprImpl.Expr}, depth)
 		if err != nil {
 			return
 		}
-		expr, err = b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, ctx)
+		expr, err = b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, depth)
 	case *tree.Tuple:
-		exprs := make([]*Expr, 0, len(astExpr.Exprs))
+		exprs := make([]*Expr, 0, len(exprImpl.Exprs))
 		var planItem *Expr
-		for _, astItem := range astExpr.Exprs {
-			planItem, err = b.BindExpr(tree.String(astItem, dialect.MYSQL), astItem, ctx)
+		for _, astItem := range exprImpl.Exprs {
+			planItem, err = b.impl.BindExpr(astItem, depth, false)
 			if err != nil {
 				return
 			}
@@ -109,67 +108,151 @@ func (b *baseBinder) bindExprImpl(alias string, astExpr tree.Expr, ctx *BindCont
 			},
 		}
 	case *tree.CaseExpr:
-		expr, err = b.bindCaseExpr(astExpr, ctx)
+		expr, err = b.bindCaseExpr(exprImpl, depth)
 	case *tree.IntervalExpr:
 		// parser will not return this type
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", astExpr))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", exprImpl))
 	case *tree.XorExpr:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", astExpr))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", exprImpl))
 	case *tree.Subquery:
 		// TODO
 		//
 	case *tree.DefaultVal:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", astExpr))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl))
 	case *tree.MaxValue:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", astExpr))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl))
 	case *tree.VarExpr:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", astExpr))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl))
 	case *tree.StrVal:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", astExpr))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl))
 	case *tree.ExprList:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", astExpr))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", exprImpl))
 	case tree.UnqualifiedStar:
 		// select * from table
-		// TODO
+		// * should only appear in SELECT clause
 	default:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", astExpr))
-	}
-
-	parent := ctx.parent
-	depth := 0
-	dummyErr := err
-	for dummyErr != nil && parent != nil && parent.binder != nil {
-		expr, dummyErr = parent.binder.BindExpr(alias, astExpr, parent)
-		depth++
-		parent = parent.parent
-	}
-
-	if dummyErr != nil {
-		return nil, err
-	}
-	if depth > 0 {
-		ctx.addCorrCol(expr)
-		return expr, nil
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl))
 	}
 
 	return expr, nil
 }
 
-func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, ctx *BindContext) (*Expr, error) {
+func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (expr *plan.Expr, err error) {
+	var table, col string
+	col = astExpr.Parts[0]
+	if astExpr.NumParts > 1 {
+		table = astExpr.Parts[1]
+	}
+
+	relPos := NotFound
+	colPos := NotFound
+	var typ *plan.Type
+
+	if len(table) == 0 {
+		if using, ok := b.ctx.usingColsByName[col]; ok {
+			if len(using) > 1 {
+				panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", tree.String(astExpr, dialect.MYSQL))))
+			}
+			binding := using[0].primary
+			colPos = binding.FindColumn(col)
+			typ = binding.types[colPos]
+			relPos = binding.tag
+			table = binding.table
+		} else {
+			var found *Binding
+			for _, binding := range b.ctx.bindings {
+				j := binding.FindColumn(col)
+				if j == AmbiguousName {
+					panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", tree.String(astExpr, dialect.MYSQL))))
+				}
+				if j != NotFound {
+					if colPos != NotFound {
+						panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", tree.String(astExpr, dialect.MYSQL))))
+					} else {
+						found = binding
+						colPos = j
+					}
+				}
+			}
+			if colPos != NotFound {
+				typ = found.types[colPos]
+				relPos = found.tag
+				table = found.table
+			}
+		}
+	} else {
+		if binding, ok := b.ctx.bindingsByName[table]; ok {
+			colPos = binding.FindColumn(col)
+			if colPos != NotFound {
+				typ = binding.types[colPos]
+				relPos = binding.tag
+			}
+		} else {
+			err = errors.New(errno.UndefinedTable, fmt.Sprintf("missing FROM-clause entry for table %q", table))
+		}
+	}
+
+	if colPos != NotFound {
+		b.boundCols = append(b.boundCols, table+"."+col)
+
+		expr = &plan.Expr{
+			Typ: typ,
+		}
+
+		if depth == 0 {
+			expr.Expr = &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: relPos,
+					ColPos: colPos,
+				},
+			}
+		} else {
+			expr.Expr = &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: relPos,
+					ColPos: colPos,
+					Depth:  depth,
+				},
+			}
+		}
+
+		return
+	}
+
+	parent := b.ctx.parent
+	if parent != nil {
+		expr, err = parent.binder.BindColRef(astExpr, depth+1)
+	}
+
+	if err != nil {
+		return
+	}
+
+	corr := expr.Expr.(*plan.Expr_Corr).Corr
+	b.ctx.corrCols = append(b.ctx.corrCols, &plan.CorrColRef{
+		RelPos: corr.RelPos,
+		ColPos: corr.ColPos,
+		Depth:  corr.Depth - depth,
+	})
+
+	return
+}
+
+func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32) (*Expr, error) {
 	var caseExpr *Expr
 	var elseExpr *Expr
 	var err error
 
 	if astExpr.Expr != nil {
-		caseExpr, err = b.BindExpr(tree.String(astExpr.Expr, dialect.MYSQL), astExpr.Expr, ctx)
+		caseExpr, err = b.impl.BindExpr(astExpr.Expr, depth, false)
 		if err != nil {
 			return nil, err
 		}
@@ -177,20 +260,20 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, ctx *BindContext) (*Ex
 
 	var args []*Expr
 	for _, whenExpr := range astExpr.Whens {
-		condExpr, err := b.BindExpr(tree.String(whenExpr.Cond, dialect.MYSQL), whenExpr.Cond, ctx)
+		condExpr, err := b.impl.BindExpr(whenExpr.Cond, depth, false)
 		if err != nil {
 			return nil, err
 		}
 		if caseExpr != nil {
 			// rewrite "case col when 1 then '1' else '2'" to "case when col=1 then '1' else '2'"
-			condExpr, err = b.bindFuncExprImplByPlanExpr("=", []*Expr{caseExpr, condExpr}, ctx)
+			condExpr, err = b.bindFuncExprImplByPlanExpr("=", []*Expr{caseExpr, condExpr}, depth)
 			if err != nil {
 				return nil, err
 			}
 		}
 		args = append(args, condExpr)
 
-		valExpr, err := b.BindExpr(tree.String(whenExpr.Val, dialect.MYSQL), whenExpr.Val, ctx)
+		valExpr, err := b.impl.BindExpr(whenExpr.Val, depth, false)
 		if err != nil {
 			return nil, err
 		}
@@ -198,7 +281,7 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, ctx *BindContext) (*Ex
 	}
 
 	if astExpr.Else != nil {
-		elseExpr, err = b.BindExpr(tree.String(astExpr.Else, dialect.MYSQL), astExpr.Else, ctx)
+		elseExpr, err = b.impl.BindExpr(astExpr.Else, depth, false)
 		if err != nil {
 			return nil, err
 		}
@@ -207,52 +290,52 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, ctx *BindContext) (*Ex
 		args = append(args, getNullExpr())
 	}
 
-	return b.bindFuncExprImplByPlanExpr("case", args, ctx)
+	return b.bindFuncExprImplByPlanExpr("case", args, depth)
 }
 
-func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, ctx *BindContext) (*Expr, error) {
-	leftExpr, err := b.BindExpr(tree.String(astExpr.Left, dialect.MYSQL), astExpr.Left, ctx)
+func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32) (*Expr, error) {
+	leftExpr, err := b.impl.BindExpr(astExpr.Left, depth, false)
 	if err != nil {
 		return nil, err
 	}
-	fromExpr, err := b.BindExpr(tree.String(astExpr.From, dialect.MYSQL), astExpr.From, ctx)
+	fromExpr, err := b.impl.BindExpr(astExpr.From, depth, false)
 	if err != nil {
 		return nil, err
 	}
-	toExpr, err := b.BindExpr(tree.String(astExpr.To, dialect.MYSQL), astExpr.To, ctx)
+	toExpr, err := b.impl.BindExpr(astExpr.To, depth, false)
 	if err != nil {
 		return nil, err
 	}
 
 	if astExpr.Not {
-		left, err := b.bindFuncExprImplByPlanExpr("<", []*Expr{leftExpr, fromExpr}, ctx)
+		left, err := b.bindFuncExprImplByPlanExpr("<", []*Expr{leftExpr, fromExpr}, depth)
 		if err != nil {
 			return nil, err
 		}
-		right, err := b.bindFuncExprImplByPlanExpr(">", []*Expr{leftExpr, toExpr}, ctx)
+		right, err := b.bindFuncExprImplByPlanExpr(">", []*Expr{leftExpr, toExpr}, depth)
 		if err != nil {
 			return nil, err
 		}
-		return b.bindFuncExprImplByPlanExpr("or", []*Expr{left, right}, ctx)
+		return b.bindFuncExprImplByPlanExpr("or", []*Expr{left, right}, depth)
 	} else {
-		left, err := b.bindFuncExprImplByPlanExpr(">=", []*Expr{leftExpr, fromExpr}, ctx)
+		left, err := b.bindFuncExprImplByPlanExpr(">=", []*Expr{leftExpr, fromExpr}, depth)
 		if err != nil {
 			return nil, err
 		}
-		right, err := b.bindFuncExprImplByPlanExpr("<=", []*Expr{leftExpr, toExpr}, ctx)
+		right, err := b.bindFuncExprImplByPlanExpr("<=", []*Expr{leftExpr, toExpr}, depth)
 		if err != nil {
 			return nil, err
 		}
-		return b.bindFuncExprImplByPlanExpr("and", []*Expr{left, right}, ctx)
+		return b.bindFuncExprImplByPlanExpr("and", []*Expr{left, right}, depth)
 	}
 }
 
-func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, ctx *BindContext) (*Expr, error) {
+func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32) (*Expr, error) {
 	switch astExpr.Op {
 	case tree.UNARY_MINUS:
-		return b.bindFuncExprImplByAstExpr("unary_minus", []tree.Expr{astExpr.Expr}, ctx)
+		return b.bindFuncExprImplByAstExpr("unary_minus", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_PLUS:
-		return b.bindFuncExprImplByAstExpr("unary_plus", []tree.Expr{astExpr.Expr}, ctx)
+		return b.bindFuncExprImplByAstExpr("unary_plus", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_TILDE:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 	case tree.UNARY_MARK:
@@ -261,59 +344,59 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, ctx *BindContext) (*
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 }
 
-func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, ctx *BindContext) (*Expr, error) {
+func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32) (*Expr, error) {
 	switch astExpr.Op {
 	case tree.PLUS:
-		return b.bindFuncExprImplByAstExpr("+", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("+", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.MINUS:
-		return b.bindFuncExprImplByAstExpr("-", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("-", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.MULTI:
-		return b.bindFuncExprImplByAstExpr("*", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("*", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.MOD:
-		return b.bindFuncExprImplByAstExpr("%", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("%", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.DIV:
-		return b.bindFuncExprImplByAstExpr("/", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("/", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.INTEGER_DIV:
-		return b.bindFuncExprImplByAstExpr("integer_div", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("integer_div", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 }
 
-func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, ctx *BindContext) (*Expr, error) {
+func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32) (*Expr, error) {
 	switch astExpr.Op {
 	case tree.EQUAL:
-		return b.bindFuncExprImplByAstExpr("=", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("=", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.LESS_THAN:
-		return b.bindFuncExprImplByAstExpr("<", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("<", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.LESS_THAN_EQUAL:
-		return b.bindFuncExprImplByAstExpr("<=", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("<=", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.GREAT_THAN:
-		return b.bindFuncExprImplByAstExpr(">", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr(">", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.GREAT_THAN_EQUAL:
-		return b.bindFuncExprImplByAstExpr(">=", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr(">=", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.NOT_EQUAL:
-		return b.bindFuncExprImplByAstExpr("<>", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("<>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.LIKE:
-		return b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.NOT_LIKE:
-		expr, err := b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		expr, err := b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 		if err != nil {
 			return nil, err
 		}
-		return b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, ctx)
+		return b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, depth)
 	case tree.IN:
-		return b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		return b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.NOT_IN:
-		expr, err := b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx)
+		expr, err := b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 		if err != nil {
 			return nil, err
 		}
-		return b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, ctx)
+		return b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, depth)
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 }
 
-func (b *baseBinder) bindFuncExpr(alias string, astExpr *tree.FuncExpr, ctx *BindContext) (*Expr, error) {
+func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, error) {
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function expr '%v' is not support now", astExpr))
@@ -321,15 +404,15 @@ func (b *baseBinder) bindFuncExpr(alias string, astExpr *tree.FuncExpr, ctx *Bin
 	funcName := funcRef.Parts[0]
 
 	if isAggFunc(funcName) {
-		return b.BindAggFunc(alias, funcName, astExpr, ctx)
+		return b.impl.BindAggFunc(funcName, astExpr, depth)
 	} else if isWinFunc(funcName) {
-		return b.BindWinFunc(alias, funcName, astExpr, ctx)
+		return b.impl.BindWinFunc(funcName, astExpr, depth)
 	}
 
-	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, ctx)
+	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
-func (b *baseBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, ctx *BindContext) (*plan.Expr, error) {
+func (b *baseBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, depth int32) (*plan.Expr, error) {
 	// rewrite some ast Exprs before binding
 	switch name {
 	case "extract":
@@ -345,11 +428,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, ct
 		case *tree.NumVal:
 			// rewrite count(*) to starcount(col_name)
 			name = "starcount"
-			if len(ctx.bindings) == 0 || len(ctx.bindings[0].cols) == 0 {
+			if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
 				return nil, errors.New(errno.InvalidColumnReference, "can not find any column when rewrite count(*) to starcount(col)")
 			}
 			var newCountCol *tree.UnresolvedName
-			newCountCol, err := tree.NewUnresolvedName(ctx.bindings[0].cols[0])
+			newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
 			if err != nil {
 				return nil, err
 			}
@@ -360,19 +443,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, ct
 	// bind ast function's args
 	newArgs := make([]*Expr, len(args))
 	for idx, arg := range args {
-		alias := tree.String(arg, dialect.MYSQL)
-		expr, err := b.BindExpr(alias, arg, ctx)
+		expr, err := b.impl.BindExpr(arg, depth, false)
 		if err != nil {
 			return nil, err
 		}
 		newArgs[idx] = expr
 	}
 
-	return b.bindFuncExprImplByPlanExpr(name, newArgs, ctx)
+	return b.bindFuncExprImplByPlanExpr(name, newArgs, depth)
 
 }
 
-func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, ctx *BindContext) (expr *Expr, err error) {
+func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth int32) (expr *Expr, err error) {
 	// deal with some special function
 	switch name {
 	case "date":
