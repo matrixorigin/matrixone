@@ -304,7 +304,7 @@ func buildColRefExpr(astExpr *tree.UnresolvedName, ctx CompilerContext, query *Q
 		name := astExpr.Parts[0]
 		if binderCtx != nil {
 			if val, ok := binderCtx.columnAlias[name]; ok {
-				return val, nil
+				return DeepCopyExpr(val), nil
 			}
 		}
 
