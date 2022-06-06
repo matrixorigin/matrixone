@@ -202,7 +202,10 @@ func (rf *rotateFile) commitLoop() {
 			file.Commit()
 			rf.commitFile()
 			rf.commitWg.Done()
+			if rf.postCommitFunc!= nil{
+
 			rf.postCommitFunc(file)
+			}
 		}
 	}
 }

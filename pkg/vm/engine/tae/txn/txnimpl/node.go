@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	logstoreEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -344,6 +345,11 @@ func (n *insertNode) execUnload() (entry wal.LogEntry) {
 		return
 	}
 	entry = n.makeLogEntry()
+	info := &logstoreEntry.Info{
+		Group:     logstoreEntry.GTUncommit,
+		Uncommits: []logstoreEntry.Tid{{Group: wal.GroupC, Tid: n.table.store.txn.GetID()}},
+	}
+	entry.SetInfo(info)
 	if seq, err := n.driver.AppendEntry(wal.GroupUC, entry); err != nil {
 		panic(err)
 	} else {
