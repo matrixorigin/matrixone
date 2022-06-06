@@ -56,6 +56,7 @@ type Txn struct {
 	Store    txnif.TxnStore
 	Err      error
 	DoneCond sync.Cond
+	LSN      uint64
 
 	PrepareCommitFn   func(txnif.AsyncTxn) error
 	PrepareRollbackFn func(txnif.AsyncTxn) error
@@ -111,6 +112,8 @@ func (txn *Txn) Commit() (err error) {
 func (txn *Txn) GetStore() txnif.TxnStore {
 	return txn.Store
 }
+
+func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 
 func (txn *Txn) Rollback() (err error) {
 	if txn.Store.IsReadonly() {
@@ -201,6 +204,7 @@ func (txn *Txn) PreApplyCommit() (err error) {
 
 func (txn *Txn) ApplyCommit() (err error) {
 	defer func() {
+		txn.LSN = txn.Store.GetLSN()
 		if err == nil {
 			err = txn.Store.Close()
 		} else {
@@ -218,6 +222,7 @@ func (txn *Txn) ApplyCommit() (err error) {
 
 func (txn *Txn) ApplyRollback() (err error) {
 	defer func() {
+		txn.LSN = txn.Store.GetLSN()
 		if err == nil {
 			err = txn.Store.Close()
 		} else {

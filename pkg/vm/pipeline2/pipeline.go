@@ -16,6 +16,7 @@ package pipeline2
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -135,6 +136,8 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	}
 	// processing the batch according to the instructions
 	proc.Reg.InputBatch = bat
+	end, err = overload.Run(p.instructions, proc)
+	proc.Reg.InputBatch = nil
 	end, err = overload.Run(p.instructions, proc)
 	return end, err
 }

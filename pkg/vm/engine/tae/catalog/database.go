@@ -212,6 +212,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		if nn.Length() == 0 {
 			delete(e.nameNodes, table.GetSchema().Name)
 		}
+		delete(e.entries, table.GetID())
 	}
 	return
 }
@@ -349,4 +350,12 @@ func (entry *DBEntry) CloneCreate() CheckpointItem {
 		name:      entry.name,
 	}
 	return cloned
+}
+
+// Coarse API: no consistency check
+func (entry *DBEntry) IsActive() bool {
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
 }

@@ -259,7 +259,9 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	}
 
 	node := seg.nodes[first]
-	err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
+	if err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1); err != nil {
+		return err
+	}
 	node = seg.nodes[last]
 	if err = node.RangeDelete(0, lastOffset); err != nil {
 		return err
