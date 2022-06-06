@@ -17,7 +17,12 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
+)
+
+var (
+	ErrUnknownError = moerr.NewError(moerr.INVALID_STATE, "unknown error")
 )
 
 type errMapping struct {
@@ -32,25 +37,46 @@ func getErrorMapping() []errMapping {
 		{dragonboat.ErrTimeout, rpc.ErrorCode_Timeout},
 		{dragonboat.ErrShardNotFound, rpc.ErrorCode_InvalidShard},
 		{dragonboat.ErrTimeoutTooSmall, rpc.ErrorCode_InvalidTimeout},
-		// dragonboat doesn't consider out of range as an error, it is treated more
-		// like a possible output.
-		{ErrOutOfRange, rpc.ErrorCode_OutOfRange},
 		{dragonboat.ErrPayloadTooBig, rpc.ErrorCode_InvalidPayloadSize},
 		{dragonboat.ErrRejected, rpc.ErrorCode_Rejected},
 		{dragonboat.ErrShardNotReady, rpc.ErrorCode_ShardNotReady},
 		{dragonboat.ErrSystemBusy, rpc.ErrorCode_ShardNotReady},
 		{dragonboat.ErrClosed, rpc.ErrorCode_SystemClosed},
+
+		{ErrInvalidTruncateIndex, rpc.ErrorCode_IndexAlreadyTruncated},
+		{ErrNotLeaseHolder, rpc.ErrorCode_NotLeaseHolder},
+		{ErrOutOfRange, rpc.ErrorCode_OutOfRange},
 	}
 }
 
-func toErrorCode(err error) rpc.ErrorCode {
+func toErrorCode(err error) (rpc.ErrorCode, string) {
 	if err == nil {
-		return rpc.ErrorCode_NoError
+		return rpc.ErrorCode_NoError, ""
 	}
 	for _, rec := range errorMappings {
 		if errors.Is(err, rec.err) {
-			return rec.code
+			plog.Errorf("error %v converted to %d", err, rec.code)
+			return rec.code, ""
 		}
 	}
-	return rpc.ErrorCode_OtherSystemError
+	plog.Errorf("unrecognized error %v, converted to %d", err,
+		rpc.ErrorCode_OtherSystemError)
+	return rpc.ErrorCode_OtherSystemError, err.Error()
+}
+
+func toError(resp rpc.Response) error {
+	if resp.ErrorCode == rpc.ErrorCode_NoError {
+		return nil
+	} else if resp.ErrorCode == rpc.ErrorCode_OtherSystemError {
+		return errors.Wrapf(ErrUnknownError, resp.ErrorMessage)
+	}
+
+	for _, rec := range errorMappings {
+		if rec.code == resp.ErrorCode {
+			return rec.err
+		}
+	}
+	plog.Panicf("Unknown error code: %d", resp.ErrorCode)
+	// will never reach here
+	return nil
 }

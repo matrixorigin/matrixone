@@ -68,7 +68,7 @@ func waitPoisonAck(conn net.Conn) {
 		return
 	}
 	if _, err := io.ReadFull(conn, ack); err != nil {
-		// TODO: log the error
+		plog.Errorf("failed to wait for the poison ack, %v", err)
 		return
 	}
 }
@@ -88,6 +88,7 @@ func readSize(conn net.Conn, buf []byte) (int, error) {
 	return int(binaryEnc.Uint32(szbuf)), nil
 }
 
+// FIXME: add data corruption check
 func writeRequest(conn net.Conn,
 	req rpc.Request, buf []byte, payload []byte) error {
 	if len(buf) < req.Size()+4+len(magicNumber[:]) {

@@ -45,27 +45,31 @@ message Request {
 };
 
 enum ErrorCode {
-  NoError            = 0;
-  Timeout            = 1;
-  Canceled           = 2;
-  InvalidShard       = 3;
-  InvalidTimeout     = 4;
-  InvalidPayload     = 5;
-  InvalidPayloadSize = 6;
-  OutOfRange         = 7;
-  Rejected           = 8;
-  ShardNotReady      = 9;
-  SystemClosed       = 10;
+  NoError               = 0;
+  Timeout               = 1;
+  Canceled              = 2;
+  InvalidShard          = 3;
+  InvalidTimeout        = 4;
+  InvalidPayload        = 5;
+  InvalidPayloadSize    = 6;
+  Rejected              = 7;
+  ShardNotReady         = 8;
+  SystemClosed          = 9;
+  
+  IndexAlreadyTruncated = 100;
+  OutOfRange            = 101;
+  NotLeaseHolder        = 102;
 
-  OtherSystemError   = 1000;
+  OtherSystemError      = 1000;
 }
 
 message Response {
-  MethodType Method  = 1;     
-  ErrorCode Error    = 2;
-  uint64 ShardID     = 3;
-  uint64 Index       = 4;
-  uint64 LastIndex   = 5;
+  MethodType Method   = 1;     
+  ErrorCode ErrorCode = 2;
+  string ErrorMessage = 3;
+  uint64 ShardID      = 4;
+  uint64 Index        = 5;
+  uint64 LastIndex    = 6;
 };
 
 message LogRecordResponse {

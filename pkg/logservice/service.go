@@ -21,9 +21,14 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/lni/dragonboat/v4/logger"
 	"github.com/lni/goutils/netutil"
 	"github.com/lni/goutils/syncutil"
 	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
+)
+
+var (
+	plog = logger.GetLogger("LogService")
 )
 
 type Lsn = uint64
@@ -50,7 +55,7 @@ func NewService(cfg Config) (*Service, error) {
 	}
 	if err := service.startServer(); err != nil {
 		if err := store.Close(); err != nil {
-			// TODO: log the error here
+			plog.Errorf("failed to close the store, %v", err)
 		}
 		return nil, err
 	}
@@ -91,7 +96,7 @@ func (s *Service) startServer() error {
 			closeFn := func() {
 				once.Do(func() {
 					if err := conn.Close(); err != nil {
-						// TODO: log the error
+						plog.Errorf("failed to close the connection, %v", err)
 					}
 				})
 			}
@@ -118,7 +123,7 @@ func (s *Service) serve(conn net.Conn) {
 		if err != nil {
 			if errors.Is(err, errPoisonReceived) {
 				if err := sendPoisonAck(conn, poisonNumber[:]); err != nil {
-					// TODO: log the error
+					plog.Errorf("failed to send poison ack, %v", err)
 				}
 				return
 			}
@@ -134,13 +139,13 @@ func (s *Service) serve(conn net.Conn) {
 		}
 		req, payload, err := readRequest(conn, reqBuf, recvBuf)
 		if err != nil {
-			// TODO: log the error
+			plog.Errorf("failed to read request, %v", err)
 			return
 		}
 		// with error already encoded into the resp
 		resp, records := s.handle(req, payload)
 		if err := writeResponse(conn, resp, records, recvBuf); err != nil {
-			// TODO: log the error
+			plog.Errorf("failed to write response, %v", err)
 			return
 		}
 	}
@@ -183,7 +188,7 @@ func (s *Service) handleConnect(req rpc.Request) rpc.Response {
 	defer cancel()
 	resp := getResponse(req)
 	if err := s.store.GetOrExtendDNLease(ctx, req.ShardID, req.DNID); err != nil {
-		resp.Error = toErrorCode(err)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
 }
@@ -194,7 +199,7 @@ func (s *Service) handleConnectRO(req rpc.Request) rpc.Response {
 	resp := getResponse(req)
 	// we only check whether the specified shard is available
 	if _, err := s.store.GetTruncatedIndex(ctx, req.ShardID); err != nil {
-		resp.Error = toErrorCode(err)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
 }
@@ -206,7 +211,7 @@ func (s *Service) handleAppend(req rpc.Request,
 	resp := getResponse(req)
 	lsn, err := s.store.Append(ctx, req.ShardID, record.Data)
 	if err != nil {
-		resp.Error = toErrorCode(err)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.Index = lsn
 	}
@@ -219,7 +224,7 @@ func (s *Service) handleRead(req rpc.Request) (rpc.Response, rpc.LogRecordRespon
 	resp := getResponse(req)
 	records, lsn, err := s.store.QueryLog(ctx, req.ShardID, req.Index, req.MaxSize)
 	if err != nil {
-		resp.Error = toErrorCode(err)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.LastIndex = lsn
 	}
@@ -236,7 +241,7 @@ func (s *Service) handleTruncate(req rpc.Request) rpc.Response {
 	defer cancel()
 	resp := getResponse(req)
 	if err := s.store.TruncateLog(ctx, req.ShardID, req.Index); err != nil {
-		resp.Error = toErrorCode(err)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
 }
@@ -247,7 +252,7 @@ func (s *Service) handleGetTruncateIndex(req rpc.Request) rpc.Response {
 	resp := getResponse(req)
 	index, err := s.store.GetTruncatedIndex(ctx, req.ShardID)
 	if err != nil {
-		resp.Error = toErrorCode(err)
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
 		resp.Index = index
 	}

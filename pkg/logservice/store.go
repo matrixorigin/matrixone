@@ -218,9 +218,11 @@ func (l *logStore) TruncateLog(ctx context.Context,
 	cmd := getSetTruncatedIndexCmd(index)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
+		plog.Errorf("propose truncate log cmd failed, %v", err)
 		return err
 	}
 	if result.Value > 0 {
+		plog.Errorf("shardID %d already truncated to index %d", shardID, result.Value)
 		return errors.Wrapf(ErrInvalidTruncateIndex, "already truncated to %d", result.Value)
 	}
 	l.mu.Lock()
@@ -238,9 +240,11 @@ func (l *logStore) Append(ctx context.Context,
 	session := l.nh.GetNoOPSession(shardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
+		plog.Errorf("propose failed, %v", err)
 		return 0, err
 	}
 	if len(result.Data) > 0 {
+		plog.Errorf("not current lease holder (%d)", binaryEnc.Uint64(result.Data))
 		return 0, errors.Wrapf(ErrNotLeaseHolder,
 			"current lease holder ID %d", binaryEnc.Uint64(result.Data))
 	}
@@ -271,6 +275,7 @@ func (l *logStore) getLeaseHolderID(ctx context.Context,
 	}
 	v, err := l.read(ctx, shardID, leaseHistoryQuery{index: e.Index})
 	if err != nil {
+		plog.Errorf("failed to read, %v", err)
 		return 0, err
 	}
 	return v.(uint64), nil
@@ -347,6 +352,7 @@ func (l *logStore) QueryLog(ctx context.Context, shardID uint64,
 	lastIndex := v.(uint64)
 	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex+1, maxSize)
 	if err != nil {
+		plog.Errorf("QueryRaftLog failed, %v", err)
 		return nil, 0, err
 	}
 	select {
@@ -356,10 +362,12 @@ func (l *logStore) QueryLog(ctx context.Context, shardID uint64,
 			next := getNextIndex(entries, firstIndex, logRange.LastIndex)
 			results, err := l.filterEntries(ctx, shardID, entries)
 			if err != nil {
+				plog.Errorf("filterEntries failed, %v", err)
 				return nil, 0, err
 			}
 			return results, next, nil
 		} else if v.RequestOutOfRange() {
+			plog.Errorf("OutOfRange query found")
 			return nil, 0, ErrOutOfRange
 		}
 		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected rs state"))
@@ -400,6 +408,7 @@ func (l *logStore) truncateLog() error {
 			defer cancel()
 			index, err := l.GetTruncatedIndex(ctx, shardID)
 			if err != nil {
+				plog.Errorf("GetTruncatedIndex failed, %v", err)
 				// FIXME: check error type, see whether it is a tmp one
 				return err
 			}
@@ -410,6 +419,7 @@ func (l *logStore) truncateLog() error {
 					CompactionIndex:            index - 1,
 				}
 				if _, err := l.nh.SyncRequestSnapshot(ctx, shardID, opts); err != nil {
+					plog.Errorf("SyncRequestSnapshot failed, %v", err)
 					// FIXME: check error type, see whether it is a tmp one
 					return err
 				}
