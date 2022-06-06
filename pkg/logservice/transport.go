@@ -162,7 +162,7 @@ func writeResponse(conn net.Conn, resp rpc.Response,
 	buf = buf[:n+4]
 	binaryEnc.PutUint32(buf, uint32(n))
 
-	tt := time.Now().Add(requestSendDuration)
+	tt := time.Now().Add(responseSendDuration)
 	if err := conn.SetWriteDeadline(tt); err != nil {
 		return err
 	}
@@ -215,6 +215,11 @@ func readResponse(conn net.Conn,
 		buf = make([]byte, size)
 	}
 	buf = buf[:size]
+
+	tt := time.Now().Add(responseReadDuration)
+	if err := conn.SetReadDeadline(tt); err != nil {
+		return rpc.Response{}, rpc.LogRecordResponse{}, err
+	}
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		return rpc.Response{}, rpc.LogRecordResponse{}, err
 	}
@@ -243,7 +248,7 @@ func readResponse(conn net.Conn,
 	}
 	toRead := size
 	for toRead > 0 {
-		tt := time.Now().Add(readDuration)
+		tt = time.Now().Add(readDuration)
 		if err := conn.SetReadDeadline(tt); err != nil {
 			return rpc.Response{}, rpc.LogRecordResponse{}, err
 		}
@@ -302,7 +307,7 @@ func getConnection(ctx context.Context, target string) (net.Conn, error) {
 			return nil, err
 		}
 	} else {
-		panic("unexpected conn type")
+		panic("unexpected connection type")
 	}
 	return conn, nil
 }

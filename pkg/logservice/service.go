@@ -178,10 +178,6 @@ func getResponse(req rpc.Request) rpc.Response {
 	return rpc.Response{Method: req.Method}
 }
 
-func toErrorCode(err error) rpc.ErrorCode {
-	panic("not implemented")
-}
-
 func (s *Service) handleConnect(req rpc.Request) rpc.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()

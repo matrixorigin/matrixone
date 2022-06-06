@@ -47,15 +47,17 @@ message Request {
 enum ErrorCode {
   NoError            = 0;
   Timeout            = 1;
-  InvalidShard       = 2;
-  InvalidTimeout     = 3;
-  InvalidPayload     = 4;
-  InvalidPayloadSize = 5;
-  OutOfRange         = 6;
-  Rejected           = 7;
-  ShardNotReady      = 8;
-  SystemClosed       = 9;
-  ReplicaRemoved     = 10;
+  Canceled           = 2;
+  InvalidShard       = 3;
+  InvalidTimeout     = 4;
+  InvalidPayload     = 5;
+  InvalidPayloadSize = 6;
+  OutOfRange         = 7;
+  Rejected           = 8;
+  ShardNotReady      = 9;
+  SystemClosed       = 10;
+
+  OtherSystemError   = 1000;
 }
 
 message Response {
