@@ -42,8 +42,8 @@ func InitAddress(addr string) {
 
 // New is used to new an object of compile
 func New(db string, sql string, uid string,
-	e engine.Engine, proc *process.Process) *compile {
-	return &compile{
+	e engine.Engine, proc *process.Process) *Compile {
+	return &Compile{
 		e:    e,
 		db:   db,
 		uid:  uid,
@@ -54,7 +54,7 @@ func New(db string, sql string, uid string,
 
 // Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
 // A scope is an execution unit.
-func (c *compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *batch.Batch) error) (err error) {
+func (c *Compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *batch.Batch) error) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.NewPanicError(e)
@@ -72,16 +72,16 @@ func (c *compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 	return nil
 }
 
-func (c *compile) setAffectedRows(n uint64) {
+func (c *Compile) setAffectedRows(n uint64) {
 	c.affectRows = n
 }
 
-func (c *compile) GetAffectedRows() uint64 {
+func (c *Compile) GetAffectedRows() uint64 {
 	return c.affectRows
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (c *compile) Run(ts uint64) (err error) {
+func (c *Compile) Run(ts uint64) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.NewPanicError(e)
@@ -124,7 +124,7 @@ func (c *compile) Run(ts uint64) (err error) {
 	return nil
 }
 
-func (c *compile) compileScope(pn *plan.Plan) (*Scope, error) {
+func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 	switch qry := pn.Plan.(type) {
 	case *plan.Plan_Query:
 		return c.compileQuery(qry.Query)
@@ -165,7 +165,7 @@ func (c *compile) compileScope(pn *plan.Plan) (*Scope, error) {
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }
 
-func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
+func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if len(qry.Steps) != 1 {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", qry))
 	}
@@ -224,7 +224,7 @@ func (c *compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	return rs, nil
 }
 
-func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
+func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
@@ -331,7 +331,7 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 	}
 }
 
-func (c *compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	if len(n.WhereList) == 0 {
 		return ss
 	}
@@ -344,7 +344,7 @@ func (c *compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Projection,
@@ -354,7 +354,7 @@ func (c *compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 	return ss
 }
 
-func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
+func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range ss {
 		chp := &Scope{
@@ -442,7 +442,7 @@ func (c *compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, join
 	return rs
 }
 
-func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	switch {
 	case n.Limit != nil && n.Offset == nil && len(n.OrderBy) > 0: // top
 		return c.compileTop(n, ss)
@@ -463,7 +463,7 @@ func (c *compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
 	}
 }
 
-func (c *compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Top,
@@ -492,7 +492,7 @@ func (c *compile) compileTop(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Order,
@@ -521,7 +521,7 @@ func (c *compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Offset,
@@ -550,7 +550,7 @@ func (c *compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Limit,
@@ -579,7 +579,7 @@ func (c *compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Group,

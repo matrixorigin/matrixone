@@ -83,8 +83,6 @@ func (s *Segment) Init(name string) error {
 	if err != nil {
 		return err
 	}
-	/*header := make([]byte, 32)
-	copy(header, encoding.EncodeUint64(sb.version))*/
 	err = binary.Write(&sbuffer, binary.BigEndian, s.super.version)
 	if err != nil {
 		return err
@@ -117,6 +115,12 @@ func (s *Segment) Init(name string) error {
 
 func (s *Segment) Open(name string) (err error) {
 	s.segFile, err = os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	s.name = name
+	s.super = SuperBlock{
+		version:   1,
+		blockSize: BLOCK_SIZE,
+		inodeSize: INODE_SIZE,
+	}
 	if err != nil {
 		return err
 	}

@@ -70,7 +70,7 @@ func (r *relation) ID(_ engine.Snapshot) string {
 func (r *relation) Segment(si SegmentInfo) aoe.Segment {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("Segment time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)))
 }

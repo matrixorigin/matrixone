@@ -129,7 +129,7 @@ func constructRestrict(n *plan.Node) *restrict.Argument {
 }
 
 func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*deletion.Argument, error) {
-	dbSource, err := eg.Database(n.ObjRef.DbName, snapshot)
+	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -138,8 +138,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 		return nil, err
 	}
 	return &deletion.Argument{
-		TableSource: relation,
-		Keys:        n.DeleteInfo.DeleteKeys,
+		TableSource:  relation,
+		UseDeleteKey: n.UseDeleteKey,
 	}, nil
 }
 

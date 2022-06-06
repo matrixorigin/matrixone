@@ -30,6 +30,7 @@ const (
 	ETCheckpoint
 	ETUncommitted
 	ETTxn
+	ETPostCommit
 	ETCustomizedStart
 )
 
@@ -38,6 +39,7 @@ const (
 	GTNoop
 	GTCKp
 	GTUncommit
+	GTInternal
 	GTCustomizedStart
 )
 
