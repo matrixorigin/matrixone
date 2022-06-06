@@ -74,6 +74,9 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 		return true, nil
 	}
 	defer bat.Clean(proc.Mp)
+	if len(bat.Vecs) == 0 {
+		return false, nil
+	}
 	proc.Reg.InputBatch = &batch.Batch{}
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
