@@ -1481,10 +1481,11 @@ func (cw *ComputationWrapperImpl) Run(ts uint64) error {
 var _ ComputationWrapper = &TxnComputationWrapper{}
 
 type TxnComputationWrapper struct {
-	stmt tree.Statement
-	plan *plan2.Plan
-	proc *process.Process
-	ses  *Session
+	stmt    tree.Statement
+	plan    *plan2.Plan
+	proc    *process.Process
+	ses     *Session
+	compile *compile2.Compile
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
@@ -1520,7 +1521,7 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 }
 
 func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
-	return 0
+	return cwft.compile.GetAffectedRows()
 }
 
 func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
@@ -1533,12 +1534,12 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.Snapshot = txnHandler.GetTxn().GetCtx()
-	comp := compile2.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
-	err = comp.Compile(cwft.plan, cwft.ses, fill)
+	cwft.compile = compile2.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), cwft.ses.GetStorage(), cwft.proc)
+	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
 	}
-	return comp, err
+	return cwft.compile, err
 }
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
@@ -1810,6 +1811,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 					goto handleFailed
 				}
 			}
+		case *tree.Delete:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+		case *tree.Update:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		default:
+			ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
 		}
 
 		if selfHandle {

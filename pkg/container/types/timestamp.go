@@ -35,11 +35,22 @@ package types
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"strconv"
 	"unsafe"
 )
 
 const microSecondsDigits = 6
+
+var TimestampMinValue Timestamp
+var TimestampMaxValue Timestamp
+
+// the range for TIMESTAMP values is '1970-01-01 00:00:01.000000' to '2038-01-19 03:14:07.999999'.
+func init() {
+	TimestampMinValue = FromClockUTC(1970, 1, 1, 0, 0, 1, 0)
+	TimestampMaxValue = FromClockUTC(2038, 1, 19, 3, 14, 07, 999999)
+}
 
 func (ts Timestamp) String() string {
 	dt := Datetime(int64(ts) + localTZ<<20)
@@ -65,6 +76,51 @@ func (ts Timestamp) String2(precision int32) string {
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
+var (
+	errIncorrectTimestampValue = errors.New(errno.DataException, "Incorrect timestamp value")
+	errTimestampOutOfRange     = errors.New(errno.DataException, "timestamp out of range")
+)
+
+// this scaleTable stores the corresponding microseconds value for a precision
+var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
+
+var OneSecInMicroSeconds = uint32(1000000)
+
+func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
+	msecs := uint32(0)
+	carry := uint32(0)
+	msecCarry := uint32(0)
+	if len(msecStr) > int(precision) {
+		if msecStr[precision] >= '5' && msecStr[precision] <= '9' {
+			msecCarry = 1
+		} else if msecStr[precision] >= '0' && msecStr[precision] <= '5' {
+			msecCarry = 0
+		} else {
+			return 0, 0, errIncorrectDatetimeValue
+		}
+		msecStr = msecStr[:precision]
+	} else if len(msecStr) < int(precision) {
+		lengthMsecStr := len(msecStr)
+		padZeros := int(precision) - lengthMsecStr
+		for i := 0; i < padZeros; i++ {
+			msecStr = msecStr + string('0')
+		}
+	}
+	if len(msecStr) == 0 { // this means the precision is 0
+		return 0, msecCarry, nil
+	}
+	m, err := strconv.ParseUint(msecStr, 10, 32)
+	if err != nil {
+		return 0, 0, errIncorrectTimestampValue
+	}
+	msecs = (uint32(m) + msecCarry) * scaleTable[precision]
+	if msecs == OneSecInMicroSeconds {
+		carry = 1
+		msecs = 0
+	}
+	return msecs, carry, nil
+}
+
 // ParseTimestamp will parse a string to be a Timestamp
 // Support Format:
 // 1. all the Date value
@@ -75,60 +131,53 @@ func ParseTimestamp(s string, precision int32) (Timestamp, error) {
 		if d, err := ParseDate(s); err == nil {
 			return Timestamp(d.ToTime()), nil
 		}
-		return -1, errIncorrectDatetimeValue
+		return -1, errIncorrectTimestampValue
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
 	var msec uint32 = 0
+	var carry uint32 = 0
+	var err error
 
 	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
 		if len(s) < 19 {
-			return -1, errIncorrectDatetimeValue
+			return -1, errIncorrectTimestampValue
 		}
 		month = (s[5]-'0')*10 + (s[6] - '0')
 		if s[7] != '-' {
-			return -1, errIncorrectDatetimeValue
+			return -1, errIncorrectTimestampValue
 		}
 		day = (s[8]-'0')*10 + (s[9] - '0')
 		if s[10] != ' ' {
-			return -1, errIncorrectDatetimeValue
+			return -1, errIncorrectTimestampValue
 		}
 		if !validDate(year, month, day) {
-			return -1, errIncorrectDatetimeValue
+			return -1, errIncorrectTimestampValue
 		}
 		hour = (s[11]-'0')*10 + (s[12] - '0')
 		if s[13] != ':' {
-			return -1, errIncorrectDatetimeValue
+			return -1, errIncorrectTimestampValue
 		}
 		minute = (s[14]-'0')*10 + (s[15] - '0')
 		if s[16] != ':' {
-			return -1, errIncorrectDatetimeValue
+			return -1, errIncorrectTimestampValue
 		}
 		second = (s[17]-'0')*10 + (s[18] - '0')
 		if !validTimeInDay(hour, minute, second) {
-			return -1, errIncorrectDatetimeValue
+			return -1, errIncorrectTimestampValue
 		}
 		if len(s) > 19 {
 			// for a timestamp string like "2020-01-01 11:11:11.123"
 			// the microseconds part .123 should be interpreted as 123000 microseconds, so we need to pad zeros
 			if len(s) > 20 && s[19] == '.' {
 				msecStr := s[20:]
-				lengthMsecStr := len(msecStr)
-				if lengthMsecStr > int(precision) {
-					msecStr = msecStr[:precision]
-				}
-				padZeros := microSecondsDigits - len(msecStr)
-				for i := 0; i < padZeros; i++ {
-					msecStr = msecStr + string('0')
-				}
-				m, err := strconv.ParseUint(msecStr, 10, 32)
+				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
-					return -1, errIncorrectDatetimeValue
+					return -1, errIncorrectTimestampValue
 				}
-				msec = uint32(m)
 			} else {
-				return -1, errIncorrectDatetimeValue
+				return -1, errIncorrectTimestampValue
 			}
 		}
 	} else {
@@ -142,26 +191,20 @@ func ParseTimestamp(s string, precision int32) (Timestamp, error) {
 			// the microseconds part .123 should be interpreted as 123000 microseconds, so we need to pad zeros
 			if len(s) > 15 && s[14] == '.' {
 				msecStr := s[15:]
-				lengthMsecStr := len(msecStr)
-				if lengthMsecStr > microSecondsDigits {
-					msecStr = msecStr[:microSecondsDigits]
-				} else {
-					padZeros := microSecondsDigits - lengthMsecStr
-					for i := 0; i < padZeros; i++ {
-						msecStr = msecStr + string('0')
-					}
-				}
-				m, err := strconv.ParseUint(msecStr, 10, 32)
+				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
-					return -1, errIncorrectDatetimeValue
+					return -1, errIncorrectTimestampValue
 				}
-				msec = uint32(m)
 			} else {
-				return -1, errIncorrectDatetimeValue
+				return -1, errIncorrectTimestampValue
 			}
 		}
 	}
-	result := FromClockUTC(year, month, day, hour, minute, second, msec)
+
+	result := FromClockUTC(year, month, day, hour, minute, second+uint8(carry), msec)
+	if result > TimestampMaxValue || result < TimestampMinValue {
+		return -1, errTimestampOutOfRange
+	}
 
 	return result, nil
 }

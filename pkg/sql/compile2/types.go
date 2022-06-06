@@ -83,8 +83,8 @@ type Scope struct {
 	Reg *process.WaitRegister
 }
 
-// compile contains all the information needed for compilation.
-type compile struct {
+// Compile contains all the information needed for compilation.
+type Compile struct {
 	scope *Scope
 	u     interface{}
 	//fill is a result writer runs a callback function.
