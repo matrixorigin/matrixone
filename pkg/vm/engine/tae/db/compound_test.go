@@ -9,35 +9,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/stretchr/testify/assert"
 )
-
-func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema) {
-	txn, _ := e.StartTxn(nil)
-	db, _ := txn.GetDatabase(dbName)
-	rel, _ := db.GetRelationByName(schema.Name)
-
-	var metas []*catalog.BlockEntry
-	it := rel.MakeBlockIt()
-	for it.Valid() {
-		blk := it.GetBlock()
-		if blk.Rows() < int(schema.BlockMaxRows) {
-			it.Next()
-			continue
-		}
-		meta := blk.GetMeta().(*catalog.BlockEntry)
-		metas = append(metas, meta)
-		it.Next()
-	}
-	for _, meta := range metas {
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
-		assert.NoError(t, err)
-		err = task.OnExec()
-		assert.NoError(t, err)
-	}
-	assert.NoError(t, txn.Commit())
-}
 
 func TestCompoundPK1(t *testing.T) {
 	tae := initDB(t, nil)
@@ -156,7 +129,7 @@ func TestCompoundPK1(t *testing.T) {
 
 	assert.NoError(t, txn.Commit())
 
-	compactBlocks(t, tae, "db", schema)
+	compactBlocks(t, tae, "db", schema, false)
 
 	// TODO
 	// txn, _ = tae.StartTxn(nil)

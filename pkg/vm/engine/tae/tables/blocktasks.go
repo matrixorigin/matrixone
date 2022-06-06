@@ -58,6 +58,7 @@ func (blk *dataBlock) CheckpointWAL(endTs uint64) (err error) {
 
 func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
 	ckpTs := blk.GetMaxCheckpointTS()
+	logutil.Infof("BlkCheckpointWAL | %s | [%d/%d]", blk.meta.Repr(), ckpTs, endTs)
 	if endTs <= ckpTs {
 		return
 	}
@@ -85,6 +86,7 @@ func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
 
 func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	ckpTs := blk.GetMaxCheckpointTS()
+	logutil.Infof("ABlkCheckpointWAL | %s | [%d/%d]", blk.meta.Repr(), ckpTs, endTs)
 	if endTs <= ckpTs {
 		return
 	}
@@ -191,7 +193,7 @@ func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint1
 	}
 	ckpTs := blk.GetMaxCheckpointTS()
 	if ts <= ckpTs {
-		logutil.Infof("FLUSH ABLK | [%s] | CANCELLED | (State Request: Already Compacted)", blk.meta.String())
+		logutil.Infof("FLUSH ABLK | [%s] | CANCELLED | (Stale Request: Already Compacted)", blk.meta.String())
 		return data.ErrStaleRequest
 	}
 
