@@ -94,3 +94,31 @@ func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows uint32, b
 	opts.FillDefaults(dir)
 	return opts
 }
+
+func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 10
+	opts.CheckpointCfg.ExecutionLevels = 5
+	opts.CheckpointCfg.ExecutionInterval = 1
+	opts.CheckpointCfg.CatalogCkpInterval = 5
+	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	return opts
+}
+
+func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 100000
+	opts.CheckpointCfg.ExecutionLevels = 20
+	opts.CheckpointCfg.ExecutionInterval = 200000
+	return opts
+}

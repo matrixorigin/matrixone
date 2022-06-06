@@ -9,7 +9,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/stretchr/testify/assert"
 )
@@ -99,31 +98,8 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
-	{
-		var metas []*catalog.BlockEntry
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			if blk.Rows() < int(schema.BlockMaxRows) {
-				it.Next()
-				continue
-			}
-			meta := blk.GetMeta().(*catalog.BlockEntry)
-			metas = append(metas, meta)
-			it.Next()
-		}
-		for _, meta := range metas {
-			task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
-			assert.NoError(t, err)
-			err = task.OnExec()
-			assert.NoError(t, err)
-		}
-	}
+	compactBlocks(t, tae, "db", schema, false)
 
-	assert.NoError(t, txn.Commit())
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
 	rel, _ = db.GetRelationByName(schema.Name)
