@@ -26,6 +26,8 @@ import (
 	"syscall"
 	"time"
 
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 
@@ -95,6 +97,10 @@ func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
 	mo = frontend.NewMOServer(address, pu, callback)
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewIternalExecutor(pu, callback)
+	}
+	metric.InitMetric(ieFactory, pu, callback.Id, metric.ALL_IN_ONE_MODE)
 	frontend.InitServerVersion(MoVersion)
 }
 

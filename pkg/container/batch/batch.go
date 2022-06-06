@@ -250,7 +250,9 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 		}
 	}
 	for _, r := range bat.Rs {
-		r.Free(m)
+		if r != nil {
+			r.Free(m)
+		}
 	}
 	bat.Vecs = nil
 	bat.Zs = nil

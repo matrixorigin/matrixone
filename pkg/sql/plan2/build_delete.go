@@ -38,7 +38,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find delete table")
 	}
 
-	// build the stmt of select
+	// build the projection of select
 	var projectExprs tree.SelectExprs
 	if stmt.Where != nil {
 		if err := buildProjectionFromExpr(stmt.Where.Expr, &projectExprs); err != nil {
@@ -55,43 +55,48 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 
 	// check col's def if exists in table's def.
 	// this check can remove if buildSelect has checked.
-	cols, err := checkColumns(projectExprs, tableDef)
-	if err != nil {
-		return nil, err
-	}
+	// cols, err := checkColumns(projectExprs, tableDef)
+	// if err != nil {
+	//	 return nil, err
+	// }
 
-	// find out deletion's type
-	var deleteInfo *plan.DeleteInfo
+	// find out use key to delete
+	var useKey *ColDef = nil
+	var useProjectExprs tree.SelectExprs = nil
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
 	if priKeys != nil {
 		for _, key := range priKeys {
-			deleteInfo.DeleteKeys = append(deleteInfo.DeleteKeys, key.Name)
-			for _, col := range cols {
-				if key.Name == col {
-					deleteInfo.DeleteType = plan.DeleteInfo_FILTER_PRIMARY
-				}
+			e, _ := tree.NewUnresolvedName(key.Name)
+			if isDuplicated(e, &projectExprs) {
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+				useKey = key
+				break
 			}
 		}
-	} else {
+	}
+	if useKey == nil {
 		hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 		if hideKey == nil {
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find hide key now")
 		}
+		useKey = hideKey
 		e, _ := tree.NewUnresolvedName(hideKey.Name)
-		projectExprs = append(projectExprs, tree.SelectExpr{Expr: e})
+		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 	}
 
 	// build the stmt of select and append select node
+	if len(stmt.OrderBy) > 0 && (stmt.Where == nil && stmt.Limit == nil) {
+		stmt.OrderBy = nil
+	}
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
-			Exprs: projectExprs,
+			Exprs: useProjectExprs,
 			From:  &tree.From{Tables: tree.TableExprs{stmt.Table}},
 			Where: stmt.Where,
 		},
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-
 	query, binderCtx := newQueryAndSelectCtx(plan.Query_DELETE)
 	nodeId, err := buildSelect(selectStmt, ctx, query, binderCtx)
 	if err != nil {
@@ -99,12 +104,13 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 	query.Steps = append(query.Steps, nodeId)
 
-	// append delete node
+	// build delete node
 	node := &Node{
-		NodeType:   plan.Node_DELETE,
-		ObjRef:     objRef,
-		TableDef:   tableDef,
-		DeleteInfo: deleteInfo,
+		NodeType:     plan.Node_DELETE,
+		ObjRef:       objRef,
+		TableDef:     tableDef,
+		UseDeleteKey: useKey.Name,
+		Children:     []int32{nodeId},
 	}
 	appendQueryNode(query, node)
 
@@ -139,6 +145,13 @@ func inTableDef(colName string, tableDef *TableDef) bool {
 		}
 	}
 	return false
+}
+
+func buildStarProjection() tree.SelectExprs {
+	expr := tree.SelectExpr{
+		Expr: tree.UnqualifiedStar{},
+	}
+	return tree.SelectExprs{expr}
 }
 
 func buildProjectionFromExpr(expr tree.Expr, selectExprs *tree.SelectExprs) error {
