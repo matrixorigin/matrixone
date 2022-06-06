@@ -30,7 +30,11 @@ import (
 func TestSingleSql(t *testing.T) {
 	// sql := "SELECT * FROM NATION where n_nationkey > 10"
 	// sql := "SELECT COUNT(n_nationkey) FROM NATION"
-	sql := "SELECT COUNT(*) FROM NATION a"
+	// sql := "SELECT COUNT(*) FROM NATION a"
+	// sql := "SELECT DATE_ADD('2022-01-31', INTERVAL 1 day) FROM NATION a"
+	// sql := "SELECT DATE_ADD(date '2022-01-31', INTERVAL 1 day) FROM NATION"
+	sql := "SELECT DATE_SUB(date '2022-01-31', INTERVAL 1 day) FROM NATION"
+	// sql := "SELECT date'2022-01-31' + INTERVAL 114 day FROM NATION a"
 	// sql := "SELECT n_nationkey, COUNT(*) AS TTT FROM NATION group by n_nationkey"
 	// sql := "select * from (select * from NATION order by n_nationkey) as x where n_nationkey > 10"
 	// sql := `select * from (select * from NATION order by n_nationkey) as x`
