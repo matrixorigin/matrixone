@@ -82,7 +82,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	var end bool // exist flag
 	var err error
 
-	cleanup(p, proc)
+	defer cleanup(p, proc)
 	if p.reg != nil { // used to handle some push-down request
 		select {
 		case <-p.reg.Ctx.Done():
