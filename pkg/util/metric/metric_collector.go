@@ -53,8 +53,8 @@ type collectorOpts struct {
 
 func defaultCollectorOpts() collectorOpts {
 	return collectorOpts{
-		metricThreshold: 10,
-		sampleThreshold: 50,
+		metricThreshold: 1000,
+		sampleThreshold: 4096,
 		flushInterval:   15 * time.Second,
 		sqlWorkerNum:    runtime.NumCPU(),
 	}
