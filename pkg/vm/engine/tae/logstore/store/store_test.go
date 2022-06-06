@@ -34,6 +34,126 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// append UC, C, CKP
+func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
+	e := entry.GetBase()
+	uncommitInfo := &entry.Info{
+		Group: entry.GTUncommit,
+		Uncommits: []entry.Tid{{
+			Group: 11,
+			Tid:   tid,
+		}},
+	}
+	e.SetType(entry.ETUncommitted)
+	e.SetInfo(uncommitInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTUncommit, e)
+	assert.Nil(t, err)
+	err = e.WaitDone()
+	assert.Nil(t, err)
+
+	txnInfo := &entry.Info{
+		Group: 11,
+		TxnId: tid,
+	}
+	e = entry.GetBase()
+	e.SetType(entry.ETTxn)
+	e.SetInfo(txnInfo)
+	n = common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err = e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	cmtLsn, err := s.AppendEntry(11, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+
+	cmd := entry.CommandInfo{
+		Size:       2,
+		CommandIds: []uint32{0, 1},
+	}
+	cmds := make(map[uint64]entry.CommandInfo)
+	cmds[cmtLsn] = cmd
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group:   11,
+			Command: cmds,
+		}},
+	}
+	e = entry.GetBase()
+	e.SetType(entry.ETCheckpoint)
+	e.SetInfo(info)
+	_, err = s.AppendEntry(entry.GTCKp, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+
+}
+
+// uncommit, commit, ckp  vf1
+// ckp all                vf2
+// truncate
+// check vinfo not exist
+// uncommit, commit       vf2
+// replay
+// ckp all                vf3
+// truncate
+// check vinfo not exist
+func TestTruncate(t *testing.T) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+
+	appendEntries(t, s, buf, 1)
+	appendEntries(t, s, buf, 2)
+	appendEntries(t, s, buf, 3)
+
+	assert.Equal(t, 2, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+
+	assert.Nil(t, s.TryCompact())
+
+	assert.Equal(t, 1, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+	err = s.Close()
+	assert.Nil(t, err)
+
+	t.Log("******************Replay*********************")
+
+	s2, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+		// fmt.Printf("%s", payload)
+	}
+	s2.Replay(a)
+
+	appendEntries(t, s2, buf, 4)
+
+	assert.Equal(t, 2, len(s2.file.GetHistory().EntryIds()))
+	t.Log(s2.file.GetHistory().String())
+
+	assert.Nil(t, s2.TryCompact())
+
+	assert.Equal(t, 1, len(s2.file.GetHistory().EntryIds()))
+	t.Log(s2.file.GetHistory().String())
+
+	err = s2.Close()
+	assert.Nil(t, err)
+}
+
 func TestAddrVersion(t *testing.T) {
 	dir := "/tmp/logstore/teststore"
 	name := "mock"

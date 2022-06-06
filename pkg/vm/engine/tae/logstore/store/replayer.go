@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -126,7 +125,6 @@ func (r *replayer) Apply() {
 		if ok {
 			if ckpinfo.ranges.ContainsInterval(
 				common.ClosedInterval{Start: e.commitId, End: e.commitId}) {
-				logutil.Infof("covered %v %v", ckpinfo.ranges, e.commitId)
 				continue
 			}
 		}

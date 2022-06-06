@@ -31,6 +31,7 @@ type syncBase struct {
 	groupLSN                     map[uint32]uint64 // for alloc
 	lsnmu                        sync.RWMutex
 	checkpointing                map[uint32]*checkpointInfo
+	ckpmu                        sync.RWMutex
 	syncing                      map[uint32]uint64
 	checkpointed, synced, ckpCnt *syncMap
 	uncommits                    map[uint32][]uint64
@@ -201,10 +202,13 @@ func newSyncBase() *syncBase {
 		uncommits:     make(map[uint32][]uint64),
 		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
+		ckpmu: sync.RWMutex{},
 	}
 }
 
 func (base *syncBase) WritePostCommitEntry(w io.Writer) (n int64, err error) {
+	base.ckpmu.RLock()
+	defer base.ckpmu.RUnlock()
 	//checkpointing
 	length := uint32(len(base.checkpointing))
 	if err = binary.Write(w, binary.BigEndian, length); err != nil {
@@ -287,8 +291,8 @@ func (base *syncBase) OnReplay(r *replayer) {
 		base.UnarshalPostCommitEntry(r.ckpEntry.payload)
 	}
 	for groupId, ckps := range r.checkpointrange {
-		ckpInfo,ok:=base.checkpointing[groupId] 
-		if !ok{
+		ckpInfo, ok := base.checkpointing[groupId]
+		if !ok {
 			base.checkpointing[groupId] = ckps
 		} else {
 			ckpInfo.MergeCheckpointInfo(ckps)
@@ -325,6 +329,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	switch v.Group {
 	case entry.GTCKp:
 		for _, intervals := range v.Checkpoints {
+			base.ckpmu.Lock()
 			ckpInfo, ok := base.checkpointing[intervals.Group]
 			if !ok {
 				ckpInfo = newCheckpointInfo()
@@ -338,6 +343,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 					ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
 				}
 			}
+			base.ckpmu.Unlock()
 		}
 	case entry.GTUncommit:
 		// addr := v.Addr.(*VFileAddress)

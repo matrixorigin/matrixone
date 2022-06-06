@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sync"
 
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -136,26 +137,17 @@ func (info *vInfo) PrepareCompactor(c *compactor) {
 		g.PrepareMerge(c)
 	}
 }
+
+// TODO: for ckp with payload, merge ckp after IsCovered()
 func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 	toDelete = true
 	for _, g := range info.groups {
-		if g.IsCheckpointGroup() {
-			// fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n",c.tidCidMap,c.gIntervals,g)
-			toDelete = false
-		}
-		if g.IsCommitGroup() {
-			if !g.IsCovered(c) {
-				// fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n",c.tidCidMap,c.gIntervals,g)
-				toDelete = false
-			}
-		}
 		g.MergeCheckpointInfo(c)
 	}
 	for _, g := range info.groups {
-		if g.IsUncommitGroup() {
-			if !g.IsCovered(c) {
-				toDelete = false
-			}
+		if !g.IsCovered(c) {
+			// logutil.Infof("not covered %d\ntcmap:%v\nckp%v\ng:%v\n",info.vf.Id(),c.tidCidMap,c.gIntervals,g)
+			toDelete = false
 		}
 	}
 	if c.ckpInfoVersion < info.ckpInfoVersion {
