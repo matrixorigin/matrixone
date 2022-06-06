@@ -16,6 +16,7 @@ package compile2
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
@@ -248,6 +249,21 @@ func (c *compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		rel, err := db.Relation(n.TableDef.Name, snap)
 		if err != nil {
 			return nil, err
+		}
+		if rel.Rows() == 0 { // process a query like `select count(*) from t`, t is an empty table
+			bat := batch.NewWithSize(len(n.TableDef.Cols))
+			for i, col := range n.TableDef.Cols {
+				bat.Vecs[i] = vector.New(types.Type{
+					Oid:   types.T(col.Typ.Id),
+					Width: col.Typ.Width,
+					Size:  col.Typ.Size,
+					Scale: col.Typ.Scale,
+				})
+			}
+			ds := &Scope{Magic: Normal}
+			ds.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
+			ds.DataSource = &Source{Bat: bat}
+			return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
 		}
 		src := &Source{
 			RelationName: n.TableDef.Name,
