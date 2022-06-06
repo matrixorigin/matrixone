@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,49 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package builtin
+package unixtimestamp
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-const (
-	Length = iota + overload.NE + 1
-	Space
-	Reverse
-	Substring
-	Ltrim
-	Rtrim
-	Oct
-	StartsWith
-	Lpad
-	Rpad
-	Empty
-	LengthUTF8
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	Sin
-	Sinh
-	Cos
-	Acos
-	Tan
-	Atan
-	Cot
-	UTCTimestamp
-	DayOfYear
-	Month
-	Year
-	Weekday
-	EndsWith
-	Date
-	BitLength
-	Bin
-	FindInSet
-	FromUnixTime
-	UnixTimestamp
+var (
+	UnixTimestamp func([]types.Datetime, []int64) []int64
 )
+
+func init() {
+	UnixTimestamp = unixTimestamp
+}
+
+func unixTimestamp(xs []types.Datetime, rs []int64) []int64 {
+	for i := range xs {
+		rs[i] = xs[i].UnixTimestamp()
+	}
+	return rs
+}
