@@ -222,7 +222,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		}
 	case entry.GTInternal:
 		if info.PostCommitVersion > r.ckpVersion {
-			r.ckpVersion=info.PostCommitVersion
+			r.ckpVersion = info.PostCommitVersion
 			replayEty := &replayEntry{
 				payload: make([]byte, e.GetPayloadSize()),
 			}

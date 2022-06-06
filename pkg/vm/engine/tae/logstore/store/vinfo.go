@@ -290,7 +290,7 @@ func (info *vInfo) GetOffsetByLSN(groupId uint32, lsn uint64) (int, error) {
 	defer info.addrmu.RUnlock()
 	lsnMap, ok := info.Addrs[groupId]
 	if !ok {
-		logutil.Infof("group %d",groupId)
+		logutil.Infof("group %d", groupId)
 		logutil.Infof("%p|addrs are %v", info, info.Addrs)
 		return 0, errors.New("vinfo group not existed")
 	}

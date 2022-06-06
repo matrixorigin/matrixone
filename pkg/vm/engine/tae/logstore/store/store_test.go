@@ -134,7 +134,8 @@ func TestTruncate(t *testing.T) {
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		// fmt.Printf("%s", payload)
 	}
-	s2.Replay(a)
+	err = s2.Replay(a)
+	assert.Nil(t, err)
 
 	appendEntries(t, s2, buf, 4)
 

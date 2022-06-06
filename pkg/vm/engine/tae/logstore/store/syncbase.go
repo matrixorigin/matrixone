@@ -202,7 +202,7 @@ func newSyncBase() *syncBase {
 		uncommits:     make(map[uint32][]uint64),
 		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
-		ckpmu: sync.RWMutex{},
+		ckpmu:         sync.RWMutex{},
 	}
 }
 
@@ -273,7 +273,10 @@ func (base *syncBase) MakePostCommitEntry(id int) entry.Entry {
 	if err != nil {
 		panic(err)
 	}
-	e.Unmarshal(buf)
+	err = e.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	info := &entry.Info{}
 	info.PostCommitVersion = id
 	info.Group = entry.GTInternal
@@ -288,7 +291,10 @@ func (base *syncBase) OnReplay(r *replayer) {
 		base.synced.ids[k] = v
 	}
 	if r.ckpEntry != nil {
-		base.UnarshalPostCommitEntry(r.ckpEntry.payload)
+		err := base.UnarshalPostCommitEntry(r.ckpEntry.payload)
+		if err != nil {
+			panic(err)
+		}
 	}
 	for groupId, ckps := range r.checkpointrange {
 		ckpInfo, ok := base.checkpointing[groupId]

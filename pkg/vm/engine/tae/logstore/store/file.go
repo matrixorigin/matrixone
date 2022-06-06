@@ -239,7 +239,7 @@ func (rf *rotateFile) Close() error {
 	rf.wg.Wait()
 	for _, vf := range rf.uncommitted {
 		vf.Close()
-	return nil
+		return nil
 	}
 	return nil
 }

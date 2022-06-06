@@ -67,7 +67,7 @@ func (mgr *commandManager) ApplyTxnRecord(tid uint64) (logEntry entry.Entry, err
 	if err = logEntry.Unmarshal(buf); err != nil {
 		return
 	}
-	info:=&entry.Info{
+	info := &entry.Info{
 		Group: wal.GroupC,
 		TxnId: tid,
 	}

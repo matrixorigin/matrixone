@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-
 )
 
 var (
@@ -145,7 +144,7 @@ func (h *history) TryTruncate() error {
 	toDelete := make([]entryWrapper, 0, 4)
 	h.mu.RLock()
 	entries := make([]VFile, len(h.entries))
-	copy(entries,h.entries)
+	copy(entries, h.entries)
 	h.mu.RUnlock()
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]

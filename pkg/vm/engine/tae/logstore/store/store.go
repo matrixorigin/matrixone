@@ -546,8 +546,11 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 
 func (s *baseStore) OnCommitVFile(vf VFile) {
 	e := s.MakePostCommitEntry(vf.Id())
-	s.AppendEntry(entry.GTInternal, e)
-	err := e.WaitDone()
+	_, err := s.AppendEntry(entry.GTInternal, e)
+	if err != nil && err != common.ClosedErr {
+		panic(err)
+	}
+	err = e.WaitDone()
 	if err != nil {
 		panic(err)
 	}
