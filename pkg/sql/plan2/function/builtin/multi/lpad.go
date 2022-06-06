@@ -23,16 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-//Min:        3,
-//Max:        3,
-//Typ:        ty
-//Typ:        types.T_varchar,
-//ReturnType: types.T_varchar,
+const UINT16_MAX = ^uint16(0)
+
 func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
 		return proc.AllocScalarNullVector(vecs[0].Typ), nil
 	}
-
 	vs := vecs[0].Col.(*types.Bytes) //Get the first arg
 	if !vecs[1].IsScalar() && vecs[1].Typ.Oid != types.T_int64 {
 		return nil, errors.New("The second argument of the lpad function must be an int64 constant")
@@ -41,50 +37,39 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return nil, errors.New("The third argument of the lpad function must be an string constant")
 	}
 
-	lens := vecs[1].Col.([]int64)
+	length := vecs[1].Col.([]int64)
 	padds := vecs[2].Col.(*types.Bytes)
-	for _, num := range lens {
-		if num < 0 {
-			vec, err := proc.AllocVector(types.Type{Oid: types.T_varchar, Size: 24}, 24*int64(len(vs.Lengths)))
-			if vecs[0].IsScalar() {
-				vec.IsConst = true
-			}
 
+	if vecs[0].IsScalar() {
+		if length[0] < 0 || length[0] > int64(UINT16_MAX) {
+			return proc.AllocScalarNullVector(types.Type{Oid: types.T_varchar, Size: 24}), nil
+		} else {
+			resultVec := proc.AllocScalarVector(types.Type{Oid: types.T_varchar, Size: 24})
+			results := &types.Bytes{
+				Data:    make([]byte, length[0]),
+				Offsets: make([]uint32, 1),
+				Lengths: make([]uint32, 1),
+			}
+			nulls.Set(resultVec.Nsp, vecs[0].Nsp)
+			vector.SetCol(resultVec, lpad.Lpad(results, vs, uint32(length[0]), padds))
+			return resultVec, nil
+		}
+	} else {
+		if length[0] < 0 {
+			return proc.AllocScalarNullVector(types.Type{Oid: types.T_varchar, Size: 24}), nil
+		} else {
+			resultVec, err := proc.AllocVector(types.Type{Oid: types.T_varchar, Size: 24}, int64(len(vs.Lengths))*length[0])
 			if err != nil {
 				return nil, err
 			}
-			nulls.Set(vec.Nsp, vecs[0].Nsp)
-			temp := ""
-			lengths_temp := []uint32{}
-			offsets_temp := []uint32{}
-			for k := 0; k < len(vs.Lengths); k++ {
-				temp += "NULL"
-				lengths_temp = append(lengths_temp, 4)
-				if len(offsets_temp) == 0 {
-					offsets_temp = append(offsets_temp, 0)
-				} else {
-					offsets_temp = append(offsets_temp, offsets_temp[len(offsets_temp)-1]+4)
-				}
-
+			results := &types.Bytes{
+				Data:    resultVec.Data,
+				Offsets: make([]uint32, len(vs.Offsets)),
+				Lengths: make([]uint32, len(vs.Lengths)),
 			}
-			res := &types.Bytes{
-				Data:    []byte(temp),
-				Lengths: lengths_temp,
-				Offsets: offsets_temp,
-			}
-			vector.SetCol(vec, res)
-			return vec, nil
+			nulls.Set(resultVec.Nsp, vecs[0].Nsp)
+			vector.SetCol(resultVec, lpad.Lpad(results, vs, uint32(length[0]), padds))
+			return resultVec, nil
 		}
 	}
-
-	vec, err := proc.AllocVector(types.Type{Oid: types.T_varchar, Size: 24}, 24*int64(len(vs.Lengths)))
-	if vecs[0].IsScalar() {
-		vec.IsConst = true
-	}
-	if err != nil {
-		return nil, err
-	}
-	nulls.Set(vec.Nsp, vecs[0].Nsp)
-	vector.SetCol(vec, lpad.LpadVarchar(vs, lens, padds))
-	return vec, nil
 }

@@ -117,6 +117,8 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 		resultExpr, isAgg, err = buildExpr(astExpr.Expr, ctx, query, node, binderCtx, needAgg)
 	case *tree.OrExpr:
 		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("or", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+	case *tree.XorExpr:
+		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("xor", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case *tree.NotExpr:
 		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("not", []tree.Expr{astExpr.Expr}, ctx, query, node, binderCtx, needAgg)
 	case *tree.AndExpr:
@@ -166,8 +168,6 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, node *Node, bi
 		resultExpr, isAgg, err = buildCaseExpr(astExpr, ctx, query, node, binderCtx, needAgg)
 	case *tree.IntervalExpr:
 		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", stmt))
-	case *tree.XorExpr:
-		return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", stmt))
 	case *tree.Subquery:
 		resultExpr, err = buildSubQuery(astExpr, ctx, query, node, binderCtx)
 		isAgg = needAgg
@@ -229,62 +229,57 @@ func buildCastExpr(astExpr *tree.CastExpr, ctx CompilerContext, query *Query, no
 
 func buildCaseExpr(astExpr *tree.CaseExpr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (expr *Expr, isAgg bool, err error) {
 	var args []*Expr
+	var caseExpr *Expr
 
 	if astExpr.Expr != nil {
-		caseExpr, _, err := buildExpr(astExpr.Expr, ctx, query, node, binderCtx, needAgg)
+		caseExpr, _, err = buildExpr(astExpr.Expr, ctx, query, node, binderCtx, needAgg)
 		if err != nil {
 			return nil, false, err
 		}
-		args = append(args, caseExpr)
 	}
 
 	isAgg = true
-	whenList := make([]*Expr, len(astExpr.Whens))
-	for idx, whenExpr := range astExpr.Whens {
-		exprs := make([]*Expr, 2)
-		expr, paramIsAgg, err := buildExpr(whenExpr.Cond, ctx, query, node, binderCtx, needAgg)
+	for _, whenExpr := range astExpr.Whens {
+		condExpr, paramIsAgg, err := buildExpr(whenExpr.Cond, ctx, query, node, binderCtx, needAgg)
 		if err != nil {
 			return nil, false, err
 		}
 		isAgg = isAgg && paramIsAgg
-		exprs[0] = expr
-		expr, paramIsAgg, err = buildExpr(whenExpr.Val, ctx, query, node, binderCtx, needAgg)
-		if err != nil {
-			return nil, false, err
+		if caseExpr != nil {
+			// rewrite "case col when 1 then '1' else '2'" to "case when col=1 then '1' else '2'"
+			condExpr, _, err = getFunctionExprByNameAndPlanExprs("=", []*Expr{caseExpr, condExpr})
+			if err != nil {
+				return nil, false, err
+			}
 		}
-		isAgg = isAgg && paramIsAgg
-		exprs[1] = expr
+		args = append(args, condExpr)
 
-		whenList[idx] = &Expr{
-			Expr: &plan.Expr_List{
-				List: &plan.ExprList{
-					List: exprs,
+		valExpr, paramIsAgg, err := buildExpr(whenExpr.Val, ctx, query, node, binderCtx, needAgg)
+		if err != nil {
+			return nil, false, err
+		}
+		isAgg = isAgg && paramIsAgg
+		args = append(args, valExpr)
+	}
+
+	if astExpr.Else != nil {
+		elseExpr, _, err := buildExpr(astExpr.Else, ctx, query, node, binderCtx, needAgg)
+		if err != nil {
+			return nil, false, err
+		}
+		args = append(args, elseExpr)
+	} else {
+		args = append(args, &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
 				},
 			},
 			Typ: &plan.Type{
-				Id: plan.Type_TUPLE,
+				Id:       plan.Type_ANY,
+				Nullable: true,
 			},
-		}
-	}
-	whenExpr := &Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: whenList,
-			},
-		},
-		Typ: &plan.Type{
-			Id: plan.Type_TUPLE,
-		},
-	}
-	args = append(args, whenExpr)
-
-	if astExpr.Else != nil {
-		elseExpr, paramIsAgg, err := buildExpr(astExpr.Else, ctx, query, node, binderCtx, needAgg)
-		if err != nil {
-			return nil, false, err
-		}
-		isAgg = isAgg && paramIsAgg
-		args = append(args, elseExpr)
+		})
 	}
 	return getFunctionExprByNameAndPlanExprs("case", args)
 }
@@ -436,6 +431,20 @@ func buildBinaryExpr(astExpr *tree.BinaryExpr, ctx CompilerContext, query *Query
 
 func buildNumVal(val constant.Value) (*Expr, error) {
 	switch val.Kind() {
+	case constant.Unknown:
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
+				},
+			},
+			Typ: &plan.Type{
+				Id:        plan.Type_ANY,
+				Nullable:  true,
+				Width:     0,
+				Precision: 0,
+			},
+		}, nil
 	case constant.Bool:
 		boolValue := constant.BoolVal(val)
 		return &Expr{

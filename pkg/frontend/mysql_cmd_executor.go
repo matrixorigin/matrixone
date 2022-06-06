@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -727,7 +728,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDb)
 	if err != nil {
 		return err
 	}
@@ -1620,6 +1621,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var ret interface{}
 	var runner ComputationRunner
 	var selfHandle = false
+	var fromLoadData = false
 	var txnErr error
 
 	for _, cw := range cws {
@@ -1651,6 +1653,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err != nil {
 				goto handleFailed
 			}
+			logutil.Infof("start autocommit txn in default")
 		}
 
 		switch st := stmt.(type) {
@@ -1745,6 +1748,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err != nil {
 				goto handleFailed
 			}
+			fromLoadData = true
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -1964,9 +1968,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		}
 	handleSucceeded:
-		txnErr = txnHandler.CommitAfterAutocommitOnly()
-		if txnErr != nil {
-			return txnErr
+		if !fromLoadData {
+			txnErr = txnHandler.CommitAfterAutocommitOnly()
+			if txnErr != nil {
+				return txnErr
+			}
 		}
 		goto handleNext
 	handleFailed:
@@ -2029,8 +2035,14 @@ func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch 
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
-func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
-	var resp *Response = nil
+func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.NewPanicError(e)
+			resp = NewGeneralErrorResponse(COM_QUERY, err)
+		}
+	}()
+
 	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.GetSession()

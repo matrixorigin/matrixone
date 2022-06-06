@@ -10,10 +10,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	// ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -562,7 +558,7 @@ func TestReplay3(t *testing.T) {
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockData(schema, 1)
-	v := compute.GetValue(bat.Vecs[schema.GetPrimaryKeyIdx()], 0)
+	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
 	filter := handle.NewEQFilter(v)
 
 	txn, err := tae.StartTxn(nil)

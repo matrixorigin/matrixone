@@ -73,9 +73,8 @@ func TestAddrVersion(t *testing.T) {
 	}
 
 	testutils.WaitExpect(4000, func() bool {
-		s.addrmu.RLock()
-		defer s.addrmu.RUnlock()
-		return len(s.addrs[entry.GTUncommit]) == 5
+		t.Log(s.GetSynced(entry.GTUncommit))
+		return s.GetSynced(entry.GTUncommit) == 10
 	})
 	s.addrmu.RLock()
 	defer s.addrmu.RUnlock()

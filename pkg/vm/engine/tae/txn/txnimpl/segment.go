@@ -189,7 +189,7 @@ func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
 
 func (seg *txnSegment) BatchDedup(pks *vector.Vector) (err error) {
 	if isLocalSegment(seg.entry.AsCommonID()) {
-		return seg.table.localSegment.BatchDedupByCol(pks)
+		return seg.table.localSegment.BatchDedup(pks)
 	}
 	segData := seg.entry.GetSegmentData()
 	seg.Txn.GetStore().LogSegmentID(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())

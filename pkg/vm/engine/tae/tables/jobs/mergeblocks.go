@@ -120,7 +120,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	message = fmt.Sprintf("%s] | Started", message)
 	logutil.Info(message)
-	entry := task.rel.GetMeta().(*catalog.TableEntry)
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
@@ -141,17 +140,31 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
+
+	// 1. Prepare sort key resources
+	// If there's no sort key, use hidden
 	for i, block := range task.compacted {
-		if entry.GetSchema().IsHiddenPK() {
-			if view, err = block.GetColumnDataById(0, nil, nil); err != nil {
+		var vec *vector.Vector
+		if !schema.HasSortKey() {
+			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil, nil); err != nil {
 				return
 			}
+			vec = view.ApplyDeletes()
+		} else if schema.SortKey.Size() == 1 {
+			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil, nil); err != nil {
+				return
+			}
+			vec = view.ApplyDeletes()
 		} else {
-			if view, err = block.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil); err != nil {
-				return
+			cols := make([]*vector.Vector, schema.SortKey.Size())
+			for idx := range cols {
+				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil, nil); err != nil {
+					return
+				}
+				cols[idx] = view.ApplyDeletes()
 			}
+			vec = model.EncodeCompoundColumn(cols...)
 		}
-		vec := view.ApplyDeletes()
 		vecs = append(vecs, vec)
 		rows[i] = uint32(vector.Length(vec))
 		fromAddr = append(fromAddr, uint32(length))
@@ -171,6 +184,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
+	// merge sort the sort key
 	node := common.GPool.Alloc(uint64(length * 4))
 	buf := node.Buf[:length]
 	defer common.GPool.Free(node)
@@ -178,11 +192,15 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to)
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
+
 	ts := task.txn.GetStartTS()
 	var flushTask tasks.Task
 	length = 0
 	var blk handle.Block
 	toAddr := make([]uint32, 0, len(vecs))
+	// Prepare new block placeholder
+	// Build and flush block index if sort key is defined
+	// Flush sort key it correlates to only one column
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vector.Length(vec)
@@ -193,28 +211,36 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 
-		def := schema.GetSinglePKColDef()
-		if def.IsHidden() {
+		if !schema.HasSortKey() {
 			continue
 		}
 
+		def := schema.SortKey.Defs[0]
+
 		// logutil.Infof("Flushing %s %v", meta.AsCommonID().String(), def)
-		closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
-		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
-		if err != nil {
+		// Flush sort key correlated column
+		if schema.SortKey.Size() == 1 {
+			closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
+			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
+			if err != nil {
+				return
+			}
+			if err = flushTask.WaitDone(); err != nil {
+				return
+			}
+		}
+		// Flush index
+		if err = BuildAndFlushIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
 			return
 		}
-		if err = flushTask.WaitDone(); err != nil {
-			return
-		}
-		if err = BuildAndFlushBlockIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
-			return
-		}
+		// Replay index
 		if err = meta.GetBlockData().ReplayData(); err != nil {
 			return
 		}
 	}
-	hidden := schema.HiddenKeyDef()
+
+	// Flush hidden column
+	hidden := schema.HiddenKey
 	for i, blk := range task.createdBlks {
 		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[i])))
 		if err != nil {
@@ -231,7 +257,10 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 	for _, def := range schema.ColDefs {
-		if def.IsHidden() || def.IsPrimary() {
+		// Skip
+		// Hidden column was processed before
+		// If only one single sort key, it was processed before
+		if def.IsHidden() || (schema.IsSingleSortKey() && def.IsSortKey()) {
 			continue
 		}
 		vecs = vecs[:0]

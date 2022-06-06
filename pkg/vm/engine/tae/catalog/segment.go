@@ -21,6 +21,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -269,6 +270,7 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 		return ErrNotFound
 	} else {
 		entry.link.Delete(n)
+		delete(entry.entries, block.GetID())
 	}
 	return nil
 }
@@ -282,9 +284,16 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 func (entry *SegmentEntry) PrepareRollback() (err error) {
 	entry.RLock()
 	currOp := entry.CurrOp
+	logutil.Infof("PrepareRollback %s", entry.StringLocked())
 	entry.RUnlock()
 	if currOp == OpCreate {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
+			return
+		}
+		//TODO: maybe scheduled?
+		// entry.GetCatalog().GetScheduler().ScheduleScopedFn(nil, tasks.IOTask, entry.AsCommonID(), entry.DestroyData)
+		if err = entry.DestroyData(); err != nil {
+			logutil.Fatalf("Cannot destroy uncommitted segment [%s] data: %v", entry.Repr(), err)
 			return
 		}
 	}
@@ -330,7 +339,11 @@ func (entry *SegmentEntry) Clone() CheckpointItem {
 func (entry *SegmentEntry) ReplayFile(cache *bytes.Buffer) {
 	colCnt := len(entry.table.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
-	indexCnt[entry.table.GetSchema().GetPrimaryKeyIdx()] = 2
+	if entry.table.GetSchema().IsSingleSortKey() {
+		indexCnt[entry.table.GetSchema().GetSingleSortKey().Idx] = 2
+	} else if entry.table.GetSchema().IsCompoundSortKey() {
+		panic("implement me")
+	}
 	if err := entry.GetSegmentData().GetSegmentFile().Replay(colCnt, indexCnt, cache); err != nil {
 		panic(err)
 	}
@@ -374,5 +387,20 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 }
 
 func (entry *SegmentEntry) DestroyData() (err error) {
-	return entry.segData.Destory()
+	if entry.segData != nil {
+		err = entry.segData.Destory()
+	}
+	return
+}
+
+// Coarse API: no consistency check
+func (entry *SegmentEntry) IsActive() bool {
+	table := entry.GetTable()
+	if !table.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
 }
