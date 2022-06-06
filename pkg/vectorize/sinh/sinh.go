@@ -14,7 +14,11 @@
 
 package sinh
 
-import "math"
+import (
+	"math"
+
+	"golang.org/x/exp/constraints"
+)
 
 var (
 	SinhUint8   func([]uint8, []float64) []float64
@@ -110,4 +114,11 @@ func sinhInt64(xs []int64, rs []float64) []float64 {
 		rs[i] = math.Sinh(float64(n))
 	}
 	return rs
+}
+
+func Sinh[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) []float64 {
+	for i, n := range inputValues {
+		resultValues[i] = math.Sinh(float64(n))
+	}
+	return resultValues
 }
