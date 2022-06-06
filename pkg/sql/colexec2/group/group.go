@@ -174,7 +174,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
 				}
 			}
-			return false, nil
+			return false, err
 		}
 		ctr.aggVecs[i].vec = vec
 		ctr.aggVecs[i].needFree = true
@@ -203,7 +203,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 					vector.Clean(ctr.groupVecs[j].vec, proc.Mp)
 				}
 			}
-			return false, nil
+			return false, err
 		}
 		ctr.groupVecs[i].vec = vec
 		ctr.groupVecs[i].needFree = true
