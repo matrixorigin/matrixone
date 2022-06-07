@@ -166,8 +166,8 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 	forEachColumnView(rel, colIdx, func(view *model.ColumnView) (err error) {
 		if applyDelete {
 			view.ApplyDeletes()
-			rows += view.Length()
 		}
+		rows += view.Length()
 		return
 	})
 	return rows

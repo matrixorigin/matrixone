@@ -92,24 +92,12 @@ func TestAppend2(t *testing.T) {
 	}
 	wg.Wait()
 	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
-	rows := 0
 	{
-		txn, _ := db.StartTxn(nil)
-		database, err := txn.GetDatabase("db")
-		assert.Nil(t, err)
-		rel, err := database.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			rows += blk.Rows()
-			it.Next()
-		}
-		assert.Nil(t, txn.Commit())
+		txn, rel := getDefaultRelation(t, db, schema.Name)
+		checkAllColRowsByScan(t, rel, int(totalRows), false)
+		assert.NoError(t, txn.Commit())
 	}
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	t.Logf("Rows: %d", rows)
-	assert.Equal(t, int(totalRows), rows)
 
 	now := time.Now()
 	testutils.WaitExpect(8000, func() bool {
@@ -1183,30 +1171,16 @@ func TestCrossDBTxn(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db1, err = txn.GetDatabase("db1")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	db2, err = txn.GetDatabase("db2")
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	rel1, err = db1.GetRelationByName(schema1.Name)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	rel2, err = db2.GetRelationByName(schema2.Name)
-	assert.Nil(t, err)
-	it1 := rel1.MakeBlockIt()
-	it2 := rel2.MakeBlockIt()
-	r1 := 0
-	r2 := 0
-	for it1.Valid() {
-		blk := it1.GetBlock()
-		r1 += blk.Rows()
-		it1.Next()
-	}
-	for it2.Valid() {
-		blk := it2.GetBlock()
-		r2 += blk.Rows()
-		it2.Next()
-	}
-	assert.Nil(t, txn.Commit())
-	assert.Equal(t, int(rows1), r1)
-	assert.Equal(t, int(rows2), r2)
+	assert.NoError(t, err)
+
+	checkAllColRowsByScan(t, rel1, int(rows1), false)
+	checkAllColRowsByScan(t, rel2, int(rows2), false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
@@ -1371,16 +1345,7 @@ func TestSystemDB2(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = sysDB.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	it := rel.MakeBlockIt()
-	rows := 0
-	for it.Valid() {
-		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(0, nil, nil)
-		assert.NoError(t, err)
-		rows += vector.Length(view.GetColumnData())
-		it.Next()
-	}
-	assert.Equal(t, 1000, rows)
+	checkAllColRowsByScan(t, rel, 1000, false)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -1413,14 +1378,7 @@ func TestScan1(t *testing.T) {
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bat)
 	assert.NoError(t, err)
-	it := rel.MakeBlockIt()
-	rows := 0
-	for it.Valid() {
-		blk := it.GetBlock()
-		rows += blk.Rows()
-		it.Next()
-	}
-	t.Logf("rows=%d", rows)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -1439,19 +1397,7 @@ func TestDedup(t *testing.T) {
 	err = rel.Append(bat)
 	t.Log(err)
 	assert.ErrorIs(t, err, data.ErrDuplicate)
-	it := rel.MakeBlockIt()
-	rows := 0
-	for it.Valid() {
-		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(2, nil, nil)
-		assert.NoError(t, err)
-		rows += view.Length()
-		t.Log(view.Length())
-		t.Log(view.GetColumnData().String())
-		it.Next()
-	}
-	assert.Equal(t, 10, rows)
-	assert.Error(t, err)
+	checkAllColRowsByScan(t, rel, 10, false)
 	err = txn.Rollback()
 	assert.NoError(t, err)
 }
@@ -1469,33 +1415,13 @@ func TestScan2(t *testing.T) {
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
-
-	actualRows := 0
-	blkIt := rel.MakeBlockIt()
-	for blkIt.Valid() {
-		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
-		assert.NoError(t, err)
-		actualRows += view.Length()
-		blkIt.Next()
-	}
-	assert.Equal(t, vector.Length(bats[0].Vecs[0]), actualRows)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
 
 	err = rel.Append(bats[0])
 	assert.Error(t, err)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
-
-	actualRows = 0
-	blkIt = rel.MakeBlockIt()
-	for blkIt.Valid() {
-		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
-		assert.NoError(t, err)
-		actualRows += view.Length()
-		blkIt.Next()
-	}
-	assert.Equal(t, int(rows), actualRows)
+	checkAllColRowsByScan(t, rel, int(rows), false)
 
 	pkv := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 5)
 	filter := handle.NewEQFilter(pkv)
@@ -1503,19 +1429,7 @@ func TestScan2(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, row, row)
 	assert.NoError(t, err)
-
-	actualRows = 0
-	blkIt = rel.MakeBlockIt()
-	for blkIt.Valid() {
-		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
-		assert.NoError(t, err)
-		view.ApplyDeletes()
-		actualRows += view.Length()
-		blkIt.Next()
-	}
-	t.Log(actualRows)
-	assert.Equal(t, int(rows)-1, actualRows)
+	checkAllColRowsByScan(t, rel, int(rows)-1, true)
 
 	pkv = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 8)
 	filter = handle.NewEQFilter(pkv)
@@ -1529,22 +1443,8 @@ func TestScan2(t *testing.T) {
 	assert.NoError(t, err)
 	v, err := rel.GetValue(id, row, 3)
 	assert.NoError(t, err)
-	t.Log(v)
 	assert.Equal(t, updateV, v.(int64))
-
-	actualRows = 0
-	blkIt = rel.MakeBlockIt()
-	for blkIt.Valid() {
-		blk := blkIt.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
-		assert.NoError(t, err)
-		view.ApplyDeletes()
-		actualRows += view.Length()
-		blkIt.Next()
-	}
-	t.Log(actualRows)
-	assert.Equal(t, int(rows)-1, actualRows)
-
+	checkAllColRowsByScan(t, rel, int(rows)-1, true)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -1595,17 +1495,7 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, err)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
-	it := rel.MakeBlockIt()
-	rows := 0
-	for it.Valid() {
-		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
-		assert.NoError(t, err)
-		vec := view.ApplyDeletes()
-		rows += vector.Length(vec)
-		it.Next()
-	}
-	assert.Equal(t, 1, rows)
+	checkAllColRowsByScan(t, rel, 1, true)
 
 	err = rel.RangeDelete(id, row, row)
 	assert.NoError(t, err)
@@ -1662,7 +1552,7 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	it = rel.MakeBlockIt()
+	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
