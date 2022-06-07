@@ -438,14 +438,14 @@ func (l *logStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
 		RaftAddress:    l.cfg.RaftAddress,
 		ServiceAddress: l.cfg.ServiceAddress,
 		GossipAddress:  l.cfg.GossipAddress,
-		Shards:         make([]*heartbeat.ShardInfo, 0),
+		Shards:         make([]*heartbeat.LogShardInfo, 0),
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
-		shardInfo := &heartbeat.ShardInfo{
+		shardInfo := &heartbeat.LogShardInfo{
 			ShardID:  ci.ShardID,
 			Replicas: ci.Nodes,
 			Epoch:    ci.ConfigChangeIndex,

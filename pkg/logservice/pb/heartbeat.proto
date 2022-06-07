@@ -30,8 +30,8 @@ message ShardState {
   map<uint64, string> InitialReplicas = 4;
 };
 
-// ShardInfo contains information of a launched shard.  
-message ShardInfo {
+// LogShardInfo contains information of a launched shard.  
+message LogShardInfo {
   uint64 ShardID               = 1;
   // Replicas is a map of ReplicaID to LogStore UUID, it describe the member
   // replicas of the shard at the given Epoch. 
@@ -46,18 +46,35 @@ message ShardInfo {
   uint64 Term                  = 5;
 };
 
-// LogStoreHeartbeat is the periodic message sent to the HAKeeper. 
+// LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
 message LogStoreHeartbeat {
-  // UUID is the uuid of the LogStore.
+  // UUID is the uuid of the Log Store.
   string UUID = 1;
   
   string RaftAddress    = 2;
   string ServiceAddress = 3;
   string GossipAddress  = 4;
 
-  // Shards is a list of ShardInfo instances collected on the specified
+  // Shards is a list of LogShardInfo instances collected on the specified
   // LogStore. Details in Shards are based on the local knowledge of each
   // replica running on the current LogStore, it may not be accurate or
   // update to date due to various reasons. 
-  repeated ShardInfo Shards = 5;
+  repeated LogShardInfo Shards = 5;
 };
+
+message DNShardInfo {
+  uint64 ShardID                 = 1;
+  // DNID uniquely identifies a DN shard instance. After repairing a failed
+  // DN shard, a new DN shard instance is created with a new DNID value.
+  uint64 DNID                    = 2;
+}
+
+// DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
+message DNStoreHeartbeat {
+  // UUID is the uuid of the DN Store.
+  string UUID = 1;
+
+  // Shards is a list of DNShardInfo instances collected on the specified
+  // DN store. 
+  repeated DNShardInfo Shards = 2;
+}

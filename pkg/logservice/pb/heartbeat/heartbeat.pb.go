@@ -124,8 +124,8 @@ func (m *ShardState) GetInitialReplicas() map[uint64]string {
 	return nil
 }
 
-// ShardInfo contains information of a launched shard.
-type ShardInfo struct {
+// LogShardInfo contains information of a launched shard.
+type LogShardInfo struct {
 	ShardID uint64 `protobuf:"varint,1,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
 	// Replicas is a map of ReplicaID to LogStore UUID, it describe the member
 	// replicas of the shard at the given Epoch.
@@ -140,18 +140,18 @@ type ShardInfo struct {
 	Term uint64 `protobuf:"varint,5,opt,name=Term,proto3" json:"Term,omitempty"`
 }
 
-func (m *ShardInfo) Reset()         { *m = ShardInfo{} }
-func (m *ShardInfo) String() string { return proto.CompactTextString(m) }
-func (*ShardInfo) ProtoMessage()    {}
-func (*ShardInfo) Descriptor() ([]byte, []int) {
+func (m *LogShardInfo) Reset()         { *m = LogShardInfo{} }
+func (m *LogShardInfo) String() string { return proto.CompactTextString(m) }
+func (*LogShardInfo) ProtoMessage()    {}
+func (*LogShardInfo) Descriptor() ([]byte, []int) {
 	return fileDescriptor_3c667767fb9826a9, []int{1}
 }
-func (m *ShardInfo) XXX_Unmarshal(b []byte) error {
+func (m *LogShardInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *ShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *LogShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_ShardInfo.Marshal(b, m, deterministic)
+		return xxx_messageInfo_LogShardInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -161,65 +161,65 @@ func (m *ShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return b[:n], nil
 	}
 }
-func (m *ShardInfo) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_ShardInfo.Merge(m, src)
+func (m *LogShardInfo) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_LogShardInfo.Merge(m, src)
 }
-func (m *ShardInfo) XXX_Size() int {
+func (m *LogShardInfo) XXX_Size() int {
 	return m.Size()
 }
-func (m *ShardInfo) XXX_DiscardUnknown() {
-	xxx_messageInfo_ShardInfo.DiscardUnknown(m)
+func (m *LogShardInfo) XXX_DiscardUnknown() {
+	xxx_messageInfo_LogShardInfo.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_ShardInfo proto.InternalMessageInfo
+var xxx_messageInfo_LogShardInfo proto.InternalMessageInfo
 
-func (m *ShardInfo) GetShardID() uint64 {
+func (m *LogShardInfo) GetShardID() uint64 {
 	if m != nil {
 		return m.ShardID
 	}
 	return 0
 }
 
-func (m *ShardInfo) GetReplicas() map[uint64]string {
+func (m *LogShardInfo) GetReplicas() map[uint64]string {
 	if m != nil {
 		return m.Replicas
 	}
 	return nil
 }
 
-func (m *ShardInfo) GetEpoch() uint64 {
+func (m *LogShardInfo) GetEpoch() uint64 {
 	if m != nil {
 		return m.Epoch
 	}
 	return 0
 }
 
-func (m *ShardInfo) GetLeaderID() uint64 {
+func (m *LogShardInfo) GetLeaderID() uint64 {
 	if m != nil {
 		return m.LeaderID
 	}
 	return 0
 }
 
-func (m *ShardInfo) GetTerm() uint64 {
+func (m *LogShardInfo) GetTerm() uint64 {
 	if m != nil {
 		return m.Term
 	}
 	return 0
 }
 
-// LogStoreHeartbeat is the periodic message sent to the HAKeeper.
+// LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
 type LogStoreHeartbeat struct {
-	// UUID is the uuid of the LogStore.
+	// UUID is the uuid of the Log Store.
 	UUID           string `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
 	RaftAddress    string `protobuf:"bytes,2,opt,name=RaftAddress,proto3" json:"RaftAddress,omitempty"`
 	ServiceAddress string `protobuf:"bytes,3,opt,name=ServiceAddress,proto3" json:"ServiceAddress,omitempty"`
 	GossipAddress  string `protobuf:"bytes,4,opt,name=GossipAddress,proto3" json:"GossipAddress,omitempty"`
-	// Shards is a list of ShardInfo instances collected on the specified
+	// Shards is a list of LogShardInfo instances collected on the specified
 	// LogStore. Details in Shards are based on the local knowledge of each
 	// replica running on the current LogStore, it may not be accurate or
 	// update to date due to various reasons.
-	Shards []*ShardInfo `protobuf:"bytes,5,rep,name=Shards,proto3" json:"Shards,omitempty"`
+	Shards []*LogShardInfo `protobuf:"bytes,5,rep,name=Shards,proto3" json:"Shards,omitempty"`
 }
 
 func (m *LogStoreHeartbeat) Reset()         { *m = LogStoreHeartbeat{} }
@@ -283,7 +283,117 @@ func (m *LogStoreHeartbeat) GetGossipAddress() string {
 	return ""
 }
 
-func (m *LogStoreHeartbeat) GetShards() []*ShardInfo {
+func (m *LogStoreHeartbeat) GetShards() []*LogShardInfo {
+	if m != nil {
+		return m.Shards
+	}
+	return nil
+}
+
+type DNShardInfo struct {
+	ShardID uint64 `protobuf:"varint,1,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
+	// DNID uniquely identifies a DN shard instance. After repairing a failed
+	// DN shard, a new DN shard instance is created with a new DNID value.
+	DNID uint64 `protobuf:"varint,2,opt,name=DNID,proto3" json:"DNID,omitempty"`
+}
+
+func (m *DNShardInfo) Reset()         { *m = DNShardInfo{} }
+func (m *DNShardInfo) String() string { return proto.CompactTextString(m) }
+func (*DNShardInfo) ProtoMessage()    {}
+func (*DNShardInfo) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3c667767fb9826a9, []int{3}
+}
+func (m *DNShardInfo) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *DNShardInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_DNShardInfo.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *DNShardInfo) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_DNShardInfo.Merge(m, src)
+}
+func (m *DNShardInfo) XXX_Size() int {
+	return m.Size()
+}
+func (m *DNShardInfo) XXX_DiscardUnknown() {
+	xxx_messageInfo_DNShardInfo.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_DNShardInfo proto.InternalMessageInfo
+
+func (m *DNShardInfo) GetShardID() uint64 {
+	if m != nil {
+		return m.ShardID
+	}
+	return 0
+}
+
+func (m *DNShardInfo) GetDNID() uint64 {
+	if m != nil {
+		return m.DNID
+	}
+	return 0
+}
+
+// DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
+type DNStoreHeartbeat struct {
+	// UUID is the uuid of the DN Store.
+	UUID string `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
+	// Shards is a list of DNShardInfo instances collected on the specified
+	// DN store.
+	Shards []*DNShardInfo `protobuf:"bytes,2,rep,name=Shards,proto3" json:"Shards,omitempty"`
+}
+
+func (m *DNStoreHeartbeat) Reset()         { *m = DNStoreHeartbeat{} }
+func (m *DNStoreHeartbeat) String() string { return proto.CompactTextString(m) }
+func (*DNStoreHeartbeat) ProtoMessage()    {}
+func (*DNStoreHeartbeat) Descriptor() ([]byte, []int) {
+	return fileDescriptor_3c667767fb9826a9, []int{4}
+}
+func (m *DNStoreHeartbeat) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *DNStoreHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_DNStoreHeartbeat.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *DNStoreHeartbeat) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_DNStoreHeartbeat.Merge(m, src)
+}
+func (m *DNStoreHeartbeat) XXX_Size() int {
+	return m.Size()
+}
+func (m *DNStoreHeartbeat) XXX_DiscardUnknown() {
+	xxx_messageInfo_DNStoreHeartbeat.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_DNStoreHeartbeat proto.InternalMessageInfo
+
+func (m *DNStoreHeartbeat) GetUUID() string {
+	if m != nil {
+		return m.UUID
+	}
+	return ""
+}
+
+func (m *DNStoreHeartbeat) GetShards() []*DNShardInfo {
 	if m != nil {
 		return m.Shards
 	}
@@ -294,44 +404,48 @@ func init() {
 	proto.RegisterEnum("ShardState_State", ShardState_State_name, ShardState_State_value)
 	proto.RegisterType((*ShardState)(nil), "ShardState")
 	proto.RegisterMapType((map[uint64]string)(nil), "ShardState.InitialReplicasEntry")
-	proto.RegisterType((*ShardInfo)(nil), "ShardInfo")
-	proto.RegisterMapType((map[uint64]string)(nil), "ShardInfo.ReplicasEntry")
+	proto.RegisterType((*LogShardInfo)(nil), "LogShardInfo")
+	proto.RegisterMapType((map[uint64]string)(nil), "LogShardInfo.ReplicasEntry")
 	proto.RegisterType((*LogStoreHeartbeat)(nil), "LogStoreHeartbeat")
+	proto.RegisterType((*DNShardInfo)(nil), "DNShardInfo")
+	proto.RegisterType((*DNStoreHeartbeat)(nil), "DNStoreHeartbeat")
 }
 
 func init() { proto.RegisterFile("heartbeat.proto", fileDescriptor_3c667767fb9826a9) }
 
 var fileDescriptor_3c667767fb9826a9 = []byte{
-	// 455 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x93, 0x31, 0x6f, 0xda, 0x40,
-	0x14, 0xc7, 0x39, 0xdb, 0x24, 0xf8, 0x51, 0x88, 0x73, 0xca, 0x70, 0x62, 0xb0, 0x2c, 0x14, 0x55,
-	0x4c, 0xae, 0x94, 0x74, 0xa8, 0xda, 0x09, 0x6a, 0x8b, 0xb8, 0x42, 0x54, 0x3a, 0xc3, 0xd2, 0xed,
-	0x02, 0x97, 0x62, 0x95, 0x60, 0x74, 0xbe, 0x44, 0xca, 0xb7, 0xe8, 0xf7, 0xe9, 0xd6, 0xa9, 0x63,
-	0xc6, 0x4e, 0x55, 0x05, 0x5f, 0xa4, 0xe2, 0x19, 0x8c, 0x41, 0x9d, 0xb2, 0x58, 0xef, 0xff, 0xee,
-	0xf7, 0xce, 0xf7, 0xff, 0xdb, 0x07, 0x67, 0x33, 0x29, 0x94, 0xbe, 0x95, 0x42, 0xfb, 0x4b, 0x95,
-	0xea, 0xb4, 0xfd, 0xd3, 0x00, 0x88, 0x67, 0x42, 0x4d, 0x63, 0x2d, 0xb4, 0xa4, 0x14, 0xac, 0xa1,
-	0xb8, 0x97, 0x8c, 0x78, 0xa4, 0x63, 0x73, 0xac, 0x29, 0x83, 0x53, 0x24, 0xa2, 0x80, 0x19, 0x1e,
-	0xe9, 0x58, 0x7c, 0x27, 0xe9, 0x35, 0xd4, 0x07, 0xe2, 0x61, 0x31, 0x99, 0xe1, 0x30, 0x33, 0x3d,
-	0xd2, 0x69, 0x5e, 0x9d, 0xfb, 0xfb, 0xfd, 0x7c, 0x7c, 0xf2, 0x32, 0x45, 0x3f, 0xc1, 0x59, 0xb4,
-	0x48, 0x74, 0x22, 0xe6, 0x5c, 0x2e, 0xe7, 0xc9, 0x44, 0x64, 0xcc, 0xf2, 0xcc, 0x4e, 0xfd, 0xca,
-	0x2b, 0x0f, 0x1e, 0x21, 0xe1, 0x42, 0xab, 0x27, 0x7e, 0x3c, 0xd8, 0xea, 0xc1, 0xc5, 0xff, 0x40,
-	0xea, 0x80, 0xf9, 0x4d, 0x3e, 0xa1, 0x0b, 0x8b, 0x6f, 0x4a, 0x7a, 0x01, 0xd5, 0x47, 0x31, 0x7f,
-	0x90, 0x68, 0xc1, 0xe6, 0xb9, 0x78, 0x6f, 0xbc, 0x23, 0xed, 0x2e, 0x54, 0xf3, 0x83, 0x35, 0x01,
-	0x78, 0xd8, 0x8f, 0xe2, 0x51, 0xc8, 0xc3, 0xc0, 0xa9, 0xd0, 0x06, 0xd8, 0x83, 0xee, 0x78, 0xf8,
-	0xf1, 0x26, 0x1a, 0xf6, 0x1d, 0x42, 0x5f, 0x41, 0x2d, 0x97, 0x61, 0xe0, 0x18, 0xb4, 0x0e, 0xa7,
-	0xdd, 0xde, 0x67, 0x3e, 0x0a, 0x03, 0xc7, 0x6c, 0xff, 0x21, 0x60, 0xe7, 0x99, 0x2c, 0xee, 0xd2,
-	0x72, 0x5e, 0xe4, 0x30, 0xaf, 0xb7, 0x50, 0x2b, 0x3c, 0x1b, 0xe8, 0x99, 0xf9, 0xc5, 0x9c, 0x7f,
-	0xe8, 0xb5, 0x20, 0x37, 0x47, 0x0f, 0x97, 0xe9, 0x64, 0x86, 0xf9, 0x5a, 0x3c, 0x17, 0xb4, 0x05,
-	0xb5, 0x81, 0x14, 0x53, 0xa9, 0xa2, 0x80, 0x59, 0xb8, 0x50, 0xe8, 0xcd, 0x57, 0x1c, 0x49, 0x75,
-	0xcf, 0xaa, 0xd8, 0xc7, 0xba, 0xf5, 0x01, 0x1a, 0x2f, 0xcf, 0xe8, 0x07, 0x81, 0xf3, 0x41, 0xfa,
-	0x35, 0xd6, 0xa9, 0x92, 0x37, 0xbb, 0x3f, 0x68, 0xf3, 0x9a, 0xf1, 0x78, 0xeb, 0xd2, 0xe6, 0x58,
-	0x53, 0x0f, 0xea, 0x5c, 0xdc, 0xe9, 0xee, 0x74, 0xaa, 0x64, 0x96, 0x6d, 0x77, 0x2a, 0xb7, 0xe8,
-	0x6b, 0x68, 0xc6, 0x52, 0x3d, 0x26, 0x13, 0xb9, 0x83, 0x4c, 0x84, 0x8e, 0xba, 0xf4, 0x12, 0x1a,
-	0xfd, 0x34, 0xcb, 0x92, 0xe5, 0x0e, 0xb3, 0x10, 0x3b, 0x6c, 0xd2, 0x36, 0x9c, 0x60, 0x82, 0x19,
-	0xab, 0x62, 0xa0, 0xb0, 0x0f, 0x94, 0x6f, 0x57, 0x7a, 0x97, 0xbf, 0x56, 0x2e, 0x79, 0x5e, 0xb9,
-	0xe4, 0xef, 0xca, 0x25, 0xdf, 0xd7, 0x6e, 0xe5, 0x79, 0xed, 0x56, 0x7e, 0xaf, 0xdd, 0xca, 0x17,
-	0x78, 0x53, 0xdc, 0x87, 0xdb, 0x13, 0xbc, 0x10, 0xd7, 0xff, 0x02, 0x00, 0x00, 0xff, 0xff, 0x63,
-	0xf2, 0xa9, 0xfb, 0x23, 0x03, 0x00, 0x00,
+	// 491 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x53, 0xc1, 0x6e, 0xda, 0x40,
+	0x10, 0x65, 0x6d, 0x93, 0xc0, 0x18, 0x88, 0xb3, 0xca, 0xc1, 0xa2, 0x92, 0x65, 0x59, 0xb4, 0xe2,
+	0xe4, 0x4a, 0xc9, 0xa1, 0x55, 0x73, 0x82, 0xda, 0x22, 0xae, 0x2c, 0x57, 0x5a, 0xe0, 0xd2, 0xdb,
+	0x06, 0x36, 0xc5, 0x2a, 0xc1, 0xc8, 0x76, 0x22, 0xe5, 0x2f, 0xfa, 0x45, 0x3d, 0xf4, 0xd4, 0x63,
+	0x8e, 0x3d, 0x56, 0xd0, 0x0f, 0xa9, 0x3c, 0xc6, 0xae, 0x41, 0x3d, 0xa0, 0x5e, 0x56, 0xf3, 0x66,
+	0xdf, 0xec, 0xce, 0x7b, 0xb3, 0x0b, 0x67, 0x0b, 0xc1, 0xe3, 0xf4, 0x56, 0xf0, 0xd4, 0x5e, 0xc7,
+	0x51, 0x1a, 0x59, 0xdf, 0x25, 0x80, 0xf1, 0x82, 0xc7, 0xf3, 0x71, 0xca, 0x53, 0x41, 0x29, 0x28,
+	0x01, 0xbf, 0x17, 0x3a, 0x31, 0x49, 0xbf, 0xc9, 0x30, 0xa6, 0x3a, 0x9c, 0x22, 0xc3, 0x73, 0x74,
+	0xc9, 0x24, 0x7d, 0x85, 0x15, 0x90, 0x5e, 0x81, 0xea, 0xf3, 0x87, 0xd5, 0x6c, 0x81, 0xc5, 0xba,
+	0x6c, 0x92, 0x7e, 0xe7, 0xf2, 0xdc, 0xfe, 0x7b, 0x9e, 0x8d, 0x2b, 0xab, 0xb2, 0xe8, 0x07, 0x38,
+	0xf3, 0x56, 0x61, 0x1a, 0xf2, 0x25, 0x13, 0xeb, 0x65, 0x38, 0xe3, 0x89, 0xae, 0x98, 0x72, 0x5f,
+	0xbd, 0x34, 0xab, 0x85, 0x07, 0x14, 0x77, 0x95, 0xc6, 0x4f, 0xec, 0xb0, 0xb0, 0x3b, 0x84, 0x8b,
+	0x7f, 0x11, 0xa9, 0x06, 0xf2, 0x17, 0xf1, 0x84, 0x2a, 0x14, 0x96, 0x85, 0xf4, 0x02, 0xea, 0x8f,
+	0x7c, 0xf9, 0x20, 0x50, 0x42, 0x93, 0xe5, 0xe0, 0x9d, 0xf4, 0x96, 0x58, 0x03, 0xa8, 0xe7, 0x8d,
+	0x75, 0x00, 0x98, 0x3b, 0xf2, 0xc6, 0x13, 0x97, 0xb9, 0x8e, 0x56, 0xa3, 0x6d, 0x68, 0xfa, 0x83,
+	0x69, 0xf0, 0xfe, 0xc6, 0x0b, 0x46, 0x1a, 0xa1, 0x2d, 0x68, 0xe4, 0xd0, 0x75, 0x34, 0x89, 0xaa,
+	0x70, 0x3a, 0x18, 0x7e, 0x64, 0x13, 0xd7, 0xd1, 0x64, 0xeb, 0x37, 0x81, 0x96, 0x1f, 0x7d, 0xce,
+	0x6d, 0x59, 0xdd, 0x45, 0x55, 0xcb, 0xc8, 0xbe, 0x65, 0x6f, 0xa0, 0x51, 0xca, 0x96, 0x50, 0xf6,
+	0x0b, 0xbb, 0x5a, 0x6a, 0xef, 0x2b, 0x2e, 0xc9, 0x99, 0x00, 0x77, 0x1d, 0xcd, 0x16, 0xe8, 0xb2,
+	0xc2, 0x72, 0x40, 0xbb, 0xd0, 0xf0, 0x05, 0x9f, 0x8b, 0xd8, 0x73, 0x74, 0x05, 0x37, 0x4a, 0x9c,
+	0xcd, 0x72, 0x22, 0xe2, 0x7b, 0xbd, 0x8e, 0x79, 0x8c, 0xbb, 0xd7, 0xd0, 0xfe, 0x7f, 0xa7, 0xbe,
+	0x11, 0x38, 0xcf, 0x7a, 0x4d, 0xa3, 0x58, 0xdc, 0x14, 0xef, 0x28, 0xbb, 0x66, 0x3a, 0xdd, 0x09,
+	0x6d, 0x32, 0x8c, 0xa9, 0x09, 0x2a, 0xe3, 0x77, 0xe9, 0x60, 0x3e, 0x8f, 0x45, 0x92, 0xec, 0x4e,
+	0xaa, 0xa6, 0xe8, 0x2b, 0xe8, 0x8c, 0x45, 0xfc, 0x18, 0xce, 0x44, 0x41, 0x92, 0x91, 0x74, 0x90,
+	0xa5, 0x3d, 0x68, 0x8f, 0xa2, 0x24, 0x09, 0xd7, 0x05, 0x4d, 0x41, 0xda, 0x7e, 0x92, 0xbe, 0x84,
+	0x13, 0x74, 0x30, 0xd1, 0xeb, 0xe8, 0x69, 0x7b, 0xcf, 0x53, 0xb6, 0xdb, 0xb4, 0xae, 0x41, 0x75,
+	0x82, 0x63, 0xa6, 0x44, 0x41, 0x71, 0x82, 0xf2, 0xbd, 0x63, 0x6c, 0xf9, 0xa0, 0x39, 0xc1, 0x11,
+	0xda, 0x7b, 0x65, 0x2f, 0xf9, 0x7c, 0x5b, 0x76, 0xe5, 0xce, 0xa2, 0x95, 0x61, 0xef, 0xc7, 0xc6,
+	0x20, 0xcf, 0x1b, 0x83, 0xfc, 0xda, 0x18, 0xe4, 0xeb, 0xd6, 0xa8, 0x3d, 0x6f, 0x8d, 0xda, 0xcf,
+	0xad, 0x51, 0xfb, 0x04, 0xaf, 0xcb, 0x3f, 0x7a, 0x7b, 0x82, 0x9f, 0xf4, 0xea, 0x4f, 0x00, 0x00,
+	0x00, 0xff, 0xff, 0xe2, 0xd6, 0x40, 0x45, 0xb7, 0x03, 0x00, 0x00,
 }
 
 func (m *ShardState) Marshal() (dAtA []byte, err error) {
@@ -391,7 +505,7 @@ func (m *ShardState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *ShardInfo) Marshal() (dAtA []byte, err error) {
+func (m *LogShardInfo) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -401,12 +515,12 @@ func (m *ShardInfo) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *ShardInfo) MarshalTo(dAtA []byte) (int, error) {
+func (m *LogShardInfo) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *ShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *LogShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -516,6 +630,83 @@ func (m *LogStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *DNShardInfo) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *DNShardInfo) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNShardInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.DNID != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.DNID))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.ShardID != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *DNStoreHeartbeat) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *DNStoreHeartbeat) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DNStoreHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.Shards) > 0 {
+		for iNdEx := len(m.Shards) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.Shards[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintHeartbeat(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x12
+		}
+	}
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintHeartbeat(dAtA, i, uint64(len(m.UUID)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintHeartbeat(dAtA []byte, offset int, v uint64) int {
 	offset -= sovHeartbeat(v)
 	base := offset
@@ -554,7 +745,7 @@ func (m *ShardState) Size() (n int) {
 	return n
 }
 
-func (m *ShardInfo) Size() (n int) {
+func (m *LogShardInfo) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -602,6 +793,40 @@ func (m *LogStoreHeartbeat) Size() (n int) {
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
 	l = len(m.GossipAddress)
+	if l > 0 {
+		n += 1 + l + sovHeartbeat(uint64(l))
+	}
+	if len(m.Shards) > 0 {
+		for _, e := range m.Shards {
+			l = e.Size()
+			n += 1 + l + sovHeartbeat(uint64(l))
+		}
+	}
+	return n
+}
+
+func (m *DNShardInfo) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ShardID != 0 {
+		n += 1 + sovHeartbeat(uint64(m.ShardID))
+	}
+	if m.DNID != 0 {
+		n += 1 + sovHeartbeat(uint64(m.DNID))
+	}
+	return n
+}
+
+func (m *DNStoreHeartbeat) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.UUID)
 	if l > 0 {
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
@@ -853,7 +1078,7 @@ func (m *ShardState) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *ShardInfo) Unmarshal(dAtA []byte) error {
+func (m *LogShardInfo) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -876,10 +1101,10 @@ func (m *ShardInfo) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: ShardInfo: wiretype end group for non-group")
+			return fmt.Errorf("proto: LogShardInfo: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: ShardInfo: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: LogShardInfo: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -1278,7 +1503,211 @@ func (m *LogStoreHeartbeat) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Shards = append(m.Shards, &ShardInfo{})
+			m.Shards = append(m.Shards, &LogShardInfo{})
+			if err := m.Shards[len(m.Shards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipHeartbeat(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *DNShardInfo) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowHeartbeat
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: DNShardInfo: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: DNShardInfo: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShardID", wireType)
+			}
+			m.ShardID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShardID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DNID", wireType)
+			}
+			m.DNID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DNID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipHeartbeat(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *DNStoreHeartbeat) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowHeartbeat
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: DNStoreHeartbeat: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: DNStoreHeartbeat: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UUID", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.UUID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Shards", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Shards = append(m.Shards, &DNShardInfo{})
 			if err := m.Shards[len(m.Shards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
