@@ -85,7 +85,6 @@ func (idx *simpleTableIndex) Insert(v any, row uint32) error {
 	idx.tree[v] = row
 	return nil
 }
-
 func (idx *simpleTableIndex) Delete(vv any) error {
 	idx.Lock()
 	defer idx.Unlock()
@@ -335,6 +334,25 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 		data := vals.([]types.Date)
 		if dedupCol {
 			set := make(map[types.Date]bool)
+			for _, v := range data[start : start+count] {
+				if _, ok := set[v]; ok {
+					return idata.ErrDuplicate
+				}
+				set[v] = true
+			}
+			break
+		}
+		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+			idx.tree[v] = row
+			row++
+		}
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
+		if dedupCol {
+			set := make(map[types.Timestamp]bool)
 			for _, v := range data[start : start+count] {
 				if _, ok := set[v]; ok {
 					return idata.ErrDuplicate

@@ -333,7 +333,7 @@ func (n *insertNode) OnUnload() {
 	}
 }
 
-func (n *insertNode) execUnload() (entry wal.LogEntry) {
+func (n *insertNode) execUnload() (en wal.LogEntry) {
 	if n.IsTransient() {
 		return
 	}
@@ -343,8 +343,13 @@ func (n *insertNode) execUnload() (entry wal.LogEntry) {
 	if n.data == nil {
 		return
 	}
-	entry = n.makeLogEntry()
-	if seq, err := n.driver.AppendEntry(wal.GroupUC, entry); err != nil {
+	en = n.makeLogEntry()
+	info := &entry.Info{
+		Group:     entry.GTUncommit,
+		Uncommits: []entry.Tid{{Group: wal.GroupC, Tid: n.table.store.txn.GetID()}},
+	}
+	en.SetInfo(info)
+	if seq, err := n.driver.AppendEntry(wal.GroupUC, en); err != nil {
 		panic(err)
 	} else {
 		atomic.StoreUint64(&n.lsn, seq)
@@ -404,7 +409,7 @@ func (n *insertNode) FillHiddenColumn(startRow, length uint32) (err error) {
 		return
 	}
 	defer closer()
-	vec, err := n.data.GetVectorByAttr(n.table.entry.GetSchema().HiddenKeyDef().Idx)
+	vec, err := n.data.GetVectorByAttr(n.table.entry.GetSchema().HiddenKey.Idx)
 	if err != nil {
 		return
 	}
@@ -516,7 +521,10 @@ func (n *insertNode) Window(start, end uint32) (bat *gbat.Batch, err error) {
 		if err != nil {
 			return nil, err
 		}
-		srcVec, _ := src.Window(start, end+1).CopyToVector()
+		srcVec, err2 := src.Window(start, end+1).CopyToVector()
+		if err2 != nil {
+			panic(err2)
+		}
 		deletes := common.BM32Window(n.deletes, int(start), int(end))
 		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
 		bat.Vecs = append(bat.Vecs, srcVec)

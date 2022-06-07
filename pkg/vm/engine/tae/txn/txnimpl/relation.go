@@ -144,8 +144,8 @@ func (h *txnRelation) Rows() int64                      { return int64(h.table.e
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
-func (h *txnRelation) BatchDedup(col *vector.Vector) error {
-	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
+func (h *txnRelation) BatchDedup(cols ...*vector.Vector) error {
+	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), cols...)
 }
 
 func (h *txnRelation) Append(data *batch.Batch) error {
@@ -229,13 +229,21 @@ func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v any) error
 	return h.Txn.GetStore().Update(h.table.entry.GetDB().ID, id, row, col, v)
 }
 
+func (h *txnRelation) DeleteByFilter(filter *handle.Filter) (err error) {
+	id, row, err := h.GetByFilter(filter)
+	if err != nil {
+		return
+	}
+	return h.RangeDelete(id, row, row)
+}
+
 func (h *txnRelation) DeleteByHiddenKeys(keys *vector.Vector) (err error) {
 	id := &common.ID{
 		TableID: h.table.entry.ID,
 	}
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
-	err = compute.ForEachValue(keys, false, func(key any) (err error) {
+	err = compute.ForEachValue(keys, false, func(key any, _ uint32) (err error) {
 		id.SegmentID, id.BlockID, row = model.DecodeHiddenKeyFromValue(key)
 		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row)
 		return

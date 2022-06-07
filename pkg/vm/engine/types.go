@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 )
 
@@ -143,10 +144,15 @@ type Relation interface {
 
 	TableDefs(Snapshot) []TableDef
 
+	GetPrimaryKeys(Snapshot) []*Attribute
+
+	GetHideKey(Snapshot) *Attribute
 	// true: primary key, false: hide key
 	GetPriKeyOrHideKey(Snapshot) ([]Attribute, bool)
 
 	Write(uint64, *batch.Batch, Snapshot) error
+
+	Delete(uint64, *vector.Vector, string, Snapshot) error
 
 	AddTableDef(uint64, TableDef, Snapshot) error
 	DelTableDef(uint64, TableDef, Snapshot) error

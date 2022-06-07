@@ -113,6 +113,11 @@ message ExprList {
 	repeated Expr list = 1;
 }
 
+// TargetType used in cast function as target type
+message TargetType {
+	Type typ = 1;
+}
+
 // Reference a subquery
 message SubQuery {
 	int32 node_id		= 1;
@@ -174,6 +179,7 @@ message Expr {
 		ExprList	list	= 9;
 		SubQuery	sub		= 10;
 		CorrColRef	corr	= 11;
+		TargetType  t		= 12;
 	}
 }
 
@@ -310,88 +316,89 @@ message UpdateList {
 
 message Node {
 	enum NodeType {
-		UNKNOWN = 0;		
+		UNKNOWN = 0;
 		// Node Types
 
 		// Scans
-		VALUE_SCAN		= 1; 
-		TABLE_SCAN		= 2;
-		FUNCTION_SCAN	= 3;
-		EXTERNAL_SCAN	= 4;
-		MATERIAL_SCAN	= 5;
+		VALUE_SCAN = 1;
+		TABLE_SCAN = 2;
+		FUNCTION_SCAN = 3;
+		EXTERNAL_SCAN = 4;
+		MATERIAL_SCAN = 5;
 
 		// Proj, for convenience
-		PROJECT = 10; 
+		PROJECT = 10;
 		// External function call (UDF)
-		EXTERNAL_FUNCTION = 11; 
+		EXTERNAL_FUNCTION = 11;
 
 		// Material, CTE, etc.
-		MATERIAL		= 20;
-		RECURSIVE_CTE	= 21;
-		SINK			= 22;
-		SINK_SCAN		= 23;
+		MATERIAL = 20;
+		RECURSIVE_CTE = 21;
+		SINK = 22;
+		SINK_SCAN = 23;
 
 		// Proper Relational Operators
-		AGG				= 30;
-		JOIN			= 31;
-		SAMPLE			= 32;
-		SORT			= 33;
-		UNION			= 34;
-		UNION_ALL		= 35;
-		UNIQUE			= 36;
-		WINDOW			= 37;
+		AGG = 30;
+		JOIN = 31;
+		SAMPLE = 32;
+		SORT = 33;
+		UNION = 34;
+		UNION_ALL = 35;
+		UNIQUE = 36;
+		WINDOW = 37;
 
 		// Physical tuple mover
-		BROADCAST		= 40;
-		SPLIT			= 41;
-		GATHER			= 42;
+		BROADCAST = 40;
+		SPLIT = 41;
+		GATHER = 42;
 
 		// Misc
-		ASSERT			= 50; 
+		ASSERT = 50;
 
 		//
-		INSERT			= 51;
-		UPDATE			= 52;
-		DELETE			= 53;
+		INSERT = 51;
+		UPDATE = 52;
+		DELETE = 53;
 	}
 
 	enum JoinFlag {
-		INNER   = 0;
-		OUTER   = 1;
-		SEMI    = 2;
-		ANTI    = 4;
-		SINGLE  = 8;
-		MARK    = 16;
-		APPLY   = 32;
+		INNER = 0;
+		OUTER = 1;
+		SEMI = 2;
+		ANTI = 4;
+		SINGLE = 8;
+		MARK = 16;
+		APPLY = 32;
 	}
 
 	enum AggMode {
-		FULL    = 0;
-		BOTTOM  = 1;
-		TOP     = 2;
+		FULL = 0;
+		BOTTOM = 1;
+		TOP = 2;
 	}
 
-	NodeType node_type	= 1;
-	int32 node_id		= 2;
-	Cost cost			= 3;
+	NodeType node_type = 1;
+	int32 node_id = 2;
+	Cost cost = 3;
 
-	repeated Expr project_list		= 4;
-	repeated int32 children			= 5;
-	JoinFlag join_type				= 6;
-	repeated Expr on_list			= 7;
-	repeated Expr where_list		= 8;
-	repeated Expr group_by			= 9;
-	repeated Expr grouping_set		= 10;
-	repeated Expr agg_list			= 11;
-	repeated OrderBySpec order_by   = 12;
+	repeated Expr project_list = 4;
+	repeated int32 children = 5;
+	JoinFlag join_type = 6;
+	repeated Expr on_list = 7;
+	repeated Expr where_list = 8;
+	repeated Expr group_by = 9;
+	repeated Expr grouping_set = 10;
+	repeated Expr agg_list = 11;
+	repeated OrderBySpec order_by = 12;
 	UpdateList update_list = 13;
 	WindowSpec win_spec = 14;
-	Expr limit			= 15;
-	Expr offset			= 16;
-	TableDef table_def	= 17;
-	ObjectRef obj_ref	= 18;
+	Expr limit = 15;
+	Expr offset = 16;
+	TableDef table_def = 17;
+	ObjectRef obj_ref = 18;
 	RowsetData rowset_data = 19;
-	string extra_options   = 20;
+	string extra_options = 20;
+	string useDeleteKey = 21;
 }
 
 message Query {

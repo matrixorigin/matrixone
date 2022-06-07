@@ -39,6 +39,10 @@ type CompilerContext interface {
 	DatabaseExists(name string) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get the definition of primary key
+	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
+	// get the definition of hide key
+	GetHideKeyDef(dbName string, tableName string) *ColDef
 	// get estimated cost by table & expr
 	Cost(obj *ObjectRef, e *Expr) *Cost
 }

@@ -154,14 +154,14 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 			return 0, hole, err
 		}
 		if n == 0 {
-			if int(l.logFile.segment.super.blockSize) == cache.Len() {
+			if int(l.logFile.segment.super.inodeSize) == cache.Len() {
 				break
 			}
-			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.segment.super.blockSize-magicLen:])
-			hole += l.logFile.segment.super.blockSize
+			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.segment.super.inodeSize-magicLen:])
+			hole += l.logFile.segment.super.inodeSize
 			continue
 		}
-		seekLen := l.logFile.segment.super.blockSize - (uint32(n) % l.logFile.segment.super.blockSize)
+		seekLen := l.logFile.segment.super.inodeSize - (uint32(n) % l.logFile.segment.super.inodeSize)
 		if file.snode.state == REMOVE {
 			l.logFile.segment.nodes[file.name] = file
 		} else {
@@ -266,7 +266,7 @@ func (l *Log) Append(file *BlockFile) error {
 			return err
 		}
 	}
-	ibufLen := (segment.super.blockSize - (uint32(ibuffer.Len()) % segment.super.blockSize)) + uint32(ibuffer.Len())
+	ibufLen := (segment.super.inodeSize - (uint32(ibuffer.Len()) % segment.super.inodeSize)) + uint32(ibuffer.Len())
 	offset, allocated := l.allocator.Allocate(uint64(ibufLen))
 	if n, err := segment.segFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil || n != ibuffer.Len() {
 		return err

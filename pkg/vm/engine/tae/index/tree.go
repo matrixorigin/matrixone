@@ -38,6 +38,8 @@ func NewSimpleARTMap(typ types.Type) *simpleARTMap {
 	}
 }
 
+func (art *simpleARTMap) Size() int { return art.tree.Size() }
+
 func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	ikey, err := compute.EncodeKey(key, art.typ)
 	if err != nil {

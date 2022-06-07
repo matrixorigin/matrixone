@@ -270,7 +270,7 @@ func TestSegment_Replay2(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	var file *BlockFile
-	for i := 0; i < 5120; i++ {
+	for i := 0; i < INODE_NUM/2; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
@@ -278,7 +278,7 @@ func TestSegment_Replay2(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	for i := 5120; i < 10240; i++ {
+	for i := INODE_NUM / 2; i < INODE_NUM; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
@@ -293,11 +293,88 @@ func TestSegment_Replay2(t *testing.T) {
 	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
-	assert.Equal(t, 10241, len(seg1.nodes))
+	assert.Equal(t, INODE_NUM+1, len(seg1.nodes))
 	checkSegment(t, &seg, &seg1)
 }
 
 func TestSegment_Replay(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "init.seg")
+	seg := Segment{}
+	err := seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	level0 := seg.allocator.(*BitmapAllocator).level0
+	level1 := seg.allocator.(*BitmapAllocator).level1
+	var file *BlockFile
+	file = seg.NewBlockFile("test_0.blk")
+	file.snode.algo = compress.None
+	buffer1 := mockData(2048000)
+	assert.NotNil(t, buffer1)
+	err = file.segment.Append(file, buffer1)
+	assert.Nil(t, err)
+	file = seg.NewBlockFile("test_1.blk")
+	file.snode.algo = compress.None
+	buffer2 := mockData(49152)
+	assert.NotNil(t, buffer2)
+	err = file.segment.Append(file, buffer2)
+	assert.Nil(t, err)
+	file = seg.NewBlockFile("test_2.blk")
+	file.snode.algo = compress.None
+	buffer3 := mockData(8192)
+	assert.NotNil(t, buffer3)
+	err = file.segment.Append(file, buffer3)
+	assert.Nil(t, err)
+	file = seg.NewBlockFile("test_4.blk")
+	file.snode.algo = compress.None
+	buffer4 := mockData(5242880)
+	assert.NotNil(t, buffer4)
+	err = file.segment.Append(file, buffer4)
+	assert.Nil(t, err)
+	osize := 2048000 + 49152 + 8192 + 5242880
+	l0pos := uint32(osize) / seg.GetPageSize() / BITS_PER_UNIT
+	l1pos := l0pos / BITS_PER_UNITSET
+
+	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos-1]))
+	ret := 0xFFFFFFFFFFFFFFFC - level0[l0pos]
+	assert.Equal(t, 0, int(ret))
+	ret = 0xFFFFFFFFFFFFFFF8 - level1[l1pos]
+	assert.Equal(t, 0, int(ret))
+	l0pos = 2048000 / seg.GetPageSize() / BITS_PER_UNIT
+	file = seg.nodes["test_1.blk"]
+	seg.ReleaseFile(file)
+	ret = 0xFFF0000000000000 - level0[l0pos]
+	assert.Equal(t, 0, int(ret))
+	ret = 0xFFFFFFFFFFFFFFF9 - level1[l1pos]
+	assert.Equal(t, 0, int(ret))
+	file = seg.nodes["test_2.blk"]
+	seg.ReleaseFile(file)
+	assert.Equal(t, 3, int(level0[l0pos+1]))
+	ret = 0xFFFFFFFFFFFFFFFB - level1[l1pos]
+	assert.Equal(t, 0, int(ret))
+	file = seg.NewBlockFile("test_5.blk")
+	file.snode.algo = compress.None
+	buffer5 := mockData(53248)
+	assert.NotNil(t, buffer5)
+	err = file.segment.Append(file, buffer5)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, int(level0[l0pos+1]))
+	ret = 0xFFFFFFFFFFFFFFFA - level1[l1pos]
+	assert.Equal(t, 0, int(ret))
+	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	assert.Nil(t, err)
+	seg1 := Segment{
+		name:    name,
+		segFile: segfile,
+	}
+	cache := bytes.NewBuffer(make([]byte, LOG_SIZE))
+	err = seg1.Replay(cache)
+	assert.Nil(t, err)
+	//assert.Equal(t, 11, len(seg1.nodes))
+	checkSegment(t, &seg, &seg1)
+}
+
+func TestSegment_Replay3(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
 	seg := Segment{}
@@ -358,12 +435,6 @@ func TestSegment_Init(t *testing.T) {
 	assert.Nil(t, err)
 	seg.Mount()
 	file := seg.NewBlockFile("test")
-	/*seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 513)))
-	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 514)))
-	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 515)))
-	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 516)))
-	seg.Update(file, []byte(fmt.Sprintf("this is tests %d", 517)), 4096)
-	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 518)))*/
 	for i := 0; i < 3; i++ {
 		var sbuffer bytes.Buffer
 		err := binary.Write(&sbuffer, binary.BigEndian, []byte(fmt.Sprintf("this is tests %d", 515)))
@@ -402,12 +473,4 @@ func TestSegment_Init(t *testing.T) {
 	buf := b.Bytes()
 	buf = buf[16384 : 16384+17]
 	logutil.Infof("%v", string(buf))
-	//seg.Update(file, []byte(fmt.Sprintf("this is tests %d", 517)), 8192)
-	//seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 516)))
-	//seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 516)))
-	/*seg.Free(file, 1)
-	seg.Free(file, 40)
-	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 513)))
-	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 514)))
-	seg.Append(file, []byte(fmt.Sprintf("this is tests %d", 515)))*/
 }

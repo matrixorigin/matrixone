@@ -90,6 +90,9 @@ type Function struct {
 	// Index is the function's location number of all the overloads with the same functionName.
 	Index int32
 
+	// Volatile function cannot be fold
+	Volatile bool
+
 	Flag plan.Function_FuncFlag
 
 	// Layout adapt to plan2/function.go, used for explaining.
@@ -105,7 +108,7 @@ type Function struct {
 
 	// TypeCheckFn is function's own argument type check function.
 	// return true if inputTypes meet the type requirement.
-	TypeCheckFn func(inputTypes []types.T, requiredTypes []types.T) (match bool)
+	TypeCheckFn func(inputTypes []types.T, requiredTypes []types.T, returnType types.T) (match bool)
 
 	// AggregateInfo is related information about aggregate function.
 	AggregateInfo int
@@ -120,7 +123,7 @@ type Function struct {
 
 // TypeCheck returns true if input arguments meets function's type requirement.
 func (f Function) TypeCheck(args []types.T) bool {
-	return f.TypeCheckFn(args, f.Args)
+	return f.TypeCheckFn(args, f.Args, f.ReturnTyp)
 }
 
 // ReturnType return result-type of function, and the result is nullable
@@ -237,7 +240,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 // strictTypeCheck is a general type check method.
 // it returns true only when each input type meets requirement.
 // Watch that : ScalarNull can match each requirement at this function.
-func strictTypeCheck(args []types.T, require []types.T) bool {
+func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	if len(args) != len(require) {
 		return false
 	}

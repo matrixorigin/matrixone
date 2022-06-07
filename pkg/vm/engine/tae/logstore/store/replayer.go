@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -30,7 +29,7 @@ type noopObserver struct {
 func (o *noopObserver) OnNewEntry(_ int) {
 }
 
-func (o *noopObserver) OnNewCommit(*entry.Info)             {}
+func (o *noopObserver) OnLogInfo(*entry.Info)               {}
 func (o *noopObserver) OnNewCheckpoint(*entry.Info)         {}
 func (o *noopObserver) OnNewTxn(*entry.Info)                {}
 func (o *noopObserver) OnNewUncommit(addrs []*VFileAddress) {}
@@ -46,8 +45,10 @@ type replayer struct {
 	applyEntry      ApplyHandle
 
 	//syncbase
-	addrs    map[uint32]map[int]common.ClosedInterval
-	groupLSN map[uint32]uint64
+	addrs      map[uint32]map[int]common.ClosedIntervals
+	groupLSN   map[uint32]uint64
+	ckpVersion int
+	ckpEntry   *replayEntry
 
 	//vinfo
 	// Commits     map[uint32]*common.ClosedInterval
@@ -68,13 +69,13 @@ func (r *replayer) updateaddrs(groupId uint32, version int, lsn uint64) {
 	}
 	m, ok := r.addrs[groupId]
 	if !ok {
-		m = make(map[int]common.ClosedInterval)
+		m = make(map[int]common.ClosedIntervals)
 	}
 	interval, ok := m[version]
 	if !ok {
-		interval = common.ClosedInterval{}
+		interval = *common.NewClosedIntervals()
 	}
-	interval.TryMerge(common.ClosedInterval{Start: lsn, End: lsn})
+	interval.TryMerge(*common.NewClosedIntervalsByInt(lsn))
 	m[version] = interval
 	r.addrs[groupId] = m
 }
@@ -93,7 +94,7 @@ func newReplayer(h ApplyHandle) *replayer {
 		checkpoints:     make([]*replayEntry, 0),
 		mergeFuncs:      make(map[uint32]func(pre []byte, curr []byte) []byte),
 		applyEntry:      h,
-		addrs:           make(map[uint32]map[int]common.ClosedInterval),
+		addrs:           make(map[uint32]map[int]common.ClosedIntervals),
 		groupLSN:        make(map[uint32]uint64),
 		vinfoAddrs:      make(map[uint32]map[uint64]int),
 	}
@@ -124,7 +125,6 @@ func (r *replayer) Apply() {
 		if ok {
 			if ckpinfo.ranges.ContainsInterval(
 				common.ClosedInterval{Start: e.commitId, End: e.commitId}) {
-				logutil.Infof("covered %v %v", ckpinfo.ranges, e.commitId)
 				continue
 			}
 		}
@@ -161,29 +161,24 @@ func (r *replayEntry) String() string {
 	return fmt.Sprintf("%v\n", r.info)
 }
 func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
-	typ := e.GetType()
-	switch typ {
-	case entry.ETFlush:
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
+	infobuf := e.GetInfoBuf()
+	info := entry.Unmarshal(infobuf)
+	r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+	r.updateaddrs(info.Group, r.version, info.GroupLSN)
+	if e.GetType() == entry.ETFlush {
 		return nil
-	case entry.ETCheckpoint:
-		// fmt.Printf("ETCheckpoint\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
-		info.Info = &VFileAddress{
-			Group:   info.Group,
-			LSN:     info.GroupLSN,
-			Version: r.version,
-			Offset:  r.state.pos,
-		}
+	}
+	r.updateGroupLSN(info.Group, info.GroupLSN)
+	info.Info = &VFileAddress{
+		Group:   info.Group,
+		LSN:     info.GroupLSN,
+		Version: r.version,
+		Offset:  r.state.pos,
+	}
+	switch info.Group {
+	case entry.GTCKp:
 		replayEty := &replayEntry{
-			entryType: typ,
+			entryType: e.GetType(),
 			payload:   make([]byte, e.GetPayloadSize()),
 			info:      info,
 		}
@@ -206,14 +201,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 				}
 			}
 		}
-		vf.OnNewCheckpoint(info)
-	case entry.ETUncommitted:
-		// fmt.Printf("ETUncommitted\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
+	case entry.GTUncommit:
 		for _, tinfo := range info.Uncommits {
 			tidMap, ok := r.uncommit[tinfo.Group]
 			if !ok {
@@ -232,42 +220,16 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 			tidMap[info.TxnId] = entries
 			r.uncommit[tinfo.Group] = tidMap
 		}
-	case entry.ETTxn:
-		// fmt.Printf("ETTxn\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
-		info.Info = &VFileAddress{
-			Group:   info.Group,
-			LSN:     info.GroupLSN,
-			Version: r.version,
-			Offset:  r.state.pos,
+	case entry.GTInternal:
+		if info.PostCommitVersion > r.ckpVersion {
+			r.ckpVersion = info.PostCommitVersion
+			replayEty := &replayEntry{
+				payload: make([]byte, e.GetPayloadSize()),
+			}
+			copy(replayEty.payload, e.GetPayload())
+			r.ckpEntry = replayEty
 		}
-		replayEty := &replayEntry{
-			entryType: e.GetType(),
-			group:     info.Group,
-			commitId:  info.GroupLSN,
-			tid:       info.TxnId,
-			payload:   make([]byte, e.GetPayloadSize()),
-		}
-		copy(replayEty.payload, e.GetPayload())
-		r.entrys = append(r.entrys, replayEty)
-		vf.OnNewTxn(info)
 	default:
-		// fmt.Printf("default\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
-		info.Info = &VFileAddress{
-			Group:   info.Group,
-			LSN:     info.GroupLSN,
-			Version: r.version,
-			Offset:  r.state.pos,
-		}
 		replayEty := &replayEntry{
 			entryType: e.GetType(),
 			group:     info.Group,
@@ -276,8 +238,8 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		}
 		copy(replayEty.payload, e.GetPayload())
 		r.entrys = append(r.entrys, replayEty)
-		vf.OnNewCommit(info)
 	}
+	vf.OnLogInfo(info)
 	return nil
 }
 

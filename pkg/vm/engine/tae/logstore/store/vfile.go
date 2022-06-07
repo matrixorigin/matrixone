@@ -141,7 +141,7 @@ func (vf *vFile) Close() error {
 }
 
 func (vf *vFile) Commit() {
-	// fmt.Printf("Committing %s\n", vf.Name())
+	logutil.Infof("Committing %s\n", vf.Name())
 	vf.wg.Wait()
 	// vf.WriteMeta()
 	err := vf.Sync()
@@ -156,7 +156,7 @@ func (vf *vFile) Commit() {
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
 	vf.vInfo.close()
-	fmt.Printf("sync-%s\n", vf.String())
+	// fmt.Printf("sync-%s\n", vf.String())
 	// vf.FreeMeta()
 }
 
@@ -290,12 +290,12 @@ func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
 			return err
 		}
 	}
-	vf.OnReplay(r)
+	// vf.OnReplay(r)
 	return nil
 }
 
 func (vf *vFile) OnNewEntry(int) {}
-func (vf *vFile) OnNewCommit(info *entry.Info) {
+func (vf *vFile) OnLogInfo(info *entry.Info) {
 	err := vf.Log(info)
 	if err != nil {
 		panic(err)

@@ -41,6 +41,7 @@ func newCalibrationOp(db *DB) *calibrationOp {
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
 	}
+	processor.TableFn = processor.onTable
 	processor.BlockFn = processor.onBlock
 	processor.SegmentFn = processor.onSegment
 	processor.PostSegmentFn = processor.onPostSegment
@@ -50,7 +51,17 @@ func newCalibrationOp(db *DB) *calibrationOp {
 func (processor *calibrationOp) PreExecute() error  { return nil }
 func (processor *calibrationOp) PostExecute() error { return nil }
 
+func (processor *calibrationOp) onTable(tableEntry *catalog.TableEntry) (err error) {
+	if !tableEntry.IsActive() {
+		err = catalog.ErrStopCurrRecur
+	}
+	return
+}
+
 func (processor *calibrationOp) onSegment(segmentEntry *catalog.SegmentEntry) (err error) {
+	if !segmentEntry.IsActive() {
+		err = catalog.ErrStopCurrRecur
+	}
 	processor.blkCntOfSegment = 0
 	return
 }
@@ -71,14 +82,15 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 }
 
 func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err error) {
+	if !blockEntry.IsActive() {
+		// logutil.Infof("Noop for block %s: table or db was dropped", blockEntry.Repr())
+		processor.blkCntOfSegment = 0
+		return
+	}
+
 	blockEntry.RLock()
 	// 1. Skip uncommitted entries
 	if !blockEntry.IsCommitted() {
-		blockEntry.RUnlock()
-		return nil
-	}
-	// 2. Skip committed dropped entries
-	if blockEntry.IsDroppedCommitted() {
 		blockEntry.RUnlock()
 		return nil
 	}
@@ -172,13 +184,24 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	entry.RUnlock()
 	if gcNeeded {
 		scopes := MakeBlockScopes(entry)
-		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry))
+		// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry, GCType_Block))
+		_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcBlockClosure(entry, GCType_Block))
 		logutil.Infof("[GCBLK] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err == tasks.ErrScheduleScopeConflict {
 			// 	logutil.Infof("Schedule | [GC BLK] | %s | Err=%s | Scopes=%s", entry.String(), err, scopes)
 			// }
 			err = nil
+		}
+	} else {
+		blkData := entry.GetBlockData()
+		ts, terminated := entry.GetTerminationTS()
+		if terminated && blkData.GetMaxCheckpointTS() < ts {
+			_, err = monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, entry.AsCommonID(), blkData.CheckpointWALClosure(ts))
+			if err != nil {
+				logutil.Warnf("CheckpointWALClosure %s: %v", entry.Repr(), err)
+				err = nil
+			}
 		}
 	}
 	return
@@ -201,15 +224,16 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	entry.RUnlock()
 	if gcNeeded {
 		scopes := MakeSegmentScopes(entry)
-		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry))
+		_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcSegmentClosure(entry, GCType_Segment))
 		logutil.Infof("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
 			// if err != tasks.ErrScheduleScopeConflict {
 			// logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
 			// }
 			err = nil
+		} else {
+			err = catalog.ErrStopCurrRecur
 		}
-		err = catalog.ErrStopCurrRecur
 	}
 	return
 }
@@ -217,13 +241,59 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err error) {
 	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
+		return
+	}
+	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
+	gcNeeded := false
+	entry.RLock()
+	if entry.IsDroppedCommitted() {
+		if logIndex := entry.GetLogIndex(); logIndex != nil {
+			gcNeeded = checkpointed >= logIndex.LSN
+		}
+	}
+	entry.RUnlock()
+	if !gcNeeded {
+		return
+	}
+
+	scopes := MakeTableScopes(entry)
+	// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcTableClosure(entry, GCType_Table))
+	_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcTableClosure(entry, GCType_Table))
+	logutil.Infof("[GCTABLE] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+	if err != nil {
+		err = nil
+	} else {
+		err = catalog.ErrStopCurrRecur
 	}
 	return
 }
 
 func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err error) {
-	if catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
+		return
+	}
+	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
+	gcNeeded := false
+	entry.RLock()
+	if entry.IsDroppedCommitted() {
+		if logIndex := entry.GetLogIndex(); logIndex != nil {
+			gcNeeded = checkpointed >= logIndex.LSN
+		}
+	}
+	entry.RUnlock()
+	if !gcNeeded {
+		return
+	}
+
+	scopes := MakeDBScopes(entry)
+	_, err = monitor.db.Scheduler.ScheduleFn(nil, tasks.GCTask, gcDatabaseClosure(entry))
+	// _, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcDatabaseClosure(entry))
+	logutil.Infof("[GCDB] | %s | Scheduled | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+	if err != nil {
+		err = nil
+	} else {
+		err = catalog.ErrStopCurrRecur
 	}
 	return
 }

@@ -52,7 +52,7 @@ func AcosInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, erro
 }
 
 // acos function's evaluation for arguments: [uint64]
-func AcosUInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func AcosUint64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVecCol := vs[0].Col.([]uint64)
 	if vs[0].IsScalar() {
 		if vs[0].IsScalarNull() {

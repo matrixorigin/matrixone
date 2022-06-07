@@ -26,7 +26,9 @@ const (
 	ETColDef
 )
 
-var HiddenColumnType types.Type
+var (
+	HiddenColumnType types.Type
+)
 
 const (
 	HiddenColumnName    = "PADDR"

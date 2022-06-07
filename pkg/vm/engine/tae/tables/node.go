@@ -287,7 +287,7 @@ func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error
 		return
 	}
 	defer closer()
-	vec, err := node.data.GetVectorByAttr(node.block.meta.GetSchema().HiddenKeyDef().Idx)
+	vec, err := node.data.GetVectorByAttr(node.block.meta.GetSchema().HiddenKey.Idx)
 	if err != nil {
 		return
 	}

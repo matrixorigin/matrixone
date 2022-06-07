@@ -606,6 +606,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 		if nn.Length() == 0 {
 			delete(catalog.nameNodes, database.name)
 		}
+		delete(catalog.entries, database.GetID())
 	}
 	return nil
 }
@@ -696,13 +697,17 @@ func (catalog *Catalog) PrepareCheckpoint(startTs, endTs uint64) *CheckpointEntr
 		return
 	}
 	processor.TableFn = func(table *TableEntry) (err error) {
+		if table.IsVirtual() {
+			err = ErrStopCurrRecur
+			return
+		}
 		entry := table.BaseEntry
 		CheckpointOp(ckpEntry, entry, table, startTs, endTs)
 		return
 	}
 	processor.DatabaseFn = func(database *DBEntry) (err error) {
 		if database.IsSystemDB() {
-			err = ErrStopCurrRecur
+			// No need to checkpoint system db entry
 			return
 		}
 		entry := database.BaseEntry

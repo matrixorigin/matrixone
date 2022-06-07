@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
 type ConstantFold struct {
@@ -67,6 +68,14 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query) {
 func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 	ef, ok := e.Expr.(*plan.Expr_F)
 	if !ok {
+		return e
+	}
+	overloadId := ef.F.Func.GetObj()
+	f, err := function.GetFunctionByID(overloadId)
+	if err != nil {
+		return e
+	}
+	if f.Volatile { // function cannot be fold
 		return e
 	}
 	for i := range ef.F.Args {
