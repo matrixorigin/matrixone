@@ -349,6 +349,25 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			idx.tree[v] = row
 			row++
 		}
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
+		if dedupCol {
+			set := make(map[types.Timestamp]bool)
+			for _, v := range data[start : start+count] {
+				if _, ok := set[v]; ok {
+					return idata.ErrDuplicate
+				}
+				set[v] = true
+			}
+			break
+		}
+		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+			idx.tree[v] = row
+			row++
+		}
 	case types.T_datetime:
 		data := vals.([]types.Datetime)
 		if dedupCol {
