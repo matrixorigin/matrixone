@@ -1800,9 +1800,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 
 	// Step 3
 	txn3, rel3 := getDefaultRelation(t, tae, schema.Name)
-	id, row, err := rel3.GetByFilter(filter)
-	assert.NoError(t, err)
-	err = rel3.RangeDelete(id, row, row)
+	err = rel3.DeleteByFilter(filter)
 	assert.NoError(t, err)
 	assert.NoError(t, txn3.Commit())
 
