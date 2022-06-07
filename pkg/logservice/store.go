@@ -172,7 +172,7 @@ func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
 	}
 	raftConfig := getRaftConfig(shardID, replicaID)
 	// TODO: add another API for joining
-	return l.nh.StartConcurrentReplica(initialReplicas, false, newStateMachine, raftConfig)
+	return l.nh.StartReplica(initialReplicas, false, newStateMachine, raftConfig)
 }
 
 func (l *logStore) propose(ctx context.Context,
@@ -361,6 +361,7 @@ func (l *logStore) QueryLog(ctx context.Context, shardID uint64,
 		return nil, 0, err
 	}
 	lastIndex := v.(uint64)
+	// FIXME: check whether lastIndex >= firstIndex
 	rs, err := l.nh.QueryRaftLog(shardID, firstIndex, lastIndex+1, maxSize)
 	if err != nil {
 		plog.Errorf("QueryRaftLog failed, %v", err)

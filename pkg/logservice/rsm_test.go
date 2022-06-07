@@ -117,9 +117,9 @@ func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 	cmd := getSetLeaseHolderCmd(500)
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	assert.Equal(t, uint64(0), tsm.LeaseHolderID)
-	entries := []sm.Entry{{Cmd: cmd, Index: 100}}
-	result, err := tsm.Update(entries)
-	assert.Equal(t, sm.Result{}, result[0].Result)
+	e := sm.Entry{Cmd: cmd, Index: 100}
+	result, err := tsm.Update(e)
+	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(500), tsm.LeaseHolderID)
 	assert.Equal(t, 1, len(tsm.LeaseHistory))
@@ -128,9 +128,9 @@ func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 	assert.Equal(t, uint64(500), v)
 
 	cmd = getSetLeaseHolderCmd(1000)
-	entries = []sm.Entry{{Cmd: cmd, Index: 200}}
-	result, err = tsm.Update(entries)
-	assert.Equal(t, sm.Result{}, result[0].Result)
+	e = sm.Entry{Cmd: cmd, Index: 200}
+	result, err = tsm.Update(e)
+	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1000), tsm.LeaseHolderID)
 	assert.Equal(t, 2, len(tsm.LeaseHistory))
@@ -139,9 +139,9 @@ func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 	assert.Equal(t, uint64(1000), v)
 
 	cmd = getSetTruncatedIndexCmd(110)
-	entries = []sm.Entry{{Cmd: cmd}}
-	result, err = tsm.Update(entries)
-	assert.Equal(t, sm.Result{}, result[0].Result)
+	e = sm.Entry{Cmd: cmd}
+	result, err = tsm.Update(e)
+	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 	// first lease history record won't be truncated
 	assert.Equal(t, 2, len(tsm.LeaseHistory))
@@ -150,21 +150,21 @@ func TestDNLeaseHolderCanBeUpdated(t *testing.T) {
 func TestTruncatedIndexCanBeUpdated(t *testing.T) {
 	cmd := getSetTruncatedIndexCmd(200)
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	entries := []sm.Entry{{Cmd: cmd}}
-	result, err := tsm.Update(entries)
-	assert.Equal(t, sm.Result{}, result[0].Result)
+	e := sm.Entry{Cmd: cmd}
+	result, err := tsm.Update(e)
+	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 
 	cmd2 := getSetTruncatedIndexCmd(220)
-	entries2 := []sm.Entry{{Cmd: cmd2}}
-	result, err = tsm.Update(entries2)
-	assert.Equal(t, sm.Result{}, result[0].Result)
+	e2 := sm.Entry{Cmd: cmd2}
+	result, err = tsm.Update(e2)
+	assert.Equal(t, sm.Result{}, result)
 	assert.Nil(t, err)
 
 	cmd3 := getSetTruncatedIndexCmd(100)
-	entries3 := []sm.Entry{{Cmd: cmd3}}
-	result, err = tsm.Update(entries3)
-	assert.Equal(t, sm.Result{Value: 220}, result[0].Result)
+	e3 := sm.Entry{Cmd: cmd3}
+	result, err = tsm.Update(e3)
+	assert.Equal(t, sm.Result{Value: 220}, result)
 	assert.Nil(t, err)
 }
 
@@ -175,19 +175,19 @@ func TestStateMachineUserUpdate(t *testing.T) {
 
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	tsm.LeaseHolderID = 1234
-	entries := []sm.Entry{{Index: 100, Cmd: cmd}}
-	result, err := tsm.Update(entries)
+	e := sm.Entry{Index: 100, Cmd: cmd}
+	result, err := tsm.Update(e)
 	assert.Nil(t, err)
-	assert.Equal(t, entries[0].Index, result[0].Result.Value)
-	assert.Nil(t, result[0].Result.Data)
+	assert.Equal(t, e.Index, result.Value)
+	assert.Nil(t, result.Data)
 
 	tsm.LeaseHolderID = 2345
-	entries = []sm.Entry{{Cmd: cmd}}
-	result, err = tsm.Update(entries)
+	e = sm.Entry{Cmd: cmd}
+	result, err = tsm.Update(e)
 	assert.Nil(t, err)
-	assert.Equal(t, uint64(0), result[0].Result.Value)
-	assert.NotNil(t, result[0].Result.Data)
-	assert.Equal(t, tsm.LeaseHolderID, binaryEnc.Uint64(result[0].Result.Data))
+	assert.Equal(t, uint64(0), result.Value)
+	assert.NotNil(t, result.Data)
+	assert.Equal(t, tsm.LeaseHolderID, binaryEnc.Uint64(result.Data))
 }
 
 func TestStateMachineSnapshot(t *testing.T) {
@@ -195,9 +195,7 @@ func TestStateMachineSnapshot(t *testing.T) {
 	tsm := newStateMachine(1, 2).(*stateMachine)
 	tsm.LeaseHolderID = 123456
 	tsm.TruncatedIndex = 456789
-	sess, err := tsm.PrepareSnapshot()
-	assert.NoError(t, err)
-	assert.Nil(t, tsm.SaveSnapshot(sess, buf, nil, nil))
+	assert.Nil(t, tsm.SaveSnapshot(buf, nil, nil))
 
 	tsm2 := newStateMachine(3, 4).(*stateMachine)
 	assert.Nil(t, tsm2.RecoverFromSnapshot(buf, nil, nil))

@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"io"
-	"sync"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
 )
@@ -93,18 +92,17 @@ func tagMatch(cmd []byte, expectedTag uint16) bool {
 type stateMachine struct {
 	shardID        uint64
 	replicaID      uint64
-	mu             sync.RWMutex
 	Index          uint64
 	LeaseHolderID  uint64
 	TruncatedIndex uint64
 	LeaseHistory   map[uint64]uint64 // log index -> truncate index
 }
 
-var _ (sm.IConcurrentStateMachine) = (*stateMachine)(nil)
+var _ (sm.IStateMachine) = (*stateMachine)(nil)
 
 // making this a IConcurrentStateMachine for now, IStateMachine need to be updated
 // to provide raft entry index to its Update() method
-func newStateMachine(shardID uint64, replicaID uint64) sm.IConcurrentStateMachine {
+func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	return &stateMachine{
 		shardID:      shardID,
 		replicaID:    replicaID,
@@ -176,35 +174,25 @@ func (s *stateMachine) Close() error {
 	return nil
 }
 
-func (s *stateMachine) Update(entries []sm.Entry) ([]sm.Entry, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for idx, e := range entries {
-		s.Index = e.Index
-		cmd := e.Cmd
-		if isSetLeaseHolderUpdate(cmd) {
-			s.setLeaseHolderID(e.Index, cmd)
-			entries[idx].Result = sm.Result{}
-		} else if isSetTruncatedIndexUpdate(cmd) {
-			if s.setTruncatedIndex(cmd) {
-				entries[idx].Result = sm.Result{}
-			} else {
-				entries[idx].Result = sm.Result{Value: s.TruncatedIndex}
-			}
-		} else if isUserUpdate(cmd) {
-			entries[idx].Result = s.handleUserUpdate(e.Index, cmd)
+func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
+	cmd := e.Cmd
+	s.Index = e.Index
+	if isSetLeaseHolderUpdate(cmd) {
+		s.setLeaseHolderID(e.Index, cmd)
+		return sm.Result{}, nil
+	} else if isSetTruncatedIndexUpdate(cmd) {
+		if s.setTruncatedIndex(cmd) {
+			return sm.Result{}, nil
 		} else {
-			panic("corrupted entry")
+			return sm.Result{Value: s.TruncatedIndex}, nil
 		}
+	} else if isUserUpdate(cmd) {
+		return s.handleUserUpdate(e.Index, cmd), nil
 	}
-	return entries, nil
+	panic("corrupted entry")
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	if v, ok := query.(uint16); ok {
 		if v == indexTag {
 			return s.Index, nil
@@ -223,33 +211,14 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	panic("unknown lookup command type")
 }
 
-func (s *stateMachine) PrepareSnapshot() (interface{}, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	v := &stateMachine{
-		Index:          s.Index,
-		LeaseHolderID:  s.LeaseHolderID,
-		TruncatedIndex: s.TruncatedIndex,
-		LeaseHistory:   make(map[uint64]uint64),
-	}
-	for key, val := range s.LeaseHistory {
-		v.LeaseHistory[key] = val
-	}
-	return v, nil
-}
-
-func (s *stateMachine) SaveSnapshot(sess interface{},
-	w io.Writer, _ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
+func (s *stateMachine) SaveSnapshot(w io.Writer,
+	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	enc := gob.NewEncoder(w)
-	return enc.Encode(sess.(*stateMachine))
+	return enc.Encode(s)
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	dec := gob.NewDecoder(r)
 	return dec.Decode(s)
 }

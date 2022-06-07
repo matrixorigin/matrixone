@@ -210,7 +210,7 @@ func TestServiceHandleRead(t *testing.T) {
 		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1), resp.LastIndex)
-		assert.Equal(t, 1, len(records.Records))
+		require.Equal(t, 1, len(records.Records))
 		assert.Equal(t, lr.Data, records.Records[0].Data)
 	}
 	runServiceTest(t, fn)
