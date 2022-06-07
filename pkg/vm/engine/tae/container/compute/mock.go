@@ -20,15 +20,16 @@ import (
 	"math/rand"
 	"reflect"
 	"strconv"
+	"time"
 
 	"github.com/bxcodec/faker/v3"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 )
 
-func MockIVector(t types.Type, rows uint64, unique bool, provider *gvec.Vector) vector.IVector {
+func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector) vector.IVector {
 	if provider != nil {
 		vec := vector.NewVector(t, rows)
 		if _, err := vec.AppendVector(provider, 0); err != nil {
@@ -206,6 +207,27 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *gvec.Vector) 
 			vals = append(vals, types.FromCalendar(i*100, 1, 1))
 		}
 		vec.Append(len(vals), vals)
+	case types.T_timestamp:
+		vec = vector.NewStdVector(t, rows)
+		vals := make([]types.Timestamp, 0, rows)
+		for i := int32(1); i <= int32(rows); i++ {
+			vals = append(vals, types.Timestamp(time.Now().Nanosecond()))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_decimal64:
+		vec = vector.NewStdVector(t, rows)
+		vals := make([]types.Decimal64, 0, rows)
+		for i := int32(1); i <= int32(rows); i++ {
+			vals = append(vals, types.Decimal64(time.Now().Nanosecond()))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_decimal128:
+		vec = vector.NewStdVector(t, rows)
+		vals := make([]types.Decimal128, 0, rows)
+		for i := int32(1); i <= int32(rows); i++ {
+			vals = append(vals, types.Decimal128{Lo: int64(time.Now().Nanosecond())})
+		}
+		vec.Append(len(vals), vals)
 	default:
 		panic("not supported")
 	}
@@ -213,43 +235,43 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *gvec.Vector) 
 }
 
 type MockDataProvider struct {
-	providers map[int]*gvec.Vector
+	providers map[int]*movec.Vector
 }
 
 func NewMockDataProvider() *MockDataProvider {
 	return &MockDataProvider{
-		providers: make(map[int]*gvec.Vector),
+		providers: make(map[int]*movec.Vector),
 	}
 }
 
 func (p *MockDataProvider) Reset() {
-	p.providers = make(map[int]*gvec.Vector)
+	p.providers = make(map[int]*movec.Vector)
 }
 
-func (p *MockDataProvider) AddColumnProvider(colIdx int, provider *gvec.Vector) {
+func (p *MockDataProvider) AddColumnProvider(colIdx int, provider *movec.Vector) {
 	p.providers[colIdx] = provider
 }
 
-func (p *MockDataProvider) GetColumnProvider(colIdx int) *gvec.Vector {
+func (p *MockDataProvider) GetColumnProvider(colIdx int) *movec.Vector {
 	if p == nil {
 		return nil
 	}
 	return p.providers[colIdx]
 }
 
-func MockBatchWithAttrs(types []types.Type, attrs []string, rows uint64, uniqueIdx int, provider *MockDataProvider) *gbat.Batch {
+func MockBatchWithAttrs(types []types.Type, attrs []string, rows uint64, uniqueIdx int, provider *MockDataProvider) *mobat.Batch {
 	bat := MockBatch(types, rows, uniqueIdx, provider)
 	bat.Attrs = attrs
 	return bat
 }
 
-func MockBatch(types []types.Type, rows uint64, uniqueIdx int, provider *MockDataProvider) *gbat.Batch {
+func MockBatch(types []types.Type, rows uint64, uniqueIdx int, provider *MockDataProvider) *mobat.Batch {
 	attrs := make([]string, len(types))
 	for idx := range types {
 		attrs[idx] = "mock_" + strconv.Itoa(idx)
 	}
 
-	bat := gbat.New(true, attrs)
+	bat := mobat.New(true, attrs)
 	var err error
 	for i, colType := range types {
 		unique := false
@@ -267,87 +289,105 @@ func MockBatch(types []types.Type, rows uint64, uniqueIdx int, provider *MockDat
 	return bat
 }
 
-func MockVec(typ types.Type, rows int, offset int) *gvec.Vector {
-	vec := gvec.New(typ)
+func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
+	vec := movec.New(typ)
 	switch typ.Oid {
 	case types.T_int8:
 		data := make([]int8, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int8(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_int16:
 		data := make([]int16, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int16(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_int32:
 		data := make([]int32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int32(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_int64:
 		data := make([]int64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int64(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_uint8:
 		data := make([]uint8, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint8(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_uint16:
 		data := make([]uint16, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint16(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_uint32:
 		data := make([]uint32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint32(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_uint64:
 		data := make([]uint64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint64(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_float32:
 		data := make([]float32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, float32(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_float64:
 		data := make([]float64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, float64(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
+	case types.T_decimal64:
+		data := make([]types.Decimal64, 0)
+		for i := 0; i < rows; i++ {
+			data = append(data, types.Decimal64(i+offset))
+		}
+		_ = movec.Append(vec, data)
+	case types.T_decimal128:
+		data := make([]types.Decimal128, 0)
+		for i := 0; i < rows; i++ {
+			data = append(data, types.Decimal128{Lo: int64(i + offset)})
+		}
+		_ = movec.Append(vec, data)
+	case types.T_timestamp:
+		data := make([]types.Timestamp, 0)
+		for i := 0; i < rows; i++ {
+			data = append(data, types.Timestamp(i+offset))
+		}
+		_ = movec.Append(vec, data)
 	case types.T_date:
 		data := make([]types.Date, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Date(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_datetime:
 		data := make([]types.Datetime, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Datetime(i+offset))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	case types.T_char, types.T_varchar:
 		data := make([][]byte, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, []byte(strconv.Itoa(i+offset)))
 		}
-		_ = gvec.Append(vec, data)
+		_ = movec.Append(vec, data)
 	default:
 		panic("not support")
 	}
