@@ -16,7 +16,6 @@ package segmentio
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 	"sync"
 )
 
@@ -25,7 +24,7 @@ const UPGRADE_FILE_NUM = 10
 type dataFile struct {
 	mutex  sync.RWMutex
 	colBlk *columnBlock
-	file   []*segment.BlockFile
+	file   []*BlockFile
 	buf    []byte
 	stat   *fileStat
 	cache  []byte

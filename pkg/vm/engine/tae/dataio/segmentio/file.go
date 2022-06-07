@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package segmentio
 
 import (
 	"bytes"
@@ -24,10 +24,10 @@ import (
 type BlockFile struct {
 	snode   *Inode
 	name    string
-	segment *Segment
+	segment *Driver
 }
 
-func (b *BlockFile) GetSegement() *Segment {
+func (b *BlockFile) GetSegement() *Driver {
 	return b.segment
 }
 

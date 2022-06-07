@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package segmentio
 
 import (
 	"bytes"
@@ -22,13 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
-	"os"
 	"path"
 	"testing"
-)
-
-const (
-	ModuleName = "LAYOUT"
 )
 
 func mockData(size uint32) []byte {
@@ -67,7 +62,7 @@ func mockData(size uint32) []byte {
 func TestBitmapAllocator_Allocate(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
-	seg := Segment{}
+	seg := Driver{}
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
@@ -107,7 +102,7 @@ func TestBitmapAllocator_Allocate(t *testing.T) {
 func TestBitmapAllocator_Free(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "free.seg")
-	seg := Segment{}
+	seg := Driver{}
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
@@ -191,7 +186,7 @@ func TestBitmapAllocator_Free(t *testing.T) {
 func TestBlockFile_GetExtents(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "free.seg")
-	seg := Segment{}
+	seg := Driver{}
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
@@ -238,7 +233,7 @@ func TestBlockFile_GetExtents(t *testing.T) {
 
 }
 
-func checkSegment(t *testing.T, seg, seg1 *Segment) {
+func checkSegment(t *testing.T, seg, seg1 *Driver) {
 	assert.Equal(t, len(seg.nodes), len(seg1.nodes))
 	level0 := seg.allocator.(*BitmapAllocator).level0
 	level1 := seg.allocator.(*BitmapAllocator).level1
@@ -265,7 +260,7 @@ func checkSegment(t *testing.T, seg, seg1 *Segment) {
 func TestSegment_Replay2(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
-	seg := Segment{}
+	seg := Driver{}
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
@@ -284,12 +279,10 @@ func TestSegment_Replay2(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	seg1 := Driver{}
+	err = seg1.Open(name)
 	assert.Nil(t, err)
-	seg1 := Segment{
-		name:    name,
-		segFile: segfile,
-	}
+	seg1.Mount()
 	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
@@ -300,7 +293,7 @@ func TestSegment_Replay2(t *testing.T) {
 func TestSegment_Replay(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
-	seg := Segment{}
+	seg := Driver{}
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
@@ -361,12 +354,10 @@ func TestSegment_Replay(t *testing.T) {
 	assert.Equal(t, 2, int(level0[l0pos+1]))
 	ret = 0xFFFFFFFFFFFFFFFA - level1[l1pos]
 	assert.Equal(t, 0, int(ret))
-	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	seg1 := Driver{}
+	err = seg1.Open(name)
 	assert.Nil(t, err)
-	seg1 := Segment{
-		name:    name,
-		segFile: segfile,
-	}
+	seg1.Mount()
 	cache := bytes.NewBuffer(make([]byte, LOG_SIZE))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
@@ -377,7 +368,7 @@ func TestSegment_Replay(t *testing.T) {
 func TestSegment_Replay3(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
-	seg := Segment{}
+	seg := Driver{}
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
@@ -414,12 +405,10 @@ func TestSegment_Replay3(t *testing.T) {
 		file = seg.nodes[fmt.Sprintf("test_%d.blk", i*2)]
 		seg.ReleaseFile(file)
 	}
-	segfile, err := os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	seg1 := Driver{}
+	err = seg1.Open(name)
 	assert.Nil(t, err)
-	seg1 := Segment{
-		name:    name,
-		segFile: segfile,
-	}
+	seg1.Mount()
 	cache := bytes.NewBuffer(make([]byte, LOG_SIZE))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
@@ -430,7 +419,7 @@ func TestSegment_Replay3(t *testing.T) {
 func TestSegment_Init(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "init.seg")
-	seg := Segment{}
+	seg := Driver{}
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()

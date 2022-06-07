@@ -25,28 +25,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
 
 var SegmentFactory file.SegmentFactory
-var SegmentOpenFactory file.SegmentFactory
 
 func init() {
 	SegmentFactory = new(segmentFactory)
-	SegmentOpenFactory = &segmentOpenFactory{
-		segmentFactory: new(segmentFactory),
-	}
 }
 
 type segmentFactory struct{}
-type segmentOpenFactory struct {
-	*segmentFactory
-}
 
 func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
 	baseName := factory.EncodeName(id)
 	name := path.Join(dir, baseName)
-	return newSegment(name, id)
+	return openSegment(name, id)
 }
 
 func (factory *segmentFactory) EncodeName(id uint64) string {
@@ -66,12 +58,6 @@ func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 	return
 }
 
-func (factory *segmentOpenFactory) Build(dir string, id uint64) file.Segment {
-	baseName := factory.EncodeName(id)
-	name := path.Join(dir, baseName)
-	return openSegment(name, id)
-}
-
 type segmentFile struct {
 	sync.RWMutex
 	common.RefHelper
@@ -79,7 +65,7 @@ type segmentFile struct {
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
-	seg    *segment.Segment
+	seg    *Driver
 }
 
 func openSegment(name string, id uint64) *segmentFile {
@@ -87,11 +73,12 @@ func openSegment(name string, id uint64) *segmentFile {
 		blocks: make(map[uint64]*blockFile),
 		name:   name,
 	}
-	sf.seg = &segment.Segment{}
+	sf.seg = &Driver{}
 	err := sf.seg.Open(sf.name)
 	if err != nil {
 		panic(any(err.Error()))
 	}
+	sf.seg.Mount()
 	sf.id = &common.ID{
 		SegmentID: id,
 	}
@@ -112,7 +99,7 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	delete(sf.blocks, id)
 }
 
-func (sf *segmentFile) replayInfo(stat *fileStat, file *segment.BlockFile) {
+func (sf *segmentFile) replayInfo(stat *fileStat, file *BlockFile) {
 	meta := file.GetInode()
 	stat.size = meta.GetFileSize()
 	stat.originSize = meta.GetOriginSize()
@@ -203,25 +190,6 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 	return nil
 }
 
-func newSegment(name string, id uint64) *segmentFile {
-	sf := &segmentFile{
-		blocks: make(map[uint64]*blockFile),
-		name:   name,
-	}
-	sf.seg = &segment.Segment{}
-	err := sf.seg.Init(sf.name)
-	if err != nil {
-		panic(any(err.Error()))
-	}
-	sf.seg.Mount()
-	sf.id = &common.ID{
-		SegmentID: id,
-	}
-	sf.Ref()
-	sf.OnZeroCB = sf.close
-	return sf
-}
-
 func (sf *segmentFile) Fingerprint() *common.ID { return sf.id }
 func (sf *segmentFile) Close() error            { return nil }
 
@@ -229,7 +197,7 @@ func (sf *segmentFile) close() {
 	sf.Destroy()
 }
 func (sf *segmentFile) Destroy() {
-	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
+	logutil.Infof("Destroying Driver %d", sf.id.SegmentID)
 	sf.RLock()
 	blocks := sf.blocks
 	sf.RUnlock()
@@ -266,7 +234,7 @@ func (sf *segmentFile) String() string {
 	return s
 }
 
-func (sf *segmentFile) GetSegmentFile() *segment.Segment {
+func (sf *segmentFile) GetSegmentFile() *Driver {
 	return sf.seg
 }
 

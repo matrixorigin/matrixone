@@ -17,6 +17,7 @@ package mockio
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/segmentio"
 	"path"
 	"strconv"
 	"strings"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
 
 var SegmentFactory file.SegmentFactory
@@ -71,7 +71,7 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 	panic(any("implement me"))
 }
 
-func (sf *segmentFile) GetSegmentFile() *segment.Segment {
+func (sf *segmentFile) GetSegmentFile() *segmentio.Driver {
 	panic(any("implement me"))
 }
 
@@ -99,7 +99,7 @@ func (sf *segmentFile) Destroy() {
 	// 	block.Unref()
 	// }
 
-	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
+	logutil.Infof("Destroying Driver %d", sf.id.SegmentID)
 	mockFS.RemoveFile(sf.id.SegmentID)
 }
 
