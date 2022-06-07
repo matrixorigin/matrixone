@@ -23,26 +23,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestQueryLogShardIDCmd(t *testing.T) {
-	cmd := getQueryLogShardIDCmd("test")
-	name, ok := isQueryLogShardIDCmd(cmd)
-	assert.True(t, ok)
-	assert.Equal(t, "test", name)
-
-	name, ok = isCreateLogShardCmd(cmd)
-	assert.False(t, ok)
-	assert.Equal(t, "", name)
-}
-
 func TestCreateLogShardCmd(t *testing.T) {
 	cmd := getCreateLogShardCmd("test")
 	name, ok := isCreateLogShardCmd(cmd)
 	assert.True(t, ok)
 	assert.Equal(t, "test", name)
-
-	name, ok = isQueryLogShardIDCmd(cmd)
-	assert.False(t, ok)
-	assert.Equal(t, "", name)
 }
 
 func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
@@ -97,15 +82,20 @@ func TestHAKeeperQueryLogShardID(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
 
-	cmd = getQueryLogShardIDCmd("test1")
-	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
-	assert.Nil(t, err)
-	assert.Equal(t, sm.Result{Value: 101}, result)
+	q1 := &logShardIDQuery{name: "test1"}
+	r, err := tsm1.Lookup(q1)
+	assert.NoError(t, err)
+	r1, ok := r.(*logShardIDQueryResult)
+	assert.True(t, ok)
+	assert.True(t, r1.found)
+	assert.Equal(t, uint64(101), r1.id)
 
-	cmd = getQueryLogShardIDCmd("test2")
-	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
-	assert.Nil(t, err)
-	assert.Equal(t, sm.Result{}, result)
+	q2 := &logShardIDQuery{name: "test2"}
+	r, err = tsm1.Lookup(q2)
+	assert.NoError(t, err)
+	r2, ok := r.(*logShardIDQueryResult)
+	assert.True(t, ok)
+	assert.False(t, r2.found)
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {

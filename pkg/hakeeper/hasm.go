@@ -40,6 +40,15 @@ const (
 	createLogShardTag      uint16 = 0xAE02
 )
 
+type logShardIDQuery struct {
+	name string
+}
+
+type logShardIDQueryResult struct {
+	id    uint64
+	found bool
+}
+
 type haSM struct {
 	replicaID uint64
 	GlobalID  uint64
@@ -48,10 +57,6 @@ type haSM struct {
 
 func parseCmdTag(cmd []byte) uint16 {
 	return binaryEnc.Uint16(cmd)
-}
-
-func getQueryLogShardIDCmd(name string) []byte {
-	return getLogShardCmd(name, queryLogShardIDTag)
 }
 
 func getCreateLogShardCmd(name string) []byte {
@@ -67,10 +72,6 @@ func getLogShardCmd(name string, tag uint16) []byte {
 
 func isCreateLogShardCmd(cmd []byte) (string, bool) {
 	return isLogShardCmd(cmd, createLogShardTag)
-}
-
-func isQueryLogShardIDCmd(cmd []byte) (string, bool) {
-	return isLogShardCmd(cmd, queryLogShardIDTag)
 }
 
 func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
@@ -93,6 +94,11 @@ func NewHAKeeperStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine 
 	}
 }
 
+func (h *haSM) assignID() uint64 {
+	h.GlobalID++
+	return h.GlobalID
+}
+
 func (h *haSM) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 	name, ok := isCreateLogShardCmd(cmd)
 	if !ok {
@@ -103,20 +109,8 @@ func (h *haSM) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 		binaryEnc.PutUint64(data, shardID)
 		return sm.Result{Value: 0, Data: data}, nil
 	}
-	h.GlobalID++
-	h.LogShards[name] = h.GlobalID
+	h.LogShards[name] = h.assignID()
 	return sm.Result{Value: h.GlobalID}, nil
-}
-
-func (h *haSM) handleQueryLogShardIDCmd(cmd []byte) (sm.Result, error) {
-	name, ok := isQueryLogShardIDCmd(cmd)
-	if !ok {
-		panic(moerr.NewError(moerr.INVALID_INPUT, "not query log shard id cmd"))
-	}
-	if shardID, ok := h.LogShards[name]; ok {
-		return sm.Result{Value: shardID}, nil
-	}
-	return sm.Result{}, nil
 }
 
 func (h *haSM) Close() error {
@@ -128,14 +122,18 @@ func (h *haSM) Update(e sm.Entry) (sm.Result, error) {
 	if _, ok := isCreateLogShardCmd(cmd); ok {
 		return h.handleCreateLogShardCmd(cmd)
 	}
-	if _, ok := isQueryLogShardIDCmd(cmd); ok {
-		return h.handleQueryLogShardIDCmd(cmd)
-	}
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }
 
 func (h *haSM) Lookup(query interface{}) (interface{}, error) {
-	panic("not implemented")
+	if q, ok := query.(*logShardIDQuery); ok {
+		id, ok := h.LogShards[q.name]
+		if ok {
+			return &logShardIDQueryResult{found: true, id: id}, nil
+		}
+		return &logShardIDQueryResult{found: false}, nil
+	}
+	panic("unknown query type")
 }
 
 func (h *haSM) SaveSnapshot(w io.Writer,
