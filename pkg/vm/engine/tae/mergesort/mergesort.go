@@ -17,6 +17,7 @@ package mergesort
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/bools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/dates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/datetimes"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal128s"
@@ -39,6 +40,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 	sortedIdx := make([]uint32, vector.Length(cols[pk]))
 
 	switch cols[pk].Typ.Oid {
+	case types.T_bool:
+		bools.Sort(cols[pk], sortedIdx)
 	case types.T_int8:
 		int8s.Sort(cols[pk], sortedIdx)
 	case types.T_int16:
@@ -78,6 +81,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 			continue
 		}
 		switch cols[i].Typ.Oid {
+		case types.T_bool:
+			int8s.Shuffle(cols[i], sortedIdx)
 		case types.T_int8:
 			int8s.Shuffle(cols[i], sortedIdx)
 		case types.T_int16:
@@ -118,6 +123,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 
 func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
 	switch column[0].Typ.Oid {
+	case types.T_bool:
+		ret, mapping = bools.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int8:
 		ret, mapping = int8s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int16:
@@ -156,6 +163,8 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout,
 
 func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
 	switch column[0].Typ.Oid {
+	case types.T_bool:
+		ret = bools.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int8:
 		ret = int8s.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int16:
