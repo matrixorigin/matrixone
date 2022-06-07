@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -34,7 +33,7 @@ type MVCCHandle struct {
 	maxVisible      uint64
 	appends         []*AppendNode
 	changes         uint32
-	deletesListener func(uint64, compute.RowGen, uint64) error
+	deletesListener func(uint64, common.RowGen, uint64) error
 }
 
 func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
@@ -55,11 +54,11 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 	return node
 }
 
-func (n *MVCCHandle) SetDeletesListener(l func(uint64, compute.RowGen, uint64) error) {
+func (n *MVCCHandle) SetDeletesListener(l func(uint64, common.RowGen, uint64) error) {
 	n.deletesListener = l
 }
 
-func (n *MVCCHandle) GetDeletesListener() func(uint64, compute.RowGen, uint64) error {
+func (n *MVCCHandle) GetDeletesListener() func(uint64, common.RowGen, uint64) error {
 	return n.deletesListener
 }
 

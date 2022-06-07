@@ -14,14 +14,12 @@
 
 package compute
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
 
-type RowGen interface {
-	HasNext() bool
-	Next() uint32
-}
-
-func InplaceDeleteRows(orig any, rowGen RowGen) any {
+func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 	if !rowGen.HasNext() {
 		return orig
 	}
