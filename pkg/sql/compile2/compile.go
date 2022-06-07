@@ -522,12 +522,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op:  overload.Offset,
-			Arg: constructOffset(n, c.proc),
-		})
-	}
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
