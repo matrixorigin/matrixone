@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 )
 
@@ -53,9 +52,9 @@ func (zm *ZoneMap) Update(v any) (err error) {
 		zm.inited = true
 		return
 	}
-	if common.CompareGeneric(v, zm.max, zm.typ) > 0 {
+	if compute.CompareGeneric(v, zm.max, zm.typ) > 0 {
 		zm.max = v
-	} else if common.CompareGeneric(v, zm.min, zm.typ) < 0 {
+	} else if compute.CompareGeneric(v, zm.min, zm.typ) < 0 {
 		zm.min = v
 	}
 	return
@@ -78,7 +77,7 @@ func (zm *ZoneMap) Contains(key any) (ok bool) {
 	if !zm.inited {
 		return
 	}
-	if common.CompareGeneric(key, zm.max, zm.typ) > 0 || common.CompareGeneric(key, zm.min, zm.typ) < 0 {
+	if compute.CompareGeneric(key, zm.max, zm.typ) > 0 || compute.CompareGeneric(key, zm.min, zm.typ) < 0 {
 		return
 	}
 	ok = true
@@ -92,7 +91,7 @@ func (zm *ZoneMap) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap,
 	visibility = roaring.NewBitmap()
 	row := uint32(0)
 	process := func(key any, _ uint32) (err error) {
-		if common.CompareGeneric(key, zm.max, zm.typ) <= 0 && common.CompareGeneric(key, zm.min, zm.typ) >= 0 {
+		if compute.CompareGeneric(key, zm.max, zm.typ) <= 0 && compute.CompareGeneric(key, zm.min, zm.typ) >= 0 {
 			visibility.Add(row)
 		}
 		row++
@@ -114,7 +113,7 @@ func (zm *ZoneMap) SetMax(v any) {
 		zm.inited = true
 		return
 	}
-	if common.CompareGeneric(v, zm.max, zm.typ) > 0 {
+	if compute.CompareGeneric(v, zm.max, zm.typ) > 0 {
 		zm.max = v
 	}
 }
@@ -130,7 +129,7 @@ func (zm *ZoneMap) SetMin(v any) {
 		zm.inited = true
 		return
 	}
-	if common.CompareGeneric(v, zm.min, zm.typ) < 0 {
+	if compute.CompareGeneric(v, zm.min, zm.typ) < 0 {
 		zm.min = v
 	}
 }

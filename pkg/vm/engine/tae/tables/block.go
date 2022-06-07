@@ -760,12 +760,12 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	return blk.blkGetByFilter(txn.GetStartTS(), filter)
 }
 
-func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+func (blk *dataBlock) BlkApplyDelete(deleted uint64, gen compute.RowGen, ts uint64) (err error) {
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
 }
 
-func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint64) (err error) {
+func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen compute.RowGen, ts uint64) (err error) {
 	// No pk defined
 	if !blk.meta.GetSchema().HasPK() {
 		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
