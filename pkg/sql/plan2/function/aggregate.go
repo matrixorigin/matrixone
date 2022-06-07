@@ -505,7 +505,7 @@ var aggregates = map[int][]Function{
 				}
 				return false
 			},
-			AggregateInfo: aggregate.Sum,
+			AggregateInfo: aggregate.Avg,
 		},
 	},
 	COUNT: {
