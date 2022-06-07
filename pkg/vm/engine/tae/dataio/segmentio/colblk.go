@@ -41,11 +41,11 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 		cb.indexes[i] = newIndex(cb)
 	}
 	cb.updates = newUpdates(cb)
-	cb.updates.file = make([]*BlockFile, 1)
+	cb.updates.file = make([]*DriverFile, 1)
 	cb.updates.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.update", cb.col, cb.block.id))
 	cb.data = newData(cb)
-	cb.data.file = make([]*BlockFile, 1)
+	cb.data.file = make([]*DriverFile, 1)
 	cb.data.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.blk", cb.col, cb.block.id))
 	cb.OnZeroCB = cb.close
@@ -63,9 +63,9 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 		cb.indexes[i] = newIndex(cb)
 	}
 	cb.updates = newUpdates(cb)
-	cb.updates.file = make([]*BlockFile, 1)
+	cb.updates.file = make([]*DriverFile, 1)
 	cb.data = newData(cb)
-	cb.data.file = make([]*BlockFile, 1)
+	cb.data.file = make([]*DriverFile, 1)
 	cb.OnZeroCB = cb.close
 	cb.Ref()
 	return cb

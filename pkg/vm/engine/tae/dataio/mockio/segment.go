@@ -17,7 +17,6 @@ package mockio
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/segmentio"
 	"path"
 	"strconv"
 	"strings"
@@ -71,10 +70,6 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 	panic(any("implement me"))
 }
 
-func (sf *segmentFile) GetSegmentFile() *segmentio.Driver {
-	panic(any("implement me"))
-}
-
 func newSegmentFile(name string, id uint64) *segmentFile {
 	sf := &segmentFile{
 		blocks: make(map[uint64]*blockFile),
@@ -99,7 +94,7 @@ func (sf *segmentFile) Destroy() {
 	// 	block.Unref()
 	// }
 
-	logutil.Infof("Destroying Driver %d", sf.id.SegmentID)
+	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
 	mockFS.RemoveFile(sf.id.SegmentID)
 }
 

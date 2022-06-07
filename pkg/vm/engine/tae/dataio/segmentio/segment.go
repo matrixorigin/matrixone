@@ -42,11 +42,11 @@ func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
 }
 
 func (factory *segmentFactory) EncodeName(id uint64) string {
-	return fmt.Sprintf("%d.seg", id)
+	return fmt.Sprintf("%d.driver", id)
 }
 
 func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
-	trimmed := strings.TrimSuffix(name, ".seg")
+	trimmed := strings.TrimSuffix(name, ".driver")
 	if trimmed == name {
 		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
 		return
@@ -65,7 +65,7 @@ type segmentFile struct {
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
-	seg    *Driver
+	driver *Driver
 }
 
 func openSegment(name string, id uint64) *segmentFile {
@@ -73,12 +73,12 @@ func openSegment(name string, id uint64) *segmentFile {
 		blocks: make(map[uint64]*blockFile),
 		name:   name,
 	}
-	sf.seg = &Driver{}
-	err := sf.seg.Open(sf.name)
+	sf.driver = &Driver{}
+	err := sf.driver.Open(sf.name)
 	if err != nil {
 		panic(any(err.Error()))
 	}
-	sf.seg.Mount()
+	sf.driver.Mount()
 	sf.id = &common.ID{
 		SegmentID: id,
 	}
@@ -99,7 +99,7 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	delete(sf.blocks, id)
 }
 
-func (sf *segmentFile) replayInfo(stat *fileStat, file *BlockFile) {
+func (sf *segmentFile) replayInfo(stat *fileStat, file *DriverFile) {
 	meta := file.GetInode()
 	stat.size = meta.GetFileSize()
 	stat.originSize = meta.GetOriginSize()
@@ -108,11 +108,11 @@ func (sf *segmentFile) replayInfo(stat *fileStat, file *BlockFile) {
 }
 
 func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
-	err := sf.seg.Replay(cache)
+	err := sf.driver.Replay(cache)
 	if err != nil {
 		return err
 	}
-	nodes := sf.seg.GetNodes()
+	nodes := sf.driver.GetNodes()
 	sf.Lock()
 	defer sf.Unlock()
 	for name, file := range nodes {
@@ -204,8 +204,8 @@ func (sf *segmentFile) Destroy() {
 	for _, block := range blocks {
 		block.Destroy()
 	}
-	sf.seg.Unmount()
-	sf.seg.Destroy()
+	sf.driver.Unmount()
+	sf.driver.Destroy()
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
@@ -235,9 +235,9 @@ func (sf *segmentFile) String() string {
 }
 
 func (sf *segmentFile) GetSegmentFile() *Driver {
-	return sf.seg
+	return sf.driver
 }
 
 func (sf *segmentFile) Sync() error {
-	return sf.seg.Sync()
+	return sf.driver.Sync()
 }

@@ -49,7 +49,7 @@ type Driver struct {
 	segFile   *os.File
 	lastInode uint64
 	super     SuperBlock
-	nodes     map[string]*BlockFile
+	nodes     map[string]*DriverFile
 	log       *Log
 	allocator Allocator
 	name      string
@@ -139,11 +139,11 @@ func (s *Driver) Mount() {
 	s.lastInode = 1
 	var seq uint64
 	seq = 0
-	s.nodes = make(map[string]*BlockFile, INODE_NUM)
-	logFile := &BlockFile{
-		snode:   s.super.lognode,
-		name:    "logfile",
-		segment: s,
+	s.nodes = make(map[string]*DriverFile, INODE_NUM)
+	logFile := &DriverFile{
+		snode:  s.super.lognode,
+		name:   "logfile",
+		driver: s,
 	}
 	s.log = &Log{}
 	s.log.logFile = logFile
@@ -181,7 +181,7 @@ func (s *Driver) Replay(cache *bytes.Buffer) error {
 	return nil
 }
 
-func (s *Driver) NewBlockFile(fname string) *BlockFile {
+func (s *Driver) NewBlockFile(fname string) *DriverFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	file := s.nodes[fname]
@@ -198,17 +198,17 @@ func (s *Driver) NewBlockFile(fname string) *BlockFile {
 			seq:        0,
 		}
 	}
-	file = &BlockFile{
-		snode:   ino,
-		name:    fname,
-		segment: s,
+	file = &DriverFile{
+		snode:  ino,
+		name:   fname,
+		driver: s,
 	}
 	s.nodes[file.name] = file
 	s.lastInode += 1
 	return file
 }
 
-func (s *Driver) Append(fd *BlockFile, pl []byte) (err error) {
+func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
 	buf := pl
 	if fd.snode.algo == compress.Lz4 {
 		colSize := len(pl)
@@ -233,7 +233,7 @@ func (s *Driver) Append(fd *BlockFile, pl []byte) (err error) {
 	return nil
 }
 
-func (s *Driver) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
+func (s *Driver) Update(fd *DriverFile, pl []byte, fOffset uint64) error {
 	offset, _ := s.allocator.Allocate(uint64(len(pl)))
 	free, err := fd.Update(DATA_START+offset, pl, uint32(fOffset))
 	if err != nil {
@@ -249,7 +249,7 @@ func (s *Driver) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 	return nil
 }
 
-func (s *Driver) ReleaseFile(fd *BlockFile) {
+func (s *Driver) ReleaseFile(fd *DriverFile) {
 	if s.segFile == nil {
 		return
 	}
@@ -264,7 +264,7 @@ func (s *Driver) ReleaseFile(fd *BlockFile) {
 	fd = nil
 }
 
-func (s *Driver) Free(fd *BlockFile) {
+func (s *Driver) Free(fd *DriverFile) {
 	fd.snode.mutex.Lock()
 	defer fd.snode.mutex.Unlock()
 	for _, ext := range fd.snode.extents {
@@ -289,7 +289,7 @@ func (s *Driver) GetName() string {
 	return s.name
 }
 
-func (s *Driver) GetNodes() map[string]*BlockFile {
+func (s *Driver) GetNodes() map[string]*DriverFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	return s.nodes

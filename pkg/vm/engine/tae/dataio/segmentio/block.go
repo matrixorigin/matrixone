@@ -51,7 +51,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
@@ -74,7 +74,7 @@ func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) 
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {

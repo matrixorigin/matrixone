@@ -19,12 +19,12 @@ import (
 	"sync"
 )
 
-const UPGRADE_FILE_NUM = 10
+const UPGRADE_FILE_NUM = 2
 
 type dataFile struct {
 	mutex  sync.RWMutex
 	colBlk *columnBlock
-	file   []*BlockFile
+	file   []*DriverFile
 	buf    []byte
 	stat   *fileStat
 	cache  []byte
@@ -130,7 +130,7 @@ func (df *dataFile) upgradeFile() {
 		df.file = df.file[len(df.file)-1 : len(df.file)]
 		df.mutex.Unlock()
 		for _, file := range releaseFile {
-			df.colBlk.block.seg.GetSegmentFile().ReleaseFile(file)
+			file.driver.ReleaseFile(file)
 		}
 	}()
 }
