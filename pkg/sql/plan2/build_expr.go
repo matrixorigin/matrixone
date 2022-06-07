@@ -457,8 +457,7 @@ func buildBinaryExpr(astExpr *tree.BinaryExpr, ctx CompilerContext, query *Query
 	case tree.DIV:
 		return getFunctionExprByNameAndAstExprs("/", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	case tree.INTEGER_DIV:
-		// todo confirm what is the difference from tree.DIV
-		return getFunctionExprByNameAndAstExprs("/", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		return getFunctionExprByNameAndAstExprs("div", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 	}
 
 	return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
