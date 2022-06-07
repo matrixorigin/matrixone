@@ -20,7 +20,6 @@ package space
 
 import (
 	"bytes"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"golang.org/x/exp/constraints"
 	"math"
@@ -141,7 +140,6 @@ func FillSpacesSigned[T constraints.Signed](originalVecCol []T, resultBytes *typ
 	result := Result{Result: resultBytes, Nsp: new(nulls.Nulls)}
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
-		fmt.Println(length)
 		if length <= 0 {
 			resultBytes.Lengths[i] = 0
 			resultBytes.Offsets[i] = offset
@@ -150,7 +148,7 @@ func FillSpacesSigned[T constraints.Signed](originalVecCol []T, resultBytes *typ
 			resultBytes.Offsets[i] = offset
 			nulls.Add(result.Nsp, uint64(i))
 		} else {
-			resultBytes.Lengths[i] = uint32(length)
+			resultBytes.Lengths[i] = uint32(length) // this cast is guaranteed safe because length > 0
 			resultBytes.Offsets[i] = offset
 			offset += uint32(length)
 		}
