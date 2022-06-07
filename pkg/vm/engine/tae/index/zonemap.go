@@ -282,6 +282,33 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
+	case types.T_timestamp:
+		if _, err = w.Write(encoding.EncodeTimestamp(zm.min.(types.Timestamp))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeTimestamp(zm.max.(types.Timestamp))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
+	case types.T_decimal64:
+		if _, err = w.Write(encoding.EncodeDecimal64(zm.min.(types.Decimal64))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeDecimal64(zm.max.(types.Decimal64))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
+	case types.T_decimal128:
+		if _, err = w.Write(encoding.EncodeDecimal128(zm.min.(types.Decimal128))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeDecimal128(zm.max.(types.Decimal128))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_char, types.T_varchar, types.T_json:
 		minv := zm.min.([]byte)
 		maxv := zm.max.([]byte)
@@ -380,6 +407,18 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[8:]
 		zm.max = encoding.DecodeDatetime(buf[:8])
 		buf = buf[8:]
+		return nil
+	case types.T_decimal64:
+		zm.min = encoding.DecodeDecimal64(buf[:8])
+		buf = buf[8:]
+		zm.max = encoding.DecodeDecimal64(buf[:8])
+		buf = buf[8:]
+		return nil
+	case types.T_decimal128:
+		zm.min = encoding.DecodeDecimal128(buf[:16])
+		buf = buf[16:]
+		zm.max = encoding.DecodeDecimal128(buf[:16])
+		buf = buf[16:]
 		return nil
 	case types.T_char, types.T_varchar, types.T_json:
 		lenminv := encoding.DecodeInt16(buf[:2])

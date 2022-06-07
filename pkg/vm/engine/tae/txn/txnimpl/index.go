@@ -311,6 +311,25 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			idx.tree[v] = row
 			row++
 		}
+	case types.T_decimal128:
+		data := vals.([]types.Decimal128)
+		if dedupCol {
+			set := make(map[types.Decimal128]bool)
+			for _, v := range data[start : start+count] {
+				if _, ok := set[v]; ok {
+					return idata.ErrDuplicate
+				}
+				set[v] = true
+			}
+			break
+		}
+		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+			idx.tree[v] = row
+			row++
+		}
 	case types.T_float32:
 		data := vals.([]float32)
 		if dedupCol {
@@ -506,6 +525,13 @@ func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
 		}
 	case types.T_decimal64:
 		data := vals.([]types.Decimal64)
+		for _, v := range data {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+		}
+	case types.T_decimal128:
+		data := vals.([]types.Decimal128)
 		for _, v := range data {
 			if _, ok := idx.tree[v]; ok {
 				return idata.ErrDuplicate

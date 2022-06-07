@@ -143,6 +143,9 @@ func GetValue(col *gvec.Vector, row uint32) any {
 	case types.T_datetime:
 		data := vals.([]types.Datetime)
 		return data[row]
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
+		return data[row]
 	case types.T_char, types.T_varchar, types.T_json:
 		data := vals.(*types.Bytes)
 		s := data.Offsets[row]
@@ -217,6 +220,10 @@ func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 		data := vals.([]types.Datetime)
 		data[row] = val.(types.Datetime)
 		col.Col = data
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
+		data[row] = val.(types.Timestamp)
+		col.Col = data
 	case types.T_char, types.T_varchar, types.T_json:
 		// data := vals.(*types.Bytes)
 		// s := data.Offsets[row]
@@ -289,6 +296,10 @@ func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 		col.Col = data
 	case types.T_datetime:
 		data := vals.([]types.Datetime)
+		data = append(data[:row], data[row+1:]...)
+		col.Col = data
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
 	case types.T_char, types.T_varchar, types.T_json:
@@ -421,8 +432,10 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 	}
 	deleted := 0
 	switch vec.Typ.Oid {
-	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
+	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64,
+		types.T_date, types.T_datetime, types.T_timestamp:
 		vec.Col = InplaceDeleteRows(vec.Col, deletesIterator)
 		deletesIterator = deletes.Iterator()
 		for deletesIterator.HasNext() {

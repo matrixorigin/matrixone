@@ -496,7 +496,7 @@ func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 	for i := 0; i < colCnt; i++ {
 		name := fmt.Sprintf("%s%d", prefix, i)
 		var typ types.Type
-		switch i % 17 {
+		switch i % 18 {
 		case 0:
 			typ = types.T_int8.ToType()
 			typ.Width = 8

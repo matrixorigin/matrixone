@@ -20,12 +20,12 @@ import (
 	"math/rand"
 	"reflect"
 	"strconv"
-	"time"
 
 	"github.com/bxcodec/faker/v3"
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 )
 
@@ -222,21 +222,21 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Timestamp, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
-			vals = append(vals, types.Timestamp(time.Now().Nanosecond()))
+			vals = append(vals, types.Timestamp(common.NextGlobalSeqNum()))
 		}
 		vec.Append(len(vals), vals)
 	case types.T_decimal64:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Decimal64, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
-			vals = append(vals, types.Decimal64(time.Now().Nanosecond()))
+			vals = append(vals, types.Decimal64(common.NextGlobalSeqNum()))
 		}
 		vec.Append(len(vals), vals)
 	case types.T_decimal128:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Decimal128, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
-			vals = append(vals, types.Decimal128{Lo: int64(time.Now().Nanosecond())})
+			vals = append(vals, types.Decimal128{Lo: int64(common.NextGlobalSeqNum())})
 		}
 		vec.Append(len(vals), vals)
 	default:
