@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
-	"github.com/RoaringBitmap/roaring/roaring64"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
@@ -144,7 +143,7 @@ func Reshape(col []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector
 			copy(merged[toOffset:toOffset+length], col[fromIdx].Col.([]uint64)[fromOffset:fromOffset+length])
 			if col[fromIdx].Nsp.Np != nil {
 				if ret[i].Nsp.Np == nil {
-					ret[i].Nsp.Np = roaring64.New()
+					ret[i].Nsp.Np = roaring.New()
 				}
 				iterator := col[fromIdx].Nsp.Np.Iterator()
 				for iterator.HasNext() {
