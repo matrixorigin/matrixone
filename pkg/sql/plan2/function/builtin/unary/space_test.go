@@ -183,7 +183,7 @@ func TestSpaceInt64(t *testing.T) {
 func TestSpaceFloat64(t *testing.T) {
 	inputVector := makeFloat64Vector([]float64{1.4, 1.6, 3.3, 0, -1, 9999999}, []uint64{4})
 	proc := NewTestProc()
-	output, err := SpaceInt64([]*vector.Vector{inputVector}, proc)
+	output, err := SpaceFloat[float64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
 	result := output.Col.(*types.Bytes)
 	// the correct result should be:
