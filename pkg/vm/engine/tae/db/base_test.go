@@ -13,6 +13,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -150,6 +151,37 @@ func getOneBlock(rel handle.Relation) handle.Block {
 func getOneBlockMeta(rel handle.Relation) *catalog.BlockEntry {
 	it := rel.MakeBlockIt()
 	return it.GetBlock().GetMeta().(*catalog.BlockEntry)
+}
+
+func checkAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
+	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	for _, def := range schema.ColDefs {
+		rows := getColumnRowsByScan(t, rel, def.Idx, applyDelete)
+		assert.Equal(t, expectRows, rows)
+	}
+}
+
+func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDelete bool) int {
+	rows := 0
+	forEachColumnView(rel, colIdx, func(view *model.ColumnView) (err error) {
+		if applyDelete {
+			view.ApplyDeletes()
+			rows += view.Length()
+		}
+		return
+	})
+	return rows
+}
+
+func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
+	forEachBlock(rel, func(blk handle.Block) (err error) {
+		view, err := blk.GetColumnDataById(colIdx, nil, nil)
+		if err != nil {
+			return
+		}
+		err = fn(view)
+		return
+	})
 }
 
 func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {

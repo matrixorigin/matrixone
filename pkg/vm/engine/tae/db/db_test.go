@@ -1616,18 +1616,7 @@ func TestADA(t *testing.T) {
 	assert.NoError(t, err)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
-
-	it = rel.MakeBlockIt()
-	rows = 0
-	for it.Valid() {
-		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
-		assert.NoError(t, err)
-		vec := view.ApplyDeletes()
-		rows += vector.Length(vec)
-		it.Next()
-	}
-	assert.Equal(t, 1, rows)
+	checkAllColRowsByScan(t, rel, 1, true)
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
