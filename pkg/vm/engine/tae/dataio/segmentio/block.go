@@ -311,6 +311,9 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 	if err = bf.WriteTS(ts); err != nil {
 		return err
 	}
+	if err = bf.WriteRows(uint32(bat.Length())); err != nil {
+		return err
+	}
 	for _, colIdx := range attrs {
 		cb, err := bf.OpenColumn(colIdx)
 		if err != nil {
