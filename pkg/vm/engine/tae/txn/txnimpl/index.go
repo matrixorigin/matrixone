@@ -118,6 +118,25 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 	defer idx.Unlock()
 	vals := col.Col
 	switch col.Typ.Oid {
+	case types.T_bool:
+		data := vals.([]bool)
+		if dedupCol {
+			set := make(map[bool]bool)
+			for _, v := range data[start : start+count] {
+				if _, ok := set[v]; ok {
+					return idata.ErrDuplicate
+				}
+				set[v] = true
+			}
+			break
+		}
+		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+			idx.tree[v] = row
+			row++
+		}
 	case types.T_int8:
 		data := vals.([]int8)
 		if dedupCol {
@@ -422,6 +441,13 @@ func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
 	defer idx.RUnlock()
 	vals := col.Col
 	switch col.Typ.Oid {
+	case types.T_bool:
+		data := vals.([]bool)
+		for _, v := range data {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+		}
 	case types.T_int8:
 		data := vals.([]int8)
 		for _, v := range data {

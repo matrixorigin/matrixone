@@ -27,6 +27,17 @@ func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 	currPos := 0
 
 	switch arr := orig.(type) {
+	case []bool:
+		for rowGen.HasNext() {
+			currRow := int(rowGen.Next())
+			copy(arr[currPos:], arr[prevRow+1:currRow])
+			currPos += currRow - prevRow - 1
+			prevRow = currRow
+		}
+		left := len(arr[prevRow+1:])
+		copy(arr[currPos:], arr[prevRow+1:])
+		currPos += left
+		return arr[:currPos]
 	case []int8:
 		for rowGen.HasNext() {
 			currRow := int(rowGen.Next())
@@ -105,6 +116,17 @@ func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 		currPos += left
 		return arr[:currPos]
 	case []uint64:
+		for rowGen.HasNext() {
+			currRow := int(rowGen.Next())
+			copy(arr[currPos:], arr[prevRow+1:currRow])
+			currPos += currRow - prevRow - 1
+			prevRow = currRow
+		}
+		left := len(arr[prevRow+1:])
+		copy(arr[currPos:], arr[prevRow+1:])
+		currPos += left
+		return arr[:currPos]
+	case []types.Timestamp:
 		for rowGen.HasNext() {
 			currRow := int(rowGen.Next())
 			copy(arr[currPos:], arr[prevRow+1:currRow])

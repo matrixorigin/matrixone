@@ -548,6 +548,9 @@ func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 		case 16:
 			typ = types.T_decimal128.ToType()
 			typ.Width = 128
+		case 17:
+			typ = types.T_bool.ToType()
+			typ.Width = 8
 		}
 
 		if pkIdx == i {

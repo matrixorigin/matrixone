@@ -165,6 +165,15 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		return
 	}
 	switch zm.typ.Oid {
+	case types.T_bool:
+		if _, err = w.Write(encoding.EncodeBool(zm.min.(bool))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeBool(zm.max.(bool))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_int8:
 		if _, err = w.Write(encoding.EncodeInt8(zm.min.(int8))); err != nil {
 			return
@@ -305,6 +314,11 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 	}
 	zm.inited = true
 	switch zm.typ.Oid {
+	case types.T_bool:
+		zm.min = encoding.DecodeBool(buf[:1])
+		buf = buf[1:]
+		zm.max = encoding.DecodeBool(buf[:1])
+		return nil
 	case types.T_int8:
 		zm.min = encoding.DecodeInt8(buf[:1])
 		buf = buf[1:]

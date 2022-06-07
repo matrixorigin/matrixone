@@ -30,6 +30,8 @@ func Hash(v any, typ types.Type) (uint64, error) {
 
 func DecodeKey(key []byte, typ types.Type) any {
 	switch typ.Oid {
+	case types.T_bool:
+		return encoding.DecodeBool(key)
 	case types.T_int8:
 		return encoding.DecodeInt8(key)
 	case types.T_int16:
@@ -69,6 +71,8 @@ func DecodeKey(key []byte, typ types.Type) any {
 
 func EncodeKey(key any, typ types.Type) []byte {
 	switch typ.Oid {
+	case types.T_bool:
+		return encoding.EncodeBool(key.(bool))
 	case types.T_int8:
 		return encoding.EncodeInt8(key.(int8))
 	case types.T_int16:
@@ -112,6 +116,22 @@ func ProcessVector(vec *vector.Vector, offset uint32, length uint32, task func(v
 		idxes = keyselects.ToArray()
 	}
 	switch vec.Typ.Oid {
+	case types.T_bool:
+		vs := vec.Col.([]bool)[offset:]
+		if keyselects == nil {
+			for i, v := range vs {
+				if err := task(v, uint32(i)); err != nil {
+					return err
+				}
+			}
+		} else {
+			for _, idx := range idxes {
+				v := vs[idx]
+				if err := task(v, idx); err != nil {
+					return err
+				}
+			}
+		}
 	case types.T_int8:
 		vs := vec.Col.([]int8)[offset:]
 		if keyselects == nil {

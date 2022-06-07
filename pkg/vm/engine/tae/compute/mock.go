@@ -39,6 +39,17 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 	}
 	var vec vector.IVector
 	switch t.Oid {
+	case types.T_bool:
+		vec = vector.NewStdVector(t, rows)
+		vals := make([]bool, 0, rows)
+		for i := int32(1); i <= int32(rows); i++ {
+			if i%2 == 0 {
+				vals = append(vals, true)
+			} else {
+				vals = append(vals, false)
+			}
+		}
+		vec.Append(len(vals), vals)
 	case types.T_int8:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int8
@@ -292,6 +303,16 @@ func MockBatch(types []types.Type, rows uint64, uniqueIdx int, provider *MockDat
 func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	vec := movec.New(typ)
 	switch typ.Oid {
+	case types.T_bool:
+		data := make([]bool, 0)
+		for i := 0; i < rows; i++ {
+			if i%2 == 0 {
+				data = append(data, true)
+			} else {
+				data = append(data, false)
+			}
+		}
+		_ = movec.Append(vec, data)
 	case types.T_int8:
 		data := make([]int8, 0)
 		for i := 0; i < rows; i++ {
