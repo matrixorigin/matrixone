@@ -12,10 +12,47 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package segmentio
 
-type Allocator interface {
-	Allocate(len uint64) (uint64, uint64)
-	Free(start uint32, len uint32)
-	CheckAllocations(start uint32, len uint32)
+type ExtentType uint8
+
+const (
+	APPEND ExtentType = iota
+	UPDATE
+)
+
+type entry struct {
+	offset uint32
+	length uint32
+}
+
+type Extent struct {
+	typ    ExtentType
+	offset uint32
+	length uint32
+	data   entry
+}
+
+func (ex *Extent) End() uint32 {
+	return ex.offset + ex.length
+}
+
+func (ex *Extent) Offset() uint32 {
+	return ex.offset
+}
+
+func (ex *Extent) Length() uint32 {
+	return ex.length
+}
+
+func (ex *Extent) GetData() *entry {
+	return &ex.data
+}
+
+func (en *entry) GetOffset() uint32 {
+	return en.offset
+}
+
+func (en *entry) GetLength() uint32 {
+	return en.length
 }

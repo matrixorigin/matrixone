@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package segmentio
 
 import (
 	"bytes"
@@ -22,13 +22,13 @@ import (
 )
 
 type Log struct {
-	logFile   *BlockFile
+	logFile   *DriverFile
 	seq       uint64
 	offset    uint64
 	allocator Allocator
 }
 
-func (l *Log) readInode(cache *bytes.Buffer, file *BlockFile) (n int, err error) {
+func (l *Log) readInode(cache *bytes.Buffer, file *DriverFile) (n int, err error) {
 	var nameLen uint32
 	var extentLen uint64
 	n = 0
@@ -126,18 +126,18 @@ func (l *Log) Replay(cache *bytes.Buffer) error {
 
 func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32, err error) {
 	hole = 0
-	pos, err = l.logFile.segment.segFile.ReadAt(data.Bytes(), offset)
+	pos, err = l.logFile.driver.segFile.ReadAt(data.Bytes(), offset)
 	if err != nil && err != io.EOF {
 		return 0, hole, err
 	}
 	if pos != data.Len() {
 		panic(any("Replay read error"))
 	}
-	l.logFile.segment.mutex.Lock()
-	defer l.logFile.segment.mutex.Unlock()
-	l.logFile.segment.lastInode = 1
+	l.logFile.driver.mutex.Lock()
+	defer l.logFile.driver.mutex.Unlock()
+	l.logFile.driver.lastInode = 1
 	l.logFile.name = "logfile"
-	l.logFile.segment.nodes[l.logFile.name] = l.logFile
+	l.logFile.driver.nodes[l.logFile.name] = l.logFile
 	magicLen := uint32(unsafe.Sizeof(l.logFile.snode.magic))
 	buffer := data.Bytes()
 	cache := bytes.NewBuffer(buffer)
@@ -145,41 +145,41 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 		if hole >= HOLE_SIZE {
 			break
 		}
-		file := &BlockFile{
-			snode:   &Inode{},
-			segment: l.logFile.segment,
+		file := &DriverFile{
+			snode:  &Inode{},
+			driver: l.logFile.driver,
 		}
 		n, err := l.readInode(cache, file)
 		if err != nil {
 			return 0, hole, err
 		}
 		if n == 0 {
-			if int(l.logFile.segment.super.inodeSize) == cache.Len() {
+			if int(l.logFile.driver.super.inodeSize) == cache.Len() {
 				break
 			}
-			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.segment.super.inodeSize-magicLen:])
-			hole += l.logFile.segment.super.inodeSize
+			cache = bytes.NewBuffer(cache.Bytes()[l.logFile.driver.super.inodeSize-magicLen:])
+			hole += l.logFile.driver.super.inodeSize
 			continue
 		}
-		seekLen := l.logFile.segment.super.inodeSize - (uint32(n) % l.logFile.segment.super.inodeSize)
+		seekLen := l.logFile.driver.super.inodeSize - (uint32(n) % l.logFile.driver.super.inodeSize)
 		if file.snode.state == REMOVE {
-			l.logFile.segment.nodes[file.name] = file
+			l.logFile.driver.nodes[file.name] = file
 		} else {
-			block := l.logFile.segment.nodes[file.name]
+			block := l.logFile.driver.nodes[file.name]
 			if (block == nil || block.snode.seq < file.snode.seq) &&
 				file.snode.state == RESIDENT {
 				extents := file.GetExtents()
 				for _, extent := range *extents {
-					l.logFile.segment.allocator.CheckAllocations(
+					l.logFile.driver.allocator.CheckAllocations(
 						extent.offset-DATA_START, extent.length)
 				}
 				file.snode.logExtents.length = uint32(n + int(seekLen))
 				file.snode.logExtents.offset = uint32(int(offset) + data.Cap() - cache.Len() - n)
 				l.allocator.CheckAllocations(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
-				l.logFile.segment.nodes[file.name] = file
+				l.logFile.driver.nodes[file.name] = file
 			}
 			if block == nil {
-				l.logFile.segment.lastInode++
+				l.logFile.driver.lastInode++
 			}
 		}
 		if int(seekLen) == cache.Len() {
@@ -187,17 +187,17 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 		}
 		cache = bytes.NewBuffer(cache.Bytes()[seekLen:])
 	}
-	nodes := l.logFile.segment.nodes
+	nodes := l.logFile.driver.nodes
 	for _, file := range nodes {
 		if file.snode.state == REMOVE {
-			delete(l.logFile.segment.nodes, file.name)
+			delete(l.logFile.driver.nodes, file.name)
 		}
 
 	}
 	return pos, hole, nil
 }
 
-func (l *Log) RemoveInode(file *BlockFile) error {
+func (l *Log) RemoveInode(file *DriverFile) error {
 	file.snode.state = REMOVE
 	err := l.Append(file)
 	if err != nil {
@@ -207,12 +207,12 @@ func (l *Log) RemoveInode(file *BlockFile) error {
 	return nil
 }
 
-func (l *Log) Append(file *BlockFile) error {
+func (l *Log) Append(file *DriverFile) error {
 	var (
 		err     error
 		ibuffer bytes.Buffer
 	)
-	segment := l.logFile.segment
+	segment := l.logFile.driver
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.magic); err != nil {
 		return err
 	}
@@ -288,7 +288,7 @@ func (l *Log) CoverState(start uint32, state StateType) error {
 		err     error
 		ibuffer bytes.Buffer
 	)
-	segment := l.logFile.segment
+	segment := l.logFile.driver
 	if err = binary.Write(&ibuffer, binary.BigEndian, state); err != nil {
 		return err
 	}
