@@ -1862,22 +1862,17 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 					if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
 						if un, ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
 							param := strings.ToLower(un.Parts[0])
-							switch param {
-							case "database":
-								fallthrough
-							case "current_user":
-								fallthrough
-							case "connection_id":
-								fallthrough
-							default:
+							if param == "database" ||
+								param == "current_user" ||
+								param == "connection_id" {
 								err = mce.handleSelectXXX(param)
-							}
-							if err != nil {
-								goto handleFailed
-							}
+								if err != nil {
+									goto handleFailed
+								}
 
-							//next statement
-							goto handleSucceeded
+								//next statement
+								goto handleSucceeded
+							}
 						}
 					} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
 						//TODO: fix multiple variables in single statement like `select @@a,@@b,@@c`
