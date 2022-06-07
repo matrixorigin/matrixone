@@ -475,7 +475,7 @@ func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
 
 func MockSchema(colCnt int, pkIdx int) *Schema {
 	rand.Seed(time.Now().UnixNano())
-	schema := NewEmptySchema(fmt.Sprintf("%s", time.Now()))
+	schema := NewEmptySchema(time.Now().String())
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
