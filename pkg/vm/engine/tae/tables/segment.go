@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -36,11 +35,10 @@ type dataSegment struct {
 }
 
 func newSegment(meta *catalog.SegmentEntry,
-	factory file.SegmentFileFactory,
+	factory file.SegmentFactory,
 	bufMgr base.INodeManager,
 	dir string) *dataSegment {
-	filePath := fmt.Sprintf("%s/%d.seg", dir, meta.GetID())
-	segFile := factory(filePath, meta.GetID())
+	segFile := factory.Build(dir, meta.GetID())
 	seg := &dataSegment{
 		meta:      meta,
 		file:      segFile,

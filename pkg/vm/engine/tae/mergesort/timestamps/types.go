@@ -12,28 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package timestamps
 
-import (
-	"errors"
-	"io"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-)
-
-var (
-	ErrInvalidParam = errors.New("tae: invalid param")
-	ErrInvalidName  = errors.New("tae: invalid name")
-)
-
-type Base interface {
-	common.IRef
-	io.Closer
-	Fingerprint() *common.ID
+type sortElem struct {
+	data types.Timestamp
+	idx  uint32
 }
 
-type SegmentFactory interface {
-	Build(dir string, id uint64) Segment
-	EncodeName(id uint64) string
-	DecodeName(name string) (id uint64, err error)
+type sortSlice []sortElem
+
+func (x sortSlice) Less(i, j int) bool { return x[i].data < x[j].data }
+func (x sortSlice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+
+type heapElem struct {
+	data types.Timestamp
+	src  uint32
+	next uint32
 }
+
+type heapSlice []heapElem
+
+func (x heapSlice) Less(i, j int) bool { return x[i].data < x[j].data }
+func (x heapSlice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }

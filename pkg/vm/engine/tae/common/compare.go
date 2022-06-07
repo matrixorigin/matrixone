@@ -106,6 +106,14 @@ func CompareGeneric(a, b any, t types.Type) int {
 		} else {
 			return 0
 		}
+	case types.T_timestamp:
+		if a.(types.Timestamp) > b.(types.Timestamp) {
+			return 1
+		} else if a.(types.Timestamp) < b.(types.Timestamp) {
+			return -1
+		} else {
+			return 0
+		}
 	case types.T_date:
 		if a.(types.Date) > b.(types.Date) {
 			return 1

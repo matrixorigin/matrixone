@@ -43,13 +43,13 @@ func mockFunctionRegister() [][]Function {
 	mockRegister[1] = []Function{
 		{
 			Index: 0,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) bool {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) bool {
 				return len(inputTypes) < 3
 			},
 		},
 		{
 			Index: 1,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) bool {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) bool {
 				return len(inputTypes) == 1
 			},
 		},

@@ -171,6 +171,14 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 		if len(args) != 2 {
 			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
 		}
+		if args[0].Typ.Id == plan.Type_VARCHAR {
+			args[0], err = appendCastExpr(args[0], &plan.Type{
+				Id: plan.Type_DATE,
+			})
+			if err != nil {
+				return
+			}
+		}
 		args, err = resetIntervalFunctionExprs(args[0], args[1])
 		if err != nil {
 			return

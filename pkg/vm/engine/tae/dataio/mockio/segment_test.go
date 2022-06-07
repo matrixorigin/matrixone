@@ -15,7 +15,6 @@
 package mockio
 
 import (
-	"path"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -29,9 +28,8 @@ const (
 
 func TestSegment1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	name := path.Join(dir, "seg")
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFileMockFactory(name, id)
+	seg := SegmentFactory.Build(dir, id)
 	fp := seg.Fingerprint()
 	assert.Equal(t, id, fp.SegmentID)
 
