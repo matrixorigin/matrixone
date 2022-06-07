@@ -30,3 +30,9 @@ type Base interface {
 	io.Closer
 	Fingerprint() *common.ID
 }
+
+type SegmentFactory interface {
+	Build(dir string, id uint64) Segment
+	EncodeName(id uint64) string
+	DecodeName(name string) (id uint64)
+}

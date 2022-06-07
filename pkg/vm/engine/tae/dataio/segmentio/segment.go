@@ -17,6 +17,7 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,11 +28,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
 
-var SegmentFileIOFactory = func(name string, id uint64) file.Segment {
-	return newSegmentFile(name, id)
+var SegmentFactory file.SegmentFactory
+var SegmentOpenFactory file.SegmentFactory
+
+func init() {
+	SegmentFactory = new(segmentFactory)
+	SegmentOpenFactory = &segmentOpenFactory{
+		segmentFactory: new(segmentFactory),
+	}
 }
 
-var SegmentFileIOOpenFactory = func(name string, id uint64) file.Segment {
+type segmentFactory struct{}
+type segmentOpenFactory struct {
+	*segmentFactory
+}
+
+func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
+	baseName := factory.EncodeName(id)
+	name := path.Join(dir, baseName)
+	return newSegment(name, id)
+}
+
+func (factory *segmentFactory) EncodeName(id uint64) string {
+	return fmt.Sprintf("%d.seg", id)
+}
+
+func (factory *segmentFactory) DecodeName(name string) (id uint64) {
+	trimmed := strings.TrimSuffix(name, ".seg")
+	if trimmed == name {
+		panic("invalid segment name")
+	}
+	id, err := strconv.ParseUint(trimmed, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
+func (factory *segmentOpenFactory) Build(dir string, id uint64) file.Segment {
+	baseName := factory.EncodeName(id)
+	name := path.Join(dir, baseName)
 	return openSegment(name, id)
 }
 
@@ -164,7 +200,7 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 	return nil
 }
 
-func newSegmentFile(name string, id uint64) *segmentFile {
+func newSegment(name string, id uint64) *segmentFile {
 	sf := &segmentFile{
 		blocks: make(map[uint64]*blockFile),
 		name:   name,

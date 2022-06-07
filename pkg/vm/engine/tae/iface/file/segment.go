@@ -16,10 +16,9 @@ package file
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
-
-type SegmentFileFactory = func(dir string, id uint64) Segment
 
 type Segment interface {
 	Base

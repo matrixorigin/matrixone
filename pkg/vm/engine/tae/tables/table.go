@@ -23,12 +23,12 @@ import (
 
 type dataTable struct {
 	meta        *catalog.TableEntry
-	fileFactory file.SegmentFileFactory
+	fileFactory file.SegmentFactory
 	bufMgr      base.INodeManager
 	aBlk        *dataBlock
 }
 
-func newTable(meta *catalog.TableEntry, fileFactory file.SegmentFileFactory, bufMgr base.INodeManager) *dataTable {
+func newTable(meta *catalog.TableEntry, fileFactory file.SegmentFactory, bufMgr base.INodeManager) *dataTable {
 	return &dataTable{
 		meta:        meta,
 		fileFactory: fileFactory,
