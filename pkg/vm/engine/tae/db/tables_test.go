@@ -47,7 +47,7 @@ func TestTables1(t *testing.T) {
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
 
-	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, db.MTBufMgr, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(mockio.SegmentFactory, db.MTBufMgr, db.Scheduler, db.Dir)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()

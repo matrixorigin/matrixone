@@ -1,9 +1,8 @@
 package db
 
 import (
+	"errors"
 	"io/ioutil"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 
@@ -11,6 +10,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -18,7 +19,8 @@ import (
 )
 
 const (
-	ModuleName = "TAEDB"
+	ModuleName    = "TAEDB"
+	defaultTestDB = "db"
 )
 
 func initDB(t *testing.T, opts *options.Options) *DB {
@@ -28,21 +30,17 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 	return db
 }
 
-func getSegmentFileNames(dir string) (names map[uint64]string) {
+func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := ioutil.ReadDir(dir)
+	files, err := ioutil.ReadDir(e.Dir)
 	if err != nil {
 		panic(err)
 	}
 	for _, f := range files {
 		name := f.Name()
-		segName := strings.TrimSuffix(name, ".seg")
-		if segName == name {
-			continue
-		}
-		id, err := strconv.ParseUint(segName, 10, 64)
+		id, err := e.FileFactory.DecodeName(name)
 		if err != nil {
-			panic(err)
+			continue
 		}
 		names[id] = name
 	}
@@ -81,6 +79,12 @@ func dropRelation(t *testing.T, e *DB, dbName, name string) {
 }
 
 func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
+	txn, db, rel := createRelationNoCommit(t, e, dbName, schema, createDB)
+	assert.NoError(t, txn.Commit())
+	return
+}
+
+func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.Schema, createDB bool) (txn txnif.AsyncTxn, db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
 	if createDB {
@@ -92,7 +96,6 @@ func createRelation(t *testing.T, e *DB, dbName string, schema *catalog.Schema, 
 	}
 	rel, err = db.CreateRelation(schema)
 	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
 	return
 }
 
@@ -118,6 +121,76 @@ func createRelationAndAppend(
 	assert.NoError(t, err)
 	assert.Nil(t, txn.Commit())
 	return
+}
+
+func getRelation(t *testing.T, e *DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
+	txn, err := e.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.GetDatabase(dbName)
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(tblName)
+	assert.NoError(t, err)
+	return
+}
+
+func getDefaultRelation(t *testing.T, e *DB, name string) (txn txnif.AsyncTxn, rel handle.Relation) {
+	return getRelation(t, e, defaultTestDB, name)
+}
+
+func getOneBlock(rel handle.Relation) handle.Block {
+	it := rel.MakeBlockIt()
+	return it.GetBlock()
+}
+
+func getOneBlockMeta(rel handle.Relation) *catalog.BlockEntry {
+	it := rel.MakeBlockIt()
+	return it.GetBlock().GetMeta().(*catalog.BlockEntry)
+}
+
+func checkAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
+	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	for _, def := range schema.ColDefs {
+		rows := getColumnRowsByScan(t, rel, def.Idx, applyDelete)
+		assert.Equal(t, expectRows, rows)
+	}
+}
+
+func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDelete bool) int {
+	rows := 0
+	forEachColumnView(rel, colIdx, func(view *model.ColumnView) (err error) {
+		if applyDelete {
+			view.ApplyDeletes()
+		}
+		rows += view.Length()
+		return
+	})
+	return rows
+}
+
+func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
+	forEachBlock(rel, func(blk handle.Block) (err error) {
+		view, err := blk.GetColumnDataById(colIdx, nil, nil)
+		if err != nil {
+			return
+		}
+		err = fn(view)
+		return
+	})
+}
+
+func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
+	it := rel.MakeBlockIt()
+	var err error
+	for it.Valid() {
+		if err = fn(it.GetBlock()); err != nil {
+			if errors.Is(err, handle.ErrIteratorEnd) {
+				return
+			} else {
+				panic(err)
+			}
+		}
+		it.Next()
+	}
 }
 
 func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
