@@ -17,6 +17,9 @@ package mockio
 import (
 	"bytes"
 	"fmt"
+	"path"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,8 +28,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
 
-var SegmentFileMockFactory = func(name string, id uint64) file.Segment {
+var SegmentFactory file.SegmentFactory
+
+func init() {
+	SegmentFactory = new(segmentFactory)
+}
+
+type segmentFactory struct{}
+
+func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
+	baseName := factory.EncodeName(id)
+	name := path.Join(dir, baseName)
 	return mockFS.OpenFile(name, id)
+}
+
+func (factory *segmentFactory) EncodeName(id uint64) string {
+	return fmt.Sprintf("%d.seg", id)
+}
+
+func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
+	trimmed := strings.TrimSuffix(name, ".seg")
+	if trimmed == name {
+		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+	}
+	id, err = strconv.ParseUint(trimmed, 10, 64)
+	if err != nil {
+		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+	}
+	return
 }
 
 type segmentFile struct {
@@ -86,6 +115,7 @@ func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (b
 	return
 }
 
+func (sf *segmentFile) Name() string { return sf.name }
 func (sf *segmentFile) RemoveBlock(id uint64) {
 	sf.Lock()
 	defer sf.Unlock()
