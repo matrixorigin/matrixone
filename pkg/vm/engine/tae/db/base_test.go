@@ -3,8 +3,6 @@ package db
 import (
 	"errors"
 	"io/ioutil"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 
@@ -32,21 +30,17 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 	return db
 }
 
-func getSegmentFileNames(dir string) (names map[uint64]string) {
+func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := ioutil.ReadDir(dir)
+	files, err := ioutil.ReadDir(e.Dir)
 	if err != nil {
 		panic(err)
 	}
 	for _, f := range files {
 		name := f.Name()
-		segName := strings.TrimSuffix(name, ".seg")
-		if segName == name {
-			continue
-		}
-		id, err := strconv.ParseUint(segName, 10, 64)
+		id, err := e.FileFactory.DecodeName(name)
 		if err != nil {
-			panic(err)
+			continue
 		}
 		names[id] = name
 	}

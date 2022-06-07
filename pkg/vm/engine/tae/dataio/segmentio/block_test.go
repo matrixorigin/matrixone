@@ -36,7 +36,7 @@ func TestBlock1(t *testing.T) {
 	}
 	var block file.Block
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFactory.Build(dir, id)
+	seg := SegmentFactory.Build(dir, id).(*segmentFile)
 	block = newBlock(common.NextGlobalSeqNum(), seg, colCnt, indexCnt)
 	blockTs := common.NextGlobalSeqNum()
 	err := block.WriteTS(blockTs)

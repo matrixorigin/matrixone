@@ -17,8 +17,9 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -35,7 +36,7 @@ import (
 
 type blockFile struct {
 	common.RefHelper
-	seg       file.Segment
+	seg       *segmentFile
 	rows      uint32
 	id        uint64
 	ts        uint64
@@ -45,7 +46,7 @@ type blockFile struct {
 	destroy   sync.Mutex
 }
 
-func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,
 		id:      id,
@@ -68,7 +69,7 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 	return bf
 }
 
-func replayBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,
 		id:      id,

@@ -46,14 +46,14 @@ func (factory *segmentFactory) EncodeName(id uint64) string {
 	return fmt.Sprintf("%d.seg", id)
 }
 
-func (factory *segmentFactory) DecodeName(name string) (id uint64) {
+func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 	trimmed := strings.TrimSuffix(name, ".seg")
 	if trimmed == name {
-		panic("invalid segment name")
+		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
 	}
-	id, err := strconv.ParseUint(trimmed, 10, 64)
+	id, err = strconv.ParseUint(trimmed, 10, 64)
 	if err != nil {
-		panic(err)
+		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
 	}
 	return
 }
@@ -115,6 +115,7 @@ func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (b
 	return
 }
 
+func (sf *segmentFile) Name() string { return sf.name }
 func (sf *segmentFile) RemoveBlock(id uint64) {
 	sf.Lock()
 	defer sf.Unlock()
