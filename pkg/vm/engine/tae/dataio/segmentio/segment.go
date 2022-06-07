@@ -42,11 +42,11 @@ func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
 }
 
 func (factory *segmentFactory) EncodeName(id uint64) string {
-	return fmt.Sprintf("%d.driver", id)
+	return fmt.Sprintf("%d.seg", id)
 }
 
 func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
-	trimmed := strings.TrimSuffix(name, ".driver")
+	trimmed := strings.TrimSuffix(name, ".seg")
 	if trimmed == name {
 		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
 		return
