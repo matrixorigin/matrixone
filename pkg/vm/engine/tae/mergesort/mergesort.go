@@ -86,7 +86,7 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 		}
 		switch cols[i].Typ.Oid {
 		case types.T_bool:
-			int8s.Shuffle(cols[i], sortedIdx)
+			bools.Shuffle(cols[i], sortedIdx)
 		case types.T_int8:
 			int8s.Shuffle(cols[i], sortedIdx)
 		case types.T_int16:

@@ -178,7 +178,11 @@ func TestAppend4(t *testing.T) {
 		checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
 		err = txn.Commit()
 		assert.NoError(t, err)
-		// compactBlocks(t, tae, defaultTestDB, schema, false)
+		compactBlocks(t, tae, defaultTestDB, schema, false)
+		txn, rel = getDefaultRelation(t, tae, schema.Name)
+		checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, false)
+		err = txn.Commit()
+		assert.NoError(t, err)
 	}
 }
 
