@@ -28,6 +28,7 @@ import (
 	"github.com/lni/goutils/syncutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/logservice/pb/heartbeat"
 )
 
@@ -159,14 +160,14 @@ func (l *logStore) GetShardInfo(shardID uint64) (dragonboat.ShardView, bool) {
 
 func (l *logStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
-	raftConfig := getRaftConfig(defaultHAKeeperShardID, replicaID)
+	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
 	// TODO: add another API for joining
-	return l.nh.StartReplica(initialReplicas, false, newHAKeeperStateMachine, raftConfig)
+	return l.nh.StartReplica(initialReplicas, false, hakeeper.NewHAKeeperStateMachine, raftConfig)
 }
 
 func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
-	if shardID == defaultHAKeeperShardID {
+	if shardID == hakeeper.DefaultHAKeeperShardID {
 		return ErrInvalidShardID
 	}
 	raftConfig := getRaftConfig(shardID, replicaID)
@@ -456,7 +457,7 @@ func (l *logStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
 		// ignore the special HAKeeper shard
-		if ci.ShardID != defaultHAKeeperShardID {
+		if ci.ShardID != hakeeper.DefaultHAKeeperShardID {
 			shardInfo := &heartbeat.LogShardInfo{
 				ShardID:  ci.ShardID,
 				Replicas: ci.Nodes,

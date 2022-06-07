@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"encoding/binary"
+	"encoding/gob"
 	"io"
 	"sync"
 
@@ -240,7 +241,8 @@ func (s *stateMachine) PrepareSnapshot() (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(sess interface{},
 	w io.Writer, _ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	return gobMarshalTo(w, sess.(*stateMachine))
+	enc := gob.NewEncoder(w)
+	return enc.Encode(sess.(*stateMachine))
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
@@ -248,5 +250,6 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return gobUnmarshalFrom(r, s)
+	dec := gob.NewDecoder(r)
+	return dec.Decode(s)
 }

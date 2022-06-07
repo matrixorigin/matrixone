@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logservice
+package hakeeper
 
 import (
+	"encoding/binary"
+	"encoding/gob"
 	"io"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
@@ -22,8 +24,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+var (
+	binaryEnc = binary.BigEndian
+)
+
 const (
-	defaultHAKeeperShardID uint64 = 0
+	headerSize = 2
+)
+
+const (
+	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
+	// shard.
+	DefaultHAKeeperShardID uint64 = 0
 	queryLogShardIDTag     uint16 = 0xAE01
 	createLogShardTag      uint16 = 0xAE02
 )
@@ -32,6 +44,10 @@ type haSM struct {
 	replicaID uint64
 	GlobalID  uint64
 	LogShards map[string]uint64
+}
+
+func parseCmdTag(cmd []byte) uint16 {
+	return binaryEnc.Uint16(cmd)
 }
 
 func getQueryLogShardIDCmd(name string) []byte {
@@ -67,8 +83,8 @@ func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
 	return "", false
 }
 
-func newHAKeeperStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
-	if shardID != defaultHAKeeperShardID {
+func NewHAKeeperStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
+	if shardID != DefaultHAKeeperShardID {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "invalid HAKeeper shard ID"))
 	}
 	return &haSM{
@@ -124,10 +140,12 @@ func (h *haSM) Lookup(query interface{}) (interface{}, error) {
 
 func (h *haSM) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	return gobMarshalTo(w, h)
+	enc := gob.NewEncoder(w)
+	return enc.Encode(h)
 }
 
 func (h *haSM) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
-	return gobUnmarshalFrom(r, h)
+	dec := gob.NewDecoder(r)
+	return dec.Decode(h)
 }

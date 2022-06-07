@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logservice
+package hakeeper
 
 import (
 	"bytes"
@@ -51,14 +51,14 @@ func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
 			t.Fatalf("failed to panic")
 		}
 	}()
-	tsm := newHAKeeperStateMachine(0, 1).(*haSM)
+	tsm := NewHAKeeperStateMachine(0, 1).(*haSM)
 	assert.Equal(t, uint64(1), tsm.replicaID)
-	newHAKeeperStateMachine(1, 1)
+	NewHAKeeperStateMachine(1, 1)
 }
 
 func TestHAKeeperStateMachineSnapshot(t *testing.T) {
-	tsm1 := newHAKeeperStateMachine(0, 1).(*haSM)
-	tsm2 := newHAKeeperStateMachine(0, 2).(*haSM)
+	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
+	tsm2 := NewHAKeeperStateMachine(0, 2).(*haSM)
 	tsm1.GlobalID = 12345
 	tsm1.LogShards["test1"] = 23456
 	tsm1.LogShards["test2"] = 34567
@@ -73,7 +73,7 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 
 func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
-	tsm1 := newHAKeeperStateMachine(0, 1).(*haSM)
+	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
 	tsm1.GlobalID = 100
 
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
@@ -91,7 +91,7 @@ func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 
 func TestHAKeeperQueryLogShardID(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
-	tsm1 := newHAKeeperStateMachine(0, 1).(*haSM)
+	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
 	tsm1.GlobalID = 100
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
@@ -109,6 +109,6 @@ func TestHAKeeperQueryLogShardID(t *testing.T) {
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {
-	tsm1 := newHAKeeperStateMachine(0, 1).(*haSM)
+	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
 	assert.Nil(t, tsm1.Close())
 }
