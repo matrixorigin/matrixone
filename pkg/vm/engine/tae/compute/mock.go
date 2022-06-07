@@ -49,7 +49,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, false)
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_int8:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int8
@@ -66,7 +66,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, int8(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_int16:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int16
@@ -80,7 +80,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, int16(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_int32:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int32
@@ -94,7 +94,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, int32(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_int64:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int64
@@ -108,7 +108,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, int64(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_uint8:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint8
@@ -125,7 +125,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, uint8(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_uint16:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint16
@@ -139,7 +139,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, uint16(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_uint32:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint32
@@ -153,7 +153,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, uint32(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_uint64:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint64
@@ -167,7 +167,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, uint64(ival))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_float32:
 		vec = vector.NewStdVector(t, rows)
 		var vals []float32
@@ -176,7 +176,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			val2 := rand.Intn(math.MaxInt32) + 1
 			vals = append(vals, float32(val1)/float32(val2))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_float64:
 		vec = vector.NewStdVector(t, rows)
 		var vals []float64
@@ -185,7 +185,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			val2 := rand.Intn(math.MaxInt32) + 1
 			vals = append(vals, float64(val1)/float64(val2))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_varchar, types.T_char:
 		vec = vector.NewStrVector(t, rows)
 		vals := make([][]byte, 0, rows)
@@ -203,42 +203,42 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 				vals = append(vals, []byte(s))
 			}
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_datetime:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Datetime, 0, rows)
 		for i := uint64(1); i <= rows; i++ {
 			vals = append(vals, types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_date:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Date, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.FromCalendar(i*100, 1, 1))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_timestamp:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Timestamp, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.Timestamp(common.NextGlobalSeqNum()))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_decimal64:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Decimal64, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.Decimal64(common.NextGlobalSeqNum()))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.T_decimal128:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Decimal128, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.Decimal128{Lo: int64(common.NextGlobalSeqNum())})
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	default:
 		panic("not supported")
 	}
