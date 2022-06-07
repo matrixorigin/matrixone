@@ -184,6 +184,15 @@ func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, er
 	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
 }
 
+func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, err error) {
+	id, row, err := h.GetByFilter(filter)
+	if err != nil {
+		return
+	}
+	v, err = h.GetValue(id, row, uint16(col))
+	return
+}
+
 func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error) {
 	id, row, err := h.table.GetByFilter(filter)
 	if err != nil {
