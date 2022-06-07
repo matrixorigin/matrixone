@@ -765,12 +765,13 @@ func TestMVCC1(t *testing.T) {
 
 	assert.NoError(t, txn2.Commit())
 
-	id, offset, err := rel.GetByFilter(filter)
+	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
+	var id *common.ID
 
 	{
 		txn, rel := getDefaultRelation(t, db, schema.Name)
-		id, offset, err = rel.GetByFilter(filter)
+		id, _, err = rel.GetByFilter(filter)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
@@ -787,8 +788,6 @@ func TestMVCC1(t *testing.T) {
 			assert.Nil(t, view.DeleteMask)
 			assert.NotNil(t, view.GetColumnData())
 			t.Log(view.GetColumnData().String())
-			t.Log(offset)
-			t.Log(val2)
 			t.Log(vector.Length(bats[0].Vecs[0]))
 			assert.Equal(t, vector.Length(bats[0].Vecs[0]), vector.Length(view.AppliedVec))
 		}
