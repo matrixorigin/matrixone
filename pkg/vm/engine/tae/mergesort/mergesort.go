@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/int32s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/int64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/int8s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/timestamps"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uint16s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uint32s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uint64s"
@@ -66,6 +67,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 		decimal64s.Sort(cols[pk], sortedIdx)
 	case types.T_decimal128:
 		decimal128s.Sort(cols[pk], sortedIdx)
+	case types.T_timestamp:
+		timestamps.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
 		varchar.Sort(cols[pk], sortedIdx)
 	}
@@ -103,6 +106,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 			decimal64s.Shuffle(cols[i], sortedIdx)
 		case types.T_decimal128:
 			decimal128s.Shuffle(cols[i], sortedIdx)
+		case types.T_timestamp:
+			timestamps.Shuffle(cols[i], sortedIdx)
 		case types.T_char, types.T_json, types.T_varchar:
 			varchar.Shuffle(cols[i], sortedIdx)
 		}
@@ -141,6 +146,8 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout,
 		ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_decimal128:
 		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
+	case types.T_timestamp:
+		ret, mapping = timestamps.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
 	}
@@ -177,6 +184,8 @@ func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLa
 		ret = decimal64s.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_decimal128:
 		ret = decimal128s.Multiplex(column, sortedIdx, fromLayout, toLayout)
+	case types.T_timestamp:
+		ret = timestamps.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar:
 		ret = varchar.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	}
