@@ -176,12 +176,17 @@ func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
 
 func (l *logStore) propose(ctx context.Context,
 	session *client.Session, cmd []byte) (sm.Result, error) {
+	count := 0
 	for {
+		count++
 		result, err := l.nh.SyncPropose(ctx, session, cmd)
 		if err != nil {
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
 				continue
+			}
+			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
+				return sm.Result{}, dragonboat.ErrTimeout
 			}
 			return sm.Result{}, err
 		}
@@ -191,14 +196,19 @@ func (l *logStore) propose(ctx context.Context,
 
 func (l *logStore) read(ctx context.Context,
 	shardID uint64, query interface{}) (interface{}, error) {
+	count := 0
 	for {
+		count++
 		result, err := l.nh.SyncRead(ctx, shardID, query)
 		if err != nil {
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
 				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
 				continue
 			}
-			return result, err
+			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
+				return nil, dragonboat.ErrTimeout
+			}
+			return nil, err
 		}
 		return result, nil
 	}

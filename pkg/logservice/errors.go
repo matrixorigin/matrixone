@@ -38,9 +38,7 @@ func getErrorToCodeMapping() []errorToCode {
 	return []errorToCode{
 		{dragonboat.ErrTimeout, rpc.ErrorCode_Timeout, true},
 		{dragonboat.ErrShardNotFound, rpc.ErrorCode_InvalidShard, true},
-		// we keep retrying on the service side when shard is not ready
-		// this can cause ErrTimeoutTooSmall to be returned, treat it
-		// as a timeout error
+		// TODO: why ErrTimeoutTooSmall is possible
 		{dragonboat.ErrTimeoutTooSmall, rpc.ErrorCode_Timeout, false},
 		{dragonboat.ErrPayloadTooBig, rpc.ErrorCode_InvalidPayloadSize, true},
 		{dragonboat.ErrRejected, rpc.ErrorCode_Rejected, true},
