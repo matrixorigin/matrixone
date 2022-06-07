@@ -16,8 +16,6 @@ import (
 // builtins,	see initBuiltIns
 // operators,	see initOperators
 func init() {
-	test()
-
 	initRelatedStructure()
 
 	initOperators()
