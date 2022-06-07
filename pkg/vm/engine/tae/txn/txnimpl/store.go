@@ -408,7 +408,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		return
 	}
 
-	logEntry, err := store.cmdMgr.ApplyTxnRecord()
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
 	if err != nil {
 		return
 	}

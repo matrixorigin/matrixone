@@ -304,7 +304,7 @@ func buildColRefExpr(astExpr *tree.UnresolvedName, ctx CompilerContext, query *Q
 		name := astExpr.Parts[0]
 		if binderCtx != nil {
 			if val, ok := binderCtx.columnAlias[name]; ok {
-				return val, nil
+				return DeepCopyExpr(val), nil
 			}
 		}
 
@@ -383,16 +383,51 @@ func buildComparisonExpr(astExpr *tree.ComparisonExpr, ctx CompilerContext, quer
 		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("not", []*Expr{resultExpr})
 		return
 	case tree.IN:
-		return getFunctionExprByNameAndAstExprs("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		return buildInExpr(astExpr, ctx, query, node, binderCtx, needAgg)
 	case tree.NOT_IN:
-		resultExpr, isAgg, err = getFunctionExprByNameAndAstExprs("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+		return buildNotInExpr(astExpr, ctx, query, node, binderCtx, needAgg)
+	}
+	return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
+}
+
+func buildInExpr(astExpr *tree.ComparisonExpr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (resultExpr *Expr, isAgg bool, err error) {
+	switch list := astExpr.Right.(type) {
+	case *tree.Tuple:
+		var new_expr tree.Expr
+		for _, expr := range list.Exprs {
+			if new_expr == nil {
+				new_expr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+			} else {
+				equal_expr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+				new_expr = tree.NewOrExpr(new_expr, equal_expr)
+			}
+		}
+		return buildExpr(new_expr, ctx, query, node, binderCtx, needAgg)
+	default:
+		return getFunctionExprByNameAndAstExprs("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
+	}
+}
+
+func buildNotInExpr(astExpr *tree.ComparisonExpr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (resultExpr *Expr, isAgg bool, err error) {
+	switch list := astExpr.Right.(type) {
+	case *tree.Tuple:
+		var new_expr tree.Expr
+		for _, expr := range list.Exprs {
+			if new_expr == nil {
+				new_expr = tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
+			} else {
+				equal_expr := tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
+				new_expr = tree.NewAndExpr(new_expr, equal_expr)
+			}
+		}
+		return buildExpr(new_expr, ctx, query, node, binderCtx, needAgg)
+	default:
+		resultExpr, _, err := getFunctionExprByNameAndAstExprs("in", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, node, binderCtx, needAgg)
 		if err != nil {
 			return nil, false, err
 		}
-		resultExpr, _, err = getFunctionExprByNameAndPlanExprs("not", []*Expr{resultExpr})
-		return
+		return getFunctionExprByNameAndPlanExprs("not", []*Expr{resultExpr})
 	}
-	return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 }
 
 func buildUnaryExpr(astExpr *tree.UnaryExpr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (expr *Expr, isAgg bool, err error) {

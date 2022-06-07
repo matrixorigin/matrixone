@@ -16,6 +16,8 @@ package tan
 
 import (
 	"math"
+
+	"golang.org/x/exp/constraints"
 )
 
 var (
@@ -112,4 +114,11 @@ func tanFloat64(xs []float64, rs []float64) []float64 {
 		rs[i] = math.Tan(n)
 	}
 	return rs
+}
+
+func Tan[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) []float64 {
+	for i, n := range inputValues {
+		resultValues[i] = math.Tan(float64(n))
+	}
+	return resultValues
 }

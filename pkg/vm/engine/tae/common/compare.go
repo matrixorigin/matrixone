@@ -16,6 +16,7 @@ package common
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -85,6 +86,10 @@ func CompareGeneric(a, b any, t types.Type) int {
 		} else {
 			return 0
 		}
+	case types.T_decimal64:
+		return int(types.CompareDecimal64Decimal64Aligned(a.(types.Decimal64), b.(types.Decimal64)))
+	case types.T_decimal128:
+		return int(types.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128)))
 	case types.T_float32:
 		if a.(float32) > b.(float32) {
 			return 1

@@ -21,23 +21,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sinh"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
-// sinh function's evaluation for arguments: [uint64]
-func SinhUint64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func Sinh[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVec := vs[0]
-	origVecCol := origVec.Col.([]uint64)
+	origVecCol := origVec.Col.([]T)
+	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	if origVec.IsScalar() {
 		if origVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
+		resultVector := proc.AllocScalarVector(resultType)
 		results := make([]float64, 1)
 		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, sinh.SinhUint64(origVecCol, results))
+		vector.SetCol(resultVector, sinh.Sinh(origVecCol, results))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
+		resultVector, err := proc.AllocVector(resultType, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err
 		}
@@ -45,61 +46,7 @@ func SinhUint64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		results = results[:len(origVecCol)]
 		resultVector.Col = results
 		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, sinh.SinhUint64(origVecCol, results))
-		return resultVector, nil
-	}
-}
-
-// sinh function's evaluation for arguments: [int64]
-func SinhInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	origVec := vs[0]
-	origVecCol := origVec.Col.([]int64)
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
-		}
-		resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-		results := make([]float64, 1)
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, sinh.SinhInt64(origVecCol, results))
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
-		if err != nil {
-			return nil, err
-		}
-		results := encoding.DecodeFloat64Slice(resultVector.Data)
-		results = results[:len(origVecCol)]
-		resultVector.Col = results
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, sinh.SinhInt64(origVecCol, results))
-		return resultVector, nil
-	}
-}
-
-// sinh function's evaluation for arguments: [float64]
-func SinhFloat64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	origVec := vs[0]
-	origVecCol := origVec.Col.([]float64)
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
-		}
-		resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-		results := make([]float64, 1)
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, sinh.SinhFloat64(origVecCol, results))
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
-		if err != nil {
-			return nil, err
-		}
-		results := encoding.DecodeFloat64Slice(resultVector.Data)
-		results = results[:len(origVecCol)]
-		resultVector.Col = results
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, sinh.SinhFloat64(origVecCol, results))
+		vector.SetCol(resultVector, sinh.Sinh(origVecCol, results))
 		return resultVector, nil
 	}
 }

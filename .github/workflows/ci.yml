@@ -130,7 +130,6 @@ jobs:
           mv log base-log
           mv report base-report
           if [ ${{ steps.bvt_on_base.outcome }} == 'success' ]; then echo 'Base sha passed all bvt cases. Pls check head version'; exit 1; fi
-          if [ "$(cat ./base-report/success.txt | wc -l )" -gt "$(cat ./head-report/success.txt | wc -l)" ]; then echo 'Base sha passed more bvt cases. Pls check head version'; exit 2; fi
           cat ./base-report/success.txt ./head-report/success.txt ./head-report/success.txt | grep -v '^$' | sort > cmp.txt
           echo '--------Cases only passed in base----------'
           uniq -u cmp.txt
@@ -272,7 +271,6 @@ jobs:
           mv log base-log
           mv report base-report
           if [ ${{ steps.bvt_on_base.outcome }} == 'success' ]; then echo 'Base sha passed all bvt cases. Pls check head version'; exit 1; fi
-          if [ "$(cat ./base-report/success.txt | wc -l )" -gt "$(cat ./head-report/success.txt | wc -l)" ]; then echo 'Base sha passed more bvt cases. Pls check head version'; exit 2; fi
           cat ./base-report/success.txt ./head-report/success.txt ./head-report/success.txt | sort > cmp.txt
           echo '--------Cases only passed in base----------'
           uniq -u cmp.txt

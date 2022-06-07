@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"sync"
 
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -29,8 +31,9 @@ import (
 type vInfo struct {
 	vf *vFile
 
-	groups  map[uint32]VGroup
-	groupmu sync.RWMutex
+	groups         map[uint32]VGroup
+	groupmu        sync.RWMutex
+	ckpInfoVersion int //the max version covered by the post commit entry
 	// Commits     map[uint32]*common.ClosedInterval
 	// Checkpoints map[uint32]*common.ClosedIntervals
 	// UncommitTxn map[uint32][]uint64 // 2% uncommit txn
@@ -135,27 +138,21 @@ func (info *vInfo) PrepareCompactor(c *compactor) {
 		g.PrepareMerge(c)
 	}
 }
+
+// TODO: for ckp with payload, merge ckp after IsCovered()
 func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 	toDelete = true
 	for _, g := range info.groups {
-		if g.IsCheckpointGroup() {
-			// fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n",c.tidCidMap,c.gIntervals,g)
-			toDelete = false
-		}
-		if g.IsCommitGroup() {
-			if !g.IsCovered(c) {
-				// fmt.Printf("not covered\ntcmap:%v\nckp%v\ng:%v\n",c.tidCidMap,c.gIntervals,g)
-				toDelete = false
-			}
-		}
 		g.MergeCheckpointInfo(c)
 	}
 	for _, g := range info.groups {
-		if g.IsUncommitGroup() {
-			if !g.IsCovered(c) {
-				toDelete = false
-			}
+		if !g.IsCovered(c) {
+			// logutil.Infof("not covered %d\ntcmap:%v\nckp%v\ng:%v\n",info.vf.Id(),c.tidCidMap,c.gIntervals,g)
+			toDelete = false
 		}
+	}
+	if c.ckpInfoVersion < info.ckpInfoVersion {
+		c.ckpInfoVersion = info.ckpInfoVersion
 	}
 	return
 }
@@ -201,6 +198,8 @@ func (info *vInfo) onLog(infos []*entry.Info) {
 			err = info.LogCheckpoint(vi)
 		case entry.GTUncommit:
 			err = info.LogUncommitInfo(vi)
+		case entry.GTInternal:
+			err = info.LogInternalInfo(vi)
 		default:
 			err = info.LogCommit(vi)
 		}
@@ -234,7 +233,13 @@ func (info *vInfo) Log(v any) error {
 	// fmt.Printf("%p|addrs are %v\n", info, info.Addrs)
 	return nil
 }
-
+func (info *vInfo) LogInternalInfo(entryInfo *entry.Info) error {
+	id := entryInfo.PostCommitVersion
+	if info.ckpInfoVersion < id {
+		info.ckpInfoVersion = id
+	}
+	return nil
+}
 func (info *vInfo) LogUncommitInfo(entryInfo *entry.Info) error {
 	g, ok := info.groups[entryInfo.Group]
 	if !ok {
@@ -285,7 +290,8 @@ func (info *vInfo) GetOffsetByLSN(groupId uint32, lsn uint64) (int, error) {
 	defer info.addrmu.RUnlock()
 	lsnMap, ok := info.Addrs[groupId]
 	if !ok {
-		// fmt.Printf("%p|addrs are %v\n", info, info.Addrs)
+		logutil.Infof("group %d", groupId)
+		logutil.Infof("%p|addrs are %v", info, info.Addrs)
 		return 0, errors.New("vinfo group not existed")
 	}
 	offset, ok := lsnMap[lsn]
