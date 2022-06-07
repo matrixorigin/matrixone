@@ -71,6 +71,9 @@ func AppendValue(vec *gvec.Vector, v any) {
 	case types.T_date:
 		vvals := vec.Col.([]types.Date)
 		vec.Col = append(vvals, v.(types.Date))
+	case types.T_timestamp:
+		vvals := vec.Col.([]types.Timestamp)
+		vec.Col = append(vvals, v.(types.Timestamp))
 	case types.T_datetime:
 		vvals := vec.Col.([]types.Datetime)
 		vec.Col = append(vvals, v.(types.Datetime))
