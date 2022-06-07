@@ -448,7 +448,8 @@ func (bs *baseStore) Checkpoint(e entry.Entry) (err error) {
 }
 
 func (bs *baseStore) TryCompact() error {
-	return bs.file.GetHistory().TryTruncate()
+	c:=newCompactor(&bs.syncBase)
+	return bs.file.GetHistory().TryTruncate(c)
 }
 
 func (bs *baseStore) TryTruncate(size int64) error {

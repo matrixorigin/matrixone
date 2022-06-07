@@ -34,7 +34,8 @@ type syncBase struct {
 	ckpmu                        sync.RWMutex
 	syncing                      map[uint32]uint64
 	checkpointed, synced, ckpCnt *syncMap
-	uncommits                    map[uint32][]uint64
+	tidLsnMaps                   map[uint32]map[uint64]uint64 //TODO: delete when checkpoint
+	tidLsnMapmu                  *sync.RWMutex
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 }
@@ -199,7 +200,8 @@ func newSyncBase() *syncBase {
 		checkpointed:  newSyncMap(),
 		synced:        newSyncMap(),
 		ckpCnt:        newSyncMap(),
-		uncommits:     make(map[uint32][]uint64),
+		tidLsnMaps:    make(map[uint32]map[uint64]uint64),
+		tidLsnMapmu:   &sync.RWMutex{},
 		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
 		ckpmu:         sync.RWMutex{},
@@ -352,26 +354,17 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 			base.ckpmu.Unlock()
 		}
 	case entry.GTUncommit:
-		// addr := v.Addr.(*VFileAddress)
-		for _, tid := range v.Uncommits {
-			tids, ok := base.uncommits[tid.Group]
-			if !ok {
-				tids = make([]uint64, 0)
-			}
-			existed := false
-			for _, id := range tids {
-				if id == tid.Tid {
-					existed = true
-					break
-				}
-			}
-			if !existed {
-				tids = append(tids, tid.Tid)
-			}
-			base.uncommits[tid.Group] = tids
-		}
-		// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
 	default:
+		base.tidLsnMapmu.Lock()
+		if v.Group >= entry.GTCustomizedStart {
+			tidLsnMap, ok := base.tidLsnMaps[v.Group]
+			if !ok {
+				tidLsnMap = make(map[uint64]uint64)
+				base.tidLsnMaps[v.Group] = tidLsnMap
+			}
+			tidLsnMap[v.TxnId] = v.GroupLSN
+		}
+		base.tidLsnMapmu.Unlock()
 	}
 	base.syncing[v.Group] = v.GroupLSN
 	base.addrmu.Lock()

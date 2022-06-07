@@ -347,9 +347,7 @@ func TestStore(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
+	err=s.TryCompact()
 	assert.Nil(t, err)
 }
 
@@ -615,9 +613,7 @@ func TestReplay(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
+	err=s.TryCompact()
 	assert.Nil(t, err)
 
 	s.Close()
@@ -818,9 +814,7 @@ func TestLoad(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	// t.Log(h.String())
-	err = h.TryTruncate()
+	err=s.TryCompact()
 	assert.Nil(t, err)
 
 	s.Close()

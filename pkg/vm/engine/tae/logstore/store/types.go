@@ -88,7 +88,7 @@ type History interface {
 	OldestEntry() VFile
 	Empty() bool
 	Replay(*replayer, ReplayObserver) error
-	TryTruncate() error
+	TryTruncate(*compactor) error
 }
 
 type ApplyHandle = func(group uint32, commitId uint64, payload []byte, typ uint16, info any)
