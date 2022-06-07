@@ -3,6 +3,7 @@ package frontend
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"testing"
 
 	"github.com/fagongzi/goetty/buf"
@@ -17,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
@@ -443,7 +443,9 @@ func Test_mce(t *testing.T) {
 			"SELECT @@max_allowed_packet",
 			"SELECT @@version_comment",
 			"SELECT @@tx_isolation",
-			"set a=b",
+			"set @@tx_isolation=`READ-COMMITTED`",
+			//TODO:fix it after parser is ready
+			//"set a = b",
 			"drop database T",
 		}
 
@@ -475,7 +477,10 @@ func Test_mce(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, &gSys)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -571,7 +576,10 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, &gSys)
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -606,13 +614,14 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 
 		mce := NewMysqlCmdExecutor()
 		mce.PrepareSessionBeforeExecRequest(ses)
-		err = mce.handleSelectDatabase(nil)
-		convey.So(err, convey.ShouldBeNil)
 
 		ses.Mrs = &MysqlResultSet{}
 		st1, err := parsers.ParseOne(dialect.MYSQL, "select @@max_allowed_packet")
@@ -634,11 +643,13 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		ses.Mrs = &MysqlResultSet{}
 		ses.protocol.SetDatabaseName("T")
-		mce.tableInfos = make(map[string]aoe.TableInfo)
-		mce.tableInfos["A"] = aoe.TableInfo{
-			Columns: []aoe.ColumnInfo{
-				{Name: "a", Type: types.Type{Oid: types.T_varchar}}},
-		}
+		mce.tableInfos = make(map[string][]ColumnInfo)
+		mce.tableInfos["A"] = []ColumnInfo{&aoeColumnInfo{
+			info: aoe.ColumnInfo{
+				Name: "a",
+				Type: types.Type{Oid: types.T_varchar},
+			},
+		}}
 
 		err = mce.handleCmdFieldList("A")
 		convey.So(err, convey.ShouldNotBeNil)
@@ -647,7 +658,11 @@ func Test_mce_selfhandle(t *testing.T) {
 		err = mce.handleCmdFieldList("A")
 		convey.So(err, convey.ShouldBeNil)
 
-		err = mce.handleSetVar(nil)
+		set := "set @@tx_isolation=`READ-COMMITTED`"
+		setVar, err := parsers.ParseOne(dialect.MYSQL, set)
+		convey.So(err, convey.ShouldBeNil)
+
+		err = mce.handleSetVar(setVar.(*tree.SetVar))
 		convey.So(err, convey.ShouldBeNil)
 
 		req := &Request{
@@ -685,7 +700,10 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 
 		// mce := NewMysqlCmdExecutor()
@@ -752,7 +770,10 @@ func Test_getDataFromPipeline(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		epochgc := getPCI()
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 
 		convey.So(getDataFromPipeline(ses, nil), convey.ShouldBeNil)
@@ -936,7 +957,9 @@ func Test_handleSelectVariables(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		ses := NewSession(proto, nil, nil, nil, nil, gSysVariables)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, nil, nil, nil, nil, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)
@@ -971,7 +994,9 @@ func Test_handleShowVariables(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		ses := NewSession(proto, nil, nil, nil, nil, gSysVariables)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, nil, nil, nil, nil, &gSys)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.PrepareSessionBeforeExecRequest(ses)

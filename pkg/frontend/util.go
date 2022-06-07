@@ -17,6 +17,8 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"go/constant"
 	"os"
 	"runtime"
 	"strconv"
@@ -926,4 +928,46 @@ func WildcardMatch(pattern, target string) bool {
 		p++
 	}
 	return p >= plen
+}
+
+// only support single value and unary minus
+func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
+	var value interface{}
+	switch v := e.(type) {
+	case *tree.NumVal:
+		switch v.Value.Kind() {
+		case constant.Unknown:
+			value = nil
+		case constant.Bool:
+			value = constant.BoolVal(v.Value)
+		case constant.String:
+			value = constant.StringVal(v.Value)
+		case constant.Int:
+			value, _ = constant.Int64Val(v.Value)
+		case constant.Float:
+			value, _ = constant.Float64Val(v.Value)
+		default:
+			return nil, errorNumericTypeIsNotSupported
+		}
+	case *tree.UnaryExpr:
+		ival, err := GetSimpleExprValue(v.Expr)
+		if err != nil {
+			return nil, err
+		}
+		if v.Op == tree.UNARY_MINUS {
+			switch iival := ival.(type) {
+			case float64:
+				value = -1 * iival
+			case int64:
+				value = -1 * iival
+			default:
+				return nil, errorUnaryMinusForNonNumericTypeIsNotSupported
+			}
+		}
+	case *tree.UnresolvedName:
+		return v.Parts[0], nil
+	default:
+		return nil, errorComplicateExprIsNotSupported
+	}
+	return value, nil
 }

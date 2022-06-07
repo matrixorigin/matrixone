@@ -40,7 +40,6 @@ import (
 	compile1 "github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -51,14 +50,18 @@ import (
 )
 
 var (
-	errorDatabaseIsNull             = goErrors.New("the database name is an empty string")
-	errorNoSuchGlobalSystemVariable = goErrors.New("there is no such global system variable")
+	errorDatabaseIsNull                            = goErrors.New("the database name is an empty string")
+	errorNoSuchGlobalSystemVariable                = goErrors.New("there is no such global system variable")
+	errorComplicateExprIsNotSupported              = goErrors.New("the complicate expression is not supported")
+	errorNumericTypeIsNotSupported                 = goErrors.New("the numeric type is not supported")
+	errorUnaryMinusForNonNumericTypeIsNotSupported = goErrors.New("unary minus for no numeric type is not supported")
+	errorFunctionIsNotSupported                    = goErrors.New("function is not supported")
 )
 
 //tableInfos of a database
 type TableInfoCache struct {
 	db         string
-	tableInfos map[string]aoe.TableInfo
+	tableInfos map[string][]ColumnInfo
 }
 
 type MysqlCmdExecutor struct {
@@ -577,20 +580,33 @@ func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 	return nil
 }
 
-//handle SELECT DATABASE()
-func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
+//handle SELECT XXX()
+func (mce *MysqlCmdExecutor) handleSelectXXX(param string) error {
 	var err error = nil
 	ses := mce.GetSession()
-	proto := ses.protocol
+	proto := ses.GetMysqlProtocol()
 
 	col := new(MysqlColumn)
-	col.SetName("DATABASE()")
+	col.SetName(param + "()")
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	ses.Mrs.AddColumn(col)
-	val := ses.protocol.GetDatabaseName()
-	if val == "" {
-		val = "NULL"
+	var val interface{}
+	switch param {
+	case "database":
+		val = ses.GetDatabaseName()
+		if val == "" {
+			val = "NULL"
+		}
+	case "current_user":
+		val = ses.GetUserName()
+		host, _ := proto.Peer()
+		val = fmt.Sprintf("%s@%s", val, host)
+	case "connection_id":
+		val = proto.ConnectionID()
+	default:
+		return errorFunctionIsNotSupported
 	}
+
 	ses.Mrs.AddRow([]interface{}{val})
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
@@ -755,45 +771,83 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 
 	//TODO:fix it on tae
 
-	db := ses.GetDatabaseName()
-	if db == "" {
+	dbName := ses.GetDatabaseName()
+	if dbName == "" {
 		return NewMysqlError(ER_NO_DB_ERROR)
 	}
 
 	//Get table infos for the database from the cube
 	//case 1: there are no table infos for the db
 	//case 2: db changed
-	if mce.tableInfos == nil || mce.db != db {
-		if ses.Pu.ClusterCatalog == nil {
-			return fmt.Errorf("need cluster catalog")
-		}
-		tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(db)
-		if err != nil {
-			return err
-		}
+	var attrs []ColumnInfo
+	if ses.IsTaeEngine() {
+		if mce.tableInfos == nil || mce.db != dbName {
+			txnHandler := ses.GetTxnHandler()
+			_, err = txnHandler.StartByAutocommitIfNeeded()
+			if err != nil {
+				return err
+			}
 
-		mce.db = ses.GetDatabaseName()
-		mce.tableInfos = make(map[string]aoe.TableInfo)
+			eng := ses.GetStorage()
+			db, err := eng.Database(dbName, txnHandler.GetTxn().GetCtx())
+			if err != nil {
+				return err
+			}
 
-		//cache these info in the executor
-		for _, table := range tableInfos {
-			mce.tableInfos[table.Name] = table
+			names := db.Relations(txnHandler.GetTxn().GetCtx())
+			for _, name := range names {
+				table, err := db.Relation(name, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					return err
+				}
+				defs := table.TableDefs(txnHandler.GetTxn().GetCtx())
+				for _, def := range defs {
+					if attr, ok := def.(*engine.AttributeDef); ok {
+						attrs = append(attrs, &engineColumnInfo{
+							name: attr.Attr.Name,
+							typ:  attr.Attr.Type,
+						})
+					}
+				}
+			}
+		}
+	} else {
+		if mce.tableInfos == nil || mce.db != dbName {
+			if ses.Pu.ClusterCatalog == nil {
+				return fmt.Errorf("need cluster catalog")
+			}
+			tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(dbName)
+			if err != nil {
+				return err
+			}
+
+			mce.db = ses.GetDatabaseName()
+			mce.tableInfos = make(map[string][]ColumnInfo)
+
+			//cache these info in the executor
+			for _, table := range tableInfos {
+				var infos []ColumnInfo
+				for _, column := range table.Columns {
+					infos = append(infos, &aoeColumnInfo{info: column})
+				}
+				mce.tableInfos[table.Name] = infos
+
+			}
 		}
 	}
 
-	var attrs []aoe.ColumnInfo
-	table, ok := mce.tableInfos[tableName]
+	cols, ok := mce.tableInfos[tableName]
 	if !ok {
 		//just give the empty info when there is no such table.
-		attrs = make([]aoe.ColumnInfo, 0)
+		attrs = make([]ColumnInfo, 0)
 	} else {
-		attrs = table.Columns
+		attrs = cols
 	}
 
 	for _, c := range attrs {
 		col := new(MysqlColumn)
-		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(c.Type.Oid, col)
+		col.SetName(c.GetName())
+		err = convertEngineTypeToMysqlType(c.GetType(), col)
 		if err != nil {
 			return err
 		}
@@ -822,9 +876,64 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 /*
 handle setvar
 */
-func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
+func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 	var err error = nil
-	proto := mce.GetSession().protocol
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	setVarFunc := func(system, global bool, name string, value interface{}) error {
+		if system {
+			if global {
+				err = ses.SetGlobalVar(name, value)
+				if err != nil {
+					return err
+				}
+			} else {
+				err = ses.SetSessionVar(name, value)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			err = ses.SetUserDefinedVar(name, value)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, assign := range sv.Assignments {
+		name := assign.Name
+		var value interface{}
+
+		//TODO: set var needs to be moved into plan2
+		//convert into definite type
+		value, err = GetSimpleExprValue(assign.Value)
+		if err != nil {
+			return err
+		}
+
+		//TODO : fix SET NAMES after parser is ready
+		if name == "names" {
+			//replaced into three system variable:
+			//character_set_client, character_set_connection, and character_set_results
+			replacedBy := []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			}
+			for _, rb := range replacedBy {
+				err = setVarFunc(assign.System, assign.Global, rb, value)
+				if err != nil {
+					return err
+				}
+			}
+		} else {
+			err = setVarFunc(assign.System, assign.Global, name, value)
+			if err != nil {
+				return err
+			}
+		}
+	}
 
 	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
 	if err = proto.SendResponse(resp); err != nil {
@@ -880,7 +989,19 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		}
 		row := make([]interface{}, 2)
 		row[0] = name
+		gsv, ok := gSysVariables.GetDefinitionOfSysVar(name)
+		if !ok {
+			return errorSystemVariableDoesNotExist
+		}
 		row[1] = value
+		if _, ok := gsv.GetType().(SystemVariableBoolType); ok {
+			if value == 1 {
+				row[1] = "on"
+			} else {
+				row[1] = "off"
+			}
+		}
+
 		rows = append(rows, row)
 	}
 
@@ -1740,15 +1861,23 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				if len(sc.Exprs) == 1 {
 					if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
 						if un, ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
-							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
-								err = mce.handleSelectDatabase(st)
-								if err != nil {
-									goto handleFailed
-								}
-
-								//next statement
-								goto handleSucceeded
+							param := strings.ToLower(un.Parts[0])
+							switch param {
+							case "database":
+								fallthrough
+							case "current_user":
+								fallthrough
+							case "connection_id":
+								fallthrough
+							default:
+								err = mce.handleSelectXXX(param)
 							}
+							if err != nil {
+								goto handleFailed
+							}
+
+							//next statement
+							goto handleSucceeded
 						}
 					} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
 						//TODO: fix multiple variables in single statement like `select @@a,@@b,@@c`
