@@ -445,15 +445,17 @@ func (l *logStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
-		shardInfo := &heartbeat.LogShardInfo{
-			ShardID:  ci.ShardID,
-			Replicas: ci.Nodes,
-			Epoch:    ci.ConfigChangeIndex,
-			LeaderID: ci.LeaderID,
-			Term:     ci.Term,
+		// ignore the special HAKeeper shard
+		if ci.ShardID != defaultHAKeeperShardID {
+			shardInfo := &heartbeat.LogShardInfo{
+				ShardID:  ci.ShardID,
+				Replicas: ci.Nodes,
+				Epoch:    ci.ConfigChangeIndex,
+				LeaderID: ci.LeaderID,
+				Term:     ci.Term,
+			}
+			m.Shards = append(m.Shards, shardInfo)
 		}
-		m.Shards = append(m.Shards, shardInfo)
 	}
-
 	return m
 }

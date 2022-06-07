@@ -28,7 +28,7 @@ const (
 	createLogShardTag      uint16 = 0xAE02
 )
 
-type haKeeperSM struct {
+type haSM struct {
 	replicaID uint64
 	GlobalID  uint64
 	LogShards map[string]uint64
@@ -71,13 +71,13 @@ func newHAKeeperStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine 
 	if shardID != defaultHAKeeperShardID {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "invalid HAKeeper shard ID"))
 	}
-	return &haKeeperSM{
+	return &haSM{
 		replicaID: replicaID,
 		LogShards: make(map[string]uint64),
 	}
 }
 
-func (h *haKeeperSM) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
+func (h *haSM) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 	name, ok := isCreateLogShardCmd(cmd)
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not create log shard cmd"))
@@ -92,7 +92,7 @@ func (h *haKeeperSM) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 	return sm.Result{Value: h.GlobalID}, nil
 }
 
-func (h *haKeeperSM) handleQueryLogShardIDCmd(cmd []byte) (sm.Result, error) {
+func (h *haSM) handleQueryLogShardIDCmd(cmd []byte) (sm.Result, error) {
 	name, ok := isQueryLogShardIDCmd(cmd)
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not query log shard id cmd"))
@@ -103,11 +103,11 @@ func (h *haKeeperSM) handleQueryLogShardIDCmd(cmd []byte) (sm.Result, error) {
 	return sm.Result{}, nil
 }
 
-func (h *haKeeperSM) Close() error {
+func (h *haSM) Close() error {
 	return nil
 }
 
-func (h *haKeeperSM) Update(e sm.Entry) (sm.Result, error) {
+func (h *haSM) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	if _, ok := isCreateLogShardCmd(cmd); ok {
 		return h.handleCreateLogShardCmd(cmd)
@@ -118,16 +118,16 @@ func (h *haKeeperSM) Update(e sm.Entry) (sm.Result, error) {
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }
 
-func (h *haKeeperSM) Lookup(query interface{}) (interface{}, error) {
+func (h *haSM) Lookup(query interface{}) (interface{}, error) {
 	panic("not implemented")
 }
 
-func (h *haKeeperSM) SaveSnapshot(w io.Writer,
+func (h *haSM) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	return gobMarshalTo(w, h)
 }
 
-func (h *haKeeperSM) RecoverFromSnapshot(r io.Reader,
+func (h *haSM) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
 	return gobUnmarshalFrom(r, h)
 }
