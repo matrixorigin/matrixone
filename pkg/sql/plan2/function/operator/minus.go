@@ -55,7 +55,7 @@ func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, 
 		}
 		resultValues := encoding.DecodeFixedSlice[T](resultVector.Data, resultElementSize)
 		nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, sub.NumericScalar(rvs[0], lvs, resultValues))
+		vector.SetCol(resultVector, sub.NumericByScalar(rvs[0], lvs, resultValues))
 		return resultVector, nil
 	default:
 		resultVector, err := proc.AllocVector(lv.Typ, int64(resultElementSize*len(lvs)))
@@ -109,7 +109,7 @@ func MinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		resultValues = resultValues[:len(lvs)]
 		nulls.Set(resultVector.Nsp, lv.Nsp)
 		nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, sub.Decimal64SubScalar(rvs[0], lvs, rvScale, lvScale, resultValues))
+		vector.SetCol(resultVector, sub.Decimal64SubByScalar(rvs[0], lvs, rvScale, lvScale, resultValues))
 		return resultVector, nil
 	default:
 		resultVector, err := proc.AllocVector(lv.Typ, int64(resultTyp.Size)*int64(len(lvs)))
@@ -163,7 +163,7 @@ func MinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		rs := encoding.DecodeDecimal128Slice(vec.Data)
 		rs = rs[:len(lvs)]
 		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-		vector.SetCol(vec, sub.Decimal128SubScalar(rvs[0], lvs, rvScale, lvScale, rs))
+		vector.SetCol(vec, sub.Decimal128SubByScalar(rvs[0], lvs, rvScale, lvScale, rs))
 		return vec, nil
 	default:
 		vec, err := proc.AllocVector(resultTyp, int64(resultTyp.Size)*int64(len(lvs)))
