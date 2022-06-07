@@ -26,30 +26,31 @@ var (
 	ErrUnknownError = moerr.NewError(moerr.INVALID_STATE, "unknown error")
 )
 
-type errMapping struct {
-	err  error
-	code rpc.ErrorCode
+type errorToCode struct {
+	err     error
+	code    rpc.ErrorCode
+	reverse bool
 }
 
-var errorMappings = getErrorMapping()
+var errorToCodeMappings = getErrorToCodeMapping()
 
-func getErrorMapping() []errMapping {
-	return []errMapping{
-		{dragonboat.ErrTimeout, rpc.ErrorCode_Timeout},
-		{dragonboat.ErrShardNotFound, rpc.ErrorCode_InvalidShard},
+func getErrorToCodeMapping() []errorToCode {
+	return []errorToCode{
+		{dragonboat.ErrTimeout, rpc.ErrorCode_Timeout, true},
+		{dragonboat.ErrShardNotFound, rpc.ErrorCode_InvalidShard, true},
 		// we keep retrying on the service side when shard is not ready
 		// this can cause ErrTimeoutTooSmall to be returned, treat it
 		// as a timeout error
-		{dragonboat.ErrTimeoutTooSmall, rpc.ErrorCode_Timeout},
-		{dragonboat.ErrPayloadTooBig, rpc.ErrorCode_InvalidPayloadSize},
-		{dragonboat.ErrRejected, rpc.ErrorCode_Rejected},
-		{dragonboat.ErrShardNotReady, rpc.ErrorCode_ShardNotReady},
-		{dragonboat.ErrSystemBusy, rpc.ErrorCode_ShardNotReady},
-		{dragonboat.ErrClosed, rpc.ErrorCode_SystemClosed},
+		{dragonboat.ErrTimeoutTooSmall, rpc.ErrorCode_Timeout, false},
+		{dragonboat.ErrPayloadTooBig, rpc.ErrorCode_InvalidPayloadSize, true},
+		{dragonboat.ErrRejected, rpc.ErrorCode_Rejected, true},
+		{dragonboat.ErrShardNotReady, rpc.ErrorCode_ShardNotReady, true},
+		{dragonboat.ErrSystemBusy, rpc.ErrorCode_ShardNotReady, false},
+		{dragonboat.ErrClosed, rpc.ErrorCode_SystemClosed, true},
 
-		{ErrInvalidTruncateIndex, rpc.ErrorCode_IndexAlreadyTruncated},
-		{ErrNotLeaseHolder, rpc.ErrorCode_NotLeaseHolder},
-		{ErrOutOfRange, rpc.ErrorCode_OutOfRange},
+		{ErrInvalidTruncateIndex, rpc.ErrorCode_IndexAlreadyTruncated, true},
+		{ErrNotLeaseHolder, rpc.ErrorCode_NotLeaseHolder, true},
+		{ErrOutOfRange, rpc.ErrorCode_OutOfRange, true},
 	}
 }
 
@@ -57,7 +58,7 @@ func toErrorCode(err error) (rpc.ErrorCode, string) {
 	if err == nil {
 		return rpc.ErrorCode_NoError, ""
 	}
-	for _, rec := range errorMappings {
+	for _, rec := range errorToCodeMappings {
 		if errors.Is(err, rec.err) {
 			plog.Errorf("error: %v, converted to code %d", err, rec.code)
 			return rec.code, ""
@@ -75,8 +76,8 @@ func toError(resp rpc.Response) error {
 		return errors.Wrapf(ErrUnknownError, resp.ErrorMessage)
 	}
 
-	for _, rec := range errorMappings {
-		if rec.code == resp.ErrorCode {
+	for _, rec := range errorToCodeMappings {
+		if rec.code == resp.ErrorCode && rec.reverse {
 			return rec.err
 		}
 	}
