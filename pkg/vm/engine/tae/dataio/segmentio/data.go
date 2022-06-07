@@ -19,7 +19,7 @@ import (
 	"sync"
 )
 
-const UPGRADE_FILE_NUM = 2
+const UPGRADE_FILE_NUM = 10
 
 type dataFile struct {
 	mutex  sync.RWMutex
