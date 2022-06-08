@@ -162,16 +162,6 @@ func (chain *ColumnChain) UpdateLocked(node *ColumnNode) {
 
 func (chain *ColumnChain) StringLocked() string {
 	return chain.view.StringLocked()
-	// msg := fmt.Sprintf("Block-%s-Col[%d]-Chain:", chain.id.ToBlockFileName(), chain.id.Idx)
-	// line := 1
-	// chain.LoopChainLocked(func(n *ColumnNode) bool {
-	// 	n.RLock()
-	// 	msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
-	// 	n.RUnlock()
-	// 	line++
-	// 	return true
-	// }, false)
-	// return msg
 }
 
 func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v any, err error) {
