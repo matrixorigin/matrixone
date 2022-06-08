@@ -296,7 +296,7 @@ func MakeDateTimeVector(values []string, nsp []uint64) *vector.Vector {
 		if nulls.Contains(vec.Nsp, uint64(i)) {
 			continue
 		}
-		d, err := types.ParseDatetime(s)
+		d, err := types.ParseDatetime(s, 6)
 		if err != nil {
 			panic(err)
 		}
@@ -309,7 +309,7 @@ func MakeDateTimeVector(values []string, nsp []uint64) *vector.Vector {
 func MakeScalarDateTime(value string, length int) *vector.Vector {
 	vec := NewProc().AllocScalarVector(dti)
 	vec.Length = length
-	d, err := types.ParseDatetime(value)
+	d, err := types.ParseDatetime(value, 6)
 	if err != nil {
 		panic(err)
 	}
@@ -338,7 +338,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			return false
 		}
 		if nulls.Any(expected.Nsp) {
-			var k uint64 = 0
+			k := uint64(0)
 			if !nulls.Any(got.Nsp) {
 				return false
 			}
