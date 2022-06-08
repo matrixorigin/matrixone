@@ -115,7 +115,7 @@ func (info *appendInfo) GetDestLen() uint32 {
 }
 func (info *appendInfo) String() string {
 	s := fmt.Sprintf("[%d]: Append from [%d:%d] to blk %s[%d:%d]",
-		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.ToBlockFileName(), info.destOff, info.destLen+info.destOff)
+		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.BlockString(), info.destOff, info.destLen+info.destOff)
 	return s
 }
 func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
