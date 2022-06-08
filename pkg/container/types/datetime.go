@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"strconv"
 	"time"
 	"unsafe"
 
@@ -34,12 +33,6 @@ const (
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
 // calendar, and lower 20 bits holds number of microseconds
 
-func (dt Datetime) String() string {
-	y, m, d, _ := dt.ToDate().Calendar(true)
-	hour, minute, sec := dt.Clock()
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
-}
-
 const (
 	//tsMask         = ^uint64(0) >> 1
 	hasMonotonic = 1 << 63
@@ -55,12 +48,31 @@ var (
 	errIncorrectDatetimeValue = errors.New(errno.DataException, "Incorrect datetime value")
 )
 
+func (dt Datetime) String() string {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	hour, minute, sec := dt.Clock()
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+}
+
+func (dt Datetime) String2(precision int32) string {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	hour, minute, sec := dt.Clock()
+	if precision > 0 {
+		msec := int64(dt) & 0xfffff
+		msecInstr := fmt.Sprintf("%06d\n", msec)
+		msecInstr = msecInstr[:precision]
+
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
+	}
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+}
+
 // ParseDatetime will parse a string to be a Datetime
 // Support Format:
 // 1. all the Date value
 // 2. yyyy-mm-dd hh:mm:ss(.msec)
 // 3. yyyymmddhhmmss(.msec)
-func ParseDatetime(s string) (Datetime, error) {
+func ParseDatetime(s string, precision int32) (Datetime, error) {
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
 			return d.ToTime(), nil
@@ -70,6 +82,8 @@ func ParseDatetime(s string) (Datetime, error) {
 	var year int32
 	var month, day, hour, minute, second uint8
 	var msec uint32 = 0
+	var carry uint32 = 0
+	var err error
 
 	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
@@ -101,11 +115,11 @@ func ParseDatetime(s string) (Datetime, error) {
 		}
 		if len(s) > 19 {
 			if len(s) > 20 && s[19] == '.' {
-				m, err := strconv.ParseUint(s[20:], 10, 32)
+				msecStr := s[20:]
+				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
 					return -1, errIncorrectDatetimeValue
 				}
-				msec = uint32(m)
 			} else {
 				return -1, errIncorrectDatetimeValue
 			}
@@ -118,17 +132,18 @@ func ParseDatetime(s string) (Datetime, error) {
 		second = (s[12]-'0')*10 + (s[13] - '0')
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
-				m, err := strconv.ParseUint(s[15:], 10, 32)
+				msecStr := s[20:]
+				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
 					return -1, errIncorrectDatetimeValue
 				}
-				msec = uint32(m)
 			} else {
 				return -1, errIncorrectDatetimeValue
 			}
 		}
 	}
-	return FromClock(year, month, day, hour, minute, second, msec), nil
+	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
+	return result, nil
 }
 
 // validTimeInDay return true if hour, minute and second can be a time during a day
