@@ -37,6 +37,7 @@ type Inode struct {
 	logExtents Extent
 	state      StateType
 	seq        uint64
+	readMutex  sync.RWMutex
 }
 
 func (i *Inode) GetFileSize() int64 {

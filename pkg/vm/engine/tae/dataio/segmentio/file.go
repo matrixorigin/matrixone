@@ -206,6 +206,8 @@ func (b *DriverFile) GetExtents() *[]Extent {
 }
 
 func (b *DriverFile) Read(data []byte) (n int, err error) {
+	b.snode.readMutex.RLock()
+	defer b.snode.readMutex.RUnlock()
 	bufLen := len(data)
 	if bufLen == 0 {
 		return 0, nil
