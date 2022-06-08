@@ -49,7 +49,7 @@ type logShardIDQueryResult struct {
 	found bool
 }
 
-type haSM struct {
+type stateMachine struct {
 	replicaID uint64
 	GlobalID  uint64
 	LogShards map[string]uint64
@@ -84,50 +84,50 @@ func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
 	return "", false
 }
 
-func NewHAKeeperStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
+func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	if shardID != DefaultHAKeeperShardID {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "invalid HAKeeper shard ID"))
 	}
-	return &haSM{
+	return &stateMachine{
 		replicaID: replicaID,
 		LogShards: make(map[string]uint64),
 	}
 }
 
-func (h *haSM) assignID() uint64 {
-	h.GlobalID++
-	return h.GlobalID
+func (s *stateMachine) assignID() uint64 {
+	s.GlobalID++
+	return s.GlobalID
 }
 
-func (h *haSM) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
+func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 	name, ok := isCreateLogShardCmd(cmd)
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not create log shard cmd"))
 	}
-	if shardID, ok := h.LogShards[name]; ok {
+	if shardID, ok := s.LogShards[name]; ok {
 		data := make([]byte, 8)
 		binaryEnc.PutUint64(data, shardID)
 		return sm.Result{Value: 0, Data: data}, nil
 	}
-	h.LogShards[name] = h.assignID()
-	return sm.Result{Value: h.GlobalID}, nil
+	s.LogShards[name] = s.assignID()
+	return sm.Result{Value: s.GlobalID}, nil
 }
 
-func (h *haSM) Close() error {
+func (s *stateMachine) Close() error {
 	return nil
 }
 
-func (h *haSM) Update(e sm.Entry) (sm.Result, error) {
+func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	if _, ok := isCreateLogShardCmd(cmd); ok {
-		return h.handleCreateLogShardCmd(cmd)
+		return s.handleCreateLogShardCmd(cmd)
 	}
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }
 
-func (h *haSM) Lookup(query interface{}) (interface{}, error) {
+func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if q, ok := query.(*logShardIDQuery); ok {
-		id, ok := h.LogShards[q.name]
+		id, ok := s.LogShards[q.name]
 		if ok {
 			return &logShardIDQueryResult{found: true, id: id}, nil
 		}
@@ -136,14 +136,14 @@ func (h *haSM) Lookup(query interface{}) (interface{}, error) {
 	panic("unknown query type")
 }
 
-func (h *haSM) SaveSnapshot(w io.Writer,
+func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
 	enc := gob.NewEncoder(w)
-	return enc.Encode(h)
+	return enc.Encode(s)
 }
 
-func (h *haSM) RecoverFromSnapshot(r io.Reader,
+func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
 	dec := gob.NewDecoder(r)
-	return dec.Decode(h)
+	return dec.Decode(s)
 }

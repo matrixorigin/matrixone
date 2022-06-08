@@ -12,27 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logservice
+package hakeeper
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func TestErrorConversion(t *testing.T) {
-	mappings := getErrorToCodeMapping()
-	for _, rec := range mappings {
-		if rec.reverse {
-			code, msg := toErrorCode(rec.err)
-			resp := logservice.Response{
-				ErrorCode:    code,
-				ErrorMessage: msg,
-			}
-			err := toError(resp)
-			assert.Equal(t, err, rec.err)
-		}
+type DNInfo struct {
+	Tick   uint64
+	Shards []logservice.DNShardInfo
+}
+
+type DNState struct {
+	Stores map[string]DNInfo
+}
+
+func NewDNState() DNState {
+	return DNState{
+		Stores: make(map[string]DNInfo),
 	}
+}
+
+func (s *DNState) Update(hb logservice.DNStoreHeartbeat, tick uint64) {
 }

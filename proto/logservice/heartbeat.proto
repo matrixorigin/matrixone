@@ -12,7 +12,9 @@
 // limitations under the License.
 
 syntax = "proto3";
-option go_package = "/heartbeat";
+package logservice;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
 // ShardState represents the state of a registered Shard. 
 message ShardState {
@@ -59,22 +61,25 @@ message LogStoreHeartbeat {
   // LogStore. Details in Shards are based on the local knowledge of each
   // replica running on the current LogStore, it may not be accurate or
   // update to date due to various reasons. 
-  repeated LogShardInfo Shards = 5;
+  repeated LogShardInfo Shards = 5 [(gogoproto.nullable) = false];
 };
 
+// DNShardInfo contains information of a launched DN shard. 
 message DNShardInfo {
+  // ShardID uniquely identifies a DN shard. Each DN shard manages a Primary
+  // Key range or hashed Primary Key value range. 
   uint64 ShardID                 = 1;
-  // DNID uniquely identifies a DN shard instance. After repairing a failed
-  // DN shard, a new DN shard instance is created with a new DNID value.
-  uint64 DNID                    = 2;
+  // ReplicaID uniquely identifies a DN shard instance. After repairing a
+  // failed DN shard, a new DN shard instance is created with a new ReplicaID
+  // value.
+  uint64 ReplicaID               = 2;
 }
 
 // DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
 message DNStoreHeartbeat {
   // UUID is the uuid of the DN Store.
   string UUID = 1;
-
   // Shards is a list of DNShardInfo instances collected on the specified
   // DN store. 
-  repeated DNShardInfo Shards = 2;
+  repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
 }

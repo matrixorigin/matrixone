@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func getServiceTestConfig() Config {
@@ -64,14 +64,14 @@ func TestNewService(t *testing.T) {
 
 func TestServiceConnect(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		req := rpc.Request{
-			Method:  rpc.MethodType_CONNECT,
+		req := logservice.Request{
+			Method:  logservice.MethodType_CONNECT,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)
@@ -79,14 +79,14 @@ func TestServiceConnect(t *testing.T) {
 
 func TestServiceConnectTimeout(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		req := rpc.Request{
-			Method:  rpc.MethodType_CONNECT,
+		req := logservice.Request{
+			Method:  logservice.MethodType_CONNECT,
 			ShardID: 1,
 			Timeout: 50 * int64(time.Millisecond),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, rpc.ErrorCode_Timeout, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_Timeout, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)
@@ -94,14 +94,14 @@ func TestServiceConnectTimeout(t *testing.T) {
 
 func TestServiceConnectRO(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		req := rpc.Request{
-			Method:  rpc.MethodType_CONNECT_RO,
+		req := logservice.Request{
+			Method:  logservice.MethodType_CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)
@@ -117,27 +117,27 @@ func getTestAppendCmd(id uint64, data []byte) []byte {
 
 func TestServiceHandleAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		req := rpc.Request{
-			Method:  rpc.MethodType_CONNECT_RO,
+		req := logservice.Request{
+			Method:  logservice.MethodType_CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := rpc.LogRecord{
+		lr := logservice.LogRecord{
 			Data: getTestAppendCmd(req.DNID, data),
 		}
-		req = rpc.Request{
-			Method:  rpc.MethodType_APPEND,
+		req = logservice.Request{
+			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, lr)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 	}
@@ -146,27 +146,27 @@ func TestServiceHandleAppend(t *testing.T) {
 
 func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		req := rpc.Request{
-			Method:  rpc.MethodType_CONNECT_RO,
+		req := logservice.Request{
+			Method:  logservice.MethodType_CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := rpc.LogRecord{
+		lr := logservice.LogRecord{
 			Data: getTestAppendCmd(req.DNID+1, data),
 		}
-		req = rpc.Request{
-			Method:  rpc.MethodType_APPEND,
+		req = logservice.Request{
+			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, lr)
-		assert.Equal(t, rpc.ErrorCode_NotLeaseHolder, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NotLeaseHolder, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.Index)
 	}
@@ -175,39 +175,39 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 
 func TestServiceHandleRead(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		req := rpc.Request{
-			Method:  rpc.MethodType_CONNECT_RO,
+		req := logservice.Request{
+			Method:  logservice.MethodType_CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := rpc.LogRecord{
+		lr := logservice.LogRecord{
 			Data: getTestAppendCmd(req.DNID, data),
 		}
-		req = rpc.Request{
-			Method:  rpc.MethodType_APPEND,
+		req = logservice.Request{
+			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, lr)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 
-		req = rpc.Request{
-			Method:  rpc.MethodType_READ,
+		req = logservice.Request{
+			Method:  logservice.MethodType_READ,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			Index:   1,
 			MaxSize: 1024 * 32,
 		}
 		resp, records := s.handleRead(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1), resp.LastIndex)
 		require.Equal(t, 1, len(records.Records))
@@ -218,59 +218,59 @@ func TestServiceHandleRead(t *testing.T) {
 
 func TestServiceTruncate(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
-		req := rpc.Request{
-			Method:  rpc.MethodType_CONNECT_RO,
+		req := logservice.Request{
+			Method:  logservice.MethodType_CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := rpc.LogRecord{
+		lr := logservice.LogRecord{
 			Data: getTestAppendCmd(req.DNID, data),
 		}
-		req = rpc.Request{
-			Method:  rpc.MethodType_APPEND,
+		req = logservice.Request{
+			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, lr)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 
-		req = rpc.Request{
-			Method:  rpc.MethodType_TRUNCATE,
+		req = logservice.Request{
+			Method:  logservice.MethodType_TRUNCATE,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			Index:   4,
 		}
 		resp = s.handleTruncate(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.Index)
 
-		req = rpc.Request{
-			Method:  rpc.MethodType_GET_TRUNCATE,
+		req = logservice.Request{
+			Method:  logservice.MethodType_GET_TRUNCATE,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleGetTruncatedIndex(req)
-		assert.Equal(t, rpc.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 
-		req = rpc.Request{
-			Method:  rpc.MethodType_TRUNCATE,
+		req = logservice.Request{
+			Method:  logservice.MethodType_TRUNCATE,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			Index:   3,
 		}
 		resp = s.handleTruncate(req)
-		assert.Equal(t, rpc.ErrorCode_IndexAlreadyTruncated, resp.ErrorCode)
+		assert.Equal(t, logservice.ErrorCode_IndexAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)

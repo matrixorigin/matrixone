@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -90,7 +90,7 @@ func readSize(conn net.Conn, buf []byte) (int, error) {
 
 // FIXME: add data corruption check
 func writeRequest(conn net.Conn,
-	req rpc.Request, buf []byte, payload []byte) error {
+	req logservice.Request, buf []byte, payload []byte) error {
 	if len(buf) < req.Size()+4+len(magicNumber[:]) {
 		buf = make([]byte, req.Size()+4+len(magicNumber[:]))
 	}
@@ -120,19 +120,19 @@ func writeRequest(conn net.Conn,
 	return nil
 }
 
-func readRequest(conn net.Conn, buf []byte, payload []byte) (rpc.Request, []byte, error) {
+func readRequest(conn net.Conn, buf []byte, payload []byte) (logservice.Request, []byte, error) {
 	size, err := readSize(conn, buf)
 	if err != nil {
-		return rpc.Request{}, nil, err
+		return logservice.Request{}, nil, err
 	}
 	if len(buf) < size {
 		buf = make([]byte, size)
 	}
 	buf = buf[:size]
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		return rpc.Request{}, nil, err
+		return logservice.Request{}, nil, err
 	}
-	var req rpc.Request
+	var req logservice.Request
 	if err := req.Unmarshal(buf); err != nil {
 		panic(err)
 	}
@@ -142,16 +142,16 @@ func readRequest(conn net.Conn, buf []byte, payload []byte) (rpc.Request, []byte
 	}
 	tt := time.Now().Add(readDuration)
 	if err := conn.SetWriteDeadline(tt); err != nil {
-		return rpc.Request{}, nil, err
+		return logservice.Request{}, nil, err
 	}
 	if _, err := io.ReadFull(conn, payload); err != nil {
-		return rpc.Request{}, nil, err
+		return logservice.Request{}, nil, err
 	}
 	return req, payload, nil
 }
 
-func writeResponse(conn net.Conn, resp rpc.Response,
-	records rpc.LogRecordResponse, buf []byte) error {
+func writeResponse(conn net.Conn, resp logservice.Response,
+	records logservice.LogRecordResponse, buf []byte) error {
 	if resp.Size() < len(buf) {
 		buf = make([]byte, resp.Size()+4)
 	}
@@ -206,10 +206,10 @@ func writeResponse(conn net.Conn, resp rpc.Response,
 }
 
 func readResponse(conn net.Conn,
-	buf []byte) (rpc.Response, rpc.LogRecordResponse, error) {
+	buf []byte) (logservice.Response, logservice.LogRecordResponse, error) {
 	size, err := readSize(conn, buf)
 	if err != nil {
-		return rpc.Response{}, rpc.LogRecordResponse{}, err
+		return logservice.Response{}, logservice.LogRecordResponse{}, err
 	}
 
 	if len(buf) < size {
@@ -219,19 +219,19 @@ func readResponse(conn net.Conn,
 
 	tt := time.Now().Add(responseReadDuration)
 	if err := conn.SetReadDeadline(tt); err != nil {
-		return rpc.Response{}, rpc.LogRecordResponse{}, err
+		return logservice.Response{}, logservice.LogRecordResponse{}, err
 	}
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		return rpc.Response{}, rpc.LogRecordResponse{}, err
+		return logservice.Response{}, logservice.LogRecordResponse{}, err
 	}
-	var resp rpc.Response
+	var resp logservice.Response
 	if err := resp.Unmarshal(buf); err != nil {
 		panic(err)
 	}
 
 	size, err = readSize(conn, buf)
 	if err != nil {
-		return rpc.Response{}, rpc.LogRecordResponse{}, err
+		return logservice.Response{}, logservice.LogRecordResponse{}, err
 	}
 
 	if size > len(buf) {
@@ -251,10 +251,10 @@ func readResponse(conn net.Conn,
 	for toRead > 0 {
 		tt = time.Now().Add(readDuration)
 		if err := conn.SetReadDeadline(tt); err != nil {
-			return rpc.Response{}, rpc.LogRecordResponse{}, err
+			return logservice.Response{}, logservice.LogRecordResponse{}, err
 		}
 		if _, err := io.ReadFull(conn, recvBuf); err != nil {
-			return rpc.Response{}, rpc.LogRecordResponse{}, err
+			return logservice.Response{}, logservice.LogRecordResponse{}, err
 		}
 		toRead -= len(recvBuf)
 		received += uint64(len(recvBuf))
@@ -265,7 +265,7 @@ func readResponse(conn net.Conn,
 		}
 	}
 
-	var logs rpc.LogRecordResponse
+	var logs logservice.LogRecordResponse
 	if err := logs.Unmarshal(buf); err != nil {
 		panic(err)
 	}

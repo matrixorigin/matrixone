@@ -19,7 +19,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -28,7 +28,7 @@ var (
 
 type errorToCode struct {
 	err     error
-	code    rpc.ErrorCode
+	code    logservice.ErrorCode
 	reverse bool
 }
 
@@ -36,25 +36,25 @@ var errorToCodeMappings = getErrorToCodeMapping()
 
 func getErrorToCodeMapping() []errorToCode {
 	return []errorToCode{
-		{dragonboat.ErrTimeout, rpc.ErrorCode_Timeout, true},
-		{dragonboat.ErrShardNotFound, rpc.ErrorCode_InvalidShard, true},
+		{dragonboat.ErrTimeout, logservice.ErrorCode_Timeout, true},
+		{dragonboat.ErrShardNotFound, logservice.ErrorCode_InvalidShard, true},
 		// TODO: why ErrTimeoutTooSmall is possible
-		{dragonboat.ErrTimeoutTooSmall, rpc.ErrorCode_Timeout, false},
-		{dragonboat.ErrPayloadTooBig, rpc.ErrorCode_InvalidPayloadSize, true},
-		{dragonboat.ErrRejected, rpc.ErrorCode_Rejected, true},
-		{dragonboat.ErrShardNotReady, rpc.ErrorCode_ShardNotReady, true},
-		{dragonboat.ErrSystemBusy, rpc.ErrorCode_ShardNotReady, false},
-		{dragonboat.ErrClosed, rpc.ErrorCode_SystemClosed, true},
+		{dragonboat.ErrTimeoutTooSmall, logservice.ErrorCode_Timeout, false},
+		{dragonboat.ErrPayloadTooBig, logservice.ErrorCode_InvalidPayloadSize, true},
+		{dragonboat.ErrRejected, logservice.ErrorCode_Rejected, true},
+		{dragonboat.ErrShardNotReady, logservice.ErrorCode_ShardNotReady, true},
+		{dragonboat.ErrSystemBusy, logservice.ErrorCode_ShardNotReady, false},
+		{dragonboat.ErrClosed, logservice.ErrorCode_SystemClosed, true},
 
-		{ErrInvalidTruncateIndex, rpc.ErrorCode_IndexAlreadyTruncated, true},
-		{ErrNotLeaseHolder, rpc.ErrorCode_NotLeaseHolder, true},
-		{ErrOutOfRange, rpc.ErrorCode_OutOfRange, true},
+		{ErrInvalidTruncateIndex, logservice.ErrorCode_IndexAlreadyTruncated, true},
+		{ErrNotLeaseHolder, logservice.ErrorCode_NotLeaseHolder, true},
+		{ErrOutOfRange, logservice.ErrorCode_OutOfRange, true},
 	}
 }
 
-func toErrorCode(err error) (rpc.ErrorCode, string) {
+func toErrorCode(err error) (logservice.ErrorCode, string) {
 	if err == nil {
-		return rpc.ErrorCode_NoError, ""
+		return logservice.ErrorCode_NoError, ""
 	}
 	for _, rec := range errorToCodeMappings {
 		if errors.Is(err, rec.err) {
@@ -63,14 +63,14 @@ func toErrorCode(err error) (rpc.ErrorCode, string) {
 		}
 	}
 	plog.Errorf("unrecognized error %v, converted to %d", err,
-		rpc.ErrorCode_OtherSystemError)
-	return rpc.ErrorCode_OtherSystemError, err.Error()
+		logservice.ErrorCode_OtherSystemError)
+	return logservice.ErrorCode_OtherSystemError, err.Error()
 }
 
-func toError(resp rpc.Response) error {
-	if resp.ErrorCode == rpc.ErrorCode_NoError {
+func toError(resp logservice.Response) error {
+	if resp.ErrorCode == logservice.ErrorCode_NoError {
 		return nil
-	} else if resp.ErrorCode == rpc.ErrorCode_OtherSystemError {
+	} else if resp.ErrorCode == logservice.ErrorCode_OtherSystemError {
 		return errors.Wrapf(ErrUnknownError, resp.ErrorMessage)
 	}
 

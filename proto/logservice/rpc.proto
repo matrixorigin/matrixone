@@ -12,7 +12,9 @@
 // limitations under the License.
 
 syntax = "proto3";
-option go_package = "/rpc";
+package logservice;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
 enum MethodType {
   CREATE       = 0;
@@ -73,5 +75,5 @@ message Response {
 };
 
 message LogRecordResponse {
-  repeated LogRecord Records = 1;
+  repeated LogRecord Records = 1 [(gogoproto.nullable) = false];
 };

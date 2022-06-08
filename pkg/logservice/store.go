@@ -29,7 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/logservice/pb/heartbeat"
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -162,7 +162,7 @@ func (l *logStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
 	// TODO: add another API for joining
-	return l.nh.StartReplica(initialReplicas, false, hakeeper.NewHAKeeperStateMachine, raftConfig)
+	return l.nh.StartReplica(initialReplicas, false, hakeeper.NewStateMachine, raftConfig)
 }
 
 func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
@@ -444,13 +444,13 @@ func (l *logStore) truncateLog() error {
 	return nil
 }
 
-func (l *logStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
-	m := heartbeat.LogStoreHeartbeat{
+func (l *logStore) getHeartbeatMessage() logservice.LogStoreHeartbeat {
+	m := logservice.LogStoreHeartbeat{
 		UUID:           l.cfg.NodeHostID,
 		RaftAddress:    l.cfg.RaftAddress,
 		ServiceAddress: l.cfg.ServiceAddress,
 		GossipAddress:  l.cfg.GossipAddress,
-		Shards:         make([]*heartbeat.LogShardInfo, 0),
+		Shards:         make([]logservice.LogShardInfo, 0),
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,
@@ -459,7 +459,7 @@ func (l *logStore) getHeartbeatMessage() heartbeat.LogStoreHeartbeat {
 	for _, ci := range nhi.ShardInfoList {
 		// ignore the special HAKeeper shard
 		if ci.ShardID != hakeeper.DefaultHAKeeperShardID {
-			shardInfo := &heartbeat.LogShardInfo{
+			shardInfo := logservice.LogShardInfo{
 				ShardID:  ci.ShardID,
 				Replicas: ci.Nodes,
 				Epoch:    ci.ConfigChangeIndex,

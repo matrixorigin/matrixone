@@ -25,7 +25,7 @@ import (
 	"github.com/lni/goutils/netutil"
 	"github.com/lni/goutils/syncutil"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice/pb/rpc"
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -34,7 +34,7 @@ var (
 
 type Lsn = uint64
 
-type LogRecord = rpc.LogRecord
+type LogRecord = logservice.LogRecord
 
 type Service struct {
 	cfg         Config
@@ -161,39 +161,39 @@ func (s *Service) serve(conn net.Conn) {
 	}
 }
 
-func (s *Service) handle(req rpc.Request,
-	payload []byte) (rpc.Response, rpc.LogRecordResponse) {
+func (s *Service) handle(req logservice.Request,
+	payload []byte) (logservice.Response, logservice.LogRecordResponse) {
 	switch req.Method {
-	case rpc.MethodType_CREATE:
+	case logservice.MethodType_CREATE:
 		panic("not implemented")
-	case rpc.MethodType_DESTROY:
+	case logservice.MethodType_DESTROY:
 		panic("not implemented")
-	case rpc.MethodType_APPEND:
-		var lr rpc.LogRecord
+	case logservice.MethodType_APPEND:
+		var lr logservice.LogRecord
 		if err := lr.Unmarshal(payload); err != nil {
 			panic(err)
 		}
-		return s.handleAppend(req, lr), rpc.LogRecordResponse{}
-	case rpc.MethodType_READ:
+		return s.handleAppend(req, lr), logservice.LogRecordResponse{}
+	case logservice.MethodType_READ:
 		return s.handleRead(req)
-	case rpc.MethodType_TRUNCATE:
-		return s.handleTruncate(req), rpc.LogRecordResponse{}
-	case rpc.MethodType_GET_TRUNCATE:
-		return s.handleGetTruncatedIndex(req), rpc.LogRecordResponse{}
-	case rpc.MethodType_CONNECT:
-		return s.handleConnect(req), rpc.LogRecordResponse{}
-	case rpc.MethodType_CONNECT_RO:
-		return s.handleConnectRO(req), rpc.LogRecordResponse{}
+	case logservice.MethodType_TRUNCATE:
+		return s.handleTruncate(req), logservice.LogRecordResponse{}
+	case logservice.MethodType_GET_TRUNCATE:
+		return s.handleGetTruncatedIndex(req), logservice.LogRecordResponse{}
+	case logservice.MethodType_CONNECT:
+		return s.handleConnect(req), logservice.LogRecordResponse{}
+	case logservice.MethodType_CONNECT_RO:
+		return s.handleConnectRO(req), logservice.LogRecordResponse{}
 	default:
 		panic("unknown method type")
 	}
 }
 
-func getResponse(req rpc.Request) rpc.Response {
-	return rpc.Response{Method: req.Method}
+func getResponse(req logservice.Request) logservice.Response {
+	return logservice.Response{Method: req.Method}
 }
 
-func (s *Service) handleConnect(req rpc.Request) rpc.Response {
+func (s *Service) handleConnect(req logservice.Request) logservice.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -203,7 +203,7 @@ func (s *Service) handleConnect(req rpc.Request) rpc.Response {
 	return resp
 }
 
-func (s *Service) handleConnectRO(req rpc.Request) rpc.Response {
+func (s *Service) handleConnectRO(req logservice.Request) logservice.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -214,8 +214,8 @@ func (s *Service) handleConnectRO(req rpc.Request) rpc.Response {
 	return resp
 }
 
-func (s *Service) handleAppend(req rpc.Request,
-	record rpc.LogRecord) rpc.Response {
+func (s *Service) handleAppend(req logservice.Request,
+	record logservice.LogRecord) logservice.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -228,7 +228,7 @@ func (s *Service) handleAppend(req rpc.Request,
 	return resp
 }
 
-func (s *Service) handleRead(req rpc.Request) (rpc.Response, rpc.LogRecordResponse) {
+func (s *Service) handleRead(req logservice.Request) (logservice.Response, logservice.LogRecordResponse) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -238,15 +238,10 @@ func (s *Service) handleRead(req rpc.Request) (rpc.Response, rpc.LogRecordRespon
 	} else {
 		resp.LastIndex = lsn
 	}
-	// FIXME: fix the proto file to avoid having []*LogRecord
-	rr := make([]*rpc.LogRecord, 0)
-	for _, r := range records {
-		rr = append(rr, &rpc.LogRecord{Index: r.Index, Data: r.Data})
-	}
-	return resp, rpc.LogRecordResponse{Records: rr}
+	return resp, logservice.LogRecordResponse{Records: records}
 }
 
-func (s *Service) handleTruncate(req rpc.Request) rpc.Response {
+func (s *Service) handleTruncate(req logservice.Request) logservice.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -256,7 +251,7 @@ func (s *Service) handleTruncate(req rpc.Request) rpc.Response {
 	return resp
 }
 
-func (s *Service) handleGetTruncatedIndex(req rpc.Request) rpc.Response {
+func (s *Service) handleGetTruncatedIndex(req logservice.Request) logservice.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)

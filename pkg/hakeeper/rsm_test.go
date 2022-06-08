@@ -23,6 +23,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestAssignID(t *testing.T) {
+	tsm := NewStateMachine(0, 1).(*stateMachine)
+	assert.Equal(t, uint64(0), tsm.GlobalID)
+	assert.Equal(t, uint64(1), tsm.assignID())
+	assert.Equal(t, uint64(1), tsm.GlobalID)
+}
+
 func TestCreateLogShardCmd(t *testing.T) {
 	cmd := getCreateLogShardCmd("test")
 	name, ok := isCreateLogShardCmd(cmd)
@@ -36,14 +43,14 @@ func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
 			t.Fatalf("failed to panic")
 		}
 	}()
-	tsm := NewHAKeeperStateMachine(0, 1).(*haSM)
+	tsm := NewStateMachine(0, 1).(*stateMachine)
 	assert.Equal(t, uint64(1), tsm.replicaID)
-	NewHAKeeperStateMachine(1, 1)
+	NewStateMachine(1, 1)
 }
 
 func TestHAKeeperStateMachineSnapshot(t *testing.T) {
-	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
-	tsm2 := NewHAKeeperStateMachine(0, 2).(*haSM)
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm2 := NewStateMachine(0, 2).(*stateMachine)
 	tsm1.GlobalID = 12345
 	tsm1.LogShards["test1"] = 23456
 	tsm1.LogShards["test2"] = 34567
@@ -58,7 +65,7 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 
 func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
-	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	tsm1.GlobalID = 100
 
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
@@ -76,7 +83,7 @@ func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 
 func TestHAKeeperQueryLogShardID(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
-	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	tsm1.GlobalID = 100
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
@@ -99,6 +106,6 @@ func TestHAKeeperQueryLogShardID(t *testing.T) {
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {
-	tsm1 := NewHAKeeperStateMachine(0, 1).(*haSM)
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	assert.Nil(t, tsm1.Close())
 }
