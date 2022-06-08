@@ -19,9 +19,14 @@ import (
 	"encoding/gob"
 	"io"
 
+	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+var (
+	plog = logger.GetLogger("hakeeper")
 )
 
 var (

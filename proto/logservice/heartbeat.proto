@@ -46,6 +46,8 @@ message LogShardInfo {
   uint64 LeaderID              = 4;
   // Term is the Raft term value. 
   uint64 Term                  = 5;
+
+  // TODO: per shard stats like CPU/memory/network usage can be added here
 };
 
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
@@ -73,6 +75,8 @@ message DNShardInfo {
   // failed DN shard, a new DN shard instance is created with a new ReplicaID
   // value.
   uint64 ReplicaID               = 2;
+
+  // TODO: per shard stats like CPU/memory/network usage can be added here
 }
 
 // DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
