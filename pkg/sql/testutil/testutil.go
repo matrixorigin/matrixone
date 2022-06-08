@@ -43,6 +43,8 @@ var (
 	vc   = types.T_varchar.ToType()
 	d64  = types.T_decimal64.ToType()
 	d128 = types.T_decimal128.ToType()
+	dt   = types.T_date.ToType()
+	dti  = types.T_datetime.ToType()
 )
 
 type vecType interface {
@@ -67,14 +69,17 @@ func makeScalar[T vecType](value T, length int, typ types.Type) *vector.Vector {
 
 func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vector {
 	vec := vector.New(typ)
-	bs := &types.Bytes{}
+	bs := &types.Bytes{
+		Lengths: make([]uint32, len(values)),
+		Offsets: make([]uint32, len(values)),
+	}
 	next := uint32(0)
 	if nsp == nil {
-		for _, s := range values {
+		for i, s := range values {
 			l := uint32(len(s))
 			bs.Data = append(bs.Data, []byte(s)...)
-			bs.Lengths = append(bs.Lengths, l)
-			bs.Offsets = append(bs.Offsets, next)
+			bs.Lengths[i] = l
+			bs.Offsets[i] = next
 			next += l
 		}
 	} else {
@@ -88,8 +93,8 @@ func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vec
 			s := values[i]
 			l := uint32(len(s))
 			bs.Data = append(bs.Data, []byte(s)...)
-			bs.Lengths = append(bs.Lengths, l)
-			bs.Offsets = append(bs.Offsets, next)
+			bs.Lengths[i] = l
+			bs.Offsets[i] = next
 			next += l
 		}
 	}
@@ -247,6 +252,68 @@ func MakeScalarDecimal128(v uint64, length int) *vector.Vector {
 	vec := NewProc().AllocScalarVector(d128)
 	vec.Length = length
 	vec.Col = []types.Decimal128{types.InitDecimal128UsingUint(v)}
+	return vec
+}
+
+func MakeDateVector(values []string, nsp []uint64) *vector.Vector {
+	vec := vector.New(dt)
+	ds := make([]types.Date, len(values))
+	for _, n := range nsp {
+		nulls.Add(vec.Nsp, n)
+	}
+	for i, s := range values {
+		if nulls.Contains(vec.Nsp, uint64(i)) {
+			continue
+		}
+		d, err := types.ParseDate(s)
+		if err != nil {
+			panic(err)
+		}
+		ds[i] = d
+	}
+	vec.Col = ds
+	return vec
+}
+
+func MakeScalarDate(value string, length int) *vector.Vector {
+	vec := NewProc().AllocScalarVector(dt)
+	vec.Length = length
+	d, err := types.ParseDate(value)
+	if err != nil {
+		panic(err)
+	}
+	vec.Col = []types.Date{d}
+	return vec
+}
+
+func MakeDateTimeVector(values []string, nsp []uint64) *vector.Vector {
+	vec := vector.New(dti)
+	ds := make([]types.Datetime, len(values))
+	for _, n := range nsp {
+		nulls.Add(vec.Nsp, n)
+	}
+	for i, s := range values {
+		if nulls.Contains(vec.Nsp, uint64(i)) {
+			continue
+		}
+		d, err := types.ParseDatetime(s)
+		if err != nil {
+			panic(err)
+		}
+		ds[i] = d
+	}
+	vec.Col = ds
+	return vec
+}
+
+func MakeScalarDateTime(value string, length int) *vector.Vector {
+	vec := NewProc().AllocScalarVector(dti)
+	vec.Length = length
+	d, err := types.ParseDatetime(value)
+	if err != nil {
+		panic(err)
+	}
+	vec.Col = []types.Datetime{d}
 	return vec
 }
 
