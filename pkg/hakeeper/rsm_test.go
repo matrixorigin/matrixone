@@ -25,9 +25,9 @@ import (
 
 func TestAssignID(t *testing.T) {
 	tsm := NewStateMachine(0, 1).(*stateMachine)
-	assert.Equal(t, uint64(0), tsm.GlobalID)
+	assert.Equal(t, uint64(0), tsm.NextID)
 	assert.Equal(t, uint64(1), tsm.assignID())
-	assert.Equal(t, uint64(1), tsm.GlobalID)
+	assert.Equal(t, uint64(1), tsm.NextID)
 }
 
 func TestCreateLogShardCmd(t *testing.T) {
@@ -51,14 +51,14 @@ func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
 func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	tsm2 := NewStateMachine(0, 2).(*stateMachine)
-	tsm1.GlobalID = 12345
+	tsm1.NextID = 12345
 	tsm1.LogShards["test1"] = 23456
 	tsm1.LogShards["test2"] = 34567
 
 	buf := bytes.NewBuffer(nil)
 	assert.Nil(t, tsm1.SaveSnapshot(buf, nil, nil))
 	assert.Nil(t, tsm2.RecoverFromSnapshot(buf, nil, nil))
-	assert.Equal(t, tsm1.GlobalID, tsm2.GlobalID)
+	assert.Equal(t, tsm1.NextID, tsm2.NextID)
 	assert.Equal(t, tsm1.LogShards, tsm2.LogShards)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
@@ -66,14 +66,14 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	tsm1.GlobalID = 100
+	tsm1.NextID = 100
 
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
-	assert.Equal(t, uint64(101), tsm1.GlobalID)
+	assert.Equal(t, uint64(101), tsm1.NextID)
 
-	tsm1.GlobalID = 200
+	tsm1.NextID = 200
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	data := make([]byte, 8)
@@ -84,7 +84,7 @@ func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 func TestHAKeeperQueryLogShardID(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	tsm1.GlobalID = 100
+	tsm1.NextID = 100
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)

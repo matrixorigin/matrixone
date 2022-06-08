@@ -56,7 +56,7 @@ type logShardIDQueryResult struct {
 
 type stateMachine struct {
 	replicaID uint64
-	GlobalID  uint64
+	NextID    uint64
 	LogShards map[string]uint64
 }
 
@@ -100,8 +100,8 @@ func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 }
 
 func (s *stateMachine) assignID() uint64 {
-	s.GlobalID++
-	return s.GlobalID
+	s.NextID++
+	return s.NextID
 }
 
 func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
@@ -115,7 +115,7 @@ func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 		return sm.Result{Value: 0, Data: data}, nil
 	}
 	s.LogShards[name] = s.assignID()
-	return sm.Result{Value: s.GlobalID}, nil
+	return sm.Result{Value: s.NextID}, nil
 }
 
 func (s *stateMachine) Close() error {
