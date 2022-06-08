@@ -290,7 +290,7 @@ func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
 			return err
 		}
 	}
-	// vf.OnReplay(r)
+	vf.OnReplay(r)
 	return nil
 }
 

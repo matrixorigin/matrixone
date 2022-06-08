@@ -670,10 +670,6 @@ func TestLoad(t *testing.T) {
 				t.Logf("entry is %s", e.entry.GetPayload())
 				if infoin != nil {
 					info := infoin.(*entry.Info)
-					testutils.WaitExpect(400, func() bool {
-						_, err = s.Load(info.Group, e.lsn)
-						return err == nil
-					})
 					_, err = s.Load(info.Group, e.lsn)
 					assert.Nil(t, err)
 					t.Logf("synced %d", s.GetSynced(info.Group))
@@ -832,13 +828,6 @@ func TestLoad(t *testing.T) {
 	}
 	err = s.Replay(a)
 	assert.Nil(t, err)
-	// r := newReplayer(a)
-	// o := &noopObserver{}
-	// err = s.file.Replay(r.replayHandler, o)
-	// if err != nil {
-	// 	fmt.Printf("err is %v", err)
-	// }
-	// r.Apply()
 
 	for _, e := range ch2 {
 		err := e.entry.WaitDone()

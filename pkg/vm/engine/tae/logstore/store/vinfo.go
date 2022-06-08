@@ -28,6 +28,12 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 )
 
+var (
+	ErrVFileGroupNotExist = errors.New("vfile: group not existed")
+	ErrVFileLsnNotExist   = errors.New("vfile: lsn not existed")
+	ErrVFileOffsetTimeOut = errors.New("get vfile offset timeout")
+)
+
 type vInfo struct {
 	vf *vFile
 
@@ -84,9 +90,7 @@ func newVInfo(vf *vFile) *vInfo {
 }
 
 func (info *vInfo) OnReplay(r *replayer) {
-	info.addrmu.Lock()
-	info.Addrs = r.vinfoAddrs
-	info.addrmu.Unlock()
+	info.flushWg.Wait()
 }
 
 func (info *vInfo) LoadMeta() error {
@@ -292,11 +296,11 @@ func (info *vInfo) GetOffsetByLSN(groupId uint32, lsn uint64) (int, error) {
 	if !ok {
 		logutil.Infof("group %d", groupId)
 		logutil.Infof("%p|addrs are %v", info, info.Addrs)
-		return 0, errors.New("vinfo group not existed")
+		return 0, ErrVFileGroupNotExist
 	}
 	offset, ok := lsnMap[lsn]
 	if !ok {
-		return 0, errors.New("vinfo lsn not existed")
+		return 0, ErrVFileLsnNotExist
 	}
 	return offset, nil
 }
