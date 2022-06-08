@@ -253,8 +253,6 @@ func (s *Driver) ReleaseFile(fd *DriverFile) {
 	if s.segFile == nil {
 		return
 	}
-	fd.snode.readMutex.Lock()
-	defer fd.snode.readMutex.Unlock()
 	err := s.log.RemoveInode(fd)
 	if err != nil {
 		panic(any(err.Error()))

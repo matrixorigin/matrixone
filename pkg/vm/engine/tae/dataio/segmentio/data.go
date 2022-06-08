@@ -113,9 +113,9 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 	if bufLen == 0 {
 		return 0, nil
 	}
-	df.mutex.RLock()
+	df.mutex.Lock()
 	file := df.file[len(df.file)-1]
-	df.mutex.RUnlock()
+	df.mutex.Unlock()
 	n, err = file.Read(buf)
 	return n, nil
 }
