@@ -540,9 +540,9 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	ver, err := s.GetVersionByGLSN(groupId, lsn)
 	if err == ErrGroupNotExist || err == ErrLsnNotExist {
 		syncedLsn := s.GetCurrSeqNum(groupId)
-		if lsn < syncedLsn {
+		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
-				logutil.Infof("lalala retry %d-%d", groupId, lsn)
+				// logutil.Infof("load retry %d-%d", groupId, lsn)
 				time.Sleep(time.Millisecond * 100)
 				ver, err = s.GetVersionByGLSN(groupId, lsn)
 				if err == nil {
@@ -560,9 +560,9 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	e, err := s.file.Load(ver, groupId, lsn)
 	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
 		syncedLsn := s.GetCurrSeqNum(groupId)
-		if lsn < syncedLsn {
+		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
-				logutil.Infof("lalala retry %d-%d", groupId, lsn)
+				// logutil.Infof("load retry %d-%d", groupId, lsn)
 				time.Sleep(time.Millisecond * 100)
 				e, err = s.file.Load(ver, groupId, lsn)
 				if err == nil {
