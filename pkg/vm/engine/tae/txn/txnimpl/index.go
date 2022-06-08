@@ -565,6 +565,13 @@ func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
 				return idata.ErrDuplicate
 			}
 		}
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
+		for _, v := range data {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+		}
 	case types.T_char, types.T_varchar, types.T_json:
 		data := vals.(*types.Bytes)
 		// bytes := make([]string, 0, len(data.Lengths))

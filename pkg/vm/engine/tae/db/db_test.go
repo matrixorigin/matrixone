@@ -186,6 +186,41 @@ func TestAppend4(t *testing.T) {
 	}
 }
 
+func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
+	bat := catalog.MockData(schema, schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1)
+	bats := compute.SplitBatch(bat, 4)
+
+	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], false)
+
+	txn, rel := getDefaultRelation(t, tae, schema.Name)
+	err := rel.Append(bats[0])
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	v := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 2)
+	filter := handle.NewEQFilter(v)
+	err = rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	for _, b := range bats[1:] {
+		err = rel.Append(b)
+		assert.NoError(t, err)
+	}
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
+	assert.NoError(t, txn.Commit())
+}
+
+func TestCRUD(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	defer tae.Close()
+	createDB(t, tae, defaultTestDB)
+	withTestAllPKType(t, tae, testCRUD)
+}
+
 func TestTableHandle(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()

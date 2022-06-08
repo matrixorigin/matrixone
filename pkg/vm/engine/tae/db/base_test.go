@@ -30,6 +30,15 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 	return db
 }
 
+func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalog.Schema)) {
+	for i := 0; i < 17; i++ {
+		schema := catalog.MockSchemaAll(18, i)
+		schema.BlockMaxRows = 10
+		schema.SegmentMaxBlocks = 2
+		test(t, tae, schema)
+	}
+}
+
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
 	files, err := ioutil.ReadDir(e.Dir)
