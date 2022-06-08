@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"math"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -190,6 +191,13 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	bat := catalog.MockData(schema, schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1)
 	bats := compute.SplitBatch(bat, 4)
 
+	var updateColIdx int
+	if schema.GetSingleSortKeyIdx() >= 17 {
+		updateColIdx = 0
+	} else {
+		updateColIdx = schema.GetSingleSortKeyIdx() + 1
+	}
+
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], false)
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
@@ -200,6 +208,20 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	filter := handle.NewEQFilter(v)
 	err = rel.DeleteByFilter(filter)
 	assert.NoError(t, err)
+
+	oldv := compute.GetValue(bats[0].Vecs[updateColIdx], 5)
+	v = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 5)
+	ufilter := handle.NewEQFilter(v)
+	{
+		ot := reflect.ValueOf(&oldv).Elem()
+		nv := reflect.ValueOf(int8(99))
+		if nv.CanConvert(reflect.TypeOf(oldv)) {
+			ot.Set(nv.Convert(reflect.TypeOf(oldv)))
+		}
+	}
+	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv)
+	assert.NoError(t, err)
+
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
 	assert.NoError(t, txn.Commit())
 

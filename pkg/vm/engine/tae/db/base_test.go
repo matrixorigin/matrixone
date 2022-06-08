@@ -180,6 +180,7 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 			view.ApplyDeletes()
 		}
 		rows += view.Length()
+		// t.Log(view.String())
 		return
 	})
 	return rows
