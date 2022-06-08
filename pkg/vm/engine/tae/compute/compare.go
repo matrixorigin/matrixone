@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package compute
 
 import (
 	"bytes"
@@ -22,6 +22,16 @@ import (
 
 func CompareGeneric(a, b any, t types.Type) int {
 	switch t.Oid {
+	case types.T_bool:
+		if a.(bool) && b.(bool) {
+			return 0
+		} else if !a.(bool) && !b.(bool) {
+			return 0
+		} else if a.(bool) {
+			return 1
+		} else {
+			return 0
+		}
 	case types.T_int8:
 		if a.(int8) > b.(int8) {
 			return 1
