@@ -456,7 +456,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 			case types.T_datetime:
-				fmt.Println("inside case types.T_datetime")
 				precision := vec.Typ.Precision
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Datetime)
