@@ -16,6 +16,7 @@ package pipeline2
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,28 +54,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	var err error
 	var bat *batch.Batch
 
-	defer func() {
-		for i, in := range p.instructions {
-			if in.Op == overload.Connector {
-				arg := p.instructions[i].Arg.(*connector.Argument)
-				select {
-				case <-arg.Reg.Ctx.Done():
-				case arg.Reg.Ch <- nil:
-				}
-				break
-			}
-			if in.Op == overload.Dispatch {
-				arg := p.instructions[i].Arg.(*dispatch.Argument)
-				for _, reg := range arg.Regs {
-					select {
-					case <-reg.Ctx.Done():
-					case reg.Ch <- nil:
-					}
-				}
-				break
-			}
-		}
-	}()
+	defer cleanup(p, proc)
 	if p.reg != nil { // used to handle some push-down request
 		select {
 		case <-p.reg.Ctx.Done():
@@ -102,28 +82,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	var end bool // exist flag
 	var err error
 
-	defer func() {
-		for i, in := range p.instructions {
-			if in.Op == overload.Connector {
-				arg := p.instructions[i].Arg.(*connector.Argument)
-				select {
-				case <-arg.Reg.Ctx.Done():
-				case arg.Reg.Ch <- nil:
-				}
-				break
-			}
-			if in.Op == overload.Dispatch {
-				arg := p.instructions[i].Arg.(*dispatch.Argument)
-				for _, reg := range arg.Regs {
-					select {
-					case <-reg.Ctx.Done():
-					case reg.Ch <- nil:
-					}
-				}
-				break
-			}
-		}
-	}()
+	defer cleanup(p, proc)
 	if p.reg != nil { // used to handle some push-down request
 		select {
 		case <-p.reg.Ctx.Done():
@@ -136,6 +95,8 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	// processing the batch according to the instructions
 	proc.Reg.InputBatch = bat
 	end, err = overload.Run(p.instructions, proc)
+	proc.Reg.InputBatch = nil
+	end, err = overload.Run(p.instructions, proc)
 	return end, err
 }
 
@@ -144,26 +105,7 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 	var err error
 
 	defer func() {
-		for i, in := range p.instructions {
-			if in.Op == overload.Connector {
-				arg := p.instructions[i].Arg.(*connector.Argument)
-				select {
-				case <-arg.Reg.Ctx.Done():
-				case arg.Reg.Ch <- nil:
-				}
-				break
-			}
-			if in.Op == overload.Dispatch {
-				arg := p.instructions[i].Arg.(*dispatch.Argument)
-				for _, reg := range arg.Regs {
-					select {
-					case <-reg.Ctx.Done():
-					case reg.Ch <- nil:
-					}
-				}
-				break
-			}
-		}
+		cleanup(p, proc)
 		for i := 0; i < len(proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 			for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
 				bat := <-proc.Reg.MergeReceivers[i].Ch
@@ -187,6 +129,31 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 		proc.Reg.InputBatch = nil
 		if end, err = overload.Run(p.instructions, proc); err != nil || end {
 			return end, err
+		}
+	}
+}
+
+func cleanup(p *Pipeline, proc *process.Process) {
+	proc.Reg.InputBatch = nil
+	overload.Run(p.instructions, proc)
+	for i, in := range p.instructions {
+		if in.Op == overload.Connector {
+			arg := p.instructions[i].Arg.(*connector.Argument)
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
+			break
+		}
+		if in.Op == overload.Dispatch {
+			arg := p.instructions[i].Arg.(*dispatch.Argument)
+			for _, reg := range arg.Regs {
+				select {
+				case <-reg.Ctx.Done():
+				case reg.Ch <- nil:
+				}
+			}
+			break
 		}
 	}
 }

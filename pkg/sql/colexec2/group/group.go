@@ -73,10 +73,10 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 		}
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	defer bat.Clean(proc.Mp)
+	if len(bat.Vecs) == 0 {
 		return false, nil
 	}
-	defer bat.Clean(proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
 	if len(ctr.aggVecs) == 0 {
 		ctr.aggVecs = make([]evalVector, len(ap.Aggs))
@@ -89,7 +89,7 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
 				}
 			}
-			return false, nil
+			return false, err
 		}
 		ctr.aggVecs[i].vec = vec
 		ctr.aggVecs[i].needFree = true
@@ -124,6 +124,9 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 				return false, err
 			}
 		}
+	}
+	if len(bat.Zs) == 0 {
+		return false, nil
 	}
 	if err := ctr.processH0(bat, ap, proc); err != nil {
 		ctr.bat.Clean(proc.Mp)
@@ -171,7 +174,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
 				}
 			}
-			return false, nil
+			return false, err
 		}
 		ctr.aggVecs[i].vec = vec
 		ctr.aggVecs[i].needFree = true
@@ -200,7 +203,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 					vector.Clean(ctr.groupVecs[j].vec, proc.Mp)
 				}
 			}
-			return false, nil
+			return false, err
 		}
 		ctr.groupVecs[i].vec = vec
 		ctr.groupVecs[i].needFree = true

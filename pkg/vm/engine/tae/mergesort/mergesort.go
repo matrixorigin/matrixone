@@ -15,8 +15,11 @@
 package mergesort
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/bools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/dates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/datetimes"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal128s"
@@ -27,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/int32s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/int64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/int8s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/timestamps"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uint16s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uint32s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uint64s"
@@ -38,6 +42,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 	sortedIdx := make([]uint32, vector.Length(cols[pk]))
 
 	switch cols[pk].Typ.Oid {
+	case types.T_bool:
+		bools.Sort(cols[pk], sortedIdx)
 	case types.T_int8:
 		int8s.Sort(cols[pk], sortedIdx)
 	case types.T_int16:
@@ -66,8 +72,12 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 		decimal64s.Sort(cols[pk], sortedIdx)
 	case types.T_decimal128:
 		decimal128s.Sort(cols[pk], sortedIdx)
+	case types.T_timestamp:
+		timestamps.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
 		varchar.Sort(cols[pk], sortedIdx)
+	default:
+		panic(fmt.Sprintf("%s not supported", cols[pk].Typ.String()))
 	}
 
 	for i := 0; i < len(cols); i++ {
@@ -75,6 +85,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 			continue
 		}
 		switch cols[i].Typ.Oid {
+		case types.T_bool:
+			bools.Shuffle(cols[i], sortedIdx)
 		case types.T_int8:
 			int8s.Shuffle(cols[i], sortedIdx)
 		case types.T_int16:
@@ -103,8 +115,12 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 			decimal64s.Shuffle(cols[i], sortedIdx)
 		case types.T_decimal128:
 			decimal128s.Shuffle(cols[i], sortedIdx)
+		case types.T_timestamp:
+			timestamps.Shuffle(cols[i], sortedIdx)
 		case types.T_char, types.T_json, types.T_varchar:
 			varchar.Shuffle(cols[i], sortedIdx)
+		default:
+			panic(fmt.Sprintf("%s not supported", cols[i].Typ.String()))
 		}
 	}
 
@@ -113,6 +129,8 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 
 func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
 	switch column[0].Typ.Oid {
+	case types.T_bool:
+		ret, mapping = bools.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int8:
 		ret, mapping = int8s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int16:
@@ -141,14 +159,20 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout,
 		ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_decimal128:
 		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
+	case types.T_timestamp:
+		ret, mapping = timestamps.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
+	default:
+		panic(fmt.Sprintf("%s not supported", column[0].Typ.String()))
 	}
 	return
 }
 
 func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
 	switch column[0].Typ.Oid {
+	case types.T_bool:
+		ret = bools.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int8:
 		ret = int8s.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_int16:
@@ -177,8 +201,12 @@ func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLa
 		ret = decimal64s.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_decimal128:
 		ret = decimal128s.Multiplex(column, sortedIdx, fromLayout, toLayout)
+	case types.T_timestamp:
+		ret = timestamps.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar:
 		ret = varchar.Multiplex(column, sortedIdx, fromLayout, toLayout)
+	default:
+		panic(fmt.Sprintf("%s not supported", column[0].Typ.String()))
 	}
 	return
 }

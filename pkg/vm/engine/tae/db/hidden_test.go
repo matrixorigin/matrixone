@@ -6,10 +6,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,9 +29,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	bat := catalog.MockData(schema, schema.BlockMaxRows*4)
 	bats := compute.SplitBatch(bat, 10)
 
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
+	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bats[0])
 	{
 		offsets := make([]uint32, 0)
@@ -58,12 +55,9 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
+		blk := getOneBlock(rel)
 		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 		assert.NoError(t, err)
 		offsets := make([]uint32, 0)
@@ -84,9 +78,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	err = rel.Append(bats[2])
@@ -99,34 +91,9 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
-	{
-		var metas []*catalog.BlockEntry
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			if blk.Rows() < int(schema.BlockMaxRows) {
-				it.Next()
-				continue
-			}
-			meta := blk.GetMeta().(*catalog.BlockEntry)
-			metas = append(metas, meta)
-			it.Next()
-		}
-		for _, meta := range metas {
-			task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
-			assert.NoError(t, err)
-			err = task.OnExec()
-			assert.NoError(t, err)
-		}
-	}
+	compactBlocks(t, tae, "db", schema, false)
 
-	assert.NoError(t, txn.Commit())
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	var segMeta *catalog.SegmentEntry
 	{
 		it := rel.MakeBlockIt()
@@ -167,9 +134,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeBlockIt()
 		for it.Valid() {
@@ -212,13 +177,10 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	bat := catalog.MockData(schema, schema.BlockMaxRows*6)
 	bats := compute.SplitBatch(bat, 10)
 
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
+	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
-	it := rel.MakeBlockIt()
-	blk := it.GetBlock()
+	blk := getOneBlock(rel)
 	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 	assert.NoError(t, err)
 	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
@@ -241,11 +203,8 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	})
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
-	it = rel.MakeBlockIt()
-	blk = it.GetBlock()
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	blk = getOneBlock(rel)
 
 	assert.Equal(t, compute.LengthOfBatch(bats[0])-1, int(rel.Rows()))
 	view, err = blk.GetColumnDataById(3, nil, nil)
@@ -270,13 +229,10 @@ func TestHidden2(t *testing.T) {
 	bat := catalog.MockData(schema, schema.BlockMaxRows*4)
 	bats := compute.SplitBatch(bat, 10)
 
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
+	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bats[0])
 	{
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
+		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
@@ -308,12 +264,9 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
+		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
@@ -359,9 +312,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeBlockIt()
 		blks := make([]data.Block, 0)
@@ -382,9 +333,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeSegmentIt()
 		segs := make([]data.Segment, 0)
@@ -408,9 +357,7 @@ func TestHidden2(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	t.Log(rel.Rows())
 	assert.Equal(t, int64(26), rel.Rows())
 	{

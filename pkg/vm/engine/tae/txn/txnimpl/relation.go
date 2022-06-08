@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -182,6 +182,15 @@ func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 
 func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, error) {
 	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
+}
+
+func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, err error) {
+	id, row, err := h.GetByFilter(filter)
+	if err != nil {
+		return
+	}
+	v, err = h.GetValue(id, row, uint16(col))
+	return
 }
 
 func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error) {

@@ -70,7 +70,7 @@ func (r *relation) ID(_ engine.Snapshot) string {
 func (r *relation) Segment(si SegmentInfo) aoe.Segment {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("Segment time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)))
 }
@@ -128,7 +128,7 @@ func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 }
 
 func (r *relation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
-	panic(any("implement me"))
+	return nil
 }
 
 func (r *relation) update() error {
@@ -254,11 +254,11 @@ func (r *relation) Nodes(_ engine.Snapshot) engine.Nodes {
 }
 
 func (r *relation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
-	panic(any("implement me"))
+	return nil
 }
 
 func (r *relation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
-	panic(any("implement me"))
+	return nil
 }
 
 func (r *relation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {

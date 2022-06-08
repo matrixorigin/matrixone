@@ -76,6 +76,7 @@ type baseStore struct {
 	common.ClosedState
 	dir, name       string
 	flushWg         sync.WaitGroup
+	flushWgMu       *sync.RWMutex
 	flushCtx        context.Context
 	flushCancel     context.CancelFunc
 	flushQueue      chan entry.Entry
@@ -98,11 +99,12 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 		commitQueue:     make(chan []*batch, DefaultMaxCommitSize*100),
 		postCommitQueue: make(chan []*batch, DefaultMaxCommitSize*100),
 		mu:              &sync.RWMutex{},
+		flushWgMu:       &sync.RWMutex{},
 	}
 	if cfg == nil {
 		cfg = &StoreCfg{}
 	}
-	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, &bs.storeInfo)
+	bs.file, err = OpenRotateFile(dir, name, nil, cfg.RotateChecker, cfg.HistoryFactory, &bs.storeInfo, bs.OnCommitVFile)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +419,9 @@ func (bs *baseStore) Close() error {
 	if !bs.TryClose() {
 		return nil
 	}
+	bs.flushWgMu.RLock()
 	bs.flushWg.Wait()
+	bs.flushWgMu.RUnlock()
 	bs.flushCancel()
 	bs.wg.Wait()
 	fmt.Printf("***********************\n")
@@ -436,7 +440,7 @@ func (bs *baseStore) Close() error {
 }
 
 func (bs *baseStore) Checkpoint(e entry.Entry) (err error) {
-	if e.IsCheckpoint() {
+	if !e.IsCheckpoint() {
 		return errors.New("wrong entry type")
 	}
 	_, err = bs.AppendEntry(entry.GTCKp, e)
@@ -470,11 +474,13 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 	if bs.IsClosed() {
 		return 0, common.ClosedErr
 	}
+	bs.flushWgMu.Lock()
 	bs.flushWg.Add(1)
 	if bs.IsClosed() {
 		bs.flushWg.Done()
 		return 0, common.ClosedErr
 	}
+	bs.flushWgMu.Unlock()
 	bs.mu.Lock()
 	lsn := bs.AllocateLsn(groupId)
 	v1 := e.GetInfo()
@@ -532,8 +538,47 @@ func (s *baseStore) Replay(h ApplyHandle) error {
 
 func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	ver, err := s.GetVersionByGLSN(groupId, lsn)
+	if err == ErrGroupNotExist || err == ErrLsnNotExist {
+		syncedLsn := s.GetCurrSeqNum(groupId)
+		if lsn <= syncedLsn {
+			for i := 0; i < 10; i++ {
+				// logutil.Infof("load retry %d-%d", groupId, lsn)
+				s.syncBase.commitCond.L.Lock()
+				ver, err = s.GetVersionByGLSN(groupId, lsn)
+				if err == nil {
+					s.syncBase.commitCond.L.Unlock()
+					break
+				}
+				s.syncBase.commitCond.Wait()
+				s.syncBase.commitCond.L.Unlock()
+				if err == nil {
+					break
+				}
+			}
+			if err != nil {
+				return nil, ErrVFileVersionTimeOut
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	return s.file.Load(ver, groupId, lsn)
+	vf, err := s.file.GetEntryByVersion(ver)
+	if err != nil {
+		return nil, err
+	}
+	e, err := vf.Load(groupId, lsn)
+	return e, err
+}
+
+func (s *baseStore) OnCommitVFile(vf VFile) {
+	e := s.MakePostCommitEntry(vf.Id())
+	_, err := s.AppendEntry(entry.GTInternal, e)
+	if err != nil && err != common.ClosedErr {
+		panic(err)
+	}
+	err = e.WaitDone()
+	if err != nil {
+		panic(err)
+	}
 }

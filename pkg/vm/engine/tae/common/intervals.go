@@ -15,7 +15,9 @@
 package common
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sort"
 )
 
@@ -123,6 +125,43 @@ func (intervals *ClosedIntervals) GetCardinality() int {
 		cardinality += (int(interval.End) - int(interval.Start) + 1)
 	}
 	return cardinality
+}
+func (intervals *ClosedIntervals) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, uint64(len(intervals.Intervals))); err != nil {
+		return
+	}
+	n += 8
+	for _, interval := range intervals.Intervals {
+		if err = binary.Write(w, binary.BigEndian, interval.Start); err != nil {
+			return
+		}
+		n += 8
+		if err = binary.Write(w, binary.BigEndian, interval.End); err != nil {
+			return
+		}
+		n += 8
+	}
+	return
+}
+func (intervals *ClosedIntervals) ReadFrom(r io.Reader) (n int64, err error) {
+	length := uint64(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 8
+	intervals.Intervals = make([]*ClosedInterval, length)
+	for i := 0; i < int(length); i++ {
+		intervals.Intervals[i] = &ClosedInterval{}
+		if err = binary.Read(r, binary.BigEndian, &intervals.Intervals[i].Start); err != nil {
+			return
+		}
+		n += 8
+		if err = binary.Read(r, binary.BigEndian, &intervals.Intervals[i].End); err != nil {
+			return
+		}
+		n += 8
+	}
+	return
 }
 
 //for test

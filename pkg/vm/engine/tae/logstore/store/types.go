@@ -72,10 +72,7 @@ type FileReader any
 
 type ReplayObserver interface {
 	OnNewEntry(int)
-	OnNewCommit(*entry.Info)
-	OnNewCheckpoint(*entry.Info)
-	OnNewTxn(*entry.Info)
-	OnNewUncommit(addrs []*VFileAddress)
+	OnLogInfo(*entry.Info)
 }
 
 type ReplayHandle = func(VFile, ReplayObserver) error
@@ -103,6 +100,7 @@ type File interface {
 	RUnlock()
 	FileReader
 
+	GetEntryByVersion(version int) (VFile, error)
 	Sync() error
 	GetAppender() FileAppender
 	Replay(*replayer, ReplayObserver) error

@@ -45,7 +45,7 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 		}
 		resValues := encoding.DecodeFixedSlice[T](resVector.Data, resultElementSize)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(srcVector, neg.NumericNeg(srcValues, resValues))
+		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
 		return resVector, nil
 	}
 }

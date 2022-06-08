@@ -11,7 +11,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -259,7 +259,9 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	}
 
 	node := seg.nodes[first]
-	err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
+	if err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1); err != nil {
+		return err
+	}
 	node = seg.nodes[last]
 	if err = node.RangeDelete(0, lastOffset); err != nil {
 		return err

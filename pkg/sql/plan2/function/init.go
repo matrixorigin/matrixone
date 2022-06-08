@@ -92,7 +92,7 @@ func completenessCheck(id int, f Function) error {
 }
 
 func functionsEqual(f1 Function, f2 Function) bool {
-	if reflect.DeepEqual(f1.Args, f2.Args) {
+	if reflect.DeepEqual(f1.Args, f2.Args) && reflect.DeepEqual(f1.ReturnTyp, f2.ReturnTyp) {
 		tc1 := reflect.ValueOf(f1.TypeCheckFn)
 		tc2 := reflect.ValueOf(f2.TypeCheckFn)
 

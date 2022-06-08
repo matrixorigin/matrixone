@@ -55,4 +55,6 @@ const (
 	BitLength
 	Bin
 	FindInSet
+	FromUnixTime
+	UnixTimestamp
 )

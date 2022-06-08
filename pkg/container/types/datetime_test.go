@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 )
@@ -67,6 +68,98 @@ func TestDatetime(t *testing.T) {
 	fmt.Println(dt.Clock())
 }
 
+func TestAddDatetime(t *testing.T) {
+	addDateTimeTbl := []struct {
+		Input              string
+		InputIntervalNum   string
+		InputIntervalTypes IntervalType
+		expect             string
+	}{
+		{"2022-01-31 00:00:00", "1", MicroSecond, "2022-01-31 00:00:00.000001"},
+		{"2022-01-31 00:00:00.000001", "1", MicroSecond, "2022-01-31 00:00:00.000002"},
+		{"2022-01-31 00:00:00", "1", Second, "2022-01-31 00:00:01"},
+		{"2022-01-31 00:00:00", "1", Minute, "2022-01-31 00:01:00"},
+		{"2022-01-31 00:00:00", "1", Hour, "2022-01-31 01:00:00"},
+		{"2022-01-31 00:00:00", "1", Day, "2022-02-01 00:00:00"},
+		{"2022-01-31 00:00:00", "1", Week, "2022-02-07 00:00:00"},
+		{"2022-01-01 00:00:00", "1", Month, "2022-02-01 00:00:00"},
+		{"2022-01-31 00:00:00", "1", Month, "2022-02-28 00:00:00"},
+		{"2022-01-01 00:00:00", "1", Quarter, "2022-04-01 00:00:00"},
+		{"2022-01-31 00:00:00", "1", Quarter, "2022-04-30 00:00:00"},
+		{"2022-01-01 00:00:00", "1", Year, "2023-01-01 00:00:00"},
+		{"2020-02-29 00:00:00", "1", Year, "2021-02-28 00:00:00"},
+
+		{"2022-01-01 00:00:00", "1.1", Second_MicroSecond, "2022-01-01 00:00:01.100000"},
+		{"2022-01-01 00:00:00", "1:1.1", Minute_MicroSecond, "2022-01-01 00:01:01.100000"},
+		{"2022-01-01 00:00:00", "1:1", Minute_Second, "2022-01-01 00:01:01"},
+		{"2022-01-01 00:00:00", "1:1:1.1", Hour_MicroSecond, "2022-01-01 01:01:01.100000"},
+		{"2022-01-01 00:00:00", "1:1:1", Hour_Second, "2022-01-01 01:01:01"},
+		{"2022-01-01 00:00:00", "1:1", Hour_Minute, "2022-01-01 01:01:00"},
+		{"2022-01-01 00:00:00", "1 1:1:1.1", Day_MicroSecond, "2022-01-02 01:01:01.100000"},
+		{"2022-01-01 00:00:00", "1 1:1:1", Day_Second, "2022-01-02 01:01:01"},
+		{"2022-01-01 00:00:00", "1 1:1", Day_Minute, "2022-01-02 01:01:00"},
+		{"2022-01-01 00:00:00", "1 1", Day_Hour, "2022-01-02 01:00:00"},
+		{"2022-01-01 00:00:00", "1-1", Year_Month, "2023-02-01 00:00:00"},
+
+		{"2022-01-31 00:00:00", "1-1", Year_Month, "2023-02-28 00:00:00"},
+
+		{"2020-12-31 23:59:59", "1", Second, "2021-01-01 00:00:00"},
+		{"2100-12-31 23:59:59", "1:1", Minute_Second, "2101-01-01 00:01:00"},
+		{"1992-12-31 23:59:59.000002", "1.999999", Second_MicroSecond, "1993-01-01 00:00:01.000001"},
+		{"1992-12-31 23:59:59.1", "1.1", Second_MicroSecond, "1993-01-01 00:00:00.200000"},
+	}
+	for _, test := range addDateTimeTbl {
+		ret, rettype, _ := NormalizeInterval(test.InputIntervalNum, test.InputIntervalTypes)
+		d, err := ParseDatetime(test.Input)
+		require.Equal(t, err, nil)
+		d = d.AddInterval(ret, rettype)
+		require.Equal(t, d.String(), test.expect)
+	}
+}
+
+func TestSubDateTime(t *testing.T) {
+	subDateTimeTbl := []struct {
+		Input              string
+		InputIntervalNum   string
+		InputIntervalTypes IntervalType
+		expect             string
+	}{
+		{"2022-01-31 00:00:00", "1", MicroSecond, "2022-01-30 23:59:59.999999"},
+		{"2022-01-31 00:00:00.000001", "1", MicroSecond, "2022-01-31 00:00:00"},
+		{"2022-01-31 00:00:00", "1", Second, "2022-01-30 23:59:59"},
+		{"2022-01-31 00:00:00", "1", Minute, "2022-01-30 23:59:00"},
+		{"2022-01-31 00:00:00", "1", Hour, "2022-01-30 23:00:00"},
+		{"2022-01-31 00:00:00", "1", Day, "2022-01-30 00:00:00"},
+		{"2022-01-31 00:00:00", "1", Week, "2022-01-24 00:00:00"},
+		{"2022-01-01 00:00:00", "1", Month, "2021-12-01 00:00:00"},
+		{"2022-03-31 00:00:00", "1", Month, "2022-02-28 00:00:00"},
+		{"2022-01-01 00:00:00", "1", Quarter, "2021-10-01 00:00:00"},
+		{"2022-01-31 00:00:00", "1", Quarter, "2021-10-31 00:00:00"},
+		{"2022-01-01 00:00:00", "1", Year, "2021-01-01 00:00:00"},
+		{"2020-02-29 00:00:00", "1", Year, "2019-02-28 00:00:00"},
+
+		{"2022-01-01 00:00:00", "1.1", Second_MicroSecond, "2021-12-31 23:59:58.900000"},
+		{"2022-01-01 00:00:00", "1:1.1", Minute_MicroSecond, "2021-12-31 23:58:58.900000"},
+		{"2022-01-01 00:00:00", "1:1", Minute_Second, "2021-12-31 23:58:59"},
+		{"2022-01-01 00:00:00", "1:1:1.1", Hour_MicroSecond, "2021-12-31 22:58:58.900000"},
+		{"2022-01-01 00:00:00", "1:1:1", Hour_Second, "2021-12-31 22:58:59"},
+		{"2022-01-01 00:00:00", "1:1", Hour_Minute, "2021-12-31 22:59:00"},
+		{"2022-01-01 00:00:00", "1 1:1:1.1", Day_MicroSecond, "2021-12-30 22:58:58.900000"},
+		{"2022-01-01 00:00:00", "1 1:1:1", Day_Second, "2021-12-30 22:58:59"},
+		{"2022-01-01 00:00:00", "1 1:1", Day_Minute, "2021-12-30 22:59:00"},
+		{"2022-01-01 00:00:00", "1 1", Day_Hour, "2021-12-30 23:00:00"},
+		{"2022-01-01 00:00:00", "1-1", Year_Month, "2020-12-01 00:00:00"},
+		{"2022-01-31 00:00:00.1", "1", Second, "2022-01-30 23:59:59.100000"},
+	}
+	for _, test := range subDateTimeTbl {
+		ret, rettype, _ := NormalizeInterval(test.InputIntervalNum, test.InputIntervalTypes)
+		d, err := ParseDatetime(test.Input)
+		require.Equal(t, err, nil)
+		d = d.AddInterval(-ret, rettype)
+		require.Equal(t, d.String(), test.expect)
+	}
+}
+
 func TestParseDatetime(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -83,7 +176,7 @@ func TestParseDatetime(t *testing.T) {
 		{
 			name: "yyyy-mm-dd hh:mm:ss.sec",
 			args: "1987-08-25 00:00:00.1",
-			want: "1987-08-25 00:00:00",
+			want: "1987-08-25 00:00:00.100000",
 		},
 		// 2. yyyymmddhhmmss(.msec)
 		{
@@ -94,7 +187,7 @@ func TestParseDatetime(t *testing.T) {
 		{
 			name: "yyyymmddhhmmss.sec",
 			args: "19870825000000.5",
-			want: "1987-08-25 00:00:00",
+			want: "1987-08-25 00:00:00.500000",
 		},
 		// 3. out of range
 		{
@@ -152,5 +245,27 @@ func TestUTC(t *testing.T) {
 	_, offset := time.Now().Local().Zone()
 	if args.sec()-utc.sec() != localTZ {
 		t.Errorf("UTC() args %v got %v and time zone UTC+%v", args, utc, offset/secsPerHour)
+	}
+}
+
+func TestUnix(t *testing.T) {
+	cases := []struct {
+		time      string
+		timestamp int64
+	}{
+		{"1955-08-25 09:21:34", -452961506},
+		{"2012-01-25 09:21:34", 1327483294},
+	}
+
+	for _, c := range cases {
+		time, _ := ParseDatetime(c.time)
+		unix_time := time.UnixTimestamp()
+		if unix_time != c.timestamp {
+			t.Errorf("UnixTimestamp want %d but got %d ", c.timestamp, unix_time)
+		}
+		parse_time := FromUnix(unix_time)
+		if time != parse_time {
+			t.Errorf("FromUnix want %s but got %s ", time, parse_time)
+		}
 	}
 }
