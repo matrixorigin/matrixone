@@ -17,7 +17,6 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -26,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
@@ -35,7 +34,7 @@ import (
 
 type blockFile struct {
 	common.RefHelper
-	seg       file.Segment
+	seg       *segmentFile
 	rows      uint32
 	id        uint64
 	ts        uint64
@@ -45,14 +44,14 @@ type blockFile struct {
 	destroy   sync.Mutex
 }
 
-func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,
 		id:      id,
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
@@ -68,14 +67,14 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 	return bf
 }
 
-func replayBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,
 		id:      id,
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {

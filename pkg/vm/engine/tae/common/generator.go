@@ -12,28 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package common
 
-import (
-	"errors"
-	"io"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-)
-
-var (
-	ErrInvalidParam = errors.New("tae: invalid param")
-	ErrInvalidName  = errors.New("tae: invalid name")
-)
-
-type Base interface {
-	common.IRef
-	io.Closer
-	Fingerprint() *common.ID
-}
-
-type SegmentFactory interface {
-	Build(dir string, id uint64) Segment
-	EncodeName(id uint64) string
-	DecodeName(name string) (id uint64, err error)
+type RowGen interface {
+	HasNext() bool
+	Next() uint32
 }

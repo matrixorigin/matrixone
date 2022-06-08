@@ -12,47 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package bools
 
-type ExtentType uint8
-
-const (
-	APPEND ExtentType = iota
-	UPDATE
-)
-
-type entry struct {
-	offset uint32
-	length uint32
+type sortElem struct {
+	data bool
+	idx  uint32
 }
 
-type Extent struct {
-	typ    ExtentType
-	offset uint32
-	length uint32
-	data   entry
+type sortSlice []sortElem
+
+func (x sortSlice) Less(i, j int) bool {
+	return !x[i].data && x[j].data
+}
+func (x sortSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+
+type heapElem struct {
+	data bool
+	src  uint32
+	next uint32
 }
 
-func (ex *Extent) End() uint32 {
-	return ex.offset + ex.length
-}
+type heapSlice []heapElem
 
-func (ex *Extent) Offset() uint32 {
-	return ex.offset
-}
-
-func (ex *Extent) Length() uint32 {
-	return ex.length
-}
-
-func (ex *Extent) GetData() *entry {
-	return &ex.data
-}
-
-func (en *entry) GetOffset() uint32 {
-	return en.offset
-}
-
-func (en *entry) GetLength() uint32 {
-	return en.length
-}
+func (x heapSlice) Less(i, j int) bool { return !x[i].data && x[j].data }
+func (x heapSlice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }

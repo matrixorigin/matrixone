@@ -12,16 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
+package compute
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
 
-type RowGen interface {
-	HasNext() bool
-	Next() uint32
-}
-
-func InplaceDeleteRows(orig any, rowGen RowGen) any {
+func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 	if !rowGen.HasNext() {
 		return orig
 	}
@@ -29,6 +27,17 @@ func InplaceDeleteRows(orig any, rowGen RowGen) any {
 	currPos := 0
 
 	switch arr := orig.(type) {
+	case []bool:
+		for rowGen.HasNext() {
+			currRow := int(rowGen.Next())
+			copy(arr[currPos:], arr[prevRow+1:currRow])
+			currPos += currRow - prevRow - 1
+			prevRow = currRow
+		}
+		left := len(arr[prevRow+1:])
+		copy(arr[currPos:], arr[prevRow+1:])
+		currPos += left
+		return arr[:currPos]
 	case []int8:
 		for rowGen.HasNext() {
 			currRow := int(rowGen.Next())
@@ -107,6 +116,17 @@ func InplaceDeleteRows(orig any, rowGen RowGen) any {
 		currPos += left
 		return arr[:currPos]
 	case []uint64:
+		for rowGen.HasNext() {
+			currRow := int(rowGen.Next())
+			copy(arr[currPos:], arr[prevRow+1:currRow])
+			currPos += currRow - prevRow - 1
+			prevRow = currRow
+		}
+		left := len(arr[prevRow+1:])
+		copy(arr[currPos:], arr[prevRow+1:])
+		currPos += left
+		return arr[:currPos]
+	case []types.Timestamp:
 		for rowGen.HasNext() {
 			currRow := int(rowGen.Next())
 			copy(arr[currPos:], arr[prevRow+1:currRow])

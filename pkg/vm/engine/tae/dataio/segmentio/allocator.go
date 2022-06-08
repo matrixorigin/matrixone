@@ -12,28 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package segmentio
 
-import (
-	"errors"
-	"io"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-)
-
-var (
-	ErrInvalidParam = errors.New("tae: invalid param")
-	ErrInvalidName  = errors.New("tae: invalid name")
-)
-
-type Base interface {
-	common.IRef
-	io.Closer
-	Fingerprint() *common.ID
-}
-
-type SegmentFactory interface {
-	Build(dir string, id uint64) Segment
-	EncodeName(id uint64) string
-	DecodeName(name string) (id uint64, err error)
+type Allocator interface {
+	Allocate(len uint64) (uint64, uint64)
+	Free(start uint32, len uint32)
+	CheckAllocations(start uint32, len uint32)
 }

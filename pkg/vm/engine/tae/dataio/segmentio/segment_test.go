@@ -16,10 +16,10 @@ package segmentio
 
 import (
 	"bytes"
+	"testing"
+
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"path"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -32,9 +32,8 @@ const (
 
 func TestSegment1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	name := path.Join(dir, "seg")
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFileIOFactory(name, id)
+	seg := SegmentFactory.Build(dir, id)
 	fp := seg.Fingerprint()
 	assert.Equal(t, id, fp.SegmentID)
 
@@ -54,9 +53,8 @@ func TestSegment1(t *testing.T) {
 
 func TestSegmentFile_Replay(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	name := path.Join(dir, "seg")
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFileIOFactory(name, id)
+	seg := SegmentFactory.Build(dir, id)
 	fp := seg.Fingerprint()
 	colCnt := 4
 	indexCnt := make(map[int]int)
@@ -98,7 +96,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 		colBlk0.Close()
 	}
 
-	seg = SegmentFileIOOpenFactory(name, id)
+	seg = SegmentFactory.Build(dir, id)
 	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err := seg.Replay(colCnt, indexCnt, cache)
 	assert.Nil(t, err)

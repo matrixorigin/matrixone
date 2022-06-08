@@ -56,9 +56,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 						ctr.bat.Vecs = append(ctr.bat.Vecs, r.Eval(ctr.bat.Zs))
 					}
 					ctr.bat.Rs = nil
-				}
-				for i := range ctr.bat.Zs { // reset zs
-					ctr.bat.Zs[i] = 1
+					for i := range ctr.bat.Zs { // reset zs
+						ctr.bat.Zs[i] = 1
+					}
 				}
 			}
 			proc.Reg.InputBatch = ctr.bat
