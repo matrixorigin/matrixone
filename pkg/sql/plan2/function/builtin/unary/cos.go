@@ -26,7 +26,6 @@ import (
 
 func Cos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVec := vs[0]
-	origVecCol := origVec.Col.([]T)
 	//Here we need to classfy it into three scenes
 	//1. if it is a constant
 	//	1.1 if it's not a null value
@@ -36,6 +35,7 @@ func Cos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *p
 		if origVec.IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
+			origVecCol := origVec.Col.([]T)
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
 			nulls.Set(resultVector.Nsp, origVec.Nsp)
@@ -43,6 +43,7 @@ func Cos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *p
 			return resultVector, nil
 		}
 	} else {
+		origVecCol := origVec.Col.([]T)
 		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err

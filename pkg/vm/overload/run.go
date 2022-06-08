@@ -17,7 +17,6 @@ package overload
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,11 +44,14 @@ func Prepare(ins vm.Instructions, proc *process.Process) error {
 func Run(ins vm.Instructions, proc *process.Process) (end bool, err error) {
 	var ok bool
 
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
-		}
-	}()
+	/*
+		defer func() {
+			if e := recover(); e != nil {
+				err = moerr.NewPanicError(e)
+			}
+		}()
+
+	*/
 	for _, in := range ins {
 		if ok, err = execFunc[in.Op](proc, in.Arg); err != nil {
 			return ok || end, err
