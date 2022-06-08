@@ -145,6 +145,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	selectBinder := NewSelectBinder(ctx, havingBinder)
 	ctx.binder = selectBinder
 	for _, selectExpr := range selectList {
+		ctx.qualifyColumnNames(selectExpr.Expr)
 		expr, err := selectBinder.BindExpr(selectExpr.Expr, 0, true)
 		if err != nil {
 			return 0, err
@@ -195,7 +196,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	}
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(selectBinder.boundCols) > 0 {
-		return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", selectBinder.boundCols[0]))
+		return 0, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", selectBinder.boundCols[0]))
 	}
 
 	// append AGG node
@@ -209,7 +210,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 
 		if len(havingList) > 0 {
 			nodeId = builder.appendNode(&plan.Node{
-				NodeType:  plan.Node_AGG,
+				NodeType:  plan.Node_PROJECT,
 				Children:  []int32{nodeId},
 				WhereList: havingList,
 			}, ctx)
@@ -343,7 +344,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		return
 	}
 
-	rightChildId, err = builder.buildTable(stmt[0], rightCtx)
+	rightChildId, err = builder.buildTable(stmt[1], rightCtx)
 	if err != nil {
 		return
 	}
@@ -361,7 +362,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		builder.ctxByNode[nodeId] = newCtx
 		newCtx.mergeContexts(leftCtx, rightCtx)
 
-		rightCtx := NewBindContext(builder, ctx)
+		rightCtx = NewBindContext(builder, ctx)
 		rightChildId, err = builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
 			return
@@ -422,7 +423,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			// FIXME
 			obj, tableDef, isCte := builder.bindTableRef(schema, table, builder.compCtx, ctx)
 			if tableDef == nil {
-				return 0, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table '%v' does not exist", table))
+				return 0, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table %q does not exist", table))
 			}
 
 			var nodeType plan.Node_NodeType
@@ -527,6 +528,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 		}
 
 		headings := builder.ctxByNode[nodeId].headings
+		projects := builder.ctxByNode[nodeId].projects
 
 		cols = make([]string, len(headings))
 		types = make([]*plan.Type, len(headings))
@@ -537,7 +539,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 			} else {
 				cols[i] = col
 			}
-			types[i] = node.ProjectList[i].Typ
+			types[i] = projects[i].Typ
 		}
 
 		binding = NewBinding(builder.ctxByNode[nodeId].projectTag, nodeId, table, cols, types)

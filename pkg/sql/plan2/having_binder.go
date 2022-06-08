@@ -72,28 +72,38 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*p
 	if b.insideAgg {
 		return b.baseBindColRef(astExpr, depth)
 	} else {
-		return nil, errors.New(errno.GroupingError, fmt.Sprintf("'%v' must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL)))
+		return nil, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL)))
 	}
 }
 
-func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (expr *plan.Expr, err error) {
+func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot be nested")
 	}
 
 	b.insideAgg = true
-	expr, err = b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	b.insideAgg = false
 
 	if err != nil {
-		return
+		return nil, err
 	}
 
+	colPos := int32(len(b.ctx.aggregates))
+
 	astStr := tree.String(astExpr, dialect.MYSQL)
-	b.ctx.aggregateByAst[astStr] = int32(len(b.ctx.aggregates))
+	b.ctx.aggregateByAst[astStr] = colPos
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
 
-	return
+	return &plan.Expr{
+		Typ: expr.Typ,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: b.ctx.aggregateTag,
+				ColPos: colPos,
+			},
+		},
+	}, nil
 }
 
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
