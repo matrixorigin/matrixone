@@ -701,14 +701,14 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 }
 
 func isAggFunc(name string) bool {
-	if funcSig, ok := BuiltinFunctionsMap[name]; ok {
+	if funcSig, ok := BuiltinFunctionsMap[strings.ToUpper(name)]; ok {
 		return funcSig.Flag == plan.Function_AGG
 	}
 	return false
 }
 
 func isWinFunc(name string) bool {
-	if funcSig, ok := BuiltinFunctionsMap[name]; ok {
+	if funcSig, ok := BuiltinFunctionsMap[strings.ToUpper(name)]; ok {
 		return funcSig.Flag == plan.Function_WIN
 	}
 	return false
