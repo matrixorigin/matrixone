@@ -15,6 +15,7 @@
 package types
 
 import (
+	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -111,21 +112,34 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 
 //
 // parseInts parse integer from string s.   This is used to handle interval values,
+// when interval type is Second_MicroSecond Minute_MicroSecond Hour_MicroSecond Day_MicroSecond
+// we should set second parameter true, other set false
+// the example: when the s is "1:1"
+// when we use Second_MicroSecond(...), we should parse to 1 second and 100000 microsecond.
+// when we use Minute_Second(...), we just parse to 1 minute and 1 second.
+// so we use method to solve this: we count the length of the num, use 1e(6 - length) * ret[len(ret) - 1]
+// for example: when the s is "1:001"
+// the last number length is 3, so the last number should be 1e(6 - 3) * 1 = 1000
+// typeMaxLength means when I use Second_MicroSecond, the typeMaxLength is 2
+// when s is "1", we don't think number 1 is microsecond
 // so there are a few strange things.
 //	1. Only takes 0-9, may have leading 0, still means decimal instead oct.
 //  2. 1-1 is parsed out as 1, 1 '-' is delim, so is '+', '.' etc.
 //	3. we will not support int32 overflow.
 //
-func parseInts(s string) ([]int32, error) {
+func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int32, error) {
 	ret := make([]int32, 0)
+	numLength := 0
 	cur := -1
 	for _, c := range s {
 		if c >= rune('0') && c <= rune('9') {
 			if cur < 0 {
 				cur = len(ret)
 				ret = append(ret, c-rune('0'))
+				numLength++
 			} else {
 				ret[cur] = 10*ret[cur] + c - rune('0')
+				numLength++
 				if ret[cur] < 0 {
 					return nil, errors.New(errno.DataException, "Invalid string interval value")
 				}
@@ -133,7 +147,13 @@ func parseInts(s string) ([]int32, error) {
 		} else {
 			if cur >= 0 {
 				cur = -1
+				numLength = 0
 			}
+		}
+	}
+	if isxxxMicrosecond {
+		if len(ret) == typeMaxLength {
+			ret[len(ret)-1] *= int32(math.Pow10(6 - numLength))
 		}
 	}
 	return ret, nil
@@ -158,7 +178,7 @@ func conv(a []int32, mul []int64, rt IntervalType) (int64, IntervalType, error) 
 }
 
 func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalType, err error) {
-	vals, err := parseInts(s)
+	vals, err := parseInts(s, isxxxMicrosecondType(it), typeMaxLength(it))
 	if err != nil {
 		return
 	}
@@ -201,4 +221,50 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 		ret, rettype, err = conv(vals, []int64{12, 1}, Month)
 	}
 	return
+}
+
+func isxxxMicrosecondType(it IntervalType) bool {
+	return it == Second_MicroSecond || it == Minute_MicroSecond || it == Hour_MicroSecond || it == Day_MicroSecond
+}
+
+func typeMaxLength(it IntervalType) int {
+	switch it {
+	case MicroSecond, Second, Minute, Hour, Day,
+		Week, Month, Quarter, Year:
+		return 1
+
+	case Second_MicroSecond:
+		return 2
+
+	case Minute_MicroSecond:
+		return 3
+
+	case Minute_Second:
+		return 2
+
+	case Hour_MicroSecond:
+		return 4
+
+	case Hour_Second:
+		return 3
+
+	case Hour_Minute:
+		return 2
+
+	case Day_MicroSecond:
+		return 5
+
+	case Day_Second:
+		return 4
+
+	case Day_Minute:
+		return 3
+
+	case Day_Hour:
+		return 2
+
+	case Year_Month:
+		return 2
+	}
+	return 0
 }

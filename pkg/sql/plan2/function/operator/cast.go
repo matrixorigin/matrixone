@@ -518,21 +518,22 @@ func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 	rtl := rv.Typ.Oid.FixedLength()
 	col := lv.Col.(*types.Bytes)
 	var vec *vector.Vector
+	var err error
 	var rs []T
 	if lv.IsScalar() {
 		vec = proc.AllocScalarVector(rv.Typ)
 		rs = make([]T, 1)
 	} else {
-		vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(col.Offsets)))
+		vec, err = proc.AllocVector(rv.Typ, int64(rtl)*int64(len(col.Offsets)))
 		if err != nil {
 			return nil, err
 		}
 		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
 	}
-
-	if _, err := typecast.BytesToInt(col, rs); err != nil {
+	if _, err = typecast.BytesToInt(col, rs); err != nil {
 		return nil, err
 	}
+
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)
 	return vec, nil
@@ -544,18 +545,19 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 	rtl := rv.Typ.Oid.FixedLength()
 	col := lv.Col.(*types.Bytes)
 	var vec *vector.Vector
+	var err error
 	var rs []T
 	if lv.IsScalar() {
 		vec = proc.AllocScalarVector(rv.Typ)
 		rs = make([]T, 1)
 	} else {
-		vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(col.Offsets)))
+		vec, err = proc.AllocVector(rv.Typ, int64(rtl)*int64(len(col.Offsets)))
 		if err != nil {
 			return nil, err
 		}
 		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
 	}
-	if _, err := typecast.BytesToFloat(col, rs); err != nil {
+	if _, err = typecast.BytesToFloat(col, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -925,7 +927,7 @@ func isUnsignedInteger(t types.T) bool {
 
 //  isFloat: return true if the types.T is floating Point Types
 func isFloat(t types.T) bool {
-	if t == types.T_int32 || t == types.T_int64 {
+	if t == types.T_float32 || t == types.T_float64 {
 		return true
 	}
 	return false

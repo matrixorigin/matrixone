@@ -22,9 +22,6 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
-
-	// "time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -33,6 +30,127 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+// append UC, C, CKP
+func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
+	e := entry.GetBase()
+	uncommitInfo := &entry.Info{
+		Group: entry.GTUncommit,
+		Uncommits: []entry.Tid{{
+			Group: 11,
+			Tid:   tid,
+		}},
+	}
+	e.SetType(entry.ETUncommitted)
+	e.SetInfo(uncommitInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTUncommit, e)
+	assert.Nil(t, err)
+	err = e.WaitDone()
+	assert.Nil(t, err)
+
+	txnInfo := &entry.Info{
+		Group: 11,
+		TxnId: tid,
+	}
+	e = entry.GetBase()
+	e.SetType(entry.ETTxn)
+	e.SetInfo(txnInfo)
+	n = common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err = e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	cmtLsn, err := s.AppendEntry(11, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+
+	cmd := entry.CommandInfo{
+		Size:       2,
+		CommandIds: []uint32{0, 1},
+	}
+	cmds := make(map[uint64]entry.CommandInfo)
+	cmds[cmtLsn] = cmd
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group:   11,
+			Command: cmds,
+		}},
+	}
+	e = entry.GetBase()
+	e.SetType(entry.ETCheckpoint)
+	e.SetInfo(info)
+	_, err = s.AppendEntry(entry.GTCKp, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+
+}
+
+// uncommit, commit, ckp  vf1
+// ckp all                vf2
+// truncate
+// check vinfo not exist
+// uncommit, commit       vf2
+// replay
+// ckp all                vf3
+// truncate
+// check vinfo not exist
+func TestTruncate(t *testing.T) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+
+	appendEntries(t, s, buf, 1)
+	appendEntries(t, s, buf, 2)
+	appendEntries(t, s, buf, 3)
+
+	assert.Equal(t, 2, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+
+	assert.Nil(t, s.TryCompact())
+
+	assert.Equal(t, 1, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+	err = s.Close()
+	assert.Nil(t, err)
+
+	t.Log("******************Replay*********************")
+
+	s2, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+		// fmt.Printf("%s", payload)
+	}
+	err = s2.Replay(a)
+	assert.Nil(t, err)
+
+	appendEntries(t, s2, buf, 4)
+
+	assert.Equal(t, 2, len(s2.file.GetHistory().EntryIds()))
+	t.Log(s2.file.GetHistory().String())
+
+	assert.Nil(t, s2.TryCompact())
+
+	assert.Equal(t, 1, len(s2.file.GetHistory().EntryIds()))
+	t.Log(s2.file.GetHistory().String())
+
+	err = s2.Close()
+	assert.Nil(t, err)
+}
 
 func TestAddrVersion(t *testing.T) {
 	dir := "/tmp/logstore/teststore"
@@ -130,7 +248,7 @@ func TestStore(t *testing.T) {
 	}
 	buf := bs.Bytes()
 
-	entryPerGroup := 5000
+	entryPerGroup := 1000
 	groupCnt := 1
 	worker, _ := ants.NewPool(groupCnt)
 	fwg.Add(entryPerGroup * groupCnt)
@@ -524,233 +642,221 @@ type entryWithLSN struct {
 	lsn   uint64
 }
 
-func TestLoad(t *testing.T) {
-	dir := "/tmp/logstore/teststore"
-	name := "mock"
-	os.RemoveAll(dir)
-	cfg := &StoreCfg{
-		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 2000),
-	}
-	s, err := NewBaseStore(dir, name, cfg)
-	assert.Nil(t, err)
+// func TestLoad(t *testing.T) {
+// 	dir := "/tmp/logstore/teststore"
+// 	name := "mock"
+// 	os.RemoveAll(dir)
+// 	cfg := &StoreCfg{
+// 		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 2000),
+// 	}
+// 	s, err := NewBaseStore(dir, name, cfg)
+// 	assert.Nil(t, err)
 
-	var wg sync.WaitGroup
-	var fwg sync.WaitGroup
-	ch := make(chan *entryWithLSN, 1000)
-	ch2 := make([]*entryWithLSN, 0)
-	ctx, cancel := context.WithCancel(context.Background())
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e := <-ch:
-				err := e.entry.WaitDone()
-				assert.Nil(t, err)
-				infoin := e.entry.GetInfo()
-				fmt.Printf("entry is %s", e.entry.GetPayload())
-				if infoin != nil {
-					info := infoin.(*entry.Info)
-					var loadedEntry entry.Entry
-					for i := 0; i < 5; i++ {
-						loadedEntry, err = s.Load(info.Group, e.lsn)
-						if err == nil {
-							fmt.Printf("loaded entry is %s", loadedEntry.GetPayload())
-							break
-						}
-						fmt.Printf("%d-%d:%v\n", info.Group, info.GroupLSN, err)
-						time.Sleep(time.Millisecond * 500)
-					}
-					assert.Nil(t, err)
-					t.Logf("synced %d", s.GetSynced(info.Group))
-					t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-					t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
-				}
-				fwg.Done()
-				ch2 = append(ch2, e)
-			}
-		}
-	}()
+// 	var wg sync.WaitGroup
+// 	var fwg sync.WaitGroup
+// 	ch := make(chan *entryWithLSN, 1000)
+// 	ch2 := make([]*entryWithLSN, 0)
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	wg.Add(1)
+// 	go func() {
+// 		defer wg.Done()
+// 		for {
+// 			select {
+// 			case <-ctx.Done():
+// 				return
+// 			case e := <-ch:
+// 				err := e.entry.WaitDone()
+// 				assert.Nil(t, err)
+// 				infoin := e.entry.GetInfo()
+// 				t.Logf("entry is %s", e.entry.GetPayload())
+// 				if infoin != nil {
+// 					info := infoin.(*entry.Info)
+// 					testutils.WaitExpect(400, func() bool {
+// 						_, err = s.Load(info.Group, e.lsn)
+// 						return err == nil
+// 					})
+// 					_, err = s.Load(info.Group, e.lsn)
+// 					assert.Nil(t, err)
+// 					t.Logf("synced %d", s.GetSynced(info.Group))
+// 					t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
+// 					t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
+// 				}
+// 				fwg.Done()
+// 				ch2 = append(ch2, e)
+// 			}
+// 		}
+// 	}()
 
-	entryPerGroup := 50
-	groupCnt := 2
-	worker, _ := ants.NewPool(groupCnt)
-	fwg.Add(entryPerGroup * groupCnt)
-	f := func(groupNo uint32) func() {
-		return func() {
-			tidAlloc := &common.IdAllocator{}
-			pre := uint64(0)
-			ckp := uint64(0)
-			var entrywithlsn *entryWithLSN
-			for i := 0; i < entryPerGroup; i++ {
-				e := entry.GetBase()
-				var lsn uint64
-				switch i % 50 {
-				case 1, 2, 3, 4, 5: //uncommit entry
-					e.SetType(entry.ETUncommitted)
-					uncommitInfo := &entry.Info{
-						Uncommits: []entry.Tid{{
-							Group: groupNo,
-							Tid:   tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
-						}},
-					}
-					e.SetInfo(uncommitInfo)
-					str := uncommitInfo.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					lsn, err = s.AppendEntry(entry.GTUncommit, e)
-					assert.Nil(t, err)
-					entrywithlsn = &entryWithLSN{
-						entry: e,
-						lsn:   lsn,
-					}
-					fmt.Printf("alloc %d-%d\n", entry.GTUncommit, lsn)
-				case 49: //ckp entry
-					e.SetType(entry.ETCheckpoint)
-					checkpointInfo := &entry.Info{
-						Checkpoints: []entry.CkpRanges{{
-							Group: 1,
-							Ranges: common.NewClosedIntervalsByInterval(
-								&common.ClosedInterval{
-									Start: pre + 1,
-									End:   ckp,
-								}),
-						}},
-					}
-					pre = ckp
-					e.SetInfo(checkpointInfo)
-					str := checkpointInfo.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					lsn, err = s.AppendEntry(entry.GTCKp, e)
-					assert.Nil(t, err)
-					entrywithlsn = &entryWithLSN{
-						entry: e,
-						lsn:   lsn,
-					}
-					fmt.Printf("alloc %d-%d\n", entry.GTCKp, lsn)
-				case 20, 21, 22, 23: //txn entry
-					e.SetType(entry.ETTxn)
-					txnInfo := &entry.Info{
-						TxnId: tidAlloc.Alloc(),
-					}
-					e.SetInfo(txnInfo)
-					str := txnInfo.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					lsn, err = s.AppendEntry(groupNo, e)
-					assert.Nil(t, err)
-					entrywithlsn = &entryWithLSN{
-						entry: e,
-						lsn:   lsn,
-					}
-					ckp = lsn
-					fmt.Printf("alloc %d-%d\n", groupNo, lsn)
-				case 26, 28: //flush entry
-					e.SetType(entry.ETFlush)
-					payload := make([]byte, 0)
-					err := e.Unmarshal(payload)
-					assert.Nil(t, err)
-					lsn, err = s.AppendEntry(entry.GTNoop, e)
-					assert.Nil(t, err)
-					entrywithlsn = &entryWithLSN{
-						entry: e,
-						lsn:   lsn,
-					}
-					fmt.Printf("alloc %d-%d\n", entry.GTNoop, lsn)
-				default: //commit entry
-					e.SetType(entry.ETCustomizedStart)
-					commitInterval := &entry.Info{}
-					e.SetInfo(commitInterval)
-					str := commitInterval.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					lsn, err = s.AppendEntry(groupNo, e)
-					assert.Nil(t, err)
-					entrywithlsn = &entryWithLSN{
-						entry: e,
-						lsn:   lsn,
-					}
-					ckp = lsn
-					fmt.Printf("alloc %d-%d\n", groupNo, lsn)
-				}
-				ch <- entrywithlsn
-			}
-		}
-	}
+// 	entryPerGroup := 50
+// 	groupCnt := 2
+// 	worker, _ := ants.NewPool(groupCnt)
+// 	fwg.Add(entryPerGroup * groupCnt)
+// 	f := func(groupNo uint32) func() {
+// 		return func() {
+// 			tidAlloc := &common.IdAllocator{}
+// 			pre := uint64(0)
+// 			ckp := uint64(0)
+// 			var entrywithlsn *entryWithLSN
+// 			for i := 0; i < entryPerGroup; i++ {
+// 				e := entry.GetBase()
+// 				var lsn uint64
+// 				switch i % 50 {
+// 				case 1, 2, 3, 4, 5: //uncommit entry
+// 					e.SetType(entry.ETUncommitted)
+// 					uncommitInfo := &entry.Info{
+// 						Uncommits: []entry.Tid{{
+// 							Group: groupNo,
+// 							Tid:   tidAlloc.Get() + 1 + uint64(rand.Intn(3)),
+// 						}},
+// 					}
+// 					e.SetInfo(uncommitInfo)
+// 					str := uncommitInfo.ToString()
+// 					buf := []byte(str)
+// 					n := common.GPool.Alloc(uint64(len(buf)))
+// 					n.Buf = n.Buf[:len(buf)]
+// 					copy(n.GetBuf(), buf)
+// 					err := e.UnmarshalFromNode(n, true)
+// 					assert.Nil(t, err)
+// 					lsn, err = s.AppendEntry(entry.GTUncommit, e)
+// 					assert.Nil(t, err)
+// 					entrywithlsn = &entryWithLSN{
+// 						entry: e,
+// 						lsn:   lsn,
+// 					}
+// 					t.Logf("alloc %d-%d", entry.GTUncommit, lsn)
+// 				case 49: //ckp entry
+// 					e.SetType(entry.ETCheckpoint)
+// 					checkpointInfo := &entry.Info{
+// 						Checkpoints: []entry.CkpRanges{{
+// 							Group: 1,
+// 							Ranges: common.NewClosedIntervalsByInterval(
+// 								&common.ClosedInterval{
+// 									Start: pre + 1,
+// 									End:   ckp,
+// 								}),
+// 						}},
+// 					}
+// 					pre = ckp
+// 					e.SetInfo(checkpointInfo)
+// 					str := checkpointInfo.ToString()
+// 					buf := []byte(str)
+// 					n := common.GPool.Alloc(uint64(len(buf)))
+// 					n.Buf = n.Buf[:len(buf)]
+// 					copy(n.GetBuf(), buf)
+// 					err := e.UnmarshalFromNode(n, true)
+// 					assert.Nil(t, err)
+// 					lsn, err = s.AppendEntry(entry.GTCKp, e)
+// 					assert.Nil(t, err)
+// 					entrywithlsn = &entryWithLSN{
+// 						entry: e,
+// 						lsn:   lsn,
+// 					}
+// 					t.Logf("alloc %d-%d", entry.GTCKp, lsn)
+// 				case 20, 21, 22, 23: //txn entry
+// 					e.SetType(entry.ETTxn)
+// 					txnInfo := &entry.Info{
+// 						TxnId: tidAlloc.Alloc(),
+// 					}
+// 					e.SetInfo(txnInfo)
+// 					str := txnInfo.ToString()
+// 					buf := []byte(str)
+// 					n := common.GPool.Alloc(uint64(len(buf)))
+// 					n.Buf = n.Buf[:len(buf)]
+// 					copy(n.GetBuf(), buf)
+// 					err := e.UnmarshalFromNode(n, true)
+// 					assert.Nil(t, err)
+// 					lsn, err = s.AppendEntry(groupNo, e)
+// 					assert.Nil(t, err)
+// 					entrywithlsn = &entryWithLSN{
+// 						entry: e,
+// 						lsn:   lsn,
+// 					}
+// 					ckp = lsn
+// 					t.Logf("alloc %d-%d", groupNo, lsn)
+// 				case 26, 28: //flush entry
+// 					e.SetType(entry.ETFlush)
+// 					payload := make([]byte, 0)
+// 					err := e.Unmarshal(payload)
+// 					assert.Nil(t, err)
+// 					lsn, err = s.AppendEntry(entry.GTNoop, e)
+// 					assert.Nil(t, err)
+// 					entrywithlsn = &entryWithLSN{
+// 						entry: e,
+// 						lsn:   lsn,
+// 					}
+// 					t.Logf("alloc %d-%d", entry.GTNoop, lsn)
+// 				default: //commit entry
+// 					e.SetType(entry.ETCustomizedStart)
+// 					commitInterval := &entry.Info{}
+// 					e.SetInfo(commitInterval)
+// 					str := commitInterval.ToString()
+// 					buf := []byte(str)
+// 					n := common.GPool.Alloc(uint64(len(buf)))
+// 					n.Buf = n.Buf[:len(buf)]
+// 					copy(n.GetBuf(), buf)
+// 					err := e.UnmarshalFromNode(n, true)
+// 					assert.Nil(t, err)
+// 					lsn, err = s.AppendEntry(groupNo, e)
+// 					assert.Nil(t, err)
+// 					entrywithlsn = &entryWithLSN{
+// 						entry: e,
+// 						lsn:   lsn,
+// 					}
+// 					ckp = lsn
+// 					t.Logf("alloc %d-%d", groupNo, lsn)
+// 				}
+// 				ch <- entrywithlsn
+// 			}
+// 		}
+// 	}
 
-	for j := entry.GTCustomizedStart; j < entry.GTCustomizedStart+uint32(groupCnt); j++ {
-		err := worker.Submit(f(uint32(j)))
-		assert.Nil(t, err)
-	}
+// 	for j := entry.GTCustomizedStart; j < entry.GTCustomizedStart+uint32(groupCnt); j++ {
+// 		err := worker.Submit(f(uint32(j)))
+// 		assert.Nil(t, err)
+// 	}
 
-	fwg.Wait()
-	cancel()
-	wg.Wait()
+// 	fwg.Wait()
+// 	cancel()
+// 	wg.Wait()
 
-	h := s.file.GetHistory()
-	// t.Log(h.String())
-	err = h.TryTruncate()
-	assert.Nil(t, err)
+// 	h := s.file.GetHistory()
+// 	// t.Log(h.String())
+// 	err = h.TryTruncate()
+// 	assert.Nil(t, err)
 
-	s.Close()
+// 	s.Close()
 
-	fmt.Printf("\n***********replay***********\n\n")
-	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
-		fmt.Printf("%s", payload)
-	}
-	err = s.Replay(a)
-	assert.Nil(t, err)
-	// r := newReplayer(a)
-	// o := &noopObserver{}
-	// err = s.file.Replay(r.replayHandler, o)
-	// if err != nil {
-	// 	fmt.Printf("err is %v", err)
-	// }
-	// r.Apply()
+// 	fmt.Printf("\n***********replay***********\n\n")
+// 	s, _ = NewBaseStore(dir, name, cfg)
+// 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+// 		t.Logf("%s", payload)
+// 	}
+// 	err = s.Replay(a)
+// 	assert.Nil(t, err)
+// 	// r := newReplayer(a)
+// 	// o := &noopObserver{}
+// 	// err = s.file.Replay(r.replayHandler, o)
+// 	// if err != nil {
+// 	// 	fmt.Printf("err is %v", err)
+// 	// }
+// 	// r.Apply()
 
-	for _, e := range ch2 {
-		err := e.entry.WaitDone()
-		assert.Nil(t, err)
-		infoin := e.entry.GetInfo()
-		fmt.Printf("entry is %s", e.entry.GetPayload())
-		if infoin != nil {
-			info := infoin.(*entry.Info)
-			var loadedEntry entry.Entry
-			for i := 0; i < 5; i++ {
-				loadedEntry, err = s.Load(info.Group, e.lsn)
-				if err == nil {
-					fmt.Printf("loaded entry is %s", loadedEntry.GetPayload())
-					break
-				}
-				fmt.Printf("%d-%d:%v\n", info.Group, info.GroupLSN, err)
-				time.Sleep(time.Millisecond * 500)
-			}
-			assert.Nil(t, err)
-			t.Logf("synced %d", s.GetSynced(info.Group))
-			t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-			t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
-		}
-	}
+// 	for _, e := range ch2 {
+// 		err := e.entry.WaitDone()
+// 		assert.Nil(t, err)
+// 		infoin := e.entry.GetInfo()
+// 		t.Logf("entry is %s", e.entry.GetPayload())
+// 		if infoin != nil {
+// 			info := infoin.(*entry.Info)
+// 			if info.Group != entry.GTNoop {
+// 				_, err = s.Load(info.Group, e.lsn)
+// 				assert.Nil(t, err)
+// 				t.Logf("synced %d", s.GetSynced(info.Group))
+// 				t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
+// 				t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
+// 			}
+// 		}
+// 	}
 
-	s.Close()
-}
+// 	s.Close()
+// }

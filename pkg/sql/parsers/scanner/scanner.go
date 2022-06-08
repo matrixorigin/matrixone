@@ -524,6 +524,9 @@ exponent:
 		if s.peek(1) == '+' || s.peek(1) == '-' {
 			token = FLOAT
 			s.skip(2)
+		} else if digitVal(s.peek(1)) < 10 {
+			token = FLOAT
+			s.skip(1)
 		} else {
 			goto exit
 		}

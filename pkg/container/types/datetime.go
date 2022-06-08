@@ -16,7 +16,7 @@ package types
 
 import (
 	"fmt"
-	"time"
+	gotime "time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -28,6 +28,7 @@ const (
 	secsPerHour   = 60 * secsPerMinute
 	secsPerDay    = 24 * secsPerHour
 	//secsPerWeek   = 7 * secsPerDay
+	microSecondBitMask = 0xfffff
 )
 
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
@@ -132,7 +133,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		second = (s[12]-'0')*10 + (s[13] - '0')
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
-				msecStr := s[20:]
+				msecStr := s[15:]
 				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
 					return -1, errIncorrectDatetimeValue
@@ -165,8 +166,16 @@ func (dt Datetime) UTC() Datetime {
 	return Datetime((dt.sec() - localTZ) << 20)
 }
 
+func (dt Datetime) UnixTimestamp() int64 {
+	return dt.sec() - unixEpoch
+}
+
+func FromUnix(time int64) Datetime {
+	return Datetime((time + unixEpoch) << 20)
+}
+
 func Now() Datetime {
-	t := time.Now()
+	t := gotime.Now()
 	wall := *(*uint64)(unsafe.Pointer(&t))
 	ext := *(*int64)(unsafe.Pointer(uintptr(unsafe.Pointer(&t)) + unsafe.Sizeof(wall)))
 	var sec, nsec int64
@@ -196,6 +205,63 @@ func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Dateti
 	days := FromCalendar(year, month, day)
 	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec)
 	return Datetime((secs << 20) + int64(msec))
+}
+
+func (dt Datetime) ConvertToGoTime() gotime.Time {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	msec := dt.microSec()
+	hour, min, sec := dt.Clock()
+	return gotime.Date(int(y), gotime.Month(m), int(d), int(hour), int(min), int(sec), int(msec*1000), startupTime.Location())
+}
+
+func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64) Datetime {
+	date = date.Add(gotime.Duration(addMsec) * gotime.Microsecond)
+	date = date.Add(gotime.Duration(addSec) * gotime.Second)
+	date = date.Add(gotime.Duration(addMin) * gotime.Minute)
+	date = date.Add(gotime.Duration(addHour) * gotime.Hour)
+	// corner case: mysql: date_add('2022-01-31',interval 1 month) -> 2022-02-28
+	// only in the month year year-month
+	if addMonth != 0 || addYear != 0 {
+		originDay := date.Day()
+		newDate := date.AddDate(int(addYear), int(addMonth), int(addDay))
+		newDay := newDate.Day()
+		if originDay != newDay {
+			maxDay := LastDay(uint16(newDate.Year()), uint8(newDate.Month()-1))
+			addDay = int64(maxDay) - int64(originDay)
+		}
+	}
+	date = date.AddDate(int(addYear), int(addMonth), int(addDay))
+	return FromClock(int32(date.Year()), uint8(date.Month()), uint8(date.Day()), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Second()), uint32(date.Nanosecond()/1000))
+}
+
+func (dt Datetime) AddInterval(nums int64, its IntervalType) Datetime {
+	goTime := dt.ConvertToGoTime()
+	var addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64
+	switch its {
+	case MicroSecond:
+		addMsec += nums
+	case Second:
+		addSec += nums
+	case Minute:
+		addMin += nums
+	case Hour:
+		addHour += nums
+	case Day:
+		addDay += nums
+	case Week:
+		addDay += 7 * nums
+	case Month:
+		addMonth += nums
+	case Quarter:
+		addMonth += 3 * nums
+	case Year:
+		addYear += nums
+	}
+	return dt.AddDateTime(goTime, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear)
+}
+
+func (dt Datetime) microSec() int64 {
+	return int64(dt) << 44 >> 44
 }
 
 func (dt Datetime) sec() int64 {

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	compile1 "github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -924,6 +925,28 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
+// this function is temporary, it should be removed when mo support sql like selct const_expr
+func (mce *MysqlCmdExecutor) handleSelect1(nv *tree.NumVal) error {
+	ses := mce.GetSession()
+	proto := ses.protocol
+
+	v_str := nv.Value.String()
+	col := new(MysqlColumn)
+	col.SetName(v_str)
+	col.SetColumnType(defines.MYSQL_TYPE_LONG)
+	ses.Mrs.AddColumn(col)
+	v, _ := strconv.Atoi(v_str)
+	ses.Mrs.AddRow([]interface{}{v})
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
 
@@ -1577,8 +1600,52 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	return cw, nil
 }
 
+func incStatementCounter(stmt tree.Statement, isInternal bool) {
+	switch stmt.(type) {
+	case *tree.Select:
+		metric.StatementCounter(metric.SQLTypeSelect, isInternal).Inc()
+	case *tree.Insert:
+		metric.StatementCounter(metric.SQLTypeInsert, isInternal).Inc()
+	case *tree.Delete:
+		metric.StatementCounter(metric.SQLTypeDelete, isInternal).Inc()
+	case *tree.Update:
+		metric.StatementCounter(metric.SQLTypeUpdate, isInternal).Inc()
+	default:
+		metric.StatementCounter(metric.SQLTypeOther, isInternal).Inc()
+	}
+}
+
+func remindrecordSQLLentencyObserver(stmt tree.Statement, isInternal bool, value float64) {
+	switch stmt.(type) {
+	case *tree.Select:
+		metric.SQLLatencyObserver(metric.SQLTypeSelect, isInternal).Observe(value)
+	case *tree.Insert:
+		metric.SQLLatencyObserver(metric.SQLTypeInsert, isInternal).Observe(value)
+	case *tree.Delete:
+		metric.SQLLatencyObserver(metric.SQLTypeDelete, isInternal).Observe(value)
+	case *tree.Update:
+		metric.SQLLatencyObserver(metric.SQLTypeUpdate, isInternal).Observe(value)
+	default:
+		metric.SQLLatencyObserver(metric.SQLTypeOther, isInternal).Observe(value)
+	}
+}
+
+func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
+	sess := mce.GetSession()
+	incStatementCounter(stmt, sess.IsInternal)
+}
+
+func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Time) {
+	// TODO: this latency doesn't consider complile and build stage, fix it!
+	latency := time.Since(beginInstant).Seconds()
+	sess := mce.GetSession()
+	remindrecordSQLLentencyObserver(stmt, sess.IsInternal, latency)
+
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
+	beginInstant := time.Now()
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
@@ -1627,6 +1694,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var fromLoadData = false
 	var txnErr error
 
+	stmt := cws[0].GetAst()
+	mce.beforeRun(stmt)
+	defer mce.afterRun(stmt, beginInstant)
+	// it is weired to do for loop here, why don't we ensure that run only one sql once
+	// it seems that mysql protocol has done that for us when reading packet from tcp
 	for _, cw := range cws {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
@@ -1688,6 +1760,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 						}
 
 						//next statement
+						goto handleSucceeded
+					} else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok && nv.Value.String() == "1" {
+						err = mce.handleSelect1(nv)
+						if err != nil {
+							goto handleFailed
+						}
 						goto handleSucceeded
 					}
 				}

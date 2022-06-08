@@ -30,7 +30,11 @@ import (
 func TestSingleSql(t *testing.T) {
 	// sql := "SELECT * FROM NATION where n_nationkey > 10"
 	// sql := "SELECT COUNT(n_nationkey) FROM NATION"
-	sql := "SELECT COUNT(*) FROM NATION a"
+	// sql := "SELECT COUNT(*) FROM NATION a"
+	// sql := "SELECT DATE_ADD('2022-01-31', INTERVAL 1 day) FROM NATION a"
+	// sql := "SELECT DATE_ADD(date '2022-01-31', INTERVAL 1 day) FROM NATION"
+	sql := "SELECT DATE_SUB(date '2022-01-31', INTERVAL 1 day) FROM NATION"
+	// sql := "SELECT date'2022-01-31' + INTERVAL 114 day FROM NATION a"
 	// sql := "SELECT n_nationkey, COUNT(*) AS TTT FROM NATION group by n_nationkey"
 	// sql := "select * from (select * from NATION order by n_nationkey) as x where n_nationkey > 10"
 	// sql := `select * from (select * from NATION order by n_nationkey) as x`
@@ -399,11 +403,14 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select sum(n_nationkey) as s from nation order by s",
 		"select date_add(date '2001-01-01', interval 1 day) as a",
 		"select date_sub(date '2001-01-01', interval '1 day') as a",
+		"select date_add('2001-01-01', interval '1 day') as a",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY between 2 and 2 OR N_NATIONKEY not between 3 and 10",                                                            //test more expr
-		// "SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",                                                                                 //test more expr
+		// "SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
+		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY IN (1, 2)",  //test more expr
+		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY NOT IN (1)", //test more expr
 
 		"SELECT -1",
 	}

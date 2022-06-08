@@ -23,13 +23,13 @@ import (
 )
 
 type DataFactory struct {
-	fileFactory  file.SegmentFileFactory
+	fileFactory  file.SegmentFactory
 	appendBufMgr base.INodeManager
 	scheduler    tasks.TaskScheduler
 	dir          string
 }
 
-func NewDataFactory(fileFactory file.SegmentFileFactory,
+func NewDataFactory(fileFactory file.SegmentFactory,
 	appendBufMgr base.INodeManager,
 	scheduler tasks.TaskScheduler,
 	dir string) *DataFactory {

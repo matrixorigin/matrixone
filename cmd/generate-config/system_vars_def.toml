@@ -428,6 +428,26 @@ values = ["true"]
 comment = "default is false. true : one txn for an independent batch false : only one txn during loading data"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "statusPort"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["7001", "7001", "7010"]
+comment = "statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "metricToProm"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true", "false"]
+comment = "default is true. if true, metrics can be scraped through host:status/metrics endpoint"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

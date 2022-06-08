@@ -104,6 +104,18 @@ func MockColTypes(colCnt int) (ct []types.Type) {
 				Size:  24,
 				Width: 100,
 			}
+		case 14:
+			typ = types.T_bool.ToType()
+			typ.Width = 8
+		case 15:
+			typ = types.T_timestamp.ToType()
+			typ.Width = 64
+		case 16:
+			typ = types.T_decimal64.ToType()
+			typ.Width = 64
+		case 17:
+			typ = types.T_decimal128.ToType()
+			typ.Width = 128
 		}
 		ct = append(ct, typ)
 	}
