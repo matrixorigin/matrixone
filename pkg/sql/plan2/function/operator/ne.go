@@ -1,6 +1,8 @@
 package operator
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,8 +47,15 @@ var StrNeOpFuncVec = []StrCompOpFunc{
 	nequalCol_Col, nequalCol_Const, nequalConst_Col, nequalConst_Const,
 }
 
-func nequalCol_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func nequalCol_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = ne.StrNe(lvs, rvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -58,15 +67,23 @@ func nequalCol_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) || nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func nequalCol_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func nequalCol_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = ne.StrNeScalar(rvs.Data, lvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -78,15 +95,23 @@ func nequalCol_Const(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func nequalConst_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func nequalConst_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(rvs.Lengths))
 	rs = ne.StrNeScalar(lvs.Data, rvs, rs)
 	col := make([]bool, len(rvs.Lengths))
@@ -98,16 +123,24 @@ func nequalConst_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func nequalConst_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
-	return []bool{string(lvs.Data) != string(rvs.Data)}
+func nequalConst_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
+	return []bool{string(lvs.Data) != string(rvs.Data)}, nil
 }
 
 func InitStrNeOpFuncMap() {
@@ -123,7 +156,11 @@ func ColNeCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vecto
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_col, NeOpFuncMap, StrNeOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_col, NeOpFuncMap, StrNeOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -134,7 +171,11 @@ func ColNeConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_const, NeOpFuncMap, StrNeOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_const, NeOpFuncMap, StrNeOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -148,7 +189,11 @@ func ConstNeCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 
 func ConstNeConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := proc.AllocScalarVector(proc.GetBoolTyp(lv.Typ))
-	vector.SetCol(vec, GetRetCol[T](lv, rv, const_const, NeOpFuncMap, StrNeOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, const_const, NeOpFuncMap, StrNeOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -225,7 +270,7 @@ func NeDataValue[T DataValue](vectors []*vector.Vector, proc *process.Process) (
 	dataID := GetDatatypeID[T]()
 	vec, err := NeFuncMap[(lt*3+rt)*dataTypeNum+dataID](lv, rv, proc)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Ne function: " + err.Error())
 	}
 	return vec, nil
 }

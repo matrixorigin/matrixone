@@ -1,29 +1,57 @@
 package operator
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func ColAndCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.([]bool), rv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
+	rvs, ok := rv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the right vec col is not []bool type")
+	}
 	n := len(lvs)
 	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
 	if err != nil {
 		return nil, err
 	}
 	col := make([]bool, len(lvs))
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	for i := 0; i < len(lvs); i++ {
 		col[i] = lvs[i] && rvs[i]
+		ln, rn := nulls.Contains(lv.Nsp, uint64(i)), nulls.Contains(rv.Nsp, uint64(i))
+		if (ln && !rn) || (!ln && rn) {
+			if ln && !rn {
+				if !rvs[i] {
+					vec.Nsp.Np.Remove(uint64(i))
+				}
+			} else {
+				if !lvs[i] {
+					vec.Nsp.Np.Remove(uint64(i))
+				}
+			}
+		}
 	}
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, col)
 	return vec, nil
 }
 
 func ColAndConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.([]bool), rv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
+	rvs, ok := rv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the right vec col is not []bool type")
+	}
 	n := len(lvs)
 	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
 	if err != nil {
@@ -31,16 +59,22 @@ func ColAndConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	rb := rvs[0]
 	col := make([]bool, len(lvs))
+	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	for i := 0; i < len(lvs); i++ {
 		col[i] = lvs[i] && rb
+		if nulls.Contains(lv.Nsp, uint64(i)) && !rb {
+			vec.Nsp.Np.Remove(uint64(i))
+		}
 	}
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 	vector.SetCol(vec, col)
 	return vec, nil
 }
 
 func ColAndNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs := lv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
 	n := len(lvs)
 	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
 	if err != nil {
@@ -48,7 +82,9 @@ func ColAndNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, e
 	}
 	col := make([]bool, len(lvs))
 	for i := 0; i < len(lvs); i++ {
-		nulls.Add(vec.Nsp, uint64(i))
+		if nulls.Contains(lv.Nsp, uint64(i)) || lvs[i] {
+			nulls.Add(vec.Nsp, uint64(i))
+		}
 	}
 	vector.SetCol(vec, col)
 	return vec, nil
@@ -59,14 +95,31 @@ func ConstAndCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 func ConstAndConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.([]bool), rv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
+	rvs, ok := rv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the right vec col is not []bool type")
+	}
 	vec := proc.AllocScalarVector(lv.Typ)
 	vector.SetCol(vec, []bool{lvs[0] && rvs[0]})
 	return vec, nil
 }
 
 func ConstAndNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(lv.Typ), nil
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
+	if lvs[0] {
+		return proc.AllocScalarNullVector(lv.Typ), nil
+	} else {
+		vec := proc.AllocScalarVector(lv.Typ)
+		vector.SetCol(vec, []bool{false})
+		return vec, nil
+	}
 }
 
 func NullAndCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -126,7 +179,7 @@ func And(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	lt, rt := GetTypeID(lv), GetTypeID(rv)
 	vec, err := AndFuncMap[lt*3+rt](lv, rv, proc)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("And function: " + err.Error())
 	}
 	return vec, nil
 }

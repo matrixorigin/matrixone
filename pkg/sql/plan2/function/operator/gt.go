@@ -1,6 +1,8 @@
 package operator
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,8 +48,15 @@ var StrGtOpFuncVec = []StrCompOpFunc{
 	greatCol_Col, greatCol_Const, greatConst_Col, greatConst_Const,
 }
 
-func greatCol_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func greatCol_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = gt.StrGt(lvs, rvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -59,15 +68,23 @@ func greatCol_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) || nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func greatCol_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func greatCol_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = lt.StrLtScalar(rvs.Data, lvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -79,15 +96,23 @@ func greatCol_Const(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func greatConst_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func greatConst_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(rvs.Lengths))
 	rs = gt.StrGtScalar(lvs.Data, rvs, rs)
 	col := make([]bool, len(rvs.Lengths))
@@ -99,16 +124,24 @@ func greatConst_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func greatConst_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
-	return []bool{string(lvs.Data) > string(rvs.Data)}
+func greatConst_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
+	return []bool{string(lvs.Data) > string(rvs.Data)}, nil
 }
 
 func InitStrGtOpFuncMap() {
@@ -124,7 +157,11 @@ func ColGtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vecto
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_col, GtOpFuncMap, StrGtOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_col, GtOpFuncMap, StrGtOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -135,7 +172,11 @@ func ColGtConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_const, GtOpFuncMap, StrGtOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_const, GtOpFuncMap, StrGtOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -144,19 +185,27 @@ func ColGtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vect
 }
 
 func ConstGtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	n := GetRetColLen[T](lv)
+	n := GetRetColLen[T](rv)
 	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
 	if err != nil {
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, const_col, GtOpFuncMap, StrGtOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, const_col, GtOpFuncMap, StrGtOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
 func ConstGtConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := proc.AllocScalarVector(proc.GetBoolTyp(lv.Typ))
-	vector.SetCol(vec, GetRetCol[T](lv, rv, const_const, GtOpFuncMap, StrGtOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, const_const, GtOpFuncMap, StrGtOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -233,7 +282,7 @@ func GtDataValue[T DataValue](vectors []*vector.Vector, proc *process.Process) (
 	dataID := GetDatatypeID[T]()
 	vec, err := GtFuncMap[(lt*3+rt)*dataTypeNum+dataID](lv, rv, proc)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Gt function: " + err.Error())
 	}
 	return vec, nil
 }

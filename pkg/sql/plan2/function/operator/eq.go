@@ -1,6 +1,8 @@
 package operator
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -50,7 +52,7 @@ func InitEqOpFuncMap() {
 	}
 }
 
-type StrCompOpFunc = func(d1, d2 interface{}) []bool
+type StrCompOpFunc = func(d1, d2 *vector.Vector) ([]bool, error)
 
 var StrEqOpFuncMap = map[int]StrCompOpFunc{}
 
@@ -58,8 +60,15 @@ var StrEqOpFuncVec = []StrCompOpFunc{
 	equalCol_Col, equalCol_Const, equalConst_Col, equalConst_Const,
 }
 
-func equalCol_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func equalCol_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = eq.StrEq(lvs, rvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -71,15 +80,23 @@ func equalCol_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) || nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func equalCol_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func equalCol_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = eq.StrEqScalar(rvs.Data, lvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -91,15 +108,23 @@ func equalCol_Const(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func equalConst_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func equalConst_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(rvs.Lengths))
 	rs = eq.StrEqScalar(lvs.Data, rvs, rs)
 	col := make([]bool, len(rvs.Lengths))
@@ -111,16 +136,24 @@ func equalConst_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func equalConst_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
-	return []bool{string(lvs.Data) == string(rvs.Data)}
+func equalConst_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
+	return []bool{string(lvs.Data) == string(rvs.Data)}, nil
 }
 
 func InitStrEqOpFuncMap() {
@@ -130,22 +163,7 @@ func InitStrEqOpFuncMap() {
 }
 
 func GetRetColLen[T DataValue](lv *vector.Vector) int {
-	dataID := GetDatatypeID[T]()
-	if dataID != 10 {
-		return GetRetColLen_1[T](lv)
-	} else {
-		return GetRetColLen_2(lv)
-	}
-}
-
-func GetRetColLen_1[T DataValue](lv *vector.Vector) int {
-	lvs := lv.Col.([]T)
-	return len(lvs)
-}
-
-func GetRetColLen_2(lv *vector.Vector) int {
-	lvs := lv.Col.(*types.Bytes)
-	return len(lvs.Offsets)
+	return vector.Length(lv)
 }
 
 const (
@@ -155,7 +173,7 @@ const (
 	const_const
 )
 
-func GetRetCol[T DataValue](lv, rv *vector.Vector, colType int, FuncMap map[int]CompOpFunc, StrFuncMap map[int]StrCompOpFunc) []bool {
+func GetRetCol[T DataValue](lv, rv *vector.Vector, colType int, FuncMap map[int]CompOpFunc, StrFuncMap map[int]StrCompOpFunc) ([]bool, error) {
 	dataID := GetDatatypeID[T]()
 	if dataID != 10 {
 		return GetRetCol_1[T](lv, rv, colType, FuncMap)
@@ -164,62 +182,70 @@ func GetRetCol[T DataValue](lv, rv *vector.Vector, colType int, FuncMap map[int]
 	}
 }
 
-func GetRetCol_1[T DataValue](lv, rv *vector.Vector, colType int, FuncMap map[int]CompOpFunc) []bool {
-	lvs, rvs := lv.Col.([]T), rv.Col.([]T)
+func GetRetCol_1[T DataValue](lv, rv *vector.Vector, colType int, FuncMap map[int]CompOpFunc) ([]bool, error) {
+	lvs, ok := lv.Col.([]T)
+	if !ok {
+		return nil, errors.New("the left col value type is not consistent to the typType")
+	}
+	rvs, ok := rv.Col.([]T)
+	if !ok {
+		return nil, errors.New("the right col value type is not consistent to the typType")
+	}
 	var col []bool
+	dataID := GetDatatypeID[T]()
 	switch colType {
 	case col_col:
 		col = make([]bool, len(lvs))
-		dataID := GetDatatypeID[T]()
 		for i := 0; i < len(lvs); i++ {
+			if nulls.Contains(lv.Nsp, uint64(i)) || nulls.Contains(rv.Nsp, uint64(i)) {
+				continue
+			}
 			if FuncMap[dataID](lvs[i], rvs[i], lv.Typ.Scale, rv.Typ.Scale) {
 				col[i] = true
-			} else {
-				col[i] = false
 			}
 		}
 	case col_const:
 		r := rvs[0]
 		col = make([]bool, len(lvs))
-		dataID := GetDatatypeID[T]()
 		for i := 0; i < len(lvs); i++ {
+			if nulls.Contains(lv.Nsp, uint64(i)) {
+				continue
+			}
 			if FuncMap[dataID](lvs[i], r, lv.Typ.Scale, rv.Typ.Scale) {
 				col[i] = true
-			} else {
-				col[i] = false
 			}
 		}
 	case const_col:
 		l := lvs[0]
 		col = make([]bool, len(rvs))
-		dataID := GetDatatypeID[T]()
 		for i := 0; i < len(rvs); i++ {
+			if nulls.Contains(rv.Nsp, uint64(i)) {
+				continue
+			}
 			if FuncMap[dataID](l, rvs[i], lv.Typ.Scale, rv.Typ.Scale) {
 				col[i] = true
-			} else {
-				col[i] = false
 			}
 		}
 	case const_const:
-		dataID := GetDatatypeID[T]()
 		col = []bool{GeOpFuncMap[dataID](lvs[0], rvs[0], lv.Typ.Scale, rv.Typ.Scale)}
 	}
-	return col
+	return col, nil
 }
 
-func GetRetCol_2(lv, rv *vector.Vector, colType int, FuncMap map[int]StrCompOpFunc) []bool {
+func GetRetCol_2(lv, rv *vector.Vector, colType int, FuncMap map[int]StrCompOpFunc) ([]bool, error) {
 	var col []bool
+	var err error
 	switch colType {
 	case col_col:
-		col = FuncMap[col_col](lv.Col, rv.Col)
+		col, err = FuncMap[col_col](lv, rv)
 	case col_const:
-		col = FuncMap[col_const](lv.Col, rv.Col)
+		col, err = FuncMap[col_const](lv, rv)
 	case const_col:
-		col = FuncMap[const_col](lv.Col, rv.Col)
+		col, err = FuncMap[const_col](lv, rv)
 	case const_const:
-		col = FuncMap[const_const](lv.Col, rv.Col)
+		col, err = FuncMap[const_const](lv, rv)
 	}
-	return col
+	return col, err
 }
 
 func ColEqCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -229,7 +255,11 @@ func ColEqCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vecto
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_col, EqOpFuncMap, StrEqOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_col, EqOpFuncMap, StrEqOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -240,7 +270,11 @@ func ColEqConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_const, EqOpFuncMap, StrEqOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_const, EqOpFuncMap, StrEqOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -254,7 +288,11 @@ func ConstEqCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 
 func ConstEqConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := proc.AllocScalarVector(proc.GetBoolTyp(lv.Typ))
-	vector.SetCol(vec, GetRetCol[T](lv, rv, const_const, EqOpFuncMap, StrEqOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, const_const, EqOpFuncMap, StrEqOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -372,7 +410,7 @@ func EqDataValue[T DataValue](vectors []*vector.Vector, proc *process.Process) (
 	dataID := GetDatatypeID[T]()
 	vec, err := EqFuncMap[(lt*3+rt)*dataTypeNum+dataID](lv, rv, proc)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Equal fucntion:" + err.Error())
 	}
 	return vec, nil
 }

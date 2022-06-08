@@ -15,7 +15,7 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-var EqintBool = []bool{true, false, false, false, false, true, false, true, false, false, true, false, false, true, false, true}
+var EqintBool = []bool{true, false, false, false, false, true, false, false, false, false, true, false, false, false, false, false}
 var intNullPos = []int{3, 7, 11, 12, 13, 14, 15}
 var intNotNullPos = []int{0, 1, 2, 4, 5, 6, 8, 9, 10}
 
@@ -123,7 +123,7 @@ func GetInt64() []*vector.Vector {
 	return vec
 }
 
-var EquintBool = []bool{true, false, true, false, true, false, true, false, true}
+var EquintBool = []bool{true, false, false, false, true, false, false, false, false}
 var uintNullPos = []int{2, 5, 6, 7, 8}
 var uintNotNullPos = []int{0, 1, 3, 4}
 
@@ -353,7 +353,7 @@ func GetDecimal64() []*vector.Vector {
 	return vec
 }
 
-var EqboolBool = []bool{true, false, false, false, true, true, false, true, true}
+var EqboolBool = []bool{true, false, false, false, true, false, false, false, false}
 
 func GetBool() []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
@@ -377,7 +377,7 @@ func GetBool() []*vector.Vector {
 	return vec
 }
 
-var EqstringBool = []bool{true, false, false, false, false, true, false, false, false, false, true, false, false, false, false, true}
+var EqstringBool = []bool{true, false, false, false, false, true, false, false, false, false, true, false, false, false, false, false}
 
 func GetString() []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
