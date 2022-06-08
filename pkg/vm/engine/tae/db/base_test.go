@@ -14,7 +14,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,12 +33,19 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 }
 
 func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalog.Schema)) {
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(100)
 	for i := 0; i < 17; i++ {
 		schema := catalog.MockSchemaAll(18, i)
 		schema.BlockMaxRows = 10
 		schema.SegmentMaxBlocks = 2
-		test(t, tae, schema)
+		wg.Add(1)
+		_ = pool.Submit(func() {
+			defer wg.Done()
+			test(t, tae, schema)
+		})
 	}
+	wg.Wait()
 }
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
@@ -286,4 +295,28 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 			assert.NoError(t, txn.Commit())
 		}
 	}
+}
+
+func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
+	txn, rel := getDefaultRelation(t, e, schema.Name)
+	segs := make([]*catalog.SegmentEntry, 0)
+	it := rel.MakeSegmentIt()
+	for it.Valid() {
+		seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segs = append(segs, seg)
+		it.Next()
+	}
+	for _, segMeta := range segs {
+		seg := segMeta.GetSegmentData()
+		factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
+		assert.NoError(t, err)
+		if factory == nil {
+			continue
+		}
+		task, err := e.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+		assert.NoError(t, err)
+		err = task.WaitDone()
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit())
 }

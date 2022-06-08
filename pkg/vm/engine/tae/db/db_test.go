@@ -211,6 +211,25 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 	}
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
 	assert.NoError(t, txn.Commit())
+
+	compactBlocks(t, tae, defaultTestDB, schema, false)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, false)
+	v = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 3)
+	filter = handle.NewEQFilter(v)
+	err = rel.DeleteByFilter(filter)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-2, true)
+	assert.NoError(t, txn.Commit())
+
+	compactSegs(t, tae, schema)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-2, false)
+	assert.NoError(t, txn.Commit())
+
+	// t.Log(rel.GetMeta().(*catalog.TableEntry).PPString(common.PPL1, 0, ""))
+	dropRelation(t, tae, defaultTestDB, schema.Name)
 }
 
 func TestCRUD(t *testing.T) {
