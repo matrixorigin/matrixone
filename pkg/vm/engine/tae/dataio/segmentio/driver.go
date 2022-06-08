@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package segmentio
 
 import (
 	"bytes"
@@ -44,18 +44,18 @@ type SuperBlock struct {
 	state     StateType
 }
 
-type Segment struct {
+type Driver struct {
 	mutex     sync.Mutex
 	segFile   *os.File
 	lastInode uint64
 	super     SuperBlock
-	nodes     map[string]*BlockFile
+	nodes     map[string]*DriverFile
 	log       *Log
 	allocator Allocator
 	name      string
 }
 
-func (s *Segment) Init(name string) error {
+func (s *Driver) Init(name string) error {
 	var (
 		err     error
 		sbuffer bytes.Buffer
@@ -113,7 +113,11 @@ func (s *Segment) Init(name string) error {
 	return nil
 }
 
-func (s *Segment) Open(name string) (err error) {
+func (s *Driver) Open(name string) (err error) {
+	if _, err = os.Stat(name); os.IsNotExist(err) {
+		err = s.Init(name)
+		return err
+	}
 	s.segFile, err = os.OpenFile(name, os.O_RDWR, os.ModePerm)
 	s.name = name
 	s.super = SuperBlock{
@@ -121,21 +125,25 @@ func (s *Segment) Open(name string) (err error) {
 		blockSize: BLOCK_SIZE,
 		inodeSize: INODE_SIZE,
 	}
-	if err != nil {
-		return err
+	log := &Inode{
+		magic: MAGIC,
+		inode: 1,
+		size:  0,
+		state: RESIDENT,
 	}
+	s.super.lognode = log
 	return nil
 }
 
-func (s *Segment) Mount() {
+func (s *Driver) Mount() {
 	s.lastInode = 1
 	var seq uint64
 	seq = 0
-	s.nodes = make(map[string]*BlockFile, INODE_NUM)
-	logFile := &BlockFile{
-		snode:   s.super.lognode,
-		name:    "logfile",
-		segment: s,
+	s.nodes = make(map[string]*DriverFile, INODE_NUM)
+	logFile := &DriverFile{
+		snode:  s.super.lognode,
+		name:   "logfile",
+		driver: s,
 	}
 	s.log = &Log{}
 	s.log.logFile = logFile
@@ -146,11 +154,11 @@ func (s *Segment) Mount() {
 	s.log.allocator = NewBitmapAllocator(LOG_SIZE, s.GetInodeSize())
 }
 
-func (s *Segment) Unmount() {
-	logutil.Infof("Unmount Segment: %v", s.name)
+func (s *Driver) Unmount() {
+	logutil.Infof("Unmount Driver: %v", s.name)
 }
 
-func (s *Segment) Destroy() {
+func (s *Driver) Destroy() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	err := s.segFile.Close()
@@ -165,20 +173,7 @@ func (s *Segment) Destroy() {
 	s.segFile = nil
 }
 
-func (s *Segment) Replay(cache *bytes.Buffer) error {
-	s.super = SuperBlock{
-		version:   1,
-		blockSize: BLOCK_SIZE,
-		inodeSize: INODE_SIZE,
-	}
-	log := &Inode{
-		magic: MAGIC,
-		inode: 1,
-		size:  0,
-		state: RESIDENT,
-	}
-	s.super.lognode = log
-	s.Mount()
+func (s *Driver) Replay(cache *bytes.Buffer) error {
 	err := s.log.Replay(cache)
 	if err != nil {
 		return err
@@ -186,7 +181,7 @@ func (s *Segment) Replay(cache *bytes.Buffer) error {
 	return nil
 }
 
-func (s *Segment) NewBlockFile(fname string) *BlockFile {
+func (s *Driver) NewBlockFile(fname string) *DriverFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	file := s.nodes[fname]
@@ -203,17 +198,17 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 			seq:        0,
 		}
 	}
-	file = &BlockFile{
-		snode:   ino,
-		name:    fname,
-		segment: s,
+	file = &DriverFile{
+		snode:  ino,
+		name:   fname,
+		driver: s,
 	}
 	s.nodes[file.name] = file
 	s.lastInode += 1
 	return file
 }
 
-func (s *Segment) Append(fd *BlockFile, pl []byte) (err error) {
+func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
 	buf := pl
 	if fd.snode.algo == compress.Lz4 {
 		colSize := len(pl)
@@ -238,7 +233,7 @@ func (s *Segment) Append(fd *BlockFile, pl []byte) (err error) {
 	return nil
 }
 
-func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
+func (s *Driver) Update(fd *DriverFile, pl []byte, fOffset uint64) error {
 	offset, _ := s.allocator.Allocate(uint64(len(pl)))
 	free, err := fd.Update(DATA_START+offset, pl, uint32(fOffset))
 	if err != nil {
@@ -254,7 +249,7 @@ func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 	return nil
 }
 
-func (s *Segment) ReleaseFile(fd *BlockFile) {
+func (s *Driver) ReleaseFile(fd *DriverFile) {
 	if s.segFile == nil {
 		return
 	}
@@ -269,7 +264,7 @@ func (s *Segment) ReleaseFile(fd *BlockFile) {
 	fd = nil
 }
 
-func (s *Segment) Free(fd *BlockFile) {
+func (s *Driver) Free(fd *DriverFile) {
 	fd.snode.mutex.Lock()
 	defer fd.snode.mutex.Unlock()
 	for _, ext := range fd.snode.extents {
@@ -278,23 +273,23 @@ func (s *Segment) Free(fd *BlockFile) {
 	fd.snode.extents = []Extent{}
 }
 
-func (s *Segment) GetPageSize() uint32 {
+func (s *Driver) GetPageSize() uint32 {
 	return s.super.blockSize
 }
 
-func (s *Segment) GetInodeSize() uint32 {
+func (s *Driver) GetInodeSize() uint32 {
 	return s.super.inodeSize
 }
 
-func (s *Segment) Sync() error {
+func (s *Driver) Sync() error {
 	return s.segFile.Sync()
 }
 
-func (s *Segment) GetName() string {
+func (s *Driver) GetName() string {
 	return s.name
 }
 
-func (s *Segment) GetNodes() map[string]*BlockFile {
+func (s *Driver) GetNodes() map[string]*DriverFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	return s.nodes

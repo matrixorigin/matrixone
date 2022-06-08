@@ -22,10 +22,7 @@ import (
 )
 
 func Hash(v any, typ types.Type) (uint64, error) {
-	data, err := EncodeKey(v, typ)
-	if err != nil {
-		return 0, err
-	}
+	data := EncodeKey(v, typ)
 	//murmur := murmur3.Sum64(data)
 	xx := xxhash.Sum64(data)
 	return xx, nil
@@ -33,6 +30,8 @@ func Hash(v any, typ types.Type) (uint64, error) {
 
 func DecodeKey(key []byte, typ types.Type) any {
 	switch typ.Oid {
+	case types.T_bool:
+		return encoding.DecodeBool(key)
 	case types.T_int8:
 		return encoding.DecodeInt8(key)
 	case types.T_int16:
@@ -57,6 +56,12 @@ func DecodeKey(key []byte, typ types.Type) any {
 		return encoding.DecodeDate(key)
 	case types.T_datetime:
 		return encoding.DecodeDatetime(key)
+	case types.T_timestamp:
+		return encoding.DecodeTimestamp(key)
+	case types.T_decimal64:
+		return encoding.DecodeDecimal64(key)
+	case types.T_decimal128:
+		return encoding.DecodeDecimal128(key)
 	case types.T_char, types.T_varchar:
 		return key
 	default:
@@ -64,92 +69,42 @@ func DecodeKey(key []byte, typ types.Type) any {
 	}
 }
 
-func EncodeKey(key any, typ types.Type) ([]byte, error) {
+func EncodeKey(key any, typ types.Type) []byte {
 	switch typ.Oid {
+	case types.T_bool:
+		return encoding.EncodeBool(key.(bool))
 	case types.T_int8:
-		if v, ok := key.(int8); ok {
-			return encoding.EncodeInt8(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeInt8(key.(int8))
 	case types.T_int16:
-		if v, ok := key.(int16); ok {
-			return encoding.EncodeInt16(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeInt16(key.(int16))
 	case types.T_int32:
-		if v, ok := key.(int32); ok {
-			return encoding.EncodeInt32(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeInt32(key.(int32))
 	case types.T_int64:
-		if v, ok := key.(int64); ok {
-			return encoding.EncodeInt64(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeInt64(key.(int64))
 	case types.T_uint8:
-		if v, ok := key.(uint8); ok {
-			return encoding.EncodeUint8(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeUint8(key.(uint8))
 	case types.T_uint16:
-		if v, ok := key.(uint16); ok {
-			return encoding.EncodeUint16(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeUint16(key.(uint16))
 	case types.T_uint32:
-		if v, ok := key.(uint32); ok {
-			return encoding.EncodeUint32(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeUint32(key.(uint32))
 	case types.T_uint64:
-		if v, ok := key.(uint64); ok {
-			return encoding.EncodeUint64(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeUint64(key.(uint64))
 	case types.T_decimal64:
-		return encoding.EncodeDecimal64(key.(types.Decimal64)), nil
+		return encoding.EncodeDecimal64(key.(types.Decimal64))
 	case types.T_decimal128:
-		return encoding.EncodeDecimal128(key.(types.Decimal128)), nil
+		return encoding.EncodeDecimal128(key.(types.Decimal128))
 	case types.T_float32:
-		if v, ok := key.(float32); ok {
-			return encoding.EncodeFloat32(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeFloat32(key.(float32))
 	case types.T_float64:
-		if v, ok := key.(float64); ok {
-			return encoding.EncodeFloat64(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeFloat64(key.(float64))
 	case types.T_date:
-		if v, ok := key.(types.Date); ok {
-			return encoding.EncodeDate(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeDate(key.(types.Date))
 	case types.T_timestamp:
-		return encoding.EncodeTimestamp(key.(types.Timestamp)), nil
+		return encoding.EncodeTimestamp(key.(types.Timestamp))
 	case types.T_datetime:
-		if v, ok := key.(types.Datetime); ok {
-			return encoding.EncodeDatetime(v), nil
-		} else {
-			panic("unsupported type")
-		}
+		return encoding.EncodeDatetime(key.(types.Datetime))
 	case types.T_char, types.T_varchar:
-		if v, ok := key.([]byte); ok {
-			return v, nil
-		} else {
-			panic("unsupported type")
-		}
+		return key.([]byte)
 	default:
 		panic("unsupported type")
 	}
@@ -161,6 +116,22 @@ func ProcessVector(vec *vector.Vector, offset uint32, length uint32, task func(v
 		idxes = keyselects.ToArray()
 	}
 	switch vec.Typ.Oid {
+	case types.T_bool:
+		vs := vec.Col.([]bool)[offset:]
+		if keyselects == nil {
+			for i, v := range vs {
+				if err := task(v, uint32(i)); err != nil {
+					return err
+				}
+			}
+		} else {
+			for _, idx := range idxes {
+				v := vs[idx]
+				if err := task(v, idx); err != nil {
+					return err
+				}
+			}
+		}
 	case types.T_int8:
 		vs := vec.Col.([]int8)[offset:]
 		if keyselects == nil {
