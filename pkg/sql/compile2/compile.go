@@ -604,13 +604,22 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
 
 func rewriteExprListForAggNode(es []*plan.Expr, groupSize int32) {
 	for i := range es {
-		ce, ok := es[i].Expr.(*plan.Expr_Col)
-		if !ok {
-			continue
+		rewriteExprForAggNode(es[i], groupSize)
+	}
+}
+
+func rewriteExprForAggNode(expr *plan.Expr, groupSize int32) {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == -2 {
+			e.Col.ColPos += groupSize
 		}
-		if ce.Col.RelPos == -2 {
-			ce.Col.ColPos += groupSize
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			rewriteExprForAggNode(e.F.Args[i], groupSize)
 		}
+	default:
+		return
 	}
 }
 
