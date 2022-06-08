@@ -543,8 +543,14 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
 				// logutil.Infof("load retry %d-%d", groupId, lsn)
-				time.Sleep(time.Millisecond * 100)
+				s.syncBase.commitCond.L.Lock()
 				ver, err = s.GetVersionByGLSN(groupId, lsn)
+				if err == nil {
+					s.syncBase.commitCond.L.Unlock()
+					break
+				}
+				s.syncBase.commitCond.Wait()
+				s.syncBase.commitCond.L.Unlock()
 				if err == nil {
 					break
 				}
@@ -557,23 +563,11 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	e, err := s.file.Load(ver, groupId, lsn)
-	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
-		syncedLsn := s.GetCurrSeqNum(groupId)
-		if lsn <= syncedLsn {
-			for i := 0; i < 10; i++ {
-				// logutil.Infof("load retry %d-%d", groupId, lsn)
-				time.Sleep(time.Millisecond * 100)
-				e, err = s.file.Load(ver, groupId, lsn)
-				if err == nil {
-					break
-				}
-			}
-			if err != nil {
-				return nil, ErrVFileVersionTimeOut
-			}
-		}
+	vf, err := s.file.GetEntryByVersion(ver)
+	if err != nil {
+		return nil, err
 	}
+	e, err := vf.Load(groupId, lsn)
 	return e, err
 }
 

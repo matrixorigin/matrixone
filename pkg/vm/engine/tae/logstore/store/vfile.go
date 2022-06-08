@@ -324,6 +324,26 @@ func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	// }
 	// }
 	offset, err := vf.GetOffsetByLSN(groupId, lsn)
+	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
+		for i := 0; i < 10; i++ {
+			// logutil.Infof("load retry %d-%d", groupId, lsn)
+			vf.addrCond.L.Lock()
+			offset, err = vf.GetOffsetByLSN(groupId, lsn)
+			if err == nil {
+				vf.addrCond.L.Unlock()
+				break
+			}
+			vf.addrCond.Wait()
+			vf.addrCond.L.Unlock()
+			offset, err = vf.GetOffsetByLSN(groupId, lsn)
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			return nil, ErrVFileVersionTimeOut
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

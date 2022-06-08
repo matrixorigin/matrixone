@@ -43,6 +43,7 @@ type syncBase struct {
 	uncommits                    map[uint32][]uint64
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
+	commitCond                   sync.Cond
 }
 
 type checkpointInfo struct {
@@ -209,6 +210,7 @@ func newSyncBase() *syncBase {
 		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
 		ckpmu:         sync.RWMutex{},
+		commitCond:    *sync.NewCond(new(sync.Mutex)),
 	}
 }
 
@@ -441,6 +443,9 @@ func (base *syncBase) SetCKpCnt(groupId uint32, id uint64) {
 }
 
 func (base *syncBase) OnCommit() {
+	base.commitCond.L.Lock()
+	base.commitCond.Broadcast()
+	base.commitCond.L.Unlock()
 	for group, checkpointing := range base.checkpointing {
 		checkpointingId := checkpointing.GetCheckpointed()
 		ckpcnt := checkpointing.GetCkpCnt()
