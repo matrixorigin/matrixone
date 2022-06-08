@@ -25,11 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (nodeId int32, err error) {
+func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (int32, error) {
 	// build CTEs
-	err = builder.buildCTE(stmt.With, ctx)
+	err := builder.buildCTE(stmt.With, ctx)
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	var clause *tree.SelectClause
@@ -45,9 +45,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	}
 
 	// build FROM clause
-	nodeId, err = builder.buildFrom(clause.From.Tables, ctx)
+	nodeId, err := builder.buildFrom(clause.From.Tables, ctx)
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	ctx.binder = NewTableBinder(ctx)
@@ -79,7 +79,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}
 
-				ctx.qualifyColumnNames(expr)
+				err = ctx.qualifyColumnNames(expr)
+				if err != nil {
+					return 0, err
+				}
+
 				selectList = append(selectList, tree.SelectExpr{
 					Expr: expr,
 					As:   selectExpr.As,
@@ -93,7 +97,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 				ctx.headings = append(ctx.headings, "")
 			}
 
-			ctx.qualifyColumnNames(expr)
+			err = ctx.qualifyColumnNames(expr)
+			if err != nil {
+				return 0, err
+			}
+
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: expr,
 				As:   selectExpr.As,
@@ -145,7 +153,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	selectBinder := NewSelectBinder(ctx, havingBinder)
 	ctx.binder = selectBinder
 	for _, selectExpr := range selectList {
-		ctx.qualifyColumnNames(selectExpr.Expr)
+		err = ctx.qualifyColumnNames(selectExpr.Expr)
+		if err != nil {
+			return 0, err
+		}
+
 		expr, err := selectBinder.BindExpr(selectExpr.Expr, 0, true)
 		if err != nil {
 			return 0, err
@@ -254,7 +266,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 		}, ctx)
 	}
 
-	return
+	return nodeId, nil
 }
 
 func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext, tags ...int32) int32 {
@@ -329,24 +341,23 @@ func (builder *QueryBuilder) buildCTE(withExpr *tree.With, ctx *BindContext) err
 	return nil
 }
 
-func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (nodeId int32, err error) {
+func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
 	if len(stmt) == 1 {
-		nodeId, err = builder.buildTable(stmt[0], ctx)
-		return
+		return builder.buildTable(stmt[0], ctx)
 	}
 
 	var rightChildId int32
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	nodeId, err = builder.buildTable(stmt[0], leftCtx)
+	nodeId, err := builder.buildTable(stmt[0], leftCtx)
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	rightChildId, err = builder.buildTable(stmt[1], rightCtx)
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	nodeId = builder.appendNode(&plan.Node{
@@ -360,12 +371,15 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		newCtx := NewBindContext(builder, ctx)
 
 		builder.ctxByNode[nodeId] = newCtx
-		newCtx.mergeContexts(leftCtx, rightCtx)
+		err = newCtx.mergeContexts(leftCtx, rightCtx)
+		if err != nil {
+			return 0, err
+		}
 
 		rightCtx = NewBindContext(builder, ctx)
 		rightChildId, err = builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
-			return
+			return 0, err
 		}
 
 		nodeId = builder.appendNode(&plan.Node{
@@ -378,9 +392,9 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	}
 
 	builder.ctxByNode[nodeId] = ctx
-	ctx.mergeContexts(leftCtx, rightCtx)
+	err = ctx.mergeContexts(leftCtx, rightCtx)
 
-	return
+	return nodeId, err
 }
 
 func (builder *QueryBuilder) bindTableRef(schema string, table string, compCtx CompilerContext, ctx *BindContext) (*ObjectRef, *TableDef, bool) {
@@ -592,7 +606,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 
-	ctx.mergeContexts(leftCtx, rightCtx)
+	err = ctx.mergeContexts(leftCtx, rightCtx)
+	if err != nil {
+		return 0, err
+	}
 
 	nodeId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
@@ -620,29 +637,31 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			node.OnList = append(node.OnList, expr)
 		}
 
-	case *tree.NaturalJoinCond:
-		leftCols := make(map[string]any)
-		for _, binding := range leftCtx.bindings {
-			for _, col := range binding.cols {
-				leftCols[col] = nil
-			}
-		}
-
-		var usingCols []string
-		for _, binding := range rightCtx.bindings {
-			for _, col := range binding.cols {
-				if _, ok := leftCols[col]; ok {
-					usingCols = append(usingCols, col)
+	default:
+		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
+			leftCols := make(map[string]any)
+			for _, binding := range leftCtx.bindings {
+				for _, col := range binding.cols {
+					leftCols[col] = nil
 				}
 			}
-		}
 
-		for _, col := range usingCols {
-			expr, err := ctx.addUsingCol(col, joinType, leftCtx, rightCtx)
-			if err != nil {
-				return 0, err
+			var usingCols []string
+			for _, binding := range rightCtx.bindings {
+				for _, col := range binding.cols {
+					if _, ok := leftCols[col]; ok {
+						usingCols = append(usingCols, col)
+					}
+				}
 			}
-			node.OnList = append(node.OnList, expr)
+
+			for _, col := range usingCols {
+				expr, err := ctx.addUsingCol(col, joinType, leftCtx, rightCtx)
+				if err != nil {
+					return 0, err
+				}
+				node.OnList = append(node.OnList, expr)
+			}
 		}
 	}
 

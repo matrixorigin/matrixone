@@ -157,7 +157,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (
 				colPos = binding.colIdByName[col]
 				typ = binding.types[colPos]
 			} else {
-				panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name)))
+				return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name))
 			}
 		} else {
 			err = errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q does not exist", name))
@@ -166,7 +166,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (
 		if binding, ok := b.ctx.bindingByTable[table]; ok {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
-				panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name)))
+				return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name))
 			}
 			if colPos != NotFound {
 				typ = binding.types[colPos]

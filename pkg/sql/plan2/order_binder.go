@@ -72,7 +72,11 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		}
 	}
 
-	astExpr = b.ctx.qualifyColumnNamesAndExpandAlias(astExpr, b.selectList)
+	astExpr, err := b.ctx.qualifyColumnNamesAndExpandAlias(astExpr, b.selectList)
+	if err != nil {
+		return nil, err
+	}
+
 	expr, err := b.SelectBinder.BindExpr(astExpr, 0, true)
 	if err != nil {
 		return nil, err
