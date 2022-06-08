@@ -22,9 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewSelectBinder(ctx *BindContext, agg *AggregateBinder) *SelectBinder {
+func NewSelectBinder(ctx *BindContext, havingBinder *HavingBinder) *SelectBinder {
 	b := &SelectBinder{
-		agg: agg,
+		havingBinder: havingBinder,
 	}
 	b.impl = b
 	b.ctx = ctx
@@ -35,7 +35,7 @@ func NewSelectBinder(ctx *BindContext, agg *AggregateBinder) *SelectBinder {
 func (b *SelectBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	astStr := tree.String(astExpr, dialect.MYSQL)
 
-	if colPos, ok := b.ctx.groupMapByAst[astStr]; ok {
+	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
 		return &plan.Expr{
 			Typ: b.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -47,7 +47,7 @@ func (b *SelectBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}, nil
 	}
 
-	if colPos, ok := b.ctx.aggregateMapByAst[astStr]; ok {
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
 		return &plan.Expr{
 			Typ: b.ctx.aggregates[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -67,7 +67,7 @@ func (b *SelectBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*p
 }
 
 func (b *SelectBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
-	return b.agg.BindAggFunc(funcName, astExpr, depth)
+	return b.havingBinder.BindAggFunc(funcName, astExpr, depth)
 }
 
 func (b *SelectBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {

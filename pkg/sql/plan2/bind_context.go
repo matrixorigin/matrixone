@@ -18,75 +18,184 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
-		groupMapByAst:     make(map[string]int32),
-		aggregateMapByAst: make(map[string]int32),
-		projectMapByExpr:  make(map[string]int32),
-		aliasMap:          make(map[string]int32),
-		bindingsByTag:     make(map[int32]*Binding),
-		bindingsByName:    make(map[string]*Binding),
-		usingColsByName:   make(map[string][]*UsingColumnSet),
-		parent:            parent,
+		groupByAst:     make(map[string]int32),
+		aggregateByAst: make(map[string]int32),
+		projectByExpr:  make(map[string]int32),
+		aliasMap:       make(map[string]int32),
+		bindingByTag:   make(map[int32]*Binding),
+		bindingByTable: make(map[string]*Binding),
+		parent:         parent,
 	}
 
 	return bc
 }
 
-func (bc *BindContext) mergeContext(other *BindContext) {
-	for _, binding := range other.bindings {
-		if _, ok := bc.bindingsByName[binding.table]; ok {
+func (bc *BindContext) mergeContexts(left, right *BindContext) {
+	left.parent = bc
+	right.parent = bc
+
+	for _, binding := range left.bindings {
+		if _, ok := bc.bindingByTable[binding.table]; ok {
 			panic(errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", binding.table)))
 		}
 
 		bc.bindings = append(bc.bindings, binding)
-		bc.bindingsByTag[binding.tag] = binding
-		bc.bindingsByName[binding.table] = binding
+		bc.bindingByTag[binding.tag] = binding
+		bc.bindingByTable[binding.table] = binding
 	}
 
-	// TODO: handle USING columns
+	for _, binding := range right.bindings {
+		if _, ok := bc.bindingByTable[binding.table]; ok {
+			panic(errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", binding.table)))
+		}
+
+		bc.bindings = append(bc.bindings, binding)
+		bc.bindingByTag[binding.tag] = binding
+		bc.bindingByTable[binding.table] = binding
+	}
+
+	for col, binding := range left.bindingByCol {
+		bc.bindingByCol[col] = binding
+	}
+
+	for col, binding := range right.bindingByCol {
+		if _, ok := bc.bindingByCol[col]; ok {
+			bc.bindingByCol[col] = nil
+		} else {
+			bc.bindingByCol[col] = binding
+		}
+	}
+
+	bc.bindingTree = &BindingTreeNode{
+		left:  left.bindingTree,
+		right: right.bindingTree,
+	}
+}
+
+func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, right *BindContext) (*plan.Expr, error) {
+	leftBinding, ok := left.bindingByCol[col]
+	if !ok {
+		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q specified in USING clause does not exist in left table", col))
+	}
+	if leftBinding == nil {
+		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("common column name %q appears more than once in left table", col))
+	}
+
+	rightBinding, ok := right.bindingByCol[col]
+	if !ok {
+		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q specified in USING clause does not exist in right table", col))
+	}
+	if rightBinding == nil {
+		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("common column name %q appears more than once in right table", col))
+	}
+
+	if typ != plan.Node_RIGHT {
+		bc.bindingByCol[col] = leftBinding
+		bc.bindingTree.using = append(bc.bindingTree.using, NameTuple{
+			table: leftBinding.table,
+			col:   col,
+		})
+	} else {
+		bc.bindingByCol[col] = rightBinding
+		bc.bindingTree.using = append(bc.bindingTree.using, NameTuple{
+			table: rightBinding.table,
+			col:   col,
+		})
+	}
+
+	leftPos := leftBinding.colIdByName[col]
+	rightPos := rightBinding.colIdByName[col]
+	expr, err := bc.binder.(*TableBinder).bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+		{
+			Typ: leftBinding.types[leftPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: leftBinding.tag,
+					ColPos: leftPos,
+				},
+			},
+		},
+		{
+			Typ: rightBinding.types[rightPos],
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: rightBinding.tag,
+					ColPos: rightPos,
+				},
+			},
+		},
+	}, 0)
+
+	return expr, err
 }
 
 func (bc *BindContext) unfoldStar(table string) ([]tree.SelectExpr, []string, error) {
 	if len(table) == 0 {
-		// TODO: handle USING columns
+		// unfold *
+		var exprs []tree.SelectExpr
+		var names []string
 
-		var exprList []tree.SelectExpr
-		var nameList []string
+		bc.doUnfoldStar(bc.bindingTree, make(map[string]any), &exprs, &names)
 
-		for _, binding := range bc.bindings {
-			for _, col := range binding.cols {
-				expr, _ := tree.NewUnresolvedName(table, col)
-				exprList = append(exprList, tree.SelectExpr{
-					Expr: expr,
-				})
-				nameList = append(nameList, col)
-			}
-		}
-
-		return exprList, nameList, nil
+		return exprs, names, nil
 	} else {
-		binding, ok := bc.bindingsByName[table]
+		// unfold tbl.*
+		binding, ok := bc.bindingByTable[table]
 		if !ok {
 			return nil, nil, errors.New(errno.UndefinedTable, fmt.Sprintf("missing FROM-clause entry for table %q", table))
 		}
 
-		exprList := make([]tree.SelectExpr, len(binding.cols))
-		nameList := make([]string, len(binding.cols))
+		exprs := make([]tree.SelectExpr, len(binding.cols))
+		names := make([]string, len(binding.cols))
 
 		for i, col := range binding.cols {
 			expr, _ := tree.NewUnresolvedName(table, col)
-			exprList[i] = tree.SelectExpr{
-				Expr: expr,
-			}
-			nameList[i] = col
+			exprs[i] = tree.SelectExpr{Expr: expr}
+			names[i] = col
 		}
 
-		return exprList, nameList, nil
+		return exprs, names, nil
+	}
+}
+
+func (bc *BindContext) doUnfoldStar(root *BindingTreeNode, visitedUsingCols map[string]any, exprs *[]tree.SelectExpr, names *[]string) {
+	if root.binding != nil {
+		for _, col := range root.binding.cols {
+			if _, ok := visitedUsingCols[col]; !ok {
+				expr, _ := tree.NewUnresolvedName(root.binding.table, col)
+				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
+				*names = append(*names, col)
+			}
+		}
+
+		return
+	}
+
+	var handledUsingCols []string
+
+	for _, using := range root.using {
+		if _, ok := visitedUsingCols[using.col]; !ok {
+			handledUsingCols = append(handledUsingCols, using.col)
+			visitedUsingCols[using.col] = nil
+
+			expr, _ := tree.NewUnresolvedName(using.table, using.col)
+			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
+			*names = append(*names, using.col)
+		}
+	}
+
+	bc.doUnfoldStar(root.left, visitedUsingCols, exprs, names)
+	bc.doUnfoldStar(root.right, visitedUsingCols, exprs, names)
+
+	for _, col := range handledUsingCols {
+		delete(visitedUsingCols, col)
 	}
 }
 
@@ -121,28 +230,11 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr) {
 	case *tree.UnresolvedName:
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.Parts[0]
-			if using, ok := bc.usingColsByName[col]; ok {
-				if len(using) > 1 {
+			if binding, ok := bc.bindingByCol[col]; ok {
+				if binding != nil {
+					exprImpl.Parts[1] = binding.table
+				} else {
 					panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col)))
-				}
-				exprImpl.Parts[1] = using[0].primary.table
-			} else {
-				var found *Binding
-				for _, binding := range bc.bindings {
-					j := binding.FindColumn(col)
-					if j == AmbiguousName {
-						panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col)))
-					}
-					if j != NotFound {
-						if found != nil {
-							panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col)))
-						} else {
-							found = binding
-						}
-					}
-				}
-				if found != nil {
-					exprImpl.Parts[1] = found.table
 				}
 			}
 		}
@@ -202,28 +294,11 @@ func (bc *BindContext) qualifyColumnNamesAndExpandAlias(astExpr tree.Expr, selec
 			col := exprImpl.Parts[0]
 			if colPos, ok := bc.aliasMap[col]; ok {
 				astExpr = selectList[colPos].Expr
-			} else if using, ok := bc.usingColsByName[col]; ok {
-				if len(using) > 1 {
+			} else if binding, ok := bc.bindingByCol[col]; ok {
+				if binding != nil {
+					exprImpl.Parts[1] = binding.table
+				} else {
 					panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col)))
-				}
-				exprImpl.Parts[1] = using[0].primary.table
-			} else {
-				var found *Binding
-				for _, binding := range bc.bindings {
-					j := binding.FindColumn(col)
-					if j == AmbiguousName {
-						panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col)))
-					}
-					if j != NotFound {
-						if found != nil {
-							panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col)))
-						} else {
-							found = binding
-						}
-					}
-				}
-				if found != nil {
-					exprImpl.Parts[1] = found.table
 				}
 			}
 		}

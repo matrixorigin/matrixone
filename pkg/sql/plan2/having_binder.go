@@ -24,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewAggregateBinder(ctx *BindContext) *AggregateBinder {
-	b := &AggregateBinder{
+func NewHavingBinder(ctx *BindContext) *HavingBinder {
+	b := &HavingBinder{
 		insideAgg: false,
 	}
 	b.impl = b
@@ -34,10 +34,10 @@ func NewAggregateBinder(ctx *BindContext) *AggregateBinder {
 	return b
 }
 
-func (b *AggregateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	astStr := tree.String(astExpr, dialect.MYSQL)
 
-	if colPos, ok := b.ctx.groupMapByAst[astStr]; ok {
+	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
 		return &plan.Expr{
 			Typ: b.ctx.groups[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -49,7 +49,7 @@ func (b *AggregateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) 
 		}, nil
 	}
 
-	if colPos, ok := b.ctx.aggregateMapByAst[astStr]; ok {
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
 		if !b.insideAgg {
 			return &plan.Expr{
 				Typ: b.ctx.aggregates[colPos].Typ,
@@ -68,7 +68,7 @@ func (b *AggregateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) 
 	return b.baseBindExpr(astExpr, depth)
 }
 
-func (b *AggregateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
+func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
 	if b.insideAgg {
 		return b.baseBindColRef(astExpr, depth)
 	} else {
@@ -76,7 +76,7 @@ func (b *AggregateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) 
 	}
 }
 
-func (b *AggregateBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (expr *plan.Expr, err error) {
+func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (expr *plan.Expr, err error) {
 	if b.insideAgg {
 		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot be nested")
 	}
@@ -90,13 +90,13 @@ func (b *AggregateBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, d
 	}
 
 	astStr := tree.String(astExpr, dialect.MYSQL)
-	b.ctx.aggregateMapByAst[astStr] = int32(len(b.ctx.aggregates))
+	b.ctx.aggregateByAst[astStr] = int32(len(b.ctx.aggregates))
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
 
 	return
 }
 
-func (b *AggregateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot contain window function calls")
 	} else {

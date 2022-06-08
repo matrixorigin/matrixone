@@ -97,11 +97,6 @@ type QueryBuilder struct {
 	nextTag    int32
 }
 
-type UsingColumnSet struct {
-	primary  *Binding
-	bindings map[string]*Binding
-}
-
 type BindContext struct {
 	binder Binder
 
@@ -118,22 +113,37 @@ type BindContext struct {
 
 	headings []string
 
-	groupMapByAst     map[string]int32
-	aggregateMapByAst map[string]int32
-	projectMapByExpr  map[string]int32
+	groupByAst     map[string]int32
+	aggregateByAst map[string]int32
+	projectByExpr  map[string]int32
 
 	aliasMap map[string]int32
 
 	bindings       []*Binding
-	bindingsByTag  map[int32]*Binding
-	bindingsByName map[string]*Binding
+	bindingByTag   map[int32]*Binding
+	bindingByTable map[string]*Binding
+	bindingByCol   map[string]*Binding
+
+	// for join tables
+	bindingTree *BindingTreeNode
 
 	corrCols []*plan.CorrColRef
 
-	usingCols       [][]*UsingColumnSet
-	usingColsByName map[string][]*UsingColumnSet
-
 	parent *BindContext
+}
+
+type NameTuple struct {
+	table string
+	col   string
+}
+
+type BindingTreeNode struct {
+	using []NameTuple
+
+	binding *Binding
+
+	left  *BindingTreeNode
+	right *BindingTreeNode
 }
 
 type Binder interface {
@@ -144,8 +154,8 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	impl      Binder
 	ctx       *BindContext
+	impl      Binder
 	boundCols []string
 }
 
@@ -157,7 +167,7 @@ type GroupBinder struct {
 	baseBinder
 }
 
-type AggregateBinder struct {
+type HavingBinder struct {
 	baseBinder
 	tableBinder *TableBinder
 	insideAgg   bool
@@ -165,7 +175,7 @@ type AggregateBinder struct {
 
 type SelectBinder struct {
 	baseBinder
-	agg *AggregateBinder
+	havingBinder *HavingBinder
 }
 
 type OrderBinder struct {
@@ -175,7 +185,7 @@ type OrderBinder struct {
 
 var _ Binder = (*TableBinder)(nil)
 var _ Binder = (*GroupBinder)(nil)
-var _ Binder = (*AggregateBinder)(nil)
+var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*SelectBinder)(nil)
 
 const (

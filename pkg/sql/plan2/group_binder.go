@@ -42,11 +42,11 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 
 	if isRoot {
 		astStr := tree.String(astExpr, dialect.MYSQL)
-		if _, ok := b.ctx.groupMapByAst[astStr]; ok {
+		if _, ok := b.ctx.groupByAst[astStr]; ok {
 			return nil, nil
 		}
 
-		b.ctx.groupMapByAst[astStr] = int32(len(b.ctx.groups))
+		b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
 		b.ctx.groups = append(b.ctx.groups, expr)
 	}
 

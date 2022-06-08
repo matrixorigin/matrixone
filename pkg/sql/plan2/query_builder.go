@@ -52,11 +52,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 
 	ctx.binder = NewTableBinder(ctx)
 
-	// get headings
+	// unfold stars and generate headings
 	var newSelectExprs tree.SelectExprs
 	for _, selectExpr := range clause.Exprs {
 		switch expr := selectExpr.Expr.(type) {
-		case *tree.UnqualifiedStar:
+		case tree.UnqualifiedStar:
 			cols, names, err := ctx.unfoldStar("")
 			if err != nil {
 				return 0, err
@@ -133,9 +133,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 
 	// build HAVING clause
 	var havingList []*plan.Expr
-	aggBinder := NewAggregateBinder(ctx)
+	havingBinder := NewHavingBinder(ctx)
 	if clause.Having != nil {
-		ctx.binder = aggBinder
+		ctx.binder = havingBinder
 		havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
 		if err != nil {
 			return 0, err
@@ -143,10 +143,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	}
 
 	// build SELECT clause
-	selectBinder := NewSelectBinder(ctx, aggBinder)
+	selectBinder := NewSelectBinder(ctx, havingBinder)
 	ctx.binder = selectBinder
 	for _, selectExpr := range clause.Exprs {
-		ctx.qualifyColumnNames(selectExpr.Expr)
 		expr, err := selectBinder.BindExpr(selectExpr.Expr, 0, true)
 		if err != nil {
 			return 0, err
@@ -162,8 +161,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	resultLen := len(ctx.projects)
 	for i, proj := range ctx.projects {
 		exprStr := proj.String()
-		if _, ok := ctx.projectMapByExpr[exprStr]; !ok {
-			ctx.projectMapByExpr[exprStr] = int32(i)
+		if _, ok := ctx.projectByExpr[exprStr]; !ok {
+			ctx.projectByExpr[exprStr] = int32(i)
 		}
 	}
 
@@ -361,10 +360,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 		newCtx := NewBindContext(builder, ctx)
 
 		builder.ctxByNode[nodeId] = newCtx
-		leftCtx.parent = newCtx
-		rightCtx.parent = newCtx
-		newCtx.mergeContext(leftCtx)
-		newCtx.mergeContext(rightCtx)
+		newCtx.mergeContexts(leftCtx, rightCtx)
 
 		rightCtx := NewBindContext(builder, ctx)
 		rightChildId, err = builder.buildTable(stmt[i], rightCtx)
@@ -382,10 +378,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	}
 
 	builder.ctxByNode[nodeId] = ctx
-	leftCtx.parent = ctx
-	rightCtx.parent = ctx
-	ctx.mergeContext(leftCtx)
-	ctx.mergeContext(rightCtx)
+	ctx.mergeContexts(leftCtx, rightCtx)
 
 	return
 }
@@ -502,7 +495,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 			table = node.TableDef.Name
 		}
 
-		if _, ok := ctx.bindingsByName[table]; ok {
+		if _, ok := ctx.bindingByTable[table]; ok {
 			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
 		}
 
@@ -519,8 +512,12 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 		}
 
 		binding := NewBinding(builder.tagsByNode[nodeId][0], nodeId, table, cols, types)
-		ctx.bindingsByTag[binding.tag] = binding
-		ctx.bindingsByName[table] = binding
+		ctx.bindingByTag[binding.tag] = binding
+		ctx.bindingByTable[table] = binding
+
+		ctx.bindingTree = &BindingTreeNode{
+			binding: binding,
+		}
 	} else {
 		// Subquery
 		if len(alias.Cols) > len(node.ProjectList) {
@@ -528,7 +525,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 		}
 
 		table := string(alias.Alias)
-		if _, ok := ctx.bindingsByName[table]; ok {
+		if _, ok := ctx.bindingByTable[table]; ok {
 			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
 		}
 
@@ -548,14 +545,18 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 
 		subCtx := builder.ctxByNode[nodeId]
 		binding := NewBinding(subCtx.projectTag, nodeId, table, cols, types)
-		ctx.bindingsByTag[binding.tag] = binding
-		ctx.bindingsByName[table] = binding
+		ctx.bindingByTag[binding.tag] = binding
+		ctx.bindingByTable[table] = binding
+
+		ctx.bindingTree = &BindingTreeNode{
+			binding: binding,
+		}
 	}
 
 	return nil
 }
 
-func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (nodeId int32, err error) {
+func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
 	var joinType plan.Node_JoinFlag
 
 	// todo need confirm
@@ -575,24 +576,67 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 	leftChildId, err := builder.buildTable(tbl.Left, leftCtx)
 	if err != nil {
-		return
+		return 0, err
 	}
 
 	rightChildId, err := builder.buildTable(tbl.Right, rightCtx)
 	if err != nil {
-		return
+		return 0, err
 	}
 
-	ctx.mergeContext(leftCtx)
-	ctx.mergeContext(rightCtx)
+	ctx.mergeContexts(leftCtx, rightCtx)
 
-	nodeId = builder.appendNode(&plan.Node{
+	nodeId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{leftChildId, rightChildId},
 		JoinType: joinType,
 	}, ctx)
+	node := builder.qry.Nodes[nodeId]
 
-	// TODO: handle JOIN conditions
+	ctx.binder = NewTableBinder(ctx)
 
-	return
+	switch cond := tbl.Cond.(type) {
+	case *tree.OnJoinCond:
+		exprs, err := splitAndBindCondition(cond.Expr, ctx)
+		if err != nil {
+			return 0, err
+		}
+		node.OnList = exprs
+
+	case *tree.UsingJoinCond:
+		for _, col := range cond.Cols {
+			expr, err := ctx.addUsingCol(string(col), joinType, leftCtx, rightCtx)
+			if err != nil {
+				return 0, err
+			}
+			node.OnList = append(node.OnList, expr)
+		}
+
+	case *tree.NaturalJoinCond:
+		leftCols := make(map[string]any)
+		for _, binding := range leftCtx.bindings {
+			for _, col := range binding.cols {
+				leftCols[col] = nil
+			}
+		}
+
+		var usingCols []string
+		for _, binding := range rightCtx.bindings {
+			for _, col := range binding.cols {
+				if _, ok := leftCols[col]; ok {
+					usingCols = append(usingCols, col)
+				}
+			}
+		}
+
+		for _, col := range usingCols {
+			expr, err := ctx.addUsingCol(col, joinType, leftCtx, rightCtx)
+			if err != nil {
+				return 0, err
+			}
+			node.OnList = append(node.OnList, expr)
+		}
+	}
+
+	return nodeId, nil
 }

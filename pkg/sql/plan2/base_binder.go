@@ -112,88 +112,71 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 	case *tree.IntervalExpr:
 		// parser will not return this type
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", exprImpl)))
 	case *tree.XorExpr:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", exprImpl)))
 	case *tree.Subquery:
 		// TODO
 		//
 	case *tree.DefaultVal:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl)))
 	case *tree.MaxValue:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl)))
 	case *tree.VarExpr:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl)))
 	case *tree.StrVal:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl)))
 	case *tree.ExprList:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", exprImpl)))
 	case tree.UnqualifiedStar:
 		// select * from table
 		// * should only appear in SELECT clause
 	default:
 		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl))
+		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl)))
 	}
 
 	return expr, nil
 }
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (expr *plan.Expr, err error) {
-	var table, col string
-	col = astExpr.Parts[0]
-	if astExpr.NumParts > 1 {
-		table = astExpr.Parts[1]
-	}
+	col := astExpr.Parts[0]
+	table := astExpr.Parts[1]
+	name := tree.String(astExpr, dialect.MYSQL)
 
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
 
 	if len(table) == 0 {
-		if using, ok := b.ctx.usingColsByName[col]; ok {
-			if len(using) > 1 {
-				panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", tree.String(astExpr, dialect.MYSQL))))
+		if binding, ok := b.ctx.bindingByCol[col]; ok {
+			if binding != nil {
+				relPos = binding.tag
+				colPos = binding.colIdByName[col]
+				typ = binding.types[colPos]
+			} else {
+				panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name)))
 			}
-			binding := using[0].primary
-			colPos = binding.FindColumn(col)
-			typ = binding.types[colPos]
-			relPos = binding.tag
-			table = binding.table
 		} else {
-			var found *Binding
-			for _, binding := range b.ctx.bindings {
-				j := binding.FindColumn(col)
-				if j == AmbiguousName {
-					panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", tree.String(astExpr, dialect.MYSQL))))
-				}
-				if j != NotFound {
-					if colPos != NotFound {
-						panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", tree.String(astExpr, dialect.MYSQL))))
-					} else {
-						found = binding
-						colPos = j
-					}
-				}
-			}
-			if colPos != NotFound {
-				typ = found.types[colPos]
-				relPos = found.tag
-				table = found.table
-			}
+			err = errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q does not exist", name))
 		}
 	} else {
-		if binding, ok := b.ctx.bindingsByName[table]; ok {
+		if binding, ok := b.ctx.bindingByTable[table]; ok {
 			colPos = binding.FindColumn(col)
+			if colPos == AmbiguousName {
+				panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name)))
+			}
 			if colPos != NotFound {
 				typ = binding.types[colPos]
 				relPos = binding.tag
+			} else {
+				err = errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q does not exist", name))
 			}
 		} else {
 			err = errors.New(errno.UndefinedTable, fmt.Sprintf("missing FROM-clause entry for table %q", table))
@@ -228,22 +211,15 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (
 	}
 
 	parent := b.ctx.parent
-	if parent != nil {
-		expr, err = parent.binder.BindColRef(astExpr, depth+1)
+	for parent != nil && parent.binder == nil {
+		parent = parent.parent
 	}
 
-	if err != nil {
+	if parent == nil {
 		return
 	}
 
-	corr := expr.Expr.(*plan.Expr_Corr).Corr
-	b.ctx.corrCols = append(b.ctx.corrCols, &plan.CorrColRef{
-		RelPos: corr.RelPos,
-		ColPos: corr.ColPos,
-		Depth:  corr.Depth - depth,
-	})
-
-	return
+	return parent.binder.BindColRef(astExpr, depth+1)
 }
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32) (*Expr, error) {

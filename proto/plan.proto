@@ -116,6 +116,12 @@ message ExprList {
 
 // Reference a subquery
 message SubQuery {
+	enum SubqueryType {
+		SCALAR	= 0;
+		EXISTS	= 1;
+		ANY		= 2;
+	}
+
 	int32 node_id		= 1;
 	bool is_correlated	= 2;
 	bool is_scalar		= 3;
@@ -357,13 +363,15 @@ message Node {
 	}
 
 	enum JoinFlag {
-		INNER   = 0;
-		OUTER   = 1;
-		SEMI    = 2;
-		ANTI    = 4;
-		SINGLE  = 8;
-		MARK    = 16;
-		APPLY   = 32;
+		INNER	= 0;
+		LEFT	= 1;
+		RIGHT	= 2;
+		OUTER	= 3;
+		SEMI	= 4;
+		ANTI	= 5;
+		SINGLE	= 6;
+		MARK	= 7;
+		APPLY	= 8;
 	}
 
 	enum AggMode {
@@ -384,15 +392,16 @@ message Node {
 	repeated Expr group_by			= 9;
 	repeated Expr grouping_set		= 10;
 	repeated Expr agg_list			= 11;
-	repeated OrderBySpec order_by   = 12;
-	UpdateList update_list = 13;
-	WindowSpec win_spec = 14;
-	Expr limit			= 15;
-	Expr offset			= 16;
-	TableDef table_def	= 17;
-	ObjectRef obj_ref	= 18;
-	RowsetData rowset_data = 19;
-	string extra_options   = 20;
+	repeated OrderBySpec order_by	= 12;
+
+	UpdateList update_list	= 13;
+	WindowSpec win_spec		= 14;
+	Expr limit				= 15;
+	Expr offset				= 16;
+	TableDef table_def		= 17;
+	ObjectRef obj_ref		= 18;
+	RowsetData rowset_data	= 19;
+	string extra_options	= 20;
 }
 
 message Query {

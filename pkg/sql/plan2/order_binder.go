@@ -82,9 +82,9 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	var ok bool
 
 	exprStr := expr.String()
-	if colPos, ok = b.ctx.projectMapByExpr[exprStr]; !ok {
+	if colPos, ok = b.ctx.projectByExpr[exprStr]; !ok {
 		colPos = int32(len(b.ctx.projects))
-		b.ctx.projectMapByExpr[exprStr] = colPos
+		b.ctx.projectByExpr[exprStr] = colPos
 		b.ctx.projects = append(b.ctx.projects, expr)
 	}
 
