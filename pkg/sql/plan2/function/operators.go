@@ -2024,24 +2024,6 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.ModFloat[float64],
 		},
-		{
-			Index:       10,
-			Flag:        plan.Function_STRICT,
-			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_decimal64, types.T_decimal64},
-			ReturnTyp:   types.T_decimal64,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
-		},
-		{
-			Index:       11,
-			Flag:        plan.Function_STRICT,
-			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_decimal128, types.T_decimal128},
-			ReturnTyp:   types.T_decimal128,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
-		},
 	},
 	UNARY_PLUS: {
 		{
