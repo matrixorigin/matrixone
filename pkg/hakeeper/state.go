@@ -22,24 +22,33 @@ import (
 
 // FIXME: dragonboat should have a public value indicating what is NoLeader node id
 const (
+	// NoLeader is the replica ID of the leader node.
 	NoLeader uint64 = 0
 )
 
+// DNShardInfo contins information on a list of shards.
 type DNShardInfo struct {
 	Tick   uint64
 	Shards []logservice.DNShardInfo
 }
 
+// DNState contains all DN details known to the HAKeeper.
 type DNState struct {
+	// Stores is keyed by DN store UUID, it contains details found on each DN
+	// store.
 	Stores map[string]DNShardInfo
 }
 
+// NewDNState creates a new DNState.
 func NewDNState() DNState {
 	return DNState{
 		Stores: make(map[string]DNShardInfo),
 	}
 }
 
+// Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
+// current tick of the HAKeeper which can be used as the timestamp of the
+// heartbeat.
 func (s *DNState) Update(hb logservice.DNStoreHeartbeat, tick uint64) {
 	shardInfo, ok := s.Stores[hb.UUID]
 	if !ok {
@@ -50,6 +59,7 @@ func (s *DNState) Update(hb logservice.DNStoreHeartbeat, tick uint64) {
 	s.Stores[hb.UUID] = shardInfo
 }
 
+// LogShardInfo contains information of all replicas found on a Log store.
 type LogShardInfo struct {
 	Tick           uint64
 	RaftAddress    string
@@ -59,10 +69,17 @@ type LogShardInfo struct {
 }
 
 type LogState struct {
+	// Shards is keyed by ShardID, it contains details aggregated from all Log
+	// stores. Each logservice.LogShardInfo here contains data aggregated from
+	// different replicas and thus reflect a more accurate description on each
+	// shard.
 	Shards map[uint64]logservice.LogShardInfo
+	// Stores is keyed by log store UUID, it contains details found on each store.
+	// Each LogShardInfo here reflects what was last reported by each Log store.
 	Stores map[string]LogShardInfo
 }
 
+// NewLogState creates a new LogState.
 func NewLogState() LogState {
 	return LogState{
 		Shards: make(map[uint64]logservice.LogShardInfo),
@@ -70,6 +87,8 @@ func NewLogState() LogState {
 	}
 }
 
+// Update applies the incoming heartbeat message to the LogState with the
+// specified tick used as the timestamp.
 func (s *LogState) Update(hb logservice.LogStoreHeartbeat, tick uint64) {
 	s.updateStores(hb, tick)
 	s.updateShards(hb)

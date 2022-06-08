@@ -28,9 +28,9 @@ func TestDNStateUpdate(t *testing.T) {
 	hb := logservice.DNStoreHeartbeat{
 		UUID: "uuid1",
 		Shards: []logservice.DNShardInfo{
-			{1, 1},
-			{2, 1},
-			{3, 1},
+			{ShardID: 1, ReplicaID: 1},
+			{ShardID: 2, ReplicaID: 1},
+			{ShardID: 3, ReplicaID: 1},
 		},
 	}
 	s.Update(hb, 1)
@@ -44,7 +44,7 @@ func TestDNStateUpdate(t *testing.T) {
 	hb = logservice.DNStoreHeartbeat{
 		UUID: "uuid2",
 		Shards: []logservice.DNShardInfo{
-			{100, 1},
+			{ShardID: 100, ReplicaID: 1},
 		},
 	}
 	s.Update(hb, 2)
@@ -52,10 +52,10 @@ func TestDNStateUpdate(t *testing.T) {
 	hb = logservice.DNStoreHeartbeat{
 		UUID: "uuid1",
 		Shards: []logservice.DNShardInfo{
-			{1, 1},
-			{3, 1},
-			{4, 1},
-			{100, 1},
+			{ShardID: 1, ReplicaID: 1},
+			{ShardID: 3, ReplicaID: 1},
+			{ShardID: 4, ReplicaID: 1},
+			{ShardID: 100, ReplicaID: 1},
 		},
 	}
 	s.Update(hb, 2)
