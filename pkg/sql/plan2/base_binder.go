@@ -78,15 +78,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 		if err != nil {
 			return
 		}
-		expr, err = appendCastExpr(expr, typ)
+		expr, err = appendCastBeforeExpr(expr, typ)
 	case *tree.IsNullExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("ifnull", []tree.Expr{exprImpl.Expr}, depth)
 	case *tree.IsNotNullExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("ifnull", []tree.Expr{exprImpl.Expr}, depth)
-		if err != nil {
-			return
-		}
-		expr, err = b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, depth)
+		expr, err = b.bindFuncExprImplByAstExpr("not", []tree.Expr{tree.NewIsNullExpr(exprImpl.Expr)}, depth)
 	case *tree.Tuple:
 		exprs := make([]*Expr, 0, len(exprImpl.Exprs))
 		var planItem *Expr
@@ -112,37 +108,37 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 	case *tree.IntervalExpr:
 		// parser will not return this type
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", exprImpl))
 	case *tree.XorExpr:
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", exprImpl))
 	case *tree.Subquery:
 		// TODO
 		//
 	case *tree.DefaultVal:
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl))
 	case *tree.MaxValue:
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl))
 	case *tree.VarExpr:
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl))
 	case *tree.StrVal:
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl))
 	case *tree.ExprList:
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", exprImpl))
 	case tree.UnqualifiedStar:
 		// select * from table
 		// * should only appear in SELECT clause
 	default:
 		// return directly?
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl)))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl))
 	}
 
-	return expr, nil
+	return
 }
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (expr *plan.Expr, err error) {
@@ -164,7 +160,24 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (
 				panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name)))
 			}
 		} else {
-			err = errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q does not exist", name))
+			for _, binding := range b.ctx.bindings {
+				findColPos := binding.FindColumn(col)
+				if findColPos == AmbiguousName {
+					panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name)))
+				}
+
+				if findColPos != NotFound {
+					if colPos != NotFound {
+						panic(errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name)))
+					}
+					colPos = findColPos
+					typ = binding.types[colPos]
+					relPos = binding.tag
+				}
+			}
+			if colPos == NotFound {
+				err = errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q does not exist", name))
+			}
 		}
 	} else {
 		if binding, ok := b.ctx.bindingByTable[table]; ok {
@@ -223,86 +236,44 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (
 }
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32) (*Expr, error) {
-	var caseExpr *Expr
-	var elseExpr *Expr
-	var err error
+	var args []tree.Expr
+	caseExist := false
 
 	if astExpr.Expr != nil {
-		caseExpr, err = b.impl.BindExpr(astExpr.Expr, depth, false)
-		if err != nil {
-			return nil, err
-		}
+		caseExist = true
+		args = append(args, astExpr.Expr)
 	}
 
-	var args []*Expr
 	for _, whenExpr := range astExpr.Whens {
-		condExpr, err := b.impl.BindExpr(whenExpr.Cond, depth, false)
-		if err != nil {
-			return nil, err
+		if caseExist {
+			newCandExpr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Expr, whenExpr.Cond)
+			args = append(args, newCandExpr)
+		} else {
+			args = append(args, whenExpr.Cond)
 		}
-		if caseExpr != nil {
-			// rewrite "case col when 1 then '1' else '2'" to "case when col=1 then '1' else '2'"
-			condExpr, err = b.bindFuncExprImplByPlanExpr("=", []*Expr{caseExpr, condExpr}, depth)
-			if err != nil {
-				return nil, err
-			}
-		}
-		args = append(args, condExpr)
-
-		valExpr, err := b.impl.BindExpr(whenExpr.Val, depth, false)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, valExpr)
+		args = append(args, whenExpr.Val)
 	}
 
 	if astExpr.Else != nil {
-		elseExpr, err = b.impl.BindExpr(astExpr.Else, depth, false)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, elseExpr)
+		args = append(args, astExpr.Else)
 	} else {
-		args = append(args, getNullExpr())
+		args = append(args, tree.NewNumVal(constant.MakeUnknown(), "", false))
 	}
 
-	return b.bindFuncExprImplByPlanExpr("case", args, depth)
+	return b.bindFuncExprImplByAstExpr("case", args, depth)
 }
 
 func (b *baseBinder) bindRangeCond(astExpr *tree.RangeCond, depth int32) (*Expr, error) {
-	leftExpr, err := b.impl.BindExpr(astExpr.Left, depth, false)
-	if err != nil {
-		return nil, err
-	}
-	fromExpr, err := b.impl.BindExpr(astExpr.From, depth, false)
-	if err != nil {
-		return nil, err
-	}
-	toExpr, err := b.impl.BindExpr(astExpr.To, depth, false)
-	if err != nil {
-		return nil, err
-	}
-
 	if astExpr.Not {
-		left, err := b.bindFuncExprImplByPlanExpr("<", []*Expr{leftExpr, fromExpr}, depth)
-		if err != nil {
-			return nil, err
-		}
-		right, err := b.bindFuncExprImplByPlanExpr(">", []*Expr{leftExpr, toExpr}, depth)
-		if err != nil {
-			return nil, err
-		}
-		return b.bindFuncExprImplByPlanExpr("or", []*Expr{left, right}, depth)
+		// rewrite 'col not between 1, 20' to 'col < 1 or col > 20'
+		newLefExpr := tree.NewComparisonExpr(tree.LESS_THAN, astExpr.Left, astExpr.From)
+		newRightExpr := tree.NewComparisonExpr(tree.GREAT_THAN, astExpr.Left, astExpr.To)
+		return b.bindFuncExprImplByAstExpr("or", []tree.Expr{newLefExpr, newRightExpr}, depth)
 	} else {
-		left, err := b.bindFuncExprImplByPlanExpr(">=", []*Expr{leftExpr, fromExpr}, depth)
-		if err != nil {
-			return nil, err
-		}
-		right, err := b.bindFuncExprImplByPlanExpr("<=", []*Expr{leftExpr, toExpr}, depth)
-		if err != nil {
-			return nil, err
-		}
-		return b.bindFuncExprImplByPlanExpr("and", []*Expr{left, right}, depth)
+		// rewrite 'col between 1, 20 ' to ' col >= 1 and col <= 2'
+		newLefExpr := tree.NewComparisonExpr(tree.GREAT_THAN_EQUAL, astExpr.Left, astExpr.From)
+		newRightExpr := tree.NewComparisonExpr(tree.LESS_THAN_EQUAL, astExpr.Left, astExpr.To)
+		return b.bindFuncExprImplByAstExpr("and", []tree.Expr{newLefExpr, newRightExpr}, depth)
 	}
 }
 
@@ -333,7 +304,7 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32) (*Exp
 	case tree.DIV:
 		return b.bindFuncExprImplByAstExpr("/", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.INTEGER_DIV:
-		return b.bindFuncExprImplByAstExpr("integer_div", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		return b.bindFuncExprImplByAstExpr("div", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 }
@@ -355,19 +326,43 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	case tree.LIKE:
 		return b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.NOT_LIKE:
-		expr, err := b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
-		if err != nil {
-			return nil, err
-		}
-		return b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, depth)
+		new_expr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
+		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{new_expr}, depth)
 	case tree.IN:
-		return b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
-	case tree.NOT_IN:
-		expr, err := b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
-		if err != nil {
-			return nil, err
+		switch list := astExpr.Right.(type) {
+		case *tree.Tuple:
+			var new_expr tree.Expr
+			for _, expr := range list.Exprs {
+				if new_expr == nil {
+					new_expr = tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+				} else {
+					equal_expr := tree.NewComparisonExpr(tree.EQUAL, astExpr.Left, expr)
+					new_expr = tree.NewOrExpr(new_expr, equal_expr)
+				}
+			}
+			return b.impl.BindExpr(new_expr, depth, false)
+		default:
+			// TODO can unnesting subquery here
+			return b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 		}
-		return b.bindFuncExprImplByPlanExpr("not", []*Expr{expr}, depth)
+	case tree.NOT_IN:
+		switch list := astExpr.Right.(type) {
+		case *tree.Tuple:
+			var new_expr tree.Expr
+			for _, expr := range list.Exprs {
+				if new_expr == nil {
+					new_expr = tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
+				} else {
+					equal_expr := tree.NewComparisonExpr(tree.NOT_EQUAL, astExpr.Left, expr)
+					new_expr = tree.NewAndExpr(new_expr, equal_expr)
+				}
+			}
+			return b.impl.BindExpr(new_expr, depth, false)
+		default:
+			// TODO can unnesting subquery here
+			new_expr := tree.NewComparisonExpr(tree.IN, astExpr.Left, astExpr.Right)
+			return b.bindFuncExprImplByAstExpr("not", []tree.Expr{new_expr}, depth)
+		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
 }
@@ -388,19 +383,19 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, e
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 }
 
-func (b *baseBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, depth int32) (*plan.Expr, error) {
+func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
 	// rewrite some ast Exprs before binding
 	switch name {
 	case "extract":
 		// ”extract(year from col_name)"  parser return year as UnresolvedName.
 		// we must rewrite it to string。 because binder bind UnresolvedName as column name
-		unit := args[0].(*tree.UnresolvedName).Parts[0]
-		args[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
+		unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
+		astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
 	case "count":
 		// we will rewrite "count(*)" to "starcount(col)"
 		// count(*) : astExprs[0].(type) is *tree.NumVal
 		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
-		switch args[0].(type) {
+		switch astArgs[0].(type) {
 		case *tree.NumVal:
 			// rewrite count(*) to starcount(col_name)
 			name = "starcount"
@@ -412,35 +407,35 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, args []tree.Expr, de
 			if err != nil {
 				return nil, err
 			}
-			args[0] = newCountCol
+			astArgs[0] = newCountCol
 		}
 	}
-
 	// bind ast function's args
-	newArgs := make([]*Expr, len(args))
-	for idx, arg := range args {
+	args := make([]*Expr, len(astArgs))
+	for idx, arg := range astArgs {
 		expr, err := b.impl.BindExpr(arg, depth, false)
 		if err != nil {
 			return nil, err
 		}
-		newArgs[idx] = expr
+		args[idx] = expr
 	}
 
-	return b.bindFuncExprImplByPlanExpr(name, newArgs, depth)
-
+	return b.bindFuncExprImplByPlanExpr(name, args, depth)
 }
 
-func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth int32) (expr *Expr, err error) {
+func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth int32) (*plan.Expr, error) {
+	var err error
+
 	// deal with some special function
 	switch name {
 	case "date":
 		// rewrite date function to cast function, and retrun directly
-		return appendCastExpr(args[0], &Type{
+		return appendCastBeforeExpr(args[0], &Type{
 			Id: plan.Type_DATE,
 		})
 	case "interval":
 		// rewrite interval function to cast function, and retrun directly
-		return appendCastExpr(args[0], &plan.Type{
+		return appendCastBeforeExpr(args[0], &plan.Type{
 			Id: plan.Type_INTERVAL,
 		})
 	case "and", "or":
@@ -448,7 +443,7 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 		// TODO , wangjian's code will conver expr to bool directly, but i don't think it is necessary
 		for i := 0; i < 2; i++ {
 			if args[i].Typ.Id != plan.Type_BOOL {
-				arg, err := appendCastExpr(args[i], &plan.Type{
+				arg, err := appendCastBeforeExpr(args[i], &plan.Type{
 					Id: plan.Type_BOOL,
 				})
 				if err != nil {
@@ -472,8 +467,7 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 	case "+", "-":
 		// rewrite "date '2001' + interval '1 day'" to date_add(date '2001', 1, day(unit))
 		if len(args) != 2 {
-			err = errors.New(errno.SyntaxErrororAccessRuleViolation, "operator function need two args")
-			return
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "operator function need two args")
 		}
 		namesMap := map[string]string{
 			"+": "date_add",
@@ -482,17 +476,16 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 		if args[0].Typ.Id == plan.Type_DATE && args[1].Typ.Id == plan.Type_INTERVAL {
 			args, err = resetDateFunctionArgs(args[0], args[1])
 			if err != nil {
-				return
+				return nil, err
 			}
 		}
 		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATE {
 			if name == "-" {
-				err = errors.New(errno.SyntaxErrororAccessRuleViolation, "(interval - date) is no supported")
-				return
+				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "(interval - date) is no supported")
 			}
 			args, err = resetDateFunctionArgs(args[1], args[2])
 			if err != nil {
-				return
+				return nil, err
 			}
 		}
 		name = namesMap[name]
@@ -508,20 +501,19 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 	// get function definition
 	funcDef, funcId, argsCastType, err := function.GetFunctionByName(name, argsType)
 	if err != nil {
-		return
+		return nil, err
 	}
 	if argsCastType != nil {
 		if len(argsCastType) != argsLength {
-			err = errors.New(errno.SyntaxErrororAccessRuleViolation, "cast types length not match args length")
-			return
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cast types length not match args length")
 		}
 		for idx, castType := range argsCastType {
 			if argsType[idx] != castType {
-				args[idx], err = appendCastExpr(args[idx], &plan.Type{
+				args[idx], err = appendCastBeforeExpr(args[idx], &plan.Type{
 					Id: plan.Type_TypeId(castType),
 				})
 				if err != nil {
-					return
+					return nil, err
 				}
 			}
 		}
@@ -543,6 +535,18 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	switch astExpr.Value.Kind() {
+	case constant.Unknown:
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_ANY,
+				Nullable: true,
+			},
+		}, nil
 	case constant.Bool:
 		boolValue := constant.BoolVal(astExpr.Value)
 		return &Expr{
@@ -625,21 +629,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 
 // --- util functions ----
 
-func getNullExpr() *Expr {
-	return &Expr{
-		Expr: &plan.Expr_C{
-			C: &Const{
-				Isnull: true,
-			},
-		},
-		Typ: &plan.Type{
-			Id:       plan.Type_ANY,
-			Nullable: true,
-		},
-	}
-}
-
-func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
+func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 	argsType := []types.T{
 		types.T(expr.Typ.Id),
 		types.T(toType.Id),
@@ -648,13 +638,17 @@ func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	// FIX ME,  pipeline need two args for cast function
-	// which kind of Expr will be used in second arg?
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(funcId, "cast"),
-				Args: []*Expr{expr},
+				Args: []*Expr{expr, {
+					Expr: &plan.Expr_T{
+						T: &plan.TargetType{
+							Typ: toType,
+						},
+					},
+				}},
 			},
 		},
 		Typ: toType,
@@ -675,13 +669,13 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 		return nil, err
 	}
 
-	// "date '2020-10-10' - interval 1 Hour"  will return date_time
+	// "date '2020-10-10' - interval 1 Hour"  will return datetime
 	// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
 	if dateExpr.Typ.Id == plan.Type_DATE {
 		switch returnType {
 		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 		default:
-			dateExpr, err = appendCastExpr(dateExpr, &plan.Type{
+			dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
 				Id:   plan.Type_DATETIME,
 				Size: 8,
 			})

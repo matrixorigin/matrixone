@@ -34,7 +34,7 @@ import (
 
 //only use in developing
 func TestBindSingleSql(t *testing.T) {
-	sql := "SELECT NATION.n_name from NATION"
+	sql := "SELECT count(*) from NATION"
 	// sql := `select * from (select * from NATION order by n_nationkey) as x`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {

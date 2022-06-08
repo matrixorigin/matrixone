@@ -163,25 +163,25 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 	return
 }
 
-// func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
-// 	argsType := []types.T{
-// 		types.T(expr.Typ.Id),
-// 		types.T(toType.Id),
-// 	}
-// 	_, funcId, _, err := function.GetFunctionByName("cast", argsType)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &Expr{
-// 		Expr: &plan.Expr_F{
-// 			F: &plan.Function{
-// 				Func: getFunctionObjRef(funcId, "cast"),
-// 				Args: []*Expr{expr},
-// 			},
-// 		},
-// 		Typ: toType,
-// 	}, nil
-// }
+func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
+	argsType := []types.T{
+		types.T(expr.Typ.Id),
+		types.T(toType.Id),
+	}
+	_, funcId, _, err := function.GetFunctionByName("cast", argsType)
+	if err != nil {
+		return nil, err
+	}
+	return &Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef(funcId, "cast"),
+				Args: []*Expr{expr},
+			},
+		},
+		Typ: toType,
+	}, nil
+}
 
 func getFunctionObjRef(funcId int64, name string) *ObjectRef {
 	return &ObjectRef{
