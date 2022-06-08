@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -133,6 +133,57 @@ func TestAppend3(t *testing.T) {
 	wg.Add(1)
 	appendFailClosure(t, bat, schema.Name, tae, &wg)()
 	wg.Wait()
+}
+
+func TestAppend4(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	defer tae.Close()
+	schema1 := catalog.MockSchemaAll(18, 14)
+	schema2 := catalog.MockSchemaAll(18, 15)
+	schema3 := catalog.MockSchemaAll(18, 16)
+	schema4 := catalog.MockSchemaAll(18, 11)
+	schema1.BlockMaxRows = 10
+	schema2.BlockMaxRows = 10
+	schema3.BlockMaxRows = 10
+	schema4.BlockMaxRows = 10
+	schema1.SegmentMaxBlocks = 2
+	schema2.SegmentMaxBlocks = 2
+	schema3.SegmentMaxBlocks = 2
+	schema4.SegmentMaxBlocks = 2
+	schemas := []*catalog.Schema{schema1, schema2, schema3, schema4}
+	createDB(t, tae, defaultTestDB)
+	for _, schema := range schemas {
+		bat := catalog.MockData(schema, schema.BlockMaxRows*3-1)
+		bats := compute.SplitBatch(bat, 1)
+		createRelation(t, tae, defaultTestDB, schema, false)
+		for i := range bats {
+			txn, rel := getDefaultRelation(t, tae, schema.Name)
+			err := rel.Append(bats[i])
+			assert.NoError(t, err)
+			err = txn.Commit()
+			assert.NoError(t, err)
+		}
+		txn, rel := getDefaultRelation(t, tae, schema.Name)
+		checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+
+		v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 3)
+		filter := handle.NewEQFilter(v)
+		err := rel.DeleteByFilter(filter)
+		assert.NoError(t, err)
+		err = txn.Commit()
+		assert.NoError(t, err)
+
+		txn, rel = getDefaultRelation(t, tae, schema.Name)
+		checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
+		err = txn.Commit()
+		assert.NoError(t, err)
+		compactBlocks(t, tae, defaultTestDB, schema, false)
+		txn, rel = getDefaultRelation(t, tae, schema.Name)
+		checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, false)
+		err = txn.Commit()
+		assert.NoError(t, err)
+	}
 }
 
 func TestTableHandle(t *testing.T) {
@@ -765,12 +816,13 @@ func TestMVCC1(t *testing.T) {
 
 	assert.NoError(t, txn2.Commit())
 
-	id, offset, err := rel.GetByFilter(filter)
+	_, _, err = rel.GetByFilter(filter)
 	assert.Error(t, err)
+	var id *common.ID
 
 	{
 		txn, rel := getDefaultRelation(t, db, schema.Name)
-		id, offset, err = rel.GetByFilter(filter)
+		id, _, err = rel.GetByFilter(filter)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
@@ -787,8 +839,6 @@ func TestMVCC1(t *testing.T) {
 			assert.Nil(t, view.DeleteMask)
 			assert.NotNil(t, view.GetColumnData())
 			t.Log(view.GetColumnData().String())
-			t.Log(offset)
-			t.Log(val2)
 			t.Log(vector.Length(bats[0].Vecs[0]))
 			assert.Equal(t, vector.Length(bats[0].Vecs[0]), vector.Length(view.AppliedVec))
 		}
