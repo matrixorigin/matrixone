@@ -48,13 +48,15 @@ func (mce *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) er
 	}
 
 	defer plan.relation.Close(snapshot)
+	if err := plan.relation.Write(ts, plan.dataBatch, snapshot); err != nil {
+		return err
+	}
 
 	resp := NewOkResponse(uint64(vector.Length(plan.dataBatch.Vecs[0])), 0, 0, 0, int(COM_QUERY), "")
 	if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
 	}
-
-	return plan.relation.Write(ts, plan.dataBatch, snapshot)
+	return nil
 }
 
 func getTableRef(tbl *tree.TableName, currentDB string, eg engine.Engine, snapshot engine.Snapshot) (string, string, engine.Relation, error) {
