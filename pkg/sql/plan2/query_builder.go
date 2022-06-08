@@ -53,7 +53,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	ctx.binder = NewTableBinder(ctx)
 
 	// unfold stars and generate headings
-	var newSelectExprs tree.SelectExprs
+	var selectList tree.SelectExprs
 	for _, selectExpr := range clause.Exprs {
 		switch expr := selectExpr.Expr.(type) {
 		case tree.UnqualifiedStar:
@@ -61,7 +61,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 			if err != nil {
 				return 0, err
 			}
-			newSelectExprs = append(newSelectExprs, cols...)
+			selectList = append(selectList, cols...)
 			ctx.headings = append(ctx.headings, names...)
 
 		case *tree.UnresolvedName:
@@ -70,7 +70,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 				if err != nil {
 					return 0, err
 				}
-				newSelectExprs = append(newSelectExprs, cols...)
+				selectList = append(selectList, cols...)
 				ctx.headings = append(ctx.headings, names...)
 			} else {
 				if len(selectExpr.As) > 0 {
@@ -80,7 +80,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 				}
 
 				ctx.qualifyColumnNames(expr)
-				newSelectExprs = append(newSelectExprs, tree.SelectExpr{
+				selectList = append(selectList, tree.SelectExpr{
 					Expr: expr,
 					As:   selectExpr.As,
 				})
@@ -94,13 +94,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 			}
 
 			ctx.qualifyColumnNames(expr)
-			newSelectExprs = append(newSelectExprs, tree.SelectExpr{
+			selectList = append(selectList, tree.SelectExpr{
 				Expr: expr,
 				As:   selectExpr.As,
 			})
 		}
 	}
-	clause.Exprs = newSelectExprs
 
 	// build WHERE clause
 	if clause.Where != nil {
@@ -145,7 +144,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	// build SELECT clause
 	selectBinder := NewSelectBinder(ctx, havingBinder)
 	ctx.binder = selectBinder
-	for _, selectExpr := range clause.Exprs {
+	for _, selectExpr := range selectList {
 		expr, err := selectBinder.BindExpr(selectExpr.Expr, 0, true)
 		if err != nil {
 			return 0, err
@@ -169,7 +168,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (n
 	// build ORDER BY clause
 	var orderBys []*plan.OrderBySpec
 	if stmt.OrderBy != nil {
-		orderBinder := NewOrderBinder(selectBinder, clause.Exprs)
+		orderBinder := NewOrderBinder(selectBinder, selectList)
 		orderBys = make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
 
 		for _, order := range stmt.OrderBy {
@@ -483,9 +482,13 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 		return nil
 	}
 
+	var cols []string
+	var types []*plan.Type
+	var binding *Binding
+
 	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
-			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
+			return errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
 		}
 
 		var table string
@@ -499,8 +502,8 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
 		}
 
-		cols := make([]string, len(node.TableDef.Cols))
-		types := make([]*plan.Type, len(node.TableDef.Cols))
+		cols = make([]string, len(node.TableDef.Cols))
+		types = make([]*plan.Type, len(node.TableDef.Cols))
 
 		for i, col := range node.TableDef.Cols {
 			if i < len(alias.Cols) {
@@ -511,17 +514,11 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 			types[i] = col.Typ
 		}
 
-		binding := NewBinding(builder.tagsByNode[nodeId][0], nodeId, table, cols, types)
-		ctx.bindingByTag[binding.tag] = binding
-		ctx.bindingByTable[table] = binding
-
-		ctx.bindingTree = &BindingTreeNode{
-			binding: binding,
-		}
+		binding = NewBinding(builder.tagsByNode[nodeId][0], nodeId, table, cols, types)
 	} else {
 		// Subquery
 		if len(alias.Cols) > len(node.ProjectList) {
-			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.ProjectList), len(alias.Cols)))
+			return errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.ProjectList), len(alias.Cols)))
 		}
 
 		table := string(alias.Alias)
@@ -531,8 +528,8 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 
 		headings := builder.ctxByNode[nodeId].headings
 
-		cols := make([]string, len(headings))
-		types := make([]*plan.Type, len(headings))
+		cols = make([]string, len(headings))
+		types = make([]*plan.Type, len(headings))
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -543,14 +540,23 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 			types[i] = node.ProjectList[i].Typ
 		}
 
-		subCtx := builder.ctxByNode[nodeId]
-		binding := NewBinding(subCtx.projectTag, nodeId, table, cols, types)
-		ctx.bindingByTag[binding.tag] = binding
-		ctx.bindingByTable[table] = binding
+		binding = NewBinding(builder.ctxByNode[nodeId].projectTag, nodeId, table, cols, types)
+	}
 
-		ctx.bindingTree = &BindingTreeNode{
-			binding: binding,
+	ctx.bindings = append(ctx.bindings, binding)
+	ctx.bindingByTag[binding.tag] = binding
+	ctx.bindingByTable[binding.table] = binding
+
+	for _, col := range cols {
+		if _, ok := ctx.bindingByCol[col]; ok {
+			ctx.bindingByCol[col] = nil
+		} else {
+			ctx.bindingByCol[col] = binding
 		}
+	}
+
+	ctx.bindingTree = &BindingTreeNode{
+		binding: binding,
 	}
 
 	return nil
