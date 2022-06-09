@@ -160,6 +160,14 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 				Magic: DropIndex,
 				Plan:  pn,
 			}, nil
+		case plan.DataDefinition_SHOW_CREATEDATABASE,
+			plan.DataDefinition_SHOW_CREATETABLE,
+			plan.DataDefinition_SHOW_DATABASES,
+			plan.DataDefinition_SHOW_TABLES,
+			plan.DataDefinition_SHOW_COLUMNS:
+			return c.compileQuery(pn.GetDdl().GetQuery())
+			// 1、not supported: show arnings/errors/status/processlist
+			// 2、show variables will not return query
 		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
