@@ -21,13 +21,13 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -240,7 +240,7 @@ func (blk *dataBlock) estimateRawScore() int {
 func (blk *dataBlock) MutationInfo() string {
 	rows := blk.Rows(nil, true)
 	totalChanges := blk.mvcc.GetChangeNodeCnt()
-	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d", blk.meta.AsCommonID().ToBlockFilePath(), totalChanges, rows)
+	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d", blk.meta.AsCommonID().BlockString(), totalChanges, rows)
 	if totalChanges == 0 {
 		return s
 	}

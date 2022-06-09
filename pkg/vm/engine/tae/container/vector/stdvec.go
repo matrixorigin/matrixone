@@ -139,6 +139,10 @@ func (v *StdVector) SetValue(idx int, val any) error {
 
 	start := idx * int(v.Type.Size)
 	switch v.Type.Oid {
+	case types.T_bool:
+		data := encoding.EncodeBool(val.(bool))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
 	case types.T_int8:
 		data := encoding.EncodeInt8(val.(int8))
 		copy(v.Data[start:start+int(v.Type.Size)], data)
@@ -195,6 +199,10 @@ func (v *StdVector) SetValue(idx int, val any) error {
 		data := encoding.EncodeDatetime(val.(types.Datetime))
 		copy(v.Data[start:start+int(v.Type.Size)], data)
 		return nil
+	case types.T_timestamp:
+		data := encoding.EncodeTimestamp(val.(types.Timestamp))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
 	default:
 		return ErrVecTypeNotSupport
 	}
@@ -213,6 +221,8 @@ func (v *StdVector) GetValue(idx int) (any, error) {
 		v.RUnlock()
 	}
 	switch v.Type.Oid {
+	case types.T_bool:
+		return encoding.DecodeBool(data), nil
 	case types.T_int8:
 		return encoding.DecodeInt8(data), nil
 	case types.T_int16:
@@ -241,6 +251,8 @@ func (v *StdVector) GetValue(idx int) (any, error) {
 		return encoding.DecodeDate(data), nil
 	case types.T_datetime:
 		return encoding.DecodeDatetime(data), nil
+	case types.T_timestamp:
+		return encoding.DecodeTimestamp(data), nil
 	default:
 		return nil, ErrVecTypeNotSupport
 	}
@@ -270,6 +282,8 @@ func (v *StdVector) Append(n int, vals any) error {
 func (v *StdVector) appendWithOffset(offset, n int, vals any) error {
 	var data []byte
 	switch v.Type.Oid {
+	case types.T_bool:
+		data = encoding.EncodeBoolSlice(vals.([]bool)[offset : offset+n])
 	case types.T_int8:
 		data = encoding.EncodeInt8Slice(vals.([]int8)[offset : offset+n])
 	case types.T_int16:
@@ -529,6 +543,12 @@ func (v *StdVector) CopyToVector() (*gvec.Vector, error) {
 	vec := gvec.New(v.Type)
 	vec.Data = v.Data
 	switch v.Type.Oid {
+	case types.T_bool:
+		col := make([]bool, length)
+		curCol := encoding.DecodeBoolSlice(v.Data)
+		copy(col, curCol[:length])
+		vec.Col = col
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_int8:
 		col := make([]int8, length)
 		curCol := encoding.DecodeInt8Slice(v.Data)

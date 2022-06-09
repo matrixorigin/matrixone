@@ -200,6 +200,12 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 }
 
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
+	defer func() {
+		if err == nil {
+			e.catalog.AddTableCnt(-1)
+			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
+		}
+	}()
 	logutil.Infof("Removing: %s", table.String())
 	e.Lock()
 	defer e.Unlock()
@@ -217,7 +223,13 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	return
 }
 
-func (e *DBEntry) AddEntryLocked(table *TableEntry) error {
+func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
+	defer func() {
+		if err == nil {
+			e.catalog.AddTableCnt(1)
+			e.catalog.AddColumnCnt(len(table.schema.ColDefs))
+		}
+	}()
 	nn := e.nameNodes[table.schema.Name]
 	if nn == nil {
 		n := e.link.Insert(table)
@@ -231,26 +243,28 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry) error {
 		node := nn.GetTableNode()
 		record := node.GetPayload().(*TableEntry)
 		record.RLock()
-		err := record.PrepareWrite(table.GetTxn(), record.RWMutex)
+		err = record.PrepareWrite(table.GetTxn(), record.RWMutex)
 		if err != nil {
 			record.RUnlock()
-			return err
+			return
 		}
 		if record.HasActiveTxn() {
 			if !record.IsDroppedUncommitted() {
 				record.RUnlock()
-				return ErrDuplicate
+				err = ErrDuplicate
+				return
 			}
 		} else if !record.HasDropped() {
 			record.RUnlock()
-			return ErrDuplicate
+			err = ErrDuplicate
+			return
 		}
 		record.RUnlock()
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
 		nn.CreateNode(table.GetID())
 	}
-	return nil
+	return
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {

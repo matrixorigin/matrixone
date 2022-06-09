@@ -19,16 +19,14 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
@@ -53,7 +51,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
@@ -76,7 +74,7 @@ func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) 
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -227,6 +225,7 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 				return
 			}
 		}
+		vec.ResetReadonly()
 		vecs[i] = vec
 		attrs[i] = i
 	}

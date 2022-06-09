@@ -25,7 +25,7 @@ import (
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -300,7 +300,7 @@ func (node *ColumnNode) StringLocked() string {
 	if node.commitTs == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s](%d-%d)[", commitState, node.id.ToBlockFileName(), node.startTs, node.commitTs)
+	s := fmt.Sprintf("[%s:%s](%d-%d)[", commitState, node.id.BlockString(), node.startTs, node.commitTs)
 	for k, v := range node.txnVals {
 		s = fmt.Sprintf("%s%d:%v,", s, k, v)
 	}

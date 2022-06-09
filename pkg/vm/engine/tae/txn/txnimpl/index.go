@@ -20,7 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	idata "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
@@ -118,6 +118,25 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 	defer idx.Unlock()
 	vals := col.Col
 	switch col.Typ.Oid {
+	case types.T_bool:
+		data := vals.([]bool)
+		if dedupCol {
+			set := make(map[bool]bool)
+			for _, v := range data[start : start+count] {
+				if _, ok := set[v]; ok {
+					return idata.ErrDuplicate
+				}
+				set[v] = true
+			}
+			break
+		}
+		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+			idx.tree[v] = row
+			row++
+		}
 	case types.T_int8:
 		data := vals.([]int8)
 		if dedupCol {
@@ -292,6 +311,25 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			idx.tree[v] = row
 			row++
 		}
+	case types.T_decimal128:
+		data := vals.([]types.Decimal128)
+		if dedupCol {
+			set := make(map[types.Decimal128]bool)
+			for _, v := range data[start : start+count] {
+				if _, ok := set[v]; ok {
+					return idata.ErrDuplicate
+				}
+				set[v] = true
+			}
+			break
+		}
+		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+			idx.tree[v] = row
+			row++
+		}
 	case types.T_float32:
 		data := vals.([]float32)
 		if dedupCol {
@@ -422,6 +460,13 @@ func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
 	defer idx.RUnlock()
 	vals := col.Col
 	switch col.Typ.Oid {
+	case types.T_bool:
+		data := vals.([]bool)
+		for _, v := range data {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+		}
 	case types.T_int8:
 		data := vals.([]int8)
 		for _, v := range data {
@@ -485,6 +530,13 @@ func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
 				return idata.ErrDuplicate
 			}
 		}
+	case types.T_decimal128:
+		data := vals.([]types.Decimal128)
+		for _, v := range data {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+		}
 	case types.T_float32:
 		data := vals.([]float32)
 		for _, v := range data {
@@ -508,6 +560,13 @@ func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
 		}
 	case types.T_datetime:
 		data := vals.([]types.Datetime)
+		for _, v := range data {
+			if _, ok := idx.tree[v]; ok {
+				return idata.ErrDuplicate
+			}
+		}
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
 		for _, v := range data {
 			if _, ok := idx.tree[v]; ok {
 				return idata.ErrDuplicate
