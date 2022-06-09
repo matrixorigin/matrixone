@@ -49,7 +49,7 @@
     "fiscalYearStartMonth": 0,
     "graphTooltip": 0,
     "id": null,
-    "iteration": 1654065590078,
+    "iteration": 1654654415181,
     "links": [],
     "liveNow": false,
     "panels": [
@@ -71,7 +71,7 @@
                 "type": "mysql",
                 "uid": "${DS_MYSQL-MO}"
             },
-            "description": "",
+            "description": "processed statement count increasing rate in the past 15 seconds",
             "fieldConfig": {
                 "defaults": {
                     "color": {
@@ -138,7 +138,7 @@
                     "calcs": [
                         "mean"
                     ],
-                    "displayMode": "list",
+                    "displayMode": "table",
                     "placement": "right"
                 },
                 "tooltip": {
@@ -178,6 +178,124 @@
                 }
             ],
             "title": "Statement Total",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "SQL processing time in seconds, averaged by the past 15 seconds",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 9,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineStyle": {
+                            "fill": "solid"
+                        },
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 9
+            },
+            "id": 16,
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "mean"
+                    ],
+                    "displayMode": "table",
+                    "placement": "right"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"15s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_latency_seconds\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"15s\", 0), type\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "table": "sql_statement_total",
+                    "timeColumn": "collecttime",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                }
+            ],
+            "title": "Statement Latency",
             "type": "timeseries"
         },
         {
@@ -242,7 +360,7 @@
                 "h": 8,
                 "w": 8,
                 "x": 0,
-                "y": 9
+                "y": 17
             },
             "id": 7,
             "options": {
@@ -289,7 +407,7 @@
                 "type": "mysql",
                 "uid": "${DS_MYSQL-MO}"
             },
-            "description": "Total memory used by MO server",
+            "description": "Total memory used by MO server，averaged by the past 1 minute",
             "fieldConfig": {
                 "defaults": {
                     "color": {
@@ -346,7 +464,7 @@
                 "h": 8,
                 "w": 8,
                 "x": 8,
-                "y": 9
+                "y": 17
             },
             "id": 2,
             "options": {
@@ -457,7 +575,7 @@
                 "h": 8,
                 "w": 8,
                 "x": 16,
-                "y": 9
+                "y": 17
             },
             "id": 4,
             "options": {
@@ -538,7 +656,7 @@
                 "h": 1,
                 "w": 24,
                 "x": 0,
-                "y": 17
+                "y": 25
             },
             "id": 13,
             "panels": [],
@@ -608,7 +726,7 @@
                 "h": 8,
                 "w": 12,
                 "x": 0,
-                "y": 18
+                "y": 26
             },
             "id": 11,
             "options": {
@@ -716,7 +834,7 @@
                 "h": 8,
                 "w": 12,
                 "x": 12,
-                "y": 18
+                "y": 26
             },
             "id": 9,
             "options": {
@@ -838,6 +956,6 @@
     "timezone": "",
     "title": "MO-Overview",
     "uid": "L4yqe2_7k",
-    "version": 4,
+    "version": 3,
     "weekStart": ""
 }

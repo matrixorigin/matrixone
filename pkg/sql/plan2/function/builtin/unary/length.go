@@ -25,13 +25,13 @@ import (
 
 func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.(*types.Bytes)
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
+	if inputVector.IsScalarNull() {
+		return proc.AllocScalarNullVector(resultType), nil
+	}
+	inputValues := inputVector.Col.(*types.Bytes)
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, length.StrLength(inputValues, resultValues))
