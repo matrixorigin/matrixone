@@ -171,6 +171,8 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout,
 
 func Reshape(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
 	switch column[0].Typ.Oid {
+	case types.T_bool:
+		ret = bools.Reshape(column, fromLayout, toLayout)
 	case types.T_int8:
 		ret = int8s.Reshape(column, fromLayout, toLayout)
 	case types.T_int16:

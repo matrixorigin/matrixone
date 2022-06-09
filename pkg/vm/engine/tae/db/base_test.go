@@ -315,7 +315,7 @@ func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, ski
 		txn, _ = e.StartTxn(nil)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, err := rel.GetSegment(seg.ID)
+		segHandle, _ := rel.GetSegment(seg.ID)
 		var metas []*catalog.BlockEntry
 		it := segHandle.MakeBlockIt()
 		for it.Valid() {
