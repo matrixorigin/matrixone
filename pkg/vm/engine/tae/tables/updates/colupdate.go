@@ -300,7 +300,7 @@ func (node *ColumnNode) StringLocked() string {
 	if node.commitTs == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s](%d-%d)[", commitState, node.id.ToBlockFileName(), node.startTs, node.commitTs)
+	s := fmt.Sprintf("[%s:%s](%d-%d)[", commitState, node.id.BlockString(), node.startTs, node.commitTs)
 	for k, v := range node.txnVals {
 		s = fmt.Sprintf("%s%d:%v,", s, k, v)
 	}
