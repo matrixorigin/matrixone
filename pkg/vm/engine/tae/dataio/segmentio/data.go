@@ -106,13 +106,14 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 func (df *dataFile) Read(buf []byte) (n int, err error) {
 	df.mutex.RLock()
 	if df.file == nil {
-		df.mutex.RUnlock()
 		n = len(buf)
 		copy(buf, df.buf)
+		df.mutex.RUnlock()
 		return
 	}
 	bufLen := len(buf)
 	if bufLen == 0 {
+		df.mutex.RUnlock()
 		return 0, nil
 	}
 	file := df.file[len(df.file)-1]
