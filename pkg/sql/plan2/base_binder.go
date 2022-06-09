@@ -225,16 +225,23 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery) (*Expr, error) {
 		return nil, errors.New(errno.SyntaxError, fmt.Sprintf("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL)))
 	}
 
-	return &plan.Expr{
+	returnExpr := &plan.Expr{
 		Typ: &plan.Type{
-			Id: plan.Type_ANY,
+			Id: plan.Type_TUPLE,
 		},
 		Expr: &plan.Expr_Sub{
 			Sub: &plan.SubQuery{
 				NodeId: nodeId,
 			},
 		},
-	}, nil
+	}
+	if astExpr.Exists {
+		returnExpr, _, err = getFunctionExprByNameAndPlanExprs("exists", []*Expr{returnExpr})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return returnExpr, nil
 }
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32) (*Expr, error) {
