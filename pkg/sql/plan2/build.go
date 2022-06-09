@@ -25,22 +25,43 @@ import (
 )
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
-	runBuildSelect := func(stmt *tree.Select) (*Plan, error) {
-		query, binderCtx := newQueryAndSelectCtx(plan.Query_SELECT)
-		nodeId, err := buildSelect(stmt, ctx, query, binderCtx)
-		query.Steps = append(query.Steps, nodeId)
+	// runBuildSelect := func(stmt *tree.Select) (*Plan, error) {
+	// 	query, binderCtx := newQueryAndSelectCtx(plan.Query_SELECT)
+	// 	nodeId, err := buildSelect(stmt, ctx, query, binderCtx)
+	// 	query.Steps = append(query.Steps, nodeId)
+	// 	return &Plan{
+	// 		Plan: &plan.Plan_Query{
+	// 			Query: query,
+	// 		},
+	// 	}, err
+	// }
+	runBuildSelectByBinder := func(stmt *tree.Select) (*Plan, error) {
+		builder := &QueryBuilder{
+			qry: &Query{
+				StmtType: plan.Query_SELECT,
+			},
+			compCtx:    ctx,
+			ctxByNode:  []*BindContext{},
+			tagsByNode: [][]int32{},
+			nextTag:    0,
+		}
+		bindCtx := NewBindContext(builder, nil)
+		_, err := builder.buildSelect(stmt, bindCtx)
+		if err != nil {
+			return nil, err
+		}
 		return &Plan{
 			Plan: &plan.Plan_Query{
-				Query: query,
+				Query: builder.qry,
 			},
 		}, err
 	}
 
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return runBuildSelect(stmt)
+		return runBuildSelectByBinder(stmt)
 	case *tree.ParenSelect:
-		return runBuildSelect(stmt.Select)
+		return runBuildSelectByBinder(stmt.Select)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx)
 	case *tree.Update:

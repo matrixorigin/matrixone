@@ -32,6 +32,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
+		cteTables:      make(map[string]*plan.TableDef),
 		parent:         parent,
 	}
 
