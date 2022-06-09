@@ -32,9 +32,6 @@ func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	inputValues := inputVector.Col.(*types.Bytes)
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
-		//if inputVector.ConstVectorIsNull() {
-		//	return proc.AllocScalarNullVector(resultType), nil
-		//}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, length.StrLength(inputValues, resultValues))
