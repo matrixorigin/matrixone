@@ -19,8 +19,10 @@ import (
 	"testing"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
-
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestAssignID(t *testing.T) {
@@ -108,4 +110,102 @@ func TestHAKeeperQueryLogShardID(t *testing.T) {
 func TestHAKeeperCanBeClosed(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	assert.Nil(t, tsm1.Close())
+}
+
+func TestHAKeeperTick(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	assert.Equal(t, uint64(0), tsm1.Tick)
+	cmd := GetTickCmd()
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), tsm1.Tick)
+}
+
+func TestHandleLogHeartbeat(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetTickCmd()
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := logservice.LogStoreHeartbeat{
+		UUID:           "uuid1",
+		RaftAddress:    "localhost:9090",
+		ServiceAddress: "localhost:9091",
+		GossipAddress:  "localhost:9092",
+		Shards: []logservice.LogShardInfo{
+			{
+				ShardID: 100,
+				Replicas: map[uint64]string{
+					200: "localhost:8000",
+					300: "localhost:9000",
+				},
+				Epoch:    200,
+				LeaderID: 200,
+				Term:     10,
+			},
+			{
+				ShardID: 101,
+				Replicas: map[uint64]string{
+					201: "localhost:8000",
+					301: "localhost:9000",
+				},
+				Epoch:    202,
+				LeaderID: 201,
+				Term:     30,
+			},
+		},
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetLogStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s := tsm1.LogState
+	assert.Equal(t, 1, len(s.Stores))
+	lsinfo, ok := s.Stores[hb.UUID]
+	require.True(t, ok)
+	assert.Equal(t, uint64(3), lsinfo.Tick)
+	assert.Equal(t, hb.RaftAddress, lsinfo.RaftAddress)
+	assert.Equal(t, hb.ServiceAddress, lsinfo.ServiceAddress)
+	assert.Equal(t, hb.GossipAddress, lsinfo.GossipAddress)
+	assert.Equal(t, 2, len(lsinfo.Shards))
+	assert.Equal(t, hb.Shards, lsinfo.Shards)
+}
+
+func TestHandleDNHeartbeat(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetTickCmd()
+	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+
+	hb := logservice.DNStoreHeartbeat{
+		UUID: "uuid1",
+		Shards: []logservice.DNShardInfo{
+			{ShardID: 1, ReplicaID: 1},
+			{ShardID: 2, ReplicaID: 1},
+			{ShardID: 3, ReplicaID: 1},
+		},
+	}
+	data, err := hb.Marshal()
+	require.NoError(t, err)
+	cmd = GetDNStoreHeartbeatCmd(data)
+	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	s := tsm1.DNState
+	assert.Equal(t, 1, len(s.Stores))
+	dninfo, ok := s.Stores[hb.UUID]
+	assert.True(t, ok)
+	assert.Equal(t, uint64(3), dninfo.Tick)
+	require.Equal(t, 3, len(dninfo.Shards))
+	assert.Equal(t, hb.Shards, dninfo.Shards)
 }

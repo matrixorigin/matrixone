@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"io"
+	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
 	sm "github.com/lni/dragonboat/v4/statemachine"
@@ -35,18 +36,20 @@ var (
 )
 
 const (
-	headerSize = 2
-)
-
-const (
+	// TickDuration defines the frequency of ticks.
+	TickDuration = time.Second
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
 
-	createLogShardTag uint16 = 0xAE01
-	tickTag           uint16 = 0xAE02
-	dnHeartbeatTag    uint16 = 0xAE03
-	logHeartbeatTag   uint16 = 0xAE04
+	headerSize = 2
+)
+
+const (
+	createLogShardTag uint16 = iota + 0xAE01
+	tickTag
+	dnHeartbeatTag
+	logHeartbeatTag
 )
 
 type logShardIDQuery struct {
@@ -60,8 +63,10 @@ type logShardIDQueryResult struct {
 
 type stateMachine struct {
 	replicaID uint64
-	Tick      uint64
-	NextID    uint64
+
+	Tick   uint64
+	NextID uint64
+
 	LogShards map[string]uint64
 	DNState   DNState
 	LogState  LogState
@@ -135,7 +140,7 @@ func GetDNStoreHeartbeatCmd(data []byte) []byte {
 
 func getHeartbeatCmd(data []byte, tag uint16) []byte {
 	cmd := make([]byte, headerSize+len(data))
-	binaryEnc.PutUint16(cmd, logHeartbeatTag)
+	binaryEnc.PutUint16(cmd, tag)
 	copy(cmd[headerSize:], data)
 	return cmd
 }
