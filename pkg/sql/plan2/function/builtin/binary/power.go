@@ -25,14 +25,18 @@ import (
 
 func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
+	if left.IsScalarNull() || right.IsScalarNull() {
+		return proc.AllocScalarNullVector(resultType), nil
+	}
+
+	leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 	resultElementSize := int(resultType.Size)
 	switch {
 	case left.IsConst && right.IsConst:
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
+		//if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+		//	return proc.AllocScalarNullVector(resultType), nil
+		//}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues)) // if our input contains null, this step may be redundant,
