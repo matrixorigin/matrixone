@@ -1,0 +1,66 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+option go_package = "/txn";
+
+import "timestamp.proto";
+
+
+// TxnStatus transaction status
+enum TxnStatus {
+    // Active is the state of transaction creation, in this state, can execute the 
+    // transaction Read/Write/Commit/Rollback.
+    Active = 0;
+    // Prepared for distributed transactions across DNs, a 2pc commit is performed, 
+    // and the prepared status means that the transaction on a DN was executed 
+    // successfully in the first phase. 
+    // 
+    // Note that this status needs to be logged to the LogService. Once the first 
+    // phase of a transaction is successful, data cannot be lost.
+    Prepared = 1;
+    // Committing for distributed transactions across DNs, once all DNs have completed
+    // the first phase, the transaction enters the Committing state and initiates an 
+    // asynchronous process to handle the commit of temporary data.
+    //
+    // Note that when all DNs involved are in the prepared state, the distributed 
+    // transaction can be considered committed because all data has been written 
+    // successfully. The subsequent Committing process just explicitly converts these
+    // writes into committed data.
+    //
+    // Note that the state exists only in memory and is not persisted to the LogService.
+    // It can be restored through the Prepared state, if all(DN).Status == Prepared.
+    Committing = 2;
+    // Committed after the Committing phase has transformed all DN data involved into 
+    // committed data, the status of the distributed transaction is explicitly recorded 
+    // as Committed.
+    //
+    // Note that this status needs to be logged to the LogService
+    Committed = 3;
+    // Aborting a client initiating a Rollback call or a distributed transaction that has
+    // any error in the first phase will enter the Aborting state. This state starts an 
+    // asynchronous task to clean up the temporary data written by the transaction.
+    //
+    // Note that the state exists only in memory and is not persisted to the LogService.
+    // It can be restored through the Prepared state, if Any(DN).Status != Prepared.
+    Aborting  = 4;
+    // Aborted after the Aborting phase, all data involved in the DN is cleaned up and 
+    // the transaction status is explicitly recorded as Aborted.
+    //
+    // Note that this status needs to be logged to the LogService
+    Aborted   = 5;
+}
+
+message TxnMeta {
+     Timestamp TS = 1;
+}
