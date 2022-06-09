@@ -26,6 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
+var (
+	ErrGroupNotExist       = errors.New("group not existed")
+	ErrLsnNotExist         = errors.New("lsn not existed")
+	ErrVFileVersionTimeOut = errors.New("get vfile version timeout")
+)
+
 type syncBase struct {
 	*sync.RWMutex
 	groupLSN                     map[uint32]uint64 // for alloc
@@ -37,6 +43,7 @@ type syncBase struct {
 	uncommits                    map[uint32][]uint64
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
+	commitCond                   sync.Cond
 }
 
 type checkpointInfo struct {
@@ -203,6 +210,7 @@ func newSyncBase() *syncBase {
 		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
 		ckpmu:         sync.RWMutex{},
+		commitCond:    *sync.NewCond(new(sync.Mutex)),
 	}
 }
 
@@ -306,12 +314,13 @@ func (base *syncBase) OnReplay(r *replayer) {
 		base.checkpointed.ids[groupId] = base.checkpointing[groupId].GetCheckpointed()
 	}
 }
+
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {
 	base.addrmu.RLock()
 	defer base.addrmu.RUnlock()
 	versionsMap, ok := base.addrs[groupId]
 	if !ok {
-		return 0, errors.New("group not existed")
+		return 0, ErrGroupNotExist
 	}
 	for ver, interval := range versionsMap {
 		if interval.Contains(*common.NewClosedIntervalsByInt(lsn)) {
@@ -319,7 +328,7 @@ func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) 
 		}
 	}
 	fmt.Printf("versionsMap is %v\n", versionsMap)
-	return 0, errors.New("lsn not existed")
+	return 0, ErrLsnNotExist
 }
 
 //TODO
@@ -434,6 +443,9 @@ func (base *syncBase) SetCKpCnt(groupId uint32, id uint64) {
 }
 
 func (base *syncBase) OnCommit() {
+	base.commitCond.L.Lock()
+	base.commitCond.Broadcast()
+	base.commitCond.L.Unlock()
 	for group, checkpointing := range base.checkpointing {
 		checkpointingId := checkpointing.GetCheckpointed()
 		ckpcnt := checkpointing.GetCkpCnt()
