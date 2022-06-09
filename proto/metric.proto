@@ -14,7 +14,8 @@
 
 
 syntax = "proto3";
-option go_package = "./pb;pb";
+package metric;
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/metric";
 
 message LabelPair {
   string name  = 1;

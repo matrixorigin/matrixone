@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
 )
 
 type dummySqlExecutor struct {
