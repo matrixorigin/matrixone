@@ -120,6 +120,52 @@ func Merge(col []*vector.Vector, src *[]uint32, fromLayout, toLayout []uint32) (
 	return
 }
 
+func Reshape(col []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
+	ret = make([]*vector.Vector, len(toLayout))
+	fromIdx := 0
+	fromOffset := 0
+	for i := 0; i < len(toLayout); i++ {
+		ret[i] = vector.New(col[0].Typ)
+		merged := make([]types.Decimal64, toLayout[i])
+		toOffset := 0
+		for toOffset < int(toLayout[i]) {
+			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)
+			if fromLeft == 0 {
+				fromIdx++
+				fromOffset = 0
+				fromLeft = fromLayout[fromIdx]
+			}
+			length := 0
+			if fromLeft < toLayout[i]-uint32(toOffset) {
+				length = int(fromLeft)
+			} else {
+				length = int(toLayout[i]) - toOffset
+			}
+			copy(merged[toOffset:toOffset+length], col[fromIdx].Col.([]types.Decimal64)[fromOffset:fromOffset+length])
+			if col[fromIdx].Nsp.Np != nil {
+				if ret[i].Nsp.Np == nil {
+					ret[i].Nsp.Np = roaring.New()
+				}
+				iterator := col[fromIdx].Nsp.Np.Iterator()
+				for iterator.HasNext() {
+					row := iterator.Next()
+					if row < uint64(fromOffset) {
+						continue
+					}
+					if row >= uint64(fromOffset)+uint64(length) {
+						break
+					}
+					ret[i].Nsp.Np.Add(row + uint64(toOffset) - uint64(fromOffset))
+				}
+			}
+			fromOffset += length
+			toOffset += length
+		}
+		ret[i].Col = merged
+	}
+	return
+}
+
 func Multiplex(col []*vector.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
 	for i := range col {
 		if nulls.Any(col[i].Nsp) {

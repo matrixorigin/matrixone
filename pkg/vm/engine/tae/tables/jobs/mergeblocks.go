@@ -100,12 +100,29 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32) (column []*vector.Vector, mapping []uint32) {
-	if isPrimary {
-		column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
+func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []*vector.Vector, mapping []uint32) {
+	if sort {
+		if isPrimary {
+			column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
+		} else {
+			column = mergesort.ShuffleColumn(vecs, *sortedIdx, fromLayout, toLayout)
+		}
 	} else {
-		column = mergesort.ShuffleColumn(vecs, *sortedIdx, fromLayout, toLayout)
+		column, mapping = task.mergeColumnWithOutSort(vecs, fromLayout, toLayout)
 	}
+	return
+}
+
+func (task *mergeBlocksTask) mergeColumnWithOutSort(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
+	totalLength := uint32(0)
+	for _, i := range toLayout {
+		totalLength += i
+	}
+	mapping = make([]uint32, totalLength)
+	for i := range mapping {
+		mapping[i] = uint32(i)
+	}
+	ret = mergesort.Reshape(column, fromLayout, toLayout)
 	return
 }
 
@@ -189,7 +206,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	buf := node.Buf[:length]
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
-	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to)
+	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 
@@ -271,7 +288,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			vec := view.ApplyDeletes()
 			vecs = append(vecs, vec)
 		}
-		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
+		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
 			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
