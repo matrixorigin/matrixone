@@ -66,6 +66,17 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 					return
 				}
 			} else {
+				if attrDef.Attr.Default.Exist {
+					attrDefault := catalog.Default{
+						Set:   attrDef.Attr.Default.Exist,
+						Value: attrDef.Attr.Default.Value,
+						Null:  attrDef.Attr.Default.IsNull,
+					}
+					if err = schema.AppendColWithDefault(attrDef.Attr.Name, attrDef.Attr.Type, attrDefault); err != nil {
+						return
+					}
+					continue
+				}
 				if err = schema.AppendCol(attrDef.Attr.Name, attrDef.Attr.Type); err != nil {
 					return
 				}
