@@ -371,7 +371,7 @@ func SplitBatch(bat *gbat.Batch, cnt int) []*gbat.Batch {
 	} else {
 		left := length
 		for i := 0; i < cnt; i++ {
-			if left >= rows {
+			if left >= rows && i < cnt-1 {
 				rowArray = append(rowArray, rows)
 			} else {
 				rowArray = append(rowArray, left)

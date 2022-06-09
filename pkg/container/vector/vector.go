@@ -707,7 +707,7 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
 	switch v.Typ.Oid {
 	case types.T_bool:
-		w.Col = v.Col.([]int8)[start:end]
+		w.Col = v.Col.([]bool)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	case types.T_int8:
 		w.Col = v.Col.([]int8)[start:end]

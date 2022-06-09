@@ -128,7 +128,7 @@ func TestGCTable(t *testing.T) {
 
 	dbEntry, _ := tae.Catalog.GetDatabaseByID(db.GetID())
 	now := time.Now()
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return dbEntry.CoarseTableCnt() == 0
 	})
 	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
@@ -149,7 +149,7 @@ func TestGCTable(t *testing.T) {
 
 	dbEntry, _ = tae.Catalog.GetDatabaseByID(db.GetID())
 	now = time.Now()
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return dbEntry.CoarseTableCnt() == 0
 	})
 	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
@@ -169,7 +169,7 @@ func TestGCTable(t *testing.T) {
 
 	// 6. Drop the table
 	dropRelation(t, tae, "db", schema.Name)
-	testutils.WaitExpect(200, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return dbEntry.CoarseTableCnt() == 0
 	})
 	names = getSegmentFileNames(tae)
@@ -230,7 +230,7 @@ func TestGCDB(t *testing.T) {
 	createRelation(t, tae, "db", schema1, true)
 	createRelation(t, tae, "db", schema2, false)
 	dropDB(t, tae, "db")
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return tae.Catalog.CoarseDBCnt() == 1
 	})
 	printCheckpointStats(t, tae)
