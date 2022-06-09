@@ -1,4 +1,5 @@
 # This Makefile is to build MatrixOne
+ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 BIN_NAME := mo-server
 BUILD_CFG := gen_config
@@ -35,11 +36,18 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 	@mv -f cmd/generate-config/system_vars.go pkg/config
 	@mv -f cmd/generate-config/system_vars_test.go pkg/config
 
-
-
 .PHONY: generate
 generate: pkg/sql/colexec/extend/overload/$(wildcard *.go)
 	@go generate ./pkg/sql/colexec/extend/overload
+
+.PHONY: generate-pb
+generate-pb:
+	$(ROOT_DIR)/proto/gen.sh
+
+# Generate protobuf files
+.PHONY: pb
+pb: generate-pb fmt
+	$(info all protos are generated) 
 
 # Building mo-server binary
 .PHONY: build
@@ -67,7 +75,6 @@ debug: generate cmd/db-server/$(wildcard *.go)
 	go get github.com/matrixorigin/matrixcube
 	go mod tidy
 	go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-
 
 
 # Excluding frontend test cases temporarily

@@ -17,6 +17,7 @@ package db
 import (
 	"bytes"
 	"math"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -184,6 +185,81 @@ func TestAppend4(t *testing.T) {
 		err = txn.Commit()
 		assert.NoError(t, err)
 	}
+}
+
+func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
+	bat := catalog.MockData(schema, schema.BlockMaxRows*(uint32(schema.SegmentMaxBlocks)+1)-1)
+	bats := compute.SplitBatch(bat, 4)
+
+	var updateColIdx int
+	if schema.GetSingleSortKeyIdx() >= 17 {
+		updateColIdx = 0
+	} else {
+		updateColIdx = schema.GetSingleSortKeyIdx() + 1
+	}
+
+	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], false)
+
+	txn, rel := getDefaultRelation(t, tae, schema.Name)
+	err := rel.Append(bats[0])
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	v := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 2)
+	filter := handle.NewEQFilter(v)
+	err = rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+
+	oldv := compute.GetValue(bats[0].Vecs[updateColIdx], 5)
+	v = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 5)
+	ufilter := handle.NewEQFilter(v)
+	{
+		ot := reflect.ValueOf(&oldv).Elem()
+		nv := reflect.ValueOf(int8(99))
+		if nv.CanConvert(reflect.TypeOf(oldv)) {
+			ot.Set(nv.Convert(reflect.TypeOf(oldv)))
+		}
+	}
+	err = rel.UpdateByFilter(ufilter, uint16(updateColIdx), oldv)
+	assert.NoError(t, err)
+
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	for _, b := range bats[1:] {
+		err = rel.Append(b)
+		assert.NoError(t, err)
+	}
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
+	assert.NoError(t, txn.Commit())
+
+	compactBlocks(t, tae, defaultTestDB, schema, false)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, false)
+	v = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 3)
+	filter = handle.NewEQFilter(v)
+	err = rel.DeleteByFilter(filter)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-2, true)
+	assert.NoError(t, txn.Commit())
+
+	compactSegs(t, tae, schema)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-2, false)
+	assert.NoError(t, txn.Commit())
+
+	// t.Log(rel.GetMeta().(*catalog.TableEntry).PPString(common.PPL1, 0, ""))
+	dropRelation(t, tae, defaultTestDB, schema.Name)
+}
+
+func TestCRUD(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	defer tae.Close()
+	createDB(t, tae, defaultTestDB)
+	withTestAllPKType(t, tae, testCRUD)
 }
 
 func TestTableHandle(t *testing.T) {
@@ -1836,4 +1912,58 @@ func TestSnapshotIsolation2(t *testing.T) {
 	t.Log(err)
 	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
 	_ = txn1.Rollback()
+}
+
+// 1. Append 3 blocks and delete last 5 rows of the 1st block
+// 2. Merge blocks
+// 3. Check rows and col[0]
+func TestMergeBlockes(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, -1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	bat := catalog.MockData(schema, 30)
+
+	createRelationAndAppend(t, tae, "db", schema, bat, true)
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	it := rel.MakeBlockIt()
+	blkID := it.GetBlock().Fingerprint()
+	err = rel.RangeDelete(blkID, 5, 9)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	for it.Valid() {
+		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
+		t.Log(col)
+		assert.Nil(t, err)
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit())
+
+	mergeBlocks(t, tae, "db", schema, false)
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	it = rel.MakeBlockIt()
+	for it.Valid() {
+		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
+		t.Log(col)
+		assert.Nil(t, err)
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit())
 }

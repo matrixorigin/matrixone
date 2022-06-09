@@ -136,11 +136,23 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	return s
 }
 
+func (h *txnRelation) Close() error   { return nil }
 func (h *txnRelation) GetMeta() any   { return h.table.entry }
 func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
-func (h *txnRelation) Close() error                     { return nil }
-func (h *txnRelation) Rows() int64                      { return int64(h.table.entry.GetRows()) }
+func (h *txnRelation) Rows() int64 {
+	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
+		if h.table.entry.GetSchema().Name == catalog.SystemTable_DB_Name {
+			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
+		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Table_Name {
+			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
+		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Columns_Name {
+			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
+		}
+		panic("logic error")
+	}
+	return int64(h.table.entry.GetRows())
+}
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 

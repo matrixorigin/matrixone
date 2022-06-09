@@ -96,7 +96,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	proc.Reg.InputBatch = bat
 	end, err = overload.Run(p.instructions, proc)
 	proc.Reg.InputBatch = nil
-	end, err = overload.Run(p.instructions, proc)
+	overload.Run(p.instructions, proc)
 	return end, err
 }
 

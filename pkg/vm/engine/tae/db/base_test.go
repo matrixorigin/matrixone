@@ -14,7 +14,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,6 +30,22 @@ func initDB(t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
 	return db
+}
+
+func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalog.Schema)) {
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(100)
+	for i := 0; i < 17; i++ {
+		schema := catalog.MockSchemaAll(18, i)
+		schema.BlockMaxRows = 10
+		schema.SegmentMaxBlocks = 2
+		wg.Add(1)
+		_ = pool.Submit(func() {
+			defer wg.Done()
+			test(t, tae, schema)
+		})
+	}
+	wg.Wait()
 }
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
@@ -162,6 +180,7 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 			view.ApplyDeletes()
 		}
 		rows += view.Length()
+		// t.Log(view.String())
 		return
 	})
 	return rows
@@ -277,4 +296,70 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 			assert.NoError(t, txn.Commit())
 		}
 	}
+}
+
+func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, _ := e.StartTxn(nil)
+	db, _ := txn.GetDatabase(dbName)
+	rel, _ := db.GetRelationByName(schema.Name)
+
+	var segs []*catalog.SegmentEntry
+	segIt := rel.MakeSegmentIt()
+	for segIt.Valid() {
+		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segs = append(segs, seg)
+		segIt.Next()
+	}
+	_ = txn.Commit()
+	for _, seg := range segs {
+		txn, _ = e.StartTxn(nil)
+		db, _ = txn.GetDatabase(dbName)
+		rel, _ = db.GetRelationByName(schema.Name)
+		segHandle, _ := rel.GetSegment(seg.ID)
+		var metas []*catalog.BlockEntry
+		it := segHandle.MakeBlockIt()
+		for it.Valid() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+			it.Next()
+		}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		if skipConflict {
+			if err != nil {
+				_ = txn.Rollback()
+			} else {
+				_ = txn.Commit()
+			}
+		} else {
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit())
+		}
+	}
+}
+
+func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
+	txn, rel := getDefaultRelation(t, e, schema.Name)
+	segs := make([]*catalog.SegmentEntry, 0)
+	it := rel.MakeSegmentIt()
+	for it.Valid() {
+		seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segs = append(segs, seg)
+		it.Next()
+	}
+	for _, segMeta := range segs {
+		seg := segMeta.GetSegmentData()
+		factory, taskType, scopes, err := seg.BuildCompactionTaskFactory()
+		assert.NoError(t, err)
+		if factory == nil {
+			continue
+		}
+		task, err := e.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+		assert.NoError(t, err)
+		err = task.WaitDone()
+		assert.NoError(t, err)
+	}
+	assert.NoError(t, txn.Commit())
 }

@@ -26,6 +26,10 @@ type MockCompilerContext struct {
 	tables  map[string]*TableDef
 }
 
+func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	return nil, nil
+}
+
 type col struct {
 	Name      string
 	Id        plan.Type_TypeId

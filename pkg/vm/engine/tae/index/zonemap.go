@@ -408,6 +408,12 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		zm.max = encoding.DecodeDatetime(buf[:8])
 		buf = buf[8:]
 		return nil
+	case types.T_timestamp:
+		zm.min = encoding.DecodeTimestamp(buf[:8])
+		buf = buf[8:]
+		zm.max = encoding.DecodeTimestamp(buf[:8])
+		buf = buf[8:]
+		return nil
 	case types.T_decimal64:
 		zm.min = encoding.DecodeDecimal64(buf[:8])
 		buf = buf[8:]
