@@ -31,9 +31,6 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	inputValues := inputVector.Col.(*types.Bytes)
 	// resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
-		//if inputVector.ConstVectorIsNull() {
-		//	return proc.AllocScalarNullVector(resultType), nil
-		//}
 		resultVector := vector.NewConst(resultType)
 		resultValues := &types.Bytes{
 			Data:    make([]byte, len(inputValues.Data)),
