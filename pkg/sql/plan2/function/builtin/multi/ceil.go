@@ -112,7 +112,7 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 
 	if vecs[0].IsScalar() {
-		vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
+		vec := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 		rs := make([]float64, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
 		vector.SetCol(vec, ceil.CeilFloat64(vs, rs, digits))
@@ -129,5 +129,4 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		vector.SetCol(vec, ceil.CeilFloat64(vs, rs, digits))
 		return vec, nil
 	}
-
 }

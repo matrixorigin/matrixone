@@ -25,7 +25,6 @@ import (
 
 func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	switch {
@@ -33,6 +32,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint64, 1)
 		vector.SetCol(resultVector, findinset.FindInSetWithAllConst(leftValues, rightValues, resultValues))
@@ -41,6 +41,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
 		if err != nil {
 			return nil, err
@@ -54,6 +55,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues.Lengths)))
 		if err != nil {
 			return nil, err
@@ -64,6 +66,7 @@ func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vector.SetCol(resultVector, findinset.FindInSetWithRightConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	}
+	leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
 	if err != nil {
 		return nil, err
