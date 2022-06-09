@@ -44,8 +44,9 @@ const (
 	DefaultHAKeeperShardID uint64 = 0
 
 	createLogShardTag uint16 = 0xAE01
-	dnHeartbeatTag    uint16 = 0xAE02
-	logHeartbeatTag   uint16 = 0xAE03
+	tickTag           uint16 = 0xAE02
+	dnHeartbeatTag    uint16 = 0xAE03
+	logHeartbeatTag   uint16 = 0xAE04
 )
 
 type logShardIDQuery struct {
@@ -100,7 +101,7 @@ func isHeartbeatCmd(cmd []byte, tag uint16) bool {
 	return parseCmdTag(cmd) == tag
 }
 
-func getHeartbeatCmd(cmd []byte) []byte {
+func parseHeartbeatCmd(cmd []byte) []byte {
 	return cmd[headerSize:]
 }
 
@@ -112,6 +113,31 @@ func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
 		return string(cmd[headerSize:]), true
 	}
 	return "", false
+}
+
+func isTickCmd(cmd []byte) bool {
+	return len(cmd) == headerSize && binaryEnc.Uint16(cmd) == tickTag
+}
+
+func GetTickCmd() []byte {
+	cmd := make([]byte, headerSize)
+	binaryEnc.PutUint16(cmd, tickTag)
+	return cmd
+}
+
+func GetLogStoreHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, logHeartbeatTag)
+}
+
+func GetDNStoreHeartbeatCmd(data []byte) []byte {
+	return getHeartbeatCmd(data, dnHeartbeatTag)
+}
+
+func getHeartbeatCmd(data []byte, tag uint16) []byte {
+	cmd := make([]byte, headerSize+len(data))
+	binaryEnc.PutUint16(cmd, logHeartbeatTag)
+	copy(cmd[headerSize:], data)
+	return cmd
 }
 
 func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
@@ -150,7 +176,7 @@ func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 }
 
 func (s *stateMachine) handleDNHeartbeat(cmd []byte) (sm.Result, error) {
-	data := getHeartbeatCmd(cmd)
+	data := parseHeartbeatCmd(cmd)
 	var hb logservice.DNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
@@ -160,12 +186,17 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) (sm.Result, error) {
 }
 
 func (s *stateMachine) handleLogHeartbeat(cmd []byte) (sm.Result, error) {
-	data := getHeartbeatCmd(cmd)
+	data := parseHeartbeatCmd(cmd)
 	var hb logservice.LogStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
 	s.LogState.Update(hb, s.Tick)
+	return sm.Result{}, nil
+}
+
+func (s *stateMachine) handleTick(cmd []byte) (sm.Result, error) {
+	s.Tick++
 	return sm.Result{}, nil
 }
 
@@ -177,6 +208,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleDNHeartbeat(cmd)
 	} else if isLogHeartbeatCmd(cmd) {
 		return s.handleLogHeartbeat(cmd)
+	} else if isTickCmd(cmd) {
+		return s.handleTick(cmd)
 	}
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }

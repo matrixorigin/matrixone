@@ -274,6 +274,49 @@ func (l *logStore) GetTruncatedIndex(ctx context.Context,
 	return v.(uint64), nil
 }
 
+func (l *logStore) HAKeeperTick(ctx context.Context) error {
+	cmd := hakeeper.GetTickCmd()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	_, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		plog.Errorf("propose failed, %v", err)
+		return err
+	}
+	return nil
+}
+
+func (l *logStore) AddLogStoreHeartbeat(ctx context.Context,
+	hb logservice.LogStoreHeartbeat) error {
+	data, err := hb.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	cmd := hakeeper.GetLogStoreHeartbeatCmd(data)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	_, err = l.propose(ctx, session, cmd)
+	if err != nil {
+		plog.Errorf("propose failed, %v", err)
+		return err
+	}
+	return nil
+}
+
+func (l *logStore) AddDNStoreHeartbeat(ctx context.Context,
+	hb logservice.DNStoreHeartbeat) error {
+	data, err := hb.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	_, err = l.propose(ctx, session, cmd)
+	if err != nil {
+		plog.Errorf("propose failed, %v", err)
+		return err
+	}
+	return nil
+}
+
 func (l *logStore) getLeaseHolderID(ctx context.Context,
 	shardID uint64, entries []pb.Entry) (uint64, error) {
 	if len(entries) == 0 {
