@@ -34,6 +34,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 				Name:    col.Name,
 				Type:    col.Type,
 				Primary: col.IsPrimary(),
+				Default: engine.MakeDefaultExpr(col.Default.Set, col.Default.Value, col.Default.Null),
 			},
 		}
 		defs = append(defs, def)
