@@ -2216,7 +2216,6 @@ var operators = map[int][]Function{
 		},
 	},
 	// others
-	// others
 	CAST: {
 		{
 			Index:       0,
@@ -3692,7 +3691,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int8,
-			Fn:          operator.CwFn1[int8],
+			Fn:          operator.CaseWhenInt8,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3700,7 +3699,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int16,
-			Fn:          operator.CwFn1[int16],
+			Fn:          operator.CaseWhenInt16,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3708,7 +3707,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int32,
-			Fn:          operator.CwFn1[int32],
+			Fn:          operator.CaseWhenInt32,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3716,7 +3715,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int64,
-			Fn:          operator.CwFn1[int64],
+			Fn:          operator.CaseWhenInt64,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3724,7 +3723,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint8,
-			Fn:          operator.CwFn1[uint8],
+			Fn:          operator.CaseWhenUint8,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3732,7 +3731,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint16,
-			Fn:          operator.CwFn1[uint16],
+			Fn:          operator.CaseWhenUint16,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3740,7 +3739,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint32,
-			Fn:          operator.CwFn1[uint32],
+			Fn:          operator.CaseWhenUint32,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3748,7 +3747,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint64,
-			Fn:          operator.CwFn1[uint64],
+			Fn:          operator.CaseWhenUint64,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3756,7 +3755,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_float32,
-			Fn:          operator.CwFn1[float32],
+			Fn:          operator.CaseWhenFloat32,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3764,7 +3763,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_float64,
-			Fn:          operator.CwFn1[float64],
+			Fn:          operator.CaseWhenFloat64,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3772,7 +3771,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_bool,
-			Fn:          operator.CwFn1[bool],
+			Fn:          operator.CaseWhenBool,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3780,7 +3779,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_date,
-			Fn:          operator.CwFn1[types.Date],
+			Fn:          operator.CaseWhenDate,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 		{
@@ -3788,7 +3787,39 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_datetime,
-			Fn:          operator.CwFn1[types.Datetime],
+			Fn:          operator.CaseWhenDateTime,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       13,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_varchar,
+			Fn:          operator.CaseWhenVarchar,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       14,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_char,
+			Fn:          operator.CaseWhenChar,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       15,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_decimal64,
+			Fn:          operator.CaseWhenDecimal64,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       16,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_decimal128,
+			Fn:          operator.CaseWhenDecimal128,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 	},

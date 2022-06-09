@@ -144,12 +144,12 @@ func TestCwFn1(t *testing.T) {
 		},
 
 		{
-			info: "when a = 1 then null, when a = 2 then null, else null", proc: testutil.NewProc(),
+			info: "when a = 1 then 10, when a = 2 then true, else null", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeBoolVector([]bool{false, false, false, false}),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarInt64(10, 4),
 				testutil.MakeBoolVector([]bool{false, false, false, false}),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarBool(true, 4),
 				testutil.MakeScalarNull(4),
 			},
 			match: false,
@@ -186,7 +186,7 @@ func TestCwFn1(t *testing.T) {
 				require.True(t, b)
 			}
 
-			got, ergot := CwFn1[int64](tc.vs, tc.proc)
+			got, ergot := cwGeneral[int64](tc.vs, tc.proc, types.Type{Oid: types.T_int64})
 			if tc.err {
 				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {
