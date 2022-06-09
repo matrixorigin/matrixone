@@ -206,7 +206,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	buf := node.Buf[:length]
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
-	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, true)
+	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 
@@ -288,7 +288,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			vec := view.ApplyDeletes()
 			vecs = append(vecs, vec)
 		}
-		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, true)
+		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
 			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
