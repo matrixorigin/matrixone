@@ -91,9 +91,10 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 }
 
 type logStore struct {
-	cfg     Config
-	nh      *dragonboat.NodeHost
-	stopper *syncutil.Stopper
+	cfg               Config
+	nh                *dragonboat.NodeHost
+	haKeeperReplicaID uint64
+	stopper           *syncutil.Stopper
 
 	mu struct {
 		sync.Mutex
@@ -160,9 +161,17 @@ func (l *logStore) GetShardInfo(shardID uint64) (dragonboat.ShardView, bool) {
 
 func (l *logStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
+	l.haKeeperReplicaID = replicaID
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
 	// TODO: add another API for joining
-	return l.nh.StartReplica(initialReplicas, false, hakeeper.NewStateMachine, raftConfig)
+	if err := l.nh.StartReplica(initialReplicas,
+		false, hakeeper.NewStateMachine, raftConfig); err != nil {
+		return err
+	}
+	l.stopper.RunWorker(func() {
+		l.ticker()
+	})
+	return nil
 }
 
 func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
@@ -272,17 +281,6 @@ func (l *logStore) GetTruncatedIndex(ctx context.Context,
 		return 0, err
 	}
 	return v.(uint64), nil
-}
-
-func (l *logStore) HAKeeperTick(ctx context.Context) error {
-	cmd := hakeeper.GetTickCmd()
-	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	_, err := l.propose(ctx, session, cmd)
-	if err != nil {
-		plog.Errorf("propose failed, %v", err)
-		return err
-	}
-	return nil
 }
 
 func (l *logStore) AddLogStoreHeartbeat(ctx context.Context,
@@ -431,6 +429,22 @@ func (l *logStore) QueryLog(ctx context.Context, shardID uint64,
 	}
 }
 
+func (l *logStore) ticker() {
+	ticker := time.NewTicker(hakeeper.TickDuration)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := l.hakeeperTick(); err != nil {
+				panic(err)
+			}
+		case <-l.stopper.ShouldStop():
+			return
+		}
+	}
+}
+
 func (l *logStore) truncationWorker() {
 	for {
 		select {
@@ -442,6 +456,27 @@ func (l *logStore) truncationWorker() {
 			}
 		}
 	}
+}
+
+// TODO: add test for this
+// FIXME: ignore temp errors
+func (l *logStore) hakeeperTick() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	leaderID, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	if err != nil {
+		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
+		return err
+	}
+	if ok && leaderID == l.haKeeperReplicaID {
+		cmd := hakeeper.GetTickCmd()
+		session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+		if _, err := l.propose(ctx, session, cmd); err != nil {
+			plog.Errorf("propose failed, %v", err)
+			return err
+		}
+	}
+	return nil
 }
 
 // TODO: add tests for this

@@ -31,10 +31,10 @@ const (
 )
 
 const (
-	leaseHolderIDTag  uint16 = 0xBF01
-	truncatedIndexTag uint16 = 0xBF02
-	userEntryTag      uint16 = 0xBF03
-	indexTag          uint16 = 0xBF04
+	leaseHolderIDTag uint16 = iota + 0xBF01
+	truncatedIndexTag
+	userEntryTag
+	indexTag
 )
 
 type leaseHistoryQuery struct {
