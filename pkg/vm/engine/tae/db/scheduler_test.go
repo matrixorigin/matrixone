@@ -121,9 +121,10 @@ func TestCheckpoint1(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	time.Sleep(time.Millisecond * 20)
-	{
-		blockCnt := 0
+
+	blockCnt := 0
+	fn := func() bool {
+		blockCnt = 0
 		blockFn := func(entry *catalog.BlockEntry) error {
 			blockCnt++
 			return nil
@@ -131,9 +132,12 @@ func TestCheckpoint1(t *testing.T) {
 		processor := new(catalog.LoopProcessor)
 		processor.BlockFn = blockFn
 		err := db.Opts.Catalog.RecurLoop(processor)
-		assert.Nil(t, err)
-		assert.Equal(t, 2+3, blockCnt)
+		assert.NoError(t, err)
+		return blockCnt == 2+3
 	}
+	testutils.WaitExpect(1000, fn)
+	fn()
+	assert.Equal(t, 2+3, blockCnt)
 }
 
 func TestCheckpoint2(t *testing.T) {
