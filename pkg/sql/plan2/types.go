@@ -129,7 +129,9 @@ type BindContext struct {
 
 	corrCols []*plan.CorrColRef
 
-	parent *BindContext
+	parent     *BindContext
+	leftChild  *BindContext
+	rightChild *BindContext
 }
 
 type NameTuple struct {
@@ -151,15 +153,21 @@ type Binder interface {
 	BindColRef(*tree.UnresolvedName, int32) (*plan.Expr, error)
 	BindAggFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
 	BindWinFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
+	BindSubquery(*tree.Subquery) (*plan.Expr, error)
 }
 
 type baseBinder struct {
+	builder   *QueryBuilder
 	ctx       *BindContext
 	impl      Binder
 	boundCols []string
 }
 
 type TableBinder struct {
+	baseBinder
+}
+
+type WhereBinder struct {
 	baseBinder
 }
 
@@ -184,6 +192,7 @@ type OrderBinder struct {
 }
 
 var _ Binder = (*TableBinder)(nil)
+var _ Binder = (*WhereBinder)(nil)
 var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*SelectBinder)(nil)

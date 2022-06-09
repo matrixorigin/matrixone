@@ -22,10 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewGroupBinder(ctx *BindContext) *GroupBinder {
+func NewGroupBinder(builder *QueryBuilder, ctx *BindContext) *GroupBinder {
 	b := &GroupBinder{}
-	b.impl = b
+	b.builder = builder
 	b.ctx = ctx
+	b.impl = b
 
 	return b
 }
@@ -63,4 +64,8 @@ func (b *GroupBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth
 
 func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "GROUP BY clause cannot contain window functions!")
+}
+
+func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
+	return nil, errors.New(errno.GroupingError, "subquery in GROUP BY clause not yet supported")
 }

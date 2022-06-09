@@ -113,8 +113,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", exprImpl))
 	case *tree.Subquery:
-		// TODO
-		//
+		expr, err = b.impl.BindSubquery(exprImpl)
 	case *tree.DefaultVal:
 		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl))
@@ -216,6 +215,34 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32) (
 	}
 
 	return parent.binder.BindColRef(astExpr, depth+1)
+}
+
+func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery) (*Expr, error) {
+	subCtx := NewBindContext(b.builder, b.ctx)
+
+	var nodeId int32
+	var err error
+	switch subquery := astExpr.Select.(type) {
+	case *tree.ParenSelect:
+		nodeId, err = b.builder.buildSelect(subquery.Select, subCtx)
+		if err != nil {
+			return nil, err
+		}
+
+	default:
+		return nil, errors.New(errno.SyntaxError, fmt.Sprintf("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL)))
+	}
+
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Id: plan.Type_ANY,
+		},
+		Expr: &plan.Expr_Sub{
+			Sub: &plan.SubQuery{
+				NodeId: nodeId,
+			},
+		},
+	}, nil
 }
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32) (*Expr, error) {
@@ -403,10 +430,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args[idx] = expr
 	}
 
-	return b.bindFuncExprImplByPlanExpr(name, args, depth)
+	return b.bindFuncExprImplByPlanExpr(name, args)
 }
 
-func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth int32) (*plan.Expr, error) {
+func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
 	// deal with some special function

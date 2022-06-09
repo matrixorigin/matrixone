@@ -22,12 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewSelectBinder(ctx *BindContext, havingBinder *HavingBinder) *SelectBinder {
+func NewSelectBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *HavingBinder) *SelectBinder {
 	b := &SelectBinder{
 		havingBinder: havingBinder,
 	}
-	b.impl = b
+	b.builder = builder
 	b.ctx = ctx
+	b.impl = b
 
 	return b
 }
@@ -72,4 +73,8 @@ func (b *SelectBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 func (b *SelectBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "window functions not yet supported")
+}
+
+func (b *SelectBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
+	return b.baseBindSubquery(astExpr)
 }

@@ -24,12 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewHavingBinder(ctx *BindContext) *HavingBinder {
+func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 	b := &HavingBinder{
 		insideAgg: false,
 	}
-	b.impl = b
+	b.builder = builder
 	b.ctx = ctx
+	b.impl = b
 
 	return b
 }
@@ -112,4 +113,8 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 	} else {
 		return nil, errors.New(errno.WindowingError, "window functions not allowed here")
 	}
+}
+
+func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
+	return b.baseBindSubquery(astExpr)
 }

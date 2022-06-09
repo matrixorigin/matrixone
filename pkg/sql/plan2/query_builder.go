@@ -50,7 +50,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		return 0, err
 	}
 
-	ctx.binder = NewTableBinder(ctx)
+	ctx.binder = NewWhereBinder(builder, ctx)
 
 	// unfold stars and generate headings
 	var selectList tree.SelectExprs
@@ -129,7 +129,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 
 	// build GROUP BY clause
 	if clause.GroupBy != nil {
-		groupBinder := NewGroupBinder(ctx)
+		groupBinder := NewGroupBinder(builder, ctx)
 		for _, group := range clause.GroupBy {
 			_, err := groupBinder.BindExpr(group, 0, true)
 			if err != nil {
@@ -140,7 +140,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 
 	// build HAVING clause
 	var havingList []*plan.Expr
-	havingBinder := NewHavingBinder(ctx)
+	havingBinder := NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
 		ctx.binder = havingBinder
 		havingList, err = splitAndBindCondition(clause.Having.Expr, ctx)
@@ -150,7 +150,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 	}
 
 	// build SELECT clause
-	selectBinder := NewSelectBinder(ctx, havingBinder)
+	selectBinder := NewSelectBinder(builder, ctx, havingBinder)
 	ctx.binder = selectBinder
 	for _, selectExpr := range selectList {
 		err = ctx.qualifyColumnNames(selectExpr.Expr)
@@ -618,7 +618,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	}, ctx)
 	node := builder.qry.Nodes[nodeId]
 
-	ctx.binder = NewTableBinder(ctx)
+	ctx.binder = NewTableBinder(builder, ctx)
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:

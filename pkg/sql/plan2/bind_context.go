@@ -41,6 +41,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
+	bc.leftChild = left
+	bc.rightChild = right
 
 	for _, binding := range left.bindings {
 		bc.bindings = append(bc.bindings, binding)
@@ -130,7 +132,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, rig
 				},
 			},
 		},
-	}, 0)
+	})
 
 	return expr, err
 }
