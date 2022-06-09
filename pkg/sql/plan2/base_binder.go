@@ -443,6 +443,14 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 		if len(args) != 2 {
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
 		}
+		if args[0].Typ.Id == plan.Type_VARCHAR {
+			args[0], err = appendCastExpr(args[0], &plan.Type{
+				Id: plan.Type_DATE,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 		args, err = resetDateFunctionArgs(args[0], args[1])
 		if err != nil {
 			return nil, err
@@ -461,6 +469,7 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 			if err != nil {
 				return nil, err
 			}
+			name = namesMap[name]
 		}
 		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATE {
 			if name == "-" {
@@ -470,8 +479,8 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 			if err != nil {
 				return nil, err
 			}
+			name = namesMap[name]
 		}
-		name = namesMap[name]
 	}
 
 	// get args(exprs) & types
