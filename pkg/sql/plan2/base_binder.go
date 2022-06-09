@@ -421,22 +421,27 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr, depth
 		return appendCastBeforeExpr(args[0], &plan.Type{
 			Id: plan.Type_INTERVAL,
 		})
-	case "and", "or":
-		// rewrite and/or funciton's args to bool
-		// TODO , wangjian's code will conver expr to bool directly, but i don't think it is necessary
-		for i := 0; i < 2; i++ {
-			if args[i].Typ.Id != plan.Type_BOOL {
-				arg, err := appendCastBeforeExpr(args[i], &plan.Type{
-					Id: plan.Type_BOOL,
-				})
-				if err != nil {
-					return nil, err
-				}
-				args[i] = arg
-			}
+	case "and", "or", "not", "xor":
+		// why to append cast function?
+		// for i := 0; i < len(args); i++ {
+		// 	if args[i].Typ.Id != plan.Type_BOOL {
+		// 		arg, err := appendCastBeforeExpr(args[i], &plan.Type{
+		// 			Id: plan.Type_BOOL,
+		// 		})
+		// 		if err != nil {
+		// 			return nil, err
+		// 		}
+		// 		args[i] = arg
+		// 	}
+		// }
+		if err := convertValueIntoBool(name, args, true); err != nil {
+			return nil, err
 		}
 	case "=", "<", "<=", ">", ">=", "<>":
-		// TODO , wangjian's code will conver arg to bool, but i don't think it is necessary
+		// why to append cast function?
+		if err := convertValueIntoBool(name, args, false); err != nil {
+			return nil, err
+		}
 	case "date_add", "date_sub":
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
