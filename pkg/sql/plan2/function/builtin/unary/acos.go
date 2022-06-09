@@ -38,7 +38,7 @@ func AcosUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if nulls.Any(results.Nsp) {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		vector.SetCol(resultVector, acos.AcosUint64(inputValues, results.Result))
+		vector.SetCol(resultVector, results.Result)
 		return resultVector, nil
 	} else {
 		inputValues := inputVector.Col.([]uint64)
@@ -70,7 +70,7 @@ func AcosInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if nulls.Any(results.Nsp) {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		vector.SetCol(resultVector, acos.AcosInt64(inputValues, results.Result))
+		vector.SetCol(resultVector, results.Result)
 		return resultVector, nil
 	} else {
 		inputValues := inputVector.Col.([]int64)
@@ -102,7 +102,7 @@ func AcosFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		if nulls.Any(results.Nsp) {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		vector.SetCol(resultVector, acos.AcosFloat64(inputValues, results.Result))
+		vector.SetCol(resultVector, results.Result)
 		return resultVector, nil
 	} else {
 		inputValues := inputVector.Col.([]float64)
