@@ -206,6 +206,25 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
+	var limitExpr *Expr
+	var offsetExpr *Expr
+	if stmt.Limit != nil {
+		limitBinder := NewLimitBinder()
+
+		if stmt.Limit.Offset != nil {
+			offsetExpr, err = limitBinder.BindExpr(stmt.Limit.Offset, 0, true)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if stmt.Limit.Count != nil {
+			limitExpr, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(selectBinder.boundCols) > 0 {
 		return 0, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", selectBinder.boundCols[0]))
 	}
@@ -237,11 +256,18 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 
 	// append SORT node
 	if len(orderBys) > 0 {
+		// if have sort node, we set limit/offset in this node.
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{nodeId},
 			OrderBy:  orderBys,
+			Limit:    limitExpr,
+			Offset:   offsetExpr,
 		}, ctx)
+	} else {
+		// other wise, we set limit/offset in last node
+		builder.qry.Nodes[nodeId].Limit = limitExpr
+		builder.qry.Nodes[nodeId].Offset = offsetExpr
 	}
 
 	// append result PROJECT node

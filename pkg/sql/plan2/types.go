@@ -191,11 +191,16 @@ type OrderBinder struct {
 	selectList tree.SelectExprs
 }
 
+type LimitBinder struct {
+	baseBinder
+}
+
 var _ Binder = (*TableBinder)(nil)
 var _ Binder = (*WhereBinder)(nil)
 var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*SelectBinder)(nil)
+var _ Binder = (*LimitBinder)(nil)
 
 const (
 	NotFound      int32 = math.MaxInt32
