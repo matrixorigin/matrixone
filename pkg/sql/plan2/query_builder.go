@@ -37,7 +37,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		clause = selectClause
-		break
 	case *tree.ParenSelect:
 		return builder.buildSelect(selectClause.Select, ctx)
 	default:
@@ -422,7 +421,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		newCtx := NewBindContext(builder, ctx)
 		nodeId, err = builder.buildSelect(tbl, newCtx)
 		if len(newCtx.corrCols) > 0 {
-			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("correlated subquery in FROM clause is not yet supported"))
+			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
 		}
 		return
 

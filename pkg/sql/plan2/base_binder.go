@@ -106,34 +106,26 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 	case *tree.CaseExpr:
 		expr, err = b.bindCaseExpr(exprImpl, depth)
 	case *tree.IntervalExpr:
-		// parser will not return this type
-		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", exprImpl))
 	case *tree.XorExpr:
-		// return directly?
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr xor'%v' is not support now", exprImpl))
+		expr, err = b.bindFuncExprImplByAstExpr("xor", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
 	case *tree.Subquery:
 		expr, err = b.impl.BindSubquery(exprImpl)
 	case *tree.DefaultVal:
-		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl))
 	case *tree.MaxValue:
-		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl))
 	case *tree.VarExpr:
-		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl))
 	case *tree.StrVal:
-		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl))
 	case *tree.ExprList:
-		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", exprImpl))
 	case tree.UnqualifiedStar:
 		// select * from table
 		// * should only appear in SELECT clause
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, "unqualified star should only appear in SELECT clause")
 	default:
-		// return directly?
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl))
 	}
 
