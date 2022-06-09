@@ -25,7 +25,6 @@ import (
 func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	// resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil

@@ -26,6 +26,9 @@ import (
 func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
+	if inputVector.IsScalarNull() {
+		return proc.AllocScalarNullVector(resultType), nil
+	}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {

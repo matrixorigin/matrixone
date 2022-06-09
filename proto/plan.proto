@@ -1,5 +1,6 @@
 syntax = "proto3";
-option go_package = "/plan";
+package plan; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 
 message Type {
 	enum TypeId {

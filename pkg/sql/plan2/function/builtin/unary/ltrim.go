@@ -25,7 +25,6 @@ import (
 func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-
 	// totalCount - spaceCount is the total bytes need for the ltrim-ed string
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
