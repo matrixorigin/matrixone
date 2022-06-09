@@ -554,6 +554,7 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 				}
 				return &plan.DefaultExpr{
 					Exist:  true,
+					Value:  nil,
 					IsNull: true,
 				}, nil
 			}
@@ -573,6 +574,13 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 				IsNull: false,
 			}, nil
 		}
+	}
+	if allowNull {
+		return &plan.DefaultExpr{
+			Exist:  true,
+			Value:  nil,
+			IsNull: true,
+		}, nil
 	}
 	return &plan.DefaultExpr{
 		Exist: false,
