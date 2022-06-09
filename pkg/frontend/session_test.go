@@ -379,31 +379,49 @@ func TestVariables(t *testing.T) {
 		v1_val, err := ses.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
+		v1_ctx_val, err := ses.txnCompileCtx.ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
 
 		//exist session
 		v2_val, err := existSes.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
+		v2_ctx_val, err := existSes.txnCompileCtx.ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
 
 		//new session after session
 		v3_val, err := newSesAfterSession.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
+		v3_ctx_val, err := newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
 
 		//same session global
 		v4_val, err := ses.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(saneSesGlobalWant4, convey.ShouldEqual, v4_val)
+		v4_ctx_val, err := ses.txnCompileCtx.ResolveVariable(v, true, true)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v4_ctx_val, convey.ShouldEqual, v4_val)
 
 		//exist session global
 		v5_val, err := existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(existSesGlobalWant5, convey.ShouldEqual, v5_val)
+		v5_ctx_val, err := existSes.txnCompileCtx.ResolveVariable(v, true, true)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v5_ctx_val, convey.ShouldEqual, v5_val)
 
 		//new session after session global
 		v6_val, err := newSesAfterSession.GetGlobalVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(newSesAfterSesGlobalWant6, convey.ShouldEqual, v6_val)
+		v6_ctx_val, err := newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, true)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v6_ctx_val, convey.ShouldEqual, v6_val)
 	}
 
 	checkWant2 := func(ses, existSes, newSesAfterSession *Session,
@@ -414,19 +432,31 @@ func TestVariables(t *testing.T) {
 		v1_val, err := ses.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(sameSesWant1, convey.ShouldEqual, v1_val)
+		v1_ctx_val, err := ses.txnCompileCtx.ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v1_ctx_val, convey.ShouldEqual, v1_val)
 
 		//exist session
 		v2_val, err := existSes.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(existSesWant2, convey.ShouldEqual, v2_val)
+		v2_ctx_val, err := existSes.txnCompileCtx.ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v2_ctx_val, convey.ShouldEqual, v2_val)
 
 		//new session after session
 		v3_val, err := newSesAfterSession.GetSessionVar(v)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(newSesAfterSesWant3, convey.ShouldEqual, v3_val)
+		v3_ctx_val, err := newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, false)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(v3_ctx_val, convey.ShouldEqual, v3_val)
 
 		//same session global
 		_, err = ses.GetGlobalVar(v)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		_, err = ses.txnCompileCtx.ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
 
@@ -434,9 +464,15 @@ func TestVariables(t *testing.T) {
 		_, err = existSes.GetGlobalVar(v)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		_, err = existSes.txnCompileCtx.ResolveVariable(v, true, true)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
 
 		//new session after session global
 		_, err = newSesAfterSession.GetGlobalVar(v)
+		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
+		_, err = newSesAfterSession.txnCompileCtx.ResolveVariable(v, true, true)
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(err, convey.ShouldBeError, errorSystemVariableSessionEmpty)
 	}
