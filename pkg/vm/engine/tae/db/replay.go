@@ -150,19 +150,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 			panic(err)
 		}
 		id := info.GetDest()
-		tb, err := database.GetTableEntryByID(id.TableID)
-		if err != nil {
-			panic(err)
-		}
-		// attrs := make([]string, len(tb.GetSchema().ColDefs))
-		// for i := range attrs {
-		// 	attrs[i] = tb.GetSchema().ColDefs[i].Name
-		// }
-		seg, err := tb.GetSegmentByID(id.SegmentID)
-		if err != nil {
-			panic(err)
-		}
-		blk, err := seg.GetBlockEntryByID(id.BlockID)
+		blk, err := database.GetBlockEntryByID(id)
 		if err != nil {
 			panic(err)
 		}
@@ -178,7 +166,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 		}
 		start := info.GetSrcOff()
 		end := start + info.GetSrcLen() - 1
-		bat, err := db.window(tb.GetSchema(), data, deletes, start, end)
+		bat, err := db.window(blk.GetSchema(), data, deletes, start, end)
 		if err != nil {
 			panic(err)
 		}
@@ -239,15 +227,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	deleteNode := cmd.GetDeleteNode()
 	deleteNode.SetLogIndex(idxCtx)
 	id := deleteNode.GetID()
-	tb, err := database.GetTableEntryByID(id.TableID)
-	if err != nil {
-		panic(err)
-	}
-	seg, err := tb.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	blk, err := seg.GetBlockEntryByID(id.BlockID)
+	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
 		panic(err)
 	}
@@ -281,15 +261,7 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	appendNode := cmd.GetAppendNode()
 	appendNode.SetLogIndex(idxCtx)
 	id := appendNode.GetID()
-	tb, err := database.GetTableEntryByID(id.TableID)
-	if err != nil {
-		panic(err)
-	}
-	seg, err := tb.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	blk, err := seg.GetBlockEntryByID(id.BlockID)
+	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
 		panic(err)
 	}
@@ -325,15 +297,7 @@ func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	updateNode := cmd.GetUpdateNode()
 	updateNode.SetLogIndex(idxCtx)
 	id := updateNode.GetID()
-	tb, err := database.GetTableEntryByID(id.TableID)
-	if err != nil {
-		panic(err)
-	}
-	seg, err := tb.GetSegmentByID(id.SegmentID)
-	if err != nil {
-		panic(err)
-	}
-	blk, err := seg.GetBlockEntryByID(id.BlockID)
+	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
 		panic(err)
 	}
