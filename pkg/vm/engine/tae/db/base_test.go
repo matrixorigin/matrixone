@@ -304,7 +304,7 @@ func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, ski
 			metas = append(metas, meta)
 			it.Next()
 		}
-		segsToMerge:=[]*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
 		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec()
