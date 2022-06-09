@@ -77,7 +77,7 @@ message DNShardInfo {
   uint64 ReplicaID               = 2;
 
   // TODO: per shard stats like CPU/memory/network usage can be added here
-}
+};
 
 // DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
 message DNStoreHeartbeat {
@@ -86,4 +86,66 @@ message DNStoreHeartbeat {
   // Shards is a list of DNShardInfo instances collected on the specified
   // DN store. 
   repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
-}
+};
+
+enum MethodType {
+  CREATE       = 0;
+  DESTROY      = 1;
+  APPEND       = 2;
+  READ         = 3;
+  TRUNCATE     = 4;
+  GET_TRUNCATE = 5;
+  CONNECT      = 6;
+  CONNECT_RO   = 7;
+};
+
+message LogRecord {
+  uint64 Index = 1;
+  bytes Data   = 2;
+};
+
+message Request {
+  MethodType Method   = 1;
+  string Name         = 2;
+  uint64 ShardID      = 3;
+  uint64 Index        = 4;
+  uint64 MaxSize      = 5;
+  int64 Timeout       = 6;
+
+  uint64 DNShardID    = 7;
+  uint64 DNID         = 8;
+
+  uint64 PayloadSize  = 9;
+};
+
+enum ErrorCode {
+  NoError               = 0;
+  Timeout               = 1;
+  Canceled              = 2;
+  InvalidShard          = 3;
+  InvalidTimeout        = 4;
+  InvalidPayload        = 5;
+  InvalidPayloadSize    = 6;
+  Rejected              = 7;
+  ShardNotReady         = 8;
+  SystemClosed          = 9;
+
+  IndexAlreadyTruncated = 100;
+  OutOfRange            = 101;
+  NotLeaseHolder        = 102;
+
+  OtherSystemError      = 1000;
+};
+
+message Response {
+  MethodType Method   = 1;
+  ErrorCode ErrorCode = 2;
+  string ErrorMessage = 3;
+  uint64 ShardID      = 4;
+  uint64 Index        = 5;
+  uint64 LastIndex    = 6;
+};
+
+message LogRecordResponse {
+  repeated LogRecord Records = 1 [(gogoproto.nullable) = false];
+};
