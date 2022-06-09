@@ -24,13 +24,13 @@ import (
 
 func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.(*types.Bytes)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	if inputVector.IsScalarNull() {
+		return proc.AllocScalarNullVector(resultType), nil
+	}
+	inputValues := inputVector.Col.(*types.Bytes)
 	// resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := &types.Bytes{
 			Data:    make([]byte, len(inputValues.Data)),
