@@ -234,11 +234,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	fileTs, err := blk.GetFileTs()
-	if err != nil {
-		panic(err)
-	}
-	if fileTs > deleteNode.GetCommitTSLocked() {
+	if deleteNode.GetCommitTSLocked() <= blk.GetBlockData().GetMaxCheckpointTS() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -268,11 +264,7 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	fileTs, err := blk.GetFileTs()
-	if err != nil {
-		panic(err)
-	}
-	if fileTs > appendNode.GetCommitTS() {
+	if appendNode.GetCommitTS() <= blk.GetBlockData().GetMaxCheckpointTS() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -304,11 +296,7 @@ func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	fileTs, err := blk.GetFileTs()
-	if err != nil {
-		panic(err)
-	}
-	if fileTs > updateNode.GetCommitTSLocked() {
+	if updateNode.GetCommitTSLocked() <= blk.GetBlockData().GetMaxCheckpointTS() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}

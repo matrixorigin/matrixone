@@ -726,42 +726,42 @@ func TestReplayTableRows(t *testing.T) {
 	assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
 	assert.Nil(t, txn.Commit())
 
-	// txn, err = tae2.StartTxn(nil)
-	// assert.Nil(t, err)
-	// db, err = txn.GetDatabase("db")
-	// assert.Nil(t, err)
-	// tbl, err = db.GetRelationByName(schema.Name)
-	// assert.Nil(t, err)
-	// blkIterator := tbl.MakeBlockIt()
-	// for blkIterator.Valid() {
-	// 	blk := blkIterator.GetBlock()
-	// 	blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	// 	blkdata.Flush()
-	// 	blkIterator.Next()
-	// }
-	// err = tae2.Catalog.Checkpoint(txn.GetStartTS())
-	// assert.Nil(t, err)
-	// assert.Nil(t, txn.Commit())
-	// testutils.WaitExpect(4000, func() bool {
-	// 	return tae2.Wal.GetPenddingCnt() == 0
-	// })
-	// assert.Equal(t, uint64(0), tae2.Wal.GetPenddingCnt())
+	txn, err = tae2.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	tbl, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	blkIterator = tbl.MakeBlockIt()
+	for blkIterator.Valid() {
+		blk := blkIterator.GetBlock()
+		blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		blkdata.Flush()
+		blkIterator.Next()
+	}
+	err = tae2.Catalog.Checkpoint(txn.GetStartTS())
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+	testutils.WaitExpect(4000, func() bool {
+		return tae2.Wal.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae2.Wal.GetPenddingCnt())
 
 	err = tae2.Close()
 	assert.Nil(t, err)
 
-	// tae3, err := Open(tae.Dir, nil)
-	// assert.Nil(t, err)
+	tae3, err := Open(tae.Dir, nil)
+	assert.Nil(t, err)
 
-	// txn, err = tae3.StartTxn(nil)
-	// assert.Nil(t, err)
-	// assert.Nil(t, err)
-	// db, err = txn.GetDatabase("db")
-	// assert.Nil(t, err)
-	// tbl, err = db.GetRelationByName(schema.Name)
-	// assert.Nil(t, err)
-	// assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
-	// assert.Nil(t, txn.Commit())
+	txn, err = tae3.StartTxn(nil)
+	assert.Nil(t, err)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	tbl, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
+	assert.Nil(t, txn.Commit())
 
 	// worker := ops.NewOpWorker("xx")
 	// worker.Start()
@@ -789,8 +789,8 @@ func TestReplayTableRows(t *testing.T) {
 	// assert.Nil(t, txn.Commit())
 	// worker.Stop()
 
-	// err = tae3.Close()
-	// assert.Nil(t, err)
+	err = tae3.Close()
+	assert.Nil(t, err)
 
 	// tae4, err := Open(tae.Dir, nil)
 	// assert.Nil(t, err)
