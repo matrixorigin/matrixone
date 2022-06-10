@@ -182,6 +182,14 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				bf.deletes.file[0] = file
 				sf.replayInfo(bf.deletes.stat, file)
 			}
+		case "idx":
+			if ts == 0 && len(fileName) < 3 {
+				bf.indexMeta.file[0] = file
+				sf.replayInfo(bf.indexMeta.stat, file)
+				break
+			}
+			bf.columns[col].indexes[ts].dataFile.file[0] = file
+			sf.replayInfo(bf.columns[col].indexes[ts].dataFile.stat, file)
 		default:
 			panic(any("No Support"))
 		}

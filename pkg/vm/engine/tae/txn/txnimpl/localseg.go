@@ -97,6 +97,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		if err = appendNode.PrepareCommit(); err != nil {
 			return
 		}
+		seg.table.store.IncreateWriteCnt()
 		seg.table.txnEntries = append(seg.table.txnEntries, appendNode)
 	}
 	if seg.tableHandle != nil {
