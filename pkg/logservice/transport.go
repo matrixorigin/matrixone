@@ -77,7 +77,7 @@ func readSize(conn net.Conn, buf []byte) (int, error) {
 	if len(buf) < 4 {
 		buf = make([]byte, 4)
 	}
-	szbuf := buf[4:]
+	szbuf := buf[:4]
 	tt := time.Now().Add(requestReadDuration)
 	if err := conn.SetWriteDeadline(tt); err != nil {
 		return 0, err
@@ -120,7 +120,8 @@ func writeRequest(conn net.Conn,
 	return nil
 }
 
-func readRequest(conn net.Conn, buf []byte, payload []byte) (logservice.Request, []byte, error) {
+func readRequest(conn net.Conn,
+	buf []byte, payload []byte) (logservice.Request, []byte, error) {
 	size, err := readSize(conn, buf)
 	if err != nil {
 		return logservice.Request{}, nil, err
@@ -152,7 +153,7 @@ func readRequest(conn net.Conn, buf []byte, payload []byte) (logservice.Request,
 
 func writeResponse(conn net.Conn, resp logservice.Response,
 	records logservice.LogRecordResponse, buf []byte) error {
-	if resp.Size() < len(buf) {
+	if len(buf) < resp.Size()+4 {
 		buf = make([]byte, resp.Size()+4)
 	}
 
@@ -177,14 +178,14 @@ func writeResponse(conn net.Conn, resp logservice.Response,
 			panic(err)
 		}
 		binaryEnc.PutUint32(buf, uint32(len(data)))
-		if _, err := conn.Write(buf); err != nil {
+		if _, err := conn.Write(buf[:4]); err != nil {
 			return err
 		}
 		sent := 0
 		bufSize := int(recvBufSize)
-		for sent < len(buf) {
+		for sent < len(data) {
 			if sent+bufSize > len(data) {
-				bufSize = len(buf) - sent
+				bufSize = len(data) - sent
 			}
 			tt = time.Now().Add(writeDuration)
 			if err := conn.SetWriteDeadline(tt); err != nil {
@@ -197,7 +198,7 @@ func writeResponse(conn net.Conn, resp logservice.Response,
 		}
 	} else {
 		binaryEnc.PutUint32(buf, 0)
-		if _, err := conn.Write(buf); err != nil {
+		if _, err := conn.Write(buf[:4]); err != nil {
 			return err
 		}
 	}
@@ -278,9 +279,10 @@ func readMagicNumber(conn net.Conn, buf []byte) error {
 	if err := conn.SetReadDeadline(tt); err != nil {
 		return err
 	}
-	if len(buf) > len(magicNumber[:]) {
-		buf = buf[:len(magicNumber[:])]
+	if len(buf) < len(magicNumber[:]) {
+		buf = make([]byte, len(magicNumber[:]))
 	}
+	buf = buf[:len(magicNumber[:])]
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		return err
 	}
