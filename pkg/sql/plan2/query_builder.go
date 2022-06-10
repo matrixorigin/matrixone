@@ -99,7 +99,6 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 				}
 				colIdx++
 			}
-
 		}
 	} else if node.NodeType == plan.Node_AGG {
 		childMap := builder.resetNode(node.Children[0])
@@ -133,26 +132,38 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 			colIdx++
 		}
 		// TODO return what?
-	} else if node.NodeType == plan.Node_PROJECT {
+	} else {
 		childMap := builder.resetNode(node.Children[0])
-		// i am a filter node
+		// project sort MATERIAL  valueScan  MATERIAL_SCAN
 		if len(node.ProjectList) == 0 {
 			for _, expr := range node.WhereList {
 				builder.resetPosition(expr, childMap)
 			}
+
+			preNode := builder.qry.Nodes[node.Children[0]]
+			node.ProjectList = make([]*Expr, len(preNode.ProjectList))
+			for prjIdx, prjExpr := range preNode.ProjectList {
+				node.ProjectList[prjIdx] = DeepCopyExpr(prjExpr)
+			}
+			// TODO order by will error
+			for _, orderBy := range node.OrderBy {
+				builder.resetPosition(orderBy.Expr, childMap)
+			}
+			return childMap
+		} else {
+			for _, expr := range node.ProjectList {
+				builder.resetPosition(expr, childMap)
+			}
+			// TODO return what?
 		}
-		for _, expr := range node.ProjectList {
-			builder.resetPosition(expr, childMap)
-		}
-		// TODO return what?
 	}
 	return returnMap
 }
 
 func (builder *QueryBuilder) createQuery() *Query {
-	for _, rootId := range builder.selectNodeIds {
-		builder.resetNode(rootId)
-	}
+	// for _, rootId := range builder.selectNodeIds {
+	// 	builder.resetNode(rootId)
+	// }
 	return builder.qry
 }
 
