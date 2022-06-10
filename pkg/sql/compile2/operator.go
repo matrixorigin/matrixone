@@ -391,10 +391,27 @@ func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
 	}
+	if exprRelPos(e.F.Args[0]) == 1 {
+		return e.F.Args[1], e.F.Args[0]
+	}
 	return e.F.Args[0], e.F.Args[1]
 }
 
 func supportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL
+}
+
+func exprRelPos(expr *plan.Expr) int32 {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col.RelPos
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			if relPos := exprRelPos(e.F.Args[i]); relPos >= 0 {
+				return relPos
+			}
+		}
+	}
+	return -1
 }
