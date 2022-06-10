@@ -112,7 +112,7 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 	case *catalog.EntryCommand:
 		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer, replayer.cache)
 	case *txnimpl.AppendCmd:
-		replayer.db.onReplayAppendCmd(cmd)
+		replayer.db.onReplayAppendCmd(cmd, replayer)
 	case *updates.UpdateCmd:
 		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer)
 	}
@@ -121,7 +121,7 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 	}
 }
 
-func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
+func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
 	var data batch.IBatch
 	var deletes *roaring.Bitmap
 	for _, subTxnCmd := range cmd.Cmds {
@@ -157,11 +157,10 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd) {
 		if blk.CurrOp == catalog.OpSoftDelete {
 			continue
 		}
-		fileTs, err := blk.GetFileTs()
-		if err != nil {
-			panic(err)
+		if observer != nil {
+			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
 		}
-		if fileTs > cmd.Ts {
+		if cmd.Ts <= blk.GetBlockData().GetMaxCheckpointTS() {
 			continue
 		}
 		start := info.GetSrcOff()

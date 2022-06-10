@@ -864,9 +864,95 @@ func TestReplay4(t *testing.T) {
 
 	tae2.Close()
 
-	time.Sleep(time.Second * 2)
 	tae3, err := Open(tae.Dir, nil)
 	assert.NoError(t, err)
 	defer tae3.Close()
+}
 
+// Testing Steps
+func TestReplay5(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+
+	schema := catalog.MockSchemaAll(18, 16)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockData(schema, schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1)
+	bats := compute.SplitBatch(bat, 8)
+
+	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], true)
+	txn, rel := getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	assert.NoError(t, txn.Commit())
+	forceCompactABlocks(t, tae, defaultTestDB, schema, false)
+
+	_ = tae.Close()
+	tae, err := Open(tae.Dir, nil)
+	assert.NoError(t, err)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	err = rel.Append(bats[1])
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	assert.NoError(t, txn.Commit())
+	t.Logf("LSN=%d", txn.GetLSN())
+
+	forceCompactABlocks(t, tae, defaultTestDB, schema, false)
+
+	_ = tae.Close()
+	tae, err = Open(tae.Dir, nil)
+	assert.NoError(t, err)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	assert.NoError(t, txn.Commit())
+	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	assert.NoError(t, err)
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	_ = tae.Close()
+	tae, err = Open(tae.Dir, nil)
+	assert.NoError(t, err)
+	printCheckpointStats(t, tae)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	assert.NoError(t, txn.Commit())
+	forceCompactABlocks(t, tae, defaultTestDB, schema, false)
+	time.Sleep(time.Millisecond * 50)
+	printCheckpointStats(t, tae)
+
+	_ = tae.Close()
+
+	// compactBlocks(t, tae2, defaultTestDB, schema, false)
+	// txn, rel = getDefaultRelation(t, tae2, schema.Name)
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	// err = rel.Append(bats[2])
+	// checkAllColRowsByScan(t, rel,
+	// 	compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1])+compute.LengthOfBatch(bats[2]), false)
+	// assert.NoError(t, txn.Commit())
+
+	// compactBlocks(t, tae2, defaultTestDB, schema, false)
+
+	// txn, rel = getDefaultRelation(t, tae2, schema.Name)
+	// checkAllColRowsByScan(t, rel,
+	// 	compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1])+compute.LengthOfBatch(bats[2]), false)
+	// assert.NoError(t, txn.Commit())
+
+	// mergeBlocks(t, tae2, defaultTestDB, schema, false)
+
+	// txn, rel = getDefaultRelation(t, tae2, schema.Name)
+	// checkAllColRowsByScan(t, rel,
+	// 	compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1])+compute.LengthOfBatch(bats[2]), false)
+	// err = rel.Append(bats[3])
+	// assert.NoError(t, err)
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	// assert.NoError(t, txn.Commit())
+	// t.Log(tae2.Catalog.SimplePPString(common.PPL1))
+
+	// tae2.Close()
+
+	// tae3, err := Open(tae.Dir, nil)
+	// assert.NoError(t, err)
+	// defer tae3.Close()
 }
