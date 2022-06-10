@@ -16,6 +16,7 @@ package compile2
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
@@ -313,14 +314,18 @@ func constructGroup(n *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
+			dist := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+			f.F.Func.Obj = int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
 			if err != nil {
 				panic(err)
 			}
 			aggs[i] = aggregate.Aggregate{
-				Op: fun.AggregateInfo,
-				E:  f.F.Args[0],
+				E:    f.F.Args[0],
+				Dist: dist,
+				Op:   fun.AggregateInfo,
 			}
+
 		}
 	}
 

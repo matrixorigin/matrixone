@@ -85,7 +85,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcDef := funcExpr.F.GetFunc()
 
-	funcProtoType, err := function.GetFunctionByID(funcDef.Obj)
+	funcProtoType, err := function.GetFunctionByID(funcDef.Obj & function.DistinctMask)
 	if err != nil {
 		return result, errors.New(errno.InvalidName, "invalid function or opreator name '"+funcName+"'")
 	}
