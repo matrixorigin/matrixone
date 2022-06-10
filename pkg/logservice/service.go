@@ -154,7 +154,16 @@ func (s *Service) serve(conn net.Conn) {
 		}
 		// with error already encoded into the resp
 		resp, records := s.handle(req, payload)
-		if err := writeResponse(conn, resp, records, recvBuf); err != nil {
+		var recs []byte
+		if len(records.Records) > 0 {
+			data, err := records.Marshal()
+			if err != nil {
+				panic(err)
+			}
+			resp.PayloadSize = uint64(len(data))
+			recs = data
+		}
+		if err := writeResponse(conn, resp, recs, recvBuf); err != nil {
 			plog.Errorf("failed to write response, %v", err)
 			return
 		}

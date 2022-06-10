@@ -160,7 +160,7 @@ func testWriteResponse(t *testing.T, sz int) {
 		ShardID:   1234567890,
 		LastIndex: 234567890,
 	}
-	assert.NoError(t, writeResponse(conn, resp, logservice.LogRecordResponse{}, nil))
+	assert.NoError(t, writeResponse(conn, resp, nil, nil))
 
 	szbuf := make([]byte, 4)
 	_, err := conn.Read(szbuf)
@@ -179,18 +179,18 @@ func testWriteResponse(t *testing.T, sz int) {
 	}
 	rand.Read(records.Records[0].Data)
 	conn = newTestConn()
-	assert.NoError(t, writeResponse(conn, resp, records, nil))
+	recs, err := records.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	resp.PayloadSize = uint64(len(recs))
+	assert.NoError(t, writeResponse(conn, resp, recs, nil))
 
 	ignored := make([]byte, 4+resp.Size())
 	_, err = conn.Read(ignored)
 	assert.NoError(t, err)
 
-	szbuf = make([]byte, 4)
-	n, err := conn.Read(szbuf)
-	assert.NoError(t, err)
-	assert.Equal(t, 4, n)
-	assert.Equal(t, records.Size(), int(binaryEnc.Uint32(szbuf)))
-	data = make([]byte, binaryEnc.Uint32(szbuf))
+	data = make([]byte, resp.PayloadSize)
 	_, err = conn.Read(data)
 	assert.NoError(t, err)
 	recordsResult := logservice.LogRecordResponse{}
@@ -213,19 +213,23 @@ func testReadResponse(t *testing.T, sz int) {
 		ShardID:   1234567890,
 		LastIndex: 234567890,
 	}
-	records := logservice.LogRecordResponse{}
-	assert.NoError(t, writeResponse(conn, resp, records, nil))
+	assert.NoError(t, writeResponse(conn, resp, nil, nil))
 	respResult, recordsResult, err := readResponse(conn, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, resp, respResult)
-	assert.Equal(t, records, recordsResult)
+	assert.Equal(t, logservice.LogRecordResponse{}, recordsResult)
 
-	records = logservice.LogRecordResponse{
+	records := logservice.LogRecordResponse{
 		Records: []logservice.LogRecord{
 			{Data: make([]byte, sz)},
 		},
 	}
-	assert.NoError(t, writeResponse(conn, resp, records, nil))
+	recs, err := records.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	resp.PayloadSize = uint64(len(recs))
+	assert.NoError(t, writeResponse(conn, resp, recs, nil))
 	respResult, recordsResult, err = readResponse(conn, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, resp, respResult)

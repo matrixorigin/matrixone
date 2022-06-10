@@ -152,9 +152,12 @@ func readRequest(conn net.Conn,
 }
 
 func writeResponse(conn net.Conn, resp logservice.Response,
-	records logservice.LogRecordResponse, buf []byte) error {
+	records []byte, buf []byte) error {
 	if len(buf) < resp.Size()+4 {
 		buf = make([]byte, resp.Size()+4)
+	}
+	if resp.PayloadSize != uint64(len(records)) {
+		panic("Payload size not set")
 	}
 
 	n, err := resp.MarshalTo(buf[4:])
@@ -172,34 +175,21 @@ func writeResponse(conn net.Conn, resp logservice.Response,
 		return err
 	}
 
-	if len(records.Records) > 0 {
-		data, err := records.Marshal()
-		if err != nil {
-			panic(err)
-		}
-		binaryEnc.PutUint32(buf, uint32(len(data)))
-		if _, err := conn.Write(buf[:4]); err != nil {
-			return err
-		}
+	if len(records) > 0 {
 		sent := 0
 		bufSize := int(recvBufSize)
-		for sent < len(data) {
-			if sent+bufSize > len(data) {
-				bufSize = len(data) - sent
+		for sent < len(records) {
+			if sent+bufSize > len(records) {
+				bufSize = len(records) - sent
 			}
 			tt = time.Now().Add(writeDuration)
 			if err := conn.SetWriteDeadline(tt); err != nil {
 				return err
 			}
-			if _, err := conn.Write(data[sent : sent+bufSize]); err != nil {
+			if _, err := conn.Write(records[sent : sent+bufSize]); err != nil {
 				return err
 			}
 			sent += bufSize
-		}
-	} else {
-		binaryEnc.PutUint32(buf, 0)
-		if _, err := conn.Write(buf[:4]); err != nil {
-			return err
 		}
 	}
 
@@ -230,11 +220,7 @@ func readResponse(conn net.Conn,
 		panic(err)
 	}
 
-	size, err = readSize(conn, buf)
-	if err != nil {
-		return logservice.Response{}, logservice.LogRecordResponse{}, err
-	}
-
+	size = int(resp.PayloadSize)
 	if size > len(buf) {
 		buf = make([]byte, size)
 	} else {
