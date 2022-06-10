@@ -102,47 +102,43 @@ func (c *client) connectReadOnly(ctx context.Context) error {
 	return c.connect(ctx, pb.MethodType_CONNECT_RO)
 }
 
-func (c *client) getRequest(ctx context.Context, mt pb.MethodType) (pb.Request, error) {
+func (c *client) request(ctx context.Context,
+	mt pb.MethodType, payload []byte, index Lsn,
+	maxSize uint64) (pb.Response, []pb.LogRecord, error) {
 	timeout, err := getTimeoutFromContext(ctx)
 	if err != nil {
-		return pb.Request{}, err
+		return pb.Response{}, nil, err
 	}
-	return pb.Request{
-		Method:  mt,
-		ShardID: c.cfg.ShardID,
-		DNID:    c.cfg.ReplicaID,
-		Timeout: int64(timeout),
-	}, nil
+	req := pb.Request{
+		Method:      mt,
+		ShardID:     c.cfg.ShardID,
+		DNID:        c.cfg.ReplicaID,
+		Timeout:     int64(timeout),
+		Index:       index,
+		MaxSize:     maxSize,
+		PayloadSize: uint64(len(payload)),
+	}
+	if err := writeRequest(c.conn, req, c.buf, payload); err != nil {
+		return pb.Response{}, nil, err
+	}
+	resp, recs, err := readResponse(c.conn, c.buf)
+	if err != nil {
+		return pb.Response{}, nil, err
+	}
+	err = toError(resp)
+	if err != nil {
+		return pb.Response{}, nil, err
+	}
+	return resp, recs.Records, nil
 }
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
-	req, err := c.getRequest(ctx, mt)
-	if err != nil {
-		return err
-	}
-	if err := writeRequest(c.conn, req, c.buf, nil); err != nil {
-		return err
-	}
-	resp, _, err := readResponse(c.conn, c.buf)
-	if err != nil {
-		return err
-	}
-	return toError(resp)
+	_, _, err := c.request(ctx, mt, nil, 0, 0)
+	return err
 }
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
-	req, err := c.getRequest(ctx, pb.MethodType_APPEND)
-	if err != nil {
-		return 0, err
-	}
-	if err := writeRequest(c.conn, req, c.buf, rec.Data); err != nil {
-		return 0, err
-	}
-	resp, _, err := readResponse(c.conn, c.buf)
-	if err != nil {
-		return 0, err
-	}
-	err = toError(resp)
+	resp, _, err := c.request(ctx, pb.MethodType_APPEND, rec.Data, 0, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -151,55 +147,20 @@ func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 
 func (c *client) read(ctx context.Context,
 	firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
-	req, err := c.getRequest(ctx, pb.MethodType_READ)
+	resp, recs, err := c.request(ctx, pb.MethodType_READ, nil, firstIndex, maxSize)
 	if err != nil {
 		return nil, 0, err
 	}
-	req.Index = firstIndex
-	req.MaxSize = maxSize
-	if err := writeRequest(c.conn, req, c.buf, nil); err != nil {
-		return nil, 0, err
-	}
-	resp, records, err := readResponse(c.conn, c.buf)
-	if err != nil {
-		return nil, 0, err
-	}
-	err = toError(resp)
-	if err != nil {
-		return nil, 0, err
-	}
-	return records.Records, resp.LastIndex, nil
+	return recs, resp.LastIndex, nil
 }
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
-	req, err := c.getRequest(ctx, pb.MethodType_TRUNCATE)
-	if err != nil {
-		return err
-	}
-	req.Index = lsn
-	if err := writeRequest(c.conn, req, c.buf, nil); err != nil {
-		return err
-	}
-	resp, _, err := readResponse(c.conn, c.buf)
-	if err != nil {
-		return err
-	}
-	return toError(resp)
+	_, _, err := c.request(ctx, pb.MethodType_TRUNCATE, nil, lsn, 0)
+	return err
 }
 
 func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
-	req, err := c.getRequest(ctx, pb.MethodType_APPEND)
-	if err != nil {
-		return 0, err
-	}
-	if err := writeRequest(c.conn, req, c.buf, nil); err != nil {
-		return 0, err
-	}
-	resp, _, err := readResponse(c.conn, c.buf)
-	if err != nil {
-		return 0, err
-	}
-	err = toError(resp)
+	resp, _, err := c.request(ctx, pb.MethodType_GET_TRUNCATE, nil, 0, 0)
 	if err != nil {
 		return 0, err
 	}
