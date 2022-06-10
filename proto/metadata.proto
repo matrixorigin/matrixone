@@ -17,7 +17,7 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/metadata";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
-// DN dn node metadata
+// DN dn shard metadata
 message DN {
     // ID the id of the DN. The ID is not modified after the DN is created.
     uint64 id         = 1 [(gogoproto.customname) = "ID"];
