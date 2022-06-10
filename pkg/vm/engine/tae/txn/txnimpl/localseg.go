@@ -82,23 +82,39 @@ func (seg *localSegment) registerInsertNode() {
 }
 
 func (seg *localSegment) ApplyAppend() (err error) {
+	var (
+		destOff      uint32
+		anode        txnif.AppendNode
+		prev         txnif.AppendNode
+		prevAppender data.BlockAppender
+	)
 	for _, ctx := range seg.appends {
-		var (
-			destOff    uint32
-			appendNode txnif.AppendNode
-		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, uint32(compute.LengthOfBatch(bat)), seg.table.store.txn); err != nil {
+		if prevAppender != nil && prevAppender.GetID() == ctx.driver.GetID() {
+			prev = anode
+		} else {
+			if anode != nil {
+				seg.table.store.IncreateWriteCnt()
+				seg.table.txnEntries = append(seg.table.txnEntries, anode)
+			}
+			anode = nil
+			prev = nil
+		}
+		prevAppender = ctx.driver
+		if anode, destOff, err = ctx.driver.ApplyAppend(
+			bat,
+			0,
+			uint32(compute.LengthOfBatch(bat)),
+			seg.table.store.txn,
+			prev); err != nil {
 			return
 		}
-		ctx.driver.Close()
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
-		if err = appendNode.PrepareCommit(); err != nil {
-			return
-		}
+	}
+	if anode != nil {
 		seg.table.store.IncreateWriteCnt()
-		seg.table.txnEntries = append(seg.table.txnEntries, appendNode)
+		seg.table.txnEntries = append(seg.table.txnEntries, anode)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
