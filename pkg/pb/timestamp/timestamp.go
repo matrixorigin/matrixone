@@ -1,54 +1,29 @@
-package pb
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package timestamp
 
 import (
 	"math"
 	"time"
 )
 
-// DN dn
-// TODO: maybe remove to other package
-type DN struct {
+/*
+// String returns the string representation of the HLC timestamp.
+func (lhs Timestamp) String() string {
+	panic("not implemented")
 }
-
-// TxnMeta transaction metadata
-type TxnMeta struct {
-	// ID transction id
-	ID []byte
-	// Status txn status
-	Status TxnStatus
-	// SnapshotTimestamp txn snapshot timestamp, determines the version of data
-	// visible to the transaction. Initialized at the CN node and will not be
-	// modified for the life of the transaction.
-	SnapshotTimestamp Timestamp
-}
-
-type TxnStatus struct {
-}
-
-type DNOpRequest struct {
-}
-
-type DNOpResponse struct {
-}
-
-type TxnError struct {
-}
-
-// Timestamp is a HLC time value. All its field should never be accessed
-// directly by its users.
-type Timestamp struct {
-	// PhysicalTime is the physical component of the HLC, it is read from a node's
-	// wall clock time as Unix epoch time in nanoseconds. HLC requires this field
-	// to be monotonically increase on each node.
-	PhysicalTime int64 `protobuf:"varint,1,opt,name=physical_time,json=physicalTime,proto3" json:"physical_time,omitempty"`
-	// LogicalTime is the logical component of the HLC, its value is maintained
-	// according to the HLC algorithm. The HLC paper further establishes that its
-	// value will not overflow in a real production environment.
-	LogicalTime          uint32   `protobuf:"varint,2,opt,name=logical_time,json=logicalTime,proto3" json:"logical_time,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
-}
+*/
 
 // IsEmpty returns a boolean value indicating whether the current timestamp
 // is an empty value.

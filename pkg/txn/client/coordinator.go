@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/pb"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -30,7 +30,7 @@ func WithTxnLogger(logger *zap.Logger) TxnOption {
 func WithDelayWrites() TxnOption {
 	return func(tc *txnCoordinator) {
 		tc.delayWrites = true
-		tc.mu.cachedWrites = make(map[uint64][]pb.DNOpRequest)
+		tc.mu.cachedWrites = make(map[uint64][]txn.DNOpRequest)
 	}
 }
 
@@ -43,14 +43,14 @@ type txnCoordinator struct {
 
 	mu struct {
 		sync.RWMutex
-		txn          pb.TxnMeta
-		cachedWrites map[uint64][]pb.DNOpRequest
+		txn          txn.TxnMeta
+		cachedWrites map[uint64][]txn.DNOpRequest
 	}
 }
 
-func newTxnCoordinator(sender TxnSender, txn pb.TxnMeta, options ...TxnOption) *txnCoordinator {
+func newTxnCoordinator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnCoordinator {
 	tc := &txnCoordinator{sender: sender}
-	tc.mu.txn = txn
+	tc.mu.txn = txnMeta
 
 	for _, opt := range options {
 		opt(tc)
@@ -67,7 +67,7 @@ func (tc *txnCoordinator) adjust() {
 	if len(tc.mu.txn.ID) == 0 {
 		tc.logger.Fatal("missing txn id")
 	}
-	if tc.mu.txn.SnapshotTimestamp.IsEmpty() {
+	if tc.mu.txn.SnapshotTS.IsEmpty() {
 		tc.logger.Fatal("missing txn snapshot timestamp")
 	}
 	if tc.readyOnly && tc.delayWrites {
@@ -79,15 +79,15 @@ func (tc *txnCoordinator) adjust() {
 	}
 }
 
-func (tc *txnCoordinator) Read(ctx context.Context, ops []pb.DNOpRequest) ([]pb.DNOpResponse, error) {
+func (tc *txnCoordinator) Read(ctx context.Context, ops []txn.DNOpRequest) ([]txn.DNOpResponse, error) {
 	return nil, nil
 }
 
-func (tc *txnCoordinator) Write(ctx context.Context, ops []pb.DNOpRequest) ([]pb.DNOpResponse, error) {
+func (tc *txnCoordinator) Write(ctx context.Context, ops []txn.DNOpRequest) ([]txn.DNOpResponse, error) {
 	return nil, nil
 }
 
-func (tc *txnCoordinator) WriteAndCommit(ctx context.Context, ops []pb.DNOpRequest) ([]pb.DNOpResponse, error) {
+func (tc *txnCoordinator) WriteAndCommit(ctx context.Context, ops []txn.DNOpRequest) ([]txn.DNOpResponse, error) {
 	return nil, nil
 }
 

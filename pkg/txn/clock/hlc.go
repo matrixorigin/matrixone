@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/pb"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 func toMicrosecond(nanoseconds int64) int64 {
@@ -52,7 +52,7 @@ type HLCClock struct {
 		// section 3.3 of the HLC paper.
 		maxLearnedPhysicalTime int64
 		// ts records the last HLC timestamp returned by the Now() method.
-		ts pb.Timestamp
+		ts timestamp.Timestamp
 	}
 }
 
@@ -103,15 +103,15 @@ func (c *HLCClock) MaxOffset() time.Duration {
 
 // Now returns the current HLC timestamp and the upper bound timestamp of the
 // current time in hlc.
-func (c *HLCClock) Now() (pb.Timestamp, pb.Timestamp) {
+func (c *HLCClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	now := c.now()
-	return now, pb.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset)}
+	return now, timestamp.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset)}
 }
 
 // Update is called whenever messages are received from other nodes. HLC
 // timestamp carried by those messages are used to update the local HLC
 // clock to capture casual relationships.
-func (c *HLCClock) Update(m pb.Timestamp) {
+func (c *HLCClock) Update(m timestamp.Timestamp) {
 	c.update(m)
 }
 
@@ -187,14 +187,14 @@ func (c *HLCClock) handleClockJump(oldPts int64, newPts int64) {
 
 // now returns the current HLC timestamp. it implements the Send or Local event
 // part of Figure 5 of the HLC paper.
-func (c *HLCClock) now() pb.Timestamp {
+func (c *HLCClock) now() timestamp.Timestamp {
 	newPts := c.getPhysicalClock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mu.ts.PhysicalTime >= newPts {
 		c.mu.ts.LogicalTime++
 	} else {
-		c.mu.ts = pb.Timestamp{PhysicalTime: newPts}
+		c.mu.ts = timestamp.Timestamp{PhysicalTime: newPts}
 	}
 
 	return c.mu.ts
@@ -202,7 +202,7 @@ func (c *HLCClock) now() pb.Timestamp {
 
 // update updates the HLCClock based on the received Timestamp, it implements
 // the Receive Event of message m part of Figure 5 of the HLC paper.
-func (c *HLCClock) update(m pb.Timestamp) {
+func (c *HLCClock) update(m timestamp.Timestamp) {
 	newPts := c.getPhysicalClock()
 
 	c.mu.Lock()
@@ -210,7 +210,7 @@ func (c *HLCClock) update(m pb.Timestamp) {
 	if newPts > c.mu.ts.PhysicalTime && newPts > m.PhysicalTime {
 		// local wall time is the max
 		// keep the physical time, reset the logical time
-		c.mu.ts = pb.Timestamp{PhysicalTime: newPts}
+		c.mu.ts = timestamp.Timestamp{PhysicalTime: newPts}
 	} else if m.PhysicalTime == c.mu.ts.PhysicalTime {
 		if m.LogicalTime > c.mu.ts.LogicalTime {
 			// received physical time is equal to the local physical time, and it

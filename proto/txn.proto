@@ -12,9 +12,12 @@
 // limitations under the License.
 
 syntax = "proto3";
-option go_package = "/txn";
+package txn; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/txn";
 
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "timestamp.proto";
+import "metadata.proto";
 
 
 // TxnStatus transaction status
@@ -61,6 +64,119 @@ enum TxnStatus {
     Aborted   = 5;
 }
 
+// TxnMeta transaction metadata
 message TxnMeta {
-     Timestamp TS = 1;
+    // ID transaction id, generated at the CN node at the time of transaction creation, 
+    // globally unique.
+    bytes               id         = 1 [(gogoproto.customname) = "ID"];
+    // Status transaction status
+    TxnStatus           status     = 2;
+    // SnapshotTS transaction read timestamp, generated at the CN node at the time of 
+    // transaction creation. All data.TS < txn.SnapshotTS is visible for the current 
+    // transaction.
+    timestamp.Timestamp snapshotTS = 3 [(gogoproto.nullable) = false];
+    // PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
+    timestamp.Timestamp preparedTS = 4;
+    // CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
+    timestamp.Timestamp commitTS   = 5;
+}
+
+// CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 
+// single transaction, then the transaction becomes a 2pc transaction.
+message CNOpRequest {
+    // OpCode request operation type
+    uint32      opCode  = 1;
+    // Payload the content of the request, TxnClient does not perceive the exact
+    // format and content
+    bytes       payload = 2;
+    // Target target to which the request was sent
+	metadata.DN target  = 3; 
+}
+
+// CNOpResponse cn read/write response, DN -> CN. A request corresponds to a response.
+message CNOpResponse {
+    // Payload response payload
+	bytes payload = 1;
+}
+
+// TxnOp transaction operations
+enum TxnOp {
+    // Read transaction read
+    Read              = 0;
+    // Write transaction write
+    Write             = 1;
+    // Commit commit transaction
+    Commit            = 2;
+    // Rollback rollback transaction
+    Rollback          = 3;
+    // Prepare when DN(Coordinator) receives a commit request from CN, it sends a prepare to 
+    // each DN(partition)
+    Prepare           = 4;
+    // GetStatus query the status of a transaction on a DN. When a DN encounters a transaction
+    // in the Prepared state, it needs to go to the DN(Coordinator) to query the status of the 
+    // current transaction. When a DN encounters a transaction in the Prepared state during the 
+    // recover, it needs to query the status of the transaction on each DN(partition) to determine
+    // if the transaction is committed.
+    GetStatus         = 5;
+    // CommitPartition after the 2pc transaction is committed, the temporary data on each DN needs
+    // to be explicitly converted to committed data.
+    CommitPartition   = 6;
+    // RollbackPartition after the 2pc transaction is aborted, the temporary data on each DN needs
+    // to cleanup.
+    RollbackPartition = 7;
+}
+
+// TxnRequest transaction request. 
+// 1. CN -> DN (TxnOp.Read, TxnOp.Write, TxnOp.Commit, TxnOp.Rollback)
+// 2. DN -> DN (TxnOp.Prepare, TxnOp.GetStatus, TxnOp.CommitPartition, TxnOp.RollbackPartition)
+message TxnRequest {
+    TxnMeta                     txn                      = 1;
+    TxnOp                       op                       = 2;
+    CNOpRequest                 cnRequest                = 3 [(gogoproto.customname) = "CNRequest"]; 
+    TxnCommitRequest            commitRequest            = 4;
+    TxnRollbackRequest          rollbackRequest          = 5;
+    TxnPrepareRequest           prepareRequest           = 6;
+    TxnGetStatusRequest         getStatusRequest         = 7;
+    TxnCommitPartitionRequest   commitPartitionRequest   = 8;
+    TxnRollbackPartitionRequest rollbackPartitionRequest = 9;
+}
+
+// TxnCommitRequest CN sent the commit request to coordinator DN.
+message TxnCommitRequest {
+    // Partitions DNs for which data has been written in the current transaction.
+    repeated metadata.DN partitions = 1 [(gogoproto.nullable) = false]; 
+}
+
+// TxnCommitRequest CN sent the rollback request to coordinator DN.
+message TxnRollbackRequest {
+    // Partitions DNs for which data has been written in the current transaction.
+    repeated metadata.DN partitions = 1 [(gogoproto.nullable) = false]; 
+}
+
+// TxnPrepareRequest when a DN(coordinator) receives a Commit request from a CN, if 
+// more than one DN is involved, the 2PC commit process is enabled and the first phase
+// is to send prepare requests to all DNs.
+message TxnPrepareRequest {
+    // Coordinator the coordinator DN.
+    metadata.DN coordinator = 1;
+}
+
+// TxnGetStatusRequest query the status of a transaction on DN
+message TxnGetStatusRequest {
+    // Partition query target DN
+    metadata.DN partition = 1;
+}
+
+// TxnCommitPartitionRequest commit txn on partition. Data needs to be written to the 
+// LogService.
+message TxnCommitPartitionRequest {
+}
+
+// TxnCommitPartitionRequest rollback txn on partition
+message TxnRollbackPartitionRequest {
+}
+
+// TxnError all explicit errors in transaction operations.
+message TxnError {
+
 }

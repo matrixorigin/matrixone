@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/pb"
 	"go.uber.org/zap"
 )
 
@@ -71,13 +71,13 @@ func (client *txnClient) adjust() {
 }
 
 func (client *txnClient) New(options ...TxnOption) TxnCoordinator {
-	txn := pb.TxnMeta{}
-	txn.ID = client.generator.Generate()
+	txnMeta := txn.TxnMeta{}
+	txnMeta.ID = client.generator.Generate()
 
 	now, _ := client.clock.Now()
 	// TODO: Consider how to handle clock offsets. If use Clock-SI, can use the current
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
-	txn.SnapshotTimestamp = now
-	return newTxnCoordinator(client.sender, txn, options...)
+	txnMeta.SnapshotTS = now
+	return newTxnCoordinator(client.sender, txnMeta, options...)
 }

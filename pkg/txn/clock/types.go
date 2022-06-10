@@ -17,7 +17,7 @@ package clock
 import (
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/pb"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // Clock is the interface to the clock used in MatrixOne's timestamp ordering
@@ -30,7 +30,7 @@ type Clock interface {
 	MaxOffset() time.Duration
 	// Now returns the current timestamp and the upper bound of the current time
 	// caused by clock offset.
-	Now() (pb.Timestamp, pb.Timestamp)
+	Now() (timestamp.Timestamp, timestamp.Timestamp)
 	// Update updates the clock based on the received timestamp.
-	Update(ts pb.Timestamp)
+	Update(ts timestamp.Timestamp)
 }

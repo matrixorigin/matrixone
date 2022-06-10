@@ -12,7 +12,8 @@
 // limitations under the License.
 
 syntax = "proto3";
-option go_package = "/hlc";
+package timestamp;
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/timestamp";
 
 // Timestamp is a HLC time value. All its field should never be accessed
 // directly by its users. 
@@ -20,9 +21,9 @@ message Timestamp {
   // PhysicalTime is the physical component of the HLC, it is read from a node's
   // wall clock time as Unix epoch time in nanoseconds. HLC requires this field
   // to be monotonically increase on each node.
-  int64 physical_time = 1;
+  int64 physicalTime = 1;
   // LogicalTime is the logical component of the HLC, its value is maintained
   // according to the HLC algorithm. The HLC paper further establishes that its
   // value will not overflow in a real production environment. 
-  uint32 logical_time = 2;
+  uint32 logicalTime = 2;
 }
