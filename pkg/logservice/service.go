@@ -169,11 +169,7 @@ func (s *Service) handle(req logservice.Request,
 	case logservice.MethodType_DESTROY:
 		panic("not implemented")
 	case logservice.MethodType_APPEND:
-		var lr logservice.LogRecord
-		if err := lr.Unmarshal(payload); err != nil {
-			panic(err)
-		}
-		return s.handleAppend(req, lr), logservice.LogRecordResponse{}
+		return s.handleAppend(req, payload), logservice.LogRecordResponse{}
 	case logservice.MethodType_READ:
 		return s.handleRead(req)
 	case logservice.MethodType_TRUNCATE:
@@ -214,12 +210,11 @@ func (s *Service) handleConnectRO(req logservice.Request) logservice.Response {
 	return resp
 }
 
-func (s *Service) handleAppend(req logservice.Request,
-	record logservice.LogRecord) logservice.Response {
+func (s *Service) handleAppend(req logservice.Request, payload []byte) logservice.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
-	lsn, err := s.store.Append(ctx, req.ShardID, record.Data)
+	lsn, err := s.store.Append(ctx, req.ShardID, payload)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {

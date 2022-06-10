@@ -128,15 +128,13 @@ func TestServiceHandleAppend(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := logservice.LogRecord{
-			Data: getTestAppendCmd(req.DNID, data),
-		}
+		cmd := getTestAppendCmd(req.DNID, data)
 		req = logservice.Request{
 			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
-		resp = s.handleAppend(req, lr)
+		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
@@ -157,15 +155,13 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := logservice.LogRecord{
-			Data: getTestAppendCmd(req.DNID+1, data),
-		}
+		cmd := getTestAppendCmd(req.DNID+1, data)
 		req = logservice.Request{
 			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
-		resp = s.handleAppend(req, lr)
+		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, logservice.ErrorCode_NotLeaseHolder, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.Index)
@@ -186,15 +182,13 @@ func TestServiceHandleRead(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := logservice.LogRecord{
-			Data: getTestAppendCmd(req.DNID, data),
-		}
+		cmd := getTestAppendCmd(req.DNID, data)
 		req = logservice.Request{
 			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
-		resp = s.handleAppend(req, lr)
+		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
@@ -211,7 +205,7 @@ func TestServiceHandleRead(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1), resp.LastIndex)
 		require.Equal(t, 1, len(records.Records))
-		assert.Equal(t, lr.Data, records.Records[0].Data)
+		assert.Equal(t, cmd, records.Records[0].Data)
 	}
 	runServiceTest(t, fn)
 }
@@ -229,15 +223,13 @@ func TestServiceTruncate(t *testing.T) {
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
-		lr := logservice.LogRecord{
-			Data: getTestAppendCmd(req.DNID, data),
-		}
+		cmd := getTestAppendCmd(req.DNID, data)
 		req = logservice.Request{
 			Method:  logservice.MethodType_APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
-		resp = s.handleAppend(req, lr)
+		resp = s.handleAppend(req, cmd)
 		assert.Equal(t, logservice.ErrorCode_NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
