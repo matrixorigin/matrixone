@@ -46,13 +46,19 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, err
 	}
 	bs := vec.Col.([]bool)
-	sels := make([]int64, 0, 8)
-	for i, b := range bs {
-		if b {
-			sels = append(sels, int64(i))
+	if vec.IsScalar() {
+		if bs[0] == false {
+			bat.Shrink(nil)
 		}
+	} else {
+		sels := make([]int64, 0, 8)
+		for i, b := range bs {
+			if b {
+				sels = append(sels, int64(i))
+			}
+		}
+		bat.Shrink(sels)
 	}
-	bat.Shrink(sels)
 	proc.Reg.InputBatch = bat
 	return false, nil
 }
