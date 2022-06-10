@@ -346,7 +346,17 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 		if expected.IsScalarNull() {
 			return got.IsScalarNull()
 		} else {
-			return reflect.DeepEqual(expected.Col, got.Col)
+			switch expected.Typ.Oid {
+			case types.T_char, types.T_varchar:
+				if got.Typ.Oid != expected.Typ.Oid {
+					return false
+				}
+				t1 := expected.Col.(*types.Bytes)
+				t2 := expected.Col.(*types.Bytes)
+				return reflect.DeepEqual(t1.Get(0), t2.Get(0))
+			default:
+				return reflect.DeepEqual(expected.Col, got.Col)
+			}
 		}
 	} else {
 		if got.IsScalar() {
@@ -371,6 +381,28 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 				}
 			}
 		}
-		return reflect.DeepEqual(expected.Col, got.Col)
+		switch expected.Typ.Oid {
+		case types.T_char, types.T_varchar:
+			if got.Typ.Oid != expected.Typ.Oid {
+				return false
+			}
+			t1 := expected.Col.(*types.Bytes)
+			t2 := expected.Col.(*types.Bytes)
+			l1, l2 := len(t1.Lengths), len(t2.Lengths)
+			if l1 != l2 {
+				return false
+			}
+			for i := 0; i < l1; i++ {
+				if nulls.Contains(expected.Nsp, uint64(i)) {
+					continue
+				}
+				if !reflect.DeepEqual(t1.Get(0), t2.Get(0)) {
+					return false
+				}
+			}
+			return true
+		default:
+			return reflect.DeepEqual(expected.Col, got.Col)
+		}
 	}
 }
