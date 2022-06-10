@@ -25,8 +25,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
 )
 
 const CHAN_CAPACITY = 10000
@@ -252,7 +252,7 @@ func (r *reminder) CleanAll() {
 
 type mfset struct {
 	mfs  []*pb.MetricFamily
-	typ  *pb.MetricType
+	typ  pb.MetricType
 	rows int // how many rows it would take when flushing to db
 }
 
@@ -265,10 +265,10 @@ func newMfset(mfs ...*pb.MetricFamily) *mfset {
 }
 
 func (s *mfset) add(mf *pb.MetricFamily) {
-	if s.typ == nil {
-		s.typ = mf.GetType().Enum()
+	if s.typ == mf.GetType() {
+		s.typ = mf.GetType()
 	}
-	switch *s.typ {
+	switch s.typ {
 	case pb.MetricType_COUNTER, pb.MetricType_GAUGE:
 		s.rows += len(mf.Metric)
 	case pb.MetricType_RAWHIST:
@@ -280,7 +280,7 @@ func (s *mfset) add(mf *pb.MetricFamily) {
 }
 
 func (s *mfset) shouldFlush(opts *collectorOpts) bool {
-	switch *s.typ {
+	switch s.typ {
 	case pb.MetricType_COUNTER, pb.MetricType_GAUGE:
 		return s.rows > opts.metricThreshold
 	case pb.MetricType_RAWHIST:
@@ -292,7 +292,7 @@ func (s *mfset) shouldFlush(opts *collectorOpts) bool {
 
 func (s *mfset) reset() {
 	s.mfs = s.mfs[:0]
-	s.typ = nil
+	s.typ = pb.MetricType_COUNTER // 0
 	s.rows = 0
 }
 
