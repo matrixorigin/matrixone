@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
 )
 
 type dummySqlExecutor struct {
@@ -139,12 +139,12 @@ func TestCollector(t *testing.T) {
 	ts := int64(types.Now())
 	go func() {
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
-			{Name: &names[0], Type: pb.MetricType_COUNTER.Enum(), Node: &nodes[0], Role: &roles[0], Metric: []*pb.Metric{
+			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
 				{
-					Counter: &pb.Counter{Value: 12.0}, Collecttime: &ts,
+					Counter: &pb.Counter{Value: 12.0}, Collecttime: ts,
 				},
 			}},
-			{Name: &names[1], Type: pb.MetricType_RAWHIST.Enum().Enum(), Metric: []*pb.Metric{
+			{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
 				{
 					Label:   []*pb.LabelPair{{Name: "sqltype", Value: "select"}, {Name: "internal", Value: "false"}},
 					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
@@ -153,12 +153,12 @@ func TestCollector(t *testing.T) {
 		})
 
 		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
-			{Name: &names[0], Type: pb.MetricType_COUNTER.Enum(), Node: &nodes[1], Role: &roles[1], Metric: []*pb.Metric{
+			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[1], Role: roles[1], Metric: []*pb.Metric{
 				{
-					Counter: &pb.Counter{Value: 21.0}, Collecttime: &ts,
+					Counter: &pb.Counter{Value: 21.0}, Collecttime: ts,
 				},
 				{
-					Counter: &pb.Counter{Value: 66.0}, Collecttime: &ts,
+					Counter: &pb.Counter{Value: 66.0}, Collecttime: ts,
 				},
 			}},
 		})
