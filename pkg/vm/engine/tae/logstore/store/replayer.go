@@ -23,8 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-type noopObserver struct {
-}
+type noopObserver struct{}
 
 func (o *noopObserver) OnNewEntry(_ int) {
 }
@@ -221,7 +220,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 			r.uncommit[tinfo.Group] = tidMap
 		}
 	case entry.GTInternal:
-		if info.PostCommitVersion > r.ckpVersion {
+		if info.PostCommitVersion >= r.ckpVersion {
 			r.ckpVersion = info.PostCommitVersion
 			replayEty := &replayEntry{
 				payload: make([]byte, e.GetPayloadSize()),

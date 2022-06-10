@@ -2240,6 +2240,8 @@ convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	switch engineType {
+	case types.T_any:
+		col.SetColumnType(defines.MYSQL_TYPE_NULL)
 	case types.T_bool:
 		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
 	case types.T_int8:

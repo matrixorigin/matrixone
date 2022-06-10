@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
-func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *Expr, isAgg bool, err error) {
+func getFunctionExprByNameAndPlanExprs(name string, distinct bool, exprs []*Expr) (resultExpr *Expr, isAgg bool, err error) {
 	// deal with special function
 	switch name {
 	case "+", "-":
@@ -94,7 +94,10 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *
 		Typ: returnType,
 	}
 	isAgg = funcDef.IsAggregate()
-
+	if isAgg && distinct {
+		fe := resultExpr.Expr.(*plan.Expr_F)
+		fe.F.Func.Obj = int64(uint64(fe.F.Func.Obj) | function.Distinct)
+	}
 	return
 }
 
@@ -111,7 +114,7 @@ func rewriteStarToCol(query *Query, node *Node) (string, error) {
 	return "", errors.New(errno.InvalidColumnReference, "can not find any column when rewrite count(*) to starcount(col)")
 }
 
-func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (resultExpr *Expr, isAgg bool, err error) {
+func getFunctionExprByNameAndAstExprs(name string, distinct bool, astExprs []tree.Expr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (resultExpr *Expr, isAgg bool, err error) {
 	// name = strings.ToLower(name)
 	args := make([]*Expr, len(astExprs))
 	// deal with special function [rewrite some ast function expr]
@@ -185,7 +188,7 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 		}
 	}
 
-	resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, args)
+	resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, distinct, args)
 	if paramIsAgg {
 		node.AggList = append(node.AggList, resultExpr)
 		resultExpr = &Expr{
@@ -305,7 +308,7 @@ func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr
 		"+": "date_add",
 		"-": "date_sub",
 	}
-	resultExpr, _, err := getFunctionExprByNameAndPlanExprs(namesMap[name], exprs)
+	resultExpr, _, err := getFunctionExprByNameAndPlanExprs(namesMap[name], false, exprs)
 
 	return resultExpr, err
 }

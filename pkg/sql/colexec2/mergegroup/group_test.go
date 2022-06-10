@@ -306,7 +306,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 		bat.Vecs[i] = vec
 	}
 	{
-		r, _ := aggregate.New(aggregate.Max, ts[0])
+		r, _ := aggregate.New(aggregate.Max, false, ts[0])
 		r.Grows(int(rows), proc.Mp)
 		for i := int64(0); i < rows; i++ {
 			r.Fill(i, i, 1, bat.Vecs[0])

@@ -14,6 +14,11 @@
 
 package function
 
+const (
+	Distinct     = 0x8000000000000000
+	DistinctMask = 0x7FFFFFFFFFFFFFFF
+)
+
 // All function IDs
 const (
 	EQUAL           = iota // =
@@ -275,6 +280,7 @@ var functionIdRegister = map[string]int32{
 	"weekday":       WEEKDAY,
 	"year":          YEAR,
 	"extract":       EXTRACT,
+	"if":            IFF,
 	"iff":           IFF,
 	"date_add":      DATE_ADD,
 	"date_sub":      DATE_SUB,
