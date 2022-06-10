@@ -266,6 +266,7 @@ func up(t1, t2 types.T) int {
 var (
 	strictTypeCheckPointer   = reflect.ValueOf(strictTypeCheck).Pointer()
 	caseWhenTypeCheckPointer = reflect.ValueOf(operator.CwTypeCheckFn).Pointer()
+	ifTypeCheckPointer       = reflect.ValueOf(operator.IfTypeCheckFn).Pointer()
 )
 
 // typeCheckWithLevelUp check if the input parameters meet the function requirements.
@@ -294,7 +295,7 @@ func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
 		}
 		return cost, f.Args
 	case caseWhenTypeCheckPointer:
-		// special type up for case-when operator
+		// special type up rule for case-when operator
 		rt, _ := f.ReturnType()
 		l := len(sources)
 		cost := 0
@@ -331,6 +332,31 @@ func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
 				} else {
 					finalTypes[i] = ScalarNull
 				}
+			}
+			return cost, finalTypes
+		}
+	case ifTypeCheckPointer:
+		// special type up rule for if operator
+		if len(sources) == 3 && sources[0] == types.T_bool {
+			cost := 0
+			rt, _ := f.ReturnType()
+			finalTypes := make([]types.T, 3)
+			finalTypes[0] = types.T_bool
+			if sources[1] != ScalarNull {
+				c := up(sources[1], rt)
+				if c == upFailed {
+					return matchFailed, nil
+				}
+				cost += c
+				finalTypes[1] = rt
+			}
+			if sources[2] != ScalarNull {
+				c := up(sources[2], rt)
+				if c == upFailed {
+					return matchFailed, nil
+				}
+				cost += c
+				finalTypes[1] = rt
 			}
 			return cost, finalTypes
 		}

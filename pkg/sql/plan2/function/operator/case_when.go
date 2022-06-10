@@ -127,14 +127,14 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 	return false
 }
 
-type Ret interface {
+type CwRet interface {
 	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
 		types.Decimal64 | types.Decimal128
 }
 
 // cwGeneral is a general evaluate function for case-when operator
 // whose return type is uint / int / float / bool / date / datetime
-func cwGeneral[T Ret](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
+func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	l := vector.Length(vs[0])
 
 	rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
