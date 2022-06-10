@@ -275,12 +275,12 @@ func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
 	if f.TypeCheck(sources) {
 		return matchDirectly, nil
 	}
-	if len(f.Args) != len(sources) {
-		return matchFailed, nil
-	}
 	switch reflect.ValueOf(f.TypeCheckFn).Pointer() {
 	case strictTypeCheckPointer:
 		// types of function's arguments are clear and not confused.
+		if len(f.Args) != len(sources) {
+			return matchFailed, nil
+		}
 		cost := 0
 		for i := range sources {
 			if sources[i] == ScalarNull {
@@ -299,7 +299,6 @@ func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
 		l := len(sources)
 		cost := 0
 		finalTypes := make([]types.T, l)
-		println(fmt.Sprintf("cms1 : %v", sources))
 		if l >= 2 {
 			for i := 0; i < l-1; i += 2 {
 				if sources[i] != types.T_bool {
@@ -333,7 +332,6 @@ func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
 					finalTypes[i] = ScalarNull
 				}
 			}
-			println(fmt.Sprintf("cms2 : %v", finalTypes))
 			return cost, finalTypes
 		}
 	}
