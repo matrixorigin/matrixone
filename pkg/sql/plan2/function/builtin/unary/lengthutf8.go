@@ -39,21 +39,31 @@ func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	resultElementSize := int(resultType.Size)
-	if inputVector.IsScalar() && inputVector.ConstVectorIsNull() {
-		return proc.AllocScalarNullVector(resultType), nil
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		inputValues, ok := inputVector.Col.(*types.Bytes)
+		if !ok {
+			return nil, errorParameterIsNotString
+		}
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]uint64, 1)
+		vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
+		return resultVector, nil
+	} else {
+		inputValues, ok := inputVector.Col.(*types.Bytes)
+		if !ok {
+			return nil, errorParameterIsNotString
+		}
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues.Lengths)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
+		return resultVector, nil
 	}
-
-	inputValues, ok := inputVector.Col.(*types.Bytes)
-	if !ok {
-		return nil, errorParameterIsNotString
-	}
-	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
-	if err != nil {
-		return nil, err
-	}
-	resultValues := encoding.DecodeUint64Slice(resultVector.Data)
-	resultValues = resultValues[:len(inputValues.Lengths)]
-	nulls.Set(resultVector.Nsp, inputVector.Nsp)
-	vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
-	return resultVector, nil
 }

@@ -158,18 +158,8 @@ func TestLengthUTF8(t *testing.T) {
 	})
 
 	convey.Convey("scalar", t, func() {
-		var ss []string
-		var ll []uint64
-		s := "abc"
-		for i := 0; i < 5; i++ {
-			ss = append(ss, s)
-			ll = append(ll, uint64(len(s)))
-		}
-		ivec := testutil.MakeVarcharVector(ss, nil)
-		wantvec := testutil.MakeUint64Vector(ll, nil)
-		ivec.IsConst = true
-		ivec.Length = len(ss)
-
+		ivec := testutil.MakeScalarVarchar("abc", 5)
+		wantvec := testutil.MakeScalarUint64(3, 5)
 		proc := testutil.NewProc()
 		ovec, err := LengthUTF8([]*vector.Vector{ivec}, proc)
 		convey.So(err, convey.ShouldBeNil)
