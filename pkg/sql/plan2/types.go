@@ -181,13 +181,13 @@ type HavingBinder struct {
 	insideAgg   bool
 }
 
-type SelectBinder struct {
+type ProjectionBinder struct {
 	baseBinder
 	havingBinder *HavingBinder
 }
 
 type OrderBinder struct {
-	*SelectBinder
+	*ProjectionBinder
 	selectList tree.SelectExprs
 }
 
@@ -199,7 +199,7 @@ var _ Binder = (*TableBinder)(nil)
 var _ Binder = (*WhereBinder)(nil)
 var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
-var _ Binder = (*SelectBinder)(nil)
+var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
 
 const (

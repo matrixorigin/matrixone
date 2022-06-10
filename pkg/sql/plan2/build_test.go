@@ -30,7 +30,7 @@ import (
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
-	sql := `select date_add(date '2001-01-01', interval 1 day) as a`
+	sql := `select distinct sum(n_name) t from NATION`
 	// sql := `SELECT REGION.* FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {

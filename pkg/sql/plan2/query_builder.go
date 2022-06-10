@@ -25,6 +25,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
+	return &QueryBuilder{
+		qry: &Query{
+			StmtType: queryType,
+		},
+		compCtx:    ctx,
+		ctxByNode:  []*BindContext{},
+		tagsByNode: [][]int32{},
+		nextTag:    0,
+	}
+}
+
+func (builder *QueryBuilder) createQuery() *Query {
+	// root := len(builder.qry.Nodes)
+	return builder.qry
+}
+
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (int32, error) {
 	// build CTEs
 	err := builder.buildCTE(stmt.With, ctx)
@@ -108,7 +125,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
-	// build WHERE clause
+	// bind WHERE clause && append node to query
 	if clause.Where != nil {
 		whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 		if err != nil {
@@ -126,7 +143,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 	ctx.aggregateTag = builder.genNewTag()
 	ctx.projectTag = builder.genNewTag()
 
-	// build GROUP BY clause
+	// bind GROUP BY clause
 	if clause.GroupBy != nil {
 		groupBinder := NewGroupBinder(builder, ctx)
 		for _, group := range clause.GroupBy {
@@ -137,7 +154,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
-	// build HAVING clause
+	// bind HAVING clause
 	var havingList []*plan.Expr
 	havingBinder := NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
@@ -148,16 +165,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
-	// build SELECT clause
-	selectBinder := NewSelectBinder(builder, ctx, havingBinder)
-	ctx.binder = selectBinder
+	// bind SELECT clause (Projection List)
+	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
+	ctx.binder = projectionBinder
 	for _, selectExpr := range selectList {
 		err = ctx.qualifyColumnNames(selectExpr.Expr)
 		if err != nil {
 			return 0, err
 		}
 
-		expr, err := selectBinder.BindExpr(selectExpr.Expr, 0, true)
+		expr, err := projectionBinder.BindExpr(selectExpr.Expr, 0, true)
 		if err != nil {
 			return 0, err
 		}
@@ -169,6 +186,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		ctx.projects = append(ctx.projects, expr)
 	}
 
+	// bind distinct
+	var distinctList []*Expr
+	if clause.Distinct {
+		distinctList = append(distinctList, ctx.projects...)
+	}
+
 	resultLen := len(ctx.projects)
 	for i, proj := range ctx.projects {
 		exprStr := proj.String()
@@ -177,10 +200,10 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
-	// build ORDER BY clause
+	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
 	if stmt.OrderBy != nil {
-		orderBinder := NewOrderBinder(selectBinder, selectList)
+		orderBinder := NewOrderBinder(projectionBinder, selectList)
 		orderBys = make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
 
 		for _, order := range stmt.OrderBy {
@@ -206,11 +229,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
+	// bind limit/offset clause
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if stmt.Limit != nil {
 		limitBinder := NewLimitBinder()
-
 		if stmt.Limit.Offset != nil {
 			offsetExpr, err = limitBinder.BindExpr(stmt.Limit.Offset, 0, true)
 			if err != nil {
@@ -225,8 +248,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
-	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(selectBinder.boundCols) > 0 {
-		return 0, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", selectBinder.boundCols[0]))
+	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
+		return 0, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0]))
 	}
 
 	// append AGG node
@@ -247,6 +270,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}
 	}
 
+	// append distinct node
+	if len(distinctList) > 0 {
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_AGG,
+			Children: []int32{nodeId},
+			GroupBy:  distinctList,
+		}, ctx)
+	}
+
 	// append PROJECT node
 	nodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -254,9 +286,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		Children:    []int32{nodeId},
 	}, ctx, ctx.projectTag)
 
-	// append SORT node
-	if len(orderBys) > 0 {
-		// if have sort node, we set limit/offset in this node.
+	// append SORT node (include limit, offset)
+	if len(orderBys) > 0 || limitExpr != nil || offsetExpr != nil {
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{nodeId},
@@ -264,10 +295,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 			Limit:    limitExpr,
 			Offset:   offsetExpr,
 		}, ctx)
-	} else {
-		// other wise, we set limit/offset in last node
-		builder.qry.Nodes[nodeId].Limit = limitExpr
-		builder.qry.Nodes[nodeId].Offset = offsetExpr
 	}
 
 	// append result PROJECT node

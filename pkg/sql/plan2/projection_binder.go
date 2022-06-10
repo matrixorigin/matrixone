@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewSelectBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *HavingBinder) *SelectBinder {
-	b := &SelectBinder{
+func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *HavingBinder) *ProjectionBinder {
+	b := &ProjectionBinder{
 		havingBinder: havingBinder,
 	}
 	b.builder = builder
@@ -33,7 +33,7 @@ func NewSelectBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *Havi
 	return b
 }
 
-func (b *SelectBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	astStr := tree.String(astExpr, dialect.MYSQL)
 
 	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
@@ -63,18 +63,18 @@ func (b *SelectBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	return b.baseBindExpr(astExpr, depth)
 }
 
-func (b *SelectBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
+func (b *ProjectionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
 	return b.baseBindColRef(astExpr, depth)
 }
 
-func (b *SelectBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
 	return b.havingBinder.BindAggFunc(funcName, astExpr, depth)
 }
 
-func (b *SelectBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "window functions not yet supported")
 }
 
-func (b *SelectBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
+func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
 	return b.baseBindSubquery(astExpr)
 }

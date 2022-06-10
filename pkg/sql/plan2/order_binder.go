@@ -24,10 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewOrderBinder(selectBinder *SelectBinder, selectList tree.SelectExprs) *OrderBinder {
+func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectExprs) *OrderBinder {
 	return &OrderBinder{
-		SelectBinder: selectBinder,
-		selectList:   selectList,
+		ProjectionBinder: projectionBinder,
+		selectList:       selectList,
 	}
 }
 
@@ -77,7 +77,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		return nil, err
 	}
 
-	expr, err := b.SelectBinder.BindExpr(astExpr, 0, true)
+	expr, err := b.ProjectionBinder.BindExpr(astExpr, 0, true)
 	if err != nil {
 		return nil, err
 	}
