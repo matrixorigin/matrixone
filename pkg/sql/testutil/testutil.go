@@ -67,6 +67,19 @@ func makeScalar[T vecType](value T, length int, typ types.Type) *vector.Vector {
 	return vec
 }
 
+func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
+	vec := NewProc().AllocScalarVector(typ)
+	vec.Length = length
+	l := uint32(len(value))
+	vec.Col = &types.Bytes{
+		Data:    []byte(value),
+		Offsets: []uint32{0},
+		Lengths: []uint32{l},
+	}
+	vec.Data = vec.Col.(*types.Bytes).Data
+	return vec
+}
+
 func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vector {
 	vec := vector.New(typ)
 	bs := &types.Bytes{
@@ -204,8 +217,16 @@ func MakeCharVector(values []string, nsp []uint64) *vector.Vector {
 	return makeStringVector(values, nsp, ct)
 }
 
+func MakeScalarChar(value string, length int) *vector.Vector {
+	return makeScalarString(value, length, ct)
+}
+
 func MakeVarcharVector(values []string, nsp []uint64) *vector.Vector {
 	return makeStringVector(values, nsp, vc)
+}
+
+func MakeScalarVarchar(value string, length int) *vector.Vector {
+	return makeScalarString(value, length, vc)
 }
 
 func MakeDecimal64Vector(values []int64, nsp []uint64) *vector.Vector {
