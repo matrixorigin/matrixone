@@ -18,6 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -31,6 +33,11 @@ const (
 )
 
 var OneInt64s []int64
+
+type evalVector struct {
+	needFree bool
+	vec      *vector.Vector
+}
 
 type Container struct {
 	state         int
@@ -48,14 +55,15 @@ type Container struct {
 
 	bat *batch.Batch
 
+	vecs []evalVector
+
 	decimal64Slice  []types.Decimal64
 	decimal128Slice []types.Decimal128
 }
 
 type Condition struct {
-	Pos   int32
 	Scale int32
-	Typ   types.Type
+	Expr  *plan.Expr
 }
 
 type Argument struct {
