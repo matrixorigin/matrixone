@@ -143,6 +143,21 @@ func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) strin
 	return fmt.Sprintf("%s\n%s", s, body)
 }
 
+func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
+	e.RLock()
+	table, err := e.GetTableEntryByID(id.TableID)
+	e.RUnlock()
+	if err != nil {
+		return
+	}
+	seg, err := table.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		return
+	}
+	blk, err = seg.GetBlockEntryByID(id.BlockID)
+	return
+}
+
 func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	e.RLock()
 	defer e.RUnlock()

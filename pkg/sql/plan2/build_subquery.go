@@ -61,7 +61,7 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, n
 		},
 	}
 	if subquery.Exists {
-		returnExpr, _, err = getFunctionExprByNameAndPlanExprs("exists", []*Expr{returnExpr})
+		returnExpr, _, err = getFunctionExprByNameAndPlanExprs("exists", false, []*Expr{returnExpr})
 		if err != nil {
 			return nil, err
 		}

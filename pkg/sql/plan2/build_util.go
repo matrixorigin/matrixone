@@ -88,7 +88,7 @@ func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) ([]*Exp
 				Typ: leftProjList[leftIdx].Typ,
 			}
 
-			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rightColExpr})
+			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", false, []*Expr{leftColExpr, rightColExpr})
 			if err != nil {
 				return nil, nil, err
 			}
