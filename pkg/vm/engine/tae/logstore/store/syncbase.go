@@ -256,6 +256,7 @@ func (base *syncBase) ReadPostCommitEntry(r io.Reader) (n int64, err error) {
 		if err != nil {
 			return n, err
 		}
+		base.checkpointing[groupID] = ckpInfo
 	}
 	return
 }
@@ -312,7 +313,9 @@ func (base *syncBase) OnReplay(r *replayer) {
 			ckpInfo.MergeCheckpointInfo(ckps)
 		}
 		base.checkpointed.ids[groupId] = base.checkpointing[groupId].GetCheckpointed()
+		base.ckpCnt.ids[groupId] = base.checkpointing[groupId].GetCkpCnt()
 	}
+	r.checkpointrange = base.checkpointing
 }
 
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {

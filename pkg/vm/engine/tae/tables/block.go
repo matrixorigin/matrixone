@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -107,6 +108,12 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	}
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs = ts
+	if ts > 0 {
+		logutil.Infof("Replay BlockIndex %s: ts=%d", meta.Repr(), ts)
+		if err := block.ReplayData(); err != nil {
+			panic(err)
+		}
+	}
 	return block
 }
 
@@ -116,19 +123,33 @@ func (blk *dataBlock) ReplayData() (err error) {
 			return
 		}
 		keysCtx := new(index.KeysCtx)
-		if blk.meta.GetSchema().IsSinglePK() {
-			w, _ := blk.getVectorWrapper(blk.meta.GetSchema().GetSingleSortKeyIdx())
-			defer common.GPool.Free(w.MNode)
-			keysCtx.Keys = &w.Vector
-		} else {
-			sortKeys := blk.meta.GetSchema().SortKey
-			vs := make([]*movec.Vector, sortKeys.Size())
-			for i := range vs {
-				w, _ := blk.getVectorWrapper(sortKeys.Defs[i].Idx)
-				vs[i] = &w.Vector
-				defer common.GPool.Free(w.MNode)
+		err = blk.node.DoWithPin(func() (err error) {
+			var vec *movec.Vector
+			if blk.meta.GetSchema().IsSinglePK() {
+				// TODO: use mempool
+				vec, err = blk.node.GetVectorCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil, nil)
+				if err != nil {
+					return
+				}
+				// TODO: apply deletes
+				keysCtx.Keys = vec
+			} else {
+				sortKeys := blk.meta.GetSchema().SortKey
+				vs := make([]*movec.Vector, sortKeys.Size())
+				for i := range vs {
+					vec, err = blk.node.GetVectorCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil, nil)
+					if err != nil {
+						return
+					}
+					// TODO: apply deletes
+					vs[i] = vec
+				}
+				keysCtx.Keys = model.EncodeCompoundColumn(vs...)
 			}
-			keysCtx.Keys = model.EncodeCompoundColumn(vs...)
+			return
+		})
+		if err != nil {
+			return
 		}
 		keysCtx.Start = 0
 		keysCtx.Count = uint32(movec.Length(keysCtx.Keys))
