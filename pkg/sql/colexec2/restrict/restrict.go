@@ -17,6 +17,8 @@ package restrict
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,6 +34,9 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	var bs []bool = nil
+	var ok = false
+
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		return true, nil
@@ -45,9 +50,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		bat.Clean(proc.Mp)
 		return false, err
 	}
-	bs := vec.Col.([]bool)
+	bs, ok = vec.Col.([]bool)
+	if !ok {
+		return false, errors.New(errno.SyntaxError, "only support logic expression to be filter condition")
+	}
 	if vec.IsScalar() {
-		if bs[0] == false {
+		if !bs[0] {
 			bat.Shrink(nil)
 		}
 	} else {
