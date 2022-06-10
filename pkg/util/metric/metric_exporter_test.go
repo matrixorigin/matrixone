@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 )
@@ -63,7 +63,7 @@ func TestExporterCommonInfo(t *testing.T) {
 		}},
 	}
 	exp.addCommonInfo(mfs)
-	if mfs[0].Metric[0].Collecttime == nil {
+	if mfs[0].Metric[0].Collecttime == 0 {
 		t.Error("addCommonInfo adds no collecttime")
 	}
 	time := mfs[0].Metric[0].GetCollecttime()

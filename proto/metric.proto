@@ -12,51 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 syntax = "proto3";
-option go_package = "./pb;pb";
+package metric;
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/metric";
 
 message LabelPair {
-  string name  = 1;
-  string value = 2;
+    string name  = 1;
+    string value = 2;
 }
 
 enum MetricType {
-  COUNTER    = 0;
-  GAUGE      = 1;
-  RAWHIST    = 2;
+    COUNTER = 0;
+    GAUGE   = 1;
+    RAWHIST = 2;
 }
 
 message Gauge {
-  double value = 1;
+    double value = 1;
 }
 
 message Counter {
-  double value = 1;
+    double value = 1;
 }
 
 message Sample {
-  int64  datetime = 1;
-  double value    = 2;
+    int64 datetime = 1;
+    double value   = 2;
 }
 
 message RawHist {
-  repeated Sample samples      = 1; // RawHist samples
+    repeated Sample samples = 1;  // RawHist samples
 }
 
 message Metric {
-  repeated LabelPair label        = 1;
-  optional Gauge     gauge        = 2;
-  optional Counter   counter      = 3;
-  optional RawHist   rawHist      = 4;
-  optional int64     collecttime  = 5; // same type with types.Datetime in MO
+    repeated LabelPair label = 1;
+    Gauge gauge              = 2;
+    Counter counter          = 3;
+    RawHist rawHist          = 4;
+    int64 collecttime        = 5;  // same type with types.Datetime in MO
 }
 
 message MetricFamily {
-  optional string     name   = 1;
-  optional string     help   = 2;
-  optional MetricType type   = 3;
-  repeated Metric     metric = 4;
-  optional int32      node   = 5;
-  optional string     role   = 6;
+    string name            = 1;
+    string help            = 2;
+    MetricType type        = 3;
+    repeated Metric metric = 4;
+    int32 node             = 5;
+    string role            = 6;
 }

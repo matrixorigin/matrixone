@@ -22,7 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -116,10 +116,10 @@ func (e *metricExporter) send(mfs []*pb.MetricFamily) {
 func (e *metricExporter) addCommonInfo(mfs []*pb.MetricFamily) {
 	now := e.now()
 	for _, mf := range mfs {
-		mf.Role = &e.role
-		mf.Node = &e.nodeid
+		mf.Role = e.role
+		mf.Node = e.nodeid
 		for _, m := range mf.Metric {
-			m.Collecttime = &now
+			m.Collecttime = now
 		}
 	}
 }
