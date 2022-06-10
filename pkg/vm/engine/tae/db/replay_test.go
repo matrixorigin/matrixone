@@ -979,3 +979,56 @@ func TestReplay5(t *testing.T) {
 	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
+
+func TestReplay6(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	schema := catalog.MockSchemaAll(18, 15)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	bat := catalog.MockData(schema, schema.BlockMaxRows*10-1)
+	bats := compute.SplitBatch(bat, 4)
+
+	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], true)
+
+	_ = tae.Close()
+	tae, err := Open(tae.Dir, opts)
+	assert.NoError(t, err)
+
+	txn, rel := getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:1]), false)
+	err = rel.Append(bats[0])
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	compactBlocks(t, tae, defaultTestDB, schema, false)
+
+	_ = tae.Close()
+	tae, err = Open(tae.Dir, opts)
+	assert.NoError(t, err)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
+	err = rel.Append(bats[0])
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	err = rel.Append(bats[3])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	compactBlocks(t, tae, defaultTestDB, schema, false)
+	mergeBlocks(t, tae, defaultTestDB, schema, false)
+	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+
+	_ = tae.Close()
+	tae, err = Open(tae.Dir, opts)
+	assert.NoError(t, err)
+
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:4]), false)
+	assert.NoError(t, txn.Commit())
+	printCheckpointStats(t, tae)
+	_ = tae.Close()
+}
