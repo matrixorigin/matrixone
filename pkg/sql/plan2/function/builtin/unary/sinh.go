@@ -26,18 +26,19 @@ import (
 
 func Sinh[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVec := vs[0]
-	origVecCol := origVec.Col.([]T)
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	if origVec.IsScalar() {
 		if origVec.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		origVecCol := origVec.Col.([]T)
 		resultVector := proc.AllocScalarVector(resultType)
 		results := make([]float64, 1)
 		nulls.Set(resultVector.Nsp, origVec.Nsp)
 		vector.SetCol(resultVector, sinh.Sinh(origVecCol, results))
 		return resultVector, nil
 	} else {
+		origVecCol := origVec.Col.([]T)
 		resultVector, err := proc.AllocVector(resultType, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err

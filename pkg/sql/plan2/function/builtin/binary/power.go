@@ -25,22 +25,23 @@ import (
 
 func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	switch {
-	case left.IsConst && right.IsConst:
+	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues)) // if our input contains null, this step may be redundant,
+		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
 		return resultVector, nil
-	case left.IsConst && !right.IsConst:
+	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 		if err != nil {
 			return nil, err
@@ -50,10 +51,11 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		nulls.Set(resultVector.Nsp, right.Nsp)
 		vector.SetCol(resultVector, power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues))
 		return resultVector, nil
-	case !left.IsConst && right.IsConst:
+	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues)))
 		if err != nil {
 			return nil, err
@@ -64,6 +66,7 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		vector.SetCol(resultVector, power.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
+	leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 	if err != nil {
 		return nil, err

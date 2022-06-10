@@ -219,6 +219,9 @@ func TestGCDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
+	dbCnt := tae.Catalog.CoarseDBCnt()
+	tableCnt := tae.Catalog.CoarseTableCnt()
+	columnCnt := tae.Catalog.CoarseColumnCnt()
 
 	schema1 := catalog.MockSchema(13, 12)
 	schema1.BlockMaxRows = 10
@@ -318,4 +321,7 @@ func TestGCDB(t *testing.T) {
 	assert.Equal(t, 0, len(names))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	printCheckpointStats(t, tae)
+	assert.Equal(t, dbCnt, tae.Catalog.CoarseDBCnt())
+	assert.Equal(t, tableCnt, tae.Catalog.CoarseTableCnt())
+	assert.Equal(t, columnCnt, tae.Catalog.CoarseColumnCnt())
 }

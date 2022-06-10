@@ -169,6 +169,46 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout,
 	return
 }
 
+func Reshape(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
+	switch column[0].Typ.Oid {
+	case types.T_bool:
+		ret = bools.Reshape(column, fromLayout, toLayout)
+	case types.T_int8:
+		ret = int8s.Reshape(column, fromLayout, toLayout)
+	case types.T_int16:
+		ret = int16s.Reshape(column, fromLayout, toLayout)
+	case types.T_int32:
+		ret = int32s.Reshape(column, fromLayout, toLayout)
+	case types.T_int64:
+		ret = int64s.Reshape(column, fromLayout, toLayout)
+	case types.T_uint8:
+		ret = uint8s.Reshape(column, fromLayout, toLayout)
+	case types.T_uint16:
+		ret = uint16s.Reshape(column, fromLayout, toLayout)
+	case types.T_uint32:
+		ret = uint32s.Reshape(column, fromLayout, toLayout)
+	case types.T_uint64:
+		ret = uint64s.Reshape(column, fromLayout, toLayout)
+	case types.T_float32:
+		ret = float32s.Reshape(column, fromLayout, toLayout)
+	case types.T_float64:
+		ret = float64s.Reshape(column, fromLayout, toLayout)
+	case types.T_date:
+		ret = dates.Reshape(column, fromLayout, toLayout)
+	case types.T_datetime:
+		ret = datetimes.Reshape(column, fromLayout, toLayout)
+	case types.T_decimal64:
+		ret = decimal64s.Reshape(column, fromLayout, toLayout)
+	case types.T_decimal128:
+		ret = decimal128s.Reshape(column, fromLayout, toLayout)
+	case types.T_timestamp:
+		ret = timestamps.Reshape(column, fromLayout, toLayout)
+	case types.T_char, types.T_json, types.T_varchar:
+		ret = varchar.Reshape(column, fromLayout, toLayout)
+	}
+	return
+}
+
 func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
 	switch column[0].Typ.Oid {
 	case types.T_bool:

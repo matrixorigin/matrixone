@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -56,6 +57,9 @@ type Catalog struct {
 	link      *common.Link
 
 	nodesMu sync.RWMutex
+
+	tableCnt  int32
+	columnCnt int32
 }
 
 func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
@@ -498,6 +502,28 @@ func (catalog *Catalog) CoarseDBCnt() int {
 	catalog.RLock()
 	defer catalog.RUnlock()
 	return len(catalog.entries)
+}
+
+func (catalog *Catalog) CoarseTableCnt() int {
+	return int(atomic.LoadInt32(&catalog.tableCnt))
+}
+
+func (catalog *Catalog) CoarseColumnCnt() int {
+	return int(atomic.LoadInt32(&catalog.columnCnt))
+}
+
+func (catalog *Catalog) AddTableCnt(cnt int) {
+	n := atomic.AddInt32(&catalog.tableCnt, int32(cnt))
+	if n < 0 {
+		panic("logic error")
+	}
+}
+
+func (catalog *Catalog) AddColumnCnt(cnt int) {
+	n := atomic.AddInt32(&catalog.columnCnt, int32(cnt))
+	if n < 0 {
+		panic("logic error")
+	}
 }
 
 func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
