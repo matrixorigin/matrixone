@@ -81,6 +81,8 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		readTs, _ := block.ReadTS()
 		assert.Equal(t, blockTs, readTs)
+		err = block.WriteIndexMeta(w.Bytes())
+		assert.Nil(t, err)
 
 		err = block.WriteDeletes(deletesBuf)
 		assert.Nil(t, err)
@@ -92,6 +94,10 @@ func TestSegmentFile_Replay(t *testing.T) {
 		err = colBlk0.WriteTS(blockTs)
 		assert.Nil(t, err)
 		err = colBlk0.WriteData(w.Bytes())
+		assert.Nil(t, err)
+		idx, err := colBlk0.OpenIndexFile(0)
+		assert.Nil(t, err)
+		_, err = idx.Write(w.Bytes())
 		assert.Nil(t, err)
 		colBlk0.Close()
 	}
@@ -122,6 +128,10 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Equal(t, 1, int(block.ReadRows()))
 
 		dataFile.Unref()
+		inx, err := colBlk0.OpenIndexFile(0)
+		assert.Nil(t, err)
+		_, err = inx.Read(dbuf)
+		assert.Equal(t, dataStr, string(dbuf))
 		colBlk0.Close()
 
 		block.Unref()
