@@ -21,7 +21,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
-	"github.com/lni/dragonboat/v4/client"
+	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
 	pb "github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
@@ -185,7 +185,7 @@ func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
 }
 
 func (l *logStore) propose(ctx context.Context,
-	session *client.Session, cmd []byte) (sm.Result, error) {
+	session *cli.Session, cmd []byte) (sm.Result, error) {
 	count := 0
 	for {
 		count++
