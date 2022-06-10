@@ -38,13 +38,13 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	runBuildSelectByBinder := func(stmt *tree.Select) (*Plan, error) {
 		builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 		bindCtx := NewBindContext(builder, nil)
-		rootId, err := builder.buildSelect(stmt, bindCtx)
+		_, err := builder.buildSelect(stmt, bindCtx)
 		if err != nil {
 			return nil, err
 		}
 		return &Plan{
 			Plan: &plan.Plan_Query{
-				Query: builder.createQuery(rootId),
+				Query: builder.createQuery(),
 			},
 		}, err
 	}

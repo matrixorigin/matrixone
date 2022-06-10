@@ -149,7 +149,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 	return returnMap
 }
 
-func (builder *QueryBuilder) createQuery(root int32) *Query {
+func (builder *QueryBuilder) createQuery() *Query {
 	for _, rootId := range builder.selectNodeIds {
 		builder.resetNode(rootId)
 	}
