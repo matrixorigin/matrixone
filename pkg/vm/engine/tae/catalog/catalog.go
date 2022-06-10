@@ -214,6 +214,7 @@ func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, 
 	if err != nil {
 		panic(err)
 	}
+	catalog.OnReplayDBID(cmd.DBID)
 	err = db.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -226,8 +227,8 @@ func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, 
 func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	var err error
 	cmd.DB.catalog = catalog
+	catalog.OnReplayDBID(cmd.DB.ID)
 	if cmd.DB.CurrOp == OpCreate {
-		catalog.OnReplayDBID(cmd.DB.ID)
 		err = catalog.AddEntryLocked(cmd.DB)
 		if err != nil {
 			panic(err)
@@ -294,6 +295,7 @@ func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, obs
 	if err != nil {
 		panic(err)
 	}
+	catalog.OnReplayTableID(cmd.TableID)
 	err = tbl.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -309,8 +311,8 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 		panic(err)
 	}
 	cmd.Table.db = db
+	catalog.OnReplayTableID(cmd.Table.ID)
 	if cmd.Table.CurrOp == OpCreate {
-		catalog.OnReplayTableID(cmd.Table.ID)
 		cmd.Table.tableData = datafactory.MakeTableFactory()(cmd.Table)
 		err = db.AddEntryLocked(cmd.Table)
 	} else {
@@ -383,6 +385,7 @@ func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, o
 	if err != nil {
 		panic(err)
 	}
+	catalog.OnReplaySegmentID(cmd.entry.ID)
 	err = seg.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -402,9 +405,9 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 		panic(err)
 	}
 	cmd.Segment.table = rel
+	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	if cmd.Segment.CurrOp == OpCreate {
 		cmd.Segment.segData = datafactory.MakeSegmentFactory()(cmd.Segment)
-		catalog.OnReplaySegmentID(cmd.Segment.ID)
 		rel.AddEntryLocked(cmd.Segment)
 		cmd.Segment.ReplayFile(cache)
 	} else {
@@ -483,6 +486,7 @@ func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, obs
 	if err != nil {
 		panic(err)
 	}
+	catalog.OnReplayBlockID(cmd.entry.ID)
 	err = blk.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -506,10 +510,10 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory
 		panic(err)
 	}
 	cmd.Block.segment = seg
+	catalog.OnReplayBlockID(cmd.Block.ID)
 	if cmd.Block.CurrOp == OpCreate {
 		cmd.Block.blkData = datafactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
 		// cmd.Block.blkData.ReplayData()
-		catalog.OnReplayBlockID(cmd.Block.ID)
 		seg.AddEntryLocked(cmd.Block)
 	} else {
 		blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)

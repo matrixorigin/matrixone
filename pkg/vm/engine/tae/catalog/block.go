@@ -209,6 +209,9 @@ func (entry *BlockEntry) CloneCreate() CheckpointItem {
 }
 
 func (entry *BlockEntry) DestroyData() (err error) {
+	if entry.blkData == nil {
+		return
+	}
 	return entry.blkData.Destroy()
 }
 
