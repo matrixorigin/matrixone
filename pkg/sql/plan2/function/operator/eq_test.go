@@ -478,6 +478,5 @@ func Test_ColEqCol(t *testing.T) {
 				convey.So(nulls.Contains(ret.Nsp, uint64(retNotNullPosVec[i][j])), convey.ShouldEqual, false)
 			}
 		}
-
 	})
 }

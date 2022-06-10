@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -56,6 +57,9 @@ type Catalog struct {
 	link      *common.Link
 
 	nodesMu sync.RWMutex
+
+	tableCnt  int32
+	columnCnt int32
 }
 
 func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
@@ -174,6 +178,12 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, datafactory DataFactory, 
 }
 
 func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	var err error
 	db, err := catalog.GetDatabaseByID(cmd.entry.ID)
 	if err == nil {
@@ -193,6 +203,12 @@ func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index
 }
 
 func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	var err error
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -220,6 +236,9 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 		var db *DBEntry
 		db, err = catalog.GetDatabaseByID(cmd.DB.ID)
 		if err == nil {
+			cmd.DB.entries = db.entries
+			cmd.DB.link = db.link
+			cmd.DB.nameNodes = db.nameNodes
 			if err = catalog.RemoveEntry(db); err != nil {
 				panic(err)
 			}
@@ -232,6 +251,12 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 }
 
 func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -255,6 +280,12 @@ func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, datafactory DataF
 }
 
 func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -285,6 +316,8 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 	} else {
 		rel, _ := db.GetTableEntryByID(cmd.Table.ID)
 		if rel != nil {
+			cmd.Table.entries = rel.entries
+			cmd.Table.link = rel.link
 			if err = db.RemoveEntry(rel); err != nil {
 				panic(err)
 			}
@@ -297,6 +330,12 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 }
 
 func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
+	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -326,6 +365,12 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory Dat
 }
 
 func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -365,6 +410,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 	} else {
 		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
 		if seg != nil {
+			cmd.Segment.entries = seg.entries
 			if err = rel.deleteEntryLocked(seg); err != nil {
 				panic(err)
 			}
@@ -374,6 +420,12 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 }
 
 func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -395,6 +447,10 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataF
 	cmd.Block.CurrOp = OpCreate
 	cmd.Block.segment = seg
 	cmd.Block.blkData = datafactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
+	ts := cmd.Block.blkData.GetMaxCheckpointTS()
+	if observer != nil {
+		observer.OnTimeStamp(ts)
+	}
 	// cmd.Block.blkData.ReplayData()
 	catalog.OnReplayBlockID(cmd.Block.ID)
 	cmd.Block.LogIndex = idx
@@ -405,6 +461,12 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataF
 }
 
 func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
+		if observer != nil {
+			observer.OnStaleIndex(idx)
+		}
+		return
+	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -498,6 +560,28 @@ func (catalog *Catalog) CoarseDBCnt() int {
 	catalog.RLock()
 	defer catalog.RUnlock()
 	return len(catalog.entries)
+}
+
+func (catalog *Catalog) CoarseTableCnt() int {
+	return int(atomic.LoadInt32(&catalog.tableCnt))
+}
+
+func (catalog *Catalog) CoarseColumnCnt() int {
+	return int(atomic.LoadInt32(&catalog.columnCnt))
+}
+
+func (catalog *Catalog) AddTableCnt(cnt int) {
+	n := atomic.AddInt32(&catalog.tableCnt, int32(cnt))
+	if n < 0 {
+		panic("logic error")
+	}
+}
+
+func (catalog *Catalog) AddColumnCnt(cnt int) {
+	n := atomic.AddInt32(&catalog.columnCnt, int32(cnt))
+	if n < 0 {
+		panic("logic error")
+	}
 }
 
 func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }

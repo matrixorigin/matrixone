@@ -29,14 +29,18 @@ func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	if inputVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
-	inputValues := inputVector.Col.(*types.Bytes)
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]int64, 1)
 		vector.SetCol(resultVector, length.StrLength(inputValues, resultValues))
 		return resultVector, nil
 	} else {
+		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
 		if err != nil {
 			return nil, err

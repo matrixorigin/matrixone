@@ -25,18 +25,19 @@ import (
 
 func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.(*types.Bytes)
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint64, 1)
 		vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
 		return resultVector, nil
 	} else {
+		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
 		if err != nil {
 			return nil, err

@@ -259,30 +259,93 @@ func tryAppendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sy
 		_ = txn.Commit()
 	}
 }
-
-func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
-	txn, _ := e.StartTxn(nil)
-	db, _ := txn.GetDatabase(dbName)
-	rel, _ := db.GetRelationByName(schema.Name)
+func forceCompactABlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, rel := getRelation(t, e, dbName, schema.Name)
 
 	var metas []*catalog.BlockEntry
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		if blk.Rows() < int(schema.BlockMaxRows) {
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		if blk.Rows() >= int(schema.BlockMaxRows) {
 			it.Next()
 			continue
 		}
-		meta := blk.GetMeta().(*catalog.BlockEntry)
 		metas = append(metas, meta)
 		it.Next()
 	}
 	_ = txn.Commit()
 	for _, meta := range metas {
+		err := meta.GetBlockData().ForceCompact()
+		if !skipConflict {
+			assert.NoError(t, err)
+		}
+	}
+}
+
+func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, rel := getRelation(t, e, dbName, schema.Name)
+
+	var metas []*catalog.BlockEntry
+	it := rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		if blk.Rows() < int(schema.BlockMaxRows) {
+			it.Next()
+			continue
+		}
+		metas = append(metas, meta)
+		it.Next()
+	}
+	_ = txn.Commit()
+	for _, meta := range metas {
+		txn, _ := getRelation(t, e, dbName, schema.Name)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		if skipConflict {
+			if err != nil {
+				_ = txn.Rollback()
+			} else {
+				_ = txn.Commit()
+			}
+		} else {
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit())
+		}
+	}
+}
+
+func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, _ := e.StartTxn(nil)
+	db, _ := txn.GetDatabase(dbName)
+	rel, _ := db.GetRelationByName(schema.Name)
+
+	var segs []*catalog.SegmentEntry
+	segIt := rel.MakeSegmentIt()
+	for segIt.Valid() {
+		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		if seg.GetAppendableBlockCnt() == int(seg.GetTable().GetSchema().SegmentMaxBlocks) {
+			segs = append(segs, seg)
+		}
+		segIt.Next()
+	}
+	_ = txn.Commit()
+	for _, seg := range segs {
 		txn, _ = e.StartTxn(nil)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
+		segHandle, _ := rel.GetSegment(seg.ID)
+		var metas []*catalog.BlockEntry
+		it := segHandle.MakeBlockIt()
+		for it.Valid() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+			it.Next()
+		}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec()
 		if skipConflict {

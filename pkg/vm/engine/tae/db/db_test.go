@@ -1913,3 +1913,57 @@ func TestSnapshotIsolation2(t *testing.T) {
 	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
 	_ = txn1.Rollback()
 }
+
+// 1. Append 3 blocks and delete last 5 rows of the 1st block
+// 2. Merge blocks
+// 3. Check rows and col[0]
+func TestMergeBlockes(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, -1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	bat := catalog.MockData(schema, 30)
+
+	createRelationAndAppend(t, tae, "db", schema, bat, true)
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	it := rel.MakeBlockIt()
+	blkID := it.GetBlock().Fingerprint()
+	err = rel.RangeDelete(blkID, 5, 9)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	for it.Valid() {
+		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
+		t.Log(col)
+		assert.Nil(t, err)
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit())
+
+	mergeBlocks(t, tae, "db", schema, false)
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	it = rel.MakeBlockIt()
+	for it.Valid() {
+		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
+		t.Log(col)
+		assert.Nil(t, err)
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit())
+}

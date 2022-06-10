@@ -241,7 +241,7 @@ func GetRetCol_1[T DataValue](lv, rv *vector.Vector, colType int, FuncMap map[in
 			}
 		}
 	case const_const:
-		col = []bool{GeOpFuncMap[dataID](lvs[0], rvs[0], lv.Typ.Scale, rv.Typ.Scale)}
+		col = []bool{FuncMap[dataID](lvs[0], rvs[0], lv.Typ.Scale, rv.Typ.Scale)}
 	}
 	return col, nil
 }

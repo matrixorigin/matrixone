@@ -179,7 +179,7 @@ type Session struct {
 
 func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
 	txnHandler := InitTxnHandler(config.StorageEngine)
-	return &Session{
+	ses := &Session{
 		protocol: proto,
 		pdHook:   pdHook,
 		GuestMmu: gm,
@@ -198,6 +198,8 @@ func NewSession(proto Protocol, pdHook *PDCallbackImpl, gm *guest.Mmu, mp *mempo
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
 	}
+	ses.txnCompileCtx.SetSession(ses)
+	return ses
 }
 
 // SetGlobalVar sets the value of system variable in global.
@@ -584,6 +586,7 @@ type TxnCompilerContext struct {
 	dbName     string
 	QryTyp     QueryType
 	txnHandler *TxnHandler
+	ses        *Session
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -591,6 +594,10 @@ func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
 		db = "mo_catalog"
 	}
 	return &TxnCompilerContext{txnHandler: txn, dbName: db, QryTyp: TXN_DEFAULT}
+}
+
+func (tcc *TxnCompilerContext) SetSession(ses *Session) {
+	tcc.ses = ses
 }
 
 func (tcc *TxnCompilerContext) SetQueryType(qryTyp QueryType) {
@@ -679,6 +686,19 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 		Cols: defs,
 	}
 	return obj, tableDef
+}
+
+func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if isSystemVar {
+		if isGlobalVar {
+			return tcc.ses.GetGlobalVar(varName)
+		} else {
+			return tcc.ses.GetSessionVar(varName)
+		}
+	} else {
+		_, val, err := tcc.ses.GetUserDefinedVar(varName)
+		return val, err
+	}
 }
 
 func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*plan2.ColDef {
