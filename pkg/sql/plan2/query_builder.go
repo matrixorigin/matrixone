@@ -156,8 +156,8 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 		}
 	case plan.Node_PROJECT:
 		childMap := builder.resetNode(node.Children[0])
-		// where  having  project
 		if len(node.ProjectList) == 0 {
+			//where  having
 			for _, expr := range node.WhereList {
 				builder.resetPosition(expr, childMap)
 			}
@@ -172,14 +172,17 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 
 			return childMap
 		} else {
+			//project
 			for idx, expr := range node.ProjectList {
 				builder.resetPosition(expr, childMap)
 
 				returnMap[getColMapKey(ctx.projectTag, int32(idx))] = []int32{0, int32(idx)}
 			}
 		}
+	case plan.Node_VALUE_SCAN:
+		//do nothing,  optimize can merge valueScan and project
 	default:
-		//MATERIAL  valueScan  MATERIAL_SCAN
+		//MATERIAL  MATERIAL_SCAN
 		panic("not finish")
 	}
 	return returnMap
@@ -276,6 +279,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 	}
 
 	// bind WHERE clause && append node to query
+	if clause.Distinct {
+		// rewrite distinct to group by
+		if clause.GroupBy != nil {
+			return 0, errors.New(errno.SyntaxErrororAccessRuleViolation, "distinct with group by is unsupported")
+		}
+		for _, selectExpr := range selectList {
+			clause.GroupBy = append(clause.GroupBy, selectExpr.Expr)
+		}
+	}
+
 	if clause.Where != nil {
 		whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 		if err != nil {
@@ -334,12 +347,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 			ctx.aliasMap[alias] = int32(len(ctx.projects))
 		}
 		ctx.projects = append(ctx.projects, expr)
-	}
-
-	// bind distinct
-	var distinctList []*Expr
-	if clause.Distinct {
-		distinctList = append(distinctList, ctx.projects...)
 	}
 
 	resultLen := len(ctx.projects)
@@ -418,15 +425,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 				WhereList: havingList,
 			}, ctx)
 		}
-	}
-
-	// append distinct node
-	if len(distinctList) > 0 {
-		nodeId = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_AGG,
-			Children: []int32{nodeId},
-			GroupBy:  distinctList,
-		}, ctx)
 	}
 
 	// append PROJECT node
