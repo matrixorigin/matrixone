@@ -17,6 +17,7 @@ package wal
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
@@ -52,9 +53,9 @@ func (driver *walDriver) Replay(handle store.ApplyHandle) (err error) {
 }
 
 func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
-	// for _, index := range indexes {
-	// 	logutil.Infof("Checkpoint Index: %s", index.String())
-	// }
+	for _, index := range indexes {
+		logutil.Infof("Checkpoint Index: %s", index.String())
+	}
 	commands := make(map[uint64]entry.CommandInfo)
 	for _, idx := range indexes {
 		cmdInfo, ok := commands[idx.LSN]

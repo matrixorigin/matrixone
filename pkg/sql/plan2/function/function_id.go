@@ -14,6 +14,11 @@
 
 package function
 
+const (
+	Distinct     = 0x8000000000000000
+	DistinctMask = 0x7FFFFFFFFFFFFFFF
+)
+
 // All function IDs
 const (
 	EQUAL           = iota // =
