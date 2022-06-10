@@ -30,8 +30,8 @@ import (
 func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
-	sql := `select distinct sum(n_name) t from NATION`
-	// sql := `SELECT REGION.* FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY`
+	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
+	sql := `select n_name, abs(N_REGIONKEY) from NATION where n_comment != 'a' order by n_name limit 20`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)

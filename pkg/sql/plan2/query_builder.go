@@ -34,11 +34,125 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 		ctxByNode:  []*BindContext{},
 		tagsByNode: [][]int32{},
 		nextTag:    0,
+
+		selectNodeIds: []int32{},
 	}
 }
 
-func (builder *QueryBuilder) createQuery() *Query {
-	// root := len(builder.qry.Nodes)
+func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32) {
+	new_expr := DeepCopyExpr(expr)
+	switch ne := new_expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if ids, ok := colMap[fmt.Sprintf("%d-%d", ne.Col.RelPos, ne.Col.ColPos)]; ok {
+			ne.Col.RelPos = ids[0]
+			ne.Col.ColPos = ids[1]
+		} else {
+			panic("can't find col in map")
+		}
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			builder.resetPosition(arg, colMap)
+		}
+	}
+}
+
+func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
+	node := builder.qry.Nodes[nodeId]
+	returnMap := make(map[string][]int32)
+
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		tag := builder.tagsByNode[nodeId][0]
+		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
+		for idx, col := range node.TableDef.Cols {
+			node.ProjectList[idx] = &Expr{
+				Typ:       col.Typ,
+				TableName: node.TableDef.Alias,
+				ColName:   col.Alias,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(idx),
+					},
+				},
+			}
+			returnMap[fmt.Sprintf("%d-%d", tag, idx)] = []int32{0, int32(idx)}
+		}
+	} else if node.NodeType == plan.Node_JOIN {
+		// TODO deal with using
+		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
+		colIdx := 0
+		for idx, child := range node.Children {
+			childMap := builder.resetNode(child)
+
+			for k := range childMap {
+				returnMap[k] = []int32{0, int32(colIdx)}
+			}
+			for prjIdx, prj := range builder.qry.Nodes[child].ProjectList {
+				node.ProjectList[colIdx] = &Expr{
+					Typ: prj.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: int32(idx),
+							ColPos: int32(prjIdx),
+						},
+					},
+				}
+				colIdx++
+			}
+
+		}
+	} else if node.NodeType == plan.Node_AGG {
+		childMap := builder.resetNode(node.Children[0])
+		node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
+		colIdx := 0
+		for idx, expr := range node.GroupBy {
+			builder.resetPosition(expr, childMap)
+			node.ProjectList[colIdx] = &Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -1,
+						ColPos: int32(idx),
+					},
+				},
+			}
+			colIdx++
+		}
+		for idx, expr := range node.AggList {
+			builder.resetPosition(expr, childMap)
+
+			node.ProjectList[colIdx] = &Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -2,
+						ColPos: int32(idx),
+					},
+				},
+			}
+			colIdx++
+		}
+		// TODO return what?
+	} else if node.NodeType == plan.Node_PROJECT {
+		childMap := builder.resetNode(node.Children[0])
+		// i am a filter node
+		if len(node.ProjectList) == 0 {
+			for _, expr := range node.WhereList {
+				builder.resetPosition(expr, childMap)
+			}
+		}
+		for _, expr := range node.ProjectList {
+			builder.resetPosition(expr, childMap)
+		}
+		// TODO return what?
+	}
+	return returnMap
+}
+
+func (builder *QueryBuilder) createQuery(root int32) *Query {
+	for _, rootId := range builder.selectNodeIds {
+		builder.resetNode(rootId)
+	}
 	return builder.qry
 }
 
@@ -318,6 +432,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}, ctx)
 	}
 
+	builder.selectNodeIds = append(builder.selectNodeIds, nodeId)
 	return nodeId, nil
 }
 

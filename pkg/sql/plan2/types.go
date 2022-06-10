@@ -95,6 +95,8 @@ type QueryBuilder struct {
 	ctxByNode  []*BindContext
 	tagsByNode [][]int32
 	nextTag    int32
+
+	selectNodeIds []int32
 }
 
 type BindContext struct {
@@ -120,7 +122,7 @@ type BindContext struct {
 	aliasMap map[string]int32
 
 	bindings       []*Binding
-	bindingByTag   map[int32]*Binding
+	bindingByTag   map[int32]*Binding //rel_pos
 	bindingByTable map[string]*Binding
 	bindingByCol   map[string]*Binding
 
