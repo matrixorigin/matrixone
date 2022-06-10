@@ -29,7 +29,7 @@ import (
 func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *Expr, isAgg bool, err error) {
 	// deal with special function
 	switch name {
-	case "+", "-":
+	case "+":
 		if len(exprs) != 2 {
 			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "operator function need two args")
 		}
@@ -41,6 +41,36 @@ func getFunctionExprByNameAndPlanExprs(name string, exprs []*Expr) (resultExpr *
 			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
 			return
 		}
+		if exprs[0].Typ.Id == plan.Type_DATETIME && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_INTERVAL && exprs[1].Typ.Id == plan.Type_DATETIME {
+			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_VARCHAR && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_INTERVAL && exprs[1].Typ.Id == plan.Type_VARCHAR {
+			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
+			return
+		}
+	case "-":
+		if exprs[0].Typ.Id == plan.Type_DATE && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_DATETIME && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_VARCHAR && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+
 	case "and", "or", "not", "xor":
 		if err := convertValueIntoBool(name, exprs, true); err != nil {
 			return nil, false, err
@@ -170,14 +200,6 @@ func getFunctionExprByNameAndAstExprs(name string, astExprs []tree.Expr, ctx Com
 	case "date_add", "date_sub":
 		if len(args) != 2 {
 			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
-		}
-		if args[0].Typ.Id == plan.Type_VARCHAR {
-			args[0], err = appendCastExpr(args[0], &plan.Type{
-				Id: plan.Type_DATE,
-			})
-			if err != nil {
-				return
-			}
 		}
 		args, err = resetIntervalFunctionExprs(args[0], args[1])
 		if err != nil {
