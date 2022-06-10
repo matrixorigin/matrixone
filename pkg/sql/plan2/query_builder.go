@@ -39,11 +39,15 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 	}
 }
 
+func getColMapKey(relPos int32, colPos int32) string {
+	return fmt.Sprintf("%d-%d", relPos, colPos)
+}
+
 func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32) {
-	new_expr := DeepCopyExpr(expr)
-	switch ne := new_expr.Expr.(type) {
+	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if ids, ok := colMap[fmt.Sprintf("%d-%d", ne.Col.RelPos, ne.Col.ColPos)]; ok {
+		if ids, ok := colMap[getColMapKey(ne.Col.RelPos, ne.Col.ColPos)]; ok {
+			// log.Printf("key =%s, v=%v", getColMapKey(ne.Col.RelPos, ne.Col.ColPos), ids)
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
 		} else {
@@ -58,9 +62,11 @@ func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32
 
 func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 	node := builder.qry.Nodes[nodeId]
+	ctx := builder.ctxByNode[nodeId]
 	returnMap := make(map[string][]int32)
 
-	if node.NodeType == plan.Node_TABLE_SCAN {
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN:
 		tag := builder.tagsByNode[nodeId][0]
 		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
 		for idx, col := range node.TableDef.Cols {
@@ -75,9 +81,9 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 					},
 				},
 			}
-			returnMap[fmt.Sprintf("%d-%d", tag, idx)] = []int32{0, int32(idx)}
+			returnMap[getColMapKey(tag, int32(idx))] = []int32{0, int32(idx)}
 		}
-	} else if node.NodeType == plan.Node_JOIN {
+	case plan.Node_JOIN:
 		// TODO deal with using
 		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
 		colIdx := 0
@@ -100,7 +106,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 				colIdx++
 			}
 		}
-	} else if node.NodeType == plan.Node_AGG {
+	case plan.Node_AGG:
 		childMap := builder.resetNode(node.Children[0])
 		node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
 		colIdx := 0
@@ -115,6 +121,8 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 					},
 				},
 			}
+
+			returnMap[getColMapKey(ctx.groupTag, int32(idx))] = []int32{0, int32(colIdx)}
 			colIdx++
 		}
 		for idx, expr := range node.AggList {
@@ -129,12 +137,26 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 					},
 				},
 			}
+			returnMap[getColMapKey(ctx.aggregateTag, int32(idx))] = []int32{0, int32(colIdx)}
 			colIdx++
 		}
-		// TODO return what?
-	} else {
+	case plan.Node_SORT:
 		childMap := builder.resetNode(node.Children[0])
-		// project sort MATERIAL  valueScan  MATERIAL_SCAN
+		for _, orderBy := range node.OrderBy {
+			builder.resetPosition(orderBy.Expr, childMap)
+		}
+
+		preNode := builder.qry.Nodes[node.Children[0]]
+		node.ProjectList = make([]*Expr, len(preNode.ProjectList))
+		for prjIdx, prjExpr := range preNode.ProjectList {
+			new_expr := DeepCopyExpr(prjExpr)
+			node.ProjectList[prjIdx] = new_expr
+
+			returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = []int32{0, int32(prjIdx)}
+		}
+	case plan.Node_PROJECT:
+		childMap := builder.resetNode(node.Children[0])
+		// where  having  project
 		if len(node.ProjectList) == 0 {
 			for _, expr := range node.WhereList {
 				builder.resetPosition(expr, childMap)
@@ -144,26 +166,29 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 			node.ProjectList = make([]*Expr, len(preNode.ProjectList))
 			for prjIdx, prjExpr := range preNode.ProjectList {
 				node.ProjectList[prjIdx] = DeepCopyExpr(prjExpr)
+
+				returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = []int32{0, int32(prjIdx)}
 			}
-			// TODO order by will error
-			for _, orderBy := range node.OrderBy {
-				builder.resetPosition(orderBy.Expr, childMap)
-			}
+
 			return childMap
 		} else {
-			for _, expr := range node.ProjectList {
+			for idx, expr := range node.ProjectList {
 				builder.resetPosition(expr, childMap)
+
+				returnMap[getColMapKey(ctx.projectTag, int32(idx))] = []int32{0, int32(idx)}
 			}
-			// TODO return what?
 		}
+	default:
+		//MATERIAL  valueScan  MATERIAL_SCAN
+		panic("not finish")
 	}
 	return returnMap
 }
 
 func (builder *QueryBuilder) createQuery() *Query {
-	// for _, rootId := range builder.selectNodeIds {
-	// 	builder.resetNode(rootId)
-	// }
+	for _, rootId := range builder.selectNodeIds {
+		builder.resetNode(rootId)
+	}
 	return builder.qry
 }
 
