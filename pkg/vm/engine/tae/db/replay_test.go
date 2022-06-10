@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -1031,4 +1032,31 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	printCheckpointStats(t, tae)
 	_ = tae.Close()
+}
+
+func TestReplay7(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	schema := catalog.MockSchemaAll(18, 14)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 5
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows*15+1)
+	createRelationAndAppend(t, tae, defaultTestDB, schema, bat, true)
+	compactBlocks(t, tae, defaultTestDB, schema, true)
+	mergeBlocks(t, tae, defaultTestDB, schema, true)
+	time.Sleep(time.Millisecond * 100)
+	printCheckpointStats(t, tae)
+	// txn, rel := getDefaultRelation(t, tae, schema.Name)
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	// assert.NoError(t, txn.Commit())
+
+	_ = tae.Close()
+	tae, err := Open(tae.Dir, opts)
+	assert.NoError(t, err)
+	defer tae.Close()
+	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	txn, rel := getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	assert.NoError(t, txn.Commit())
 }

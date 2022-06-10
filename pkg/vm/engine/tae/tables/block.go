@@ -109,7 +109,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs = ts
 	if ts > 0 {
-		logutil.Infof("Replay BlockIndex %s: ts=%d", meta.Repr(), ts)
+		logutil.Infof("Replay BlockIndex %s: ts=%d,rows=%d", meta.Repr(), ts, block.file.ReadRows())
 		if err := block.ReplayData(); err != nil {
 			panic(err)
 		}
