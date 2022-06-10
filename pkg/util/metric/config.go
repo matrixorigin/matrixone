@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 )
 
 var (
