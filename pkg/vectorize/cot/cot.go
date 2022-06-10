@@ -118,12 +118,13 @@ func cotFloat64(xs []float64, rs []float64) []float64 {
 
 func Cot[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) []float64 {
 	for i, n := range inputValues {
-		if math.Tan(float64(n)) < 1e-9 && math.Tan(float64(n)) >= 0 {
+		res := math.Tan(float64(n))
+		if res < 1e-9 && res >= 0 {
 			resultValues[i] = 16331239353195392.0000
-		} else if math.Tan(float64(n)) > -1e-9 && math.Tan(float64(n)) < 0 {
+		} else if res > -1e-9 && res < 0 {
 			resultValues[i] = -16331239353195392.0000
 		} else {
-			resultValues[i] = 1.0 / math.Tan(float64(n))
+			resultValues[i] = 1.0 / res
 		}
 	}
 	return resultValues
