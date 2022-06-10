@@ -279,6 +279,7 @@ var functionIdRegister = map[string]int32{
 	"weekday":       WEEKDAY,
 	"year":          YEAR,
 	"extract":       EXTRACT,
+	"if":            IFF,
 	"iff":           IFF,
 	"date_add":      DATE_ADD,
 	"date_sub":      DATE_SUB,
