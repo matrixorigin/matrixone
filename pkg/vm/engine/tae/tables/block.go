@@ -93,6 +93,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:    bufMgr,
 		prefix:    meta.MakeKey(),
 	}
+	ts, _ := block.file.ReadTS()
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
@@ -104,6 +105,8 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		block.index = indexwrapper.NewImmutableIndex()
 	}
+	block.mvcc.SetMaxVisible(ts)
+	block.ckpTs = ts
 	return block
 }
 
@@ -486,8 +489,14 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompressed *bytes.Buffer, raw bool) (view *model.ColumnView, err error) {
 	err = blk.node.DoWithPin(func() (err error) {
 		maxRow := uint32(0)
+		var visible bool
 		blk.mvcc.RLock()
-		maxRow, visible, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
+		if ts >= blk.GetMaxVisibleTS() {
+			maxRow = blk.node.rows
+			visible = true
+		} else {
+			maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
+		}
 		blk.mvcc.RUnlock()
 		if !visible || err != nil {
 			return

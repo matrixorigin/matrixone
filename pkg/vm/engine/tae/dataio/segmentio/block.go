@@ -225,6 +225,7 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 				return
 			}
 		}
+		vec.ResetReadonly()
 		vecs[i] = vec
 		attrs[i] = i
 	}

@@ -298,6 +298,48 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 	}
 }
 
+func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, _ := e.StartTxn(nil)
+	db, _ := txn.GetDatabase(dbName)
+	rel, _ := db.GetRelationByName(schema.Name)
+
+	var segs []*catalog.SegmentEntry
+	segIt := rel.MakeSegmentIt()
+	for segIt.Valid() {
+		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
+		segs = append(segs, seg)
+		segIt.Next()
+	}
+	_ = txn.Commit()
+	for _, seg := range segs {
+		txn, _ = e.StartTxn(nil)
+		db, _ = txn.GetDatabase(dbName)
+		rel, _ = db.GetRelationByName(schema.Name)
+		segHandle, _ := rel.GetSegment(seg.ID)
+		var metas []*catalog.BlockEntry
+		it := segHandle.MakeBlockIt()
+		for it.Valid() {
+			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			metas = append(metas, meta)
+			it.Next()
+		}
+		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		if skipConflict {
+			if err != nil {
+				_ = txn.Rollback()
+			} else {
+				_ = txn.Commit()
+			}
+		} else {
+			assert.NoError(t, err)
+			assert.NoError(t, txn.Commit())
+		}
+	}
+}
+
 func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 	txn, rel := getDefaultRelation(t, e, schema.Name)
 	segs := make([]*catalog.SegmentEntry, 0)
