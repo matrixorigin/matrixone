@@ -29,7 +29,8 @@ const (
 
 type testEngine struct {
 	*DB
-	t *testing.T
+	t      *testing.T
+	schema *catalog.Schema
 }
 
 func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
@@ -38,6 +39,8 @@ func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
 		DB: db,
 	}
 }
+
+func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
 
 func (e *testEngine) restart() {
 	_ = e.DB.Close()
@@ -48,6 +51,18 @@ func (e *testEngine) restart() {
 
 func (e *testEngine) Close() error {
 	return e.DB.Close()
+}
+
+func (e *testEngine) createRelAndAppend(bat *batch.Batch, createDB bool) (handle.Database, handle.Relation) {
+	return createRelationAndAppend(e.t, e.DB, defaultTestDB, e.schema, bat, createDB)
+}
+
+func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
+	return getDefaultRelation(e.t, e.DB, e.schema.Name)
+}
+
+func (e *testEngine) compactABlocks(skipConflict bool) {
+	forceCompactABlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
 func initDB(t *testing.T, opts *options.Options) *DB {

@@ -1100,6 +1100,15 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	_ = txn.Rollback()
 
-	forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
-	tae.restart()
+	// Flush the appendable block
+	// forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
+	// txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, false)
+	// assert.NoError(t, txn.Commit())
+
+	// tae.restart()
+
+	// txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, false)
+	// assert.NoError(t, txn.Commit())
 }
