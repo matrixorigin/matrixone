@@ -523,6 +523,15 @@ func Length(v *Vector) int {
 	}
 }
 
+func ColumnLength(v *Vector) int {
+	switch v.Typ.Oid {
+	case types.T_char, types.T_varchar, types.T_json:
+		return len(v.Col.(*types.Bytes).Offsets)
+	default:
+		return reflect.ValueOf(v.Col).Len()
+	}
+}
+
 func setLengthFixed[T any](v *Vector, n int) {
 	vs := v.Col.([]T)
 	m := len(vs)
@@ -4615,6 +4624,151 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 		}
 	default:
 		return fmt.Errorf("unexpect type %v for function vector.GetColumnData", typ)
+	}
+	return nil
+}
+
+func ConstantPadding(vec *Vector, count uint64) error {
+	if nulls.Contains(vec.Nsp, 0) {
+		for i := uint64(0); i < count-1; i++ {
+			nulls.Add(vec.Nsp, i+1)
+		}
+		return nil
+	}
+	switch vec.Typ.Oid {
+	case types.T_int8:
+		value := vec.Col.([]int8)[0]
+		values := vec.Col.([]int8)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_int16:
+		value := vec.Col.([]int16)[0]
+		values := vec.Col.([]int16)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_int32:
+		value := vec.Col.([]int32)[0]
+		values := vec.Col.([]int32)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_int64:
+		value := vec.Col.([]int64)[0]
+		values := vec.Col.([]int64)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_uint8:
+		value := vec.Col.([]uint8)[0]
+		values := vec.Col.([]uint8)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_uint16:
+		value := vec.Col.([]uint16)[0]
+		values := vec.Col.([]uint16)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_uint32:
+		value := vec.Col.([]uint32)[0]
+		values := vec.Col.([]uint32)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_uint64:
+		value := vec.Col.([]uint64)[0]
+		values := vec.Col.([]uint64)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_float32:
+		value := vec.Col.([]float32)[0]
+		values := vec.Col.([]float32)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_float64:
+		value := vec.Col.([]float64)[0]
+		values := vec.Col.([]float64)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_sel:
+		value := vec.Col.([]int64)[0]
+		values := vec.Col.([]int64)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_tuple:
+		value := vec.Col.([][]interface{})[0]
+		values := vec.Col.([][]interface{})
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_char, types.T_varchar, types.T_json:
+		value := vec.Col.(*types.Bytes).Data
+		offset := vec.Col.(*types.Bytes).Offsets[0]
+		cnt := vec.Col.(*types.Bytes).Lengths[0]
+		values := vec.Col.(*types.Bytes)
+		for i := uint64(0); i < count-1; i++ {
+			values.Data = append(values.Data, value...)
+			values.Lengths = append(values.Lengths, cnt)
+			offset += cnt
+			values.Offsets = append(values.Offsets, offset)
+		}
+		SetCol(vec, values)
+	case types.T_date:
+		value := vec.Col.([]types.Date)[0]
+		values := vec.Col.([]types.Date)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_datetime:
+		value := vec.Col.([]types.Datetime)[0]
+		values := vec.Col.([]types.Datetime)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_timestamp:
+		value := vec.Col.([]types.Timestamp)[0]
+		values := vec.Col.([]types.Timestamp)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_decimal64:
+		value := vec.Col.([]types.Decimal64)[0]
+		values := vec.Col.([]types.Decimal64)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	case types.T_decimal128:
+		value := vec.Col.([]types.Decimal128)[0]
+		values := vec.Col.([]types.Decimal128)
+		for i := uint64(0); i < count-1; i++ {
+			values = append(values, value)
+		}
+		SetCol(vec, values)
+	default:
+		return fmt.Errorf("unexpect type %s for function constantPadding", vec.Typ)
 	}
 	return nil
 }
