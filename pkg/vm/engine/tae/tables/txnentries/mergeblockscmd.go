@@ -170,7 +170,7 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 		n += sn
 	}
 
-	createdBlksLength := uint32(len(cmd.createdSegs))
+	createdBlksLength := uint32(len(cmd.createdBlks))
 	if err = binary.Write(w, binary.BigEndian, createdBlksLength); err != nil {
 		return
 	}

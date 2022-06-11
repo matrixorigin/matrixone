@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/panjf2000/ants/v2"
 )
@@ -128,7 +128,7 @@ func main() {
 				compressed.Reset()
 				decompressed.Reset()
 				view, err := blk.GetColumnDataById(0, &compressed, &decompressed)
-				logutil.Infof("Block %s Rows %d", blk.Fingerprint().ToBlockFileName(), vector.Length(view.AppliedVec))
+				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), vector.Length(view.AppliedVec))
 				if err != nil {
 					panic(err)
 				}

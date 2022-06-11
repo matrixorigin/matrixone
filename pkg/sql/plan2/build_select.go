@@ -94,7 +94,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 							}
 							expr.TableName = ""
 							expr.ColName = alias
-							aggNode.ProjectList = append(aggNode.ProjectList, expr)
+							aggNode.ProjectList = append(aggNode.ProjectList, DeepCopyExpr(expr))
 						}
 						selectList = append(selectList, expr)
 					}
@@ -106,7 +106,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 				break
 			}
 
-			node.ProjectList = append(node.ProjectList, expr)
+			node.ProjectList = append(node.ProjectList, DeepCopyExpr(expr))
 		}
 		switch listExpr := expr.Expr.(type) {
 		case *plan.Expr_List:
@@ -129,7 +129,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 				}
 				expr.TableName = ""
 				expr.ColName = alias
-				node.ProjectList = append(node.ProjectList, expr)
+				node.ProjectList = append(node.ProjectList, DeepCopyExpr(expr))
 			}
 			selectList = append(selectList, expr)
 		}
@@ -199,7 +199,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, binderCtx
 		for _, selectExpr := range selectExprs {
 			alias := string(selectExpr.As)
 			if len(alias) != 0 {
-				sortNode.ProjectList = append(sortNode.ProjectList, binderCtx.columnAlias[alias])
+				sortNode.ProjectList = append(sortNode.ProjectList, DeepCopyExpr(binderCtx.columnAlias[alias]))
 				continue
 			}
 			expr, _, err := buildExpr(selectExpr.Expr, ctx, query, sortNode, binderCtx, false)

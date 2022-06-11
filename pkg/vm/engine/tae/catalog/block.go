@@ -209,9 +209,58 @@ func (entry *BlockEntry) CloneCreate() CheckpointItem {
 }
 
 func (entry *BlockEntry) DestroyData() (err error) {
+	if entry.blkData == nil {
+		return
+	}
 	return entry.blkData.Destroy()
 }
 
 func (entry *BlockEntry) MakeKey() []byte {
 	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
+}
+
+// Coarse API: no consistency check
+func (entry *BlockEntry) IsActive() bool {
+	segment := entry.GetSegment()
+	if !segment.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
+}
+
+// Coarse API: no consistency check
+func (entry *BlockEntry) GetTerminationTS() (ts uint64, terminated bool) {
+	segmentEntry := entry.GetSegment()
+	tableEntry := segmentEntry.GetTable()
+	dbEntry := tableEntry.GetDB()
+
+	dbEntry.RLock()
+	terminated = dbEntry.IsDroppedCommitted()
+	if terminated {
+		ts = dbEntry.DeleteAt
+	}
+	dbEntry.RUnlock()
+	if terminated {
+		return
+	}
+
+	tableEntry.RLock()
+	terminated = tableEntry.IsDroppedCommitted()
+	if terminated {
+		ts = tableEntry.DeleteAt
+	}
+	tableEntry.RUnlock()
+	return
+	// segmentEntry.RLock()
+	// terminated = segmentEntry.IsDroppedCommitted()
+	// if terminated {
+	// 	ts = segmentEntry.DeleteAt
+	// }
+	// segmentEntry.RUnlock()
+	// if terminated {
+	// 	return
+	// }
 }

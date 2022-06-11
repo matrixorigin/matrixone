@@ -389,122 +389,12 @@ comment = "default is false. Disable epochgc pci."
 update-mode = "dynamic"
 
 [[parameter]]
-name = "enableTpe"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = []
-comment = "default is false. Enable transactional processing engine."
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeMultiNode"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = []
-comment = "default is false. true : tpe works well in multi node environment."
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeKVType"
-scope = ["global"]
-access = ["file"]
-type = "string"
-domain-type = "set"
-values = ["cubekv","memorykv"]
-comment = "default is cubekv. Chose memory or cube as the KV storage."
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeKVLimit"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["40000", "10000", "160000"]
-comment = "limit count per batch in the read/write of the Tpe"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeParallelReader"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = ["true"]
-comment = "default is false. true : tpe creates multiple readers reading data from KV. false : only one reader"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeDedupSetBatchTimeout"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["30", "30", "180"]
-comment = "timeout in DedupSetBatch"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeDedupSetBatchTryCount"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["3", "1", "5"]
-comment = "the count of tries when the set failed in DedupSetBatch"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeScanTimeout"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["30", "30", "180"]
-comment = "timeout in scan"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeScanTryCount"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["3", "1", "5"]
-comment = "the count of tries when it failed in Scan"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeSerializer"
-scope = ["global"]
-access = ["file"]
-type = "string"
-domain-type = "set"
-values = ["flat","concise","json"]
-comment = "default is flat. concise : just use the go encoding/binary as the de/serializer. json: json de/serializer. flat: binary de/serializer"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "tpeValueLayoutSerializer"
-scope = ["global"]
-access = ["file"]
-type = "string"
-domain-type = "set"
-values = ["compact","default"]
-comment = "default is 'compact'. default : attributes in value without offset array. compact: attributes in value with offset array"
-update-mode = "dynamic"
-
-[[parameter]]
 name = "storageEngine"
 scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["aoe","tae","tpe"]
+values = ["aoe","tae"]
 comment = "default engine is 'aoe'."
 update-mode = "dynamic"
 
@@ -536,6 +426,26 @@ type = "bool"
 domain-type = "set"
 values = ["true"]
 comment = "default is false. true : one txn for an independent batch false : only one txn during loading data"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "statusPort"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["7001", "7001", "7010"]
+comment = "statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "metricToProm"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true", "false"]
+comment = "default is true. if true, metrics can be scraped through host:status/metrics endpoint"
 update-mode = "dynamic"
 
 # Cluster Configs

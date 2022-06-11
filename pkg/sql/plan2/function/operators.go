@@ -33,6 +33,7 @@ func initOperators() {
 			}
 		}
 	}
+	operator.InitFuncMap()
 }
 
 // operators contains the operator function indexed by function id.
@@ -49,7 +50,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[uint8],
 		},
 		{
 			Index:  1,
@@ -61,7 +62,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[uint16],
 		},
 		{
 			Index:  2,
@@ -73,7 +74,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[uint32],
 		},
 		{
 			Index:  3,
@@ -85,7 +86,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[uint64],
 		},
 		{
 			Index:  4,
@@ -97,7 +98,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[int8],
 		},
 		{
 			Index:  5,
@@ -109,7 +110,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[int16],
 		},
 		{
 			Index:  6,
@@ -121,7 +122,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[int32],
 		},
 		{
 			Index:  7,
@@ -133,7 +134,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[int64],
 		},
 		{
 			Index:  8,
@@ -145,7 +146,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[float32],
 		},
 		{
 			Index:  9,
@@ -157,7 +158,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[float64],
 		},
 		{
 			Index:  10,
@@ -169,7 +170,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -181,7 +182,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -193,7 +194,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[string],
 		},
 		{
 			Index:  13,
@@ -205,7 +206,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[string],
 		},
 		{
 			Index:  14,
@@ -217,10 +218,22 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[types.Date],
 		},
 		{
 			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_datetime,
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.EqDataValue[types.Datetime],
+		},
+		{
+			Index:  16,
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
@@ -229,7 +242,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.EqDataValue[bool],
 		},
 	},
 	GREAT_THAN: {
@@ -243,7 +256,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[uint8],
 		},
 		{
 			Index:  1,
@@ -255,7 +268,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[uint16],
 		},
 		{
 			Index:  2,
@@ -267,7 +280,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[uint32],
 		},
 		{
 			Index:  3,
@@ -279,7 +292,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[uint64],
 		},
 		{
 			Index:  4,
@@ -291,7 +304,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[int8],
 		},
 		{
 			Index:  5,
@@ -303,7 +316,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[int16],
 		},
 		{
 			Index:  6,
@@ -315,7 +328,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[int32],
 		},
 		{
 			Index:  7,
@@ -327,7 +340,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[int64],
 		},
 		{
 			Index:  8,
@@ -339,7 +352,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[float32],
 		},
 		{
 			Index:  9,
@@ -351,7 +364,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[float64],
 		},
 		{
 			Index:  10,
@@ -363,7 +376,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -375,7 +388,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -387,7 +400,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[string],
 		},
 		{
 			Index:  13,
@@ -399,7 +412,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[string],
 		},
 		{
 			Index:  14,
@@ -411,10 +424,22 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[types.Date],
 		},
 		{
 			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_datetime,
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.GtDataValue[types.Datetime],
+		},
+		{
+			Index:  16,
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
@@ -423,7 +448,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GtDataValue[bool],
 		},
 	},
 	GREAT_EQUAL: {
@@ -437,7 +462,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[uint8],
 		},
 		{
 			Index:  1,
@@ -449,7 +474,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[uint16],
 		},
 		{
 			Index:  2,
@@ -461,7 +486,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[uint32],
 		},
 		{
 			Index:  3,
@@ -473,7 +498,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[uint64],
 		},
 		{
 			Index:  4,
@@ -485,7 +510,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[int8],
 		},
 		{
 			Index:  5,
@@ -497,7 +522,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[int16],
 		},
 		{
 			Index:  6,
@@ -509,7 +534,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[int32],
 		},
 		{
 			Index:  7,
@@ -521,7 +546,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[int64],
 		},
 		{
 			Index:  8,
@@ -533,7 +558,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[float32],
 		},
 		{
 			Index:  9,
@@ -545,7 +570,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[float64],
 		},
 		{
 			Index:  10,
@@ -557,7 +582,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -569,7 +594,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -581,7 +606,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[string],
 		},
 		{
 			Index:  13,
@@ -593,7 +618,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[string],
 		},
 		{
 			Index:  14,
@@ -605,10 +630,22 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[types.Date],
 		},
 		{
 			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_datetime,
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.GeDataValue[types.Datetime],
+		},
+		{
+			Index:  16,
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
@@ -617,7 +654,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.GeDataValue[bool],
 		},
 	},
 	LESS_THAN: {
@@ -631,7 +668,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[uint8],
 		},
 		{
 			Index:  1,
@@ -643,7 +680,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[uint16],
 		},
 		{
 			Index:  2,
@@ -655,7 +692,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[uint32],
 		},
 		{
 			Index:  3,
@@ -667,7 +704,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[uint64],
 		},
 		{
 			Index:  4,
@@ -679,7 +716,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[int8],
 		},
 		{
 			Index:  5,
@@ -691,7 +728,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[int16],
 		},
 		{
 			Index:  6,
@@ -703,7 +740,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[int32],
 		},
 		{
 			Index:  7,
@@ -715,7 +752,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[int64],
 		},
 		{
 			Index:  8,
@@ -727,7 +764,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[float32],
 		},
 		{
 			Index:  9,
@@ -739,7 +776,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[float64],
 		},
 		{
 			Index:  10,
@@ -751,7 +788,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -763,7 +800,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -775,7 +812,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[string],
 		},
 		{
 			Index:  13,
@@ -787,7 +824,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[string],
 		},
 		{
 			Index:  14,
@@ -799,10 +836,22 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[types.Date],
 		},
 		{
 			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_datetime,
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.LtDataValue[types.Datetime],
+		},
+		{
+			Index:  16,
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
@@ -811,7 +860,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LtDataValue[bool],
 		},
 	},
 	LESS_EQUAL: {
@@ -825,7 +874,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[uint8],
 		},
 		{
 			Index:  1,
@@ -837,7 +886,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[uint16],
 		},
 		{
 			Index:  2,
@@ -849,7 +898,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[uint32],
 		},
 		{
 			Index:  3,
@@ -861,7 +910,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[uint64],
 		},
 		{
 			Index:  4,
@@ -873,7 +922,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[int8],
 		},
 		{
 			Index:  5,
@@ -885,7 +934,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[int16],
 		},
 		{
 			Index:  6,
@@ -897,7 +946,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[int32],
 		},
 		{
 			Index:  7,
@@ -909,7 +958,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[int64],
 		},
 		{
 			Index:  8,
@@ -921,7 +970,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[float32],
 		},
 		{
 			Index:  9,
@@ -933,7 +982,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[float64],
 		},
 		{
 			Index:  10,
@@ -945,7 +994,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -957,7 +1006,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -969,7 +1018,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[string],
 		},
 		{
 			Index:  13,
@@ -981,7 +1030,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[string],
 		},
 		{
 			Index:  14,
@@ -993,10 +1042,22 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[types.Date],
 		},
 		{
 			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_datetime,
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.LeDataValue[types.Datetime],
+		},
+		{
+			Index:  16,
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
@@ -1005,7 +1066,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.LeDataValue[bool],
 		},
 	},
 	NOT_EQUAL: {
@@ -1019,7 +1080,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[uint8],
 		},
 		{
 			Index:  1,
@@ -1031,7 +1092,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[uint16],
 		},
 		{
 			Index:  2,
@@ -1043,7 +1104,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[uint16],
 		},
 		{
 			Index:  3,
@@ -1055,7 +1116,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[uint64],
 		},
 		{
 			Index:  4,
@@ -1067,7 +1128,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[int8],
 		},
 		{
 			Index:  5,
@@ -1079,7 +1140,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[int16],
 		},
 		{
 			Index:  6,
@@ -1091,7 +1152,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[int32],
 		},
 		{
 			Index:  7,
@@ -1103,7 +1164,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[int64],
 		},
 		{
 			Index:  8,
@@ -1115,7 +1176,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[float32],
 		},
 		{
 			Index:  9,
@@ -1127,7 +1188,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[float64],
 		},
 		{
 			Index:  10,
@@ -1139,7 +1200,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -1151,7 +1212,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -1163,7 +1224,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[string],
 		},
 		{
 			Index:  13,
@@ -1175,7 +1236,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[string],
 		},
 		{
 			Index:  14,
@@ -1187,10 +1248,22 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[types.Date],
 		},
 		{
 			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_datetime,
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.NeDataValue[types.Datetime],
+		},
+		{
+			Index:  16,
 			Flag:   plan.Function_STRICT,
 			Layout: COMPARISON_OPERATOR,
 			Args: []types.T{
@@ -1199,7 +1272,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.NeDataValue[bool],
 		},
 	},
 	LIKE: {
@@ -1209,11 +1282,8 @@ var operators = map[int][]Function{
 			Layout:    BINARY_LOGICAL_OPERATOR,
 			Args:      nil,
 			ReturnTyp: types.T_bool,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				_, _ = vs[0].Col.(*types.Bytes), vs[1].Col.(*types.Bytes)
-				return nil, nil
-			},
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			Fn:        operator.Like,
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) != 2 {
 					return false
 				}
@@ -1380,7 +1450,7 @@ var operators = map[int][]Function{
 			Flag:      plan.Function_STRICT,
 			Layout:    IN_PREDICATE,
 			ReturnTyp: types.T_bool,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 2 && inputTypes[1] == types.T_tuple {
 					return true
 				}
@@ -1395,7 +1465,7 @@ var operators = map[int][]Function{
 			Flag:      plan.Function_STRICT,
 			Layout:    EXISTS_ANY_PREDICATE,
 			ReturnTyp: types.T_bool,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				return len(inputTypes) == 1
 			},
 		},
@@ -1412,7 +1482,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.And,
 		},
 	},
 	OR: {
@@ -1426,7 +1496,21 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Or,
+		},
+	},
+	XOR: {
+		{
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: BINARY_LOGICAL_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Xor,
 		},
 	},
 	NOT: {
@@ -1439,7 +1523,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+			Fn:          operator.Not,
 		},
 	},
 	// arithmetic operator
@@ -1520,7 +1604,7 @@ var operators = map[int][]Function{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_float32, types.T_float64},
+			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.Plus[float32],
@@ -1639,7 +1723,7 @@ var operators = map[int][]Function{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_float32, types.T_float64},
+			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.Minus[float32],
@@ -1758,7 +1842,7 @@ var operators = map[int][]Function{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_float32, types.T_float64},
+			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.Mult[float32],
@@ -1926,7 +2010,7 @@ var operators = map[int][]Function{
 			Index:       8,
 			Flag:        plan.Function_STRICT,
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_float32, types.T_float64},
+			Args:        []types.T{types.T_float32, types.T_float32},
 			ReturnTyp:   types.T_float32,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.ModFloat[float32],
@@ -1939,24 +2023,6 @@ var operators = map[int][]Function{
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.ModFloat[float64],
-		},
-		{
-			Index:       10,
-			Flag:        plan.Function_STRICT,
-			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_decimal64, types.T_decimal64},
-			ReturnTyp:   types.T_decimal64,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
-		},
-		{
-			Index:       11,
-			Flag:        plan.Function_STRICT,
-			Layout:      BINARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_decimal128, types.T_decimal128},
-			ReturnTyp:   types.T_decimal128,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
 		},
 	},
 	UNARY_PLUS: {
@@ -2148,26 +2214,7 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.UnaryMinus[float64],
 		},
-		{
-			Index:       6,
-			Flag:        plan.Function_STRICT,
-			Layout:      UNARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_decimal64},
-			ReturnTyp:   types.T_decimal64,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
-		},
-		{
-			Index:       7,
-			Flag:        plan.Function_STRICT,
-			Layout:      UNARY_ARITHMETIC_OPERATOR,
-			Args:        []types.T{types.T_decimal128},
-			ReturnTyp:   types.T_decimal128,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
-		},
 	},
-	// others
 	// others
 	CAST: {
 		{
@@ -3601,56 +3648,317 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          nil,
 		},
+		{
+			Index:       159,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint8, types.T_decimal128},
+			ReturnTyp:   types.T_decimal128,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       160,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint16, types.T_decimal128},
+			ReturnTyp:   types.T_decimal128,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       161,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint32, types.T_decimal128},
+			ReturnTyp:   types.T_decimal128,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       162,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint64, types.T_decimal128},
+			ReturnTyp:   types.T_decimal128,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
 	},
 	CASE: {
 		{
-			Index:     0,
-			Flag:      plan.Function_NONE,
-			Layout:    CASE_WHEN_EXPRESSION,
-			Args:      nil,
-			ReturnTyp: types.T_int64,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				// not implement now.
-				return nil, nil
-			},
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				return true
-				// TODO: need rewrite to deal with case is nil
-				// l := len(inputTypes)
-				// if l < 3 {
-				// 	return false
-				// }
-				// caseType := inputTypes[0]
-				// for i := 0; i < l-1; i += 2 { // when should be caseType
-				// 	if inputTypes[i] != caseType && isNotScalarNull(inputTypes[i]) {
-				// 		return false
-				// 	}
-				// }
-				// for i := 1; i < l-1; i += 2 { // then should be int64
-				// 	if inputTypes[i] != types.T_int64 && isNotScalarNull(inputTypes[i]) {
-				// 		return false
-				// 	}
-				// }
-				// if l%2 == 1 { // has else part
-				// 	if inputTypes[l-1] != types.T_int64 && isNotScalarNull(inputTypes[l-1]) {
-				// 		return false
-				// 	}
-				// }
-				// return true
-			},
+			Index:       0,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_int8,
+			Fn:          operator.CaseWhenInt8,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_int16,
+			Fn:          operator.CaseWhenInt16,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_int32,
+			Fn:          operator.CaseWhenInt32,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       3,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_int64,
+			Fn:          operator.CaseWhenInt64,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       4,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint8,
+			Fn:          operator.CaseWhenUint8,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       5,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint16,
+			Fn:          operator.CaseWhenUint16,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       6,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint32,
+			Fn:          operator.CaseWhenUint32,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       7,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_uint64,
+			Fn:          operator.CaseWhenUint64,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       8,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_float32,
+			Fn:          operator.CaseWhenFloat32,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       9,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_float64,
+			Fn:          operator.CaseWhenFloat64,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       10,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_bool,
+			Fn:          operator.CaseWhenBool,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       11,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_date,
+			Fn:          operator.CaseWhenDate,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       12,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_datetime,
+			Fn:          operator.CaseWhenDateTime,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       13,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_varchar,
+			Fn:          operator.CaseWhenVarchar,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       14,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_char,
+			Fn:          operator.CaseWhenChar,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       15,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_decimal64,
+			Fn:          operator.CaseWhenDecimal64,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
+		{
+			Index:       16,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_decimal128,
+			Fn:          operator.CaseWhenDecimal128,
+			TypeCheckFn: operator.CwTypeCheckFn,
 		},
 	},
 	IFF: {
 		{
-			Index:     0,
-			Flag:      plan.Function_STRICT,
-			Layout:    STANDARD_FUNCTION,
-			Args:      []types.T{types.T_any, types.T_any, types.T_any},
-			ReturnTyp: types.T_any,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
-				return true
-			},
-			Fn: nil,
+			Index:       0,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_int8,
+			Fn:          operator.IfInt8,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_int16,
+			Fn:          operator.IfInt16,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_int32,
+			Fn:          operator.IfInt32,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       3,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_int64,
+			Fn:          operator.IfInt64,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       4,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_uint8,
+			Fn:          operator.IfUint8,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       5,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_uint16,
+			Fn:          operator.IfUint16,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       6,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_uint32,
+			Fn:          operator.IfUint32,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       7,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_uint64,
+			Fn:          operator.IfUint64,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       8,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_float32,
+			Fn:          operator.IfFloat32,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       9,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_float64,
+			Fn:          operator.IfFloat64,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       10,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_bool,
+			Fn:          operator.IfBool,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       11,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_date,
+			Fn:          operator.IfDate,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       12,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_datetime,
+			Fn:          operator.IfDateTime,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       13,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_varchar,
+			Fn:          operator.IfVarchar,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       14,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_char,
+			Fn:          operator.IfChar,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       15,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_decimal64,
+			Fn:          operator.IfDecimal64,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       16,
+			Flag:        plan.Function_NONE,
+			Layout:      STANDARD_FUNCTION,
+			ReturnTyp:   types.T_decimal128,
+			Fn:          operator.IfDecimal128,
+			TypeCheckFn: operator.IfTypeCheckFn,
 		},
 	},
 }

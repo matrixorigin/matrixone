@@ -15,17 +15,8 @@
 package common
 
 import (
-	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync/atomic"
-)
-
-var (
-	ErrParseBlockFileName   = errors.New("tae: parse block file name")
-	ErrParseTBlockFileName  = errors.New("tae: parse tblock file name")
-	ErrParseSegmentFileName = errors.New("tae: parse segment file name")
 )
 
 // ID is the general identifier type shared by different types like
@@ -49,16 +40,6 @@ type ID struct {
 	Iter uint8
 }
 
-const (
-	TRANSIENT_TABLE_START_ID uint64 = ^(uint64(0)) / 2
-)
-
-func NewTransientID() *ID {
-	return &ID{
-		TableID: TRANSIENT_TABLE_START_ID,
-	}
-}
-
 func (id *ID) AsBlockID() ID {
 	return ID{
 		TableID:   id.TableID,
@@ -78,10 +59,6 @@ func (id *ID) String() string {
 	return fmt.Sprintf("<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
 }
 
-func (id *ID) TableString() string {
-	return fmt.Sprintf("TBL<%d>", id.TableID)
-}
-
 func (id *ID) SegmentString() string {
 	return fmt.Sprintf("SEG<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
 }
@@ -98,31 +75,6 @@ func (id *ID) IsSameBlock(o ID) bool {
 	return id.TableID == o.TableID && id.SegmentID == o.SegmentID && id.BlockID == o.BlockID
 }
 
-func (id *ID) Next() *ID {
-	newId := atomic.AddUint64(&id.TableID, uint64(1))
-	return &ID{
-		TableID: newId - 1,
-	}
-}
-
-func (id *ID) NextPart() ID {
-	newId := atomic.AddUint32(&id.PartID, uint32(1))
-	bid := *id
-	bid.PartID = newId - 1
-	return bid
-}
-
-func (id *ID) NextIter() ID {
-	return ID{
-		TableID:   id.TableID,
-		Idx:       id.Idx,
-		SegmentID: id.SegmentID,
-		BlockID:   id.BlockID,
-		PartID:    id.PartID,
-		Iter:      id.Iter + 1,
-	}
-}
-
 func (id *ID) NextBlock() ID {
 	newId := atomic.AddUint64(&id.BlockID, uint64(1))
 	bid := *id
@@ -135,109 +87,6 @@ func (id *ID) NextSegment() ID {
 	bid := *id
 	bid.SegmentID = newId - 1
 	return bid
-}
-
-func (id *ID) IsTransient() bool {
-	return id.TableID >= TRANSIENT_TABLE_START_ID
-}
-
-func (id *ID) ToPartFileName() string {
-	return fmt.Sprintf("%d_%d_%d_%d_%d", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID)
-}
-
-func (id *ID) ToPartFilePath() string {
-	return fmt.Sprintf("%d/%d/%d/%d/%d.%d", id.TableID, id.SegmentID, id.BlockID, id.Idx, id.PartID, id.Iter)
-}
-
-func (id *ID) ToBlockFileName() string {
-	return fmt.Sprintf("%d_%d_%d", id.TableID, id.SegmentID, id.BlockID)
-}
-
-func (id *ID) ToTBlockFileName(name string) string {
-	return fmt.Sprintf("%d_%d_%d_%s", id.TableID, id.SegmentID, id.BlockID, name)
-}
-
-func (id *ID) ToBlockFilePath() string {
-	return fmt.Sprintf("%d/%d/%d/", id.TableID, id.SegmentID, id.BlockID)
-}
-
-func (id *ID) ToSegmentFileName() string {
-	return fmt.Sprintf("%d_%d", id.TableID, id.SegmentID)
-}
-
-func (id *ID) ToSegmentFilePath() string {
-	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
-}
-
-func ParseTBlkName(name string) (id ID, tag string, err error) {
-	strs := strings.Split(name, "_")
-	if len(strs) != 4 {
-		err = ErrParseTBlockFileName
-		return
-	}
-	if tid, err := strconv.ParseUint(strs[0], 10, 64); err != nil {
-		return id, tag, err
-	} else {
-		id.TableID = tid
-	}
-	if sid, err := strconv.ParseUint(strs[1], 10, 64); err != nil {
-		return id, tag, err
-	} else {
-		id.SegmentID = sid
-	}
-	if bid, err := strconv.ParseUint(strs[2], 10, 64); err != nil {
-		return id, tag, err
-	} else {
-		id.BlockID = bid
-	}
-	tag = strs[3]
-	return
-}
-
-func ParseBlkNameToID(name string) (ID, error) {
-	var (
-		id  ID
-		err error
-	)
-	strs := strings.Split(name, "_")
-	if len(strs) != 3 {
-		return id, ErrParseBlockFileName
-	}
-	tid, err := strconv.ParseUint(strs[0], 10, 64)
-	if err != nil {
-		return id, err
-	}
-	sid, err := strconv.ParseUint(strs[1], 10, 64)
-	if err != nil {
-		return id, err
-	}
-	bid, err := strconv.ParseUint(strs[2], 10, 64)
-	if err != nil {
-		return id, err
-	}
-	id.TableID, id.SegmentID, id.BlockID = tid, sid, bid
-	return id, nil
-}
-
-func ParseSegmentNameToID(name string) (ID, error) {
-	var (
-		id  ID
-		err error
-	)
-	strs := strings.Split(name, "_")
-	if len(strs) != 2 {
-		return id, ErrParseSegmentFileName
-	}
-	tid, err := strconv.ParseUint(strs[0], 10, 64)
-	if err != nil {
-		return id, err
-	}
-	sid, err := strconv.ParseUint(strs[1], 10, 64)
-	if err != nil {
-		return id, err
-	}
-	id.TableID, id.SegmentID = tid, sid
-	return id, nil
 }
 
 func IDArraryString(ids []ID) string {

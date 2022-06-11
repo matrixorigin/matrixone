@@ -47,6 +47,7 @@ var Names = [...]string{
 }
 
 type Aggregate struct {
-	Op int
-	E  *plan.Expr
+	Op   int
+	Dist bool
+	E    *plan.Expr
 }

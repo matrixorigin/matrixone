@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
@@ -44,6 +45,9 @@ type dbScanner struct {
 	db         *DB
 	ops        []ScannerOp
 	errHandler ErrHandler
+	dbmask     *roaring.Bitmap
+	tablemask  *roaring.Bitmap
+	segmask    *roaring.Bitmap
 }
 
 func (scanner *dbScanner) OnStopped() {
@@ -51,6 +55,9 @@ func (scanner *dbScanner) OnStopped() {
 }
 
 func (scanner *dbScanner) OnExec() {
+	scanner.dbmask.Clear()
+	scanner.tablemask.Clear()
+	scanner.segmask.Clear()
 	for _, op := range scanner.ops {
 		err := op.PreExecute()
 		if err != nil {
@@ -77,6 +84,9 @@ func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
 		db:            db,
 		ops:           make([]ScannerOp, 0),
 		errHandler:    errHandler,
+		dbmask:        roaring.New(),
+		tablemask:     roaring.New(),
+		segmask:       roaring.New(),
 	}
 	scanner.BlockFn = scanner.onBlock
 	scanner.SegmentFn = scanner.onSegment
@@ -111,35 +121,72 @@ func (scanner *dbScanner) onPostSegment(entry *catalog.SegmentEntry) (err error)
 }
 
 func (scanner *dbScanner) onSegment(entry *catalog.SegmentEntry) (err error) {
-	for _, op := range scanner.ops {
+	scanner.segmask.Clear()
+	for i, op := range scanner.ops {
+		if scanner.tablemask.Contains(uint32(i)) {
+			scanner.segmask.Add(uint32(i))
+			continue
+		}
 		err = op.OnSegment(entry)
+		if err == catalog.ErrStopCurrRecur {
+			scanner.segmask.Add(uint32(i))
+		}
 		if err = scanner.errHandler.OnSegmentErr(entry, err); err != nil {
 			break
 		}
+	}
+	if scanner.segmask.GetCardinality() == uint64(len(scanner.ops)) {
+		err = catalog.ErrStopCurrRecur
+		logutil.Infof("StopRecurScanSegment: %s", entry.String())
 	}
 	return
 }
 
 func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
-	for _, op := range scanner.ops {
+	if entry.IsVirtual() {
+		err = catalog.ErrStopCurrRecur
+		return
+	}
+	scanner.tablemask.Clear()
+	for i, op := range scanner.ops {
+		// If the specified op was masked OnDatabase. skip it
+		if scanner.dbmask.Contains(uint32(i)) {
+			scanner.tablemask.Add(uint32(i))
+			continue
+		}
 		err = op.OnTable(entry)
+		if err == catalog.ErrStopCurrRecur {
+			scanner.tablemask.Add(uint32(i))
+		}
 		if err = scanner.errHandler.OnTableErr(entry, err); err != nil {
 			break
 		}
+	}
+	if scanner.tablemask.GetCardinality() == uint64(len(scanner.ops)) {
+		err = catalog.ErrStopCurrRecur
+		logutil.Infof("StopRecurScanTable: %s", entry.String())
 	}
 	return
 }
 
 func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
-	if entry.IsSystemDB() {
-		err = catalog.ErrStopCurrRecur
-		return
-	}
-	for _, op := range scanner.ops {
+	// if entry.IsSystemDB() {
+	// 	err = catalog.ErrStopCurrRecur
+	// 	return
+	// }
+	scanner.dbmask.Clear()
+	for i, op := range scanner.ops {
 		err = op.OnDatabase(entry)
+		if err == catalog.ErrStopCurrRecur {
+			scanner.dbmask.Add(uint32(i))
+		}
 		if err = scanner.errHandler.OnDatabaseErr(entry, err); err != nil {
 			break
 		}
+	}
+	if scanner.dbmask.GetCardinality() == uint64(len(scanner.ops)) {
+		err = catalog.ErrStopCurrRecur
+		logutil.Infof("StopRecurScanDatabase: %s", entry.String())
 	}
 	return
 }

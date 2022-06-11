@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -55,6 +56,7 @@ func (task *ScheduledTxnTask) Execute() (err error) {
 		if err2 != nil {
 			panic(err2)
 		}
+		logutil.Warnf("Execute ScheduleTxnTask: %v. Rollbacked", err)
 		return
 	}
 	err = txnTask.OnExec()

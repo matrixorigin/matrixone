@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -52,8 +53,6 @@ type txnTable struct {
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
-
-	isHiddenPK bool
 }
 
 func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
@@ -65,7 +64,6 @@ func newTxnTable(store *txnStore, entry *catalog.TableEntry) *txnTable {
 		deleteNodes: make(map[common.ID]txnif.DeleteNode),
 		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
-		isHiddenPK:  entry.GetSchema().IsHiddenPK(),
 	}
 	return tbl
 }
@@ -138,6 +136,7 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 	if err != nil {
 		return
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
@@ -153,6 +152,7 @@ func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error
 		return
 	}
 	seg = newSegment(tbl, meta)
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -168,6 +168,7 @@ func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 		return
 	}
 	seg = newSegment(tbl, meta)
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -182,12 +183,14 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	if err != nil {
 		return
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }
 
 func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, entry)
 	for _, id := range readed {
 		tbl.store.warChecker.Read(tbl.entry.GetDB().ID, id)
@@ -234,6 +237,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 	if err != nil {
 		return
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return buildBlock(tbl, meta), err
@@ -243,6 +247,7 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 	if tbl.createEntry != nil {
 		panic("logic error")
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.createEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
@@ -255,6 +260,7 @@ func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
 	if tbl.createEntry != nil {
 		return txnbase.ErrDDLDropCreated
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.dropEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
@@ -298,6 +304,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 		return ErrDuplicateNode
 	}
 	tbl.deleteNodes[nid] = node
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
@@ -308,16 +315,30 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	if u != nil {
 		return ErrDuplicateNode
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.updateNodes[id] = node
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
 
-func (tbl *txnTable) Append(data *batch.Batch) error {
-	if !tbl.isHiddenPK {
-		err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().GetPrimaryKeyIdx()])
-		if err != nil {
-			return err
+func (tbl *txnTable) GetSortColumns(data *batch.Batch) []*vector.Vector {
+	vs := make([]*vector.Vector, tbl.schema.GetSortKeyCnt())
+	for i := range vs {
+		vs[i] = data.Vecs[tbl.schema.SortKey.Defs[i].Idx]
+	}
+	return vs
+}
+
+// func (tbl *txnTable)
+
+func (tbl *txnTable) Append(data *batch.Batch) (err error) {
+	if tbl.schema.IsSinglePK() {
+		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
+			return
+		}
+	} else if tbl.schema.IsCompoundPK() {
+		if err = tbl.DoBatchDedup(tbl.GetSortColumns(data)...); err != nil {
+			return
 		}
 	}
 	if tbl.localSegment == nil {
@@ -517,10 +538,10 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 }
 
 func (tbl *txnTable) PreCommitDedup() (err error) {
-	if tbl.localSegment == nil || tbl.isHiddenPK {
+	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	pks := tbl.localSegment.GetPrimaryColumn()
+	pks := tbl.localSegment.GetPKColumn()
 	err = tbl.DoDedup(pks, true)
 	return
 }
@@ -586,24 +607,32 @@ func (tbl *txnTable) DoDedup(pks *vector.Vector, preCommit bool) (err error) {
 	return
 }
 
-func (tbl *txnTable) BatchDedup(pks *vector.Vector) (err error) {
+func (tbl *txnTable) DoBatchDedup(keys ...*vector.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	err = index.BatchInsert(pks, 0, vector.Length(pks), 0, true)
-	if err != nil {
+	key := model.EncodeCompoundColumn(keys...)
+	if err = index.BatchInsert(key, 0, vector.Length(key), 0, true); err != nil {
 		return
 	}
+
 	if tbl.localSegment != nil {
-		if err = tbl.localSegment.BatchDedupByCol(pks); err != nil {
+		if err = tbl.localSegment.BatchDedup(key); err != nil {
 			return
 		}
 	}
-	err = tbl.DoDedup(pks, false)
+
+	err = tbl.DoDedup(key, false)
 	return
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
-	if tbl.localSegment != nil {
-		err = tbl.localSegment.BatchDedupByCol(bat.Vecs[tbl.GetSchema().GetPrimaryKeyIdx()])
+	if tbl.localSegment == nil {
+		return
+	}
+	if tbl.schema.IsSinglePK() {
+		err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
+	} else {
+		key := model.EncodeCompoundColumn(tbl.GetSortColumns(bat)...)
+		err = tbl.localSegment.BatchDedup(key)
 	}
 	return
 }

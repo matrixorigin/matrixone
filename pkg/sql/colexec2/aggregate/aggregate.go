@@ -75,7 +75,7 @@ func ReturnType(op int, typ types.T) types.T {
 	return 0
 }
 
-func New(op int, typ types.Type) (ring.Ring, error) {
+func New(op int, dist bool, typ types.Type) (ring.Ring, error) {
 	switch op {
 	case Sum:
 		return NewSum(typ)
@@ -89,6 +89,9 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case Min:
 		return NewMin(typ)
 	case Count:
+		if dist {
+			return count.NewDistinctCount(typ), nil
+		}
 		return count.NewCount(typ), nil
 	case StarCount:
 		return starcount.NewCount(typ), nil
@@ -146,6 +149,8 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 
 func NewMax(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return max.NewBool(typ), nil
 	case types.T_int8:
 		return max.NewInt8(typ), nil
 	case types.T_int16:
@@ -178,6 +183,8 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 
 func NewMin(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return min.NewBool(typ), nil
 	case types.T_int8:
 		return min.NewInt8(typ), nil
 	case types.T_int16:

@@ -16,61 +16,64 @@ package binary
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/power"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Power(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv, rv := vs[0], vs[1]
-	lvs, rvs := lv.Col.([]float64), rv.Col.([]float64)
+func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	left, right := vectors[0], vectors[1]
+	resultType := types.Type{Oid: types.T_float64, Size: 8}
+	resultElementSize := int(resultType.Size)
 	switch {
-	case lv.IsScalar() && rv.IsScalar():
-		if lv.IsScalarNull() || rv.IsScalarNull() {
-			return proc.AllocScalarNullVector(lv.Typ), nil
+	case left.IsScalar() && right.IsScalar():
+		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		vec := proc.AllocScalarVector(lv.Typ)
-		rs := make([]float64, 1)
-		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-		vector.SetCol(vec, power.Power(lvs, rvs, rs))
-		return vec, nil
-	case lv.IsScalar() && !rv.IsScalar():
-		if lv.IsScalarNull() {
-			return proc.AllocScalarNullVector(lv.Typ), nil
+		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]float64, 1)
+		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
+		return resultVector, nil
+	case left.IsScalar() && !right.IsScalar():
+		if left.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		vec, err := proc.AllocVector(lv.Typ, 8*int64(len(rvs)))
+		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeFloat64Slice(vec.Data)
-		rs = rs[:len(rvs)]
-		// If one of the parameters of power is null, the return value is null
-		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-		vector.SetCol(vec, power.PowerScalarLeftConst(lvs[0], rvs, rs))
-		return vec, nil
-	case !lv.IsScalar() && rv.IsScalar():
-		if rv.IsScalarNull() {
-			return proc.AllocScalarNullVector(rv.Typ), nil
+		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+		resultValues = resultValues[:len(rightValues)]
+		nulls.Set(resultVector.Nsp, right.Nsp)
+		vector.SetCol(resultVector, power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues))
+		return resultVector, nil
+	case !left.IsScalar() && right.IsScalar():
+		if right.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		vec, err := proc.AllocVector(lv.Typ, 8*int64(len(lvs)))
+		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues)))
 		if err != nil {
 			return nil, err
 		}
-		rs := encoding.DecodeFloat64Slice(vec.Data)
-		rs = rs[:len(rvs)]
-		// If one of the parameters of power is null, the return value is null
-		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-		vector.SetCol(vec, power.PowerScalarRightConst(rvs[0], lvs, rs))
-		return vec, nil
+		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+		resultValues = resultValues[:len(leftValues)]
+		nulls.Set(resultVector.Nsp, left.Nsp)
+		vector.SetCol(resultVector, power.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
+		return resultVector, nil
 	}
-	vec, err := proc.AllocVector(lv.Typ, 8*int64(len(lvs)))
+	leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
+	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 	if err != nil {
 		return nil, err
 	}
-	rs := encoding.DecodeFloat64Slice(vec.Data)
-	rs = rs[:len(rvs)]
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, power.Power(lvs, rvs, rs))
-	return vec, nil
+	resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+	resultValues = resultValues[:len(leftValues)]
+	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
+	return resultVector, nil
 }

@@ -1120,6 +1120,24 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 	case *approxcd.ApproxCountDistinctRing:
 		buf.WriteByte(ApproxCountDistinctRing)
 		return v.Marshal(buf)
+	case *max.BoolRing:
+		buf.WriteByte(MaxBoolRing)
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeBoolSlice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	case *max.Int8Ring:
 		buf.WriteByte(MaxInt8Ring)
 		// Ns
@@ -1423,6 +1441,24 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 					buf.Write(v.Vs[i])
 				}
 			}
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.BoolRing:
+		buf.WriteByte(MinBoolRing)
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		da := encoding.EncodeBoolSlice(v.Vs)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
 		}
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
@@ -2074,6 +2110,30 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		r := approxcd.NewApproxCountDistinct(types.Type{})
 		data, err := r.Unmarshal(data)
 		return r, data, err
+	case MaxBoolRing:
+		r := new(max.BoolRing)
+		data = data[1:]
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeBoolSlice(r.Da)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
 	case MaxInt8Ring:
 		r := new(max.Int8Ring)
 		data = data[1:]
@@ -2466,6 +2526,30 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 				}
 			}
 		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinBoolRing:
+		r := new(min.BoolRing)
+		data = data[1:]
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Da
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Vs
+		r.Vs = encoding.DecodeBoolSlice(r.Da)
 		// Typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]

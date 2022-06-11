@@ -17,6 +17,7 @@ package compile2
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -126,6 +127,17 @@ func (s *Scope) CreateIndex(ts uint64, snapshot engine.Snapshot, engine engine.E
 
 func (s *Scope) DropIndex(ts uint64, snapshot engine.Snapshot, engine engine.Engine) error {
 	return nil
+}
+
+func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+	s.Magic = Merge
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
+	arg.Ts = ts
+	defer arg.TableSource.Close(nil)
+	if err := s.MergeRun(engine); err != nil {
+		return 0, err
+	}
+	return arg.AffectedRows, nil
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {

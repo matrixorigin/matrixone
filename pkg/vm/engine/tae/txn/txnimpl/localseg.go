@@ -11,7 +11,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -82,22 +82,39 @@ func (seg *localSegment) registerInsertNode() {
 }
 
 func (seg *localSegment) ApplyAppend() (err error) {
+	var (
+		destOff      uint32
+		anode        txnif.AppendNode
+		prev         txnif.AppendNode
+		prevAppender data.BlockAppender
+	)
 	for _, ctx := range seg.appends {
-		var (
-			destOff    uint32
-			appendNode txnif.AppendNode
-		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, uint32(compute.LengthOfBatch(bat)), seg.table.store.txn); err != nil {
+		if prevAppender != nil && prevAppender.GetID().BlockID == ctx.driver.GetID().BlockID {
+			prev = anode
+		} else {
+			if anode != nil {
+				seg.table.store.IncreateWriteCnt()
+				seg.table.txnEntries = append(seg.table.txnEntries, anode)
+			}
+			anode = nil
+			prev = nil
+		}
+		prevAppender = ctx.driver
+		if anode, destOff, err = ctx.driver.ApplyAppend(
+			bat,
+			0,
+			uint32(compute.LengthOfBatch(bat)),
+			seg.table.store.txn,
+			prev); err != nil {
 			return
 		}
-		ctx.driver.Close()
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
-		if err = appendNode.PrepareCommit(); err != nil {
-			return
-		}
-		seg.table.txnEntries = append(seg.table.txnEntries, appendNode)
+	}
+	if anode != nil {
+		seg.table.store.IncreateWriteCnt()
+		seg.table.txnEntries = append(seg.table.txnEntries, anode)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -183,9 +200,19 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
-		if !seg.table.isHiddenPK {
-			start := seg.rows
-			if err = seg.index.BatchInsert(data.Vecs[seg.table.GetSchema().GetPrimaryKeyIdx()], int(offset), int(appended), start, false); err != nil {
+		if seg.table.schema.IsSinglePK() {
+			if err = seg.index.BatchInsert(
+				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
+				int(offset),
+				int(appended),
+				seg.rows,
+				false); err != nil {
+				break
+			}
+		} else if seg.table.schema.IsCompoundPK() {
+			cols := seg.table.GetSortColumns(data)
+			key := model.EncodeCompoundColumn(cols...)
+			if err = seg.index.BatchInsert(key, int(offset), int(appended), seg.rows, false); err != nil {
 				break
 			}
 		}
@@ -201,6 +228,40 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 	return err
 }
 
+func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (err error) {
+	for i := from; i <= to; i++ {
+		v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		if err = seg.index.Delete(v); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func (seg *localSegment) DeleteCompoundIndex(from, to uint32, node InsertNode) (err error) {
+	var buf bytes.Buffer
+	vs := make([]any, seg.table.schema.GetSortKeyCnt())
+	for i := from; i <= to; i++ {
+		buf.Reset()
+		for j := range vs {
+			v, _ := node.GetValue(seg.table.schema.SortKey.Defs[j].Idx, i)
+			vs[j] = v
+		}
+		key := model.EncodeTypedVals(&buf, vs...)
+		if err = seg.index.Delete(key); err != nil {
+			break
+		}
+	}
+	return
+}
+
+func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
+	if seg.table.schema.IsSinglePK() {
+		return seg.DeleteSingleIndex(from, to, node)
+	}
+	return seg.DeleteCompoundIndex(from, to, node)
+}
+
 func (seg *localSegment) RangeDelete(start, end uint32) error {
 	first, firstOffset := seg.GetLocalPhysicalAxis(start)
 	last, lastOffset := seg.GetLocalPhysicalAxis(end)
@@ -208,43 +269,36 @@ func (seg *localSegment) RangeDelete(start, end uint32) error {
 	if last == first {
 		node := seg.nodes[first]
 		err = node.RangeDelete(firstOffset, lastOffset)
-		if !seg.table.isHiddenPK {
-			if err == nil {
-				for i := firstOffset; i <= lastOffset; i++ {
-					v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
-					if err = seg.index.Delete(v); err != nil {
-						break
-					}
-				}
-			}
+		if err != nil {
+			return err
 		}
-	} else {
-		node := seg.nodes[first]
-		err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
-		node = seg.nodes[last]
-		err = node.RangeDelete(0, lastOffset)
-		if !seg.table.isHiddenPK {
-			for i := uint32(0); i <= lastOffset; i++ {
-				v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
-				if err = seg.index.Delete(v); err != nil {
-					break
-				}
-			}
+		if !seg.table.schema.HasPK() {
+			// If no pk defined
+			return err
 		}
-		if last > first+1 && err == nil {
-			for i := first + 1; i < last; i++ {
-				node = seg.nodes[i]
-				if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
-					break
-				}
-				if !seg.table.isHiddenPK {
-					for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
-						v, _ := node.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), i)
-						if err = seg.index.Delete(v); err != nil {
-							break
-						}
-					}
-				}
+		err = seg.DeleteFromIndex(firstOffset, lastOffset, node)
+		return err
+	}
+
+	node := seg.nodes[first]
+	if err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1); err != nil {
+		return err
+	}
+	node = seg.nodes[last]
+	if err = node.RangeDelete(0, lastOffset); err != nil {
+		return err
+	}
+	if err = seg.DeleteFromIndex(0, lastOffset, node); err != nil {
+		return err
+	}
+	if last > first+1 {
+		for i := first + 1; i < last; i++ {
+			node = seg.nodes[i]
+			if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
+				break
+			}
+			if err = seg.DeleteFromIndex(0, txnbase.MaxNodeRows, node); err != nil {
+				break
 			}
 		}
 	}
@@ -290,7 +344,7 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 }
 
 func (seg *localSegment) Update(row uint32, col uint16, value any) error {
-	if seg.table.entry.GetSchema().HiddenKeyDef().Idx == int(col) {
+	if seg.table.entry.GetSchema().HiddenKey.Idx == int(col) {
 		return data.ErrUpdateHiddenKey
 	}
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
@@ -302,11 +356,8 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
 	}
-	if !seg.table.isHiddenPK {
-		v, _ := n.GetValue(seg.table.entry.GetSchema().GetPrimaryKeyIdx(), row)
-		if err = seg.index.Delete(v); err != nil {
-			panic(err)
-		}
+	if err = seg.DeleteFromIndex(row, row, n); err != nil {
+		return err
 	}
 
 	vec := vector.New(window.Vecs[col].Typ)
@@ -326,31 +377,36 @@ func (seg *localSegment) Rows() uint32 {
 }
 
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	if seg.table.isHiddenPK {
+	id = seg.entry.AsCommonID()
+	if !seg.table.schema.HasPK() {
 		_, _, offset = model.DecodeHiddenKeyFromValue(filter.Val)
-	} else {
+		return
+	}
+	if seg.table.schema.IsSinglePK() {
 		if v, ok := filter.Val.([]byte); ok {
 			offset, err = seg.index.Search(string(v))
 		} else {
 			offset, err = seg.index.Search(filter.Val)
 		}
-	}
-	if err == nil {
-		id = seg.entry.AsCommonID()
+	} else if seg.table.schema.IsCompoundPK() {
+		offset, err = seg.index.Search(string(filter.Val.([]byte)))
 	}
 	return
 }
 
-func (seg *localSegment) GetPrimaryColumn() *vector.Vector {
+func (seg *localSegment) GetPKColumn() *vector.Vector {
 	schema := seg.table.entry.GetSchema()
-	return seg.index.KeyToVector(schema.GetSinglePKType())
+	return seg.index.KeyToVector(schema.GetSortKeyType())
 }
 
-func (seg *localSegment) BatchDedupByCol(col *vector.Vector) error {
-	return seg.index.BatchDedup(col)
+func (seg *localSegment) BatchDedup(key *vector.Vector) error {
+	return seg.index.BatchDedup(key)
 }
 
-func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+func (seg *localSegment) GetColumnDataById(
+	blk *catalog.BlockEntry,
+	colIdx int,
+	compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]

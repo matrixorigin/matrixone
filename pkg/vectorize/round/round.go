@@ -292,15 +292,8 @@ func roundFloat32(xs []float32, rs []float32, digits int64) []float32 {
 		for i := range xs {
 			rs[i] = float32(math.RoundToEven(float64(xs[i])))
 		}
-	} else if digits < 0 {
-		scale := float64(scaleTable[-digits])
-		for i := range xs {
-			value := float64(xs[i]) / scale
-			roundResult := math.RoundToEven(value)
-			rs[i] = float32(roundResult * scale)
-		}
 	} else {
-		scale := float64(scaleTable[digits])
+		scale := math.Pow10(int(digits))
 		for i := range xs {
 			value := float64(xs[i]) * scale
 			roundResult := math.RoundToEven(value)
@@ -315,15 +308,8 @@ func roundFloat64(xs []float64, rs []float64, digits int64) []float64 {
 		for i := range xs {
 			rs[i] = math.RoundToEven(xs[i])
 		}
-	} else if digits < 0 {
-		scale := float64(scaleTable[-digits])
-		for i := range xs {
-			value := xs[i] / scale
-			roundResult := math.RoundToEven(value)
-			rs[i] = roundResult * scale
-		}
 	} else {
-		scale := float64(scaleTable[digits])
+		scale := math.Pow10(int(digits))
 		for i := range xs {
 			value := xs[i] * scale
 			roundResult := math.RoundToEven(value)

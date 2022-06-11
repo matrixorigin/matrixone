@@ -15,9 +15,29 @@
 package db
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
+
+var dbScope = common.ID{
+	TableID: math.MaxUint64 / 2,
+}
+
+func MakeDBScopes(entry *catalog.DBEntry) (scopes []common.ID) {
+	scope := dbScope
+	scope.SegmentID = entry.GetID()
+	scopes = append(scopes, scope)
+	return
+}
+
+func MakeTableScopes(entries ...*catalog.TableEntry) (scopes []common.ID) {
+	for _, entry := range entries {
+		scopes = append(scopes, *entry.AsCommonID())
+	}
+	return
+}
 
 func MakeSegmentScopes(entries ...*catalog.SegmentEntry) (scopes []common.ID) {
 	for _, entry := range entries {

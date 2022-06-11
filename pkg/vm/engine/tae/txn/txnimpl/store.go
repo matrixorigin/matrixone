@@ -108,7 +108,7 @@ func (store *txnStore) BindTxn(txn txnif.AsyncTxn) {
 	store.txn = txn
 }
 
-func (store *txnStore) BatchDedup(dbId, id uint64, pks *vector.Vector) (err error) {
+func (store *txnStore) BatchDedup(dbId, id uint64, pks ...*vector.Vector) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pks *vector.Vector) (err erro
 	// 	return txnbase.ErrNotFound
 	// }
 
-	return db.BatchDedup(id, pks)
+	return db.BatchDedup(id, pks...)
 }
 
 func (store *txnStore) Append(dbId, id uint64, data *batch.Batch) error {
@@ -133,7 +133,6 @@ func (store *txnStore) Append(dbId, id uint64, data *batch.Batch) error {
 }
 
 func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32) (err error) {
-	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -169,7 +168,6 @@ func (store *txnStore) GetValue(dbId uint64, id *common.ID, row uint32, colIdx u
 }
 
 func (store *txnStore) Update(dbId uint64, id *common.ID, row uint32, colIdx uint16, v any) (err error) {
-	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -207,7 +205,6 @@ func (store *txnStore) GetDatabase(name string) (h handle.Database, err error) {
 }
 
 func (store *txnStore) CreateDatabase(name string) (h handle.Database, err error) {
-	store.IncreateWriteCnt()
 	meta, err := store.catalog.CreateDBEntry(name, store.txn)
 	if err != nil {
 		return nil, err
@@ -224,7 +221,6 @@ func (store *txnStore) CreateDatabase(name string) (h handle.Database, err error
 }
 
 func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) {
-	store.IncreateWriteCnt()
 	meta, err := store.catalog.DropDBEntry(name, store.txn)
 	if err != nil {
 		return
@@ -241,7 +237,6 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 }
 
 func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Relation, err error) {
-	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return
@@ -250,7 +245,6 @@ func (store *txnStore) CreateRelation(dbId uint64, def any) (relation handle.Rel
 }
 
 func (store *txnStore) DropRelationByName(dbId uint64, name string) (relation handle.Relation, err error) {
-	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return nil, err
@@ -275,7 +269,6 @@ func (store *txnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segmen
 }
 
 func (store *txnStore) CreateSegment(dbId, tid uint64) (seg handle.Segment, err error) {
-	store.IncreateWriteCnt()
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -284,7 +277,6 @@ func (store *txnStore) CreateSegment(dbId, tid uint64) (seg handle.Segment, err 
 }
 
 func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
-	store.IncreateWriteCnt()
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -306,7 +298,6 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 }
 
 func (store *txnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
-	store.IncreateWriteCnt()
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -323,7 +314,6 @@ func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, e
 }
 
 func (store *txnStore) CreateBlock(dbId, tid, sid uint64) (blk handle.Block, err error) {
-	store.IncreateWriteCnt()
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -332,7 +322,6 @@ func (store *txnStore) CreateBlock(dbId, tid, sid uint64) (blk handle.Block, err
 }
 
 func (store *txnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error) {
-	store.IncreateWriteCnt()
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -341,7 +330,6 @@ func (store *txnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error) {
 }
 
 func (store *txnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) {
-	store.IncreateWriteCnt()
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
@@ -408,7 +396,11 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		return
 	}
 
-	logEntry, err := store.cmdMgr.ApplyTxnRecord()
+	if store.cmdMgr.GetCSN() == 0 {
+		return
+	}
+
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
 	if err != nil {
 		return
 	}
@@ -442,3 +434,5 @@ func (store *txnStore) PrepareRollback() error {
 
 	return err
 }
+
+func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }

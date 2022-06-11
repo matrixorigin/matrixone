@@ -182,6 +182,15 @@ var aggregates = map[int][]Function{
 			ReturnTyp:     types.T_decimal128,
 			AggregateInfo: aggregate.Max,
 		},
+		{
+			Index:         16,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_bool},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_bool,
+			AggregateInfo: aggregate.Max,
+		},
 	},
 	MIN: {
 		{
@@ -326,6 +335,15 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_decimal128},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_decimal128,
+			AggregateInfo: aggregate.Min,
+		},
+		{
+			Index:         16,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_bool},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_bool,
 			AggregateInfo: aggregate.Min,
 		},
 	},
@@ -481,13 +499,13 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_float64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 1 && isNumberType(inputTypes[0]) {
 					return true
 				}
 				return false
 			},
-			AggregateInfo: aggregate.Sum,
+			AggregateInfo: aggregate.Avg,
 		},
 	},
 	COUNT: {
@@ -496,7 +514,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_int64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				return len(inputTypes) == 1
 			},
 			AggregateInfo: aggregate.Count,
@@ -508,7 +526,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_int64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				return len(inputTypes) == 1
 			},
 			AggregateInfo: aggregate.StarCount,
@@ -520,7 +538,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_uint64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 1 {
 					_, err := aggregate.NewBitAnd(types.Type{Oid: inputTypes[0]})
 					if err == nil {
@@ -538,7 +556,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_uint64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 1 {
 					_, err := aggregate.NewBitOr(types.Type{Oid: inputTypes[0]})
 					if err == nil {
@@ -556,7 +574,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_uint64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 1 {
 					_, err := aggregate.NewBitXor(types.Type{Oid: inputTypes[0]})
 					if err == nil {
@@ -574,7 +592,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_float64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 1 {
 					_, err := variance.NewVarianceRingWithTypeCheck(types.Type{Oid: inputTypes[0]})
 					if err == nil {
@@ -592,7 +610,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_float64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				if len(inputTypes) == 1 {
 					_, err := stddevpop.NewStdDevPopRingWithTypeCheck(types.Type{Oid: inputTypes[0]})
 					if err == nil {
@@ -610,7 +628,7 @@ var aggregates = map[int][]Function{
 			Flag:      plan.Function_AGG,
 			Layout:    STANDARD_FUNCTION,
 			ReturnTyp: types.T_uint64,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
 				return len(inputTypes) == 1
 			},
 			AggregateInfo: aggregate.ApproxCountDistinct,

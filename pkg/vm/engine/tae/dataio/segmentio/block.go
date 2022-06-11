@@ -17,7 +17,6 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -26,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
@@ -35,7 +34,7 @@ import (
 
 type blockFile struct {
 	common.RefHelper
-	seg       file.Segment
+	seg       *segmentFile
 	rows      uint32
 	id        uint64
 	ts        uint64
@@ -45,17 +44,21 @@ type blockFile struct {
 	destroy   sync.Mutex
 }
 
-func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,
 		id:      id,
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.indexMeta.file = make([]*DriverFile, 1)
+	bf.indexMeta.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
+		fmt.Sprintf("%d_%d.idx", colCnt, bf.id))
+	bf.indexMeta.file[0].snode.algo = compress.None
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -68,15 +71,16 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 	return bf
 }
 
-func replayBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
+func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,
 		id:      id,
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*segment.BlockFile, 1)
+	bf.deletes.file = make([]*DriverFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.indexMeta.file = make([]*DriverFile, 1)
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -181,8 +185,14 @@ func (bf *blockFile) Destroy() error {
 		cb.Unref()
 	}
 	bf.columns = nil
-	bf.deletes = nil
-	bf.indexMeta = nil
+	if bf.deletes.file[0] != nil {
+		bf.deletes.file[0].driver.ReleaseFile(bf.deletes.file[0])
+		bf.deletes = nil
+	}
+	if bf.indexMeta.file[0] != nil {
+		bf.indexMeta.file[0].driver.ReleaseFile(bf.indexMeta.file[0])
+		bf.indexMeta = nil
+	}
 	if bf.seg != nil {
 		bf.seg.RemoveBlock(bf.id)
 	}
@@ -226,6 +236,7 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 				return
 			}
 		}
+		vec.ResetReadonly()
 		vecs[i] = vec
 		attrs[i] = i
 	}
@@ -309,6 +320,9 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 		}
 	}
 	if err = bf.WriteTS(ts); err != nil {
+		return err
+	}
+	if err = bf.WriteRows(uint32(bat.Length())); err != nil {
 		return err
 	}
 	for _, colIdx := range attrs {

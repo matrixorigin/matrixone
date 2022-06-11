@@ -35,6 +35,7 @@ const (
 	DropDatabase
 	DropTable
 	DropIndex
+	Deletion
 )
 
 // Address is the ip:port of local node
@@ -82,14 +83,15 @@ type Scope struct {
 	Reg *process.WaitRegister
 }
 
-// compile contains all the information needed for compilation.
-type compile struct {
+// Compile contains all the information needed for compilation.
+type Compile struct {
 	scope *Scope
 	u     interface{}
 	//fill is a result writer runs a callback function.
 	//fill will be called when result data is ready.
 	fill func(interface{}, *batch.Batch) error
-
+	//affectRows stores the number of rows affected while insert / update / delete
+	affectRows uint64
 	// db current database name.
 	db string
 	// uid the user who initiated the sql.

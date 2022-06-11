@@ -6,10 +6,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,19 +29,17 @@ func TestHiddenWithPK1(t *testing.T) {
 	bat := catalog.MockData(schema, schema.BlockMaxRows*4)
 	bats := compute.SplitBatch(bat, 10)
 
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
+	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bats[0])
 	{
 		offsets := make([]uint32, 0)
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(schema.HiddenKeyDef().Idx, nil, nil)
+			view, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
 			assert.NoError(t, err)
 			fp := blk.Fingerprint()
-			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 				t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, fp.SegmentID, sid)
@@ -58,18 +55,15 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
+		blk := getOneBlock(rel)
 		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 		assert.NoError(t, err)
 		offsets := make([]uint32, 0)
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
-		_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+		_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 			assert.Equal(t, fp.SegmentID, sid)
@@ -84,9 +78,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	err = rel.Append(bats[2])
@@ -99,34 +91,9 @@ func TestHiddenWithPK1(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
-	{
-		var metas []*catalog.BlockEntry
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			if blk.Rows() < int(schema.BlockMaxRows) {
-				it.Next()
-				continue
-			}
-			meta := blk.GetMeta().(*catalog.BlockEntry)
-			metas = append(metas, meta)
-			it.Next()
-		}
-		for _, meta := range metas {
-			task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
-			assert.NoError(t, err)
-			err = task.OnExec()
-			assert.NoError(t, err)
-		}
-	}
+	compactBlocks(t, tae, "db", schema, false)
 
-	assert.NoError(t, txn.Commit())
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	var segMeta *catalog.SegmentEntry
 	{
 		it := rel.MakeBlockIt()
@@ -137,7 +104,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			offsets := make([]uint32, 0)
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
-			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.GetSegment().ID, sid)
@@ -167,9 +134,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeBlockIt()
 		for it.Valid() {
@@ -180,7 +145,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
 			t.Log(meta.GetSegment().String())
-			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+			_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 				assert.Equal(t, meta.GetSegment().ID, sid)
@@ -212,16 +177,13 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	bat := catalog.MockData(schema, schema.BlockMaxRows*6)
 	bats := compute.SplitBatch(bat, 10)
 
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
+	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
-	it := rel.MakeBlockIt()
-	blk := it.GetBlock()
+	blk := getOneBlock(rel)
 	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 	assert.NoError(t, err)
-	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 		sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
 		t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
 		expectV := compute.GetValue(bats[0].Vecs[3], offset)
@@ -234,24 +196,21 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 		} else {
 			err = rel.UpdateByHiddenKey(v, 3, int64(9999))
 			assert.NoError(t, err)
-			err2 := rel.UpdateByHiddenKey(v, schema.HiddenKeyDef().Idx, v)
+			err2 := rel.UpdateByHiddenKey(v, schema.HiddenKey.Idx, v)
 			assert.ErrorIs(t, err2, data.ErrUpdateHiddenKey)
 		}
 		return
 	})
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
-	it = rel.MakeBlockIt()
-	blk = it.GetBlock()
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
+	blk = getOneBlock(rel)
 
 	assert.Equal(t, compute.LengthOfBatch(bats[0])-1, int(rel.Rows()))
 	view, err = blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, compute.LengthOfBatch(bats[0])-1, view.Length())
-	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any) (err error) {
+	_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, _ uint32) (err error) {
 		assert.Equal(t, int64(9999), v)
 		return
 	})
@@ -270,13 +229,10 @@ func TestHidden2(t *testing.T) {
 	bat := catalog.MockData(schema, schema.BlockMaxRows*4)
 	bats := compute.SplitBatch(bat, 10)
 
-	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.CreateDatabase("db")
-	rel, _ := db.CreateRelation(schema)
+	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bats[0])
 	{
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
+		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
@@ -286,10 +242,10 @@ func TestHidden2(t *testing.T) {
 				hidden = view
 			}
 		}
-		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any) (err error) {
+		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
+			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {
@@ -308,12 +264,9 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
+		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
@@ -323,10 +276,10 @@ func TestHidden2(t *testing.T) {
 				hidden = view
 			}
 		}
-		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any) (err error) {
+		_ = compute.ForEachValue(hidden.GetColumnData(), false, func(key any, _ uint32) (err error) {
 			sid, bid, offset := model.DecodeHiddenKeyFromValue(key)
 			t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKeyDef().Idx)
+			v, err := rel.GetValueByHiddenKey(key, schema.HiddenKey.Idx)
 			assert.NoError(t, err)
 			assert.Equal(t, key, v)
 			if offset == 1 {
@@ -359,9 +312,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeBlockIt()
 		blks := make([]data.Block, 0)
@@ -382,9 +333,7 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeSegmentIt()
 		segs := make([]data.Segment, 0)
@@ -408,9 +357,7 @@ func TestHidden2(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit())
 
-	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	t.Log(rel.Rows())
 	assert.Equal(t, int64(26), rel.Rows())
 	{
@@ -419,7 +366,7 @@ func TestHidden2(t *testing.T) {
 		for it.Valid() {
 			blk := it.GetBlock()
 			// hidden, err := blk.GetColumnDataById(0, nil, nil)
-			hidden, err := blk.GetColumnDataById(schema.HiddenKeyDef().Idx, nil, nil)
+			hidden, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
 			assert.NoError(t, err)
 			hidden.ApplyDeletes()
 			rows += hidden.Length()

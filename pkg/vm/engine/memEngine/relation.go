@@ -2,6 +2,7 @@ package memEngine
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +33,14 @@ func (_ *relation) Cardinality(_ string) int64 {
 
 func (r *relation) Nodes(_ engine.Snapshot) engine.Nodes {
 	return engine.Nodes{r.n}
+}
+
+func (r *relation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
+	panic(any("implement me"))
+}
+
+func (r *relation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
+	panic(any("implement me"))
 }
 
 func (r *relation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
@@ -127,6 +136,10 @@ func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 		}
 	}
 	return nil
+}
+
+func (r *relation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+	panic(any("implement me"))
 }
 
 func (r *relation) CreateIndex(_ uint64, _ []engine.TableDef) error {

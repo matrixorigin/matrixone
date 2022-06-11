@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -244,6 +244,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 	var comp bytes.Buffer
 	var decomp bytes.Buffer
 	var view *model.ColumnView
+	found := false
 	for blockIt.Valid() {
 		comp.Reset()
 		decomp.Reset()
@@ -252,18 +253,27 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 		if err != nil {
 			return
 		}
-		rows := gvec.Length(view.AppliedVec)
-		for i := 0; i < rows; i++ {
-			v := compute.GetValue(view.AppliedVec, uint32(i))
-			if v == goodId {
-				id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-				offset = uint32(i)
-				comp.Reset()
-				decomp.Reset()
-				view, _ := blk.GetColumnDataByName(repertory.ColDefs[2].Name, &comp, &decomp)
-				count = compute.GetValue(view.AppliedVec, offset).(uint64)
+		_ = compute.ForEachValue(view.GetColumnData(), false, func(v any, row uint32) (err error) {
+			pk := v.(uint64)
+			if pk != goodId {
 				return
 			}
+			if view.DeleteMask != nil && view.DeleteMask.Contains(row) {
+				return
+			}
+			id = blk.Fingerprint()
+			key := model.EncodeHiddenKey(id.SegmentID, id.BlockID, row)
+			cntv, err := rel.GetValueByHiddenKey(key, 2)
+			if err != nil {
+				return
+			}
+			found = true
+			offset = row
+			count = cntv.(uint64)
+			return fmt.Errorf("stop iteration")
+		})
+		if found {
+			return
 		}
 		blockIt.Next()
 	}
@@ -284,35 +294,6 @@ func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, 
 	entry.ID = goodId
 	price, _ := goodRel.GetValue(id, offset, 2)
 	entry.Price = price.(float64)
-
-	// var comp bytes.Buffer
-	// var decomp bytes.Buffer
-	// for blockIt.Valid() {
-	// 	comp.Reset()
-	// 	decomp.Reset()
-	// 	blk := blockIt.GetBlock()
-	// 	vec, err := blk.GetColumnDataByName(goods.ColDefs[0].Name, &comp, &decomp)
-	// 	if err != nil {
-	// 		return id, offset, entry, err
-	// 	}
-	// 	rows := gvec.Length(vec)
-	// 	for i := 0; i < rows; i++ {
-	// 		v := compute.GetValue(vec, uint32(i))
-	// 		if v == goodId {
-	// 			entry = new(APP1Goods)
-	// 			entry.ID = goodId
-	// 			id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-	// 			offset = uint32(i)
-	// 			comp.Reset()
-	// 			decomp.Reset()
-	// 			vec, _ := blk.GetColumnDataByName(goods.ColDefs[2].Name, &comp, &decomp)
-	// 			entry.Price = compute.GetValue(vec, offset).(float64)
-	// 			return id, offset, entry, err
-	// 		}
-	// 	}
-	// 	blockIt.Next()
-	// }
-	// err = catalog.ErrNotFound
 	return
 }
 
@@ -437,7 +418,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider := compute.NewMockDataProvider()
 	provider.AddColumnProvider(4, balanceData.Vecs[0])
-	userData := compute.MockBatchWithAttrs(user.Types(), user.Attrs(), uint64(conf.Users), user.GetPrimaryKeyIdx(), provider)
+	userData := compute.MockBatchWithAttrs(user.Types(), user.Attrs(), uint64(conf.Users), user.GetSingleSortKeyIdx(), provider)
 
 	for i := 0; i < conf.Users; i++ {
 		uid := compute.GetValue(userData.Vecs[0], uint32(i))
@@ -461,7 +442,7 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider.Reset()
 	provider.AddColumnProvider(2, price)
-	goodsData := compute.MockBatchWithAttrs(goods.Types(), goods.Attrs(), uint64(conf.GoodKinds), goods.GetPrimaryKeyIdx(), provider)
+	goodsData := compute.MockBatchWithAttrs(goods.Types(), goods.Attrs(), uint64(conf.GoodKinds), goods.GetSingleSortKeyIdx(), provider)
 	if err = goodsRel.Append(goodsData); err != nil {
 		panic(err)
 	}
@@ -481,7 +462,7 @@ func (app1 *APP1) Init(factor int) {
 	provider.Reset()
 	provider.AddColumnProvider(1, goodIds)
 	provider.AddColumnProvider(2, count)
-	repertoryData := compute.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), uint64(conf.GoodKinds), repertory.GetPrimaryKeyIdx(), provider)
+	repertoryData := compute.MockBatchWithAttrs(repertory.Types(), repertory.Attrs(), uint64(conf.GoodKinds), repertory.GetSingleSortKeyIdx(), provider)
 	repertoryRel, err := db.GetRelationByName(repertory.Name)
 	if err != nil {
 		panic(err)
@@ -623,14 +604,14 @@ func TestTxn8(t *testing.T) {
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
-	pkv := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 2)
+	pkv := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(pkv)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
 	err = rel.Update(id, row, 3, int64(9999))
 	assert.NoError(t, err)
 
-	pkv = compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 3)
+	pkv = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(pkv)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -743,7 +724,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
 	rel, _ = db.GetRelationByName(schema.Name)
-	v := compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 2)
+	v := compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 2)
 	filter := handle.NewEQFilter(v)
 	id, row, err := rel.GetByFilter(filter)
 	assert.NoError(t, err)
@@ -757,7 +738,7 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(apply)
 	rel, _ = db.GetRelationByName(schema.Name)
-	v = compute.GetValue(bats[0].Vecs[schema.GetPrimaryKeyIdx()], 3)
+	v = compute.GetValue(bats[0].Vecs[schema.GetSingleSortKeyIdx()], 3)
 	filter = handle.NewEQFilter(v)
 	id, row, err = rel.GetByFilter(filter)
 	assert.NoError(t, err)

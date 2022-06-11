@@ -15,8 +15,9 @@
 package host
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu"
 )
 
 func New(limit int64) *Mmu {

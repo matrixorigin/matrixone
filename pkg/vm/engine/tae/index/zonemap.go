@@ -21,8 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 )
 
 type ZoneMap struct {
@@ -53,9 +52,9 @@ func (zm *ZoneMap) Update(v any) (err error) {
 		zm.inited = true
 		return
 	}
-	if common.CompareGeneric(v, zm.max, zm.typ) > 0 {
+	if compute.CompareGeneric(v, zm.max, zm.typ) > 0 {
 		zm.max = v
-	} else if common.CompareGeneric(v, zm.min, zm.typ) < 0 {
+	} else if compute.CompareGeneric(v, zm.min, zm.typ) < 0 {
 		zm.min = v
 	}
 	return
@@ -78,7 +77,7 @@ func (zm *ZoneMap) Contains(key any) (ok bool) {
 	if !zm.inited {
 		return
 	}
-	if common.CompareGeneric(key, zm.max, zm.typ) > 0 || common.CompareGeneric(key, zm.min, zm.typ) < 0 {
+	if compute.CompareGeneric(key, zm.max, zm.typ) > 0 || compute.CompareGeneric(key, zm.min, zm.typ) < 0 {
 		return
 	}
 	ok = true
@@ -92,7 +91,7 @@ func (zm *ZoneMap) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap,
 	visibility = roaring.NewBitmap()
 	row := uint32(0)
 	process := func(key any, _ uint32) (err error) {
-		if common.CompareGeneric(key, zm.max, zm.typ) <= 0 && common.CompareGeneric(key, zm.min, zm.typ) >= 0 {
+		if compute.CompareGeneric(key, zm.max, zm.typ) <= 0 && compute.CompareGeneric(key, zm.min, zm.typ) >= 0 {
 			visibility.Add(row)
 		}
 		row++
@@ -114,7 +113,7 @@ func (zm *ZoneMap) SetMax(v any) {
 		zm.inited = true
 		return
 	}
-	if common.CompareGeneric(v, zm.max, zm.typ) > 0 {
+	if compute.CompareGeneric(v, zm.max, zm.typ) > 0 {
 		zm.max = v
 	}
 }
@@ -130,7 +129,7 @@ func (zm *ZoneMap) SetMin(v any) {
 		zm.inited = true
 		return
 	}
-	if common.CompareGeneric(v, zm.min, zm.typ) < 0 {
+	if compute.CompareGeneric(v, zm.min, zm.typ) < 0 {
 		zm.min = v
 	}
 }
@@ -166,6 +165,15 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		return
 	}
 	switch zm.typ.Oid {
+	case types.T_bool:
+		if _, err = w.Write(encoding.EncodeBool(zm.min.(bool))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeBool(zm.max.(bool))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_int8:
 		if _, err = w.Write(encoding.EncodeInt8(zm.min.(int8))); err != nil {
 			return
@@ -274,6 +282,33 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
+	case types.T_timestamp:
+		if _, err = w.Write(encoding.EncodeTimestamp(zm.min.(types.Timestamp))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeTimestamp(zm.max.(types.Timestamp))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
+	case types.T_decimal64:
+		if _, err = w.Write(encoding.EncodeDecimal64(zm.min.(types.Decimal64))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeDecimal64(zm.max.(types.Decimal64))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
+	case types.T_decimal128:
+		if _, err = w.Write(encoding.EncodeDecimal128(zm.min.(types.Decimal128))); err != nil {
+			return
+		}
+		if _, err = w.Write(encoding.EncodeDecimal128(zm.max.(types.Decimal128))); err != nil {
+			return
+		}
+		buf = w.Bytes()
+		return
 	case types.T_char, types.T_varchar, types.T_json:
 		minv := zm.min.([]byte)
 		maxv := zm.max.([]byte)
@@ -306,6 +341,11 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 	}
 	zm.inited = true
 	switch zm.typ.Oid {
+	case types.T_bool:
+		zm.min = encoding.DecodeBool(buf[:1])
+		buf = buf[1:]
+		zm.max = encoding.DecodeBool(buf[:1])
+		return nil
 	case types.T_int8:
 		zm.min = encoding.DecodeInt8(buf[:1])
 		buf = buf[1:]
@@ -367,6 +407,24 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[8:]
 		zm.max = encoding.DecodeDatetime(buf[:8])
 		buf = buf[8:]
+		return nil
+	case types.T_timestamp:
+		zm.min = encoding.DecodeTimestamp(buf[:8])
+		buf = buf[8:]
+		zm.max = encoding.DecodeTimestamp(buf[:8])
+		buf = buf[8:]
+		return nil
+	case types.T_decimal64:
+		zm.min = encoding.DecodeDecimal64(buf[:8])
+		buf = buf[8:]
+		zm.max = encoding.DecodeDecimal64(buf[:8])
+		buf = buf[8:]
+		return nil
+	case types.T_decimal128:
+		zm.min = encoding.DecodeDecimal128(buf[:16])
+		buf = buf[16:]
+		zm.max = encoding.DecodeDecimal128(buf[:16])
+		buf = buf[16:]
 		return nil
 	case types.T_char, types.T_varchar, types.T_json:
 		lenminv := encoding.DecodeInt16(buf[:2])

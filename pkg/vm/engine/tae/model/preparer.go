@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/binary"
 
+	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -28,4 +29,26 @@ func PrepareHiddenData(typ types.Type, prefix []byte, startRow, length uint32) (
 		common.GPool.Free(n)
 	}
 	return
+}
+
+type PreparedCompactedBlockData struct {
+	Columns *mobat.Batch
+	SortKey *movec.Vector
+	closers []func()
+}
+
+func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
+	return &PreparedCompactedBlockData{
+		closers: make([]func(), 0),
+	}
+}
+
+func (preparer *PreparedCompactedBlockData) AddCloser(fn func()) {
+	preparer.closers = append(preparer.closers, fn)
+}
+
+func (preparer *PreparedCompactedBlockData) Close() {
+	for _, fn := range preparer.closers {
+		fn()
+	}
 }

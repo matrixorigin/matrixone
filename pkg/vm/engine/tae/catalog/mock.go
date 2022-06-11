@@ -18,7 +18,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -194,8 +194,12 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 }
 
 func MockData(schema *Schema, rows uint32) *batch.Batch {
-	if schema.IsSinglePK() {
-		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.GetPrimaryKeyIdx(), nil)
+	if schema.IsSingleSortKey() {
+		sortKey := schema.GetSingleSortKey()
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), sortKey.Idx, nil)
+	} else if schema.IsCompoundSortKey() {
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
+	} else {
+		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
 	}
-	panic("implement me")
 }

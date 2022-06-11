@@ -143,6 +143,21 @@ func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) strin
 	return fmt.Sprintf("%s\n%s", s, body)
 }
 
+func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
+	e.RLock()
+	table, err := e.GetTableEntryByID(id.TableID)
+	e.RUnlock()
+	if err != nil {
+		return
+	}
+	seg, err := table.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		return
+	}
+	blk, err = seg.GetBlockEntryByID(id.BlockID)
+	return
+}
+
 func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	e.RLock()
 	defer e.RUnlock()
@@ -200,6 +215,12 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 }
 
 func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
+	defer func() {
+		if err == nil {
+			e.catalog.AddTableCnt(-1)
+			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
+		}
+	}()
 	logutil.Infof("Removing: %s", table.String())
 	e.Lock()
 	defer e.Unlock()
@@ -212,11 +233,18 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		if nn.Length() == 0 {
 			delete(e.nameNodes, table.GetSchema().Name)
 		}
+		delete(e.entries, table.GetID())
 	}
 	return
 }
 
-func (e *DBEntry) AddEntryLocked(table *TableEntry) error {
+func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
+	defer func() {
+		if err == nil {
+			e.catalog.AddTableCnt(1)
+			e.catalog.AddColumnCnt(len(table.schema.ColDefs))
+		}
+	}()
 	nn := e.nameNodes[table.schema.Name]
 	if nn == nil {
 		n := e.link.Insert(table)
@@ -230,26 +258,28 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry) error {
 		node := nn.GetTableNode()
 		record := node.GetPayload().(*TableEntry)
 		record.RLock()
-		err := record.PrepareWrite(table.GetTxn(), record.RWMutex)
+		err = record.PrepareWrite(table.GetTxn(), record.RWMutex)
 		if err != nil {
 			record.RUnlock()
-			return err
+			return
 		}
 		if record.HasActiveTxn() {
 			if !record.IsDroppedUncommitted() {
 				record.RUnlock()
-				return ErrDuplicate
+				err = ErrDuplicate
+				return
 			}
 		} else if !record.HasDropped() {
 			record.RUnlock()
-			return ErrDuplicate
+			err = ErrDuplicate
+			return
 		}
 		record.RUnlock()
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
 		nn.CreateNode(table.GetID())
 	}
-	return nil
+	return
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
@@ -349,4 +379,12 @@ func (entry *DBEntry) CloneCreate() CheckpointItem {
 		name:      entry.name,
 	}
 	return cloned
+}
+
+// Coarse API: no consistency check
+func (entry *DBEntry) IsActive() bool {
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
 }

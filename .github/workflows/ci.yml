@@ -17,6 +17,7 @@ jobs:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: Build Plan2-TAE on CentOS/x64
+    timeout-minutes: 30
     env:
       #Job-Status: 2-uncertain, 1-fail, 0-success
       Job-Status: 2
@@ -121,7 +122,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           sleep 60s
-          ./run.sh
+          ./run.sh 2>&1
 
       - name: BVT Compare
         if: ${{ env.Job-Status }} == 2
@@ -130,7 +131,6 @@ jobs:
           mv log base-log
           mv report base-report
           if [ ${{ steps.bvt_on_base.outcome }} == 'success' ]; then echo 'Base sha passed all bvt cases. Pls check head version'; exit 1; fi
-          if [ "$(cat ./base-report/success.txt | wc -l )" -gt "$(cat ./head-report/success.txt | wc -l)" ]; then echo 'Base sha passed more bvt cases. Pls check head version'; exit 2; fi
           cat ./base-report/success.txt ./head-report/success.txt ./head-report/success.txt | grep -v '^$' | sort > cmp.txt
           echo '--------Cases only passed in base----------'
           uniq -u cmp.txt
@@ -159,6 +159,7 @@ jobs:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: Build Plan2-AOE on CentOS/x64
+    timeout-minutes: 30
     env:
       #Job-Status: 2-uncertain, 1-fail, 0-success
       Job-Status: 2
@@ -222,7 +223,7 @@ jobs:
         run: |
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh  2>&1
+          ./run.sh -g 2>&1
 
       - name: Stop Current MO-Server
         if: ${{ env.Job-Status }} == 2
@@ -263,7 +264,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           sleep 60s
-          ./run.sh
+          ./run.sh -g 2>&1
 
       - name: BVT Compare
         if: ${{ env.Job-Status }} == 2
@@ -272,7 +273,6 @@ jobs:
           mv log base-log
           mv report base-report
           if [ ${{ steps.bvt_on_base.outcome }} == 'success' ]; then echo 'Base sha passed all bvt cases. Pls check head version'; exit 1; fi
-          if [ "$(cat ./base-report/success.txt | wc -l )" -gt "$(cat ./head-report/success.txt | wc -l)" ]; then echo 'Base sha passed more bvt cases. Pls check head version'; exit 2; fi
           cat ./base-report/success.txt ./head-report/success.txt ./head-report/success.txt | sort > cmp.txt
           echo '--------Cases only passed in base----------'
           uniq -u cmp.txt

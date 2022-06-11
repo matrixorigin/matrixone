@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -47,7 +47,7 @@ func TestTables1(t *testing.T) {
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
 
-	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, db.MTBufMgr, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(mockio.SegmentFactory, db.MTBufMgr, db.Scheduler, db.Dir)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()
@@ -69,7 +69,6 @@ func TestTables1(t *testing.T) {
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
-	appender.Close()
 
 	appender, err = handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableBlockNotFound, err)
@@ -81,7 +80,6 @@ func TestTables1(t *testing.T) {
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
-	appender.Close()
 
 	appender, err = handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)
@@ -345,13 +343,13 @@ func TestTxn4(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
-		pk := vector.New(schema.GetSinglePKType())
+		pk := vector.New(schema.GetSingleSortKey().Type)
 		compute.AppendValue(pk, int32(1))
 		compute.AppendValue(pk, int32(2))
 		compute.AppendValue(pk, int32(1))
 		provider := compute.NewMockDataProvider()
-		provider.AddColumnProvider(schema.GetPrimaryKeyIdx(), pk)
-		bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), 3, schema.GetPrimaryKeyIdx(), provider)
+		provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
+		bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), 3, schema.GetSingleSortKeyIdx(), provider)
 		err := rel.Append(bat)
 		t.Log(err)
 		assert.NotNil(t, err)
@@ -420,7 +418,7 @@ func TestTxn5(t *testing.T) {
 		assert.Nil(t, err)
 
 		assert.Nil(t, txn2.Commit())
-		assert.NotNil(t, txn.Commit())
+		assert.Error(t, txn.Commit())
 		t.Log(txn2.String())
 		t.Log(txn.String())
 	}
@@ -555,7 +553,7 @@ func TestMergeBlocks1(t *testing.T) {
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
-	pk := vector.New(schema.GetSinglePKType())
+	pk := vector.New(schema.GetSingleSortKey().Type)
 	col3 := vector.New(schema.ColDefs[3].Type)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
@@ -565,9 +563,9 @@ func TestMergeBlocks1(t *testing.T) {
 	}
 
 	provider := compute.NewMockDataProvider()
-	provider.AddColumnProvider(schema.GetPrimaryKeyIdx(), pk)
+	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(schema.BlockMaxRows*3), schema.GetPrimaryKeyIdx(), provider)
+	bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -597,7 +595,7 @@ func TestMergeBlocks1(t *testing.T) {
 			blk := it.GetBlock()
 			err := blk.Update(2, 3, int64(22))
 			assert.Nil(t, err)
-			pkv, err := rel.GetValue(blk.Fingerprint(), 2, uint16(schema.GetPrimaryKeyIdx()))
+			pkv, err := rel.GetValue(blk.Fingerprint(), 2, uint16(schema.GetSingleSortKeyIdx()))
 			mapping[pkv.(int32)] = int64(22)
 			assert.Nil(t, err)
 			err = blk.RangeDelete(4, 4)
@@ -630,7 +628,7 @@ func TestMergeBlocks1(t *testing.T) {
 			if view.DeleteMask != nil {
 				t.Log(view.DeleteMask.String())
 			}
-			pkView, _ := blk.GetColumnDataById(schema.GetPrimaryKeyIdx(), nil, nil)
+			pkView, _ := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 			for i := 0; i < vector.Length(pkView.AppliedVec); i++ {
 				pkv := compute.GetValue(pkView.AppliedVec, uint32(i))
 				colv := compute.GetValue(view.AppliedVec, uint32(i))
@@ -663,7 +661,7 @@ func TestMergeBlocks2(t *testing.T) {
 	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
-	pk := vector.New(schema.GetSinglePKType())
+	pk := vector.New(schema.GetSingleSortKey().Type)
 	col3 := vector.New(schema.ColDefs[3].Type)
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
@@ -673,9 +671,9 @@ func TestMergeBlocks2(t *testing.T) {
 	}
 
 	provider := compute.NewMockDataProvider()
-	provider.AddColumnProvider(schema.GetPrimaryKeyIdx(), pk)
+	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
-	bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(schema.BlockMaxRows*3), schema.GetPrimaryKeyIdx(), provider)
+	bat := compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
 	{
 		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
