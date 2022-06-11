@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestS3FS(t *testing.T) {
+func TestS3FSMinio(t *testing.T) {
 
 	var sharedConfig S3Config
 	content, err := os.ReadFile("s3.json")
@@ -41,7 +41,7 @@ func TestS3FS(t *testing.T) {
 		config := sharedConfig
 		config.KeyPrefix = time.Now().Format("2006-01-02T15:04:05")
 
-		fs, err := NewS3FS(config)
+		fs, err := NewS3FSMinio(config)
 		assert.Nil(t, err)
 
 		return fs

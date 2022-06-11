@@ -8,6 +8,7 @@ import (
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -65,9 +66,18 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	return
 }
 
+func lenOfBats(bats []*gbat.Batch) int {
+	rows := 0
+	for _, bat := range bats {
+		rows += compute.LengthOfBatch(bat)
+	}
+	return rows
+}
+
 func printCheckpointStats(t *testing.T, tae *DB) {
 	t.Logf("GetCheckpointedLSN: %d", tae.Wal.GetCheckpointed())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
+	t.Logf("GetCurrSeqNum: %d", tae.Wal.GetCurrSeqNum())
 }
 
 func createDB(t *testing.T, e *DB, dbName string) {
@@ -336,7 +346,14 @@ func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, ski
 		txn, _ = e.StartTxn(nil)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, _ := rel.GetSegment(seg.ID)
+		segHandle, err := rel.GetSegment(seg.ID)
+		if err != nil {
+			if skipConflict {
+				_ = txn.Rollback()
+				continue
+			}
+			assert.NoErrorf(t, err, "Txn Ts=%d", txn.GetStartTS())
+		}
 		var metas []*catalog.BlockEntry
 		it := segHandle.MakeBlockIt()
 		for it.Valid() {

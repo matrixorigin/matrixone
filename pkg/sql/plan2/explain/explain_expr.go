@@ -149,52 +149,33 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 	case function.CASE_WHEN_EXPRESSION:
 		// TODO need rewrite to deal with case is nil
 		result += "CASE"
-		// result += "CASE"
-		// // case when expression has three part (case expression, when expression, else expression)
-		// if len(funcExpr.F.Args) != 3 {
-		// 	return result, errors.New(errno.SyntaxErrororAccessRuleViolation, "case expression parameter number error")
-		// }
-		// // case expression can be null
-		// if funcExpr.F.Args[0] != nil {
-		// 	// get case expression
-		// 	caseDesc, err := describeExpr(funcExpr.F.Args[0], options)
-		// 	if err != nil {
-		// 		return result, err
-		// 	}
-		// 	result += " " + caseDesc
-		// }
+		// case when expression has two part(case when condition and else exression)
+		condSize := len(funcExpr.F.Args) / 2
+		for i := 0; i < condSize; i++ {
+			whenExpr := funcExpr.F.Args[i]
+			thenExpr := funcExpr.F.Args[i+1]
+			whenExprDesc, err := describeExpr(whenExpr, options)
+			if err != nil {
+				return result, err
+			}
+			thenExprDesc, err := describeExpr(thenExpr, options)
+			if err != nil {
+				return result, err
+			}
+			result += " WHEN " + whenExprDesc + " THEN " + thenExprDesc
+		}
 
-		// // get when expression
-		// var whenExpr *plan.Expr = funcExpr.F.Args[1]
-		// var whenlist *plan.Expr_List = whenExpr.Expr.(*plan.Expr_List)
-		// var list *plan.ExprList = whenlist.List
-
-		// for i := 0; i < len(list.List); i++ {
-		// 	whenThenExpr := list.List[i].Expr.(*plan.Expr_List)
-		// 	if len(whenThenExpr.List.List) != 2 {
-		// 		return result, errors.New(errno.SyntaxErrororAccessRuleViolation, "case when expression parameter number is not equal to 2")
-		// 	}
-
-		// 	whenExprDesc, err := describeExpr(whenThenExpr.List.List[0], options)
-		// 	if err != nil {
-		// 		return result, err
-		// 	}
-		// 	thenExprDesc, err := describeExpr(whenThenExpr.List.List[1], options)
-		// 	if err != nil {
-		// 		return result, err
-		// 	}
-		// 	result += " WHEN " + whenExprDesc + " THEN " + thenExprDesc
-		// }
-		// // when expression can be null
-		// if funcExpr.F.Args[2] != nil {
-		// 	// get else expression
-		// 	elseExprDesc, err := describeExpr(funcExpr.F.Args[2], options)
-		// 	if err != nil {
-		// 		return result, err
-		// 	}
-		// 	result += " ELSE " + elseExprDesc
-		// }
-		// result += " END"
+		if len(funcExpr.F.Args)%2 == 1 {
+			lastIndex := len(funcExpr.F.Args) - 1
+			elseExpr := funcExpr.F.Args[lastIndex]
+			// get else expression
+			elseExprDesc, err := describeExpr(elseExpr, options)
+			if err != nil {
+				return result, err
+			}
+			result += " ELSE " + elseExprDesc
+		}
+		result += " END"
 	case function.IN_PREDICATE:
 		if len(funcExpr.F.Args) != 2 {
 			panic("Nested query predicate,such as in,exist,all,any parameter number error!")

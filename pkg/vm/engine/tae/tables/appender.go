@@ -36,10 +36,6 @@ func newAppender(node *appendableNode) *blockAppender {
 	return appender
 }
 
-func (appender *blockAppender) Close() error {
-	return nil
-}
-
 func (appender *blockAppender) GetMeta() any {
 	return appender.node.block.meta
 }
@@ -99,7 +95,11 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 	})
 	return
 }
-func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
+func (appender *blockAppender) ApplyAppend(
+	bat *gbat.Batch,
+	offset, length uint32,
+	txn txnif.AsyncTxn,
+	anode txnif.AppendNode) (node txnif.AppendNode, from uint32, err error) {
 	err = appender.node.DoWithPin(func() (err error) {
 		appender.node.block.mvcc.Lock()
 		defer appender.node.block.mvcc.Unlock()
@@ -128,7 +128,12 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 			}
 		}
 		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
-		node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
+		if anode != nil {
+			anode.(*updates.AppendNode).SetMaxRow(appender.node.rows)
+			node = anode
+		} else {
+			node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
+		}
 		return
 	})
 	return

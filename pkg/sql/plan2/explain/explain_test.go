@@ -36,13 +36,13 @@ func TestSingleSql(t *testing.T) {
 	//input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10"
 	//input := "explain verbose select * from part where p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')"
 	//input := `explain verbose
-	//     select
-	//          case
-	//               when p_type like 'PROMO%'
-	//                   then l_extendedprice * (1 - l_discount)
-	//               when p_type like 'PRX%'
-	//                   then l_extendedprice * (2 - l_discount)
-	//          else 0 end
+	//    select
+	//         case
+	//              when p_type like 'PROMO%'
+	//                  then l_extendedprice * (1 - l_discount)
+	//              when p_type like 'PRX%'
+	//                  then l_extendedprice * (2 - l_discount)
+	//         else 0 end
 	//	from lineitem,part
 	//	where l_shipdate < date '1996-04-01' + interval '1 month'`
 	input := "explain select abs(N_REGIONKEY) from NATION"
@@ -67,6 +67,7 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain verbose SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10",
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY limit 10",
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20",
+		"explain verbose select case when p_type like 'PROMO%' then l_extendedprice * (1 - l_discount) when p_type like 'PRX%' then l_extendedprice * (2 - l_discount) else 0 end from lineitem,part where l_shipdate < date '1996-04-01' + interval '1 month'",
 	}
 	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
