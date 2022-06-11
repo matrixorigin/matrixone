@@ -15,6 +15,7 @@ package reverse
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"unicode/utf8"
 )
 
 var (
@@ -35,13 +36,25 @@ func reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 		curLen := xs.Lengths[idx]
 
 		// handle with unicode
-		unicodes := []rune(string(xs.Data[cursor : cursor+curLen]))
-		for i, j := 0, len(unicodes)-1; i < j; i, j = i+1, j-1 {
-			unicodes[i], unicodes[j] = unicodes[j], unicodes[i]
-		}
+		if curLen != 0 {
+			//reverse
+			bytes := xs.Data[cursor : cursor+curLen]
+			source := 0
+			target := curLen
+			for source < len(bytes) {
+				r, readed := utf8.DecodeRune(bytes[source:])
+				if r == utf8.RuneError {
+					return nil
+				}
 
-		for i, b := range []byte(string(unicodes)) {
-			rs.Data[retCursor+uint32(i)] = b
+				p := target - uint32(readed)
+				w := utf8.EncodeRune(rs.Data[p:], r)
+				if w == utf8.RuneError {
+					return nil
+				}
+				source += readed
+				target = p
+			}
 		}
 
 		retCursor += curLen
