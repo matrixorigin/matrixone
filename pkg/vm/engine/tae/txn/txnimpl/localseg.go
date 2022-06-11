@@ -90,7 +90,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 	)
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if prevAppender != nil && prevAppender.GetID() == ctx.driver.GetID() {
+		if prevAppender != nil && prevAppender.GetID().BlockID == ctx.driver.GetID().BlockID {
 			prev = anode
 		} else {
 			if anode != nil {
@@ -201,7 +201,12 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		if seg.table.schema.IsSinglePK() {
-			if err = seg.index.BatchInsert(data.Vecs[seg.table.schema.GetSingleSortKeyIdx()], int(offset), int(appended), seg.rows, false); err != nil {
+			if err = seg.index.BatchInsert(
+				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
+				int(offset),
+				int(appended),
+				seg.rows,
+				false); err != nil {
 				break
 			}
 		} else if seg.table.schema.IsCompoundPK() {
@@ -398,7 +403,10 @@ func (seg *localSegment) BatchDedup(key *vector.Vector) error {
 	return seg.index.BatchDedup(key)
 }
 
-func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+func (seg *localSegment) GetColumnDataById(
+	blk *catalog.BlockEntry,
+	colIdx int,
+	compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
