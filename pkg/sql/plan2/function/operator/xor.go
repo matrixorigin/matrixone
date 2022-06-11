@@ -1,13 +1,36 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package operator
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func ColXorCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.([]bool), rv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
+	rvs, ok := rv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the right vec col is not []bool type")
+	}
 	n := len(lvs)
 	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
 	if err != nil {
@@ -23,7 +46,14 @@ func ColXorCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, er
 }
 
 func ColXorConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.([]bool), rv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
+	rvs, ok := rv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the right vec col is not []bool type")
+	}
 	n := len(lvs)
 	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
 	if err != nil {
@@ -40,7 +70,10 @@ func ColXorConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 func ColXorNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs := lv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
 	n := len(lvs)
 	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
 	if err != nil {
@@ -59,7 +92,14 @@ func ConstXorCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 func ConstXorConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, rvs := lv.Col.([]bool), rv.Col.([]bool)
+	lvs, ok := lv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the left vec col is not []bool type")
+	}
+	rvs, ok := rv.Col.([]bool)
+	if !ok {
+		return nil, errors.New("the right vec col is not []bool type")
+	}
 	vec := proc.AllocScalarVector(lv.Typ)
 	vector.SetCol(vec, []bool{(lvs[0] || rvs[0]) && !(lvs[0] && rvs[0])})
 	return vec, nil
@@ -103,7 +143,7 @@ func Xor(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	lt, rt := GetTypeID(lv), GetTypeID(rv)
 	vec, err := XorFuncMap[lt*3+rt](lv, rv, proc)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Xor function: " + err.Error())
 	}
 	return vec, nil
 }
