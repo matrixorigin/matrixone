@@ -61,8 +61,17 @@ func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getDefaultRelation(e.t, e.DB, e.schema.Name)
 }
 
+func (e *testEngine) checkpointCatalog() {
+	err := e.DB.Catalog.Checkpoint(e.DB.TxnMgr.StatSafeTS())
+	assert.NoError(e.t, err)
+}
+
 func (e *testEngine) compactABlocks(skipConflict bool) {
 	forceCompactABlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+}
+
+func (e *testEngine) compactBlocks(skipConflict bool) {
+	compactBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
 func initDB(t *testing.T, opts *options.Options) *DB {
@@ -316,7 +325,8 @@ func forceCompactABlocks(t *testing.T, e *DB, dbName string, schema *catalog.Sch
 	for it.Valid() {
 		blk := it.GetBlock()
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		if blk.Rows() >= int(schema.BlockMaxRows) {
+		// if blk.Rows() >= int(schema.BlockMaxRows) {
+		if !meta.IsAppendable() {
 			it.Next()
 			continue
 		}
