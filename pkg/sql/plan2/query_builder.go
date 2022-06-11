@@ -16,7 +16,6 @@ package plan2
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -49,8 +48,6 @@ func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
 		} else {
-			log.Printf("dd %v, %v", ne.Col, colMap)
-			panic("dfdsfs")
 			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can't find column in context's map %v", colMap))
 		}
 	case *plan.Expr_F:
