@@ -126,6 +126,26 @@ var builtins = map[int][]Function{
 			Fn:          unary.DatetimeToDate,
 		},
 	},
+	DAY: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DateToDay,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_datetime},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DatetimeToDay,
+		},
+	},
 	DAYOFYEAR: {
 		{
 			Index:       0,
@@ -701,6 +721,26 @@ var builtins = map[int][]Function{
 			ReturnTyp:   types.T_varchar,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          unary.SpaceFloat[float64],
+		},
+	},
+	WEEK: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DateToWeek,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_datetime},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DatetimeToWeek,
 		},
 	},
 	WEEKDAY: {
