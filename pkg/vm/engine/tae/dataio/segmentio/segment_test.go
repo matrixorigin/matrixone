@@ -100,7 +100,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		_, err = idx.Write(w.Bytes())
 		assert.Nil(t, err)
-		colBlk0.WriteUpdates(w.Bytes())
+		err = colBlk0.WriteUpdates(w.Bytes())
 		assert.Nil(t, err)
 		colBlk0.Close()
 	}
@@ -138,6 +138,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
 		update, err := colBlk0.OpenUpdateFile()
+		assert.Nil(t, err)
 		buf = make([]byte, size)
 		dsize = update.Stat().OriginSize()
 		assert.Equal(t, int64(len(dataStr)), update.Stat().OriginSize())
