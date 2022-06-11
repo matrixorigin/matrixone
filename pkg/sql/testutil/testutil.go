@@ -116,7 +116,7 @@ func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vec
 }
 
 func NewProc() *process.Process {
-	return process.New(mheap.New(guest.New(1<<10, host.New(1<<10))))
+	return process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
 }
 
 func MakeScalarNull(length int) *vector.Vector {
