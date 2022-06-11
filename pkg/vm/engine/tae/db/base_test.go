@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -25,6 +26,29 @@ const (
 	ModuleName    = "TAEDB"
 	defaultTestDB = "db"
 )
+
+type testEngine struct {
+	*DB
+	t *testing.T
+}
+
+func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
+	db := initDB(t, opts)
+	return &testEngine{
+		DB: db,
+	}
+}
+
+func (e *testEngine) restart() {
+	_ = e.DB.Close()
+	var err error
+	e.DB, err = Open(e.Dir, e.Opts)
+	assert.NoError(e.t, err)
+}
+
+func (e *testEngine) Close() error {
+	return e.DB.Close()
+}
 
 func initDB(t *testing.T, opts *options.Options) *DB {
 	mockio.ResetFS()
@@ -400,4 +424,9 @@ func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 		assert.NoError(t, err)
 	}
 	assert.NoError(t, txn.Commit())
+}
+
+func getSingleSortKeyValue(bat *batch.Batch, schema *catalog.Schema, row int) (v any) {
+	v = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], uint32(row))
+	return
 }

@@ -1046,7 +1046,6 @@ func TestReplay7(t *testing.T) {
 	compactBlocks(t, tae, defaultTestDB, schema, true)
 	mergeBlocks(t, tae, defaultTestDB, schema, true)
 	time.Sleep(time.Millisecond * 100)
-	printCheckpointStats(t, tae)
 	// txn, rel := getDefaultRelation(t, tae, schema.Name)
 	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
 	// assert.NoError(t, txn.Commit())
@@ -1059,4 +1058,48 @@ func TestReplay7(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
 	assert.NoError(t, txn.Commit())
+}
+
+func TestReplay8(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows*3+1)
+	bats := compute.SplitBatch(bat, 4)
+
+	createRelationAndAppend(t, tae.DB, defaultTestDB, schema, bats[0], true)
+	txn, rel := getDefaultRelation(t, tae.DB, schema.Name)
+	v := getSingleSortKeyValue(bats[0], schema, 2)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	window := compute.BatchWindow(bats[0], 2, 3)
+	err = rel.Append(window)
+	assert.NoError(t, err)
+	_ = txn.Rollback()
+
+	tae.restart()
+
+	// Check the total rows by scan
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	err = rel.Append(bats[0])
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.NoError(t, txn.Commit())
+
+	// Try to append the delete row and then rollback
+	// txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	// err = rel.Append(window)
+	// assert.NoError(t, err)
+	// _ = txn.Rollback()
+
+	// forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
+	// tae.restart()
 }
