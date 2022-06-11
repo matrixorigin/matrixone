@@ -1826,7 +1826,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
 			vecs:       makeTempVector(33333300, leftType, true, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{types.Decimal128{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
 			wantType:   types.T_decimal128,
 			wantScalar: true,
 		},
@@ -1834,7 +1834,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
 			vecs:       makeTempVector(33333300, leftType, false, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{types.Decimal128{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
 			wantType:   types.T_decimal128,
 			wantScalar: false,
 		},
@@ -1958,7 +1958,7 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
 			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType, true, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{types.Decimal128{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
 			wantType:   destType,
 			wantScalar: true,
 		},
@@ -1966,7 +1966,7 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 			name:       "Test02",
 			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType, false, destType),
 			proc:       procs,
-			wantBytes:  []types.Decimal128{types.Decimal128{Lo: 33333300, Hi: 0}},
+			wantBytes:  []types.Decimal128{{Lo: 33333300, Hi: 0}},
 			wantType:   destType,
 			wantScalar: false,
 		},
