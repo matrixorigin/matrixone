@@ -55,6 +55,10 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.indexMeta.file = make([]*DriverFile, 1)
+	bf.indexMeta.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
+		fmt.Sprintf("%d_%d.idx", colCnt, bf.id))
+	bf.indexMeta.file[0].snode.algo = compress.None
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -76,6 +80,7 @@ func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) 
 	bf.deletes = newDeletes(bf)
 	bf.deletes.file = make([]*DriverFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.indexMeta.file = make([]*DriverFile, 1)
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -137,6 +142,10 @@ func (bf *blockFile) ReadDeletes(buf []byte) (err error) {
 	return
 }
 
+func (bf *blockFile) GetDeletesFileStat() (stat common.FileInfo) {
+	return bf.deletes.Stat()
+}
+
 func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
 	_, err = bf.indexMeta.Write(buf)
 	return
@@ -180,8 +189,14 @@ func (bf *blockFile) Destroy() error {
 		cb.Unref()
 	}
 	bf.columns = nil
-	bf.deletes = nil
-	bf.indexMeta = nil
+	if bf.deletes.file[0] != nil {
+		bf.deletes.file[0].driver.ReleaseFile(bf.deletes.file[0])
+		bf.deletes = nil
+	}
+	if bf.indexMeta.file[0] != nil {
+		bf.indexMeta.file[0].driver.ReleaseFile(bf.indexMeta.file[0])
+		bf.indexMeta = nil
+	}
 	if bf.seg != nil {
 		bf.seg.RemoveBlock(bf.id)
 	}

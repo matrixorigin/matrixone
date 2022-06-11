@@ -63,8 +63,9 @@ func (n *AppendNode) SetLogIndex(idx *wal.Index) {
 func (n *AppendNode) GetID() *common.ID {
 	return n.id
 }
-func (n *AppendNode) GetCommitTS() uint64 { return n.commitTs }
-func (n *AppendNode) GetMaxRow() uint32   { return n.maxRow }
+func (n *AppendNode) GetCommitTS() uint64  { return n.commitTs }
+func (n *AppendNode) GetMaxRow() uint32    { return n.maxRow }
+func (n *AppendNode) SetMaxRow(row uint32) { n.maxRow = row }
 
 func (n *AppendNode) PrepareCommit() error {
 	return nil
