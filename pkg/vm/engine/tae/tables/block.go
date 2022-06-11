@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -119,6 +120,31 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) ReplayData() (err error) {
 	if blk.meta.IsAppendable() {
+		delStats := blk.file.GetDeletesFileStat()
+		if delStats.Size() != 0 {
+			size := delStats.Size()
+			osize := delStats.OriginSize()
+			dnode := common.GPool.Alloc(uint64(size))
+			defer common.GPool.Free(dnode)
+			err := blk.file.ReadDeletes(dnode.Buf[:size])
+			if err != nil {
+				return err
+			}
+			node := common.GPool.Alloc(uint64(osize))
+			defer common.GPool.Free(node)
+
+			if _, err = compress.Decompress(dnode.Buf[:size], node.Buf[:osize], compress.Lz4); err != nil {
+				return err
+			}
+			deletes := roaring.New()
+			if err = deletes.UnmarshalBinary(node.Buf[:osize]); err != nil {
+				return err
+			}
+			logutil.Info(deletes.String())
+			deleteNode := updates.NewMergedNode(blk.ckpTs)
+			deleteNode.SetDeletes(deletes)
+			blk.OnReplayDelete(deleteNode)
+		}
 		if !blk.meta.GetSchema().HasPK() {
 			return
 		}

@@ -1102,14 +1102,14 @@ func TestReplay8(t *testing.T) {
 	_ = txn.Rollback()
 
 	// Flush the appendable block
-	// forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
-	// txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
-	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, false)
-	// assert.NoError(t, txn.Commit())
+	forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	assert.NoError(t, txn.Commit())
 
-	// tae.restart()
+	tae.restart()
 
-	// txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
-	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, false)
-	// assert.NoError(t, txn.Commit())
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	assert.NoError(t, txn.Commit())
 }
