@@ -41,6 +41,15 @@ type leaseHistoryQuery struct {
 	index uint64
 }
 
+func getAppendCmd(cmd []byte, replicaID uint64) []byte {
+	if len(cmd) < headerSize+8 {
+		panic("cmd too small")
+	}
+	binaryEnc.PutUint16(cmd, userEntryTag)
+	binaryEnc.PutUint64(cmd[headerSize:], replicaID)
+	return cmd
+}
+
 func parseCmdTag(cmd []byte) uint16 {
 	return binaryEnc.Uint16(cmd)
 }

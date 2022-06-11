@@ -110,12 +110,14 @@ func writeRequest(conn net.Conn,
 	if _, err := conn.Write(buf); err != nil {
 		return err
 	}
-	tt = time.Now().Add(writeDuration)
-	if err := conn.SetWriteDeadline(tt); err != nil {
-		return err
-	}
-	if _, err := conn.Write(payload); err != nil {
-		return err
+	if len(payload) > 0 {
+		tt = time.Now().Add(writeDuration)
+		if err := conn.SetWriteDeadline(tt); err != nil {
+			return err
+		}
+		if _, err := conn.Write(payload); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -137,16 +139,18 @@ func readRequest(conn net.Conn,
 	if err := req.Unmarshal(buf); err != nil {
 		panic(err)
 	}
-
-	if uint64(len(payload)) < req.PayloadSize {
-		payload = make([]byte, req.PayloadSize)
-	}
-	tt := time.Now().Add(readDuration)
-	if err := conn.SetWriteDeadline(tt); err != nil {
-		return logservice.Request{}, nil, err
-	}
-	if _, err := io.ReadFull(conn, payload); err != nil {
-		return logservice.Request{}, nil, err
+	if req.PayloadSize > 0 {
+		if uint64(len(payload)) < req.PayloadSize {
+			payload = make([]byte, req.PayloadSize)
+		}
+		payload = payload[:req.PayloadSize]
+		tt := time.Now().Add(readDuration)
+		if err := conn.SetWriteDeadline(tt); err != nil {
+			return logservice.Request{}, nil, err
+		}
+		if _, err := io.ReadFull(conn, payload); err != nil {
+			return logservice.Request{}, nil, err
+		}
 	}
 	return req, payload, nil
 }

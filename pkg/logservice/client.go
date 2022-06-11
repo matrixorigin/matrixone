@@ -62,10 +62,14 @@ func CreateClient(ctx context.Context,
 		if cfg.ReadOnly {
 			if err := c.connectReadOnly(ctx); err == nil {
 				return c, nil
+			} else {
+				e = err
 			}
 		} else {
 			if err := c.connectReadWrite(ctx); err == nil {
 				return c, nil
+			} else {
+				e = err
 			}
 		}
 	}

@@ -27,14 +27,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+const (
+	testServiceAddress = "localhost:9000"
+)
+
 func getServiceTestConfig() Config {
 	return Config{
 		RTTMillisecond:       10,
 		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
 		DeploymentID:         1,
 		FS:                   vfs.NewStrictMem(),
-		ServiceListenAddress: "localhost:9000",
-		ServiceAddress:       "localhost:9000",
+		ServiceListenAddress: testServiceAddress,
+		ServiceAddress:       testServiceAddress,
 	}
 }
 

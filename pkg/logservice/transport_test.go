@@ -263,6 +263,7 @@ func TestGetTimeoutFromContext(t *testing.T) {
 	assert.True(t, d > 55*time.Second)
 	ctx1, cancel1 := context.WithTimeout(context.Background(), time.Microsecond)
 	defer cancel1()
+	time.Sleep(time.Millisecond)
 	_, err = getTimeoutFromContext(ctx1)
 	assert.Equal(t, ErrInvalidDeadline, err)
 }
