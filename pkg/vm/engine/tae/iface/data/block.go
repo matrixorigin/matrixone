@@ -16,7 +16,6 @@ package data
 
 import (
 	"bytes"
-	"io"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,11 +38,10 @@ type CheckpointUnit interface {
 }
 
 type BlockAppender interface {
-	io.Closer
 	GetID() *common.ID
 	GetMeta() any
 	PrepareAppend(rows uint32) (n uint32, err error)
-	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (txnif.AppendNode, uint32, error)
+	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn, anode txnif.AppendNode) (txnif.AppendNode, uint32, error)
 	OnReplayInsertNode(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error)
 	IsAppendable() bool
 	OnReplayAppendNode(an txnif.AppendNode)

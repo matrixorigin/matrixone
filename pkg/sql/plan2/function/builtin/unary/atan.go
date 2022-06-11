@@ -24,34 +24,29 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func Atan[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	origVec := vs[0]
-	origVecCol := origVec.Col.([]T)
-	//Here we need to classfy it into three scenes
-	//1. if it is a constant
-	//	1.1 if it's not a null value
-	//  1.2 if it's a null value
-	//2 common scene
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
-		} else {
-			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-			resultValues := make([]float64, 1)
-			nulls.Set(resultVector.Nsp, origVec.Nsp)
-			vector.SetCol(resultVector, atan.Atan[T](origVecCol, resultValues))
-			return resultVector, nil
+func Atan[T constraints.Integer | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_float64, Size: 8}
+	resultElementSize := int(resultType.Size)
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]T)
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]float64, 1)
+		vector.SetCol(resultVector, atan.Atan[T](inputValues, resultValues))
+		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
+		inputValues := inputVector.Col.([]T)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		results := encoding.DecodeFloat64Slice(resultVector.Data)
-		results = results[:len(origVecCol)]
-		resultVector.Col = results
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, atan.Atan[T](origVecCol, results))
+		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		vector.SetCol(resultVector, atan.Atan[T](inputValues, resultValues))
 		return resultVector, nil
 	}
 }

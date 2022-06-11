@@ -16,7 +16,6 @@ package segmentio
 
 import (
 	"bytes"
-	"path"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -30,7 +29,6 @@ import (
 
 func TestBlock1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	name := path.Join(dir, "seg")
 	colCnt := 4
 	indexCnt := make(map[int]int)
 	for col := 0; col < colCnt; col++ {
@@ -38,7 +36,7 @@ func TestBlock1(t *testing.T) {
 	}
 	var block file.Block
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFileIOFactory(name, id)
+	seg := SegmentFactory.Build(dir, id).(*segmentFile)
 	block = newBlock(common.NextGlobalSeqNum(), seg, colCnt, indexCnt)
 	blockTs := common.NextGlobalSeqNum()
 	err := block.WriteTS(blockTs)

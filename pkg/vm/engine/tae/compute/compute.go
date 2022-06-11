@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
@@ -32,6 +31,9 @@ import (
 
 func AppendValue(vec *gvec.Vector, v any) {
 	switch vec.Typ.Oid {
+	case types.T_bool:
+		vvals := vec.Col.([]bool)
+		vec.Col = append(vvals, v.(bool))
 	case types.T_int8:
 		vvals := vec.Col.([]int8)
 		vec.Col = append(vvals, v.(int8))
@@ -96,6 +98,9 @@ func LengthOfBatch(bat *gbat.Batch) int {
 func GetValue(col *gvec.Vector, row uint32) any {
 	vals := col.Col
 	switch col.Typ.Oid {
+	case types.T_bool:
+		data := vals.([]bool)
+		return data[row]
 	case types.T_int8:
 		data := vals.([]int8)
 		return data[row]
@@ -138,6 +143,9 @@ func GetValue(col *gvec.Vector, row uint32) any {
 	case types.T_datetime:
 		data := vals.([]types.Datetime)
 		return data[row]
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
+		return data[row]
 	case types.T_char, types.T_varchar, types.T_json:
 		data := vals.(*types.Bytes)
 		s := data.Offsets[row]
@@ -152,6 +160,10 @@ func GetValue(col *gvec.Vector, row uint32) any {
 func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 	vals := col.Col
 	switch col.Typ.Oid {
+	case types.T_bool:
+		data := vals.([]bool)
+		data[row] = val.(bool)
+		col.Col = data
 	case types.T_int8:
 		data := vals.([]int8)
 		data[row] = val.(int8)
@@ -208,6 +220,10 @@ func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 		data := vals.([]types.Datetime)
 		data[row] = val.(types.Datetime)
 		col.Col = data
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
+		data[row] = val.(types.Timestamp)
+		col.Col = data
 	case types.T_char, types.T_varchar, types.T_json:
 		// data := vals.(*types.Bytes)
 		// s := data.Offsets[row]
@@ -222,6 +238,10 @@ func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 	vals := col.Col
 	switch col.Typ.Oid {
+	case types.T_bool:
+		data := vals.([]bool)
+		data = append(data[:row], data[row+1:]...)
+		col.Col = data
 	case types.T_int8:
 		data := vals.([]int8)
 		data = append(data[:row], data[row+1:]...)
@@ -276,6 +296,10 @@ func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 		col.Col = data
 	case types.T_datetime:
 		data := vals.([]types.Datetime)
+		data = append(data[:row], data[row+1:]...)
+		col.Col = data
+	case types.T_timestamp:
+		data := vals.([]types.Timestamp)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
 	case types.T_char, types.T_varchar, types.T_json:
@@ -347,7 +371,7 @@ func SplitBatch(bat *gbat.Batch, cnt int) []*gbat.Batch {
 	} else {
 		left := length
 		for i := 0; i < cnt; i++ {
-			if left >= rows {
+			if left >= rows && i < cnt-1 {
 				rowArray = append(rowArray, rows)
 			} else {
 				rowArray = append(rowArray, left)
@@ -408,9 +432,11 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 	}
 	deleted := 0
 	switch vec.Typ.Oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
-		vec.Col = common.InplaceDeleteRows(vec.Col, deletesIterator)
+	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64,
+		types.T_date, types.T_datetime, types.T_timestamp:
+		vec.Col = InplaceDeleteRows(vec.Col, deletesIterator)
 		deletesIterator = deletes.Iterator()
 		for deletesIterator.HasNext() {
 			row := deletesIterator.Next()
@@ -502,8 +528,10 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 	iterator := mask.Iterator()
 	col := vec.Col
 	switch vec.Typ.Oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
+	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64,
+		types.T_date, types.T_datetime, types.T_timestamp:
 		for iterator.HasNext() {
 			row := iterator.Next()
 			SetFixSizeTypeValue(vec, row, vals[row])
@@ -709,6 +737,39 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes
 
 func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset uint32, exist bool) {
 	switch data.Typ.Oid {
+	case types.T_bool:
+		column := data.Col.([]bool)
+		val := v.(bool)
+		compare := func(left, right bool) int {
+			if left && right {
+				return 0
+			} else if !left && !right {
+				return 0
+			} else if left {
+				return 1
+			} else {
+				return -1
+			}
+		}
+		start, end := 0, len(column)-1
+		var mid int
+		for start <= end {
+			mid = (start + end) / 2
+			ret := compare(column[mid], val)
+			if ret == 1 {
+				end = mid - 1
+			} else if ret == -1 {
+				start = mid + 1
+			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return
+				}
+				offset = uint32(mid)
+				exist = true
+				return
+			}
+		}
+		return
 	case types.T_int8:
 		column := data.Col.([]int8)
 		val := v.(int8)
@@ -950,6 +1011,70 @@ func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset u
 			if column[mid] > val {
 				end = mid - 1
 			} else if column[mid] < val {
+				start = mid + 1
+			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return
+				}
+				offset = uint32(mid)
+				exist = true
+				return
+			}
+		}
+		return
+	case types.T_timestamp:
+		column := data.Col.([]types.Timestamp)
+		val := v.(types.Timestamp)
+		start, end := 0, len(column)-1
+		var mid int
+		for start <= end {
+			mid = (start + end) / 2
+			if column[mid] > val {
+				end = mid - 1
+			} else if column[mid] < val {
+				start = mid + 1
+			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return
+				}
+				offset = uint32(mid)
+				exist = true
+				return
+			}
+		}
+		return
+	case types.T_decimal64:
+		column := data.Col.([]types.Decimal64)
+		val := v.(types.Decimal64)
+		start, end := 0, len(column)-1
+		var mid int
+		for start <= end {
+			mid = (start + end) / 2
+			if column[mid] > val {
+				end = mid - 1
+			} else if column[mid] < val {
+				start = mid + 1
+			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return
+				}
+				offset = uint32(mid)
+				exist = true
+				return
+			}
+		}
+		return
+	case types.T_decimal128:
+		column := data.Col.([]types.Decimal128)
+		val := v.(types.Decimal128)
+		start, end := 0, len(column)-1
+		var mid int
+		for start <= end {
+			mid = (start + end) / 2
+			ret := types.CompareDecimal128Decimal128Aligned(column[mid], val)
+			if ret == 1 {
+				end = mid - 1
+			} else if ret == -1 {
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {

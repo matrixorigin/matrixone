@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -136,11 +136,23 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	return s
 }
 
+func (h *txnRelation) Close() error   { return nil }
 func (h *txnRelation) GetMeta() any   { return h.table.entry }
 func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
-func (h *txnRelation) Close() error                     { return nil }
-func (h *txnRelation) Rows() int64                      { return int64(h.table.entry.GetRows()) }
+func (h *txnRelation) Rows() int64 {
+	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
+		if h.table.entry.GetSchema().Name == catalog.SystemTable_DB_Name {
+			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
+		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Table_Name {
+			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
+		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Columns_Name {
+			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
+		}
+		panic("logic error")
+	}
+	return int64(h.table.entry.GetRows())
+}
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
@@ -182,6 +194,15 @@ func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 
 func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, error) {
 	return h.Txn.GetStore().GetByFilter(h.table.entry.GetDB().ID, h.table.entry.GetID(), filter)
+}
+
+func (h *txnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, err error) {
+	id, row, err := h.GetByFilter(filter)
+	if err != nil {
+		return
+	}
+	v, err = h.GetValue(id, row, uint16(col))
+	return
 }
 
 func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (err error) {

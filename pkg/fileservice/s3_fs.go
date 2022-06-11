@@ -18,28 +18,24 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net/url"
+	"os"
 	"path"
 	"sort"
 	"strings"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go/logging"
 )
 
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
 	config S3Config
-	client *minio.Client
-}
-
-type S3Config struct {
-	Endpoint  string
-	APIKey    string
-	APISecret string
-	Bucket    string
-	// KeyPrefix enables multiple fs instances in one bucket
-	KeyPrefix string
+	client *s3.Client
 }
 
 // key mapping scheme:
@@ -48,13 +44,24 @@ type S3Config struct {
 var _ FileService = new(S3FS)
 
 func NewS3FS(config S3Config) (*S3FS, error) {
-	client, err := minio.New(config.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(config.APIKey, config.APISecret, ""),
-		Secure: true,
-	})
+	u, err := url.Parse(config.Endpoint)
 	if err != nil {
 		return nil, err
 	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	endpoint := u.String()
+	client := s3.New(s3.Options{
+		Credentials: credentials.NewStaticCredentialsProvider(
+			config.APIKey,
+			config.APISecret,
+			"",
+		),
+		EndpointResolver: s3.EndpointResolverFromURL(endpoint),
+		Region:           config.Region,
+		Logger:           logging.NewStandardLogger(os.Stdout),
+	})
 
 	return &S3FS{
 		config: config,
@@ -64,21 +71,45 @@ func NewS3FS(config S3Config) (*S3FS, error) {
 
 func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 
-	for info := range m.client.ListObjects(
-		ctx,
-		m.config.Bucket,
-		minio.ListObjectsOptions{
-			Prefix: m.pathToKey(dirPath) + "/",
-		},
-	) {
-		filePath := m.keyToPath(info.Key)
-		isDir := strings.HasSuffix(filePath, "/")
-		filePath = strings.TrimRight(filePath, "/")
-		_, name := path.Split(filePath)
-		entries = append(entries, DirEntry{
-			Name:  name,
-			IsDir: isDir,
-		})
+	var cont *string
+	for {
+		output, err := m.client.ListObjectsV2(
+			ctx,
+			&s3.ListObjectsV2Input{
+				Bucket:            ptrTo(m.config.Bucket),
+				Delimiter:         ptrTo("/"),
+				Prefix:            ptrTo(m.pathToKey(dirPath) + "/"),
+				ContinuationToken: cont,
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, obj := range output.Contents {
+			filePath := m.keyToPath(*obj.Key)
+			filePath = strings.TrimRight(filePath, "/")
+			_, name := path.Split(filePath)
+			entries = append(entries, DirEntry{
+				Name:  name,
+				IsDir: false,
+			})
+		}
+
+		for _, prefix := range output.CommonPrefixes {
+			filePath := m.keyToPath(*prefix.Prefix)
+			filePath = strings.TrimRight(filePath, "/")
+			entries = append(entries, DirEntry{
+				Name:  filePath,
+				IsDir: true,
+			})
+		}
+
+		if output.ContinuationToken == nil ||
+			*output.ContinuationToken == "" {
+			break
+		}
+		cont = output.ContinuationToken
 	}
 
 	return
@@ -88,13 +119,14 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 
 	// check existence
 	key := m.pathToKey(vector.FilePath)
-	obj, err := m.client.GetObject(
+	output, err := m.client.HeadObject(
 		ctx,
-		m.config.Bucket,
-		key,
-		minio.GetObjectOptions{},
+		&s3.HeadObjectInput{
+			Bucket: ptrTo(m.config.Bucket),
+			Key:    ptrTo(key),
+		},
 	)
-	err = mapS3Error(err)
+	err = m.mapError(err)
 	if errors.Is(err, ErrFileNotFound) {
 		// key not exists
 		err = nil
@@ -103,18 +135,9 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 		// other error
 		return err
 	}
-	if obj != nil {
-		_, err = obj.Stat()
-		err = mapS3Error(err)
-		if errors.Is(err, ErrFileNotFound) {
-			// key not exists
-		} else if err != nil {
-			// othter error
-			return err
-		} else {
-			// stat ok, key existed
-			return ErrFileExisted
-		}
+	if output != nil {
+		// key existed
+		return ErrFileExisted
 	}
 
 	// sort
@@ -130,13 +153,18 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 
 	// put
+	content, err := io.ReadAll(newIOEntriesReader(vector.Entries))
+	if err != nil {
+		return err
+	}
 	_, err = m.client.PutObject(
 		ctx,
-		m.config.Bucket,
-		key,
-		newIOEntriesReader(vector.Entries),
-		size,
-		minio.PutObjectOptions{},
+		&s3.PutObjectInput{
+			Bucket:        ptrTo(m.config.Bucket),
+			Key:           ptrTo(key),
+			Body:          bytes.NewReader(content),
+			ContentLength: size,
+		},
 	)
 	if err != nil {
 		return err
@@ -150,24 +178,23 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 	min, max := vector.offsetRange()
 	readLen := max - min
 
-	obj, err := m.client.GetObject(
+	rang := fmt.Sprintf("bytes=%d-%d", min, max)
+	output, err := m.client.GetObject(
 		ctx,
-		m.config.Bucket,
-		m.pathToKey(vector.FilePath),
-		minio.GetObjectOptions{},
+		&s3.GetObjectInput{
+			Bucket: ptrTo(m.config.Bucket),
+			Key:    ptrTo(m.pathToKey(vector.FilePath)),
+			Range:  ptrTo(rang),
+		},
 	)
-	err = mapS3Error(err)
+	err = m.mapError(err)
 	if err != nil {
 		return err
 	}
-	defer obj.Close()
-	_, err = obj.Seek(int64(min), io.SeekStart)
-	err = mapS3Error(err)
-	if err != nil {
-		return err
-	}
-	content, err := io.ReadAll(io.LimitReader(obj, int64(readLen)))
-	err = mapS3Error(err)
+	defer output.Body.Close()
+
+	content, err := io.ReadAll(io.LimitReader(output.Body, int64(readLen)))
+	err = m.mapError(err)
 	if err != nil {
 		return err
 	}
@@ -199,7 +226,11 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
 		if setData {
-			vector.Entries[i].Data = data
+			if len(entry.Data) < entry.Size {
+				vector.Entries[i].Data = data
+			} else {
+				copy(entry.Data, data)
+			}
 		}
 	}
 
@@ -208,11 +239,12 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 
 func (m *S3FS) Delete(ctx context.Context, filePath string) error {
 
-	err := m.client.RemoveObject(
+	_, err := m.client.DeleteObject(
 		ctx,
-		m.config.Bucket,
-		m.pathToKey(filePath),
-		minio.RemoveObjectOptions{},
+		&s3.DeleteObjectInput{
+			Bucket: ptrTo(m.config.Bucket),
+			Key:    ptrTo(m.pathToKey(filePath)),
+		},
 	)
 	if err != nil {
 		return err
@@ -231,18 +263,14 @@ func (m *S3FS) keyToPath(key string) string {
 	return path
 }
 
-func mapS3Error(err error) error {
+func (m *S3FS) mapError(err error) error {
 	if err == nil {
-		return err
+		return nil
 	}
-	return _mapS3Error(err)
-}
-
-func _mapS3Error(err error) error {
-	resp, ok := err.(minio.ErrorResponse)
-	if ok {
-		if resp.Code == "NoSuchKey" {
-			err = ErrFileNotFound
+	var httpError *http.ResponseError
+	if errors.As(err, &httpError) {
+		if httpError.Response.StatusCode == 404 {
+			return ErrFileNotFound
 		}
 	}
 	return err

@@ -16,10 +16,10 @@ package segmentio
 
 import (
 	"bytes"
+	"testing"
+
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"path"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -32,9 +32,8 @@ const (
 
 func TestSegment1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	name := path.Join(dir, "seg")
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFileIOFactory(name, id)
+	seg := SegmentFactory.Build(dir, id)
 	fp := seg.Fingerprint()
 	assert.Equal(t, id, fp.SegmentID)
 
@@ -54,9 +53,8 @@ func TestSegment1(t *testing.T) {
 
 func TestSegmentFile_Replay(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	name := path.Join(dir, "seg")
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFileIOFactory(name, id)
+	seg := SegmentFactory.Build(dir, id)
 	fp := seg.Fingerprint()
 	colCnt := 4
 	indexCnt := make(map[int]int)
@@ -83,6 +81,8 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		readTs, _ := block.ReadTS()
 		assert.Equal(t, blockTs, readTs)
+		err = block.WriteIndexMeta(w.Bytes())
+		assert.Nil(t, err)
 
 		err = block.WriteDeletes(deletesBuf)
 		assert.Nil(t, err)
@@ -95,10 +95,14 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		err = colBlk0.WriteData(w.Bytes())
 		assert.Nil(t, err)
+		idx, err := colBlk0.OpenIndexFile(0)
+		assert.Nil(t, err)
+		_, err = idx.Write(w.Bytes())
+		assert.Nil(t, err)
 		colBlk0.Close()
 	}
 
-	seg = SegmentFileIOOpenFactory(name, id)
+	seg = SegmentFactory.Build(dir, id)
 	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err := seg.Replay(colCnt, indexCnt, cache)
 	assert.Nil(t, err)
@@ -124,6 +128,10 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Equal(t, 1, int(block.ReadRows()))
 
 		dataFile.Unref()
+		inx, err := colBlk0.OpenIndexFile(0)
+		assert.Nil(t, err)
+		_, err = inx.Read(dbuf)
+		assert.Equal(t, dataStr, string(dbuf))
 		colBlk0.Close()
 
 		block.Unref()

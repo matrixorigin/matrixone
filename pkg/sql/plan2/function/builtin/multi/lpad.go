@@ -55,7 +55,7 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 			return resultVec, nil
 		}
 	} else {
-		if length[0] < 0 {
+		if length[0] < 0 || length[0] > int64(UINT16_MAX) {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_varchar, Size: 24}), nil
 		} else {
 			resultVec, err := proc.AllocVector(types.Type{Oid: types.T_varchar, Size: 24}, int64(len(vs.Lengths))*length[0])

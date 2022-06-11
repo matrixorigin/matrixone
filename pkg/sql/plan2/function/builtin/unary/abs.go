@@ -24,86 +24,85 @@ import (
 )
 
 // abs function's evaluation for arguments: [uint64]
-func AbsUInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	origVec := vs[0]
-	origVecCol := origVec.Col.([]uint64)
-
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_uint64, Size: 8}), nil
-		} else {
-			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_uint64, Size: 8})
-			resultValues := make([]uint64, 1)
-			nulls.Set(resultVector.Nsp, origVec.Nsp)
-			vector.SetCol(resultVector, abs.AbsUint64(origVecCol, resultValues))
-			//resultVector.Length = origVec.Length
-			return resultVector, nil
+func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_uint64, Size: 8}
+	resultElementSize := int(resultType.Size)
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]uint64)
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]uint64, 1)
+		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
+		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_uint64, Size: 8}, 8*int64(len(origVecCol)))
+		inputValues := inputVector.Col.([]uint64)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		results := encoding.DecodeUint64Slice(resultVector.Data)
-		results = results[:len(origVecCol)]
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, abs.AbsUint64(origVecCol, results))
+		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
 
 // abs function's evaluation for arguments: [int64]
-func AbsInt64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	origVec := vs[0]
-	origVecCol := origVec.Col.([]int64)
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: 8}), nil
-		} else {
-			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
-			resultValues := make([]int64, 1)
-			nulls.Set(resultVector.Nsp, origVec.Nsp)
-			vector.SetCol(resultVector, abs.AbsInt64(origVecCol, resultValues))
-			//resultVector.Length = origVec.Length
-			return resultVector, nil
+func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_int64, Size: 8}
+	resultElementSize := int(resultType.Size)
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]int64)
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]int64, 1)
+		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
+		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: 8}, 8*int64(len(origVecCol)))
+		inputValues := inputVector.Col.([]int64)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		results := encoding.DecodeInt64Slice(resultVector.Data)
-		results = results[:len(origVecCol)]
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, abs.AbsInt64(origVecCol, results))
+		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
 		return resultVector, nil
 	}
 }
 
 // abs function's evaluation for arguments: [float64]
-func AbsFloat64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	origVec := vs[0]
-	origVecCol := origVec.Col.([]float64)
-	if origVec.IsScalar() {
-		if origVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
-		} else {
-			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-			resultValues := make([]float64, 1)
-			nulls.Set(resultVector.Nsp, origVec.Nsp)
-			vector.SetCol(resultVector, abs.AbsFloat64(origVecCol, resultValues))
-			//resultVector.Length = origVec.Length
-			return resultVector, nil
+func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_float64, Size: 8}
+	resultElementSize := int(resultType.Size)
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]float64)
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]float64, 1)
+		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
+		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
+		inputValues := inputVector.Col.([]float64)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		results := encoding.DecodeFloat64Slice(resultVector.Data)
-		results = results[:len(origVecCol)]
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, abs.AbsFloat64(origVecCol, results))
+		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

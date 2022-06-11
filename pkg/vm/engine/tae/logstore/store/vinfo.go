@@ -28,6 +28,12 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 )
 
+var (
+	ErrVFileGroupNotExist = errors.New("vfile: group not existed")
+	ErrVFileLsnNotExist   = errors.New("vfile: lsn not existed")
+	ErrVFileOffsetTimeOut = errors.New("get vfile offset timeout")
+)
+
 type vInfo struct {
 	vf *vFile
 
@@ -40,8 +46,9 @@ type vInfo struct {
 	// // TxnCommit   map[uint32]*roaring64.Bitmap
 	// TidCidMap map[uint32]map[uint64]uint64 // 5% uncommit txn
 
-	Addrs  map[uint32]map[uint64]int //group-groupLSN-offset 5%
-	addrmu sync.RWMutex
+	Addrs    map[uint32]map[uint64]int //group-groupLSN-offset 5%
+	addrmu   sync.RWMutex
+	addrCond sync.Cond
 
 	unloaded    bool
 	loadmu      sync.Mutex
@@ -70,11 +77,12 @@ func newVInfo(vf *vFile) *vInfo {
 		// UncommitTxn: make(map[uint32][]uint64),
 		// TxnCommit:   make(map[string]*roaring64.Bitmap),
 		// TidCidMap: make(map[uint32]map[uint64]uint64),
-		groups:  make(map[uint32]VGroup),
-		groupmu: sync.RWMutex{},
-		Addrs:   make(map[uint32]map[uint64]int),
-		addrmu:  sync.RWMutex{},
-		vf:      vf,
+		groups:   make(map[uint32]VGroup),
+		groupmu:  sync.RWMutex{},
+		Addrs:    make(map[uint32]map[uint64]int),
+		addrmu:   sync.RWMutex{},
+		addrCond: *sync.NewCond(new(sync.Mutex)),
+		vf:       vf,
 
 		logQueue: make(chan *entry.Info, DefaultMaxCommitSize*100),
 	}
@@ -84,9 +92,7 @@ func newVInfo(vf *vFile) *vInfo {
 }
 
 func (info *vInfo) OnReplay(r *replayer) {
-	info.addrmu.Lock()
-	info.Addrs = r.vinfoAddrs
-	info.addrmu.Unlock()
+	info.flushWg.Wait()
 }
 
 func (info *vInfo) LoadMeta() error {
@@ -216,6 +222,9 @@ func (info *vInfo) onLog(infos []*entry.Info) {
 		info.Addrs[addr.Group] = addrsMap
 		info.addrmu.Unlock()
 	}
+	info.addrCond.L.Lock()
+	info.addrCond.Broadcast()
+	info.addrCond.L.Unlock()
 	info.flushWg.Add(-1 * len(infos))
 }
 
@@ -292,11 +301,11 @@ func (info *vInfo) GetOffsetByLSN(groupId uint32, lsn uint64) (int, error) {
 	if !ok {
 		logutil.Infof("group %d", groupId)
 		logutil.Infof("%p|addrs are %v", info, info.Addrs)
-		return 0, errors.New("vinfo group not existed")
+		return 0, ErrVFileGroupNotExist
 	}
 	offset, ok := lsnMap[lsn]
 	if !ok {
-		return 0, errors.New("vinfo lsn not existed")
+		return 0, ErrVFileLsnNotExist
 	}
 	return offset, nil
 }

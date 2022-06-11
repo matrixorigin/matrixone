@@ -160,6 +160,13 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 				Magic: DropIndex,
 				Plan:  pn,
 			}, nil
+		case plan.DataDefinition_SHOW_DATABASES,
+			plan.DataDefinition_SHOW_TABLES,
+			plan.DataDefinition_SHOW_COLUMNS:
+			return c.compileQuery(pn.GetDdl().GetQuery())
+			// 1、not supported: show arnings/errors/status/processlist
+			// 2、show variables will not return query
+			// 3、show create database/table need rewrite to create sql
 		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
@@ -522,12 +529,6 @@ func (c *Compile) compileOrder(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileOffset(n *plan.Node, ss []*Scope) []*Scope {
-	for i := range ss {
-		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op:  overload.Offset,
-			Arg: constructOffset(n, c.proc),
-		})
-	}
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
@@ -610,13 +611,22 @@ func (c *Compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
 
 func rewriteExprListForAggNode(es []*plan.Expr, groupSize int32) {
 	for i := range es {
-		ce, ok := es[i].Expr.(*plan.Expr_Col)
-		if !ok {
-			continue
+		rewriteExprForAggNode(es[i], groupSize)
+	}
+}
+
+func rewriteExprForAggNode(expr *plan.Expr, groupSize int32) {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col.RelPos == -2 {
+			e.Col.ColPos += groupSize
 		}
-		if ce.Col.RelPos == -2 {
-			ce.Col.ColPos += groupSize
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			rewriteExprForAggNode(e.F.Args[i], groupSize)
 		}
+	default:
+		return
 	}
 }
 

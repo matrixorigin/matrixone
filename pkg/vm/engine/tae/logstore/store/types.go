@@ -100,6 +100,7 @@ type File interface {
 	RUnlock()
 	FileReader
 
+	GetEntryByVersion(version int) (VFile, error)
 	Sync() error
 	GetAppender() FileAppender
 	Replay(*replayer, ReplayObserver) error
