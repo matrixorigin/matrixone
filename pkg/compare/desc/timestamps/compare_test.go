@@ -30,13 +30,13 @@ func TestNew(t *testing.T) {
 
 func TestCompare_Vector(t *testing.T) {
 	c := New()
-	c.vs[0] = vector.New(types.Type{Oid: types.T(types.T_datetime)})
-	require.Equal(t, vector.New(types.Type{Oid: types.T(types.T_datetime)}), c.Vector())
+	c.vs[0] = vector.New(types.Type{Oid: types.T(types.T_timestamp)})
+	require.Equal(t, vector.New(types.Type{Oid: types.T(types.T_timestamp)}), c.Vector())
 }
 
 func TestCompare_Set(t *testing.T) {
 	c := New()
-	vector := vector.New(types.Type{Oid: types.T(types.T_datetime)})
+	vector := vector.New(types.Type{Oid: types.T(types.T_timestamp)})
 	c.Set(1, vector)
 	require.Equal(t, vector, c.vs[1])
 }
