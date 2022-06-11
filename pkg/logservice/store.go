@@ -378,7 +378,7 @@ func (l *logStore) filterEntries(ctx context.Context,
 				// lease not match, skip
 				continue
 			}
-			result = append(result, LogRecord{Data: cmd})
+			result = append(result, LogRecord{Data: cmd, Index: e.Index})
 		}
 	}
 	return result, nil

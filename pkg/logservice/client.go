@@ -18,7 +18,13 @@ import (
 	"context"
 	"net"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+)
+
+var (
+	// ErrIncompatibleClient is returned when write requests are made on read-only clients.
+	ErrIncompatibleClient = moerr.NewError(moerr.INVALID_INPUT, "incompatible client")
 )
 
 type LogServiceClientConfig struct {
@@ -31,6 +37,7 @@ type LogServiceClientConfig struct {
 
 type Client interface {
 	Close() error
+	Config() LogServiceClientConfig
 	Append(ctx context.Context, rec pb.LogRecord) (Lsn, error)
 	Read(ctx context.Context, firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error)
 	Truncate(ctx context.Context, index Lsn) error
@@ -80,7 +87,14 @@ func (c *client) Close() error {
 	return sendPoison(c.conn, poisonNumber[:])
 }
 
+func (c *client) Config() LogServiceClientConfig {
+	return c.cfg
+}
+
 func (c *client) Append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
+	if c.readOnly() {
+		return 0, ErrIncompatibleClient
+	}
 	// TODO: check piggybacked hint on whether we are connected to the leader node
 	return c.append(ctx, rec)
 }
@@ -91,6 +105,9 @@ func (c *client) Read(ctx context.Context,
 }
 
 func (c *client) Truncate(ctx context.Context, lsn Lsn) error {
+	if c.readOnly() {
+		return ErrIncompatibleClient
+	}
 	return c.truncate(ctx, lsn)
 }
 
@@ -98,7 +115,14 @@ func (c *client) GetTruncatedIndex(ctx context.Context) (Lsn, error) {
 	return c.getTruncatedIndex(ctx)
 }
 
+func (c *client) readOnly() bool {
+	return c.cfg.ReadOnly
+}
+
 func (c *client) connectReadWrite(ctx context.Context) error {
+	if c.readOnly() {
+		panic(ErrIncompatibleClient)
+	}
 	return c.connect(ctx, pb.MethodType_CONNECT)
 }
 

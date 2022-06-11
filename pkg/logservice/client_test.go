@@ -144,3 +144,17 @@ func TestClientTruncate(t *testing.T) {
 	}
 	runClientTest(t, false, fn)
 }
+
+func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
+	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+		cmd := make([]byte, 16+headerSize+8)
+		cmd = getAppendCmd(cmd, cfg.ReplicaID)
+		rand.Read(cmd[headerSize+8:])
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+		require.Equal(t, ErrIncompatibleClient, err)
+		require.Equal(t, ErrIncompatibleClient, c.Truncate(ctx, 4))
+	}
+	runClientTest(t, true, fn)
+}
