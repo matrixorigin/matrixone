@@ -41,7 +41,7 @@ type blockFile struct {
 }
 
 func (bf *blockFile) GetDeletesFileStat() common.FileInfo {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
