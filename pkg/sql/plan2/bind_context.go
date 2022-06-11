@@ -266,7 +266,6 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr) error {
 		return bc.qualifyColumnNames(exprImpl.To)
 
 	case *tree.UnresolvedName:
-		// Fix Me: the first arg in extract function is UnresolvedName. but it's normal string
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.Parts[0]
 			if binding, ok := bc.bindingByCol[col]; ok {
@@ -394,7 +393,6 @@ func (bc *BindContext) qualifyColumnNamesAndExpandAlias(astExpr tree.Expr, selec
 		exprImpl.To, err = bc.qualifyColumnNamesAndExpandAlias(exprImpl.To, selectList)
 
 	case *tree.UnresolvedName:
-		// Fix Me: the first arg in extract function is UnresolvedName. but it's normal string
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.Parts[0]
 			if colPos, ok := bc.aliasMap[col]; ok {

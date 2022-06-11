@@ -91,7 +91,6 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 
 	colPos := int32(len(b.ctx.aggregates))
-
 	astStr := tree.String(astExpr, dialect.MYSQL)
 	b.ctx.aggregateByAst[astStr] = colPos
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)

@@ -183,8 +183,7 @@ type GroupBinder struct {
 
 type HavingBinder struct {
 	baseBinder
-	tableBinder *TableBinder
-	insideAgg   bool
+	insideAgg bool
 }
 
 type ProjectionBinder struct {

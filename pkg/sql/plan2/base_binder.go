@@ -236,7 +236,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery) (*Expr, error) {
 		},
 	}
 	if astExpr.Exists {
-		returnExpr, _, err = getFunctionExprByNameAndPlanExprs("exists", []*Expr{returnExpr})
+		returnExpr, err = b.bindFuncExprImplByPlanExpr("exists", []*Expr{returnExpr})
 		if err != nil {
 			return nil, err
 		}
@@ -448,7 +448,7 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 			Id: plan.Type_INTERVAL,
 		})
 	case "and", "or", "not", "xor":
-		// why to append cast function?
+		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
 		// 	if args[i].Typ.Id != plan.Type_BOOL {
 		// 		arg, err := appendCastBeforeExpr(args[i], &plan.Type{
@@ -464,7 +464,7 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 			return nil, err
 		}
 	case "=", "<", "<=", ">", ">=", "<>":
-		// why to append cast function?
+		// why not append cast function?
 		if err := convertValueIntoBool(name, args, false); err != nil {
 			return nil, err
 		}

@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -48,7 +49,9 @@ func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
 		} else {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, "can't find column in context's map")
+			log.Printf("dd %v, %v", ne.Col, colMap)
+			panic("dfdsfs")
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can't find column in context's map %v", colMap))
 		}
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
@@ -118,7 +121,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 			}
 		}
 		for _, expr := range node.OnList {
-			builder.resetPosition(expr, thisColMap)
+			err := builder.resetPosition(expr, thisColMap)
+			if err != nil {
+				return nil, err
+			}
 		}
 	case plan.Node_AGG:
 		childMap, err := builder.resetNode(node.Children[0])
@@ -128,7 +134,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 		node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
 		colIdx := 0
 		for idx, expr := range node.GroupBy {
-			builder.resetPosition(expr, childMap)
+			err := builder.resetPosition(expr, childMap)
+			if err != nil {
+				return nil, err
+			}
 			node.ProjectList[colIdx] = &Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Col{
@@ -143,7 +152,11 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 			colIdx++
 		}
 		for idx, expr := range node.AggList {
-			builder.resetPosition(expr, childMap)
+			// don't want to reset
+			// err := builder.resetPosition(expr, childMap)
+			// if err != nil {
+			// 	return nil, err
+			// }
 
 			node.ProjectList[colIdx] = &Expr{
 				Typ: expr.Typ,
@@ -163,7 +176,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 			return nil, err
 		}
 		for _, orderBy := range node.OrderBy {
-			builder.resetPosition(orderBy.Expr, childMap)
+			err := builder.resetPosition(orderBy.Expr, childMap)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		preNode := builder.qry.Nodes[node.Children[0]]
@@ -182,20 +198,25 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 		if len(node.ProjectList) == 0 {
 			//where  having
 			for _, expr := range node.WhereList {
-				builder.resetPosition(expr, childMap)
+				err := builder.resetPosition(expr, childMap)
+				if err != nil {
+					return nil, err
+				}
 			}
 
 			preNode := builder.qry.Nodes[node.Children[0]]
 			node.ProjectList = make([]*Expr, len(preNode.ProjectList))
 			for prjIdx, prjExpr := range preNode.ProjectList {
 				node.ProjectList[prjIdx] = DeepCopyExpr(prjExpr)
-
-				returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = []int32{0, int32(prjIdx)}
 			}
+			returnMap = childMap
 		} else {
 			//project
 			for idx, expr := range node.ProjectList {
-				builder.resetPosition(expr, childMap)
+				err := builder.resetPosition(expr, childMap)
+				if err != nil {
+					return nil, err
+				}
 
 				returnMap[getColMapKey(ctx.projectTag, int32(idx))] = []int32{0, int32(idx)}
 			}
@@ -203,7 +224,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 	case plan.Node_VALUE_SCAN:
 		//do nothing,  optimize can merge valueScan and project
 	default:
-		errors.New(errno.SyntaxErrororAccessRuleViolation, "unsupport node type to rebiuld query")
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "unsupport node type to rebiuld query")
 	}
 	return returnMap, nil
 }
@@ -293,7 +314,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 			if len(selectExpr.As) > 0 {
 				ctx.headings = append(ctx.headings, string(selectExpr.As))
 			} else {
-				ctx.headings = append(ctx.headings, "")
+				ctx.headings = append(ctx.headings, tree.String(selectExpr.Expr, dialect.MYSQL))
 			}
 
 			err = ctx.qualifyColumnNames(expr)
@@ -324,7 +345,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		if err != nil {
 			return 0, err
 		}
-
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType:  plan.Node_PROJECT,
 			Children:  []int32{nodeId},
