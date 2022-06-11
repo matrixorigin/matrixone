@@ -258,6 +258,11 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	return true
 }
 
+// todo(broccoli): change this to a general function
+func concat_ws_TypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	return true
+}
+
 // returns the cost if t1 can level up to t2
 func up(t1, t2 types.T) int {
 	return levelUp[t1][t2]
