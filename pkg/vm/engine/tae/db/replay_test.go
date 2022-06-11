@@ -1067,19 +1067,20 @@ func TestReplay8(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
 
 	bat := catalog.MockData(schema, schema.BlockMaxRows*3+1)
 	bats := compute.SplitBatch(bat, 4)
 
-	createRelationAndAppend(t, tae.DB, defaultTestDB, schema, bats[0], true)
-	txn, rel := getDefaultRelation(t, tae.DB, schema.Name)
+	tae.createRelAndAppend(bats[0], true)
+	txn, rel := tae.getRelation()
 	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
 	err := rel.DeleteByFilter(filter)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	txn, rel = tae.getRelation()
 	window := compute.BatchWindow(bats[0], 2, 3)
 	err = rel.Append(window)
 	assert.NoError(t, err)
@@ -1088,14 +1089,14 @@ func TestReplay8(t *testing.T) {
 	tae.restart()
 
 	// Check the total rows by scan
-	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
 	err = rel.Append(bats[0])
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	assert.NoError(t, txn.Commit())
 
 	// Try to append the delete row and then rollback
-	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	txn, rel = tae.getRelation()
 	err = rel.Append(window)
 	assert.NoError(t, err)
 	_ = txn.Rollback()
