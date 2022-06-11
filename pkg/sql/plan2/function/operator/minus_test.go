@@ -176,7 +176,7 @@ func minusDecimal64(t *testing.T, left types.Decimal64, leftType types.Type, rig
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, decimalres.Col)
-			require.Equal(t, c.wantType, decimalres.Typ)
+			require.Equal(t, c.wantType.Oid, decimalres.Typ.Oid)
 			require.Equal(t, c.wantScalar, decimalres.IsScalar())
 		})
 	}
@@ -235,7 +235,7 @@ func minusDecimal128(t *testing.T, left types.Decimal128, leftType types.Type, r
 				t.Fatal(err)
 			}
 			require.Equal(t, c.wantBytes, decimalres.Col)
-			require.Equal(t, c.wantType, decimalres.Typ)
+			require.Equal(t, c.wantType.Oid, decimalres.Typ.Oid)
 			require.Equal(t, c.wantScalar, decimalres.IsScalar())
 		})
 	}

@@ -14,6 +14,7 @@
 package date_sub
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -77,6 +78,67 @@ func TestDatetimeSub(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Datetime, len(c.args1))
 			require.Equal(t, c.want, datetimeSub(c.args1, c.args2, c.args3, got))
+		})
+	}
+
+}
+
+func TestDateStringSub(t *testing.T) {
+	testCases := []struct {
+		name    string
+		args1   *types.Bytes
+		args2   []int64
+		args3   []int64
+		want    *types.Bytes
+		contain bool
+	}{
+		{
+			args1:   &types.Bytes{Data: []byte("2018-01-02"), Offsets: []uint32{0}, Lengths: []uint32{10}},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Day)},
+			want:    &types.Bytes{Data: []byte("2018-01-01"), Offsets: []uint32{0}, Lengths: []uint32{10}},
+			contain: false,
+		},
+		{
+			args1:   &types.Bytes{Data: []byte("2018-01-02"), Offsets: []uint32{0}, Lengths: []uint32{10}},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Second)},
+			want:    &types.Bytes{Data: []byte("2018-01-01 23:59:59"), Offsets: []uint32{0}, Lengths: []uint32{19}},
+			contain: false,
+		},
+		{
+			args1:   &types.Bytes{Data: []byte("2018-01-01 00:00:02"), Offsets: []uint32{0}, Lengths: []uint32{19}},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Second)},
+			want:    &types.Bytes{Data: []byte("2018-01-01 00:00:01"), Offsets: []uint32{0}, Lengths: []uint32{19}},
+			contain: false,
+		},
+		{
+			args1:   &types.Bytes{Data: []byte("xxxx"), Offsets: []uint32{0}, Lengths: []uint32{4}},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Second)},
+			want:    &types.Bytes{Data: []byte(""), Offsets: []uint32{0}, Lengths: []uint32{0}},
+			contain: true,
+		},
+		{
+			args1:   &types.Bytes{Data: []byte("xxxx2018-01-02 00:00:012018-01-02"), Offsets: []uint32{0, 4, 23}, Lengths: []uint32{4, 19, 10}},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Day)},
+			want:    &types.Bytes{Data: []byte("2018-01-01 00:00:012018-01-01"), Offsets: []uint32{0, 0, 19}, Lengths: []uint32{0, 19, 10}},
+			contain: true,
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			got := &types.Bytes{
+				Data:    make([]byte, 0),
+				Offsets: make([]uint32, 0),
+				Lengths: make([]uint32, 0),
+			}
+			nu := &nulls.Nulls{}
+			require.Equal(t, c.want, dateStringSub(c.args1, c.args2, c.args3, nu, got))
+			require.Equal(t, c.contain, nulls.Contains(nu, 0))
 		})
 	}
 
