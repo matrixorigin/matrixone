@@ -171,14 +171,24 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 			}
 		case "del":
-			if ts == 0 {
-				bf.ts = 0
+			if bf.ts <= ts {
+				bf.ts = ts
+			}
+			if bf.deletes.file[0] == nil {
 				bf.deletes.file[0] = file
 				sf.replayInfo(bf.deletes.stat, file)
 				break
 			}
-			if bf.ts < ts {
-				bf.ts = ts
+			delTmp := strings.Split(bf.deletes.file[0].name, ".")
+			delName := strings.Split(delTmp[0], "_")
+			var delTs uint64 = 0
+			if len(delName) > 2 {
+				delTs, err = strconv.ParseUint(delName[2], 10, 64)
+				if err != nil {
+					return err
+				}
+			}
+			if ts > delTs {
 				bf.deletes.file[0] = file
 				sf.replayInfo(bf.deletes.stat, file)
 			}

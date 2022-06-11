@@ -40,6 +40,10 @@ type blockFile struct {
 	indexMeta *dataFile
 }
 
+func (bf *blockFile) GetDeletesFileStat() common.FileInfo {
+	panic("implement me")
+}
+
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,

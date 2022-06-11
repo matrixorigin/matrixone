@@ -86,6 +86,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 
 		err = block.WriteDeletes(deletesBuf)
 		assert.Nil(t, err)
+		assert.Equal(t, int64(len(deletesBuf)), block.GetDeletesFileStat().OriginSize())
 		ids = append(ids, blkId1)
 
 		colBlk0, err := block.OpenColumn(0)
@@ -109,6 +110,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		block, err := seg.OpenBlock(ids[i], colCnt, indexCnt)
 		assert.Nil(t, err)
+		assert.Equal(t, int64(len(deletesBuf)), block.GetDeletesFileStat().OriginSize())
 		colBlk0, err := block.OpenColumn(0)
 		assert.Nil(t, err)
 		assert.NotNil(t, colBlk0)
