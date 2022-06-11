@@ -246,6 +246,7 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 	vfile := v.(*vFile)
 	if vfile.version != r.version {
 		r.state.pos = 0
+		r.version = vfile.version
 	}
 	current := vfile.GetState()
 	entry := entry.GetBase()
@@ -269,19 +270,22 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		if !errors.Is(err, io.EOF) {
 			return err
 		}
-		err2 := vfile.Truncate(int64(r.state.pos))
-		if err2 != nil {
-			panic(err2)
-		}
-		return err
+		panic("wrong wal")
+		// err2 := vfile.Truncate(int64(r.state.pos))
+		// if err2 != nil {
+		// 	panic(err2)
+		// }
+		// return err
 	}
 	if int(n) != entry.TotalSizeExpectMeta() {
 		if current.pos == r.state.pos+int(n) {
-			err2 := vfile.Truncate(int64(current.pos))
-			if err2 != nil {
-				return err
-			}
-			return io.EOF
+			panic("wrong wal")
+			// err2 := vfile.Truncate(int64(current.pos))
+			// if err2 != nil {
+			// 	logutil.Infof("lalala")
+			// 	return err
+			// }
+			// return io.EOF
 		} else {
 			return fmt.Errorf("payload mismatch: %d != %d", n, entry.GetPayloadSize())
 		}

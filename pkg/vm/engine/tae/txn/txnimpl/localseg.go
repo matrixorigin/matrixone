@@ -82,23 +82,39 @@ func (seg *localSegment) registerInsertNode() {
 }
 
 func (seg *localSegment) ApplyAppend() (err error) {
+	var (
+		destOff      uint32
+		anode        txnif.AppendNode
+		prev         txnif.AppendNode
+		prevAppender data.BlockAppender
+	)
 	for _, ctx := range seg.appends {
-		var (
-			destOff    uint32
-			appendNode txnif.AppendNode
-		)
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
-		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, uint32(compute.LengthOfBatch(bat)), seg.table.store.txn); err != nil {
+		if prevAppender != nil && prevAppender.GetID().BlockID == ctx.driver.GetID().BlockID {
+			prev = anode
+		} else {
+			if anode != nil {
+				seg.table.store.IncreateWriteCnt()
+				seg.table.txnEntries = append(seg.table.txnEntries, anode)
+			}
+			anode = nil
+			prev = nil
+		}
+		prevAppender = ctx.driver
+		if anode, destOff, err = ctx.driver.ApplyAppend(
+			bat,
+			0,
+			uint32(compute.LengthOfBatch(bat)),
+			seg.table.store.txn,
+			prev); err != nil {
 			return
 		}
-		ctx.driver.Close()
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
-		if err = appendNode.PrepareCommit(); err != nil {
-			return
-		}
+	}
+	if anode != nil {
 		seg.table.store.IncreateWriteCnt()
-		seg.table.txnEntries = append(seg.table.txnEntries, appendNode)
+		seg.table.txnEntries = append(seg.table.txnEntries, anode)
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -185,7 +201,12 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		if seg.table.schema.IsSinglePK() {
-			if err = seg.index.BatchInsert(data.Vecs[seg.table.schema.GetSingleSortKeyIdx()], int(offset), int(appended), seg.rows, false); err != nil {
+			if err = seg.index.BatchInsert(
+				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
+				int(offset),
+				int(appended),
+				seg.rows,
+				false); err != nil {
 				break
 			}
 		} else if seg.table.schema.IsCompoundPK() {
@@ -382,7 +403,10 @@ func (seg *localSegment) BatchDedup(key *vector.Vector) error {
 	return seg.index.BatchDedup(key)
 }
 
-func (seg *localSegment) GetColumnDataById(blk *catalog.BlockEntry, colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+func (seg *localSegment) GetColumnDataById(
+	blk *catalog.BlockEntry,
+	colIdx int,
+	compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
