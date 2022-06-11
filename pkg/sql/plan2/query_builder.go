@@ -34,8 +34,6 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 		ctxByNode:  []*BindContext{},
 		tagsByNode: [][]int32{},
 		nextTag:    0,
-
-		selectNodeIds: []int32{},
 	}
 }
 
@@ -47,7 +45,6 @@ func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if ids, ok := colMap[getColMapKey(ne.Col.RelPos, ne.Col.ColPos)]; ok {
-			// log.Printf("key =%s, v=%v", getColMapKey(ne.Col.RelPos, ne.Col.ColPos), ids)
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
 		} else {
@@ -85,16 +82,23 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 		}
 	case plan.Node_JOIN:
 		// TODO deal with using
-		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
 		colIdx := 0
+		// use this colMap to reset OnList
+		thisColMap := make(map[string][]int32)
 		for idx, child := range node.Children {
 			childMap := builder.resetNode(child)
 
-			for k := range childMap {
-				returnMap[k] = []int32{0, int32(colIdx)}
+			for k, v := range childMap {
+				for i := 0; i < len(builder.qry.Nodes[child].ProjectList); i++ {
+					returnMap[k] = []int32{int32(idx), int32(i)}
+				}
+				thisColV := v
+				thisColV[0] = int32(idx)
+				thisColMap[k] = thisColV
 			}
+
 			for prjIdx, prj := range builder.qry.Nodes[child].ProjectList {
-				node.ProjectList[colIdx] = &Expr{
+				node.ProjectList = append(node.ProjectList, &Expr{
 					Typ: prj.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
@@ -102,9 +106,12 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 							ColPos: int32(prjIdx),
 						},
 					},
-				}
+				})
 				colIdx++
 			}
+		}
+		for _, expr := range node.OnList {
+			builder.resetPosition(expr, thisColMap)
 		}
 	case plan.Node_AGG:
 		childMap := builder.resetNode(node.Children[0])
@@ -189,8 +196,13 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 }
 
 func (builder *QueryBuilder) createQuery() *Query {
-	for _, rootId := range builder.selectNodeIds {
-		builder.resetNode(rootId)
+	rootId := int32(len(builder.qry.Nodes) - 1)
+	builder.resetNode(rootId)
+
+	// reset root projection
+	ctx := builder.ctxByNode[rootId]
+	for idx, expr := range builder.qry.Nodes[rootId].ProjectList {
+		expr.ColName = ctx.headings[idx]
 	}
 	return builder.qry
 }
@@ -466,7 +478,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}, ctx)
 	}
 
-	builder.selectNodeIds = append(builder.selectNodeIds, nodeId)
+	//reset last nodeId with heading
+	builder.ctxByNode[nodeId].headings = ctx.headings
+
 	return nodeId, nil
 }
 
