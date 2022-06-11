@@ -41,29 +41,33 @@ func getColMapKey(relPos int32, colPos int32) string {
 	return fmt.Sprintf("%d-%d", relPos, colPos)
 }
 
-func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32) {
+func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32) error {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if ids, ok := colMap[getColMapKey(ne.Col.RelPos, ne.Col.ColPos)]; ok {
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
 		} else {
-			panic("can't find col in map")
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, "can't find column in context's map")
 		}
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
-			builder.resetPosition(arg, colMap)
+			err := builder.resetPosition(arg, colMap)
+			if err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
+func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error) {
 	node := builder.qry.Nodes[nodeId]
 	ctx := builder.ctxByNode[nodeId]
 	returnMap := make(map[string][]int32)
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
 		tag := builder.tagsByNode[nodeId][0]
 		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
 		for idx, col := range node.TableDef.Cols {
@@ -86,7 +90,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 		// use this colMap to reset OnList
 		thisColMap := make(map[string][]int32)
 		for idx, child := range node.Children {
-			childMap := builder.resetNode(child)
+			childMap, err := builder.resetNode(child)
+			if err != nil {
+				return nil, err
+			}
 
 			for k, v := range childMap {
 				for i := 0; i < len(builder.qry.Nodes[child].ProjectList); i++ {
@@ -114,7 +121,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 			builder.resetPosition(expr, thisColMap)
 		}
 	case plan.Node_AGG:
-		childMap := builder.resetNode(node.Children[0])
+		childMap, err := builder.resetNode(node.Children[0])
+		if err != nil {
+			return nil, err
+		}
 		node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
 		colIdx := 0
 		for idx, expr := range node.GroupBy {
@@ -148,7 +158,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 			colIdx++
 		}
 	case plan.Node_SORT:
-		childMap := builder.resetNode(node.Children[0])
+		childMap, err := builder.resetNode(node.Children[0])
+		if err != nil {
+			return nil, err
+		}
 		for _, orderBy := range node.OrderBy {
 			builder.resetPosition(orderBy.Expr, childMap)
 		}
@@ -161,8 +174,11 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 
 			returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = []int32{0, int32(prjIdx)}
 		}
-	case plan.Node_PROJECT:
-		childMap := builder.resetNode(node.Children[0])
+	case plan.Node_PROJECT, plan.Node_MATERIAL:
+		childMap, err := builder.resetNode(node.Children[0])
+		if err != nil {
+			return nil, err
+		}
 		if len(node.ProjectList) == 0 {
 			//where  having
 			for _, expr := range node.WhereList {
@@ -176,8 +192,6 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 
 				returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = []int32{0, int32(prjIdx)}
 			}
-
-			return childMap
 		} else {
 			//project
 			for idx, expr := range node.ProjectList {
@@ -189,22 +203,26 @@ func (builder *QueryBuilder) resetNode(nodeId int32) map[string][]int32 {
 	case plan.Node_VALUE_SCAN:
 		//do nothing,  optimize can merge valueScan and project
 	default:
-		//MATERIAL  MATERIAL_SCAN
-		panic("not finish")
+		errors.New(errno.SyntaxErrororAccessRuleViolation, "unsupport node type to rebiuld query")
 	}
-	return returnMap
+	return returnMap, nil
 }
 
-func (builder *QueryBuilder) createQuery() *Query {
-	rootId := int32(len(builder.qry.Nodes) - 1)
-	builder.resetNode(rootId)
+func (builder *QueryBuilder) createQuery() (*Query, error) {
+	for _, rootId := range builder.qry.Steps {
+		_, err := builder.resetNode(rootId)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// reset root projection
+	rootId := int32(len(builder.qry.Nodes) - 1)
 	ctx := builder.ctxByNode[rootId]
 	for idx, expr := range builder.qry.Nodes[rootId].ProjectList {
 		expr.ColName = ctx.headings[idx]
 	}
-	return builder.qry
+	return builder.qry, nil
 }
 
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (int32, error) {
@@ -523,7 +541,7 @@ func (builder *QueryBuilder) buildCTE(withExpr *tree.With, ctx *BindContext) err
 			Cols: make([]*ColDef, len(subCtx.headings)),
 		}
 
-		if len(ctx.headings) < len(cte.Name.Cols) {
+		if len(subCtx.headings) < len(cte.Name.Cols) {
 			return errors.New(errno.InvalidColumnReference, "CTE table column length not match")
 		}
 
