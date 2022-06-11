@@ -6,8 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
@@ -53,7 +52,7 @@ func (e *testEngine) Close() error {
 	return e.DB.Close()
 }
 
-func (e *testEngine) createRelAndAppend(bat *batch.Batch, createDB bool) (handle.Database, handle.Relation) {
+func (e *testEngine) createRelAndAppend(bat *mobat.Batch, createDB bool) (handle.Database, handle.Relation) {
 	return createRelationAndAppend(e.t, e.DB, defaultTestDB, e.schema, bat, createDB)
 }
 
@@ -114,7 +113,7 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	return
 }
 
-func lenOfBats(bats []*gbat.Batch) int {
+func lenOfBats(bats []*mobat.Batch) int {
 	rows := 0
 	for _, bat := range bats {
 		rows += compute.LengthOfBatch(bat)
@@ -180,7 +179,7 @@ func createRelationAndAppend(
 	e *DB,
 	dbName string,
 	schema *catalog.Schema,
-	bat *gbat.Batch,
+	bat *mobat.Batch,
 	createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
@@ -270,7 +269,7 @@ func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	}
 }
 
-func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendFailClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -284,7 +283,7 @@ func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *s
 	}
 }
 
-func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -298,7 +297,7 @@ func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.
 	}
 }
 
-func tryAppendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func tryAppendClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -451,7 +450,7 @@ func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 	assert.NoError(t, txn.Commit())
 }
 
-func getSingleSortKeyValue(bat *batch.Batch, schema *catalog.Schema, row int) (v any) {
+func getSingleSortKeyValue(bat *mobat.Batch, schema *catalog.Schema, row int) (v any) {
 	v = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], uint32(row))
 	return
 }
