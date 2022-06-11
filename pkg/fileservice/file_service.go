@@ -49,6 +49,7 @@ type IOEntry struct {
 	Size int
 
 	// raw content
+	// when reading, if len(Data) < Size, a new Size-lengthed byte slice will be allocated
 	Data []byte
 
 	// when reading, if Writer is not nil, write data to it instead of setting Data field

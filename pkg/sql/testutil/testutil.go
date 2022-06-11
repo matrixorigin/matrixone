@@ -67,6 +67,19 @@ func makeScalar[T vecType](value T, length int, typ types.Type) *vector.Vector {
 	return vec
 }
 
+func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
+	vec := NewProc().AllocScalarVector(typ)
+	vec.Length = length
+	l := uint32(len(value))
+	vec.Col = &types.Bytes{
+		Data:    []byte(value),
+		Offsets: []uint32{0},
+		Lengths: []uint32{l},
+	}
+	vec.Data = vec.Col.(*types.Bytes).Data
+	return vec
+}
+
 func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vector {
 	vec := vector.New(typ)
 	bs := &types.Bytes{
@@ -204,8 +217,16 @@ func MakeCharVector(values []string, nsp []uint64) *vector.Vector {
 	return makeStringVector(values, nsp, ct)
 }
 
+func MakeScalarChar(value string, length int) *vector.Vector {
+	return makeScalarString(value, length, ct)
+}
+
 func MakeVarcharVector(values []string, nsp []uint64) *vector.Vector {
 	return makeStringVector(values, nsp, vc)
+}
+
+func MakeScalarVarchar(value string, length int) *vector.Vector {
+	return makeScalarString(value, length, vc)
 }
 
 func MakeDecimal64Vector(values []int64, nsp []uint64) *vector.Vector {
@@ -325,7 +346,17 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 		if expected.IsScalarNull() {
 			return got.IsScalarNull()
 		} else {
-			return reflect.DeepEqual(expected.Col, got.Col)
+			switch expected.Typ.Oid {
+			case types.T_char, types.T_varchar:
+				if got.Typ.Oid != expected.Typ.Oid {
+					return false
+				}
+				t1 := expected.Col.(*types.Bytes)
+				t2 := expected.Col.(*types.Bytes)
+				return reflect.DeepEqual(t1.Get(0), t2.Get(0))
+			default:
+				return reflect.DeepEqual(expected.Col, got.Col)
+			}
 		}
 	} else {
 		if got.IsScalar() {
@@ -350,6 +381,28 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 				}
 			}
 		}
-		return reflect.DeepEqual(expected.Col, got.Col)
+		switch expected.Typ.Oid {
+		case types.T_char, types.T_varchar:
+			if got.Typ.Oid != expected.Typ.Oid {
+				return false
+			}
+			t1 := expected.Col.(*types.Bytes)
+			t2 := expected.Col.(*types.Bytes)
+			l1, l2 := len(t1.Lengths), len(t2.Lengths)
+			if l1 != l2 {
+				return false
+			}
+			for i := 0; i < l1; i++ {
+				if nulls.Contains(expected.Nsp, uint64(i)) {
+					continue
+				}
+				if !reflect.DeepEqual(t1.Get(0), t2.Get(0)) {
+					return false
+				}
+			}
+			return true
+		default:
+			return reflect.DeepEqual(expected.Col, got.Col)
+		}
 	}
 }
