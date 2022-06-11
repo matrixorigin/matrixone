@@ -641,6 +641,7 @@ func (blk *dataBlock) updateWithFineLock(
 
 func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
 	blk.mvcc.OnReplayDeleteNode(node)
+	err = node.OnApply()
 	return
 }
 

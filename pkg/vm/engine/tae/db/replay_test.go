@@ -1095,11 +1095,11 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	// Try to append the delete row and then rollback
-	// txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
-	// err = rel.Append(window)
-	// assert.NoError(t, err)
-	// _ = txn.Rollback()
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	err = rel.Append(window)
+	assert.NoError(t, err)
+	_ = txn.Rollback()
 
-	// forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
-	// tae.restart()
+	forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
+	tae.restart()
 }
