@@ -845,6 +845,17 @@ var builtins = map[int][]Function{
 			Fn:          multi.CeilFloat64,
 		},
 	},
+	CONCAT_WS: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: concat_ws_TypeCheck,
+			Fn:          multi.Concat_ws,
+		},
+	},
 	FLOOR: {
 		{
 			Index:       0,

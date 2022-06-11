@@ -45,39 +45,40 @@ const (
 	NOT                    // NOT
 	CAST                   // CAST
 
-	ABS               // ABS
-	ACOS              // ACOS
-	ADDDATE           // ADDDATE
-	ADDTIME           // ADDTIME
-	AES_DECRYPT       // AES_DECRYPT
-	AES_ENCRYPT       // AES_ENCRYPT
-	ANY_VALUE         // ANY_VALUE
-	ARRAY_AGG         // ARRAY_AGG
-	ARRAY_APPEND      // ARRAY_APPEND
-	ARRAY_CAT         // ARRAY_CAT
-	ARRAY_CONTAINS    // ARRAY_CONTAINS
-	ARRAY_POSITION    // ARRAY_POSITION
-	ARRAY_SIZE        // ARRAY_SIZE
-	ASCII             // ASCII
-	ASIN              // ASIN
-	ATAN              // ATAN
-	ATAN2             // ATAN2
-	AVG               // AVG
-	BASE64_DECODE     // BASE64_DECODE
-	BASE64_ENCODE     // BASE64_ENCODE
-	BIT_AND           // BIT_AND
-	BIT_LENGTH        // BIT_LENGTH
-	BIT_NOT           // BIT_NOT
-	BIT_OR            // BIT_OR
-	BIT_XOR           // BIT_XOR
-	BITAGG_AND        // BITAGG_AND
-	BITAGG_OR         // BITAGG_OR
-	BOOLAGG_AND       // BOOLAGG_AND
-	BOOLAGG_OR        // BOOLAGG_OR
-	CASE              // CASE
-	CEIL              // CEIL
-	CHR               // CHR
-	COALESCE          // COALESCE
+	ABS            // ABS
+	ACOS           // ACOS
+	ADDDATE        // ADDDATE
+	ADDTIME        // ADDTIME
+	AES_DECRYPT    // AES_DECRYPT
+	AES_ENCRYPT    // AES_ENCRYPT
+	ANY_VALUE      // ANY_VALUE
+	ARRAY_AGG      // ARRAY_AGG
+	ARRAY_APPEND   // ARRAY_APPEND
+	ARRAY_CAT      // ARRAY_CAT
+	ARRAY_CONTAINS // ARRAY_CONTAINS
+	ARRAY_POSITION // ARRAY_POSITION
+	ARRAY_SIZE     // ARRAY_SIZE
+	ASCII          // ASCII
+	ASIN           // ASIN
+	ATAN           // ATAN
+	ATAN2          // ATAN2
+	AVG            // AVG
+	BASE64_DECODE  // BASE64_DECODE
+	BASE64_ENCODE  // BASE64_ENCODE
+	BIT_AND        // BIT_AND
+	BIT_LENGTH     // BIT_LENGTH
+	BIT_NOT        // BIT_NOT
+	BIT_OR         // BIT_OR
+	BIT_XOR        // BIT_XOR
+	BITAGG_AND     // BITAGG_AND
+	BITAGG_OR      // BITAGG_OR
+	BOOLAGG_AND    // BOOLAGG_AND
+	BOOLAGG_OR     // BOOLAGG_OR
+	CASE           // CASE
+	CEIL           // CEIL
+	CHR            // CHR
+	COALESCE       // COALESCE
+	CONCAT_WS
 	CONTAINS          // CONTAINS
 	CORR              // CORR
 	COS               // COS
@@ -240,14 +241,17 @@ var functionIdRegister = map[string]int32{
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
 	// builtin
+	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
 	"endswith":   ENDSWITH,
 	"findinset":  FINDINSET,
 	"power":      POW,
 	"startswith": STARTSWITH,
 	// variadic functions
+	// whoever edit this, please follow the lexical order
 	"ceil":          CEIL,
 	"ceiling":       CEIL,
+	"concat_ws":     CONCAT_WS,
 	"floor":         FLOOR,
 	"lpad":          LPAD,
 	"pi":            PI,
@@ -256,33 +260,35 @@ var functionIdRegister = map[string]int32{
 	"substr":        SUBSTRING,
 	"substring":     SUBSTRING,
 	"utc_timestamp": UTC_TIMESTAMP,
-	"abs":           ABS,
-	"acos":          ACOS,
-	"bit_length":    BIT_LENGTH,
-	"date":          DATE,
-	"dayofyear":     DAYOFYEAR,
-	"exp":           EXP,
-	"empty":         EMPTY,
-	"length":        LENGTH,
-	"lengthutf8":    LENGTH_UTF8,
-	"ln":            LN,
-	"log":           LOG,
-	"ltrim":         LTRIM,
-	"month":         MONTH,
-	"oct":           OCT,
-	"reverse":       REVERSE,
-	"rtrim":         RTRIM,
-	"sin":           SIN,
-	"sinh":          SINH,
-	"space":         SPACE,
-	"tan":           TAN,
-	"weekday":       WEEKDAY,
-	"year":          YEAR,
-	"extract":       EXTRACT,
-	"iff":           IFF,
-	"date_add":      DATE_ADD,
-	"date_sub":      DATE_SUB,
-	"atan":          ATAN,
-	"cos":           COS,
-	"cot":           COT,
+	// whoever edit this, please follow the lexical order
+	// unary functions
+	"abs":        ABS,
+	"acos":       ACOS,
+	"bit_length": BIT_LENGTH,
+	"date":       DATE,
+	"dayofyear":  DAYOFYEAR,
+	"exp":        EXP,
+	"empty":      EMPTY,
+	"length":     LENGTH,
+	"lengthutf8": LENGTH_UTF8,
+	"ln":         LN,
+	"log":        LOG,
+	"ltrim":      LTRIM,
+	"month":      MONTH,
+	"oct":        OCT,
+	"reverse":    REVERSE,
+	"rtrim":      RTRIM,
+	"sin":        SIN,
+	"sinh":       SINH,
+	"space":      SPACE,
+	"tan":        TAN,
+	"weekday":    WEEKDAY,
+	"year":       YEAR,
+	"extract":    EXTRACT,
+	"iff":        IFF,
+	"date_add":   DATE_ADD,
+	"date_sub":   DATE_SUB,
+	"atan":       ATAN,
+	"cos":        COS,
+	"cot":        COT,
 }
