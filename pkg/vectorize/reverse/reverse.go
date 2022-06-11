@@ -38,17 +38,18 @@ func reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 		// handle with unicode
 		if curLen != 0 {
 			//reverse
-			bytes := xs.Data[cursor : cursor+curLen]
+			input := xs.Data[cursor : cursor+curLen]
+			output := rs.Data[cursor : cursor+curLen]
 			source := 0
 			target := curLen
-			for source < len(bytes) {
-				r, readed := utf8.DecodeRune(bytes[source:])
+			for source < len(input) {
+				r, readed := utf8.DecodeRune(input[source:])
 				if r == utf8.RuneError {
 					return nil
 				}
 
 				p := target - uint32(readed)
-				w := utf8.EncodeRune(rs.Data[p:], r)
+				w := utf8.EncodeRune(output[p:], r)
 				if w == utf8.RuneError {
 					return nil
 				}
