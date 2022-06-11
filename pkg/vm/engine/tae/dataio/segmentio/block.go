@@ -142,6 +142,10 @@ func (bf *blockFile) ReadDeletes(buf []byte) (err error) {
 	return
 }
 
+func (bf *blockFile) GetDeletesFileStat() (stat common.FileInfo) {
+	return bf.deletes.Stat()
+}
+
 func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
 	_, err = bf.indexMeta.Write(buf)
 	return

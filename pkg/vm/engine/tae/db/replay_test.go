@@ -1046,7 +1046,6 @@ func TestReplay7(t *testing.T) {
 	compactBlocks(t, tae, defaultTestDB, schema, true)
 	mergeBlocks(t, tae, defaultTestDB, schema, true)
 	time.Sleep(time.Millisecond * 100)
-	printCheckpointStats(t, tae)
 	// txn, rel := getDefaultRelation(t, tae, schema.Name)
 	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
 	// assert.NoError(t, txn.Commit())
@@ -1059,4 +1058,153 @@ func TestReplay7(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
 	assert.NoError(t, txn.Commit())
+}
+
+func TestReplay8(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows*3+1)
+	bats := compute.SplitBatch(bat, 4)
+
+	tae.createRelAndAppend(bats[0], true)
+	txn, rel := tae.getRelation()
+	v := getSingleSortKeyValue(bats[0], schema, 2)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	window := compute.BatchWindow(bats[0], 2, 3)
+	err = rel.Append(window)
+	assert.NoError(t, err)
+	_ = txn.Rollback()
+
+	tae.restart()
+
+	// Check the total rows by scan
+	txn, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	err = rel.Append(bats[0])
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.NoError(t, txn.Commit())
+
+	// Try to append the delete row and then rollback
+	txn, rel = tae.getRelation()
+	err = rel.Append(window)
+	assert.NoError(t, err)
+	_ = txn.Rollback()
+
+	// Flush the appendable block
+	forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
+
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	err = rel.Append(window)
+	assert.NoError(t, err)
+	_ = txn.Rollback()
+
+	tae.restart()
+
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	err = rel.Append(window)
+	assert.NoError(t, err)
+	tuple3 := compute.BatchWindow(bat, 3, 4)
+	err = rel.Append(tuple3)
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), true)
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+
+	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), true)
+	err = rel.Append(window)
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	err = rel.Append(bats[3])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactBlocks(false)
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
+	err = rel.Append(window)
+	assert.ErrorIs(t, err, data.ErrDuplicate)
+
+	v0_5 := getSingleSortKeyValue(bats[0], schema, 5)
+	filter = handle.NewEQFilter(v0_5)
+	err = rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	v1_5 := getSingleSortKeyValue(bats[1], schema, 5)
+	filter = handle.NewEQFilter(v1_5)
+	err = rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	v2_5 := getSingleSortKeyValue(bats[2], schema, 5)
+	filter = handle.NewEQFilter(v2_5)
+	err = rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	v3_2 := getSingleSortKeyValue(bats[3], schema, 2)
+	filter = handle.NewEQFilter(v3_2)
+	err = rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-4, true)
+	tuple0_5 := compute.BatchWindow(bats[0], 5, 6)
+	err = rel.Append(tuple0_5)
+	assert.NoError(t, err)
+	tuple1_5 := compute.BatchWindow(bats[1], 5, 6)
+	err = rel.Append(tuple1_5)
+	assert.NoError(t, err)
+	tuple2_5 := compute.BatchWindow(bats[2], 5, 6)
+	err = rel.Append(tuple2_5)
+	assert.NoError(t, err)
+	tuple3_2 := compute.BatchWindow(bats[3], 2, 3)
+	err = rel.Append(tuple3_2)
+	assert.NoError(t, err)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
+	_ = txn.Rollback()
+
+	tae.compactABlocks(false)
+	tae.checkpointCatalog()
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-4, true)
+	err = rel.Append(tuple0_5)
+	assert.NoError(t, err)
+	err = rel.Append(tuple1_5)
+	assert.NoError(t, err)
+	err = rel.Append(tuple2_5)
+	assert.NoError(t, err)
+	err = rel.Append(tuple3_2)
+	assert.NoError(t, err)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
+	_ = txn.Rollback()
 }

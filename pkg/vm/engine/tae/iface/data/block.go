@@ -84,6 +84,6 @@ type Block interface {
 	FlushColumnDataClosure(ts uint64, colIdx int, colData *vector.Vector, sync bool) tasks.FuncT
 	ForceCompact() error
 	Destroy() error
-	ReplayData() error
+	ReplayIndex() error
 	Flush()
 }
