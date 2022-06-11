@@ -133,32 +133,6 @@ func (l *logStore) ID() string {
 	return l.nh.ID()
 }
 
-func (l *logStore) GetServiceAddress(nhID string) (string, bool) {
-	r, ok := l.nh.GetNodeHostRegistry()
-	if !ok {
-		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
-	}
-	data, ok := r.GetMeta(nhID)
-	if !ok {
-		return "", false
-	}
-	var md logStoreMeta
-	md.unmarshal(data)
-	return md.serviceAddress, true
-}
-
-func (l *logStore) GetShardInfo(shardID uint64) (dragonboat.ShardView, bool) {
-	r, ok := l.nh.GetNodeHostRegistry()
-	if !ok {
-		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
-	}
-	ci, ok := r.GetShardInfo(shardID)
-	if !ok {
-		return dragonboat.ShardView{}, false
-	}
-	return ci, true
-}
-
 func (l *logStore) StartHAKeeperReplica(replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target) error {
 	l.haKeeperReplicaID = replicaID
