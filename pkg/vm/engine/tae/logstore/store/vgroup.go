@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -60,6 +61,7 @@ func newCompactor(base *syncBase) *compactor {
 	base.checkpointed.RWMutex.RUnlock()
 	c.tidCidMap = base.tidLsnMaps
 	c.tidCidMapMu = base.tidLsnMapmu
+	c.ckpInfoVersion=int(atomic.LoadUint64(&base.syncedVersion))
 	return c
 }
 

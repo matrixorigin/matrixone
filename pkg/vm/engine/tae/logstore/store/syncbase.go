@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -45,6 +46,7 @@ type syncBase struct {
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 	commitCond                   sync.Cond
+	syncedVersion                uint64
 }
 
 type checkpointInfo struct {
@@ -318,6 +320,8 @@ func (base *syncBase) OnReplay(r *replayer) {
 		base.ckpCnt.ids[groupId] = base.checkpointing[groupId].GetCkpCnt()
 	}
 	r.checkpointrange = base.checkpointing
+	base.syncedVersion=uint64(r.ckpVersion)
+	base.tidLsnMaps=r.tidlsnMap
 }
 
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {
@@ -366,6 +370,8 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 			base.ckpmu.Unlock()
 		}
 	case entry.GTUncommit:
+	case entry.GTInternal:
+		atomic.StoreUint64(&base.syncedVersion,uint64(v.PostCommitVersion))
 	default:
 		base.tidLsnMapmu.Lock()
 		if v.Group >= entry.GTCustomizedStart {

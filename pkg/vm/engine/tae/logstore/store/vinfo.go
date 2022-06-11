@@ -157,9 +157,9 @@ func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 			toDelete = false
 		}
 	}
-	if c.ckpInfoVersion < info.ckpInfoVersion {
-		c.ckpInfoVersion = info.ckpInfoVersion
-	}
+	// if c.ckpInfoVersion < info.ckpInfoVersion {
+	// 	c.ckpInfoVersion = info.ckpInfoVersion
+	// }
 	return
 }
 
