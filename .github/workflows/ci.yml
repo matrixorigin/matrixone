@@ -17,6 +17,7 @@ jobs:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: Build Plan2-TAE on CentOS/x64
+    timeout-minutes: 30
     env:
       #Job-Status: 2-uncertain, 1-fail, 0-success
       Job-Status: 2
@@ -90,7 +91,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           mv log head-log
           mv report head-report
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; fi
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; echo "Job-Status=1" >> $GITHUB_ENV; exit 1; fi
 
 
       - uses: actions/checkout@v2
@@ -121,7 +122,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           sleep 60s
-          ./run.sh
+          ./run.sh 2>&1
 
       - name: BVT Compare
         if: ${{ env.Job-Status }} == 2
@@ -158,6 +159,7 @@ jobs:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
     name: Build Plan2-AOE on CentOS/x64
+    timeout-minutes: 30
     env:
       #Job-Status: 2-uncertain, 1-fail, 0-success
       Job-Status: 2
@@ -221,7 +223,7 @@ jobs:
         run: |
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh  2>&1
+          ./run.sh -g 2>&1
 
       - name: Stop Current MO-Server
         if: ${{ env.Job-Status }} == 2
@@ -231,7 +233,7 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-tester
           mv log head-log
           mv report head-report
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; fi
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; echo "Job-Status=1" >> $GITHUB_ENV; exit 1; fi
 
 
       - uses: actions/checkout@v2
@@ -262,7 +264,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           sleep 60s
-          ./run.sh
+          ./run.sh -g 2>&1
 
       - name: BVT Compare
         if: ${{ env.Job-Status }} == 2

@@ -14,16 +14,21 @@
 
 package month
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 var (
-	DateToMonth     func([]types.Date, []uint8) []uint8
-	DatetimeToMonth func([]types.Datetime, []uint8) []uint8
+	DateToMonth       func([]types.Date, []uint8) []uint8
+	DatetimeToMonth   func([]types.Datetime, []uint8) []uint8
+	DateStringToMonth func(*types.Bytes, *nulls.Nulls, []uint8) []uint8
 )
 
 func init() {
 	DateToMonth = dataToMonth
 	DatetimeToMonth = datetimeToMonth
+	DateStringToMonth = dateStringToMonth
 }
 
 func dataToMonth(xs []types.Date, rs []uint8) []uint8 {
@@ -36,6 +41,21 @@ func dataToMonth(xs []types.Date, rs []uint8) []uint8 {
 func datetimeToMonth(xs []types.Datetime, rs []uint8) []uint8 {
 	for i, x := range xs {
 		rs[i] = x.Month()
+	}
+	return rs
+}
+
+func dateStringToMonth(xs *types.Bytes, ns *nulls.Nulls, rs []uint8) []uint8 {
+	for i := range xs.Lengths {
+		str := string(xs.Get(int64(i)))
+		d, e := types.ParseDatetime(str)
+		if e != nil {
+			// set null
+			nulls.Add(ns, uint64(i))
+			rs[i] = 0
+			continue
+		}
+		rs[i] = d.Month()
 	}
 	return rs
 }

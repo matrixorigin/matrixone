@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package operator
 
 import (
@@ -144,12 +158,12 @@ func TestCwFn1(t *testing.T) {
 		},
 
 		{
-			info: "when a = 1 then null, when a = 2 then null, else null", proc: testutil.NewProc(),
+			info: "when a = 1 then 10, when a = 2 then true, else null", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeBoolVector([]bool{false, false, false, false}),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarInt64(10, 4),
 				testutil.MakeBoolVector([]bool{false, false, false, false}),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarBool(true, 4),
 				testutil.MakeScalarNull(4),
 			},
 			match: false,
@@ -186,7 +200,7 @@ func TestCwFn1(t *testing.T) {
 				require.True(t, b)
 			}
 
-			got, ergot := CwFn1[int64](tc.vs, tc.proc)
+			got, ergot := cwGeneral[int64](tc.vs, tc.proc, types.Type{Oid: types.T_int64})
 			if tc.err {
 				require.Errorf(t, ergot, fmt.Sprintf("case '%d' expected error, but no error happens", i))
 			} else {
