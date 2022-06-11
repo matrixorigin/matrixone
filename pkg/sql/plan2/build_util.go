@@ -1123,6 +1123,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			Corr: &plan.CorrColRef{
 				NodeId: item.Corr.GetNodeId(),
 				ColPos: item.Corr.GetColPos(),
+				RelPos: item.Corr.GetRelPos(),
+				Depth:  item.Corr.GetDepth(),
 			},
 		}
 	case *plan.Expr_T:
