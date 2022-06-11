@@ -39,16 +39,18 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	astStr := tree.String(astExpr, dialect.MYSQL)
 
-	if colPos, ok := b.ctx.groupByAst[astStr]; ok {
-		return &plan.Expr{
-			Typ: b.ctx.groups[colPos].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: b.ctx.groupTag,
-					ColPos: colPos,
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.groupByAst[astStr]; ok {
+			return &plan.Expr{
+				Typ: b.ctx.groups[colPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: b.ctx.groupTag,
+						ColPos: colPos,
+					},
 				},
-			},
-		}, nil
+			}, nil
+		}
 	}
 
 	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
