@@ -15,17 +15,17 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-var GtintBool = []bool{false, false, false, false, true, false, false, false, true, true, false, true, true, false, false, false}
+var GtintBool = []bool{false, false, false, false, true, false, false, false, true, true, false, false, false, false, false, false}
 var GtintNullPos = []int{3, 7, 11, 12, 13, 14, 15}
 var GtintNotNullPos = []int{0, 1, 2, 4, 5, 6, 8, 9, 10}
 
-var GtuintBool = []bool{false, false, false, true, false, true, false, false, false}
+var GtuintBool = []bool{false, false, false, true, false, false, false, false, false}
 var GtuintNullPos = []int{2, 5, 6, 7, 8}
 var GtuintNotNullPos = []int{0, 1, 3, 4}
 
-var GtboolBool = []bool{false, true, true, false, false, false, false, false, false}
+var GtboolBool = []bool{false, true, false, false, false, false, false, false, false}
 
-var GtstringBool = []bool{false, false, false, true, true, false, false, true, true, true, false, true, false, false, false, false}
+var GtstringBool = []bool{false, false, false, false, true, false, false, false, true, true, false, false, false, false, false, false}
 
 type testGtFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
