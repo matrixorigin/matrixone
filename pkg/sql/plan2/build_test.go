@@ -385,11 +385,12 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 	sqls := []string{
 		"SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10, 20",
 		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC", //test alias
-		"SELECT NATION.N_NAME FROM NATION",            //test alias
-		"SELECT * FROM NATION",                        //test star
-		"SELECT a.* FROM NATION a",                    //test star
-		"SELECT count(*) FROM NATION",                 //test star
-		"SELECT count(*) FROM NATION group by N_NAME", //test star
+		"SELECT NATION.N_NAME FROM NATION",                                       //test alias
+		"SELECT * FROM NATION",                                                   //test star
+		"SELECT a.* FROM NATION a",                                               //test star
+		"SELECT count(*) FROM NATION",                                            //test star
+		"SELECT count(*) FROM NATION group by N_NAME",                            //test star
+		"SELECT N_NAME, count(distinct N_REGIONKEY) FROM NATION group by N_NAME", //test distinct agg function
 		"SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10", //test agg
 		"SELECT DISTINCT N_NAME FROM NATION", //test distinct
 		"select sum(n_nationkey) as s from nation order by s",

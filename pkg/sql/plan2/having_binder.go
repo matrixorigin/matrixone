@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
 func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
@@ -84,6 +85,9 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+		expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
+	}
 	b.insideAgg = false
 
 	if err != nil {
