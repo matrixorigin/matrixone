@@ -173,6 +173,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 	if err != nil {
 		return err
 	}
+	//TODO use multiple ReadAt
 	content, err := io.ReadAll(io.LimitReader(f, int64(readLen)))
 	if err != nil {
 		return err
@@ -205,7 +206,11 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 			*ptr = io.NopCloser(bytes.NewReader(data))
 		}
 		if setData {
-			vector.Entries[i].Data = data
+			if len(entry.Data) < entry.Size {
+				vector.Entries[i].Data = data
+			} else {
+				copy(entry.Data, data)
+			}
 		}
 	}
 

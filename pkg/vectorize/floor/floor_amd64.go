@@ -15,6 +15,8 @@
 package floor
 
 import (
+	"math"
+
 	"golang.org/x/sys/cpu"
 )
 
@@ -33,12 +35,9 @@ func init() {
 func floorFloat32Avx2(xs []float32, rs []float32, digits int64) []float32 {
 	if digits == 0 {
 		float32FloorAvx2AsmZero(xs, rs)
-	} else if digits > 0 {
-		scale := float32(ScaleTable[digits])
-		float32FloorAvx2Asm(xs, rs, scale)
 	} else {
-		scale := float32(ScaleTable[-digits])
-		float32FloorAvx2Asm(xs, rs, 1/scale)
+		scale := float32(math.Pow10(int(digits)))
+		float32FloorAvx2Asm(xs, rs, scale)
 	}
 	return rs
 }
@@ -46,12 +45,9 @@ func floorFloat32Avx2(xs []float32, rs []float32, digits int64) []float32 {
 func floorFloat64Avx2(xs []float64, rs []float64, digits int64) []float64 {
 	if digits == 0 {
 		float64FloorAvx2AsmZero(xs, rs)
-	} else if digits > 0 {
-		scale := float64(ScaleTable[digits])
-		float64FloorAvx2Asm(xs, rs, scale)
 	} else {
-		scale := float64(ScaleTable[-digits])
-		float64FloorAvx2Asm(xs, rs, 1/scale)
+		scale := math.Pow10(int(digits))
+		float64FloorAvx2Asm(xs, rs, scale)
 	}
 	return rs
 }

@@ -424,7 +424,7 @@ func EqDataValue[T DataValue](vectors []*vector.Vector, proc *process.Process) (
 	dataID := GetDatatypeID[T]()
 	vec, err := EqFuncMap[(lt*3+rt)*dataTypeNum+dataID](lv, rv, proc)
 	if err != nil {
-		return nil, errors.New("Equal fucntion:" + err.Error())
+		return nil, errors.New("Equal function:" + err.Error())
 	}
 	return vec, nil
 }

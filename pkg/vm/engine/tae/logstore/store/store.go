@@ -542,7 +542,7 @@ func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 		syncedLsn := s.GetCurrSeqNum(groupId)
 		if lsn <= syncedLsn {
 			for i := 0; i < 10; i++ {
-				// logutil.Infof("load retry %d-%d", groupId, lsn)
+				logutil.Infof("load retry %d-%d", groupId, lsn)
 				s.syncBase.commitCond.L.Lock()
 				ver, err = s.GetVersionByGLSN(groupId, lsn)
 				if err == nil {

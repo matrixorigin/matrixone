@@ -17,6 +17,7 @@ package segmentio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"unsafe"
 )
@@ -272,6 +273,10 @@ func (l *Log) Append(file *DriverFile) error {
 		return err
 	}
 	if file.snode.state == REMOVE {
+		if file.snode.logExtents.length == 0 {
+			logutil.Infof("remove file: %v, but it is empty", file.name)
+			return nil
+		}
 		err = l.CoverState(uint32(file.snode.logExtents.offset+LOG_START), REMOVE)
 		if err != nil {
 			return err
