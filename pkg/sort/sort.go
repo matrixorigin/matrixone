@@ -96,7 +96,7 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 			int64s.Sort(*(*[]int64)(unsafe.Pointer(&vs)), os)
 		}
 	case types.T_timestamp:
-		vs := vec.Col.([]types.Datetime)
+		vs := vec.Col.([]types.Timestamp)
 		if desc {
 			dint64s.Sort(*(*[]int64)(unsafe.Pointer(&vs)), os)
 		} else {
