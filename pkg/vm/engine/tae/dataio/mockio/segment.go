@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
 )
 
 var SegmentFactory file.SegmentFactory
@@ -68,10 +67,6 @@ type segmentFile struct {
 }
 
 func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
-	panic(any("implement me"))
-}
-
-func (sf *segmentFile) GetSegmentFile() *segment.Segment {
 	panic(any("implement me"))
 }
 

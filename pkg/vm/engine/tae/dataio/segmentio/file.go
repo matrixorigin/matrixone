@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segment
+package segmentio
 
 import (
 	"bytes"
@@ -21,33 +21,33 @@ import (
 	"io"
 )
 
-type BlockFile struct {
-	snode   *Inode
-	name    string
-	segment *Segment
+type DriverFile struct {
+	snode  *Inode
+	name   string
+	driver *Driver
 }
 
-func (b *BlockFile) GetSegement() *Segment {
-	return b.segment
+func (b *DriverFile) GetSegement() *Driver {
+	return b.driver
 }
 
-func (b *BlockFile) GetInode() *Inode {
+func (b *DriverFile) GetInode() *Inode {
 	b.snode.mutex.RLock()
 	defer b.snode.mutex.RUnlock()
 	return b.snode
 }
 
-func (b *BlockFile) SetRows(rows uint32) {
+func (b *DriverFile) SetRows(rows uint32) {
 	b.snode.rows = rows
 }
 
-func (b *BlockFile) GetName() string {
+func (b *DriverFile) GetName() string {
 	return b.name
 }
 
-func (b *BlockFile) Append(offset uint64, data []byte, originSize uint32) (err error) {
-	cbufLen := uint32(p2roundup(uint64(len(data)), uint64(b.segment.super.blockSize)))
-	_, err = b.segment.segFile.WriteAt(data, int64(offset))
+func (b *DriverFile) Append(offset uint64, data []byte, originSize uint32) (err error) {
+	cbufLen := uint32(p2roundup(uint64(len(data)), uint64(b.driver.super.blockSize)))
+	_, err = b.driver.segFile.WriteAt(data, int64(offset))
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func extentsRemove(extents *[]Extent, vals []Extent) {
 	}
 }
 
-func (b *BlockFile) repairExtent(offset, fOffset, length uint32) []Extent {
+func (b *DriverFile) repairExtent(offset, fOffset, length uint32) []Extent {
 	num := 0
 	b.snode.mutex.Lock()
 	defer b.snode.mutex.Unlock()
@@ -175,7 +175,7 @@ func (b *BlockFile) repairExtent(offset, fOffset, length uint32) []Extent {
 	return free
 }
 
-func (b *BlockFile) Update(offset uint64, data []byte, fOffset uint32) ([]Extent, error) {
+func (b *DriverFile) Update(offset uint64, data []byte, fOffset uint32) ([]Extent, error) {
 	var (
 		err     error
 		sbuffer bytes.Buffer
@@ -183,16 +183,16 @@ func (b *BlockFile) Update(offset uint64, data []byte, fOffset uint32) ([]Extent
 	if err = binary.Write(&sbuffer, binary.BigEndian, data); err != nil {
 		return nil, err
 	}
-	cbufLen := uint32(p2roundup(uint64(sbuffer.Len()), uint64(b.segment.super.blockSize)))
+	cbufLen := uint32(p2roundup(uint64(sbuffer.Len()), uint64(b.driver.super.blockSize)))
 	//if cbufLen > uint32(sbuffer.Len()) {
 	//zero := make([]byte, cbufLen-uint32(sbuffer.Len()))
 	//binary.Write(&sbuffer, binary.BigEndian, zero)
 	//}
-	_, err = b.segment.segFile.Seek(int64(offset), io.SeekStart)
+	_, err = b.driver.segFile.Seek(int64(offset), io.SeekStart)
 	if err != nil {
 		return nil, err
 	}
-	_, err = b.segment.segFile.Write(sbuffer.Bytes())
+	_, err = b.driver.segFile.Write(sbuffer.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -200,12 +200,12 @@ func (b *BlockFile) Update(offset uint64, data []byte, fOffset uint32) ([]Extent
 	return b.repairExtent(uint32(offset), fOffset, cbufLen), nil
 }
 
-func (b *BlockFile) GetExtents() *[]Extent {
+func (b *DriverFile) GetExtents() *[]Extent {
 	extents := &b.snode.extents
 	return extents
 }
 
-func (b *BlockFile) Read(data []byte) (n int, err error) {
+func (b *DriverFile) Read(data []byte) (n int, err error) {
 	bufLen := len(data)
 	if bufLen == 0 {
 		return 0, nil
@@ -232,7 +232,7 @@ func (b *BlockFile) Read(data []byte) (n int, err error) {
 	return n, nil
 }
 
-func (b *BlockFile) ReadExtent(offset, length uint32, data []byte) (uint32, error) {
+func (b *DriverFile) ReadExtent(offset, length uint32, data []byte) (uint32, error) {
 	remain := uint32(b.snode.size) - offset - length
 	num := 0
 	for _, extent := range b.snode.extents {
@@ -256,7 +256,7 @@ func (b *BlockFile) ReadExtent(offset, length uint32, data []byte) (uint32, erro
 			readOne = b.snode.extents[num].length
 		}
 		buf = buf[read : read+readOne]
-		_, err := b.segment.segFile.ReadAt(buf, int64(b.snode.extents[num].offset)+int64(offset))
+		_, err := b.driver.segFile.ReadAt(buf, int64(b.snode.extents[num].offset)+int64(offset))
 		if err != nil && err != io.EOF {
 			return 0, err
 		}

@@ -16,11 +16,11 @@ package compile2
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
@@ -178,10 +178,7 @@ func constructJoin(n *plan.Node, proc *process.Process) *join.Argument {
 		conds[1] = make([]join.Condition, len(n.OnList))
 	}
 	for i, expr := range n.OnList {
-		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
-		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
-		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
-		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
 	return &join.Argument{
 		IsPreBuild: false,
@@ -205,10 +202,7 @@ func constructSemi(n *plan.Node, proc *process.Process) *semi.Argument {
 		conds[1] = make([]semi.Condition, len(n.OnList))
 	}
 	for i, expr := range n.OnList {
-		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
-		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
-		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
-		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
 	return &semi.Argument{
 		IsPreBuild: false,
@@ -228,10 +222,7 @@ func constructLeft(n *plan.Node, proc *process.Process) *left.Argument {
 		conds[1] = make([]left.Condition, len(n.OnList))
 	}
 	for i, expr := range n.OnList {
-		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
-		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
-		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
-		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
 	return &left.Argument{
 		IsPreBuild: false,
@@ -263,10 +254,7 @@ func constructComplement(n *plan.Node, proc *process.Process) *complement.Argume
 		conds[1] = make([]complement.Condition, len(n.OnList))
 	}
 	for i, expr := range n.OnList {
-		lpos, ltyp, rpos, rtyp := constructJoinCondition(expr)
-		conds[0][i].Pos, conds[1][i].Pos = lpos, rpos
-		conds[0][i].Typ, conds[1][i].Typ = ltyp, rtyp
-		conds[0][i].Scale, conds[1][i].Scale = ltyp.Scale, rtyp.Scale
+		conds[0][i].Expr, conds[1][i].Expr = constructJoinCondition(expr)
 	}
 	return &complement.Argument{
 		IsPreBuild: false,
@@ -313,13 +301,16 @@ func constructGroup(n *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
+			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+			f.F.Func.Obj = int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 			fun, err := function.GetFunctionByID(f.F.Func.GetObj())
 			if err != nil {
 				panic(err)
 			}
 			aggs[i] = aggregate.Aggregate{
-				Op: fun.AggregateInfo,
-				E:  f.F.Args[0],
+				E:    f.F.Args[0],
+				Dist: distinct,
+				Op:   fun.AggregateInfo,
 			}
 		}
 	}
@@ -395,50 +386,32 @@ func constructJoinResult(expr *plan.Expr) (int32, int32) {
 	return e.Col.RelPos, e.Col.ColPos
 }
 
-func constructJoinCondition(expr *plan.Expr) (int32, types.Type, int32, types.Type) {
+func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
 	}
-	left, ok := e.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok {
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
+	if exprRelPos(e.F.Args[0]) == 1 {
+		return e.F.Args[1], e.F.Args[0]
 	}
-	right, ok := e.F.Args[1].Expr.(*plan.Expr_Col)
-	if !ok {
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
-	}
-	if left.Col.RelPos == 0 {
-		return left.Col.ColPos, types.Type{
-				Oid:       types.T(e.F.Args[0].Typ.Id),
-				Size:      e.F.Args[0].Typ.Size,
-				Width:     e.F.Args[0].Typ.Width,
-				Scale:     e.F.Args[0].Typ.Scale,
-				Precision: e.F.Args[0].Typ.Precision,
-			}, right.Col.ColPos, types.Type{
-				Oid:       types.T(e.F.Args[1].Typ.Id),
-				Size:      e.F.Args[1].Typ.Size,
-				Width:     e.F.Args[1].Typ.Width,
-				Scale:     e.F.Args[1].Typ.Scale,
-				Precision: e.F.Args[1].Typ.Precision,
-			}
-	}
-	return right.Col.ColPos, types.Type{
-			Oid:       types.T(e.F.Args[1].Typ.Id),
-			Size:      e.F.Args[1].Typ.Size,
-			Width:     e.F.Args[1].Typ.Width,
-			Scale:     e.F.Args[1].Typ.Scale,
-			Precision: e.F.Args[1].Typ.Precision,
-		}, left.Col.ColPos, types.Type{
-			Oid:       types.T(e.F.Args[0].Typ.Id),
-			Size:      e.F.Args[0].Typ.Size,
-			Width:     e.F.Args[0].Typ.Width,
-			Scale:     e.F.Args[0].Typ.Scale,
-			Precision: e.F.Args[0].Typ.Precision,
-		}
+	return e.F.Args[0], e.F.Args[1]
 }
 
 func supportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL
+}
+
+func exprRelPos(expr *plan.Expr) int32 {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col.RelPos
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			if relPos := exprRelPos(e.F.Args[i]); relPos >= 0 {
+				return relPos
+			}
+		}
+	}
+	return -1
 }

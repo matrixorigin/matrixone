@@ -22,7 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
@@ -128,7 +128,7 @@ func TestGCTable(t *testing.T) {
 
 	dbEntry, _ := tae.Catalog.GetDatabaseByID(db.GetID())
 	now := time.Now()
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return dbEntry.CoarseTableCnt() == 0
 	})
 	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
@@ -149,7 +149,7 @@ func TestGCTable(t *testing.T) {
 
 	dbEntry, _ = tae.Catalog.GetDatabaseByID(db.GetID())
 	now = time.Now()
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return dbEntry.CoarseTableCnt() == 0
 	})
 	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
@@ -169,7 +169,7 @@ func TestGCTable(t *testing.T) {
 
 	// 6. Drop the table
 	dropRelation(t, tae, "db", schema.Name)
-	testutils.WaitExpect(200, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return dbEntry.CoarseTableCnt() == 0
 	})
 	names = getSegmentFileNames(tae)
@@ -219,6 +219,9 @@ func TestGCDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
+	dbCnt := tae.Catalog.CoarseDBCnt()
+	tableCnt := tae.Catalog.CoarseTableCnt()
+	columnCnt := tae.Catalog.CoarseColumnCnt()
 
 	schema1 := catalog.MockSchema(13, 12)
 	schema1.BlockMaxRows = 10
@@ -230,7 +233,7 @@ func TestGCDB(t *testing.T) {
 	createRelation(t, tae, "db", schema1, true)
 	createRelation(t, tae, "db", schema2, false)
 	dropDB(t, tae, "db")
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return tae.Catalog.CoarseDBCnt() == 1
 	})
 	printCheckpointStats(t, tae)
@@ -318,4 +321,7 @@ func TestGCDB(t *testing.T) {
 	assert.Equal(t, 0, len(names))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	printCheckpointStats(t, tae)
+	assert.Equal(t, dbCnt, tae.Catalog.CoarseDBCnt())
+	assert.Equal(t, tableCnt, tae.Catalog.CoarseTableCnt())
+	assert.Equal(t, columnCnt, tae.Catalog.CoarseColumnCnt())
 }

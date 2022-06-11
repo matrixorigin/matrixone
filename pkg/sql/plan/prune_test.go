@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -50,13 +51,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.UnaryExtend{
 					Op: overload.Not,
 					E: &extend.ValueExtend{
-						V: testutil.MakeInt64Vector([]int64{1}, 0),
+						V: testutil.MakeInt64Vector([]int64{1}, nil),
 					},
 				},
 				isProjection: true,
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt8Vector([]int8{0}, 0),
+				V: testutil.MakeInt8Vector([]int8{0}, nil),
 			},
 		},
 		{
@@ -66,13 +67,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.UnaryExtend{
 					Op: overload.Not,
 					E: &extend.ValueExtend{
-						V: testutil.MakeInt64Vector([]int64{1}, 0),
+						V: testutil.MakeInt64Vector([]int64{1}, nil),
 					},
 				},
 				isProjection: false,
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 0),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 		{
@@ -82,13 +83,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.UnaryExtend{
 					Op: overload.UnaryMinus,
 					E: &extend.ValueExtend{
-						V: testutil.MakeInt64Vector([]int64{1}, 0),
+						V: testutil.MakeInt64Vector([]int64{1}, nil),
 					},
 				},
 				isProjection: false,
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{-1}, 0),
+				V: testutil.MakeInt64Vector([]int64{-1}, nil),
 			},
 		},
 		{
@@ -98,13 +99,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.UnaryExtend{
 					Op: overload.UnaryMinus,
 					E: &extend.ValueExtend{
-						V: testutil.MakeInt64Vector([]int64{-1}, 0),
+						V: testutil.MakeInt64Vector([]int64{-1}, nil),
 					},
 				},
 				isProjection: false,
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 0),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 		// 2. parenExtend
@@ -113,11 +114,11 @@ func Test_build_pruneExtend(t *testing.T) {
 			fields: fields{},
 			args: args{
 				e: &extend.ParenExtend{E: &extend.ValueExtend{
-					V: testutil.MakeInt8Vector([]int8{1}, 0),
+					V: testutil.MakeInt8Vector([]int8{1}, nil),
 				}},
 			},
 			want: &extend.ParenExtend{E: &extend.ValueExtend{
-				V: testutil.MakeInt8Vector([]int8{1}, 0),
+				V: testutil.MakeInt8Vector([]int8{1}, nil),
 			}},
 		},
 		// 3. binaryExtend
@@ -127,12 +128,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Or,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 0),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 		{
@@ -142,10 +143,10 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.Or,
 					Left:  &extend.Attribute{Name: "a", Type: 0},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
-			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 		},
 		{
 			name:   "binary_or_2",
@@ -153,11 +154,11 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Or,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 					Right: &extend.Attribute{Name: "a", Type: 0},
 				},
 			},
-			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 		},
 		{
 			name:   "binary_or_3",
@@ -165,7 +166,7 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Or,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, nil)},
 					Right: &extend.Attribute{Name: "a", Type: 0},
 				},
 			},
@@ -178,7 +179,7 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.Or,
 					Left:  &extend.Attribute{Name: "a", Type: 0},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, nil)},
 				},
 			},
 			want: &extend.Attribute{Name: "a", Type: 0},
@@ -190,12 +191,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 0),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 		{
@@ -205,7 +206,7 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
 					Left:  &extend.Attribute{Name: "a", Type: 0},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.Attribute{Name: "a", Type: 0},
@@ -217,10 +218,10 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
 					Left:  &extend.Attribute{Name: "a", Type: 0},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, nil)},
 				},
 			},
-			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, 0)},
+			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, nil)},
 		},
 		{
 			name:   "binary_and_3",
@@ -228,11 +229,11 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, nil)},
 					Right: &extend.Attribute{Name: "a", Type: 0},
 				},
 			},
-			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, 0)},
+			want: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{0}, nil)},
 		},
 		{
 			name:   "binary_and_4",
@@ -240,7 +241,7 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 					Right: &extend.Attribute{Name: "a", Type: 0},
 				},
 			},
@@ -252,7 +253,7 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
-					Left:  &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{1}, nil)},
 					Right: &extend.Attribute{Name: "a", Type: 0},
 				},
 			},
@@ -265,7 +266,7 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
 					Left:  &extend.Attribute{Name: "a", Type: 0},
-					Right: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{1}, nil)},
 				},
 			},
 			want: &extend.Attribute{Name: "a", Type: 0},
@@ -277,10 +278,10 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
 					Left:  &extend.Attribute{Name: "a", Type: 0},
-					Right: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, nil)},
 				},
 			},
-			want: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, 0)},
+			want: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, nil)},
 		},
 		{
 			name:   "binary_and_8",
@@ -288,11 +289,11 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.And,
-					Left:  &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, nil)},
 					Right: &extend.Attribute{Name: "a", Type: 0},
 				},
 			},
-			want: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, 0)},
+			want: &extend.ValueExtend{V: testutil.MakeFloat64Vector([]float64{0}, nil)},
 		},
 
 		{
@@ -301,12 +302,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.EQ,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 1),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 		{
@@ -316,13 +317,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.EQ,
 					Left:  &extend.Attribute{Name: "a", Type: types.T_int8},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_int8},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -332,13 +333,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.EQ,
 					Left:  &extend.Attribute{Name: "a", Type: types.T_int16},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_int16},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -348,13 +349,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.EQ,
 					Left:  &extend.Attribute{Name: "a", Type: types.T_int32},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_int32},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -364,13 +365,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.EQ,
 					Left:  &extend.Attribute{Name: "a", Type: types.T_int64},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_int64},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -380,13 +381,13 @@ func Test_build_pruneExtend(t *testing.T) {
 				e: &extend.BinaryExtend{
 					Op:    overload.EQ,
 					Left:  &extend.Attribute{Name: "a", Type: types.T_uint8},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_uint8},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 
@@ -396,12 +397,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.LT,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{0}, 1),
+				V: testutil.MakeInt64Vector([]int64{0}, nil),
 			},
 		},
 		{
@@ -410,12 +411,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.LE,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{0}, 1),
+				V: testutil.MakeInt64Vector([]int64{0}, nil),
 			},
 		},
 		{
@@ -424,12 +425,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.GT,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 1),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 		{
@@ -438,12 +439,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.GE,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 1),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 		{
@@ -452,12 +453,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.NE,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{0}, 1),
+				V: testutil.MakeInt64Vector([]int64{0}, nil),
 			},
 		},
 		{
@@ -466,12 +467,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Div,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{4}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{4}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeFloat64Vector([]float64{2}, 1),
+				V: testutil.MakeFloat64Vector([]float64{2}, nil),
 			},
 		},
 		{
@@ -480,12 +481,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Mod,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{5}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{3}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{5}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{3}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{2}, 1),
+				V: testutil.MakeInt64Vector([]int64{2}, nil),
 			},
 		},
 		{
@@ -494,12 +495,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Mult,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{2}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{2}, 1),
+				V: testutil.MakeInt64Vector([]int64{2}, nil),
 			},
 		},
 		{
@@ -508,12 +509,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Plus,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{2}, 1),
+				V: testutil.MakeInt64Vector([]int64{2}, nil),
 			},
 		},
 		{
@@ -522,12 +523,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Minus,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{0}, 1),
+				V: testutil.MakeInt64Vector([]int64{0}, nil),
 			},
 		},
 		{
@@ -536,12 +537,12 @@ func Test_build_pruneExtend(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.Like,
-					Left:  &extend.ValueExtend{V: testutil.MakeStringVector([]string{"123"}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeStringVector([]string{"123"}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeVarcharVector([]string{"123"}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeVarcharVector([]string{"123"}, nil)},
 				},
 			},
 			want: &extend.ValueExtend{
-				V: testutil.MakeInt64Vector([]int64{1}, 1),
+				V: testutil.MakeInt64Vector([]int64{1}, nil),
 			},
 		},
 	}
@@ -561,7 +562,9 @@ func Test_build_pruneExtend(t *testing.T) {
 			if err != nil && tt.wantErr {
 				return
 			}
-			if !reflect.DeepEqual(got, tt.want) {
+			s1 := strings.TrimSpace(tt.want.String())
+			s2 := strings.TrimSpace(got.String())
+			if s1 != s2 {
 				t.Errorf("pruneExtend() got = %v, want %v", got, tt.want)
 			}
 		})
@@ -591,14 +594,14 @@ func Test_logicInverse(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.EQ,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.NE,
-				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -606,14 +609,14 @@ func Test_logicInverse(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.NE,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
-				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -621,14 +624,14 @@ func Test_logicInverse(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.GE,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.LT,
-				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -636,14 +639,14 @@ func Test_logicInverse(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.LT,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.GE,
-				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -651,14 +654,14 @@ func Test_logicInverse(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.LE,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.GT,
-				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{
@@ -666,14 +669,14 @@ func Test_logicInverse(t *testing.T) {
 			args: args{
 				e: &extend.BinaryExtend{
 					Op:    overload.GT,
-					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.BinaryExtend{
 				Op:    overload.LE,
-				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+				Left:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		// 3. unaryExtend
@@ -682,12 +685,12 @@ func Test_logicInverse(t *testing.T) {
 			args: args{
 				e: &extend.UnaryExtend{
 					Op: overload.UnaryMinus,
-					E:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+					E:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 				},
 			},
 			want: &extend.UnaryExtend{
 				Op: overload.UnaryMinus,
-				E:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
+				E:  &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, nil)},
 			},
 		},
 		{

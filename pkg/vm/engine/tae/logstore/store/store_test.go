@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"math/rand"
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,7 @@ func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
 	assert.Nil(t, err)
 	err = e.WaitDone()
 	assert.Nil(t, err)
+	e.Free()
 
 	txnInfo := &entry.Info{
 		Group: 11,
@@ -65,6 +67,7 @@ func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
 	cmtLsn, err := s.AppendEntry(11, e)
 	assert.Nil(t, err)
 	assert.Nil(t, e.WaitDone())
+	e.Free()
 
 	cmd := entry.CommandInfo{
 		Size:       2,
@@ -85,7 +88,7 @@ func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
 	_, err = s.AppendEntry(entry.GTCKp, e)
 	assert.Nil(t, err)
 	assert.Nil(t, e.WaitDone())
-
+	e.Free()
 }
 
 // uncommit, commit, ckp  vf1
@@ -187,6 +190,7 @@ func TestAddrVersion(t *testing.T) {
 		assert.Nil(t, err)
 		err := e.WaitDone()
 		assert.Nil(t, err)
+		e.Free()
 	}
 
 	testutils.WaitExpect(4000, func() bool {
@@ -229,6 +233,7 @@ func TestStore(t *testing.T) {
 				err := e.WaitDone()
 				assert.Nil(t, err)
 				v := e.GetInfo()
+				e.Free()
 				if v != nil {
 					info := v.(*entry.Info)
 					t.Logf("group-%d", info.Group)
@@ -386,6 +391,7 @@ func TestPartialCkp(t *testing.T) {
 	assert.Nil(t, err)
 	err = uncommit.WaitDone()
 	assert.Nil(t, err)
+	uncommit.Free()
 	testutils.WaitExpect(400, func() bool {
 		_, err = s.Load(entry.GTUncommit, lsn)
 		return err == nil
@@ -458,6 +464,11 @@ func TestPartialCkp(t *testing.T) {
 	err = anotherEntry.WaitDone()
 	assert.Nil(t, err)
 
+	commit.Free()
+	ckp1.Free()
+	ckp2.Free()
+	anotherEntry.Free()
+
 	err = s.TryCompact()
 	assert.Nil(t, err)
 	_, err = s.Load(entry.GTUncommit, lsn)
@@ -490,6 +501,7 @@ func TestReplay(t *testing.T) {
 			case e := <-ch:
 				info := e.GetInfo()
 				err := e.WaitDone()
+				e.Free()
 				assert.Nil(t, err)
 				if info != nil {
 					groupNo := info.(*entry.Info).Group
@@ -668,12 +680,9 @@ func TestLoad(t *testing.T) {
 				assert.Nil(t, err)
 				infoin := e.entry.GetInfo()
 				t.Logf("entry is %s", e.entry.GetPayload())
+				e.entry.Free()
 				if infoin != nil {
 					info := infoin.(*entry.Info)
-					testutils.WaitExpect(400, func() bool {
-						_, err = s.Load(info.Group, e.lsn)
-						return err == nil
-					})
 					_, err = s.Load(info.Group, e.lsn)
 					assert.Nil(t, err)
 					t.Logf("synced %d", s.GetSynced(info.Group))
@@ -832,17 +841,8 @@ func TestLoad(t *testing.T) {
 	}
 	err = s.Replay(a)
 	assert.Nil(t, err)
-	// r := newReplayer(a)
-	// o := &noopObserver{}
-	// err = s.file.Replay(r.replayHandler, o)
-	// if err != nil {
-	// 	fmt.Printf("err is %v", err)
-	// }
-	// r.Apply()
 
 	for _, e := range ch2 {
-		err := e.entry.WaitDone()
-		assert.Nil(t, err)
 		infoin := e.entry.GetInfo()
 		t.Logf("entry is %s", e.entry.GetPayload())
 		if infoin != nil {

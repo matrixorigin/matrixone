@@ -265,17 +265,11 @@ func ceilFloat32(xs, rs []float32, digits int64) []float32 {
 		for i := range xs {
 			rs[i] = float32(math.Ceil(float64(xs[i])))
 		}
-	} else if digits > 0 {
-		scale := float32(floor.ScaleTable[digits])
+	} else {
+		scale := float32(math.Pow10(int(digits)))
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = float32(math.Ceil(float64(value))) / scale
-		}
-	} else {
-		scale := float32(floor.ScaleTable[-digits])
-		for i := range xs {
-			value := xs[i] / scale
-			rs[i] = float32(math.Ceil(float64(value))) * scale
 		}
 	}
 	return rs
@@ -286,17 +280,11 @@ func ceilFloat64(xs, rs []float64, digits int64) []float64 {
 		for i := range xs {
 			rs[i] = math.Ceil(xs[i])
 		}
-	} else if digits > 0 {
-		scale := float64(floor.ScaleTable[digits])
+	} else {
+		scale := math.Pow10(int(digits))
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = math.Ceil(value) / scale
-		}
-	} else {
-		scale := float64(floor.ScaleTable[-digits])
-		for i := range xs {
-			value := xs[i] / scale
-			rs[i] = math.Ceil(value) * scale
 		}
 	}
 	return rs

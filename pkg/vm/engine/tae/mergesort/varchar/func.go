@@ -185,6 +185,73 @@ func Merge(col []*vector.Vector, src *[]uint32, fromLayout, toLayout []uint32) (
 	return
 }
 
+func Reshape(col []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
+	ret = make([]*vector.Vector, len(toLayout))
+	fromIdx := 0
+	fromOffset := 0
+	fromData := col[0].Col.(*types.Bytes)
+	for i := 0; i < len(toLayout); i++ {
+		ret[i] = vector.New(col[0].Typ)
+		merged := &types.Bytes{
+			Data:    make([]byte, 0),
+			Offsets: make([]uint32, toLayout[i]),
+			Lengths: make([]uint32, toLayout[i]),
+		}
+		toOffset := 0
+		for toOffset < int(toLayout[i]) {
+			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)
+			if fromLeft == 0 {
+				fromIdx++
+				fromOffset = 0
+				fromLeft = fromLayout[fromIdx]
+				fromData = col[fromIdx].Col.(*types.Bytes)
+			}
+			length := 0
+			if fromLeft < toLayout[i]-uint32(toOffset) {
+				length = int(fromLeft)
+			} else {
+				length = int(toLayout[i]) - toOffset
+			}
+			dataLength := fromData.Offsets[fromOffset+length-1] + fromData.Lengths[fromOffset+length-1] - fromData.Offsets[fromOffset]
+			mergedDataOffset := uint32(0)
+			if toOffset != 0 {
+				mergedDataOffset = merged.Offsets[toOffset-1] + merged.Lengths[toOffset-1]
+			}
+			fromDataOffset := fromData.Offsets[fromOffset]
+			merged.Data = append(merged.Data, make([]byte, dataLength)...)
+			copy(merged.Data[mergedDataOffset:mergedDataOffset+dataLength], fromData.Data[fromDataOffset:fromDataOffset+dataLength])
+			copy(merged.Lengths[toOffset:toOffset+length], fromData.Lengths[fromOffset:fromOffset+length])
+			for i := toOffset; i < toOffset+length; i++ {
+				if i == 0 {
+					merged.Offsets[i] = 0
+					continue
+				}
+				merged.Offsets[i] = merged.Offsets[i-1] + merged.Lengths[i-1]
+			}
+			if col[fromIdx].Nsp.Np != nil {
+				if ret[i].Nsp.Np == nil {
+					ret[i].Nsp.Np = roaring.New()
+				}
+				iterator := col[fromIdx].Nsp.Np.Iterator()
+				for iterator.HasNext() {
+					row := iterator.Next()
+					if row < uint64(fromOffset) {
+						continue
+					}
+					if row >= uint64(fromOffset)+uint64(length) {
+						break
+					}
+					ret[i].Nsp.Np.Add(row + uint64(toOffset) - uint64(fromOffset))
+				}
+			}
+			fromOffset += length
+			toOffset += length
+		}
+		ret[i].Col = merged
+	}
+	return
+}
+
 func Multiplex(col []*vector.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
 	for i := range col {
 		if nulls.Any(col[i].Nsp) {

@@ -23,24 +23,29 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+// the function registeration for generics functions may have some problem now, change this to generics later
 func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.([]int64)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]int64)
 		resultVector := vector.NewConst(resultType)
+		bytesNeed := space.CountSpacesSigned(inputValues)
 		results := &types.Bytes{
-			Data:    make([]byte, inputValues[0]),
+			Data:    make([]byte, bytesNeed),
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		vector.SetCol(resultVector, space.FillSpacesInt64(inputValues, results))
+		result := space.FillSpacesSigned[int64](inputValues, results)
+		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
+		vector.SetCol(resultVector, result.Result)
 		return resultVector, nil
 	}
-	bytesNeed := space.CountSpacesForInt64(inputValues)
+	inputValues := inputVector.Col.([]int64)
+	bytesNeed := space.CountSpacesSigned(inputValues)
 	resultVector, err := proc.AllocVector(resultType, bytesNeed)
 	if err != nil {
 		return nil, err
@@ -50,30 +55,34 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		Offsets: make([]uint32, len(inputValues)),
 		Lengths: make([]uint32, len(inputValues)),
 	}
-	nulls.Set(resultVector.Nsp, inputVector.Nsp)
-	vector.SetCol(resultVector, space.FillSpacesInt64(inputValues, resultValues))
+	result := space.FillSpacesSigned[int64](inputValues, resultValues)
+	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
+	vector.SetCol(resultVector, result.Result)
 	return resultVector, nil
-
 }
 
 func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.([]uint64)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]uint64)
 		resultVector := vector.NewConst(resultType)
+		bytesNeed := space.CountSpacesUnsigned[uint64](inputValues)
 		results := &types.Bytes{
-			Data:    make([]byte, inputValues[0]),
+			Data:    make([]byte, bytesNeed),
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		vector.SetCol(resultVector, space.FillSpacesUint64(inputValues, results))
+		result := space.FillSpacesUnsigned[uint64](inputValues, results)
+		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
+		vector.SetCol(resultVector, result.Result)
 		return resultVector, nil
 	}
-	bytesNeed := space.CountSpacesForUint64(inputValues)
+	inputValues := inputVector.Col.([]uint64)
+	bytesNeed := space.CountSpacesUnsigned[uint64](inputValues)
 	resultVector, err := proc.AllocVector(resultType, bytesNeed)
 	if err != nil {
 		return nil, err
@@ -83,30 +92,34 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		Offsets: make([]uint32, len(inputValues)),
 		Lengths: make([]uint32, len(inputValues)),
 	}
-	nulls.Set(resultVector.Nsp, inputVector.Nsp)
-	vector.SetCol(resultVector, space.FillSpacesUint64(inputValues, resultValues))
+	result := space.FillSpacesUnsigned[uint64](inputValues, resultValues)
+	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
+	vector.SetCol(resultVector, result.Result)
 	return resultVector, nil
-
 }
 
 func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.([]T)
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]T)
 		resultVector := vector.NewConst(resultType)
+		bytesNeed := space.CountSpacesFloat[T](inputValues)
 		results := &types.Bytes{
-			Data:    make([]byte, int(inputValues[0]+1)),
+			Data:    make([]byte, bytesNeed),
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		vector.SetCol(resultVector, space.FillSpacesFloat[T](inputValues, results))
+		result := space.FillSpacesFloat[T](inputValues, results)
+		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
+		vector.SetCol(resultVector, result.Result)
 		return resultVector, nil
 	}
-	bytesNeed := space.CountSpacesForFloat[T](inputValues)
+	inputValues := inputVector.Col.([]T)
+	bytesNeed := space.CountSpacesFloat[T](inputValues)
 	resultVector, err := proc.AllocVector(resultType, bytesNeed)
 	if err != nil {
 		return nil, err
@@ -116,8 +129,8 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		Offsets: make([]uint32, len(inputValues)),
 		Lengths: make([]uint32, len(inputValues)),
 	}
-	nulls.Set(resultVector.Nsp, inputVector.Nsp)
-	vector.SetCol(resultVector, space.FillSpacesFloat[T](inputValues, resultValues))
+	result := space.FillSpacesFloat[T](inputValues, resultValues)
+	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
+	vector.SetCol(resultVector, result.Result)
 	return resultVector, nil
-
 }

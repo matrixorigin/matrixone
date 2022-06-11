@@ -61,6 +61,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 }
 
 func (mgr *TxnManager) Init(prevTxnId uint64, prevTs uint64) error {
+	logutil.Infof("TxnManager Init: PrevTxnId=%d, PrevTS=%d", prevTxnId, prevTs)
 	mgr.IdAlloc.SetStart(prevTxnId)
 	mgr.TsAlloc.SetStart(prevTs)
 	return nil
@@ -229,4 +230,5 @@ func (mgr *TxnManager) OnException(new error) {
 func (mgr *TxnManager) Stop() {
 	mgr.StateMachine.Stop()
 	mgr.OnException(common.ClosedErr)
+	logutil.Infof("TxnManager Stop: CurrTxnId=%d, CurrTS=%d", mgr.IdAlloc.Get(), mgr.TsAlloc.Get())
 }
