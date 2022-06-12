@@ -31,15 +31,9 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	var separator []byte
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	scalarCount := 0
-	if len(vectors) <= 1 {
-		return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "concat_ws needs at least two parameters")
-	}
 	for i, v := range vectors {
 		if v.IsScalarNull() {
 			return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "null constant for concat_ws is not supported now")
-		}
-		if v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_char {
-			return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "concat_ws supports only char/varchar type now")
 		}
 		if i == 0 {
 			if !v.IsScalar() {

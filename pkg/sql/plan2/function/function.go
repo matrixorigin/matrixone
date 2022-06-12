@@ -260,6 +260,14 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 
 // todo(broccoli): change this to a general function
 func concat_ws_TypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) <= 1 {
+		return false
+	}
+	for _, arg := range args {
+		if arg != types.T_varchar || arg != types.T_char {
+			return false
+		}
+	}
 	return true
 }
 
