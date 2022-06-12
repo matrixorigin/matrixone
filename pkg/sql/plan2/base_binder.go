@@ -246,12 +246,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery) (*Expr, error) {
 
 func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32) (*Expr, error) {
 	var args []tree.Expr
-	caseExist := false
-
-	if astExpr.Expr != nil {
-		caseExist = true
-		args = append(args, astExpr.Expr)
-	}
+	caseExist := astExpr.Expr != nil
 
 	for _, whenExpr := range astExpr.Whens {
 		if caseExist {
