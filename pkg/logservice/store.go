@@ -23,13 +23,13 @@ import (
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
-	pb "github.com/lni/dragonboat/v4/raftpb"
+	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/lni/goutils/syncutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -258,15 +258,11 @@ func (l *logStore) GetTruncatedIndex(ctx context.Context,
 }
 
 func (l *logStore) AddLogStoreHeartbeat(ctx context.Context,
-	hb logservice.LogStoreHeartbeat) error {
-	data, err := hb.Marshal()
-	if err != nil {
-		panic(err)
-	}
+	hb pb.LogStoreHeartbeat) error {
+	data := MustMarshal(&hb)
 	cmd := hakeeper.GetLogStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	_, err = l.propose(ctx, session, cmd)
-	if err != nil {
+	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
 		return err
 	}
@@ -274,15 +270,11 @@ func (l *logStore) AddLogStoreHeartbeat(ctx context.Context,
 }
 
 func (l *logStore) AddDNStoreHeartbeat(ctx context.Context,
-	hb logservice.DNStoreHeartbeat) error {
-	data, err := hb.Marshal()
-	if err != nil {
-		panic(err)
-	}
+	hb pb.DNStoreHeartbeat) error {
+	data := MustMarshal(&hb)
 	cmd := hakeeper.GetDNStoreHeartbeatCmd(data)
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
-	_, err = l.propose(ctx, session, cmd)
-	if err != nil {
+	if _, err := l.propose(ctx, session, cmd); err != nil {
 		plog.Errorf("propose failed, %v", err)
 		return err
 	}
@@ -290,7 +282,7 @@ func (l *logStore) AddDNStoreHeartbeat(ctx context.Context,
 }
 
 func (l *logStore) getLeaseHolderID(ctx context.Context,
-	shardID uint64, entries []pb.Entry) (uint64, error) {
+	shardID uint64, entries []raftpb.Entry) (uint64, error) {
 	if len(entries) == 0 {
 		panic("empty entries")
 	}
@@ -307,11 +299,11 @@ func (l *logStore) getLeaseHolderID(ctx context.Context,
 	return v.(uint64), nil
 }
 
-func (l *logStore) decodeCmd(e pb.Entry) []byte {
-	if e.Type == pb.ApplicationEntry {
+func (l *logStore) decodeCmd(e raftpb.Entry) []byte {
+	if e.Type == raftpb.ApplicationEntry {
 		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected entry type"))
 	}
-	if e.Type == pb.EncodedEntry {
+	if e.Type == raftpb.EncodedEntry {
 		if e.Cmd[0] != 0 {
 			panic(moerr.NewError(moerr.INVALID_STATE, "unexpected cmd header"))
 		}
@@ -320,15 +312,15 @@ func (l *logStore) decodeCmd(e pb.Entry) []byte {
 	panic(moerr.NewError(moerr.INVALID_STATE, "invalid cmd"))
 }
 
-func isRaftInternalEntry(e pb.Entry) bool {
+func isRaftInternalEntry(e raftpb.Entry) bool {
 	if len(e.Cmd) == 0 {
 		return true
 	}
-	return e.Type == pb.ConfigChangeEntry || e.Type == pb.MetadataEntry
+	return e.Type == raftpb.ConfigChangeEntry || e.Type == raftpb.MetadataEntry
 }
 
 func (l *logStore) filterEntries(ctx context.Context,
-	shardID uint64, entries []pb.Entry) ([]LogRecord, error) {
+	shardID uint64, entries []raftpb.Entry) ([]LogRecord, error) {
 	if len(entries) == 0 {
 		return []LogRecord{}, nil
 	}
@@ -358,7 +350,7 @@ func (l *logStore) filterEntries(ctx context.Context,
 	return result, nil
 }
 
-func getNextIndex(entries []pb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
+func getNextIndex(entries []raftpb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
 	if len(entries) == 0 {
 		return firstIndex
 	}
@@ -496,30 +488,30 @@ func (l *logStore) truncateLog() error {
 	return nil
 }
 
-func (l *logStore) getHeartbeatMessage() logservice.LogStoreHeartbeat {
-	m := logservice.LogStoreHeartbeat{
+func (l *logStore) getHeartbeatMessage() pb.LogStoreHeartbeat {
+	m := pb.LogStoreHeartbeat{
 		UUID:           l.cfg.NodeHostID,
 		RaftAddress:    l.cfg.RaftAddress,
 		ServiceAddress: l.cfg.ServiceAddress,
 		GossipAddress:  l.cfg.GossipAddress,
-		Shards:         make([]logservice.LogShardInfo, 0),
+		Shards:         make([]pb.LogShardInfo, 0),
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
-		// ignore the special HAKeeper shard
-		if ci.ShardID != hakeeper.DefaultHAKeeperShardID {
-			shardInfo := logservice.LogShardInfo{
-				ShardID:  ci.ShardID,
-				Replicas: ci.Nodes,
-				Epoch:    ci.ConfigChangeIndex,
-				LeaderID: ci.LeaderID,
-				Term:     ci.Term,
-			}
-			m.Shards = append(m.Shards, shardInfo)
+		shardInfo := pb.LogShardInfo{
+			ShardID:  ci.ShardID,
+			Replicas: ci.Nodes,
+			Epoch:    ci.ConfigChangeIndex,
+			LeaderID: ci.LeaderID,
+			Term:     ci.Term,
 		}
+		if shardInfo.Replicas == nil {
+			shardInfo.Replicas = make(map[uint64]dragonboat.Target)
+		}
+		m.Shards = append(m.Shards, shardInfo)
 	}
 	return m
 }

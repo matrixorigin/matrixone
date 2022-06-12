@@ -25,7 +25,7 @@ import (
 	"github.com/lni/goutils/netutil"
 	"github.com/lni/goutils/syncutil"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -34,7 +34,7 @@ var (
 
 type Lsn = uint64
 
-type LogRecord = logservice.LogRecord
+type LogRecord = pb.LogRecord
 
 type Service struct {
 	cfg         Config
@@ -160,10 +160,7 @@ func (s *Service) serve(conn net.Conn) {
 		resp, records := s.handle(req, payload)
 		var recs []byte
 		if len(records.Records) > 0 {
-			data, err := records.Marshal()
-			if err != nil {
-				panic(err)
-			}
+			data := MustMarshal(&records)
 			resp.PayloadSize = uint64(len(data))
 			recs = data
 		}
@@ -174,35 +171,35 @@ func (s *Service) serve(conn net.Conn) {
 	}
 }
 
-func (s *Service) handle(req logservice.Request,
-	payload []byte) (logservice.Response, logservice.LogRecordResponse) {
+func (s *Service) handle(req pb.Request,
+	payload []byte) (pb.Response, pb.LogRecordResponse) {
 	switch req.Method {
-	case logservice.MethodType_CREATE:
+	case pb.MethodType_CREATE:
 		panic("not implemented")
-	case logservice.MethodType_DESTROY:
+	case pb.MethodType_DESTROY:
 		panic("not implemented")
-	case logservice.MethodType_APPEND:
-		return s.handleAppend(req, payload), logservice.LogRecordResponse{}
-	case logservice.MethodType_READ:
+	case pb.MethodType_APPEND:
+		return s.handleAppend(req, payload), pb.LogRecordResponse{}
+	case pb.MethodType_READ:
 		return s.handleRead(req)
-	case logservice.MethodType_TRUNCATE:
-		return s.handleTruncate(req), logservice.LogRecordResponse{}
-	case logservice.MethodType_GET_TRUNCATE:
-		return s.handleGetTruncatedIndex(req), logservice.LogRecordResponse{}
-	case logservice.MethodType_CONNECT:
-		return s.handleConnect(req), logservice.LogRecordResponse{}
-	case logservice.MethodType_CONNECT_RO:
-		return s.handleConnectRO(req), logservice.LogRecordResponse{}
+	case pb.MethodType_TRUNCATE:
+		return s.handleTruncate(req), pb.LogRecordResponse{}
+	case pb.MethodType_GET_TRUNCATE:
+		return s.handleGetTruncatedIndex(req), pb.LogRecordResponse{}
+	case pb.MethodType_CONNECT:
+		return s.handleConnect(req), pb.LogRecordResponse{}
+	case pb.MethodType_CONNECT_RO:
+		return s.handleConnectRO(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown method type")
 	}
 }
 
-func getResponse(req logservice.Request) logservice.Response {
-	return logservice.Response{Method: req.Method}
+func getResponse(req pb.Request) pb.Response {
+	return pb.Response{Method: req.Method}
 }
 
-func (s *Service) handleConnect(req logservice.Request) logservice.Response {
+func (s *Service) handleConnect(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -212,7 +209,7 @@ func (s *Service) handleConnect(req logservice.Request) logservice.Response {
 	return resp
 }
 
-func (s *Service) handleConnectRO(req logservice.Request) logservice.Response {
+func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -223,7 +220,7 @@ func (s *Service) handleConnectRO(req logservice.Request) logservice.Response {
 	return resp
 }
 
-func (s *Service) handleAppend(req logservice.Request, payload []byte) logservice.Response {
+func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -236,7 +233,7 @@ func (s *Service) handleAppend(req logservice.Request, payload []byte) logservic
 	return resp
 }
 
-func (s *Service) handleRead(req logservice.Request) (logservice.Response, logservice.LogRecordResponse) {
+func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -246,10 +243,10 @@ func (s *Service) handleRead(req logservice.Request) (logservice.Response, logse
 	} else {
 		resp.LastIndex = lsn
 	}
-	return resp, logservice.LogRecordResponse{Records: records}
+	return resp, pb.LogRecordResponse{Records: records}
 }
 
-func (s *Service) handleTruncate(req logservice.Request) logservice.Response {
+func (s *Service) handleTruncate(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)
@@ -259,7 +256,7 @@ func (s *Service) handleTruncate(req logservice.Request) logservice.Response {
 	return resp
 }
 
-func (s *Service) handleGetTruncatedIndex(req logservice.Request) logservice.Response {
+func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
 	resp := getResponse(req)

@@ -15,11 +15,12 @@
 package logservice
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestErrorConversion(t *testing.T) {
@@ -27,7 +28,7 @@ func TestErrorConversion(t *testing.T) {
 	for _, rec := range mappings {
 		if rec.reverse {
 			code, msg := toErrorCode(rec.err)
-			resp := logservice.Response{
+			resp := pb.Response{
 				ErrorCode:    code,
 				ErrorMessage: msg,
 			}
@@ -35,4 +36,11 @@ func TestErrorConversion(t *testing.T) {
 			assert.Equal(t, err, rec.err)
 		}
 	}
+}
+
+func TestUnknownErrorIsHandled(t *testing.T) {
+	err := errors.New("test error")
+	code, str := toErrorCode(err)
+	assert.Equal(t, pb.ErrorCode_OtherSystemError, code)
+	assert.Equal(t, err.Error(), str)
 }

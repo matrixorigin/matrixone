@@ -25,6 +25,8 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -233,6 +235,52 @@ func TestQueryLog(t *testing.T) {
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, uint64(5), lsn)
 		assert.Equal(t, entries[0].Data, cmd)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestHAKeeperTick(t *testing.T) {
+	fn := func(t *testing.T, store *logStore) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.ID()
+		assert.NoError(t, store.StartHAKeeperReplica(1, peers))
+
+		assert.NoError(t, store.hakeeperTick())
+	}
+	runStoreTest(t, fn)
+}
+
+func TestGetHeartbeatMessage(t *testing.T) {
+	fn := func(t *testing.T, store *logStore) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.ID()
+		assert.NoError(t, store.StartReplica(10, 1, peers))
+		assert.NoError(t, store.StartHAKeeperReplica(1, peers))
+
+		m := store.getHeartbeatMessage()
+		// hakeeper shard is included
+		assert.Equal(t, 3, len(m.Shards))
+	}
+	runStoreTest(t, fn)
+}
+
+func TestAddHeartbeat(t *testing.T) {
+	fn := func(t *testing.T, store *logStore) {
+		peers := make(map[uint64]dragonboat.Target)
+		peers[1] = store.ID()
+		assert.NoError(t, store.StartHAKeeperReplica(1, peers))
+
+		m := store.getHeartbeatMessage()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		assert.NoError(t, store.AddLogStoreHeartbeat(ctx, m))
+
+		dnMsg := pb.DNStoreHeartbeat{
+			UUID:   store.ID(),
+			Shards: make([]pb.DNShardInfo, 0),
+		}
+		dnMsg.Shards = append(dnMsg.Shards, pb.DNShardInfo{ShardID: 2, ReplicaID: 3})
+		assert.NoError(t, store.AddDNStoreHeartbeat(ctx, dnMsg))
 	}
 	runStoreTest(t, fn)
 }

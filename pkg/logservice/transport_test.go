@@ -24,7 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 type testConn struct {
@@ -96,8 +96,8 @@ func TestReadSize(t *testing.T) {
 
 func TestWriteRequest(t *testing.T) {
 	conn := newTestConn()
-	req := logservice.Request{
-		Method:      logservice.MethodType_APPEND,
+	req := pb.Request{
+		Method:      pb.MethodType_APPEND,
 		Name:        "test",
 		DNID:        1234567890,
 		PayloadSize: 32,
@@ -116,15 +116,14 @@ func TestWriteRequest(t *testing.T) {
 	sz := binaryEnc.Uint32(result[len(magicNumber[:]):])
 	assert.Equal(t, int(sz), req.Size())
 
-	data, err := req.Marshal()
-	assert.NoError(t, err)
+	data := MustMarshal(&req)
 	assert.Equal(t, data, result[len(magicNumber[:])+4:])
 }
 
 func TestReadRequest(t *testing.T) {
 	conn := newTestConn()
-	req := logservice.Request{
-		Method:      logservice.MethodType_APPEND,
+	req := pb.Request{
+		Method:      pb.MethodType_APPEND,
 		Name:        "test",
 		PayloadSize: 32,
 	}
@@ -155,8 +154,8 @@ func TestWriteResponse(t *testing.T) {
 
 func testWriteResponse(t *testing.T, sz int) {
 	conn := newTestConn()
-	resp := logservice.Response{
-		Method:    logservice.MethodType_APPEND,
+	resp := pb.Response{
+		Method:    pb.MethodType_APPEND,
 		ShardID:   1234567890,
 		LastIndex: 234567890,
 	}
@@ -168,21 +167,18 @@ func testWriteResponse(t *testing.T, sz int) {
 	assert.Equal(t, resp.Size(), int(binaryEnc.Uint32(szbuf)))
 	data := make([]byte, binaryEnc.Uint32(szbuf))
 	_, err = conn.Read(data)
-	var respResult logservice.Response
+	var respResult pb.Response
 	assert.NoError(t, respResult.Unmarshal(data))
 	assert.Equal(t, resp, respResult)
 
-	records := logservice.LogRecordResponse{
-		Records: []logservice.LogRecord{
+	records := pb.LogRecordResponse{
+		Records: []pb.LogRecord{
 			{Data: make([]byte, sz)},
 		},
 	}
 	rand.Read(records.Records[0].Data)
 	conn = newTestConn()
-	recs, err := records.Marshal()
-	if err != nil {
-		panic(err)
-	}
+	recs := MustMarshal(&records)
 	resp.PayloadSize = uint64(len(recs))
 	assert.NoError(t, writeResponse(conn, resp, recs, nil))
 
@@ -193,7 +189,7 @@ func testWriteResponse(t *testing.T, sz int) {
 	data = make([]byte, resp.PayloadSize)
 	_, err = conn.Read(data)
 	assert.NoError(t, err)
-	recordsResult := logservice.LogRecordResponse{}
+	recordsResult := pb.LogRecordResponse{}
 	assert.NoError(t, recordsResult.Unmarshal(data))
 	assert.Equal(t, records, recordsResult)
 }
@@ -208,8 +204,8 @@ func TestReadResponse(t *testing.T) {
 
 func testReadResponse(t *testing.T, sz int) {
 	conn := newTestConn()
-	resp := logservice.Response{
-		Method:    logservice.MethodType_APPEND,
+	resp := pb.Response{
+		Method:    pb.MethodType_APPEND,
 		ShardID:   1234567890,
 		LastIndex: 234567890,
 	}
@@ -217,17 +213,14 @@ func testReadResponse(t *testing.T, sz int) {
 	respResult, recordsResult, err := readResponse(conn, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, resp, respResult)
-	assert.Equal(t, logservice.LogRecordResponse{}, recordsResult)
+	assert.Equal(t, pb.LogRecordResponse{}, recordsResult)
 
-	records := logservice.LogRecordResponse{
-		Records: []logservice.LogRecord{
+	records := pb.LogRecordResponse{
+		Records: []pb.LogRecord{
 			{Data: make([]byte, sz)},
 		},
 	}
-	recs, err := records.Marshal()
-	if err != nil {
-		panic(err)
-	}
+	recs := MustMarshal(&records)
 	resp.PayloadSize = uint64(len(recs))
 	assert.NoError(t, writeResponse(conn, resp, recs, nil))
 	respResult, recordsResult, err = readResponse(conn, nil)

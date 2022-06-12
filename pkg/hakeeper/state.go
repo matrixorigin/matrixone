@@ -120,10 +120,11 @@ func (s *LogState) updateShards(hb logservice.LogStoreHeartbeat) {
 		if incoming.Epoch > recorded.Epoch {
 			recorded.Epoch = incoming.Epoch
 			recorded.Replicas = incoming.Replicas
-		} else if incoming.Epoch == recorded.Epoch {
+		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
 			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) {
-				plog.Panicf("inconsistent replicas, %+v, %+v",
-					recorded.Replicas, incoming.Replicas)
+				plog.Panicf("inconsistent replicas, %+v, %+v, nil: %t, nil: %t",
+					recorded.Replicas, incoming.Replicas,
+					recorded.Replicas == nil, incoming.Replicas == nil)
 			}
 		}
 

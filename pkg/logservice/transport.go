@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -90,7 +90,7 @@ func readSize(conn net.Conn, buf []byte) (int, error) {
 
 // FIXME: add data corruption check
 func writeRequest(conn net.Conn,
-	req logservice.Request, buf []byte, payload []byte) error {
+	req pb.Request, buf []byte, payload []byte) error {
 	if len(buf) < req.Size()+4+len(magicNumber[:]) {
 		buf = make([]byte, req.Size()+4+len(magicNumber[:]))
 	}
@@ -123,22 +123,20 @@ func writeRequest(conn net.Conn,
 }
 
 func readRequest(conn net.Conn,
-	buf []byte, payload []byte) (logservice.Request, []byte, error) {
+	buf []byte, payload []byte) (pb.Request, []byte, error) {
 	size, err := readSize(conn, buf)
 	if err != nil {
-		return logservice.Request{}, nil, err
+		return pb.Request{}, nil, err
 	}
 	if len(buf) < size {
 		buf = make([]byte, size)
 	}
 	buf = buf[:size]
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		return logservice.Request{}, nil, err
+		return pb.Request{}, nil, err
 	}
-	var req logservice.Request
-	if err := req.Unmarshal(buf); err != nil {
-		panic(err)
-	}
+	var req pb.Request
+	MustUnmarshal(&req, buf)
 	if req.PayloadSize > 0 {
 		if uint64(len(payload)) < req.PayloadSize {
 			payload = make([]byte, req.PayloadSize)
@@ -146,16 +144,16 @@ func readRequest(conn net.Conn,
 		payload = payload[:req.PayloadSize]
 		tt := time.Now().Add(readDuration)
 		if err := conn.SetWriteDeadline(tt); err != nil {
-			return logservice.Request{}, nil, err
+			return pb.Request{}, nil, err
 		}
 		if _, err := io.ReadFull(conn, payload); err != nil {
-			return logservice.Request{}, nil, err
+			return pb.Request{}, nil, err
 		}
 	}
 	return req, payload, nil
 }
 
-func writeResponse(conn net.Conn, resp logservice.Response,
+func writeResponse(conn net.Conn, resp pb.Response,
 	records []byte, buf []byte) error {
 	if len(buf) < resp.Size()+4 {
 		buf = make([]byte, resp.Size()+4)
@@ -201,10 +199,10 @@ func writeResponse(conn net.Conn, resp logservice.Response,
 }
 
 func readResponse(conn net.Conn,
-	buf []byte) (logservice.Response, logservice.LogRecordResponse, error) {
+	buf []byte) (pb.Response, pb.LogRecordResponse, error) {
 	size, err := readSize(conn, buf)
 	if err != nil {
-		return logservice.Response{}, logservice.LogRecordResponse{}, err
+		return pb.Response{}, pb.LogRecordResponse{}, err
 	}
 
 	if len(buf) < size {
@@ -214,16 +212,13 @@ func readResponse(conn net.Conn,
 
 	tt := time.Now().Add(responseReadDuration)
 	if err := conn.SetReadDeadline(tt); err != nil {
-		return logservice.Response{}, logservice.LogRecordResponse{}, err
+		return pb.Response{}, pb.LogRecordResponse{}, err
 	}
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		return logservice.Response{}, logservice.LogRecordResponse{}, err
+		return pb.Response{}, pb.LogRecordResponse{}, err
 	}
-	var resp logservice.Response
-	if err := resp.Unmarshal(buf); err != nil {
-		panic(err)
-	}
-
+	var resp pb.Response
+	MustUnmarshal(&resp, buf)
 	size = int(resp.PayloadSize)
 	if size > len(buf) {
 		buf = make([]byte, size)
@@ -242,10 +237,10 @@ func readResponse(conn net.Conn,
 	for toRead > 0 {
 		tt = time.Now().Add(readDuration)
 		if err := conn.SetReadDeadline(tt); err != nil {
-			return logservice.Response{}, logservice.LogRecordResponse{}, err
+			return pb.Response{}, pb.LogRecordResponse{}, err
 		}
 		if _, err := io.ReadFull(conn, recvBuf); err != nil {
-			return logservice.Response{}, logservice.LogRecordResponse{}, err
+			return pb.Response{}, pb.LogRecordResponse{}, err
 		}
 		toRead -= len(recvBuf)
 		received += uint64(len(recvBuf))
@@ -256,10 +251,8 @@ func readResponse(conn net.Conn,
 		}
 	}
 
-	var logs logservice.LogRecordResponse
-	if err := logs.Unmarshal(buf); err != nil {
-		panic(err)
-	}
+	var logs pb.LogRecordResponse
+	MustUnmarshal(&logs, buf)
 
 	return resp, logs, nil
 }
