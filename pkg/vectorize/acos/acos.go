@@ -18,6 +18,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"golang.org/x/exp/constraints"
 )
 
 var (
@@ -166,6 +167,19 @@ func acosFloat64(xs []float64, rs []float64) AcosResult {
 			nulls.Add(result.Nsp, uint64(i))
 		} else {
 			result.Result[i] = math.Acos(n)
+		}
+	}
+	return result
+}
+
+func Acos[T constraints.Integer | constraints.Float](inputValues []T, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
+	for i, n := range inputValues {
+		t := float64(n)
+		if t < -1 || t > 1 {
+			nulls.Add(result.Nsp, uint64(i))
+		} else {
+			result.Result[i] = math.Acos(t)
 		}
 	}
 	return result
