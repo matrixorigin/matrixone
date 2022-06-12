@@ -87,14 +87,13 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 	b.insideAgg = true
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err != nil {
+		return nil, err
+	}
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		expr.GetF().Func.Obj = int64(int64(uint64(expr.GetF().Func.Obj) | function.Distinct))
 	}
 	b.insideAgg = false
-
-	if err != nil {
-		return nil, err
-	}
 
 	colPos := int32(len(b.ctx.aggregates))
 	astStr := tree.String(astExpr, dialect.MYSQL)
