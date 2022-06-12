@@ -146,11 +146,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 			colIdx++
 		}
 		for idx, expr := range node.AggList {
-			// don't want to reset
-			// err := builder.resetPosition(expr, childMap)
-			// if err != nil {
-			// 	return nil, err
-			// }
+			err := builder.resetPosition(expr, childMap)
+			if err != nil {
+				return nil, err
+			}
 
 			node.ProjectList[colIdx] = &Expr{
 				Typ: expr.Typ,
