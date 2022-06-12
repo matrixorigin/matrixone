@@ -181,11 +181,13 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
+	DAY       //DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
 	OCT
 	SUBSTRING // SUBSTRING
+	WEEK      //WEEK
 	WEEKDAY
 	YEAR // YEAR
 
@@ -251,6 +253,7 @@ var functionIdRegister = map[string]int32{
 	// variadic functions
 	"ceil":          CEIL,
 	"ceiling":       CEIL,
+	"concat_ws":     CONCAT_WS,
 	"floor":         FLOOR,
 	"lpad":          LPAD,
 	"pi":            PI,
@@ -264,8 +267,8 @@ var functionIdRegister = map[string]int32{
 	"abs":         ABS,
 	"acos":        ACOS,
 	"bit_length":  BIT_LENGTH,
-	"concat_ws":   CONCAT_WS,
 	"date":        DATE,
+	"day":         DAY,
 	"dayofyear":   DAYOFYEAR,
 	"exp":         EXP,
 	"empty":       EMPTY,
@@ -283,6 +286,7 @@ var functionIdRegister = map[string]int32{
 	"sinh":        SINH,
 	"space":       SPACE,
 	"tan":         TAN,
+	"week":        WEEK,
 	"weekday":     WEEKDAY,
 	"year":        YEAR,
 	"extract":     EXTRACT,

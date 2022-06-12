@@ -380,3 +380,8 @@ func LastDay(year uint16, month uint8) int {
 	}
 	return int(flatYearMonthDays[month-1])
 }
+
+func (d Date) Day() uint8 {
+	_, _, day, _ := d.Calendar(true)
+	return day
+}
