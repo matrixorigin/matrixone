@@ -23,6 +23,12 @@ import (
 )
 
 func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(vectors) == 0 || proc == nil {
+		return nil, errorParameterIsInvalid
+	}
+	if vectors[0] == nil {
+		return nil, errorParameterIsInvalid
+	}
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 
@@ -30,7 +36,10 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.(*types.Bytes)
+		inputValues, ok := inputVector.Col.(*types.Bytes)
+		if !ok {
+			return nil, errorParameterIsNotString
+		}
 		// totalCount - spaceCount is the total bytes need for the ltrim-ed string
 		spaceCount := rtrim.CountSpacesFromRight(inputValues)
 		totalCount := int32(len(inputValues.Data))
@@ -43,7 +52,10 @@ func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		vector.SetCol(resultVector, rtrim.RtrimChar(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.(*types.Bytes)
+		inputValues, ok := inputVector.Col.(*types.Bytes)
+		if !ok {
+			return nil, errorParameterIsNotString
+		}
 		// totalCount - spaceCount is the total bytes need for the ltrim-ed string
 		spaceCount := rtrim.CountSpacesFromRight(inputValues)
 		totalCount := int32(len(inputValues.Data))

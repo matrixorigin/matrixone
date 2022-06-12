@@ -30,8 +30,8 @@ func Test_ColOrCol(t *testing.T) {
 		for i := 0; i < len(data); i++ {
 			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
-		NullPos := []int{2, 5, 6, 7, 8}
-		NotNullPos := []int{0, 1, 3, 4}
+		NullPos := []int{5, 7, 8}
+		NotNullPos := []int{0, 1, 2, 3, 4, 6}
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
 		}
@@ -58,8 +58,8 @@ func Test_ColOrConst(t *testing.T) {
 		for i := 0; i < 9; i++ {
 			convey.So(data[i], convey.ShouldEqual, true)
 		}
-		NullPos := []int{6, 7, 8}
-		NotNullPos := []int{0, 1, 2, 3, 4, 5}
+		NullPos := []int{}
+		NotNullPos := []int{0, 1, 2, 3, 4, 5, 6, 7, 8}
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
 		}
@@ -80,6 +80,8 @@ func Test_ColOrConst(t *testing.T) {
 			convey.So(data[i], convey.ShouldEqual, boolVec[i])
 		}
 
+		NullPos = []int{6, 7, 8}
+		NotNullPos = []int{0, 1, 2, 3, 4, 5}
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
 		}
@@ -100,9 +102,13 @@ func Test_ColOrNull(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		NullPos := []int{0, 1, 2, 3, 4, 5, 6, 7, 8}
+		NullPos := []int{3, 4, 5, 6, 7, 8}
+		NotNullPos := []int{0, 1, 2}
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
+		}
+		for i := 0; i < len(NotNullPos); i++ {
+			convey.So(nulls.Contains(ret.Nsp, uint64(NotNullPos[i])), convey.ShouldEqual, false)
 		}
 
 	})
@@ -163,7 +169,7 @@ func Test_ConstOrNull(t *testing.T) {
 		vec := make([]*vector.Vector, 2)
 		vec[0] = InitConstVector()
 		vec[1] = InitConstVector()
-		vec[0].Col = []bool{true}
+		vec[0].Col = []bool{false}
 		nulls.Add(vec[1].Nsp, 0)
 		ret, err := Or(vec, proc)
 		if err != nil {
@@ -172,6 +178,16 @@ func Test_ConstOrNull(t *testing.T) {
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
 		convey.So(ret.Col, convey.ShouldBeNil)
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
+
+		vec[0].Col = []bool{true}
+		nulls.Add(vec[1].Nsp, 0)
+		ret, err = Or(vec, proc)
+		if err != nil {
+			log.Fatal(err)
+		}
+		convey.So(ret.IsConst, convey.ShouldBeTrue)
+		convey.So(ret.Col, convey.ShouldResemble, []bool{true})
+		convey.So(ret.Nsp.Np, convey.ShouldBeNil)
 	})
 }
 

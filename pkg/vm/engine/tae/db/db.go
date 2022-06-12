@@ -17,8 +17,10 @@ package db
 import (
 	"errors"
 	"io"
+	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -104,10 +106,24 @@ func (db *DB) Replay(dataFactory *tables.DataFactory) {
 	}
 }
 
+func (db *DB) PrintStats() {
+	pc, _, _, _ := runtime.Caller(1)
+	caller := runtime.FuncForPC(pc).Name()
+	stats := db.CollectStats()
+	logutil.Infof("[PrintStats][Caller=%s]:%s", caller, stats.ToString(""))
+}
+
+func (db *DB) CollectStats() *Stats {
+	stats := NewStats(db)
+	stats.Collect()
+	return stats
+}
+
 func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
+	defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
 	db.TimedScanner.Stop()
 	db.CKPDriver.Stop()

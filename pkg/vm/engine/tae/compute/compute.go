@@ -344,6 +344,18 @@ func UpdateOffsets(data *types.Bytes, start, end int) {
 		data.Offsets[i+1] = data.Offsets[i] + data.Lengths[i]
 	}
 }
+
+func BatchWindow(bat *gbat.Batch, start, end int) *gbat.Batch {
+	window := gbat.New(true, bat.Attrs)
+	window.Vecs = make([]*gvec.Vector, len(bat.Vecs))
+	for i := range window.Vecs {
+		vec := gvec.New(bat.Vecs[i].Typ)
+		gvec.Window(bat.Vecs[i], start, end, vec)
+		window.Vecs[i] = vec
+	}
+	return window
+}
+
 func SplitBatch(bat *gbat.Batch, cnt int) []*gbat.Batch {
 	if cnt == 1 {
 		return []*gbat.Batch{bat}
