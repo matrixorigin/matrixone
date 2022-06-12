@@ -80,6 +80,10 @@ func (node *DeleteNode) AddLogIndexesLocked(indexes []*wal.Index) {
 	node.logIndexes = append(node.logIndexes, indexes...)
 }
 
+func (node *DeleteNode) SetDeletes(mask *roaring.Bitmap) {
+	node.mask = mask
+}
+
 func (node *DeleteNode) AddLogIndexLocked(index *wal.Index) {
 	node.logIndexes = append(node.logIndexes, index)
 }
