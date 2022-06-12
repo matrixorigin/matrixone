@@ -30,7 +30,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
-	sql := `select n_name, count(*) from nation group by n_name order by 2 asc;`
+	sql := `select (select count(distinct 12)) from nation group by n_name`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -398,6 +398,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select date_sub(date '2001-01-01', interval '1 day') as a",
 		"select date_add('2001-01-01', interval '1 day') as a",
 		"select n_name, count(*) from nation group by n_name order by 2 asc",
+		"select count(distinct 12)",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr

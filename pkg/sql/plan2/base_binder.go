@@ -404,19 +404,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// we will rewrite "count(*)" to "starcount(col)"
 		// count(*) : astExprs[0].(type) is *tree.NumVal
 		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
-		switch astArgs[0].(type) {
+		switch nval := astArgs[0].(type) {
 		case *tree.NumVal:
 			// rewrite count(*) to starcount(col_name)
-			name = "starcount"
-			if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
-				return nil, errors.New(errno.InvalidColumnReference, "can not find any column when rewrite count(*) to starcount(col)")
+			if nval.String() == "*" {
+				name = "starcount"
+				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
+					return nil, errors.New(errno.InvalidColumnReference, "can not find any column when rewrite count(*) to starcount(col)")
+				}
+				var newCountCol *tree.UnresolvedName
+				newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
+				if err != nil {
+					return nil, err
+				}
+				astArgs[0] = newCountCol
 			}
-			var newCountCol *tree.UnresolvedName
-			newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
-			if err != nil {
-				return nil, err
-			}
-			astArgs[0] = newCountCol
 		}
 	}
 	// bind ast function's args

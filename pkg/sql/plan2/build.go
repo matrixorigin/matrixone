@@ -24,41 +24,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
-	// runBuildSelectByBinder := func(stmt *tree.Select) (*Plan, error) {
-	// 	query, binderCtx := newQueryAndSelectCtx(plan.Query_SELECT)
-	// 	nodeId, err := buildSelect(stmt, ctx, query, binderCtx)
-	// 	query.Steps = append(query.Steps, nodeId)
-	// 	return &Plan{
-	// 		Plan: &plan.Plan_Query{
-	// 			Query: query,
-	// 		},
-	// 	}, err
-	// }
-	runBuildSelectByBinder := func(stmt *tree.Select) (*Plan, error) {
-		builder := NewQueryBuilder(plan.Query_SELECT, ctx)
-		bindCtx := NewBindContext(builder, nil)
-		rootId, err := builder.buildSelect(stmt, bindCtx, true)
-		builder.qry.Steps = append(builder.qry.Steps, rootId)
-		if err != nil {
-			return nil, err
-		}
-		query, err := builder.createQuery()
-		if err != nil {
-			return nil, err
-		}
-		return &Plan{
-			Plan: &plan.Plan_Query{
-				Query: query,
-			},
-		}, err
-	}
+func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select) (*Plan, error) {
+	// query, binderCtx := newQueryAndSelectCtx(stmtType)
+	// nodeId, err := buildSelect(stmt, ctx, query, binderCtx)
+	// query.Steps = append(query.Steps, nodeId)
+	// return &Plan{
+	// 	Plan: &plan.Plan_Query{
+	// 		Query: query,
+	// 	},
+	// }, err
 
+	builder := NewQueryBuilder(stmtType, ctx)
+	bindCtx := NewBindContext(builder, nil)
+	rootId, err := builder.buildSelect(stmt, bindCtx, true)
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	if err != nil {
+		return nil, err
+	}
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
+}
+
+func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return runBuildSelectByBinder(stmt)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	case *tree.ParenSelect:
-		return runBuildSelectByBinder(stmt.Select)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx)
 	case *tree.Update:
