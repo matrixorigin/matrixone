@@ -378,9 +378,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, e
 	}
 	funcName := funcRef.Parts[0]
 
-	if isAggFunc(funcName) {
+	if function.GetFunctionIsAggregateByName(funcName) {
 		return b.impl.BindAggFunc(funcName, astExpr, depth)
-	} else if isWinFunc(funcName) {
+	} else if function.GetFunctionIsWinfunByName(funcName) {
 		return b.impl.BindWinFunc(funcName, astExpr, depth)
 	}
 
@@ -735,20 +735,6 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 			},
 		},
 	}, nil
-}
-
-func isAggFunc(name string) bool {
-	if funcSig, ok := BuiltinFunctionsMap[strings.ToUpper(name)]; ok {
-		return funcSig.Flag == plan.Function_AGG
-	}
-	return false
-}
-
-func isWinFunc(name string) bool {
-	if funcSig, ok := BuiltinFunctionsMap[strings.ToUpper(name)]; ok {
-		return funcSig.Flag == plan.Function_WIN
-	}
-	return false
 }
 
 //splitConjunctiveCondition split a expression to a list of AND conditions.
