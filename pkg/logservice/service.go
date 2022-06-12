@@ -51,6 +51,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	store, err := newLogStore(cfg)
 	if err != nil {
+		plog.Errorf("failed to create log store %v", err)
 		return nil, err
 	}
 	service := &Service{
@@ -59,7 +60,10 @@ func NewService(cfg Config) (*Service, error) {
 		stopper:     syncutil.NewStopper(),
 		connStopper: syncutil.NewStopper(),
 	}
+	// TODO: before making the service available to the outside world, restore all
+	// replicas already known to the local store
 	if err := service.startServer(); err != nil {
+		plog.Errorf("failed to start the server %v", err)
 		if err := store.Close(); err != nil {
 			plog.Errorf("failed to close the store, %v", err)
 		}

@@ -74,3 +74,19 @@ func TestFillConfig(t *testing.T) {
 	assert.Equal(t, defaultGossipAddress, c.GossipListenAddress)
 	assert.Equal(t, 0, len(c.GossipSeedAddresses))
 }
+
+func TestListenAddressCanBeFilled(t *testing.T) {
+	cfg := Config{
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+	}
+	cfg.Fill()
+	assert.Equal(t, cfg.ServiceAddress, cfg.ServiceListenAddress)
+	assert.Equal(t, cfg.RaftAddress, cfg.RaftListenAddress)
+	assert.Equal(t, cfg.GossipAddress, cfg.GossipListenAddress)
+}

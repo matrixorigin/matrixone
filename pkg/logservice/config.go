@@ -81,10 +81,14 @@ func (c *Config) Fill() {
 	if len(c.ServiceAddress) == 0 {
 		c.ServiceAddress = defaultServiceAddress
 		c.ServiceListenAddress = defaultServiceAddress
+	} else if len(c.ServiceAddress) != 0 && len(c.ServiceListenAddress) == 0 {
+		c.ServiceListenAddress = c.ServiceAddress
 	}
 	if len(c.RaftAddress) == 0 {
 		c.RaftAddress = defaultRaftAddress
 		c.RaftListenAddress = defaultRaftAddress
+	} else if len(c.RaftAddress) != 0 && len(c.RaftListenAddress) == 0 {
+		c.RaftListenAddress = c.RaftAddress
 	}
 	if len(c.GossipAddress) == 0 {
 		c.GossipAddress = defaultGossipAddress

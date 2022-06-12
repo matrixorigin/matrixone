@@ -271,3 +271,102 @@ func TestServiceTruncate(t *testing.T) {
 	}
 	runServiceTest(t, fn)
 }
+
+func TestShardInfoCanBeQueried(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg1 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9002",
+		RaftAddress:         "127.0.0.1:9000",
+		GossipAddress:       "127.0.0.1:9001",
+		GossipSeedAddresses: []string{"127.0.0.1:9011"},
+	}
+	cfg2 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-2",
+		ServiceAddress:      "127.0.0.1:9012",
+		RaftAddress:         "127.0.0.1:9010",
+		GossipAddress:       "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9001"},
+	}
+
+	service1, err := NewService(cfg1)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service1.Close())
+	}()
+	peers1 := make(map[uint64]dragonboat.Target)
+	peers1[1] = service1.ID()
+	assert.NoError(t, service1.store.StartReplica(1, 1, peers1))
+
+	service2, err := NewService(cfg2)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, service2.Close())
+	}()
+	peers2 := make(map[uint64]dragonboat.Target)
+	peers2[1] = service2.ID()
+	assert.NoError(t, service2.store.StartReplica(2, 1, peers2))
+
+	nhID1 := service1.ID()
+	nhID2 := service2.ID()
+
+	done := false
+	for i := 0; i < 3000; i++ {
+		si1, ok := service1.GetShardInfo(1)
+		if !ok || si1.LeaderID != 1 {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si1.Replicas))
+		require.Equal(t, uint64(1), si1.ShardID)
+		ri, ok := si1.Replicas[1]
+		assert.True(t, ok)
+		assert.Equal(t, nhID1, ri.UUID)
+		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
+
+		si2, ok := service1.GetShardInfo(2)
+		if !ok || si2.LeaderID != 1 {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si2.Replicas))
+		require.Equal(t, uint64(2), si2.ShardID)
+		ri, ok = si2.Replicas[1]
+		assert.True(t, ok)
+		assert.Equal(t, nhID2, ri.UUID)
+		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
+
+		si1, ok = service2.GetShardInfo(1)
+		if !ok || si1.LeaderID != 1 {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si1.Replicas))
+		require.Equal(t, uint64(1), si1.ShardID)
+		ri, ok = si1.Replicas[1]
+		assert.True(t, ok)
+		assert.Equal(t, nhID1, ri.UUID)
+		assert.Equal(t, cfg1.ServiceAddress, ri.ServiceAddress)
+
+		si2, ok = service2.GetShardInfo(2)
+		if !ok || si2.LeaderID != 1 {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		assert.Equal(t, 1, len(si2.Replicas))
+		require.Equal(t, uint64(2), si2.ShardID)
+		ri, ok = si2.Replicas[1]
+		assert.True(t, ok)
+		assert.Equal(t, nhID2, ri.UUID)
+		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
+
+		done = true
+	}
+	assert.True(t, done)
+}
