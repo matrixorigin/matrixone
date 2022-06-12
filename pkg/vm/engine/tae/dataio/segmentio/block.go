@@ -386,6 +386,29 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 	return
 }
 
+func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) {
+	stats := bf.deletes.Stat()
+	if stats.Size() == 0 {
+		return
+	}
+	size := stats.Size()
+	osize := stats.OriginSize()
+	dnode := common.GPool.Alloc(uint64(size))
+	defer common.GPool.Free(dnode)
+	if _, err = bf.deletes.Read(dnode.Buf[:size]); err != nil {
+		return
+	}
+	node := common.GPool.Alloc(uint64(osize))
+	defer common.GPool.Free(node)
+
+	if _, err = compress.Decompress(dnode.Buf[:size], node.Buf[:osize], compress.Lz4); err != nil {
+		return
+	}
+	mask = roaring.New()
+	err = mask.UnmarshalBinary(node.Buf[:osize])
+	return
+}
+
 func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any) {
 	for i, cb := range bf.columns {
 		uf, err := cb.OpenUpdateFile()

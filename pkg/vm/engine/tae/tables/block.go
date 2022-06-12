@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -138,32 +137,13 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 			}
 		}
 	}
-	delStats := blk.file.GetDeletesFileStat()
-	if delStats.Size() != 0 {
-		size := delStats.Size()
-		osize := delStats.OriginSize()
-		dnode := common.GPool.Alloc(uint64(size))
-		defer common.GPool.Free(dnode)
-		if err = blk.file.ReadDeletes(dnode.Buf[:size]); err != nil {
-			return err
-		}
-		node := common.GPool.Alloc(uint64(osize))
-		defer common.GPool.Free(node)
-
-		if _, err = compress.Decompress(dnode.Buf[:size], node.Buf[:osize], compress.Lz4); err != nil {
-			return err
-		}
-		deletes := roaring.New()
-		if err = deletes.UnmarshalBinary(node.Buf[:osize]); err != nil {
-			return err
-		}
-		logutil.Info(deletes.String())
-		deleteNode := updates.NewMergedNode(blk.ckpTs)
-		deleteNode.SetDeletes(deletes)
-		if err = blk.OnReplayDelete(deleteNode); err != nil {
-			return
-		}
+	deletes, err := blk.file.LoadDeletes()
+	if err != nil || deletes == nil {
+		return
 	}
+	deleteNode := updates.NewMergedNode(blk.ckpTs)
+	deleteNode.SetDeletes(deletes)
+	err = blk.OnReplayDelete(deleteNode)
 	return
 }
 
