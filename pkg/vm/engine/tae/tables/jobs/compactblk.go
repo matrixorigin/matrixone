@@ -161,7 +161,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		return
 	}
 
-	if err = newBlkData.ReplayData(); err != nil {
+	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
 	task.created = newBlk

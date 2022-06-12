@@ -1967,3 +1967,33 @@ func TestMergeBlockes(t *testing.T) {
 	}
 	assert.Nil(t, txn.Commit())
 }
+
+func TestDelete2(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 11)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockData(schema, 5)
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	v := getSingleSortKeyValue(bat, schema, 2)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactABlocks(false)
+
+	// txn, rel = tae.getRelation()
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
+	// assert.NoError(t, txn.Commit())
+
+	// tae.restart()
+	// txn, rel = tae.getRelation()
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
+	// assert.NoError(t, txn.Commit())
+}

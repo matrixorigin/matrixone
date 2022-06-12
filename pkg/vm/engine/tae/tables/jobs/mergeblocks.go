@@ -251,7 +251,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return
 		}
 		// Replay index
-		if err = meta.GetBlockData().ReplayData(); err != nil {
+		if err = meta.GetBlockData().ReplayIndex(); err != nil {
 			return
 		}
 	}
