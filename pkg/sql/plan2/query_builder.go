@@ -180,8 +180,16 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 		preNode := builder.qry.Nodes[node.Children[0]]
 		node.ProjectList = make([]*Expr, len(preNode.ProjectList))
 		for prjIdx, prjExpr := range preNode.ProjectList {
-			new_expr := DeepCopyExpr(prjExpr)
-			node.ProjectList[prjIdx] = new_expr
+			// node.ProjectList[prjIdx] = DeepCopyExpr(prjExpr)
+			node.ProjectList[prjIdx] = &Expr{
+				Typ: prjExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(prjIdx),
+					},
+				},
+			}
 
 			returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = []int32{0, int32(prjIdx)}
 		}
@@ -202,7 +210,16 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 			preNode := builder.qry.Nodes[node.Children[0]]
 			node.ProjectList = make([]*Expr, len(preNode.ProjectList))
 			for prjIdx, prjExpr := range preNode.ProjectList {
-				node.ProjectList[prjIdx] = DeepCopyExpr(prjExpr)
+				node.ProjectList[prjIdx] = &Expr{
+					Typ: prjExpr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: int32(prjIdx),
+						},
+					},
+				}
+				// node.ProjectList[prjIdx] = DeepCopyExpr(prjExpr)
 			}
 			returnMap = childMap
 		} else {
@@ -212,7 +229,6 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 				if err != nil {
 					return nil, err
 				}
-
 				returnMap[getColMapKey(ctx.projectTag, int32(idx))] = []int32{0, int32(idx)}
 			}
 		}
