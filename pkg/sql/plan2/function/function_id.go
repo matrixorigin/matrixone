@@ -180,11 +180,13 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
+	DAY       //DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
 	OCT
 	SUBSTRING // SUBSTRING
+	WEEK      //WEEK
 	WEEKDAY
 	YEAR // YEAR
 
@@ -260,6 +262,7 @@ var functionIdRegister = map[string]int32{
 	"acos":          ACOS,
 	"bit_length":    BIT_LENGTH,
 	"date":          DATE,
+	"day":           DAY,
 	"dayofyear":     DAYOFYEAR,
 	"exp":           EXP,
 	"empty":         EMPTY,
@@ -277,6 +280,7 @@ var functionIdRegister = map[string]int32{
 	"sinh":          SINH,
 	"space":         SPACE,
 	"tan":           TAN,
+	"week":          WEEK,
 	"weekday":       WEEKDAY,
 	"year":          YEAR,
 	"extract":       EXTRACT,
