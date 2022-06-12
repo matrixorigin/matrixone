@@ -37,11 +37,11 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *Q
 	}
 }
 
-func getColMapKey(relPos int32, colPos int32) string {
-	return fmt.Sprintf("%d-%d", relPos, colPos)
+func getColMapKey(relPos int32, colPos int32) int64 {
+	return (int64(relPos) << 32) + int64(colPos)
 }
 
-func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32) error {
+func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[int64][2]int32) error {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		if ids, ok := colMap[getColMapKey(ne.Col.RelPos, ne.Col.ColPos)]; ok {
@@ -61,10 +61,10 @@ func (builder *QueryBuilder) resetPosition(expr *Expr, colMap map[string][]int32
 	return nil
 }
 
-func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error) {
+func (builder *QueryBuilder) resetNode(nodeId int32) (map[int64][2]int32, error) {
 	node := builder.qry.Nodes[nodeId]
 	ctx := builder.ctxByNode[nodeId]
-	returnMap := make(map[string][]int32)
+	returnMap := make(map[int64][2]int32)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
@@ -80,13 +80,13 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 					},
 				},
 			}
-			returnMap[getColMapKey(tag, int32(idx))] = []int32{0, int32(idx)}
+			returnMap[getColMapKey(tag, int32(idx))] = [2]int32{0, int32(idx)}
 		}
 	case plan.Node_JOIN:
 		// TODO deal with using
 		colIdx := 0
 		// use this colMap to reset OnList
-		thisColMap := make(map[string][]int32)
+		thisColMap := make(map[int64][2]int32)
 		for idx, child := range node.Children {
 			childMap, err := builder.resetNode(child)
 			if err != nil {
@@ -94,7 +94,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 			}
 
 			for k, v := range childMap {
-				returnMap[k] = []int32{0, int32(colIdx)}
+				returnMap[k] = [2]int32{0, int32(colIdx)}
 				colIdx++
 
 				thisColV := v
@@ -142,7 +142,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 				},
 			}
 
-			returnMap[getColMapKey(ctx.groupTag, int32(idx))] = []int32{0, int32(colIdx)}
+			returnMap[getColMapKey(ctx.groupTag, int32(idx))] = [2]int32{0, int32(colIdx)}
 			colIdx++
 		}
 		for idx, expr := range node.AggList {
@@ -160,7 +160,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 					},
 				},
 			}
-			returnMap[getColMapKey(ctx.aggregateTag, int32(idx))] = []int32{0, int32(colIdx)}
+			returnMap[getColMapKey(ctx.aggregateTag, int32(idx))] = [2]int32{0, int32(colIdx)}
 			colIdx++
 		}
 	case plan.Node_SORT:
@@ -189,7 +189,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 				},
 			}
 
-			returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = []int32{0, int32(prjIdx)}
+			returnMap[getColMapKey(ctx.projectTag, int32(prjIdx))] = [2]int32{0, int32(prjIdx)}
 		}
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
 		childMap, err := builder.resetNode(node.Children[0])
@@ -227,7 +227,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 				if err != nil {
 					return nil, err
 				}
-				returnMap[getColMapKey(ctx.projectTag, int32(idx))] = []int32{0, int32(idx)}
+				returnMap[getColMapKey(ctx.projectTag, int32(idx))] = [2]int32{0, int32(idx)}
 			}
 		}
 	case plan.Node_VALUE_SCAN:
