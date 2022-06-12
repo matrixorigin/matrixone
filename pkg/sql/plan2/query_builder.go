@@ -72,9 +72,7 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
 		for idx, col := range node.TableDef.Cols {
 			node.ProjectList[idx] = &Expr{
-				Typ:       col.Typ,
-				TableName: node.TableDef.Alias,
-				ColName:   col.Alias,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: 0,
@@ -232,13 +230,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	// reset root projection
-	rootId := int32(len(builder.qry.Nodes) - 1)
-	ctx := builder.ctxByNode[rootId]
-	for idx, expr := range builder.qry.Nodes[rootId].ProjectList {
-		expr.ColName = ctx.headings[idx]
 	}
 	return builder.qry, nil
 }
@@ -513,8 +504,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}, ctx)
 	}
 
-	//reset last nodeId with heading
-	builder.ctxByNode[nodeId].headings = ctx.headings
+	// set query's headings
+	builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
 
 	return nodeId, nil
 }
