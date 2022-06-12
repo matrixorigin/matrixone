@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,96 +21,96 @@ import (
 	"testing"
 )
 
-func TestDate(t *testing.T) {
-	convey.Convey("DateCase", t, func() {
+func TestWeekday(t *testing.T) {
+	convey.Convey("WeekDayDateCase", t, func() {
 		type kase struct {
 			s    string
-			want string
+			want uint8
 		}
 
 		kases := []kase{
 			{
 				s:    "2004-04-03",
-				want: "2004-04-03",
+				want: 5,
 			},
 			{
 				s:    "2021-10-03",
-				want: "2021-10-03",
+				want: 6,
 			},
 			{
 				s:    "2020-08-23",
-				want: "2020-08-23",
+				want: 6,
 			},
 		}
 
 		var inStrs []string
-		var wantStr []string
+		var wantUint8 []uint8
 		for _, k := range kases {
 			inStrs = append(inStrs, k.s)
-			wantStr = append(wantStr, k.want)
+			wantUint8 = append(wantUint8, k.want)
 		}
 
 		inVector := testutil.MakeDateVector(inStrs, nil)
-		wantVec := testutil.MakeDateVector(wantStr, nil)
+		wantVec := testutil.MakeUint8Vector(wantUint8, nil)
 		proc := testutil.NewProc()
-		res, err := DateToDate([]*vector.Vector{inVector}, proc)
+		res, err := DateToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
 		compare := testutil.CompareVectors(wantVec, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
 
-	convey.Convey("ScalarDateCase", t, func() {
+	convey.Convey("ScalarWeekDayDateCase", t, func() {
 		type kase struct {
 			s    string
-			want string
+			want uint8
 		}
 
 		k := kase{
 			s:    "2020-08-23",
-			want: "2020-08-23",
+			want: 6,
 		}
 
 		inVector := testutil.MakeScalarDate(k.s, 10)
-		wantVec := testutil.MakeScalarDate(k.want, 10)
+		wantVec := testutil.MakeScalarUint8(k.want, 10)
 		proc := testutil.NewProc()
-		res, err := DateToDate([]*vector.Vector{inVector}, proc)
+		res, err := DateToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
 		compare := testutil.CompareVectors(wantVec, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
 
-	convey.Convey("DateTimeCase", t, func() {
+	convey.Convey("WeekDayDateTimeCase", t, func() {
 		type kase struct {
 			s    string
-			want string
+			want uint8
 		}
 
 		kases := []kase{
 			{
 				s:    "2004-04-03 13:11:10",
-				want: "2004-04-03",
+				want: 5,
 			},
 			{
 				s:    "2021-10-03 15:24:18",
-				want: "2021-10-03",
+				want: 6,
 			},
 			{
 				s:    "2020-08-23 21:53:09",
-				want: "2020-08-23",
+				want: 6,
 			},
 		}
 
 		var inStrs []string
-		var wantStrs []string
+		var wantUint8 []uint8
 		for _, k := range kases {
 			inStrs = append(inStrs, k.s)
-			wantStrs = append(wantStrs, k.want)
+			wantUint8 = append(wantUint8, k.want)
 		}
 
 		inVector := testutil.MakeDateTimeVector(inStrs, nil)
-		wantVec := testutil.MakeDateVector(wantStrs, nil)
+		wantVec := testutil.MakeUint8Vector(wantUint8, nil)
 		proc := testutil.NewProc()
-		res, err := DatetimeToDate([]*vector.Vector{inVector}, proc)
+		res, err := DatetimeToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
 		compare := testutil.CompareVectors(wantVec, res)
 		convey.So(compare, convey.ShouldBeTrue)
@@ -119,40 +119,43 @@ func TestDate(t *testing.T) {
 	convey.Convey("ScalarWeekDayDateTimeCase", t, func() {
 		type kase struct {
 			s    string
-			want string
+			want uint8
 		}
 
 		k := kase{
 			s:    "2021-10-03 15:24:18",
-			want: "2021-10-03",
+			want: 6,
 		}
 
 		inVector := testutil.MakeScalarDateTime(k.s, 10)
-		wantVec := testutil.MakeScalarDate(k.want, 10)
+		wantVec := testutil.MakeScalarUint8(k.want, 10)
 		proc := testutil.NewProc()
-		res, err := DatetimeToDate([]*vector.Vector{inVector}, proc)
+		res, err := DatetimeToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
 		compare := testutil.CompareVectors(wantVec, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
 
-	convey.Convey("TestDateToDateNull", t, func() {
-		vecs := []*vector.Vector{testutil.MakeScalarNull(10)}
+	convey.Convey("ScalarDateNUllCase", t, func() {
+		inVector := testutil.MakeScalarNull(10)
+		wantVec := testutil.MakeScalarNull(10)
 		proc := testutil.NewProc()
-		wantVector := testutil.MakeScalarNull(10)
-		vec, err := DateToDate(vecs, proc)
+		res, err := DateToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantVector, vec)
-		convey.So(ret, convey.ShouldBeTrue)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+
 	})
 
-	convey.Convey("TestDatetimeToDateNull", t, func() {
-		vecs := []*vector.Vector{testutil.MakeScalarNull(10)}
+	convey.Convey("ScalarDateTimeNUllCase", t, func() {
+		inVector := testutil.MakeScalarNull(10)
+		wantVec := testutil.MakeScalarNull(10)
 		proc := testutil.NewProc()
-		wantVector := testutil.MakeScalarNull(10)
-		vec, err := DatetimeToDate(vecs, proc)
+		res, err := DatetimeToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
-		ret := testutil.CompareVectors(wantVector, vec)
-		convey.So(ret, convey.ShouldBeTrue)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+
 	})
+
 }
