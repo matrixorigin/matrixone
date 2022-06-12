@@ -258,6 +258,22 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	return true
 }
 
+// todo(broccoli): change this to a general function
+func concatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) <= 1 {
+		return false
+	}
+	for _, arg := range args {
+		if arg != types.T_varchar && arg != types.T_char {
+			return false
+		}
+		if isScalarNull(arg) {
+			return false
+		}
+	}
+	return true
+}
+
 // returns the cost if t1 can level up to t2
 func up(t1, t2 types.T) int {
 	return levelUp[t1][t2]
@@ -376,6 +392,10 @@ func compare(f1, f2 Function) (f Function, change bool) {
 
 func isNotScalarNull(t types.T) bool {
 	return t != ScalarNull
+}
+
+func isScalarNull(t types.T) bool {
+	return t == ScalarNull
 }
 
 var (
