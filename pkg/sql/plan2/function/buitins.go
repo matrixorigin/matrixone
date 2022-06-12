@@ -106,6 +106,17 @@ var builtins = map[int][]Function{
 			Fn:          unary.BitLengthFunc,
 		},
 	},
+	CONCAT_WS: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: concatWsTypeCheck,
+			Fn:          multi.Concat_ws,
+		},
+	},
 	DATE: {
 		{
 			Index:       0,
