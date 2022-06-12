@@ -30,7 +30,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
-	sql := `with tbl(col1, col2) as (select n_nationkey, n_name from nation) select * from tbl order by col2`
+	sql := `select n_nationkey, sum(n_regionkey) from (select * from nation) sub group by n_nationkey`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -706,7 +706,8 @@ func TestResultColumns(t *testing.T) {
 	}
 
 	returnColumnsSql := map[string]string{
-		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC": "N_NAME,a",
+		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC":            "N_NAME,a",
+		"select n_nationkey, sum(n_regionkey) from (select * from nation) sub group by n_nationkey": "n_nationkey,sum(n_regionkey)",
 		"show variables":            "Variable_name,Value",
 		"show create database tpch": "Database,Create Database",
 		"show create table nation":  "Table,Create Table",

@@ -248,7 +248,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (int32, error) {
+func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
 	// build CTEs
 	err := builder.buildCTE(stmt.With, ctx)
 	if err != nil {
@@ -261,7 +261,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 	case *tree.SelectClause:
 		clause = selectClause
 	case *tree.ParenSelect:
-		return builder.buildSelect(selectClause.Select, ctx)
+		return builder.buildSelect(selectClause.Select, ctx, isRoot)
 	default:
 		return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
@@ -518,8 +518,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext) (i
 		}, ctx)
 	}
 
-	// set query's headings
-	builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
+	if isRoot {
+		builder.qry.Headings = append(builder.qry.Headings, ctx.headings...)
+	}
 
 	return nodeId, nil
 }
@@ -545,9 +546,9 @@ func (builder *QueryBuilder) buildCTE(withExpr *tree.With, ctx *BindContext) err
 
 		switch stmt := cte.Stmt.(type) {
 		case *tree.Select:
-			nodeId, err = builder.buildSelect(stmt, subCtx)
+			nodeId, err = builder.buildSelect(stmt, subCtx, false)
 		case *tree.ParenSelect:
-			nodeId, err = builder.buildSelect(stmt.Select, subCtx)
+			nodeId, err = builder.buildSelect(stmt.Select, subCtx, false)
 		default:
 			err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 		}
@@ -675,7 +676,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		newCtx := NewBindContext(builder, ctx)
-		nodeId, err = builder.buildSelect(tbl, newCtx)
+		nodeId, err = builder.buildSelect(tbl, newCtx, false)
 		if len(newCtx.corrCols) > 0 {
 			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
 		}
