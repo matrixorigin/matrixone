@@ -264,7 +264,10 @@ func concatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 		return false
 	}
 	for _, arg := range args {
-		if arg != types.T_varchar || arg != types.T_char || isScalarNull(arg) {
+		if arg != types.T_varchar && arg != types.T_char {
+			return false
+		}
+		if isScalarNull(arg) {
 			return false
 		}
 	}
