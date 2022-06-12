@@ -57,12 +57,13 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				return nil, errors.New(errno.SyntaxError, fmt.Sprintf("ORDER BY position %v is not in select list", colPos))
 			}
 
+			colPos = colPos - 1
 			return &plan.Expr{
 				Typ: b.ctx.projects[colPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: b.ctx.projectTag,
-						ColPos: int32(colPos - 1),
+						ColPos: int32(colPos),
 					},
 				},
 			}, nil
