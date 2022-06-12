@@ -39,13 +39,13 @@ func CountSpacesFromRight(xs *types.Bytes) int32 {
 		}
 
 		cursor := offset + xs.Lengths[i] - 1
-		for ; cursor >= offset && xs.Data[cursor] == ' '; cursor-- {
+		//cursor >= offset >=0
+		for ; cursor > offset && xs.Data[cursor] == ' '; cursor-- {
 			spaceCount++
+		}
 
-			if cursor == 0 {
-				// cursor is uint32, it will be 2 ** 32 -1 after cursor--
-				break
-			}
+		if cursor == offset && xs.Data[cursor] == ' ' {
+			spaceCount++
 		}
 	}
 
@@ -64,22 +64,20 @@ func rtrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 		}
 
 		cursor := offset + xs.Lengths[i] - 1
+		//cursor >= offset >=0
 		// ignore the tailing spaces
-		for ; cursor >= offset && xs.Data[cursor] == ' '; cursor-- {
-			if cursor == 0 {
-				break
-			}
-
+		for ; cursor > offset && xs.Data[cursor] == ' '; cursor-- {
 			continue
 		}
 
-		// copy the non-space characters
-		length := cursor - offset + 1
-		if resultCursor+length > uint32(len(rs.Data)) {
-			copy(rs.Data[resultCursor:], xs.Data[offset:offset+length])
-		} else {
+		length := uint32(0)
+		//cursor == offset :all spaces
+		if cursor > offset {
+			// copy the non-space characters
+			length = cursor - offset + 1
 			copy(rs.Data[resultCursor:resultCursor+length], xs.Data[offset:offset+length])
 		}
+
 		rs.Lengths[i] = length
 		rs.Offsets[i] = resultCursor
 		resultCursor += length

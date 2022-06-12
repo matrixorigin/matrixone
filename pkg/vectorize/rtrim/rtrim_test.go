@@ -16,6 +16,7 @@ package rtrim
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -81,8 +82,10 @@ func TestRtrim(t *testing.T) {
 	multiStringCase := types.Bytes{}
 	buf := bytes.Buffer{}
 	var offset uint32 = 0
+	trimed := 0
 	for _, input := range multiStrings {
 		buf.WriteString(input)
+		trimed += len(input) - len(strings.TrimRight(input, " "))
 		multiStringCase.Lengths = append(multiStringCase.Lengths, uint32(len(input)))
 		multiStringCase.Offsets = append(multiStringCase.Offsets, offset)
 
@@ -91,6 +94,7 @@ func TestRtrim(t *testing.T) {
 	multiStringCase.Data = buf.Bytes()
 
 	spacesCount := CountSpacesFromRight(&multiStringCase)
+	require.Equal(t, spacesCount, int32(trimed))
 	rs := types.Bytes{
 		Data:    make([]byte, len(multiStringCase.Data)-int(spacesCount)),
 		Lengths: make([]uint32, len(multiStringCase.Lengths)),
@@ -101,4 +105,9 @@ func TestRtrim(t *testing.T) {
 	require.Equal(t, 10, len(rs.Lengths))
 	require.Equal(t, 10, len(rs.Offsets))
 	require.Equal(t, int(spacesCount), len(multiStringCase.Data)-len(rs.Data))
+	for i := 0; i < len(multiStrings); i++ {
+		r := string(rs.Get(int64(i)))
+		want := strings.TrimRight(multiStrings[i], " ")
+		require.Equal(t, r, want)
+	}
 }

@@ -86,6 +86,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 
 		err = block.WriteDeletes(deletesBuf)
 		assert.Nil(t, err)
+		assert.Equal(t, int64(len(deletesBuf)), block.GetDeletesFileStat().OriginSize())
 		ids = append(ids, blkId1)
 
 		colBlk0, err := block.OpenColumn(0)
@@ -99,6 +100,8 @@ func TestSegmentFile_Replay(t *testing.T) {
 		assert.Nil(t, err)
 		_, err = idx.Write(w.Bytes())
 		assert.Nil(t, err)
+		err = colBlk0.WriteUpdates(w.Bytes())
+		assert.Nil(t, err)
 		colBlk0.Close()
 	}
 
@@ -109,6 +112,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		block, err := seg.OpenBlock(ids[i], colCnt, indexCnt)
 		assert.Nil(t, err)
+		assert.Equal(t, int64(len(deletesBuf)), block.GetDeletesFileStat().OriginSize())
 		colBlk0, err := block.OpenColumn(0)
 		assert.Nil(t, err)
 		assert.NotNil(t, colBlk0)
@@ -131,6 +135,23 @@ func TestSegmentFile_Replay(t *testing.T) {
 		inx, err := colBlk0.OpenIndexFile(0)
 		assert.Nil(t, err)
 		_, err = inx.Read(dbuf)
+		assert.Nil(t, err)
+		assert.Equal(t, dataStr, string(dbuf))
+		update, err := colBlk0.OpenUpdateFile()
+		assert.Nil(t, err)
+		buf = make([]byte, size)
+		dsize = update.Stat().OriginSize()
+		assert.Equal(t, int64(len(dataStr)), update.Stat().OriginSize())
+		dbuf = make([]byte, dsize)
+		_, err = update.Read(buf)
+		assert.Nil(t, err)
+		dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
+		assert.Nil(t, err)
+		assert.Equal(t, dataStr, string(dbuf))
+		err = colBlk0.ReadUpdates(buf)
+		assert.Nil(t, err)
+		dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
+		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
 		colBlk0.Close()
 
