@@ -26,6 +26,7 @@ func TestReverse(t *testing.T) {
 			"@($)@($#)_@(#",
 			"2023-04-24",
 			"10:03:23.021412",
+			"sdfad  ",
 		}
 		wantStrs := []string{
 			"cba",
@@ -44,6 +45,7 @@ func TestReverse(t *testing.T) {
 			"#(@_)#$(@)$(@",
 			"42-40-3202",
 			"214120.32:30:01",
+			"  dafds",
 		}
 		ivec := testutil.MakeVarcharVector(inputStrs, nil)
 		wantVec := testutil.MakeVarcharVector(wantStrs, nil)

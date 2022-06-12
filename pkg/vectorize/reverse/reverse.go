@@ -31,6 +31,19 @@ func init() {
 func reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 	var retCursor uint32
 
+	//in plan1, sometime, xs and rs are same...
+	isSame := xs == rs
+	var tmp []byte
+	if isSame {
+		maxSpaceLen := uint32(0)
+		for _, length := range xs.Lengths {
+			if length > maxSpaceLen {
+				maxSpaceLen = length
+			}
+		}
+		tmp = make([]byte, maxSpaceLen)
+	}
+
 	for idx, offset := range xs.Offsets {
 		cursor := offset
 		curLen := xs.Lengths[idx]
@@ -39,9 +52,16 @@ func reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 		if curLen != 0 {
 			//reverse
 			input := xs.Data[cursor : cursor+curLen]
-			output := rs.Data[cursor : cursor+curLen]
-			source := 0
+			var output []byte
 			target := curLen
+			if isSame {
+				output = tmp
+				target = uint32(len(tmp))
+			} else {
+				output = rs.Data[cursor : cursor+curLen]
+				target = curLen
+			}
+			source := 0
 			for source < len(input) {
 				r, readed := utf8.DecodeRune(input[source:])
 				if r == utf8.RuneError {
@@ -55,6 +75,9 @@ func reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 				}
 				source += readed
 				target = p
+			}
+			if isSame {
+				copy(rs.Data[cursor:cursor+curLen], tmp[target:])
 			}
 		}
 
