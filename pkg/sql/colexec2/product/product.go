@@ -47,10 +47,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				ctr.bat.Clean(proc.Mp)
+				if ctr.bat != nil {
+					ctr.bat.Clean(proc.Mp)
+				}
 				continue
 			}
 			if len(bat.Zs) == 0 {
+				continue
+			}
+			if ctr.bat == nil {
+				bat.Clean(proc.Mp)
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc); err != nil {
