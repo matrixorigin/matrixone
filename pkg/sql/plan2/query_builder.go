@@ -88,14 +88,15 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[int64][2]int32, error)
 		// use this colMap to reset OnList
 		thisColMap := make(map[int64][2]int32)
 		for idx, child := range node.Children {
+			colIdx = len(returnMap)
+
 			childMap, err := builder.resetNode(child)
 			if err != nil {
 				return nil, err
 			}
 
 			for k, v := range childMap {
-				returnMap[k] = [2]int32{0, int32(colIdx)}
-				colIdx++
+				returnMap[k] = [2]int32{0, int32(colIdx) + v[1]}
 
 				thisColV := v
 				thisColV[0] = int32(idx)
