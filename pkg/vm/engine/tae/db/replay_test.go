@@ -1208,3 +1208,45 @@ func TestReplay8(t *testing.T) {
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
 	_ = txn.Rollback()
 }
+
+func TestReplay9(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockData(schema, schema.BlockMaxRows*3+2)
+	bats := compute.SplitBatch(bat, 4)
+
+	tae.createRelAndAppend(bats[0], true)
+	txn, rel := tae.getRelation()
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	v := getSingleSortKeyValue(bats[0], schema, 2)
+	filter := handle.NewEQFilter(v)
+	err := rel.UpdateByFilter(filter, 2, int32(999))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	// tae.restart()
+	// txn, rel = tae.getRelation()
+	// actv, err := rel.GetValueByFilter(filter, 2)
+	// assert.NoError(t, err)
+	// assert.Equal(t, int32(999), actv)
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	// assert.NoError(t, txn.Commit())
+
+	tae.compactABlocks(false)
+
+	tae.restart()
+	txn, rel = tae.getRelation()
+	_, _, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	return
+	actv, err := rel.GetValueByFilter(filter, 3)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(999), actv)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	assert.NoError(t, txn.Commit())
+}

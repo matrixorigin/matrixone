@@ -125,31 +125,34 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
+	an := updates.NewCommittedAppendNode(blk.ckpTs, blk.node.rows, blk.mvcc)
+	blk.mvcc.OnReplayAppendNode(an)
 	delStats := blk.file.GetDeletesFileStat()
-	if delStats.Size() == 0 {
-		return
-	}
-	size := delStats.Size()
-	osize := delStats.OriginSize()
-	dnode := common.GPool.Alloc(uint64(size))
-	defer common.GPool.Free(dnode)
-	if err = blk.file.ReadDeletes(dnode.Buf[:size]); err != nil {
-		return err
-	}
-	node := common.GPool.Alloc(uint64(osize))
-	defer common.GPool.Free(node)
+	if delStats.Size() != 0 {
+		size := delStats.Size()
+		osize := delStats.OriginSize()
+		dnode := common.GPool.Alloc(uint64(size))
+		defer common.GPool.Free(dnode)
+		if err = blk.file.ReadDeletes(dnode.Buf[:size]); err != nil {
+			return err
+		}
+		node := common.GPool.Alloc(uint64(osize))
+		defer common.GPool.Free(node)
 
-	if _, err = compress.Decompress(dnode.Buf[:size], node.Buf[:osize], compress.Lz4); err != nil {
-		return err
+		if _, err = compress.Decompress(dnode.Buf[:size], node.Buf[:osize], compress.Lz4); err != nil {
+			return err
+		}
+		deletes := roaring.New()
+		if err = deletes.UnmarshalBinary(node.Buf[:osize]); err != nil {
+			return err
+		}
+		logutil.Info(deletes.String())
+		deleteNode := updates.NewMergedNode(blk.ckpTs)
+		deleteNode.SetDeletes(deletes)
+		if err = blk.OnReplayDelete(deleteNode); err != nil {
+			return
+		}
 	}
-	deletes := roaring.New()
-	if err = deletes.UnmarshalBinary(node.Buf[:osize]); err != nil {
-		return err
-	}
-	logutil.Info(deletes.String())
-	deleteNode := updates.NewMergedNode(blk.ckpTs)
-	deleteNode.SetDeletes(deletes)
-	err = blk.OnReplayDelete(deleteNode)
 	return
 }
 
@@ -785,6 +788,7 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 		if err != nil {
 			return
 		}
+		// logutil.Infof("ts=%d, maxVisible=%d,visible=%v", ts, blk.mvcc.LoadMaxVisible(), visible)
 		// If row is visible to txn
 		if visible {
 			var deleted bool
@@ -805,6 +809,7 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 	deleted, existed := blk.index.IsKeyDeleted(filter.Val, ts)
 	if !existed || deleted {
 		err = data.ErrNotFound
+		// panic(fmt.Sprintf("%v:%v %v:%s", existed, deleted, filter.Val, blk.index.String()))
 	}
 	return
 }
