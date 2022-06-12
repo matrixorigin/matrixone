@@ -1913,3 +1913,87 @@ func TestSnapshotIsolation2(t *testing.T) {
 	assert.ErrorIs(t, err, txnif.TxnWWConflictErr)
 	_ = txn1.Rollback()
 }
+
+// 1. Append 3 blocks and delete last 5 rows of the 1st block
+// 2. Merge blocks
+// 3. Check rows and col[0]
+func TestMergeBlockes(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13, -1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 3
+	bat := catalog.MockData(schema, 30)
+
+	createRelationAndAppend(t, tae, "db", schema, bat, true)
+
+	txn, err := tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err := txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err := db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	it := rel.MakeBlockIt()
+	blkID := it.GetBlock().Fingerprint()
+	err = rel.RangeDelete(blkID, 5, 9)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	for it.Valid() {
+		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
+		t.Log(col)
+		assert.Nil(t, err)
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit())
+
+	mergeBlocks(t, tae, "db", schema, false)
+
+	txn, err = tae.StartTxn(nil)
+	assert.Nil(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
+	it = rel.MakeBlockIt()
+	for it.Valid() {
+		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
+		t.Log(col)
+		assert.Nil(t, err)
+		it.Next()
+	}
+	assert.Nil(t, txn.Commit())
+}
+
+func TestDelete2(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 11)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockData(schema, 5)
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	v := getSingleSortKeyValue(bat, schema, 2)
+	filter := handle.NewEQFilter(v)
+	err := rel.DeleteByFilter(filter)
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactABlocks(false)
+
+	// txn, rel = tae.getRelation()
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
+	// assert.NoError(t, txn.Commit())
+
+	// tae.restart()
+	// txn, rel = tae.getRelation()
+	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
+	// assert.NoError(t, txn.Commit())
+}

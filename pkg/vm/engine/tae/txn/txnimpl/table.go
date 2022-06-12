@@ -136,6 +136,7 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 	if err != nil {
 		return
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
@@ -151,6 +152,7 @@ func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error
 		return
 	}
 	seg = newSegment(tbl, meta)
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -166,6 +168,7 @@ func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 		return
 	}
 	seg = newSegment(tbl, meta)
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -180,12 +183,14 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	if err != nil {
 		return
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }
 
 func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, entry)
 	for _, id := range readed {
 		tbl.store.warChecker.Read(tbl.entry.GetDB().ID, id)
@@ -232,6 +237,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 	if err != nil {
 		return
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return buildBlock(tbl, meta), err
@@ -241,6 +247,7 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 	if tbl.createEntry != nil {
 		panic("logic error")
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.createEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
@@ -253,6 +260,7 @@ func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
 	if tbl.createEntry != nil {
 		return txnbase.ErrDDLDropCreated
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.dropEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
@@ -296,6 +304,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 		return ErrDuplicateNode
 	}
 	tbl.deleteNodes[nid] = node
+	tbl.store.IncreateWriteCnt()
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
@@ -306,6 +315,7 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	if u != nil {
 		return ErrDuplicateNode
 	}
+	tbl.store.IncreateWriteCnt()
 	tbl.updateNodes[id] = node
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil

@@ -37,6 +37,7 @@ type Block interface {
 	// OpenDeletesFile() common.IRWFile
 	WriteDeletes(buf []byte) error
 	ReadDeletes(buf []byte) error
+	GetDeletesFileStat() common.FileInfo
 
 	LoadIndexMeta() (any, error)
 	WriteIndexMeta(buf []byte) (err error)

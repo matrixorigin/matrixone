@@ -773,20 +773,38 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 // CastVarcharAsTimestamp : Cast converts varchar to timestamp type
 func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vs := lv.Col.(*types.Bytes)
-	col := make([]types.Timestamp, 0, len(vs.Lengths))
-	for i := range vs.Lengths {
-		varcharValue := vs.Get(int64(i))
-		data, err := types.ParseTimestamp(string(varcharValue), 6) // default timestamp precision is 6
+
+	if lv.IsScalar() {
+		scalarVector := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Timestamp, 1)
+		strBytes := vs.Get(0)
+		data, err := types.ParseTimestamp(string(strBytes), 6)
 		if err != nil {
 			return nil, err
 		}
-		col = append(col, data)
+		rs[0] = data
+		nulls.Set(scalarVector.Nsp, lv.Nsp)
+		vector.SetCol(scalarVector, rs)
+		return scalarVector, nil
 	}
-	vec := vector.New(rv.Typ)
-	vec.Col = col
-	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
-	return vec, nil
+
+	allocVector, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeTimestampSlice(allocVector.Data)
+	rs = rs[:len(vs.Lengths)]
+	for i := range vs.Lengths {
+		strBytes := vs.Get(int64(i))
+		data, err := types.ParseTimestamp(string(strBytes), 6)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = data
+	}
+	nulls.Set(allocVector.Nsp, lv.Nsp)
+	vector.SetCol(allocVector, rs)
+	return allocVector, nil
 }
 
 // CastDecimal64AsDecimal128: Cast converts decimal64 to timestamp decimal128

@@ -36,6 +36,7 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 	if db.createEntry != nil {
 		panic("logic error")
 	}
+	db.store.IncreateWriteCnt()
 	db.createEntry = e
 	return nil
 }
@@ -47,6 +48,7 @@ func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 	if db.createEntry != nil {
 		return txnbase.ErrDDLDropCreated
 	}
+	db.store.IncreateWriteCnt()
 	db.dropEntry = e
 	return nil
 }
@@ -152,7 +154,6 @@ func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err er
 }
 
 func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
-	db.store.IncreateWriteCnt()
 	schema := def.(*catalog.Schema)
 	var factory catalog.TableDataFactory
 	if db.store.dataFactory != nil {
@@ -172,7 +173,6 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 }
 
 func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err error) {
-	db.store.IncreateWriteCnt()
 	meta, err := db.entry.DropTableEntry(name, db.store.txn)
 	if err != nil {
 		return nil, err

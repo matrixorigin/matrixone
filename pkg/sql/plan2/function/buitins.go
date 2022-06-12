@@ -126,6 +126,26 @@ var builtins = map[int][]Function{
 			Fn:          unary.DatetimeToDate,
 		},
 	},
+	DAY: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DateToDay,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_datetime},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DatetimeToDay,
+		},
+	},
 	DAYOFYEAR: {
 		{
 			Index:       0,
@@ -476,6 +496,15 @@ var builtins = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          unary.DatetimeToMonth,
 		},
+		{
+			Index:       2,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DateStringToMonth,
+		},
 	},
 	OCT: {
 		{
@@ -703,6 +732,26 @@ var builtins = map[int][]Function{
 			Fn:          unary.SpaceFloat[float64],
 		},
 	},
+	WEEK: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_date},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DateToWeek,
+		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_datetime},
+			ReturnTyp:   types.T_uint8,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DatetimeToWeek,
+		},
+	},
 	WEEKDAY: {
 		{
 			Index:       0,
@@ -741,6 +790,15 @@ var builtins = map[int][]Function{
 			ReturnTyp:   types.T_uint16,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          unary.DatetimeToYear,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar},
+			ReturnTyp:   types.T_uint16,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          unary.DateStringToYear,
 		},
 	},
 	// binary functions
@@ -1581,7 +1639,7 @@ var builtins = map[int][]Function{
 			Args:        []types.T{types.T_date, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          unary.DateAdd,
+			Fn:          multi.DateAdd,
 		},
 		{
 			Index:       1,
@@ -1591,7 +1649,17 @@ var builtins = map[int][]Function{
 			Args:        []types.T{types.T_datetime, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_datetime,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          unary.DatetimeAdd,
+			Fn:          multi.DatetimeAdd,
+		},
+		{
+			Index:       2,
+			Volatile:    true,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.DateStringAdd,
 		},
 	},
 	DATE_SUB: {
@@ -1603,7 +1671,7 @@ var builtins = map[int][]Function{
 			Args:        []types.T{types.T_date, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_date,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          unary.DateSub,
+			Fn:          multi.DateSub,
 		},
 		{
 			Index:       1,
@@ -1613,7 +1681,17 @@ var builtins = map[int][]Function{
 			Args:        []types.T{types.T_datetime, types.T_int64, types.T_int64},
 			ReturnTyp:   types.T_datetime,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          unary.DatetimeSub,
+			Fn:          multi.DatetimeSub,
+		},
+		{
+			Index:       2,
+			Volatile:    true,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_int64, types.T_int64},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.DateStringSub,
 		},
 	},
 	TAN: {

@@ -23,8 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-type noopObserver struct {
-}
+type noopObserver struct{}
 
 func (o *noopObserver) OnNewEntry(_ int) {
 }
@@ -221,7 +220,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 			r.uncommit[tinfo.Group] = tidMap
 		}
 	case entry.GTInternal:
-		if info.PostCommitVersion > r.ckpVersion {
+		if info.PostCommitVersion >= r.ckpVersion {
 			r.ckpVersion = info.PostCommitVersion
 			replayEty := &replayEntry{
 				payload: make([]byte, e.GetPayloadSize()),
@@ -247,6 +246,7 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 	vfile := v.(*vFile)
 	if vfile.version != r.version {
 		r.state.pos = 0
+		r.version = vfile.version
 	}
 	current := vfile.GetState()
 	entry := entry.GetBase()
@@ -270,19 +270,22 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		if !errors.Is(err, io.EOF) {
 			return err
 		}
-		err2 := vfile.Truncate(int64(r.state.pos))
-		if err2 != nil {
-			panic(err2)
-		}
-		return err
+		panic("wrong wal")
+		// err2 := vfile.Truncate(int64(r.state.pos))
+		// if err2 != nil {
+		// 	panic(err2)
+		// }
+		// return err
 	}
 	if int(n) != entry.TotalSizeExpectMeta() {
 		if current.pos == r.state.pos+int(n) {
-			err2 := vfile.Truncate(int64(current.pos))
-			if err2 != nil {
-				return err
-			}
-			return io.EOF
+			panic("wrong wal")
+			// err2 := vfile.Truncate(int64(current.pos))
+			// if err2 != nil {
+			// 	logutil.Infof("lalala")
+			// 	return err
+			// }
+			// return io.EOF
 		} else {
 			return fmt.Errorf("payload mismatch: %d != %d", n, entry.GetPayloadSize())
 		}

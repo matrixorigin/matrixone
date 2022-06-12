@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package pb
+package metric
 
 import (
 	"fmt"
@@ -30,15 +30,15 @@ func P2MMetricFamilies(mfs []*dto.MetricFamily) []*MetricFamily {
 			continue
 		}
 		moMf := &MetricFamily{
-			Name: mf.Name,
-			Help: mf.Help,
+			Name: mf.GetName(),
+			Help: mf.GetHelp(),
 		}
 		switch mf.GetType() {
 		case dto.MetricType_COUNTER:
-			moMf.Type = MetricType_COUNTER.Enum()
+			moMf.Type = MetricType_COUNTER
 			moMf.Metric = P2MCounters(mf.Metric)
 		case dto.MetricType_GAUGE:
-			moMf.Type = MetricType_GAUGE.Enum()
+			moMf.Type = MetricType_GAUGE
 			moMf.Metric = P2MGauges(mf.Metric)
 		default:
 			panic(fmt.Sprintf("unsupported metric type in mo %v", mf.GetType()))

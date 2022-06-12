@@ -21,7 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/metric/pb"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -68,9 +68,9 @@ func (r *rawHist) assembleAndSend(buf []*pb.Sample) {
 		RawHist: rawHistMetric,
 	}
 	mf := &pb.MetricFamily{
-		Name:   &name,
-		Help:   &o.Help,
-		Type:   pb.MetricType_RAWHIST.Enum(),
+		Name:   name,
+		Help:   o.Help,
+		Type:   pb.MetricType_RAWHIST,
 		Metric: []*pb.Metric{metric},
 	}
 

@@ -14,6 +14,11 @@
 
 package function
 
+const (
+	Distinct     = 0x8000000000000000
+	DistinctMask = 0x7FFFFFFFFFFFFFFF
+)
+
 // All function IDs
 const (
 	EQUAL           = iota // =
@@ -175,11 +180,13 @@ const (
 	ANY    // ANY
 
 	DATE      // DATE
+	DAY       //DAY
 	DAYOFYEAR // DAYOFYEAR
 	INTERVAL  // INTERVAL
 	EXTRACT   // EXTRACT
 	OCT
 	SUBSTRING // SUBSTRING
+	WEEK      //WEEK
 	WEEKDAY
 	YEAR // YEAR
 
@@ -255,11 +262,13 @@ var functionIdRegister = map[string]int32{
 	"acos":          ACOS,
 	"bit_length":    BIT_LENGTH,
 	"date":          DATE,
+	"day":           DAY,
 	"dayofyear":     DAYOFYEAR,
 	"exp":           EXP,
 	"empty":         EMPTY,
 	"length":        LENGTH,
 	"lengthutf8":    LENGTH_UTF8,
+	"char_length":   LENGTH_UTF8,
 	"ln":            LN,
 	"log":           LOG,
 	"ltrim":         LTRIM,
@@ -271,9 +280,11 @@ var functionIdRegister = map[string]int32{
 	"sinh":          SINH,
 	"space":         SPACE,
 	"tan":           TAN,
+	"week":          WEEK,
 	"weekday":       WEEKDAY,
 	"year":          YEAR,
 	"extract":       EXTRACT,
+	"if":            IFF,
 	"iff":           IFF,
 	"date_add":      DATE_ADD,
 	"date_sub":      DATE_SUB,

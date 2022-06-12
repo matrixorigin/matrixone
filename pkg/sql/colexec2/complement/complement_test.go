@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -57,109 +58,153 @@ func init() {
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]Condition{
 				{
-					{0, 0, types.Type{Oid: types.T_int8}},
+					{0, newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 				{
-					{0, 0, types.Type{Oid: types.T_int8}},
+					{0, newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 			[][]Condition{
 				{
-					{0, 0, types.Type{Oid: types.T_int8}},
+					{0, newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 				{
-					{0, 0, types.Type{Oid: types.T_int8}},
+					{0, newExpr(0, types.Type{Oid: types.T_int8})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
 			[][]Condition{
 				{
-					{0, 0, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{0, 1, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal64}}, []int32{0},
 			[][]Condition{
 				{
-					{0, 0, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{0, 1, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
-					{0, 0, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{0, 1, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
-					{0, 0, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{0, 1, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
 			[][]Condition{
 				{
-					{1, 0, types.Type{Oid: types.T_int64}},
+					{0, newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 				{
-					{1, 0, types.Type{Oid: types.T_int64}},
+					{0, newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, []int32{0},
 			[][]Condition{
 				{
-					{1, 0, types.Type{Oid: types.T_int64}},
+					{0, newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 				{
-					{1, 0, types.Type{Oid: types.T_int64}},
+					{0, newExpr(1, types.Type{Oid: types.T_int64})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
 			[][]Condition{
 				{
-					{1, 0, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{1, 1, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal64}}, []int32{0},
 			[][]Condition{
 				{
-					{1, 0, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal64})},
 				},
 				{
-					{1, 1, types.Type{Oid: types.T_decimal64}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal64, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
-					{1, 0, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{1, 1, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
 				},
 			}),
 		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_decimal128}}, []int32{0},
 			[][]Condition{
 				{
-					{1, 0, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal128})},
 				},
 				{
-					{1, 1, types.Type{Oid: types.T_decimal128}},
+					{0, newExpr(1, types.Type{Oid: types.T_decimal128, Scale: 1})},
+				},
+			}),
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
+			[][]Condition{
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
+				},
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
+				},
+			}),
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal64}, {Oid: types.T_char}}, []int32{0},
+			[][]Condition{
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64, Scale: 1})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
+				},
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal64})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
+				},
+			}),
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
+			[][]Condition{
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
+				},
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
+				},
+			}),
+		newTestCase(mheap.New(gm), []bool{true, true}, []types.Type{{Oid: types.T_decimal128}, {Oid: types.T_char}}, []int32{0},
+			[][]Condition{
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128, Scale: 1})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
+				},
+				{
+					{0, newExpr(0, types.Type{Oid: types.T_decimal128})},
+					{0, newExpr(1, types.Type{Oid: types.T_char})},
 				},
 			}),
 	}
@@ -208,19 +253,19 @@ func BenchmarkComplement(b *testing.B) {
 			newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]Condition{
 					{
-						{0, 0, types.Type{Oid: types.T_int8}},
+						{0, newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 					{
-						{0, 0, types.Type{Oid: types.T_int8}},
+						{0, newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 				}),
 			newTestCase(mheap.New(gm), []bool{true}, []types.Type{{Oid: types.T_int8}}, []int32{0},
 				[][]Condition{
 					{
-						{0, 0, types.Type{Oid: types.T_int8}},
+						{0, newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 					{
-						{0, 0, types.Type{Oid: types.T_int8}},
+						{0, newExpr(0, types.Type{Oid: types.T_int8})},
 					},
 				}),
 		}
@@ -243,6 +288,22 @@ func BenchmarkComplement(b *testing.B) {
 				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
 			}
 		}
+	}
+}
+
+func newExpr(pos int32, typ types.Type) *plan.Expr {
+	return &plan.Expr{
+		Typ: &plan.Type{
+			Size:  typ.Size,
+			Scale: typ.Scale,
+			Width: typ.Width,
+			Id:    plan.Type_TypeId(typ.Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				ColPos: pos,
+			},
+		},
 	}
 }
 
