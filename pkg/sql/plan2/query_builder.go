@@ -352,6 +352,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if err != nil {
 			return 0, err
 		}
+
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType:  plan.Node_PROJECT,
 			Children:  []int32{nodeId},
@@ -841,17 +842,26 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
 	var joinType plan.Node_JoinFlag
+	var leftJoinType plan.Node_JoinFlag
+	var rightJoinType plan.Node_JoinFlag
 
-	// todo need confirm
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
 		joinType = plan.Node_INNER
+		leftJoinType = plan.Node_INNER
+		rightJoinType = plan.Node_INNER
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
+		leftJoinType = plan.Node_OUTER
+		rightJoinType = plan.Node_INNER
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
 		joinType = plan.Node_RIGHT
+		leftJoinType = plan.Node_INNER
+		rightJoinType = plan.Node_OUTER
 	case tree.JOIN_TYPE_FULL:
 		joinType = plan.Node_OUTER
+		leftJoinType = plan.Node_OUTER
+		rightJoinType = plan.Node_OUTER
 	}
 
 	leftCtx := NewBindContext(builder, ctx)
@@ -867,6 +877,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		return 0, err
 	}
 
+	leftChild := builder.qry.Nodes[leftChildId]
+	rightChild := builder.qry.Nodes[rightChildId]
+	leftChild.JoinType = leftJoinType
+	rightChild.JoinType = rightJoinType
+
 	err = ctx.mergeContexts(leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
@@ -875,7 +890,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	nodeId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		Children: []int32{leftChildId, rightChildId},
-		JoinType: joinType,
 	}, ctx)
 	node := builder.qry.Nodes[nodeId]
 
