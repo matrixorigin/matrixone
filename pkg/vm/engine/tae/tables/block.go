@@ -127,6 +127,17 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	}
 	an := updates.NewCommittedAppendNode(blk.ckpTs, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
+	masks, vals := blk.file.LoadUpdates()
+	if masks != nil {
+		for colIdx, mask := range masks {
+			un := updates.NewCommittedColumnNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
+			un.SetMask(mask)
+			un.SetValues(vals[colIdx])
+			if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
+				return
+			}
+		}
+	}
 	delStats := blk.file.GetDeletesFileStat()
 	if delStats.Size() != 0 {
 		size := delStats.Size()

@@ -39,6 +39,8 @@ type Block interface {
 	ReadDeletes(buf []byte) error
 	GetDeletesFileStat() common.FileInfo
 
+	LoadUpdates() (map[uint16]*roaring.Bitmap, map[uint16]map[uint32]any)
+
 	LoadIndexMeta() (any, error)
 	WriteIndexMeta(buf []byte) (err error)
 

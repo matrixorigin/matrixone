@@ -286,3 +286,7 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 	}
 	return
 }
+
+func (bf *blockFile) LoadUpdates() (map[uint16]*roaring.Bitmap, map[uint16]map[uint32]any) {
+	panic("implement me")
+}

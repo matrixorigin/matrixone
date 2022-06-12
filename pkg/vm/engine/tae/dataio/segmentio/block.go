@@ -16,6 +16,7 @@ package segmentio
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 
@@ -347,6 +348,13 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 		if updates != nil {
 			w.Reset()
 			mask := masks[uint16(colIdx)]
+			buf, err := mask.ToBytes()
+			if err != nil {
+				return err
+			}
+			if err = binary.Write(&w, binary.BigEndian, uint32(len(buf))); err != nil {
+				return err
+			}
 			if _, err = mask.WriteTo(&w); err != nil {
 				return err
 			}
@@ -357,7 +365,7 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 				v := updates[row]
 				compute.AppendValue(col, v)
 			}
-			buf, err := col.Show()
+			buf, err = col.Show()
 			if err != nil {
 				return err
 			}
@@ -374,6 +382,57 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 		if err = cb.WriteData(buf); err != nil {
 			return err
 		}
+	}
+	return
+}
+
+func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any) {
+	for i, cb := range bf.columns {
+		uf, err := cb.OpenUpdateFile()
+		if err != nil {
+			panic(err)
+		}
+		osize := uf.Stat().OriginSize()
+		if osize == 0 {
+			continue
+		}
+		size := uf.Stat().Size()
+		node := common.GPool.Alloc(uint64(size))
+		defer common.GPool.Free(node)
+		buf := node.Buf[:size]
+		if _, err = uf.Read(buf); err != nil {
+			panic(err)
+		}
+		onode := common.GPool.Alloc(uint64(osize))
+		defer common.GPool.Free(onode)
+		obuf := onode.Buf[:osize]
+		obuf, err = compress.Decompress(buf, obuf, compress.Lz4)
+		maskLen := binary.BigEndian.Uint32(obuf[:4])
+		obuf = obuf[4:]
+		mask := roaring.New()
+		if err = mask.UnmarshalBinary(obuf[:maskLen]); err != nil {
+			panic(err)
+		}
+		obuf = obuf[maskLen:]
+		vec := gvec.New(types.T_any.ToType())
+		if err = vec.Read(obuf); err != nil {
+			panic(err)
+		}
+		val := make(map[uint32]any)
+		it := mask.Iterator()
+		pos := 0
+		for it.HasNext() {
+			row := it.Next()
+			v := compute.GetValue(vec, uint32(pos))
+			val[row] = v
+			pos++
+		}
+		if masks == nil {
+			masks = make(map[uint16]*roaring.Bitmap)
+			vals = make(map[uint16]map[uint32]any)
+		}
+		vals[uint16(i)] = val
+		masks[uint16(i)] = mask
 	}
 	return
 }
