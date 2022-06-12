@@ -61,7 +61,7 @@ func newCompactor(base *syncBase) *compactor {
 	base.checkpointed.RWMutex.RUnlock()
 	c.tidCidMap = base.tidLsnMaps
 	c.tidCidMapMu = base.tidLsnMapmu
-	c.ckpInfoVersion=int(atomic.LoadUint64(&base.syncedVersion))
+	c.ckpInfoVersion = int(atomic.LoadUint64(&base.syncedVersion))
 	return c
 }
 

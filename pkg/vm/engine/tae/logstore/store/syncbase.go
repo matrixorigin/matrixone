@@ -41,7 +41,7 @@ type syncBase struct {
 	ckpmu                        sync.RWMutex
 	syncing                      map[uint32]uint64
 	checkpointed, synced, ckpCnt *syncMap
-	tidLsnMaps                   map[uint32]map[uint64]uint64 //TODO: delete when checkpoint
+	tidLsnMaps                   map[uint32]map[uint64]uint64
 	tidLsnMapmu                  *sync.RWMutex
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
@@ -114,7 +114,7 @@ func (info *checkpointInfo) GetCheckpointed() uint64 {
 	if info.ranges == nil || len(info.ranges.Intervals) == 0 {
 		return 0
 	}
-	if info.ranges.Intervals[0].Start != 1 {
+	if info.ranges.Intervals[0].Start > 1 {
 		return 0
 	}
 	return info.ranges.Intervals[0].End
@@ -303,6 +303,9 @@ func (base *syncBase) OnReplay(r *replayer) {
 	for k, v := range r.groupLSN {
 		base.synced.ids[k] = v
 	}
+	for k, v := range r.groupLSN {
+		base.syncing[k] = v
+	}
 	if r.ckpEntry != nil {
 		err := base.UnarshalPostCommitEntry(r.ckpEntry.payload)
 		if err != nil {
@@ -320,8 +323,8 @@ func (base *syncBase) OnReplay(r *replayer) {
 		base.ckpCnt.ids[groupId] = base.checkpointing[groupId].GetCkpCnt()
 	}
 	r.checkpointrange = base.checkpointing
-	base.syncedVersion=uint64(r.ckpVersion)
-	base.tidLsnMaps=r.tidlsnMap
+	base.syncedVersion = uint64(r.ckpVersion)
+	base.tidLsnMaps = r.tidlsnMap
 }
 
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {
@@ -371,7 +374,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 		}
 	case entry.GTUncommit:
 	case entry.GTInternal:
-		atomic.StoreUint64(&base.syncedVersion,uint64(v.PostCommitVersion))
+		atomic.StoreUint64(&base.syncedVersion, uint64(v.PostCommitVersion))
 	default:
 		base.tidLsnMapmu.Lock()
 		if v.Group >= entry.GTCustomizedStart {
