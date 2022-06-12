@@ -168,6 +168,9 @@ func (bc *BindContext) unfoldStar(table string) ([]tree.SelectExpr, []string, er
 }
 
 func (bc *BindContext) doUnfoldStar(root *BindingTreeNode, visitedUsingCols map[string]any, exprs *[]tree.SelectExpr, names *[]string) {
+	if root == nil {
+		return
+	}
 	if root.binding != nil {
 		for _, col := range root.binding.cols {
 			if _, ok := visitedUsingCols[col]; !ok {
