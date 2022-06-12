@@ -42,6 +42,9 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
+func (idx *immutableIndex) String() string {
+	panic("implement me")
+}
 func (index *immutableIndex) GetMaxDeleteTS() uint64                    { panic("not supported") }
 func (index *immutableIndex) HasDeleteFrom(key any, fromTs uint64) bool { panic("not supported") }
 
