@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/concat_ws"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -67,7 +66,7 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		result := concat_ws.ConcatWs(inputBytes, inputNsps, separator, vectors[0].Length, resultValues)
+		result := concatWsInputBytes(inputBytes, inputNsps, separator, vectors[0].Length, resultValues)
 		resultVector.Col = result.OutputBytes
 		resultVector.Nsp = result.OutputNsp
 		return resultVector, nil
@@ -90,8 +89,54 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		Offsets: make([]uint32, vectors[0].Length),
 		Lengths: make([]uint32, vectors[0].Length),
 	}
-	result := concat_ws.ConcatWs(inputBytes, inputNsps, separator, vectors[0].Length, resultValues)
+	result := concatWsInputBytes(inputBytes, inputNsps, separator, vectors[0].Length, resultValues)
 	resultVector.Col = result.OutputBytes
 	resultVector.Nsp = result.OutputNsp
 	return resultVector, nil
+}
+
+type ConcatWsResult struct {
+	OutputBytes *types.Bytes
+	OutputNsp   *nulls.Nulls
+}
+
+func concatWsInputBytes(inputBytes []*types.Bytes, inputNsps []*nulls.Nulls, separator []byte, length int, resultValues *types.Bytes) ConcatWsResult {
+	resultNsp := new(nulls.Nulls)
+	lengthOfSeparator := uint32(len(separator))
+	numOfColumns := len(inputBytes)
+
+	offsetsAll := uint32(0)
+	for i := 0; i < length; i++ {
+		offsetThisResultRow := uint32(0)
+		allNull := true
+		for j := 0; j < numOfColumns; j++ {
+			if nulls.Contains(inputNsps[j], uint64(i)) {
+				continue
+			}
+			allNull = false
+			offset := inputBytes[j].Offsets[i]
+			lengthOfThis := inputBytes[j].Lengths[i]
+			bytes := inputBytes[j].Data[offset : offset+lengthOfThis]
+			resultValues.Data = append(resultValues.Data, bytes...)
+			offsetThisResultRow += lengthOfThis
+			for k := j + 1; k < numOfColumns; k++ {
+				if !nulls.Contains(inputNsps[k], uint64(i)) {
+					resultValues.Data = append(resultValues.Data, separator...)
+					offsetThisResultRow += lengthOfSeparator
+					break
+				}
+			}
+		}
+
+		if allNull {
+			nulls.Add(resultNsp, uint64(i))
+			resultValues.Offsets[i] = offsetsAll
+			resultValues.Lengths[i] = offsetThisResultRow
+		} else {
+			resultValues.Offsets[i] = offsetsAll
+			resultValues.Lengths[i] = offsetThisResultRow
+			offsetsAll += offsetThisResultRow
+		}
+	}
+	return ConcatWsResult{resultValues, resultNsp}
 }
