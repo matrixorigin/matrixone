@@ -34,6 +34,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 				Name:    col.Name,
 				Type:    col.Type,
 				Primary: col.IsPrimary(),
+				Default: engine.MakeDefaultExpr(col.Default.Set, col.Default.Value, col.Default.Null),
 			},
 		}
 		defs = append(defs, def)
@@ -66,6 +67,17 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 					return
 				}
 			} else {
+				if attrDef.Attr.Default.Exist {
+					attrDefault := catalog.Default{
+						Set:   attrDef.Attr.Default.Exist,
+						Value: attrDef.Attr.Default.Value,
+						Null:  attrDef.Attr.Default.IsNull,
+					}
+					if err = schema.AppendColWithDefault(attrDef.Attr.Name, attrDef.Attr.Type, attrDefault); err != nil {
+						return
+					}
+					continue
+				}
 				if err = schema.AppendCol(attrDef.Attr.Name, attrDef.Attr.Type); err != nil {
 					return
 				}

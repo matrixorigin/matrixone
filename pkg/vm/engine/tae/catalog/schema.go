@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"io"
 	"math/rand"
 	"sort"
@@ -41,6 +42,12 @@ type IndexInfo struct {
 	Name    string
 	Type    IndexT
 	Columns []uint16
+}
+
+type Default struct {
+	Set   bool
+	Null  bool
+	Value any
 }
 
 func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
@@ -66,6 +73,7 @@ type ColDef struct {
 	SortKey       int8
 	Primary       int8
 	Comment       string
+	Default       Default
 }
 
 func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
@@ -150,6 +158,57 @@ func (s *Schema) GetSortKeyCnt() int {
 	return s.SortKey.Size()
 }
 
+func MarshalDefault(w *bytes.Buffer, typ types.Type, data Default) (err error) {
+	if !data.Set {
+		if err = binary.Write(w, binary.BigEndian, data.Set); err != nil {
+			return
+		}
+		return
+	}
+	if data.Null {
+		if err = binary.Write(w, binary.BigEndian, data.Null); err != nil {
+			return
+		}
+		return
+	}
+	value := compute.EncodeKey(data.Value, typ)
+	if err = binary.Write(w, binary.BigEndian, uint16(len(value))); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, value); err != nil {
+		return
+	}
+	return nil
+}
+func UnMarshalDefault(r io.Reader, typ types.Type, data *Default) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &data.Set); err != nil {
+		return
+	}
+	n = 1
+	if !data.Set {
+		return n, nil
+	}
+	if err = binary.Read(r, binary.BigEndian, &data.Null); err != nil {
+		return
+	}
+	n += 1
+	if data.Null {
+		return n, nil
+	}
+	var valueLen uint16 = 0
+	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return
+	}
+	n += 2
+	buf := make([]byte, valueLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	data.Value = compute.DecodeKey(buf, typ)
+	n += int64(valueLen)
+	return n, nil
+}
+
 func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
 		return
@@ -212,6 +271,11 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += 1
+		def.Default = Default{}
+		if sn, err = UnMarshalDefault(r, def.Type, &def.Default); err != nil {
+			return
+		}
+		n += sn
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -265,6 +329,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
 			return
 		}
+		if err = MarshalDefault(&w, def.Type, def.Default); err != nil {
+			return
+		}
 	}
 	buf = w.Bytes()
 	return
@@ -311,6 +378,16 @@ func (s *Schema) AppendCol(name string, typ types.Type) error {
 		Name:    name,
 		Type:    typ,
 		SortIdx: -1,
+	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) error {
+	def := &ColDef{
+		Name:    name,
+		Type:    typ,
+		SortIdx: -1,
+		Default: val,
 	}
 	return s.AppendColDef(def)
 }
