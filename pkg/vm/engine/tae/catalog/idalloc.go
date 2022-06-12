@@ -14,7 +14,11 @@
 
 package catalog
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
 
 type IDAlloctor struct {
 	dbAlloc  *common.IdAlloctor
@@ -69,4 +73,9 @@ func (alloc *IDAlloctor) OnReplayDBID(id uint64) {
 	if alloc.CurrDB() < id {
 		alloc.dbAlloc.SetStart(id)
 	}
+}
+
+func (alloc *IDAlloctor) IDStates() string {
+	return fmt.Sprintf("Current DBID=%d,TID=%d,SID=%d,BID=%d",
+		alloc.CurrDB(), alloc.CurrTable(), alloc.CurrSegment(), alloc.CurrBlock())
 }
