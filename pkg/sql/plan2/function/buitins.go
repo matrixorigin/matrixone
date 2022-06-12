@@ -113,7 +113,7 @@ var builtins = map[int][]Function{
 			Layout:      STANDARD_FUNCTION,
 			Args:        []types.T{},
 			ReturnTyp:   types.T_varchar,
-			TypeCheckFn: concat_ws_TypeCheck,
+			TypeCheckFn: concatWsTypeCheck,
 			Fn:          multi.Concat_ws,
 		},
 	},

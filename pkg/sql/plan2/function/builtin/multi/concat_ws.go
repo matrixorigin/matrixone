@@ -32,9 +32,6 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	scalarCount := 0
 	for i, v := range vectors {
-		if v.IsScalarNull() {
-			return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "null constant for concat_ws is not supported now")
-		}
 		if i == 0 {
 			if !v.IsScalar() {
 				return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the first argument(the separator) for concat_ws must be a constant char/varchar")
