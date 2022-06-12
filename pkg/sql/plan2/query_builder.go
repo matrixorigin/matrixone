@@ -94,9 +94,9 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 			}
 
 			for k, v := range childMap {
-				for i := 0; i < len(builder.qry.Nodes[child].ProjectList); i++ {
-					returnMap[k] = []int32{int32(idx), int32(i)}
-				}
+				returnMap[k] = []int32{0, int32(colIdx)}
+				colIdx++
+
 				thisColV := v
 				thisColV[0] = int32(idx)
 				thisColMap[k] = thisColV
@@ -112,7 +112,6 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[string][]int32, error)
 						},
 					},
 				})
-				colIdx++
 			}
 		}
 		for _, expr := range node.OnList {
