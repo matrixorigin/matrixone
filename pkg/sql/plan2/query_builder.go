@@ -82,6 +82,9 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[int64][2]int32, error)
 			}
 			returnMap[getColMapKey(tag, int32(idx))] = [2]int32{0, int32(idx)}
 		}
+		for _, expr := range node.WhereList {
+			builder.resetPosition(expr, returnMap)
+		}
 	case plan.Node_JOIN:
 		// TODO deal with using
 		colIdx := 0
@@ -116,6 +119,12 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[int64][2]int32, error)
 			}
 		}
 		for _, expr := range node.OnList {
+			err := builder.resetPosition(expr, thisColMap)
+			if err != nil {
+				return nil, err
+			}
+		}
+		for _, expr := range node.WhereList {
 			err := builder.resetPosition(expr, thisColMap)
 			if err != nil {
 				return nil, err
@@ -940,5 +949,67 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		}
 	}
 
+	// push down onlist
+	// when optimizer is ok, we can remove these code
+	builder.pushdownOnlist(node)
+
 	return nodeId, nil
+}
+
+func (builder *QueryBuilder) pushdownOnlist(node *Node) {
+	var toOnList []*Expr
+	var toWhereList []*Expr
+	pushDownList := make(map[int32][]*Expr)
+
+	for _, expr := range node.OnList {
+		isEqual := false
+		switch fun := expr.Expr.(type) {
+		case *plan.Expr_F:
+			isEqual = fun.F.Func.ObjName == "="
+		}
+		if !isEqual {
+			toWhereList = append(toWhereList, DeepCopyExpr(expr))
+		} else {
+			affectsNodes := make(map[int32]struct{})
+			getExprAffectsNodeList(expr, affectsNodes)
+			if len(affectsNodes) == 2 {
+				toOnList = append(toOnList, DeepCopyExpr(expr))
+			} else {
+				for k := range affectsNodes {
+					pushDownList[k] = append(pushDownList[k], DeepCopyExpr(expr))
+				}
+			}
+		}
+	}
+	node.WhereList = append(node.WhereList, toWhereList...)
+	node.OnList = toOnList
+
+	leftNodeId := node.Children[0]
+	rightNodeId := node.Children[1]
+	leftTag := builder.tagsByNode[leftNodeId][0]
+	rightTag := builder.tagsByNode[rightNodeId][0]
+
+	for k, v := range pushDownList {
+		if k == leftTag {
+			builder.qry.Nodes[leftNodeId].WhereList = append(builder.qry.Nodes[leftNodeId].WhereList, v...)
+		}
+		if k == rightTag {
+			builder.qry.Nodes[rightNodeId].WhereList = append(builder.qry.Nodes[rightNodeId].WhereList, v...)
+		}
+	}
+}
+
+func getExprAffectsNodeList(expr *Expr, affectsNodes map[int32]struct{}) {
+	switch newExpr := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range newExpr.F.Args {
+			getExprAffectsNodeList(arg, affectsNodes)
+		}
+	case *plan.Expr_Col:
+		affectsNodes[newExpr.Col.RelPos] = struct{}{}
+	case *plan.Expr_List:
+		for _, item := range newExpr.List.List {
+			getExprAffectsNodeList(item, affectsNodes)
+		}
+	}
 }
