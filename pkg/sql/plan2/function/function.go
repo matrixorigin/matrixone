@@ -187,6 +187,15 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 	return fs[overloadIndex], nil
 }
 
+func GetFunctionIsAggregateByName(name string) bool {
+	fid, err := fromNameToFunctionId(name)
+	if err != nil {
+		return false
+	}
+	fs := functionRegister[fid]
+	return len(fs) > 0 && fs[0].IsAggregate()
+}
+
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
 // return function structure and encoded overload id
