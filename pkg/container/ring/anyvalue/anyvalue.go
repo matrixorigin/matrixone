@@ -53,7 +53,7 @@ type AnyVRing2 struct {
 	Set []bool // if Set[i] is false, the Vs[i] hasn't been assign any value
 }
 
-func EncodeAnyValueRing1[T ts1](ring AnyVRing1[T], buf *bytes.Buffer) {
+func EncodeAnyValueRing1[T ts1](ring *AnyVRing1[T], buf *bytes.Buffer) {
 	// Ns
 	n := len(ring.Ns)
 	buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -108,7 +108,7 @@ func DecodeAnyValueRing1[T ts1](data []byte, typ types.Type) (*AnyVRing1[T], []b
 	return r, data, nil
 }
 
-func EncodeAnyRing2(ring AnyVRing2, buf *bytes.Buffer) {
+func EncodeAnyRing2(ring *AnyVRing2, buf *bytes.Buffer) {
 	// Ns
 	n := len(ring.Ns)
 	buf.Write(encoding.EncodeUint32(uint32(n)))
