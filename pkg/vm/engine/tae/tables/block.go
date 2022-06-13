@@ -109,7 +109,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs = ts
 	if ts > 0 {
-		logutil.Infof("Replay BlockIndex %s: ts=%d,rows=%d", meta.Repr(), ts, block.file.ReadRows())
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
@@ -129,6 +128,8 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	masks, vals := blk.file.LoadUpdates()
 	if masks != nil {
 		for colIdx, mask := range masks {
+			logutil.Infof("%s ReplayUpdates: [TS=%d,Rows=%d,Col=%d,Cnt=%d]",
+				blk.meta.Repr(), blk.ckpTs, blk.file.ReadRows(), colIdx, mask.GetCardinality())
 			un := updates.NewCommittedColumnNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
 			un.SetMask(mask)
 			un.SetValues(vals[colIdx])
@@ -141,6 +142,8 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if err != nil || deletes == nil {
 		return
 	}
+	logutil.Infof("%s ReplayDeletes: [TS=%d,Rows=%d,Cnt=%d]",
+		blk.meta.Repr(), blk.ckpTs, blk.file.ReadRows(), deletes.GetCardinality())
 	deleteNode := updates.NewMergedNode(blk.ckpTs)
 	deleteNode.SetDeletes(deletes)
 	err = blk.OnReplayDelete(deleteNode)
