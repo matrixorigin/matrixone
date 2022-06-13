@@ -45,7 +45,8 @@ func TestSingleSql(t *testing.T) {
 	//         else 0 end
 	//	from lineitem,part
 	//	where l_shipdate < date '1996-04-01' + interval '1 month'`
-	input := "explain select abs(N_REGIONKEY) from NATION"
+	//input := "explain select abs(N_REGIONKEY) from NATION"
+	input := "explain verbose SELECT l.L_ORDERKEY a FROM CUSTOMER c, ORDERS o, LINEITEM l WHERE c.C_CUSTKEY = o.O_CUSTKEY and l.L_ORDERKEY = o.O_ORDERKEY and o.O_ORDERKEY < 10"
 
 	mock := plan2.NewMockOptimizer()
 	err := runOneStmt(mock, t, input)
@@ -240,7 +241,7 @@ func runTestShouldPass(opt plan2.Optimizer, t *testing.T, sqls []string) {
 }
 
 func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
-	// t.Logf("SQL: %v\n", sql)
+	t.Logf("SQL: %v\n", sql)
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
