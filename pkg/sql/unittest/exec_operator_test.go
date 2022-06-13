@@ -505,7 +505,7 @@ func TestRestrictOperator(t *testing.T) {
 		{sql: "insert into r_table2 values (1, 2, 3, 4), (1, 2, 3, 4), (1, 2, 3, 4), (2, 3, 4, 5);"},
 		{sql: "insert into r_table3 values (1.1, 2.2), (1.1, 2.2), (-1.1, -1.2), (-1.1, -1.2);"},
 
-		{sql: "create table t1 (userID int, spID int, score int);"},
+		{sql: "create table t1 (userid int, spID int, score int);"},
 		{sql: "insert into t1 values (1, 1, 30), (2, 1, 40), (3, 1, 50), (4, 2, 0), (5, 2, 100), (6, 3, 17);"},
 
 		// 1. where
@@ -542,73 +542,73 @@ func TestRestrictOperator(t *testing.T) {
 			null: true,
 		}},
 		// 3. from compile_test.go
-		{sql: "SELECT userID, min(score) FROM t1 GROUP BY userID;", res: executeResult{
-			attr: []string{"userID", "min(score)"},
+		{sql: "SELECT userid, min(score) FROM t1 GROUP BY userid;", res: executeResult{
+			attr: []string{"userid", "min(score)"},
 			data: [][]string{
 				{"1", "30"}, {"2", "40"}, {"3", "50"}, {"4", "0"}, {"5", "100"}, {"6", "17"},
 			},
 		}},
-		{sql: "SELECT userID, MIN(score) FROM t1 GROUP BY userID ORDER BY userID asc;", res: executeResult{
+		{sql: "SELECT userid, MIN(score) FROM t1 GROUP BY userid ORDER BY userid asc;", res: executeResult{
 			data: [][]string{
 				{"1", "30"}, {"2", "40"}, {"3", "50"}, {"4", "0"}, {"5", "100"}, {"6", "17"},
 			},
 		}},
-		{sql: "SELECT userID, SUM(score) FROM t1 GROUP BY userID ORDER BY userID desc;", res: executeResult{
+		{sql: "SELECT userid, SUM(score) FROM t1 GROUP BY userid ORDER BY userid desc;", res: executeResult{
 			data: [][]string{
 				{"6", "17"}, {"5", "100"}, {"4", "0"}, {"3", "50"}, {"2", "40"}, {"1", "30"},
 			},
 		}},
-		{sql: "SELECT userID as a, MIN(score) as b FROM t1 GROUP BY userID;", res: executeResult{
+		{sql: "SELECT userid as a, MIN(score) as b FROM t1 GROUP BY userid;", res: executeResult{
 			data: [][]string{
 				{"1", "30"}, {"2", "40"}, {"3", "50"}, {"4", "0"}, {"5", "100"}, {"6", "17"},
 			},
 		}},
-		{sql: "SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by user;", res: executeResult{
+		{sql: "SELECT userid as user, MAX(score) as max FROM t1 GROUP BY userid order by user;", res: executeResult{
 			data: [][]string{
 				{"1", "30"}, {"2", "40"}, {"3", "50"}, {"4", "0"}, {"5", "100"}, {"6", "17"},
 			},
 		}},
-		{sql: "SELECT userID as user, MAX(score) as max FROM t1 GROUP BY userID order by max desc;", res: executeResult{
+		{sql: "SELECT userid as user, MAX(score) as max FROM t1 GROUP BY userid order by max desc;", res: executeResult{
 			data: [][]string{
 				{"5", "100"}, {"3", "50"}, {"2", "40"}, {"1", "30"}, {"6", "17"}, {"4", "0"},
 			},
 		}},
-		{sql: "select userID,count(score) from t1 group by userID having count(score)>1;", res: executeResult{
+		{sql: "select userid,count(score) from t1 group by userid having count(score)>1;", res: executeResult{
 			null: true,
 		}},
-		{sql: "select userID,count(score) from t1 where userID>2 group by userID having count(score)>1;", res: executeResult{
+		{sql: "select userid,count(score) from t1 where userid>2 group by userid having count(score)>1;", res: executeResult{
 			null: true,
 		}},
-		{sql: "select userID,count(score) from t1 group by userID having count(score)>1;", res: executeResult{
+		{sql: "select userid,count(score) from t1 group by userid having count(score)>1;", res: executeResult{
 			null: true,
 		}},
-		{sql: "SELECT distinct userID, count(score) FROM t1 GROUP BY userID;", res: executeResult{
+		{sql: "SELECT distinct userid, count(score) FROM t1 GROUP BY userid;", res: executeResult{
 			data: [][]string{
 				{"1", "1"}, {"2", "1"}, {"3", "1"}, {"4", "1"}, {"5", "1"}, {"6", "1"},
 			},
 		}},
-		{sql: "select distinct sum(spID) from t1 group by userID;", res: executeResult{
-			attr: []string{"sum(spID)"},
+		{sql: "select distinct sum(spID) from t1 group by userid;", res: executeResult{
+			attr: []string{"sum(spid)"},
 			data: [][]string{
 				{"1"}, {"2"}, {"3"},
 			},
 		}},
-		{sql: "select distinct sum(spID) as sum from t1 group by userID order by sum asc;", res: executeResult{
+		{sql: "select distinct sum(spID) as sum from t1 group by userid order by sum asc;", res: executeResult{
 			data: [][]string{
 				{"1"}, {"2"}, {"3"},
 			},
 		}},
-		{sql: "select distinct sum(spID) as sum from t1 where score>1 group by userID order by sum asc;", res: executeResult{
+		{sql: "select distinct sum(spID) as sum from t1 where score>1 group by userid order by sum asc;", res: executeResult{
 			data: [][]string{
 				{"1"}, {"2"}, {"3"},
 			},
 		}},
-		{sql: "select userID,MAX(score) from t1 where userID between 2 and 3 group by userID;", res: executeResult{
+		{sql: "select userid,MAX(score) from t1 where userid between 2 and 3 group by userid;", res: executeResult{
 			data: [][]string{
 				{"2", "40"}, {"3", "50"},
 			},
 		}},
-		{sql: "select userID,MAX(score) from t1 where userID not between 2 and 3 group by userID order by userID desc;", res: executeResult{
+		{sql: "select userid,MAX(score) from t1 where userid not between 2 and 3 group by userid order by userid desc;", res: executeResult{
 			data: [][]string{
 				{"6", "17"}, {"5", "100"}, {"4", "0"}, {"1", "30"},
 			},
@@ -616,7 +616,7 @@ func TestRestrictOperator(t *testing.T) {
 		{sql: "select sum(score) as sum from t1 where spID=6 group by score order by sum desc;", res: executeResult{
 			null: true,
 		}},
-		{sql: "select userID,MAX(score) max_score from t1 where userID <2 || userID > 3 group by userID order by max_score;", res: executeResult{
+		{sql: "select userid,MAX(score) max_score from t1 where userid <2 || userid > 3 group by userid order by max_score;", res: executeResult{
 			data: [][]string{
 				{"4", "0"}, {"6", "17"}, {"1", "30"}, {"5", "100"},
 			},

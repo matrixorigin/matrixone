@@ -14,10 +14,13 @@
 package buffer
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -53,7 +56,7 @@ func (mgr *nodeManager) String() string {
 	for _, node := range mgr.nodes {
 		id := node.GetID()
 		node.RLock()
-		s = fmt.Sprintf("%s\n\t%s | %s | Size: %d ", s, id.BlockString(), base.NodeStateString(mgr.nodes[node.GetID()].GetState()), mgr.nodes[node.GetID()].Size())
+		s = fmt.Sprintf("%s\n\t%s | %s | Size: %d ", s, id.String(), base.NodeStateString(mgr.nodes[node.GetID()].GetState()), mgr.nodes[node.GetID()].Size())
 		if node.GetState() == base.NODE_LOADED {
 			loaded++
 		}
@@ -121,6 +124,30 @@ func (mgr *nodeManager) MakeRoom(size uint64) bool {
 	}
 
 	return ok
+}
+
+func (mgr *nodeManager) TryPin(node base.INode, timeout time.Duration) (h base.INodeHandle, err error) {
+	h = mgr.Pin(node)
+	if h == nil {
+		times := 0
+		var ctx context.Context
+		var cancel context.CancelFunc
+		if timeout > 0 {
+			ctx, cancel = context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+		}
+		err = common.DoRetry(func() (err error) {
+			times++
+			h = mgr.Pin(node)
+			if h == nil {
+				err = base.ErrNoSpace
+			}
+			return
+		}, ctx)
+		id := node.GetID()
+		logutil.Warnf("DoRetry Pin Node %s Times %d: %v", id.String(), times, err)
+	}
+	return
 }
 
 func (mgr *nodeManager) Pin(node base.INode) base.INodeHandle {

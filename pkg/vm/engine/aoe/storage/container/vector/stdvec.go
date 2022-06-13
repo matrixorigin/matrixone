@@ -201,6 +201,8 @@ func (v *StdVector) Append(n int, vals interface{}) error {
 func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 	var data []byte
 	switch v.Type.Oid {
+	case types.T_bool:
+		data = encoding.EncodeBoolSlice(vals.([]bool)[offset : offset+n])
 	case types.T_int8:
 		data = encoding.EncodeInt8Slice(vals.([]int8)[offset : offset+n])
 	case types.T_int16:

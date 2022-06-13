@@ -16,9 +16,10 @@ package compress
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"log"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/pierrec/lz4"
 )
@@ -34,8 +35,8 @@ func TestLz4(t *testing.T) {
 		log.Fatal(err)
 	}
 	fmt.Printf("buf: %v\n", buf)
-	data := make([]byte, len(buf)*10)
-	if data, err = Decompress(buf, raw, Lz4); err != nil {
+	data, err := Decompress(buf, raw, Lz4)
+	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("dat: %v\n", data)

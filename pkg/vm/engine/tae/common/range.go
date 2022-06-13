@@ -20,8 +20,8 @@ import (
 )
 
 var (
-	ErrRangeNotContinous = errors.New("aoe: range not continuous")
-	ErrRangeInvalid      = errors.New("aoe: invalid range")
+	ErrRangeNotContinous = errors.New("tae: range not continuous")
+	ErrRangeInvalid      = errors.New("tae: invalid range")
 )
 
 type Range struct {

@@ -15,7 +15,6 @@
 package dataio
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -230,7 +229,7 @@ func (sf *UnsortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	sf.RLock()
 	blk, ok := sf.Blocks[id.AsBlockID()]
 	if !ok {
-		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx))
+		return fmt.Errorf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx)
 	}
 	sf.RUnlock()
 	return blk.PrefetchPart(colIdx, id)

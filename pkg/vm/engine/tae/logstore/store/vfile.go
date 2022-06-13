@@ -27,12 +27,10 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var Metasize = 2
-var DefaultBufSize = common.M * 20
 
 type vFileState struct {
 	bufPos  int
@@ -51,10 +49,9 @@ type vFile struct {
 	wg         sync.WaitGroup
 	commitCond sync.Cond
 	history    History
-	buf        []byte
+	buf        *bytes.Buffer
 	bufpos     int //update when write
 	syncpos    int //update when sync
-	bufSize    int
 
 	bsInfo *storeInfo
 }
@@ -73,8 +70,7 @@ func newVFile(mu *sync.RWMutex, name string, version int, history History, bsInf
 		version:    version,
 		commitCond: *sync.NewCond(new(sync.Mutex)),
 		history:    history,
-		buf:        make([]byte, DefaultBufSize),
-		bufSize:    int(DefaultBufSize),
+		buf:        &bytes.Buffer{},
 	}
 	vf.vInfo = newVInfo(vf)
 	return vf, nil
@@ -117,10 +113,9 @@ func (vf *vFile) GetState() *vFileState {
 	vf.RLock()
 	defer vf.RUnlock()
 	return &vFileState{
-		bufPos:  vf.bufpos,
-		bufSize: vf.bufSize,
-		pos:     vf.size,
-		file:    vf,
+		bufPos: vf.bufpos,
+		pos:    vf.size,
+		file:   vf,
 	}
 }
 
@@ -129,22 +124,30 @@ func (vf *vFile) HasCommitted() bool {
 }
 
 func (vf *vFile) PrepareWrite(size int) {
-	// fmt.Printf("PrepareWrite %s\n", vf.Name())
 	vf.wg.Add(1)
-	// vf.size += size
-	// fmt.Printf("\n%p|prepare write %d->%d\n", vf, vf.size-size, vf.size)
 }
 
 func (vf *vFile) FinishWrite() {
-	// fmt.Printf("FinishWrite %s\n", vf.Name())
 	vf.wg.Done()
 }
 
+func (vf *vFile) Close() error {
+	err := vf.File.Close()
+	if err != nil {
+		return err
+	}
+	vf.buf = nil
+	return nil
+}
+
 func (vf *vFile) Commit() {
-	// fmt.Printf("Committing %s\n", vf.Name())
+	logutil.Infof("Committing %s\n", vf.Name())
 	vf.wg.Wait()
 	// vf.WriteMeta()
-	vf.Sync()
+	err := vf.Sync()
+	if err != nil {
+		panic(err)
+	}
 	vf.Lock()
 	vf.buf = nil
 	vf.Unlock()
@@ -153,11 +156,10 @@ func (vf *vFile) Commit() {
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
 	vf.vInfo.close()
-	fmt.Printf("sync-%s\n", vf.String())
+	// fmt.Printf("sync-%s\n", vf.String())
 	// vf.FreeMeta()
 }
 
-//TODO reuse wait sync
 func (vf *vFile) Sync() error {
 	vf.Lock()
 	defer vf.Unlock()
@@ -165,21 +167,23 @@ func (vf *vFile) Sync() error {
 		vf.bsInfo.syncTimes++
 	}
 	if vf.buf == nil {
-		vf.File.Sync()
-		return nil
+		err := vf.File.Sync()
+		return err
 	}
-	targetSize := vf.size //TODO race size, bufpos
+	targetSize := vf.size
 	targetpos := vf.bufpos
 	t0 := time.Now()
-	_, err := vf.File.WriteAt(vf.buf[:targetpos], int64(vf.syncpos))
-
+	buf := vf.buf.Bytes()
+	n, err := vf.File.WriteAt(buf[:targetpos], int64(vf.syncpos))
+	if n != targetpos {
+		panic("logic err")
+	}
 	if vf.bsInfo != nil {
 		vf.bsInfo.writeDuration += time.Since(t0)
 	}
 	if err != nil {
 		return err
 	}
-	//TODO safe (call by write at, call by store)
 	// fmt.Printf("%p|sync [%v,%v](total%v|n=%d)\n", vf, vf.syncpos, vf.syncpos+vf.bufpos, vf.bufpos, n)
 	// buf := make([]byte, 10)
 	// _, err = vf.ReadAt(buf, int64(vf.syncpos))
@@ -190,9 +194,13 @@ func (vf *vFile) Sync() error {
 		panic(fmt.Sprintf("%p|logic error, sync %v, size %v", vf, vf.syncpos, targetSize))
 	}
 	vf.bufpos = 0
+	vf.buf.Reset()
 	// fmt.Printf("199bufpos is %v\n",vf.bufpos)
 	t0 = time.Now()
-	vf.File.Sync()
+	err = vf.File.Sync()
+	if err != nil {
+		return err
+	}
 
 	if vf.bsInfo != nil {
 		vf.bsInfo.syncDuration += time.Since(t0)
@@ -221,43 +229,27 @@ func (vf *vFile) WaitCommitted() {
 	vf.commitCond.L.Unlock()
 }
 
-func (vf *vFile) PrepareSync() {
-	// write at buf -> wait sync buf
-	// wait sync size
-	// wait sync bufsize
-}
-
-//TODO alloc&free buf
 func (vf *vFile) WriteAt(b []byte, off int64) (n int, err error) {
-	// n, err = vf.File.WriteAt(b, off)
 	dataLength := len(b)
-	// if vf.buf == nil || dataLength > vf.bufSize {
-	// 	vf.Sync()
-	// 	n, err := vf.File.WriteAt(b, int64(vf.syncpos))
-	// 	// fmt.Printf("%p|write vf in buf [%v,%v]\n", vf, vf.syncpos, vf.syncpos+n)
-	// 	vf.syncpos += n
-	// 	vf.size += n
-	// 	return n, err
-	// }
-	// if dataLength+int(off)-vf.syncpos > vf.bufSize {
-	// 	vf.Sync()
-	// }
 	vf.Lock()
 	if vf.buf == nil {
 		vf.bufpos = 0
-		vf.buf = make([]byte, dataLength)
+		vf.buf = &bytes.Buffer{}
 	}
-	if dataLength+int(off)-vf.syncpos > vf.bufSize {
-		vf.buf = append(vf.buf, make([]byte, dataLength)...)
+	if dataLength+int(off)-vf.syncpos > vf.buf.Cap() {
+		vf.buf.Grow(dataLength + int(off) - vf.syncpos)
 	}
-	n = copy(vf.buf[int(off)-vf.syncpos:], b)
-	// fmt.Printf("%p|write in buf[%v,%v]\n", vf, int(off)-vf.syncpos, int(off)-vf.syncpos+n)
-	// fmt.Printf("%p|write vf in buf [%v,%v]\n", vf, int(off), int(off)+n)
+	n, err = vf.buf.Write(b)
+	if err != nil {
+		panic(err)
+	}
+	// logutil.Infof("%p|write in buf[%v,%v]", vf, int(off)-vf.syncpos, int(off)-vf.syncpos+n)
+	// logutil.Infof("%p|write vf in buf [%v,%v]", vf, int(off), int(off)+n)
 	vf.bufpos = int(off) + n - vf.syncpos
 	vf.size += n
-	// fmt.Printf("%p|size is %v\n",vf,vf.size)
+	// logutil.Infof("%p|size is %v",vf,vf.size)
 	vf.Unlock()
-	// fmt.Printf("243bufpos is %v\n",vf.bufpos)
+	// logutil.Infof("%p|bufpos is %v",vf,vf.bufpos)
 	if err != nil {
 		return
 	}
@@ -303,14 +295,23 @@ func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
 }
 
 func (vf *vFile) OnNewEntry(int) {}
-func (vf *vFile) OnNewCommit(info *entry.Info) {
-	vf.Log(info)
+func (vf *vFile) OnLogInfo(info *entry.Info) {
+	err := vf.Log(info)
+	if err != nil {
+		panic(err)
+	}
 }
 func (vf *vFile) OnNewCheckpoint(info *entry.Info) {
-	vf.Log(info)
+	err := vf.Log(info)
+	if err != nil {
+		panic(err)
+	}
 }
 func (vf *vFile) OnNewTxn(info *entry.Info) {
-	vf.Log(info)
+	err := vf.Log(info)
+	if err != nil {
+		panic(err)
+	}
 }
 func (vf *vFile) OnNewUncommit(addrs []*VFileAddress) {}
 
@@ -323,6 +324,26 @@ func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	// }
 	// }
 	offset, err := vf.GetOffsetByLSN(groupId, lsn)
+	if err == ErrVFileGroupNotExist || err == ErrVFileLsnNotExist {
+		for i := 0; i < 10; i++ {
+			logutil.Infof("load retry %d-%d", groupId, lsn)
+			vf.addrCond.L.Lock()
+			offset, err = vf.GetOffsetByLSN(groupId, lsn)
+			if err == nil {
+				vf.addrCond.L.Unlock()
+				break
+			}
+			vf.addrCond.Wait()
+			vf.addrCond.L.Unlock()
+			offset, err = vf.GetOffsetByLSN(groupId, lsn)
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			return nil, ErrVFileVersionTimeOut
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -339,12 +360,18 @@ func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 
 func (vf *vFile) readMeta() error {
 	buf := make([]byte, Metasize)
-	vf.ReadAt(buf, int64(vf.size)-int64(Metasize))
+	_, err := vf.ReadAt(buf, int64(vf.size)-int64(Metasize))
+	if err != nil {
+		return err
+	}
 	size := binary.BigEndian.Uint16(buf)
 	buf = make([]byte, int(size))
-	vf.ReadAt(buf, int64(vf.size)-int64(Metasize)-int64(size))
-	json.Unmarshal(buf, vf.vInfo)
-	if vf.vInfo == nil {
+	_, err = vf.ReadAt(buf, int64(vf.size)-int64(Metasize)-int64(size))
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(buf, vf.vInfo)
+	if err != nil {
 		return errors.New("read vfile meta failed")
 	}
 	return nil

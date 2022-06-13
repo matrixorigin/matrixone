@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
@@ -43,7 +44,7 @@ func commitTxn(txn *txnbase.Txn) {
 }
 
 func TestColumnChain1(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -66,8 +67,8 @@ func TestColumnChain1(t *testing.T) {
 		n := chain.AddNode(txn)
 		if (i >= cnt1 && i < cnt1+cnt2) || (i >= cnt1+cnt2+cnt3) {
 			txn.CommitTS = common.NextGlobalSeqNum()
-			n.PrepareCommit()
-			n.ApplyCommit(nil)
+			_ = n.PrepareCommit()
+			_ = n.ApplyCommit(nil)
 		}
 	}
 	t.Log(chain.StringLocked())
@@ -76,7 +77,7 @@ func TestColumnChain1(t *testing.T) {
 }
 
 func TestColumnChain2(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -106,17 +107,17 @@ func TestColumnChain2(t *testing.T) {
 	txn2.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
 	n2 := chain.AddNode(txn2)
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
-	assert.Equal(t, txnbase.ErrDuplicated, err)
+	assert.Equal(t, txnif.TxnWWConflictErr, err)
 	err = chain.TryUpdateNodeLocked(4, int32(44), n2)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, chain.view.RowCnt())
 
 	txn1.CommitTS = common.NextGlobalSeqNum()
-	n1.PrepareCommit()
-	n1.ApplyCommit(nil)
+	_ = n1.PrepareCommit()
+	_ = n1.ApplyCommit(nil)
 
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
-	assert.Equal(t, txnbase.ErrDuplicated, err)
+	assert.Equal(t, txnif.TxnWWConflictErr, err)
 
 	assert.Equal(t, 1, chain.view.links[1].Depth())
 	assert.Equal(t, 1, chain.view.links[2].Depth())
@@ -150,7 +151,7 @@ func TestColumnChain2(t *testing.T) {
 	now := time.Now()
 	for i := 1; i < 30; i++ {
 		wg.Add(1)
-		p.Submit(doUpdate(i))
+		_ = p.Submit(doUpdate(i))
 	}
 	wg.Wait()
 	t.Log(time.Since(now))
@@ -163,7 +164,7 @@ func TestColumnChain2(t *testing.T) {
 	v, err = chain.view.GetValue(2, txn1.GetStartTS())
 	assert.Equal(t, int32(22), v)
 	assert.Nil(t, err)
-	v, err = chain.view.GetValue(2, txn2.GetStartTS())
+	_, err = chain.view.GetValue(2, txn2.GetStartTS())
 	assert.NotNil(t, err)
 	v, err = chain.view.GetValue(2, txn3.GetStartTS())
 	assert.Equal(t, int32(2222), v)
@@ -171,10 +172,11 @@ func TestColumnChain2(t *testing.T) {
 	v, err = chain.view.GetValue(2, common.NextGlobalSeqNum())
 	assert.Equal(t, int32(22), v)
 	assert.Nil(t, err)
-	v, err = chain.view.GetValue(2000, common.NextGlobalSeqNum())
+	_, err = chain.view.GetValue(2000, common.NextGlobalSeqNum())
 	assert.NotNil(t, err)
 
-	mask, vals := chain.view.CollectUpdates(txn1.GetStartTS())
+	mask, vals, err := chain.view.CollectUpdates(txn1.GetStartTS())
+	assert.NoError(t, err)
 	assert.True(t, mask.Contains(1))
 	assert.True(t, mask.Contains(2))
 	assert.True(t, mask.Contains(3))
@@ -191,7 +193,7 @@ func TestColumnChain2(t *testing.T) {
 
 func TestColumnChain3(t *testing.T) {
 	ncnt := 100
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -210,11 +212,11 @@ func TestColumnChain3(t *testing.T) {
 		txn := mockTxn()
 		node := chain.AddNode(txn)
 		for j := i * ecnt; j < i*ecnt+ecnt; j++ {
-			chain.TryUpdateNodeLocked(uint32(j), int32(j), node)
+			_ = chain.TryUpdateNodeLocked(uint32(j), int32(j), node)
 		}
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 	}
 	t.Log(time.Since(start))
 	start = time.Now()
@@ -245,7 +247,7 @@ func TestColumnChain3(t *testing.T) {
 }
 
 func TestColumnChain4(t *testing.T) {
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	defer c.Close()
@@ -263,41 +265,42 @@ func TestColumnChain4(t *testing.T) {
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(5), int32(5), node)
+		_ = chain.TryUpdateNodeLocked(uint32(5), int32(5), node)
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(10), int32(10), node)
+		_ = chain.TryUpdateNodeLocked(uint32(10), int32(10), node)
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 		ts1 = txn.GetCommitTS()
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(20), int32(20), node)
+		_ = chain.TryUpdateNodeLocked(uint32(20), int32(20), node)
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 		ts2 = txn.GetCommitTS()
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(30), int32(30), node)
+		_ = chain.TryUpdateNodeLocked(uint32(30), int32(30), node)
 	}
 	{
 		txn := mockTxn()
 		node := chain.AddNode(txn)
-		chain.TryUpdateNodeLocked(uint32(40), int32(40), node)
+		_ = chain.TryUpdateNodeLocked(uint32(40), int32(40), node)
 		commitTxn(txn)
-		node.PrepareCommit()
-		node.ApplyCommit(nil)
+		_ = node.PrepareCommit()
+		_ = node.ApplyCommit(nil)
 		ts3 = txn.GetCommitTS()
 	}
-	mask, vals, _ := chain.CollectCommittedInRangeLocked(0, common.NextGlobalSeqNum())
+	mask, vals, _, err := chain.CollectCommittedInRangeLocked(0, common.NextGlobalSeqNum())
+	assert.NoError(t, err)
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
 	assert.True(t, mask.Contains(40))
@@ -306,7 +309,8 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts1, common.NextGlobalSeqNum())
+	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts1, common.NextGlobalSeqNum())
+	assert.NoError(t, err)
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
 	assert.True(t, mask.Contains(40))
@@ -315,22 +319,26 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts2, common.NextGlobalSeqNum())
+	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts2, common.NextGlobalSeqNum())
+	assert.NoError(t, err)
 	assert.True(t, mask.Contains(20))
 	assert.True(t, mask.Contains(40))
 	assert.Equal(t, uint64(2), mask.GetCardinality())
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts3, common.NextGlobalSeqNum())
+	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts3, common.NextGlobalSeqNum())
+	assert.NoError(t, err)
 	assert.True(t, mask.Contains(40))
 	assert.Equal(t, uint64(1), mask.GetCardinality())
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts3+1, common.NextGlobalSeqNum())
+	mask, _, _, err = chain.CollectCommittedInRangeLocked(ts3+1, common.NextGlobalSeqNum())
+	assert.NoError(t, err)
 	assert.Nil(t, mask)
 
-	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts1, ts3)
+	mask, vals, _, err = chain.CollectCommittedInRangeLocked(ts1, ts3)
+	assert.NoError(t, err)
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
 	assert.Equal(t, uint64(2), mask.GetCardinality())
@@ -341,7 +349,17 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
-	controller := NewMVCCHandle(nil)
+	schema := catalog.MockSchema(1, 0)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c := catalog.MockCatalog(dir, "mock", nil, nil)
+	defer c.Close()
+
+	db, _ := c.CreateDBEntry("db", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
+	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
+
+	controller := NewMVCCHandle(blk)
 	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
 	txn1.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
@@ -376,14 +394,18 @@ func TestDeleteChain1(t *testing.T) {
 	assert.Nil(t, merged)
 	assert.Equal(t, 2, chain.Depth())
 
-	collected := chain.CollectDeletesLocked(txn1.GetStartTS(), false)
+	collected, err := chain.CollectDeletesLocked(txn1.GetStartTS(), false)
+	assert.NoError(t, err)
 	assert.Equal(t, uint32(10), collected.GetCardinalityLocked())
-	collected = chain.CollectDeletesLocked(txn2.GetStartTS(), false)
+	collected, err = chain.CollectDeletesLocked(txn2.GetStartTS(), false)
+	assert.NoError(t, err)
 	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
 
-	collected = chain.CollectDeletesLocked(0, false)
+	collected, err = chain.CollectDeletesLocked(0, false)
+	assert.NoError(t, err)
 	assert.Nil(t, collected)
-	collected = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
+	collected, err = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
+	assert.NoError(t, err)
 	assert.Nil(t, collected)
 
 	commitTxn(txn1)
@@ -391,11 +413,14 @@ func TestDeleteChain1(t *testing.T) {
 	assert.Nil(t, n1.ApplyCommit(nil))
 	t.Log(chain.StringLocked())
 
-	collected = chain.CollectDeletesLocked(0, false)
+	collected, err = chain.CollectDeletesLocked(0, false)
+	assert.NoError(t, err)
 	assert.Nil(t, collected)
-	collected = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
+	collected, err = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
+	assert.NoError(t, err)
 	assert.Equal(t, uint32(10), collected.GetCardinalityLocked())
-	collected = chain.CollectDeletesLocked(txn2.GetStartTS(), false)
+	collected, err = chain.CollectDeletesLocked(txn2.GetStartTS(), false)
+	assert.NoError(t, err)
 	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
 
 	txn3 := mockTxn()
@@ -406,7 +431,8 @@ func TestDeleteChain1(t *testing.T) {
 	n3 := chain.AddNodeLocked(txn3)
 	n3.RangeDeleteLocked(31, 33)
 
-	collected = chain.CollectDeletesLocked(txn3.GetStartTS(), false)
+	collected, err = chain.CollectDeletesLocked(txn3.GetStartTS(), false)
+	assert.NoError(t, err)
 	assert.Equal(t, uint32(13), collected.GetCardinalityLocked())
 	t.Log(chain.StringLocked())
 
@@ -439,49 +465,63 @@ func TestDeleteChain2(t *testing.T) {
 
 	txn1 := mockTxn()
 	n1 := chain.AddNodeLocked(txn1).(*DeleteNode)
-	chain.PrepareRangeDelete(1, 4, txn1.GetStartTS())
+	err := chain.PrepareRangeDelete(1, 4, txn1.GetStartTS())
+	assert.Nil(t, err)
 	n1.RangeDeleteLocked(1, 4)
 	commitTxn(txn1)
-	n1.PrepareCommit()
-	n1.ApplyCommit(nil)
+	err = n1.PrepareCommit()
+	assert.Nil(t, err)
+	err = n1.ApplyCommit(nil)
+	assert.Nil(t, err)
 	t.Log(chain.StringLocked())
 
 	txn2 := mockTxn()
 	n2 := chain.AddNodeLocked(txn2).(*DeleteNode)
-	chain.PrepareRangeDelete(5, 8, txn2.GetStartTS())
+	err = chain.PrepareRangeDelete(5, 8, txn2.GetStartTS())
+	assert.Nil(t, err)
 	n2.RangeDeleteLocked(5, 8)
 	t.Log(chain.StringLocked())
 
 	txn3 := mockTxn()
 	n3 := chain.AddNodeLocked(txn3).(*DeleteNode)
-	chain.PrepareRangeDelete(9, 12, txn3.GetStartTS())
+	err = chain.PrepareRangeDelete(9, 12, txn3.GetStartTS())
+	assert.Nil(t, err)
 	n3.RangeDeleteLocked(9, 12)
 	commitTxn(txn3)
-	n3.PrepareCommit()
-	n3.ApplyCommit(nil)
+	err = n3.PrepareCommit()
+	assert.Nil(t, err)
+	err = n3.ApplyCommit(nil)
+	assert.Nil(t, err)
 	t.Log(chain.StringLocked())
 
-	m := chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
+	m, err := chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
+	assert.NoError(t, err)
 	mask := m.(*DeleteNode).mask
 	assert.Equal(t, uint64(8), mask.GetCardinality())
-	m = chain.CollectDeletesLocked(txn3.GetCommitTS(), false)
+	m, err = chain.CollectDeletesLocked(txn3.GetCommitTS(), false)
+	assert.NoError(t, err)
 	mask = m.(*DeleteNode).mask
 	assert.Equal(t, uint64(8), mask.GetCardinality())
-	m = chain.CollectDeletesLocked(txn1.GetCommitTS(), false)
+	m, err = chain.CollectDeletesLocked(txn1.GetCommitTS(), false)
+	assert.NoError(t, err)
 	mask = m.(*DeleteNode).mask
 	assert.Equal(t, uint64(4), mask.GetCardinality())
-	m = chain.CollectDeletesLocked(txn1.GetCommitTS()-1, false)
+	m, err = chain.CollectDeletesLocked(txn1.GetCommitTS()-1, false)
+	assert.NoError(t, err)
 	assert.Nil(t, m)
 
-	mask, _ = chain.CollectDeletesInRange(0, txn3.GetCommitTS())
+	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS())
+	assert.NoError(t, err)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(4), mask.GetCardinality())
 
-	mask, _ = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1)
+	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1)
+	assert.NoError(t, err)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(8), mask.GetCardinality())
 
-	mask, _ = chain.CollectDeletesInRange(txn1.GetCommitTS(), txn3.GetCommitTS()+1)
+	mask, _, err = chain.CollectDeletesInRange(txn1.GetCommitTS(), txn3.GetCommitTS()+1)
+	assert.NoError(t, err)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(4), mask.GetCardinality())
 }

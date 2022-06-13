@@ -23,10 +23,17 @@ import (
 
 var (
 	ErrInvalidParam = errors.New("tae: invalid param")
+	ErrInvalidName  = errors.New("tae: invalid name")
 )
 
 type Base interface {
 	common.IRef
 	io.Closer
 	Fingerprint() *common.ID
+}
+
+type SegmentFactory interface {
+	Build(dir string, id uint64) Segment
+	EncodeName(id uint64) string
+	DecodeName(name string) (id uint64, err error)
 }

@@ -50,16 +50,16 @@ var (
 	FloorFloat64 func([]float64, []float64, int64) []float64
 )
 
-var MaxUint8digits = digits(math.MaxUint8)
-var MaxUint16digits = digits(math.MaxUint16)
-var MaxUint32digits = digits(math.MaxUint32)
-var MaxUint64digits = digits(math.MaxUint64) // 20
-var MaxInt8digits = digits(math.MaxInt8)
-var MaxInt16digits = digits(math.MaxInt16)
-var MaxInt32digits = digits(math.MaxInt32)
-var MaxInt64digits = digits(math.MaxInt64) // 19
+var MaxUint8digits = numOfDigits(math.MaxUint8)
+var MaxUint16digits = numOfDigits(math.MaxUint16)
+var MaxUint32digits = numOfDigits(math.MaxUint32)
+var MaxUint64digits = numOfDigits(math.MaxUint64) // 20
+var MaxInt8digits = numOfDigits(math.MaxInt8)
+var MaxInt16digits = numOfDigits(math.MaxInt16)
+var MaxInt32digits = numOfDigits(math.MaxInt32)
+var MaxInt64digits = numOfDigits(math.MaxInt64) // 19
 
-func digits(value uint64) int64 {
+func numOfDigits(value uint64) int64 {
 	digits := int64(0)
 	for value > 0 {
 		value /= 10
@@ -263,17 +263,11 @@ func floorFloat32(xs, rs []float32, digits int64) []float32 {
 		for i := range xs {
 			rs[i] = float32(math.Floor(float64(xs[i])))
 		}
-	} else if digits > 0 {
-		scale := float32(ScaleTable[digits])
+	} else {
+		scale := float32(math.Pow10(int(digits)))
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = float32(math.Floor(float64(value))) / scale
-		}
-	} else {
-		scale := float32(ScaleTable[-digits])
-		for i := range xs {
-			value := xs[i] / scale
-			rs[i] = float32(math.Floor(float64(value))) * scale
 		}
 	}
 	return rs
@@ -284,17 +278,11 @@ func floorFloat64(xs, rs []float64, digits int64) []float64 {
 		for i := range xs {
 			rs[i] = math.Floor(xs[i])
 		}
-	} else if digits > 0 {
-		scale := float64(ScaleTable[digits])
+	} else {
+		scale := math.Pow10(int(digits))
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = math.Floor(value) / scale
-		}
-	} else {
-		scale := float64(ScaleTable[-digits])
-		for i := range xs {
-			value := xs[i] / scale
-			rs[i] = math.Floor(value) * scale
 		}
 	}
 	return rs

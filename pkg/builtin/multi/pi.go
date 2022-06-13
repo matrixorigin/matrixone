@@ -16,7 +16,7 @@ package multi
 
 import (
 	"errors"
-	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/builtin"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,7 +34,7 @@ func init() {
 		return types.T_float64
 	}
 	extend.MultiStrings[builtin.Pi] = func(e []extend.Extend) string {
-		return fmt.Sprintf("pi()")
+		return "pi()"
 	}
 	overload.AppendFunctionRets(builtin.Pi, []types.T{}, types.T_float64)
 	overload.MultiOps[builtin.Pi] = []*overload.MultiOp{

@@ -52,11 +52,16 @@ type Txn struct {
 	sync.RWMutex
 	sync.WaitGroup
 	*TxnCtx
-	Mgr             *TxnManager
-	Store           txnif.TxnStore
-	Err             error
-	DoneCond        sync.Cond
-	PrepareCommitFn func(interface{}) error
+	Mgr      *TxnManager
+	Store    txnif.TxnStore
+	Err      error
+	DoneCond sync.Cond
+	LSN      uint64
+
+	PrepareCommitFn   func(txnif.AsyncTxn) error
+	PrepareRollbackFn func(txnif.AsyncTxn) error
+	ApplyCommitFn     func(txnif.AsyncTxn) error
+	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
 func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start uint64, info []byte) *Txn {
@@ -74,18 +79,31 @@ func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
 func (txn *Txn) SetError(err error) { txn.Err = err }
 func (txn *Txn) GetError() error    { return txn.Err }
 
-func (txn *Txn) SetPrepareCommitFn(fn func(interface{}) error) { txn.PrepareCommitFn = fn }
+func (txn *Txn) SetPrepareCommitFn(fn func(txnif.AsyncTxn) error)   { txn.PrepareCommitFn = fn }
+func (txn *Txn) SetPrepareRollbackFn(fn func(txnif.AsyncTxn) error) { txn.PrepareRollbackFn = fn }
+func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyCommitFn = fn }
+func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyRollbackFn = fn }
 
-func (txn *Txn) Commit() error {
+func (txn *Txn) Commit() (err error) {
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
 		return nil
 	}
 	txn.Add(1)
-	txn.Mgr.OnOpTxn(&OpTxn{
+	err = txn.Mgr.OnOpTxn(&OpTxn{
 		Txn: txn,
 		Op:  OpCommit,
 	})
+	// TxnManager is closed
+	if err != nil {
+		txn.SetError(err)
+		txn.Lock()
+		_ = txn.ToRollbackingLocked(txn.GetStartTS() + 1)
+		txn.Unlock()
+		_ = txn.PrepareRollback()
+		_ = txn.ApplyRollback()
+		txn.DoneWithErr(err)
+	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
 	return txn.GetError()
@@ -95,27 +113,44 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 	return txn.Store
 }
 
-func (txn *Txn) Rollback() error {
+func (txn *Txn) GetLSN() uint64 { return txn.LSN }
+
+func (txn *Txn) Rollback() (err error) {
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
-		return nil
+		return
 	}
 	txn.Add(1)
-	txn.Mgr.OnOpTxn(&OpTxn{
+	err = txn.Mgr.OnOpTxn(&OpTxn{
 		Txn: txn,
 		Op:  OpRollback,
 	})
+	if err != nil {
+		_ = txn.PrepareRollback()
+		_ = txn.ApplyRollback()
+		txn.DoneWithErr(err)
+	}
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
-	return txn.Err
+	err = txn.Err
+	return
 }
 
-func (txn *Txn) Done() {
+func (txn *Txn) DoneWithErr(err error) {
 	txn.DoneCond.L.Lock()
-	if txn.State == txnif.TxnStateCommitting {
-		txn.ToCommittedLocked()
+	if err != nil {
+		txn.ToUnknownLocked()
+		txn.SetError(err)
 	} else {
-		txn.ToRollbackedLocked()
+		if txn.State == txnif.TxnStateCommitting {
+			if err := txn.ToCommittedLocked(); err != nil {
+				txn.SetError(err)
+			}
+		} else {
+			if err := txn.ToRollbackedLocked(); err != nil {
+				txn.SetError(err)
+			}
+		}
 	}
 	txn.WaitGroup.Done()
 	txn.DoneCond.Broadcast()
@@ -127,7 +162,7 @@ func (txn *Txn) IsTerminated(waitIfcommitting bool) bool {
 	return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
 }
 
-func (txn *Txn) GetTxnState(waitIfcommitting bool) int32 {
+func (txn *Txn) GetTxnState(waitIfcommitting bool) txnif.TxnState {
 	txn.RLock()
 	state := txn.State
 	if !waitIfcommitting {
@@ -146,50 +181,86 @@ func (txn *Txn) GetTxnState(waitIfcommitting bool) int32 {
 		return state
 	}
 	txn.DoneCond.Wait()
+	state = txn.State
 	txn.DoneCond.L.Unlock()
 	return state
 }
 
-func (txn *Txn) PrepareCommit() error {
+func (txn *Txn) PrepareCommit() (err error) {
 	logutil.Debugf("Prepare Committing %d", txn.ID)
-	var err error
 	if txn.PrepareCommitFn != nil {
-		err = txn.PrepareCommitFn(txn)
+		if err = txn.PrepareCommitFn(txn); err != nil {
+			return
+		}
 	}
-	if err != nil {
-		return err
-	}
-	// TODO: process data in store
 	err = txn.Store.PrepareCommit()
 	return err
 }
 
-func (txn *Txn) ApplyCommit() error {
-	if err := txn.Store.ApplyCommit(); err != nil && err != txnif.TxnRollbacked {
-		panic(err)
-	}
-	return txn.Store.Close()
+func (txn *Txn) PreApplyCommit() (err error) {
+	err = txn.Store.PreApplyCommit()
+	return
 }
 
-func (txn *Txn) ApplyRollback() error {
-	if err := txn.Store.ApplyRollback(); err != nil {
-		panic(err)
+func (txn *Txn) ApplyCommit() (err error) {
+	defer func() {
+		txn.LSN = txn.Store.GetLSN()
+		if err == nil {
+			err = txn.Store.Close()
+		} else {
+			txn.Store.Close()
+		}
+	}()
+	if txn.ApplyCommitFn != nil {
+		if err = txn.ApplyCommitFn(txn); err != nil {
+			return
+		}
 	}
-	return txn.Store.Close()
+	err = txn.Store.ApplyCommit()
+	return
+}
+
+func (txn *Txn) ApplyRollback() (err error) {
+	defer func() {
+		txn.LSN = txn.Store.GetLSN()
+		if err == nil {
+			err = txn.Store.Close()
+		} else {
+			txn.Store.Close()
+		}
+	}()
+	if txn.ApplyRollbackFn != nil {
+		if err = txn.ApplyRollbackFn(txn); err != nil {
+			return
+		}
+	}
+	err = txn.Store.ApplyRollback()
+	return
 }
 
 func (txn *Txn) PreCommit() error {
 	return txn.Store.PreCommit()
 }
 
-func (txn *Txn) PrepareRollback() error {
+func (txn *Txn) PrepareRollback() (err error) {
 	logutil.Debugf("Prepare Rollbacking %d", txn.ID)
-	return txn.Store.PrepareRollback()
+	if txn.PrepareRollbackFn != nil {
+		if err = txn.PrepareRollbackFn(txn); err != nil {
+			return
+		}
+	}
+	err = txn.Store.PrepareRollback()
+	return
 }
 
-func (txn *Txn) WaitDone() error {
+func (txn *Txn) String() string {
+	str := txn.TxnCtx.String()
+	return fmt.Sprintf("%s: %v", str, txn.GetError())
+}
+
+func (txn *Txn) WaitDone(err error) error {
 	// logutil.Infof("Wait %s Done", txn.String())
-	txn.Done()
+	txn.DoneWithErr(err)
 	return txn.Err
 }
 
@@ -217,6 +288,6 @@ func (txn *Txn) DatabaseNames() (names []string) {
 	return
 }
 
-func (txn *Txn) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+func (txn *Txn) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }

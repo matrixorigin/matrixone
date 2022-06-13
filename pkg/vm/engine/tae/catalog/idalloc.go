@@ -14,7 +14,11 @@
 
 package catalog
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+)
 
 type IDAlloctor struct {
 	dbAlloc  *common.IdAlloctor
@@ -25,10 +29,10 @@ type IDAlloctor struct {
 
 func NewIDAllocator() *IDAlloctor {
 	return &IDAlloctor{
-		dbAlloc:  common.NewIdAlloctor(1),
-		tblAlloc: common.NewIdAlloctor(1),
-		segAlloc: common.NewIdAlloctor(1),
-		blkAlloc: common.NewIdAlloctor(1),
+		dbAlloc:  common.NewIdAlloctor(1000),
+		tblAlloc: common.NewIdAlloctor(1000),
+		segAlloc: common.NewIdAlloctor(1000),
+		blkAlloc: common.NewIdAlloctor(1000),
 	}
 }
 
@@ -48,3 +52,30 @@ func (alloc *IDAlloctor) CurrDB() uint64      { return alloc.dbAlloc.Get() }
 func (alloc *IDAlloctor) CurrTable() uint64   { return alloc.tblAlloc.Get() }
 func (alloc *IDAlloctor) CurrSegment() uint64 { return alloc.segAlloc.Get() }
 func (alloc *IDAlloctor) CurrBlock() uint64   { return alloc.blkAlloc.Get() }
+
+func (alloc *IDAlloctor) OnReplayBlockID(id uint64) {
+	if alloc.CurrBlock() < id {
+		alloc.blkAlloc.SetStart(id)
+	}
+}
+
+func (alloc *IDAlloctor) OnReplaySegmentID(id uint64) {
+	if alloc.CurrSegment() < id {
+		alloc.segAlloc.SetStart(id)
+	}
+}
+func (alloc *IDAlloctor) OnReplayTableID(id uint64) {
+	if alloc.CurrTable() < id {
+		alloc.tblAlloc.SetStart(id)
+	}
+}
+func (alloc *IDAlloctor) OnReplayDBID(id uint64) {
+	if alloc.CurrDB() < id {
+		alloc.dbAlloc.SetStart(id)
+	}
+}
+
+func (alloc *IDAlloctor) IDStates() string {
+	return fmt.Sprintf("Current DBID=%d,TID=%d,SID=%d,BID=%d",
+		alloc.CurrDB(), alloc.CurrTable(), alloc.CurrSegment(), alloc.CurrBlock())
+}

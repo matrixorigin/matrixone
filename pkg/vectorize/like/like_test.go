@@ -24,7 +24,8 @@ import (
 )
 
 func makeArgs(ss []string) *types.Bytes {
-	return testutil.MakeBytes(ss)
+	vec := testutil.MakeVarcharVector(ss, nil)
+	return vec.Col.(*types.Bytes)
 }
 
 func Test_sliceLikePure(t *testing.T) {

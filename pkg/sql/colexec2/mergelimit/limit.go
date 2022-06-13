@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -56,8 +56,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 
 		if n.ctr.seen >= n.Limit {
 			proc.Reg.InputBatch = nil
-			batch.Clean(bat, proc.Mp)
-			return false, nil
+			bat.Clean(proc.Mp)
+			return true, nil
 		}
 		newSeen := n.ctr.seen + uint64(len(bat.Zs))
 		if newSeen < n.Limit {

@@ -53,5 +53,9 @@ const (
 	EndsWith
 	Date
 	Sign
+	BitLength
 	Bin
+	FindInSet
+	FromUnixTime
+	UnixTimestamp
 )

@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -36,14 +36,14 @@ func Prepare(_ *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		rec := proc.Reg.MergeReceivers[i]
-		bat := <-rec.Ch
+		reg := proc.Reg.MergeReceivers[i]
+		bat := <-reg.Ch
 		// deal special case for bat
 		{
 			// 1. the last batch at this receiver
 			if bat == nil {
 				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
-				i++
+				i--
 				continue
 			}
 			// 2. an empty batch
@@ -54,6 +54,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 
 		if n.ctr.seen > n.Offset {
+			bat.Clean(proc.Mp)
 			return false, nil
 		}
 		length := len(bat.Zs)
@@ -66,7 +67,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			return false, nil
 		}
 		n.ctr.seen += uint64(length)
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc.Mp)
 		proc.Reg.InputBatch = nil
 		i--
 	}

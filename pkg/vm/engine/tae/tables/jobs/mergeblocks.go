@@ -19,7 +19,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -101,12 +100,29 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32) (column []*vector.Vector, mapping []uint32) {
-	if isPrimary {
-		column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
+func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []*vector.Vector, mapping []uint32) {
+	if sort {
+		if isPrimary {
+			column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
+		} else {
+			column = mergesort.ShuffleColumn(vecs, *sortedIdx, fromLayout, toLayout)
+		}
 	} else {
-		column = mergesort.ShuffleColumn(vecs, *sortedIdx, fromLayout, toLayout)
+		column, mapping = task.mergeColumnWithOutSort(vecs, fromLayout, toLayout)
 	}
+	return
+}
+
+func (task *mergeBlocksTask) mergeColumnWithOutSort(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
+	totalLength := uint32(0)
+	for _, i := range toLayout {
+		totalLength += i
+	}
+	mapping = make([]uint32, totalLength)
+	for i := range mapping {
+		mapping[i] = uint32(i)
+	}
+	ret = mergesort.Reshape(column, fromLayout, toLayout)
 	return
 }
 
@@ -141,13 +157,33 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
+
+	// 1. Prepare sort key resources
+	// If there's no sort key, use hidden
 	for i, block := range task.compacted {
-		if view, err = block.GetColumnDataById(int(schema.PrimaryKey), nil, nil); err != nil {
-			return
+		var vec *vector.Vector
+		if !schema.HasSortKey() {
+			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil, nil); err != nil {
+				return
+			}
+			vec = view.ApplyDeletes()
+		} else if schema.SortKey.Size() == 1 {
+			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil, nil); err != nil {
+				return
+			}
+			vec = view.ApplyDeletes()
+		} else {
+			cols := make([]*vector.Vector, schema.SortKey.Size())
+			for idx := range cols {
+				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil, nil); err != nil {
+					return
+				}
+				cols[idx] = view.ApplyDeletes()
+			}
+			vec = model.EncodeCompoundColumn(cols...)
 		}
-		vec := view.ApplyDeletes()
 		vecs = append(vecs, vec)
-		rows[i] = uint32(gvec.Length(vec))
+		rows[i] = uint32(vector.Length(vec))
 		fromAddr = append(fromAddr, uint32(length))
 		length += vector.Length(vec)
 		ids = append(ids, block.Fingerprint())
@@ -165,63 +201,98 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
+	// merge sort the sort key
 	node := common.GPool.Alloc(uint64(length * 4))
 	buf := node.Buf[:length]
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
-	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to)
+	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
+
 	ts := task.txn.GetStartTS()
 	var flushTask tasks.Task
 	length = 0
 	var blk handle.Block
 	toAddr := make([]uint32, 0, len(vecs))
+	// Prepare new block placeholder
+	// Build and flush block index if sort key is defined
+	// Flush sort key it correlates to only one column
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
-		length += gvec.Length(vec)
+		length += vector.Length(vec)
 		blk, err = toSegEntry.CreateNonAppendableBlock()
 		if err != nil {
 			return err
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		closure := meta.GetBlockData().FlushColumnDataClosure(ts, int(schema.PrimaryKey), vec, false)
-		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
-		if err != nil {
+
+		if !schema.HasSortKey() {
+			continue
+		}
+
+		def := schema.SortKey.Defs[0]
+
+		// logutil.Infof("Flushing %s %v", meta.AsCommonID().String(), def)
+		// Flush sort key correlated column
+		if schema.SortKey.Size() == 1 {
+			closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
+			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
+			if err != nil {
+				return
+			}
+			if err = flushTask.WaitDone(); err != nil {
+				return
+			}
+		}
+		// Flush index
+		if err = BuildAndFlushIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
 			return
 		}
-		if err = flushTask.WaitDone(); err != nil {
+		// Replay index
+		if err = meta.GetBlockData().ReplayIndex(); err != nil {
 			return
 		}
-		if err = BuildAndFlushBlockIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
-			return
-		}
-		if err = meta.GetBlockData().ReplayData(); err != nil {
-			return
-		}
-		// bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
-		// if bf.WriteColumnVec(task.txn.GetStartTS(), int(schema.PrimaryKey), vec); err != nil {
-		// 	return
-		// }
 	}
 
-	for i := 0; i < len(schema.ColDefs); i++ {
-		if i == int(schema.PrimaryKey) {
+	// Flush hidden column
+	hidden := schema.HiddenKey
+	for i, blk := range task.createdBlks {
+		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[i])))
+		if err != nil {
+			return err
+		}
+		defer closer()
+		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
+		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
+		if err != nil {
+			return err
+		}
+		if err = flushTask.WaitDone(); err != nil {
+			return err
+		}
+	}
+	for _, def := range schema.ColDefs {
+		// Skip
+		// Hidden column was processed before
+		// If only one single sort key, it was processed before
+		if def.IsHidden() || (schema.IsSingleSortKey() && def.IsSortKey()) {
 			continue
 		}
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(i, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
 			vec := view.ApplyDeletes()
 			vecs = append(vecs, vec)
 		}
-		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
+		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, i, vec, false)
+			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
+			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
 			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 			if err != nil {
 				return
@@ -253,6 +324,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
+	table := task.toSegEntry.GetTable()
 	txnEntry := txnentries.NewMergeBlocksEntry(
 		task.txn,
 		task.rel,
@@ -264,7 +336,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		fromAddr,
 		toAddr,
 		task.scheduler)
-	if err = task.txn.LogTxnEntry(task.toSegEntry.GetTable().GetID(), txnEntry, ids); err != nil {
+	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return
 	}
 

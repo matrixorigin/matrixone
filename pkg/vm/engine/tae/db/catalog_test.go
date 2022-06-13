@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -31,10 +32,8 @@ func TestCatalog1(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
 
-	txn := db.StartTxn(nil)
-	schema := catalog.MockSchema(1)
-	database, _ := txn.CreateDatabase("db")
-	rel, _ := database.CreateRelation(schema)
+	schema := catalog.MockSchema(1, 0)
+	txn, _, rel := createRelationNoCommit(t, db, defaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
 	seg, _ := rel.CreateSegment()
 	blk, err := seg.CreateBlock()
@@ -42,9 +41,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
-	txn = db.StartTxn(nil)
-	database, _ = txn.GetDatabase("db")
-	rel, _ = database.GetRelationByName(schema.Name)
+	txn, rel = getDefaultRelation(t, db, schema.Name)
 	sseg, err := rel.GetSegment(seg.GetID())
 	assert.Nil(t, err)
 	t.Log(sseg.String())
@@ -59,10 +56,7 @@ func TestCatalog1(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn = db.StartTxn(nil)
-		database, _ = txn.GetDatabase("db")
-		rel, _ = database.GetRelationByName(schema.Name)
-		t.Log(txn.String())
+		txn, rel = getDefaultRelation(t, db, schema.Name)
 		it := rel.MakeBlockIt()
 		cnt := 0
 		for it.Valid() {
@@ -80,59 +74,64 @@ func TestShowDatabaseNames(t *testing.T) {
 	defer tae.Close()
 
 	{
-		txn := tae.StartTxn(nil)
-		txn.CreateDatabase("db1")
+		txn, _ := tae.StartTxn(nil)
+		_, err := txn.CreateDatabase("db1")
+		assert.Nil(t, err)
 		names := txn.DatabaseNames()
-		assert.Equal(t, 1, len(names))
-		assert.Equal(t, "db1", names[0])
+		assert.Equal(t, 2, len(names))
+		assert.Equal(t, "db1", names[1])
 		assert.Nil(t, txn.Commit())
 	}
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		names := txn.DatabaseNames()
-		assert.Equal(t, 1, len(names))
-		assert.Equal(t, "db1", names[0])
-		txn.CreateDatabase("db2")
+		assert.Equal(t, 2, len(names))
+		assert.Equal(t, "db1", names[1])
+		_, err := txn.CreateDatabase("db2")
+		assert.Nil(t, err)
 		names = txn.DatabaseNames()
 		t.Log(tae.Catalog.SimplePPString(common.PPL1))
-		assert.Equal(t, 2, len(names))
-		assert.Equal(t, "db1", names[0])
-		assert.Equal(t, "db2", names[1])
+		assert.Equal(t, 3, len(names))
+		assert.Equal(t, "db1", names[1])
+		assert.Equal(t, "db2", names[2])
 		{
-			txn := tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			names := txn.DatabaseNames()
-			assert.Equal(t, 1, len(names))
-			assert.Equal(t, "db1", names[0])
+			assert.Equal(t, 2, len(names))
+			assert.Equal(t, "db1", names[1])
 			_, err := txn.CreateDatabase("db2")
 			assert.NotNil(t, err)
-			txn.Rollback()
+			err = txn.Rollback()
+			assert.Nil(t, err)
 		}
 		{
-			txn := tae.StartTxn(nil)
-			txn.CreateDatabase("db3")
+			txn, _ := tae.StartTxn(nil)
+			_, err := txn.CreateDatabase("db3")
+			assert.Nil(t, err)
 			names := txn.DatabaseNames()
-			assert.Equal(t, "db1", names[0])
-			assert.Equal(t, "db3", names[1])
+			assert.Equal(t, "db1", names[1])
+			assert.Equal(t, "db3", names[2])
 			assert.Nil(t, txn.Commit())
 		}
 		{
-			txn := tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			names := txn.DatabaseNames()
-			assert.Equal(t, 2, len(names))
-			assert.Equal(t, "db1", names[0])
-			assert.Equal(t, "db3", names[1])
+			assert.Equal(t, 3, len(names))
+			assert.Equal(t, "db1", names[1])
+			assert.Equal(t, "db3", names[2])
 			_, err := txn.DropDatabase("db1")
 			assert.Nil(t, err)
 			names = txn.DatabaseNames()
 			t.Log(tae.Catalog.SimplePPString(common.PPL1))
-			assert.Equal(t, 1, len(names))
-			assert.Equal(t, "db3", names[0])
+			t.Log(names)
+			assert.Equal(t, 2, len(names))
+			assert.Equal(t, "db3", names[1])
 			assert.Nil(t, txn.Commit())
 		}
 		names = txn.DatabaseNames()
-		assert.Equal(t, 2, len(names))
-		assert.Equal(t, "db1", names[0])
-		assert.Equal(t, "db2", names[1])
+		assert.Equal(t, 3, len(names))
+		assert.Equal(t, "db1", names[1])
+		assert.Equal(t, "db2", names[2])
 		assert.Nil(t, txn.Commit())
 	}
 }
@@ -140,8 +139,8 @@ func TestShowDatabaseNames(t *testing.T) {
 func TestLogBlock(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(2)
-	txn := tae.StartTxn(nil)
+	schema := catalog.MockSchemaAll(2, 0)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	seg, _ := rel.CreateSegment()
@@ -154,7 +153,7 @@ func TestLogBlock(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -172,8 +171,8 @@ func TestLogBlock(t *testing.T) {
 func TestLogSegment(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(2)
-	txn := tae.StartTxn(nil)
+	schema := catalog.MockSchemaAll(2, 0)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	seg, _ := rel.CreateSegment()
@@ -185,7 +184,7 @@ func TestLogSegment(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -203,9 +202,8 @@ func TestLogSegment(t *testing.T) {
 func TestLogTable(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(13)
-	schema.PrimaryKey = 3
-	txn := tae.StartTxn(nil)
+	schema := catalog.MockSchemaAll(13, 3)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 	meta := rel.GetMeta().(*catalog.TableEntry)
@@ -216,7 +214,7 @@ func TestLogTable(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -232,14 +230,14 @@ func TestLogTable(t *testing.T) {
 	assert.Equal(t, meta.GetSchema().Name, entryCmd.Table.GetSchema().Name)
 	assert.Equal(t, meta.GetSchema().BlockMaxRows, entryCmd.Table.GetSchema().BlockMaxRows)
 	assert.Equal(t, meta.GetSchema().SegmentMaxBlocks, entryCmd.Table.GetSchema().SegmentMaxBlocks)
-	assert.Equal(t, meta.GetSchema().PrimaryKey, entryCmd.Table.GetSchema().PrimaryKey)
+	assert.Equal(t, meta.GetSchema().GetSingleSortKeyIdx(), entryCmd.Table.GetSchema().GetSingleSortKeyIdx())
 	assert.Equal(t, meta.GetSchema().Types(), entryCmd.Table.GetSchema().Types())
 }
 
 func TestLogDatabase(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	txn := tae.StartTxn(nil)
+	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	meta := db.GetMeta().(*catalog.DBEntry)
 	err := txn.Commit()
@@ -249,7 +247,7 @@ func TestLogDatabase(t *testing.T) {
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, nil)
+	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
@@ -268,17 +266,20 @@ func TestLogDatabase(t *testing.T) {
 func TestCheckpointCatalog2(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	txn := tae.StartTxn(nil)
-	schema := catalog.MockSchemaAll(13)
-	db, _ := txn.CreateDatabase("db")
-	db.CreateRelation(schema)
-	txn.Commit()
+	txn, _ := tae.StartTxn(nil)
+	schema := catalog.MockSchemaAll(13, 12)
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.Nil(t, err)
+	err = txn.Commit()
+	assert.Nil(t, err)
 
 	pool, _ := ants.NewPool(20)
 	var wg sync.WaitGroup
 	mockRes := func() {
 		defer wg.Done()
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		seg, err := rel.CreateSegment()
@@ -294,7 +295,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		err = txn.Commit()
 		assert.Nil(t, err)
 
-		txn = tae.StartTxn(nil)
+		txn, _ = tae.StartTxn(nil)
 		db, _ = txn.GetDatabase("db")
 		rel, _ = db.GetRelationByName(schema.Name)
 		seg, _ = rel.GetSegment(id.SegmentID)
@@ -304,13 +305,15 @@ func TestCheckpointCatalog2(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		pool.Submit(mockRes)
+		err := pool.Submit(mockRes)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	ts := tae.Scheduler.GetSafeTS()
 	entry := tae.Catalog.PrepareCheckpoint(0, ts)
 	maxIndex := entry.GetMaxIndex()
-	tae.Catalog.Checkpoint(ts)
+	err = tae.Catalog.Checkpoint(ts)
+	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
 		ckp := tae.Scheduler.GetCheckpointedLSN()
 		return ckp == maxIndex.LSN
@@ -321,17 +324,20 @@ func TestCheckpointCatalog2(t *testing.T) {
 func TestCheckpointCatalog(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
-	txn := tae.StartTxn(nil)
-	schema := catalog.MockSchemaAll(2)
-	db, _ := txn.CreateDatabase("db")
-	db.CreateRelation(schema)
-	txn.Commit()
+	txn, _ := tae.StartTxn(nil)
+	schema := catalog.MockSchemaAll(2, 0)
+	db, err := txn.CreateDatabase("db")
+	assert.Nil(t, err)
+	_, err = db.CreateRelation(schema)
+	assert.Nil(t, err)
+	err = txn.Commit()
+	assert.Nil(t, err)
 
 	pool, _ := ants.NewPool(1)
 	var wg sync.WaitGroup
 	mockRes := func() {
 		defer wg.Done()
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		seg, err := rel.CreateSegment()
@@ -347,17 +353,21 @@ func TestCheckpointCatalog(t *testing.T) {
 		err = txn.Commit()
 		assert.Nil(t, err)
 
-		txn = tae.StartTxn(nil)
-		db, _ = txn.GetDatabase("db")
-		rel, _ = db.GetRelationByName(schema.Name)
-		seg, _ = rel.GetSegment(id.SegmentID)
+		txn, _ = tae.StartTxn(nil)
+		db, err = txn.GetDatabase("db")
+		assert.Nil(t, err)
+		rel, err = db.GetRelationByName(schema.Name)
+		assert.Nil(t, err)
+		seg, err = rel.GetSegment(id.SegmentID)
+		assert.Nil(t, err)
 		err = seg.SoftDeleteBlock(id.BlockID)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		pool.Submit(mockRes)
+		err := pool.Submit(mockRes)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))

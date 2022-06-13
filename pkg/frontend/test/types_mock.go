@@ -5,13 +5,49 @@
 package mock_frontend
 
 import (
-	"net"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// MockComputationRunner is a mock of ComputationRunner interface.
+type MockComputationRunner struct {
+	ctrl     *gomock.Controller
+	recorder *MockComputationRunnerMockRecorder
+}
+
+// MockComputationRunnerMockRecorder is the mock recorder for MockComputationRunner.
+type MockComputationRunnerMockRecorder struct {
+	mock *MockComputationRunner
+}
+
+// NewMockComputationRunner creates a new mock instance.
+func NewMockComputationRunner(ctrl *gomock.Controller) *MockComputationRunner {
+	mock := &MockComputationRunner{ctrl: ctrl}
+	mock.recorder = &MockComputationRunnerMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockComputationRunner) EXPECT() *MockComputationRunnerMockRecorder {
+	return m.recorder
+}
+
+// Run mocks base method.
+func (m *MockComputationRunner) Run(ts uint64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Run", ts)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Run indicates an expected call of Run.
+func (mr *MockComputationRunnerMockRecorder) Run(ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockComputationRunner)(nil).Run), ts)
+}
 
 // MockComputationWrapper is a mock of ComputationWrapper interface.
 type MockComputationWrapper struct {
@@ -22,10 +58,6 @@ type MockComputationWrapper struct {
 // MockComputationWrapperMockRecorder is the mock recorder for MockComputationWrapper.
 type MockComputationWrapperMockRecorder struct {
 	mock *MockComputationWrapper
-}
-
-func (m *MockIOSession) RawConn() (net.Conn, error) {
-	return nil, nil
 }
 
 // NewMockComputationWrapper creates a new mock instance.
@@ -41,11 +73,12 @@ func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 }
 
 // Compile mocks base method.
-func (m *MockComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+func (m *MockComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Compile", u, fill)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(interface{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Compile indicates an expected call of Compile.

@@ -42,12 +42,12 @@ func TestEval(t *testing.T) {
 
 	view.UpdateMasks[1] = &roaring.Bitmap{}
 	view.UpdateMasks[1].Add(3)
-	view.UpdateVals[1] = make(map[uint32]interface{})
+	view.UpdateVals[1] = make(map[uint32]any)
 	view.UpdateVals[1][3] = int16(7)
 
 	view.UpdateMasks[13] = &roaring.Bitmap{}
 	view.UpdateMasks[13].Add(4)
-	view.UpdateVals[13] = make(map[uint32]interface{})
+	view.UpdateVals[13] = make(map[uint32]any)
 	view.UpdateVals[13][4] = []byte("testEval")
 
 	view.Eval()
@@ -97,7 +97,8 @@ func TestMarshal(t *testing.T) {
 	buf, err := view.Marshal()
 	assert.Nil(t, err)
 	view2 := NewBlockView(0)
-	view2.Unmarshal(buf)
+	err = view2.Unmarshal(buf)
+	assert.Nil(t, err)
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
@@ -124,7 +125,8 @@ func TestMarshal2(t *testing.T) {
 	buf, err := view.Marshal()
 	assert.Nil(t, err)
 	view2 := NewBlockView(0)
-	view2.Unmarshal(buf)
+	err = view2.Unmarshal(buf)
+	assert.Nil(t, err)
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
@@ -158,7 +160,8 @@ func TestMarshal3(t *testing.T) {
 	buf, err := view.Marshal()
 	assert.Nil(t, err)
 	view2 := NewBlockView(0)
-	view2.Unmarshal(buf)
+	err = view2.Unmarshal(buf)
+	assert.Nil(t, err)
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 

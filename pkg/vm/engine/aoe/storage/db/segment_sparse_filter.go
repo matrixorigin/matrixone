@@ -16,8 +16,8 @@ package db
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
@@ -40,7 +40,7 @@ func NewSegmentSparseFilter(s *Segment) aoe.SparseFilter {
 func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	ctx := index.FilterCtx{
 		Op:  index.OpEq,
@@ -95,7 +95,7 @@ func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error)
 func (f *SegmentSparseFilter) Ne(attr string, val interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	ctx := index.FilterCtx{
 		Op:  index.OpNe,
@@ -149,7 +149,7 @@ func (f *SegmentSparseFilter) Ne(attr string, val interface{}) ([]string, error)
 func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	ctx := index.FilterCtx{
 		Op:  index.OpLt,
@@ -203,7 +203,7 @@ func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error)
 func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	ctx := index.FilterCtx{
 		Op:  index.OpLe,
@@ -257,7 +257,7 @@ func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error)
 func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	ctx := index.FilterCtx{
 		Op:  index.OpGt,
@@ -311,7 +311,7 @@ func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error)
 func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	ctx := index.FilterCtx{
 		Op:  index.OpGe,
@@ -365,7 +365,7 @@ func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error)
 func (f *SegmentSparseFilter) Btw(attr string, minv interface{}, maxv interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	ctx := index.FilterCtx{
 		Op:     index.OpIn,

@@ -26,7 +26,6 @@ import (
 )
 
 func Test_TPCH_Plan2(t *testing.T) {
-	mock := NewMockOptimizer()
 	_, fn, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(fn)
 
@@ -40,17 +39,16 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
 
-	/*
-		BROKEN: Will crash.
-		for _, ast := range ddls {
-			_, err := mock.Optimize(ast)
-			if err == nil {
-				t.Logf("Optimizer failed, NYI")
-			}
+	mock := NewEmptyMockOptimizer()
+	for _, ast := range ddls {
+		_, err := mock.Optimize(ast)
+		if err != nil {
+			t.Errorf("Optimizer failed, %v", err)
 		}
-	*/
+	}
 
-	//test simple sql
+	mock = NewMockOptimizer()
+	// test simple sql
 	qf, err := os.ReadFile(dir + "/tpch/simple.sql")
 	if err != nil {
 		t.Errorf("Cannot open queries file, error %v", err)
@@ -66,7 +64,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 	}
 
-	//test tpch query
+	// test tpch query
 	for qn := 1; qn <= 22; qn += 1 {
 		qnf, err := os.ReadFile(fmt.Sprintf("%s/tpch/q%d.sql", dir, qn))
 		if err != nil {

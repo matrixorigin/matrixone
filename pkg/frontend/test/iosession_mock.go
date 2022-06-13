@@ -5,6 +5,7 @@
 package mock_frontend
 
 import (
+	net "net"
 	reflect "reflect"
 	time "time"
 
@@ -146,6 +147,21 @@ func (m *MockIOSession) OutBuf() *buf.ByteBuf {
 func (mr *MockIOSessionMockRecorder) OutBuf() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OutBuf", reflect.TypeOf((*MockIOSession)(nil).OutBuf))
+}
+
+// RawConn mocks base method.
+func (m *MockIOSession) RawConn() (net.Conn, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RawConn")
+	ret0, _ := ret[0].(net.Conn)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RawConn indicates an expected call of RawConn.
+func (mr *MockIOSessionMockRecorder) RawConn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RawConn", reflect.TypeOf((*MockIOSession)(nil).RawConn))
 }
 
 // Read mocks base method.

@@ -30,6 +30,7 @@ type DBEntry struct {
 	*BaseEntry
 	catalog *Catalog
 	name    string
+	isSys   bool
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
@@ -58,6 +59,27 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	return e
 }
 
+func NewSystemDBEntry(catalog *Catalog) *DBEntry {
+	id := SystemDBID
+	entry := &DBEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		catalog:   catalog,
+		name:      SystemDBName,
+		entries:   make(map[uint64]*common.DLNode),
+		nameNodes: make(map[string]*nodeList),
+		link:      new(common.Link),
+		isSys:     true,
+	}
+	return entry
+}
+
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
 		BaseEntry: new(BaseEntry),
@@ -66,6 +88,13 @@ func NewReplayDBEntry() *DBEntry {
 		link:      new(common.Link),
 	}
 	return entry
+}
+
+func (e *DBEntry) IsSystemDB() bool { return e.isSys }
+func (e *DBEntry) CoarseTableCnt() int {
+	e.RLock()
+	defer e.RUnlock()
+	return len(e.entries)
 }
 
 func (e *DBEntry) Compare(o common.NodePayload) int {
@@ -114,6 +143,21 @@ func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) strin
 	return fmt.Sprintf("%s\n%s", s, body)
 }
 
+func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) {
+	e.RLock()
+	table, err := e.GetTableEntryByID(id.TableID)
+	e.RUnlock()
+	if err != nil {
+		return
+	}
+	seg, err := table.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		return
+	}
+	blk, err = seg.GetBlockEntryByID(id.BlockID)
+	return
+}
+
 func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	e.RLock()
 	defer e.RUnlock()
@@ -125,20 +169,20 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	return
 }
 
-func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) *common.DLNode {
+func (e *DBEntry) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
 	node := e.nameNodes[name]
 	if node == nil {
-		return nil
+		return nil, ErrNotFound
 	}
 	return node.TxnGetTableNodeLocked(txnCtx)
 }
 
 func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
 	e.RLock()
-	n := e.txnGetNodeByNameLocked(name, txnCtx)
+	n, err := e.txnGetNodeByNameLocked(name, txnCtx)
 	e.RUnlock()
-	if n == nil {
-		return nil, ErrNotFound
+	if err != nil {
+		return
 	}
 	entry = n.GetPayload().(*TableEntry)
 	return
@@ -147,9 +191,8 @@ func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *Tabl
 func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *TableEntry, err error) {
 	e.Lock()
 	defer e.Unlock()
-	dn := e.txnGetNodeByNameLocked(name, txnCtx)
-	if dn == nil {
-		err = ErrNotFound
+	dn, err := e.txnGetNodeByNameLocked(name, txnCtx)
+	if err != nil {
 		return
 	}
 	entry := dn.GetPayload().(*TableEntry)
@@ -165,13 +208,19 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) (created *TableEntry, err error) {
 	e.Lock()
 	created = NewTableEntry(e, schema, txnCtx, dataFactory)
-	err = e.addEntryLocked(created)
+	err = e.AddEntryLocked(created)
 	e.Unlock()
 
 	return created, err
 }
 
-func (e *DBEntry) RemoveEntry(table *TableEntry) error {
+func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
+	defer func() {
+		if err == nil {
+			e.catalog.AddTableCnt(-1)
+			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
+		}
+	}()
 	logutil.Infof("Removing: %s", table.String())
 	e.Lock()
 	defer e.Unlock()
@@ -181,11 +230,21 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) error {
 		nn := e.nameNodes[table.GetSchema().Name]
 		nn.DeleteNode(table.GetID())
 		e.link.Delete(n)
+		if nn.Length() == 0 {
+			delete(e.nameNodes, table.GetSchema().Name)
+		}
+		delete(e.entries, table.GetID())
 	}
-	return nil
+	return
 }
 
-func (e *DBEntry) addEntryLocked(table *TableEntry) error {
+func (e *DBEntry) AddEntryLocked(table *TableEntry) (err error) {
+	defer func() {
+		if err == nil {
+			e.catalog.AddTableCnt(1)
+			e.catalog.AddColumnCnt(len(table.schema.ColDefs))
+		}
+	}()
 	nn := e.nameNodes[table.schema.Name]
 	if nn == nil {
 		n := e.link.Insert(table)
@@ -199,26 +258,28 @@ func (e *DBEntry) addEntryLocked(table *TableEntry) error {
 		node := nn.GetTableNode()
 		record := node.GetPayload().(*TableEntry)
 		record.RLock()
-		err := record.PrepareWrite(table.GetTxn(), record.RWMutex)
+		err = record.PrepareWrite(table.GetTxn(), record.RWMutex)
 		if err != nil {
 			record.RUnlock()
-			return err
+			return
 		}
 		if record.HasActiveTxn() {
 			if !record.IsDroppedUncommitted() {
 				record.RUnlock()
-				return ErrDuplicate
+				err = ErrDuplicate
+				return
 			}
 		} else if !record.HasDropped() {
 			record.RUnlock()
-			return ErrDuplicate
+			err = ErrDuplicate
+			return
 		}
 		record.RUnlock()
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
 		nn.CreateNode(table.GetID())
 	}
-	return nil
+	return
 }
 
 func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
@@ -240,6 +301,7 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 		if err = processor.OnTable(table); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil
+				tableIt.Next()
 				continue
 			}
 			break
@@ -317,4 +379,12 @@ func (entry *DBEntry) CloneCreate() CheckpointItem {
 		name:      entry.name,
 	}
 	return cloned
+}
+
+// Coarse API: no consistency check
+func (entry *DBEntry) IsActive() bool {
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
 }

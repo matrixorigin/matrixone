@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -33,6 +34,7 @@ type TableEntry struct {
 	entries   map[uint64]*common.DLNode
 	link      *common.Link
 	tableData data.Table
+	rows      uint64
 }
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
@@ -57,6 +59,36 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	return e
 }
 
+func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
+	e := &TableEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		db:      db,
+		schema:  schema,
+		link:    new(common.Link),
+		entries: make(map[uint64]*common.DLNode),
+	}
+	var sid uint64
+	if schema.Name == SystemTableSchema.Name {
+		sid = SystemSegment_Table_ID
+	} else if schema.Name == SystemDBSchema.Name {
+		sid = SystemSegment_DB_ID
+	} else if schema.Name == SystemColumnSchema.Name {
+		sid = SystemSegment_Columns_ID
+	} else {
+		panic("not supported")
+	}
+	segment := NewSysSegmentEntry(e, sid)
+	e.AddEntryLocked(segment)
+	return e
+}
+
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
 		BaseEntry: new(BaseEntry),
@@ -76,6 +108,27 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 		link:    new(common.Link),
 		entries: make(map[uint64]*common.DLNode),
 	}
+}
+
+func (entry *TableEntry) IsVirtual() bool {
+	if !entry.db.IsSystemDB() {
+		return false
+	}
+	return entry.schema.Name == SystemTable_DB_Name ||
+		entry.schema.Name == SystemTable_Table_Name ||
+		entry.schema.Name == SystemTable_Columns_Name
+}
+
+func (entry *TableEntry) GetRows() uint64 {
+	return atomic.LoadUint64(&entry.rows)
+}
+
+func (entry *TableEntry) AddRows(delta uint64) uint64 {
+	return atomic.AddUint64(&entry.rows, delta)
+}
+
+func (entry *TableEntry) RemoveRows(delta uint64) uint64 {
+	return atomic.AddUint64(&entry.rows, ^(delta - 1))
 }
 
 func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error) {
@@ -98,7 +151,7 @@ func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dat
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewSegmentEntry(entry, txn, state, dataFactory)
-	entry.addEntryLocked(created)
+	entry.AddEntryLocked(created)
 	return
 }
 
@@ -112,7 +165,7 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newTableCmd(id, cmdType, entry), nil
 }
 
-func (entry *TableEntry) addEntryLocked(segment *SegmentEntry) {
+func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
 	entry.entries[segment.GetID()] = n
 }
@@ -122,6 +175,7 @@ func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 		return ErrNotFound
 	} else {
 		entry.link.Delete(n)
+		delete(entry.entries, segment.GetID())
 	}
 	return nil
 }
@@ -201,6 +255,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		if err = processor.OnSegment(segment); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil
+				segIt.Next()
 				continue
 			}
 			break
@@ -209,7 +264,12 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload().(*BlockEntry)
 			if err = processor.OnBlock(block); err != nil {
-				return
+				if err == ErrStopCurrRecur {
+					err = nil
+					blkIt.Next()
+					continue
+				}
+				break
 			}
 			blkIt.Next()
 		}
@@ -304,4 +364,16 @@ func (entry *TableEntry) CloneCreate() CheckpointItem {
 		db:        entry.db,
 	}
 	return cloned
+}
+
+// Coarse API: no consistency check
+func (entry *TableEntry) IsActive() bool {
+	db := entry.GetDB()
+	if !db.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
 }

@@ -25,11 +25,11 @@ const (
 
 //modes for a transaction
 type TransactionModes struct {
-	rwMode ReadWriteMode
+	RwMode ReadWriteMode
 }
 
 func (node *TransactionModes) Format(ctx *FmtCtx) {
-	switch node.rwMode {
+	switch node.RwMode {
 	case READ_WRITE_MODE_READ_ONLY:
 		ctx.WriteString("read only")
 	case READ_WRITE_MODE_READ_WRITE:
@@ -38,7 +38,7 @@ func (node *TransactionModes) Format(ctx *FmtCtx) {
 }
 
 func MakeTransactionModes(rwm ReadWriteMode) TransactionModes {
-	return TransactionModes{rwMode: rwm}
+	return TransactionModes{RwMode: rwm}
 }
 
 //Begin statement
@@ -49,7 +49,7 @@ type BeginTransaction struct {
 
 func (node *BeginTransaction) Format(ctx *FmtCtx) {
 	ctx.WriteString("start transaction")
-	if node.Modes.rwMode != READ_WRITE_MODE_NONE {
+	if node.Modes.RwMode != READ_WRITE_MODE_NONE {
 		ctx.WriteByte(' ')
 		node.Modes.Format(ctx)
 	}

@@ -18,6 +18,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -25,15 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type TxnClient interface {
-	StartTxn(info []byte) (AsyncTxn, error)
-}
-
 type Txn2PC interface {
-	PreCommit() error
 	PrepareRollback() error
-	PrepareCommit() error
 	ApplyRollback() error
+	PreCommit() error
+	PrepareCommit() error
+	PreApplyCommit() error
 	ApplyCommit() error
 }
 
@@ -41,24 +39,24 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	GetID() uint64
+	GetCtx() []byte
 	GetStartTS() uint64
 	GetCommitTS() uint64
 	GetInfo() []byte
 	IsTerminated(bool) bool
 	IsVisible(o TxnReader) bool
-	GetTxnState(waitIfcommitting bool) int32
+	GetTxnState(waitIfcommitting bool) TxnState
 	GetError() error
 	GetStore() TxnStore
 	String() string
 	Repr() string
+	GetLSN() uint64
 }
 
 type TxnHandle interface {
 	CreateDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
-	UseDatabase(name string) error
-	CurrentDatabase() handle.Database
 	DatabaseNames() []string
 }
 
@@ -70,23 +68,27 @@ type TxnChanger interface {
 	ToCommittingLocked(ts uint64) error
 	ToRollbackedLocked() error
 	ToRollbackingLocked(ts uint64) error
+	ToUnknownLocked()
 	Commit() error
 	Rollback() error
 	SetError(error)
-	SetPrepareCommitFn(func(interface{}) error)
 }
 
 type TxnWriter interface {
-	LogTxnEntry(tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 }
 
 type TxnAsyncer interface {
-	WaitDone() error
+	WaitDone(error) error
 }
 
 type TxnTest interface {
 	MockSetCommitTSLocked(ts uint64)
 	MockIncWriteCnt() int
+	SetPrepareCommitFn(func(AsyncTxn) error)
+	SetPrepareRollbackFn(func(AsyncTxn) error)
+	SetApplyCommitFn(func(AsyncTxn) error)
+	SetApplyRollbackFn(func(AsyncTxn) error)
 }
 
 type AsyncTxn interface {
@@ -118,8 +120,8 @@ type UpdateChain interface {
 	AddNodeLocked(txn AsyncTxn) UpdateNode
 	PrepareUpdate(uint32, UpdateNode) error
 
-	GetValueLocked(row uint32, ts uint64) (interface{}, error)
-	TryUpdateNodeLocked(row uint32, v interface{}, n UpdateNode) error
+	GetValueLocked(row uint32, ts uint64) (any, error)
+	TryUpdateNodeLocked(row uint32, v any, n UpdateNode) error
 	// CheckDeletedLocked(start, end uint32, txn AsyncTxn) error
 	// CheckColumnUpdatedLocked(row uint32, colIdx uint16, txn AsyncTxn) error
 }
@@ -136,7 +138,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts uint64) error
 	DepthLocked() int
-	CollectDeletesLocked(ts uint64, collectIndex bool) DeleteNode
+	CollectDeletesLocked(ts uint64, collectIndex bool) (DeleteNode, error)
 }
 
 type AppendNode interface {
@@ -149,6 +151,9 @@ type DeleteNode interface {
 	GetChain() DeleteChain
 	RangeDeleteLocked(start, end uint32)
 	GetCardinalityLocked() uint32
+	IsDeletedLocked(row uint32) bool
+	GetRowMaskRefLocked() *roaring.Bitmap
+	OnApply() error
 }
 
 type UpdateNode interface {
@@ -157,52 +162,50 @@ type UpdateNode interface {
 	String() string
 	GetChain() UpdateChain
 	GetDLNode() *common.DLNode
+	GetMask() *roaring.Bitmap
+	GetValues() map[uint32]interface{}
 
-	UpdateLocked(row uint32, v interface{}) error
+	UpdateLocked(row uint32, v any) error
 }
 
 type TxnStore interface {
 	Txn2PC
 	io.Closer
 	BindTxn(AsyncTxn)
+	GetLSN() uint64
 
-	BatchDedup(id uint64, pks *vector.Vector) error
-	LogSegmentID(tid, sid uint64)
-	LogBlockID(tid, bid uint64)
+	BatchDedup(dbId, id uint64, pks ...*vector.Vector) error
+	LogSegmentID(dbId, tid, sid uint64)
+	LogBlockID(dbId, tid, bid uint64)
 
-	Append(id uint64, data *batch.Batch) error
-	// RangeDeleteLocalRows(id uint64, start, end uint32) error
-	// UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error
-	// AddUpdateNode(id uint64, node UpdateNode) error
+	Append(dbId, id uint64, data *batch.Batch) error
 
-	RangeDelete(id *common.ID, start, end uint32) error
-	Update(id *common.ID, row uint32, col uint16, v interface{}) error
-	GetByFilter(id uint64, filter *handle.Filter) (*common.ID, uint32, error)
-	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
+	RangeDelete(dbId uint64, id *common.ID, start, end uint32) error
+	Update(dbId uint64, id *common.ID, row uint32, col uint16, v any) error
+	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
+	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (any, error)
 
-	CreateRelation(def interface{}) (handle.Relation, error)
-	DropRelationByName(name string) (handle.Relation, error)
-	GetRelationByName(name string) (handle.Relation, error)
+	CreateRelation(dbId uint64, def any) (handle.Relation, error)
+	DropRelationByName(dbId uint64, name string) (handle.Relation, error)
+	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 
 	CreateDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
-	UseDatabase(name string) error
-	CurrentDatabase() handle.Database
 	DatabaseNames() []string
 
-	GetSegment(id *common.ID) (handle.Segment, error)
-	CreateSegment(tid uint64) (handle.Segment, error)
-	CreateNonAppendableSegment(tid uint64) (handle.Segment, error)
-	CreateBlock(tid, sid uint64) (handle.Block, error)
-	GetBlock(id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(id *common.ID) (handle.Block, error)
-	SoftDeleteSegment(id *common.ID) error
-	SoftDeleteBlock(id *common.ID) error
+	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
+	CreateSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateNonAppendableSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateBlock(dbId, tid, sid uint64) (handle.Block, error)
+	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
+	SoftDeleteSegment(dbId uint64, id *common.ID) error
+	SoftDeleteBlock(dbId uint64, id *common.ID) error
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
-	LogTxnEntry(tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 
 	IsReadonly() bool
 	IncreateWriteCnt() int

@@ -43,23 +43,12 @@ func TestStdVector(t *testing.T) {
 	assert.False(t, vec0.IsReadonly())
 	var wg sync.WaitGroup
 	for i := 0; i < 10000; i++ {
-		wg.Add(1)
-		go func(num int) {
-			assert.Nil(t, vec0.Append(1, []int8{int8(num)}))
-			wg.Add(1)
-			go func(prev int) {
-				view := vec0.GetLatestView()
-				assert.True(t, view.Length() >= prev)
-				if prev > 0 {
-					_, err := vec0.GetValue(prev - 1)
-					assert.Nil(t, err)
-				}
-				wg.Done()
-			}(vec0.Length())
-			wg.Done()
-		}(i)
+		assert.Nil(t, vec0.Append(1, []int8{int8(i)}))
+		view := vec0.GetLatestView()
+		assert.Equal(t, vec0.Length(), view.Length())
+		_, err := view.GetValue(i)
+		assert.NoError(t, err)
 	}
-	wg.Wait()
 	assert.Equal(t, 10000, vec0.Length())
 	assert.True(t, vec0.IsReadonly())
 	assert.False(t, vec0.HasNull())
@@ -214,10 +203,12 @@ func TestStdVector(t *testing.T) {
 	assert.True(t, tmpv.Type.Eq(colTypes[2]))
 
 	f, err := os.Create("/tmp/teststdvec")
+	assert.Nil(t, err)
 	_, err = vecs[1].WriteTo(f)
 	assert.Nil(t, err)
 	assert.Nil(t, f.Close())
 	f, err = os.Open("/tmp/teststdvec")
+	assert.Nil(t, err)
 	tmpv = NewEmptyStdVector()
 	_, err = tmpv.ReadFrom(f)
 	assert.Nil(t, f.Close())

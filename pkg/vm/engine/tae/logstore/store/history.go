@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	HistoryEntryNotFoundErr = errors.New("aoe: history not found")
+	HistoryEntryNotFoundErr = errors.New("tae: history not found")
 )
 
 type HistoryFactory func() History
@@ -47,7 +47,7 @@ func newHistory(mu *sync.RWMutex) *history {
 }
 
 func (h *history) String() string {
-	s := fmt.Sprintf("{")
+	s := "{"
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for _, entry := range h.entries {
@@ -139,22 +139,22 @@ type entryWrapper struct {
 // One worker
 // h.mu.Rlock
 // wrapper
-func (h *history) TryTruncate() error {
-	c := newCompactor()
+func (h *history) TryTruncate(c *compactor) error {
 	toDelete := make([]entryWrapper, 0, 4)
 	h.mu.RLock()
 	entries := make([]VFile, len(h.entries))
-	for i, entry := range h.entries {
-		entries[i] = entry
-	}
+	copy(entries, h.entries)
 	h.mu.RUnlock()
+	// for i := len(entries) - 1; i >= 0; i-- {
+	// 	e := entries[i]
+	// 	e.PrepareCompactor(c)
+	// }
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		e.PrepareCompactor(c)
-	}
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		e.LoadMeta()
+		// err := e.LoadMeta()
+		// if err != nil {
+		// 	return err
+		// }
 		wrapper := entryWrapper{entry: e}
 		if e.IsToDelete(c) {
 			wrapper.offset = i
@@ -172,6 +172,16 @@ func (h *history) TryTruncate() error {
 			return err
 		}
 	}
+	c.tidCidMapMu.Lock()
+	for group, tidCidMap := range c.tidCidMap {
+		ckp := c.checkpointed[group]
+		for tid, lsn := range tidCidMap {
+			if lsn < ckp {
+				delete(tidCidMap, tid)
+			}
+		}
+	}
+	c.tidCidMapMu.Unlock()
 	return nil
 }
 

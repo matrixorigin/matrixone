@@ -47,25 +47,26 @@ func TestCheckpoint1(t *testing.T) {
 	e.SetType(entry.ETCustomizedStart)
 	buf2 := make([]byte, common.K)
 	copy(buf2, buf)
-	e.Unmarshal(buf2)
+	err := e.Unmarshal(buf2)
+	assert.Nil(t, err)
 	lsn, err := driver.AppendEntry(GroupC, e)
 	assert.Nil(t, err)
 	err = e.WaitDone()
 	assert.Nil(t, err)
-	testutils.WaitExpect(400, func() bool {
-		_, err = driver.LoadEntry(GroupC, lsn)
-		return err == nil
-	})
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
 	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	testutils.WaitExpect(400, func() bool {
+		return driver.GetPenddingCnt() == 1
+	})
 	assert.Equal(t, uint64(1), driver.GetPenddingCnt())
 
 	flush := entry.GetBase()
 	flush.SetType(entry.ETCustomizedStart)
 	buf3 := make([]byte, common.K*3/2)
 	copy(buf3, buf)
-	flush.Unmarshal(buf3)
+	err = flush.Unmarshal(buf3)
+	assert.Nil(t, err)
 	l, err := driver.AppendEntry(GroupC+1, flush)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), l)
@@ -107,6 +108,9 @@ func TestCheckpoint1(t *testing.T) {
 	})
 	assert.Equal(t, lsn, driver.GetCheckpointed())
 	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	testutils.WaitExpect(400, func() bool {
+		return driver.GetPenddingCnt() == 0
+	})
 	assert.Equal(t, uint64(0), driver.GetPenddingCnt())
 
 	flush3 := entry.GetBase()
@@ -152,15 +156,12 @@ func TestCheckpoint2(t *testing.T) {
 	uncommit.SetInfo(info)
 	buf1 := make([]byte, common.K)
 	copy(buf1, buf)
-	uncommit.Unmarshal(buf1)
+	err := uncommit.Unmarshal(buf1)
+	assert.Nil(t, err)
 	lsn, err := driver.AppendEntry(entry.GTUncommit, uncommit)
 	assert.Nil(t, err)
 	err = uncommit.WaitDone()
 	assert.Nil(t, err)
-	testutils.WaitExpect(400, func() bool {
-		_, err = driver.LoadEntry(entry.GTUncommit, lsn)
-		return err == nil
-	})
 	_, err = driver.LoadEntry(entry.GTUncommit, lsn)
 	assert.Nil(t, err)
 
@@ -168,7 +169,8 @@ func TestCheckpoint2(t *testing.T) {
 	commit.SetType(entry.ETCustomizedStart)
 	buf2 := make([]byte, common.K)
 	copy(buf2, buf)
-	commit.Unmarshal(buf2)
+	err = commit.Unmarshal(buf2)
+	assert.Nil(t, err)
 	commitInfo := &entry.Info{
 		Group: GroupC,
 		TxnId: 1,
@@ -178,20 +180,20 @@ func TestCheckpoint2(t *testing.T) {
 	assert.Nil(t, err)
 	err = commit.WaitDone()
 	assert.Nil(t, err)
-	testutils.WaitExpect(400, func() bool {
-		_, err = driver.LoadEntry(GroupC, lsn)
-		return err == nil
-	})
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
 	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	testutils.WaitExpect(400, func() bool {
+		return driver.GetPenddingCnt() == 1
+	})
 	assert.Equal(t, uint64(1), driver.GetPenddingCnt())
 
 	flush := entry.GetBase()
 	flush.SetType(entry.ETCustomizedStart)
 	buf3 := make([]byte, common.K*3/2)
 	copy(buf3, buf)
-	flush.Unmarshal(buf3)
+	err = flush.Unmarshal(buf3)
+	assert.Nil(t, err)
 	l, err := driver.AppendEntry(GroupC+1, flush)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), l)
@@ -209,6 +211,9 @@ func TestCheckpoint2(t *testing.T) {
 	})
 	assert.Equal(t, lsn, driver.GetCheckpointed())
 	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	testutils.WaitExpect(400, func() bool {
+		return driver.GetPenddingCnt() == 0
+	})
 	assert.Equal(t, uint64(0), driver.GetPenddingCnt())
 
 	flush2 := entry.GetBase()

@@ -22,11 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
 type blockFile struct {
@@ -38,6 +38,10 @@ type blockFile struct {
 	columns   []*columnBlock
 	deletes   *deletesFile
 	indexMeta *dataFile
+}
+
+func (bf *blockFile) GetDeletesFileStat() common.FileInfo {
+	panic(any("implement me"))
 }
 
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
@@ -105,14 +109,14 @@ func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
 	return
 }
 
-func (bf *blockFile) LoadIndexMeta() (*idxCommon.IndicesMeta, error) {
+func (bf *blockFile) LoadIndexMeta() (any, error) {
 	size := bf.indexMeta.Stat().Size()
 	buf := make([]byte, size)
 	_, err := bf.indexMeta.Read(buf)
 	if err != nil {
 		return nil, err
 	}
-	indices := idxCommon.NewEmptyIndicesMeta()
+	indices := indexwrapper.NewEmptyIndicesMeta()
 	if err = indices.Unmarshal(buf); err != nil {
 		return nil, err
 	}
@@ -226,7 +230,7 @@ func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
 	return
 }
 
-func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) (err error) {
+func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
 	attrs := bat.GetAttrs()
 	var w bytes.Buffer
 	if deletes != nil {
@@ -281,4 +285,9 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 		}
 	}
 	return
+}
+
+func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) { panic("implement me") }
+func (bf *blockFile) LoadUpdates() (map[uint16]*roaring.Bitmap, map[uint16]map[uint32]any) {
+	panic("implement me")
 }

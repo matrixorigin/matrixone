@@ -37,8 +37,5 @@ func (c *ClosedState) IsClosed() bool {
 }
 
 func (c *ClosedState) TryClose() bool {
-	if !atomic.CompareAndSwapInt32(&c.closed, int32(0), int32(1)) {
-		return false
-	}
-	return true
+	return atomic.CompareAndSwapInt32(&c.closed, int32(0), int32(1))
 }

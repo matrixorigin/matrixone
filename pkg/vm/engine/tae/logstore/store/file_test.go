@@ -34,7 +34,8 @@ func TestVFile(t *testing.T) {
 	dir := "/tmp/testvfile"
 	os.RemoveAll(dir)
 	name := "mock"
-	os.MkdirAll(dir, 0755)
+	err := os.MkdirAll(dir, 0755)
+	assert.Nil(t, err)
 	v0, err := newVFile(nil, MakeVersionFile(dir, name, 0), 0, nil, nil)
 	assert.Nil(t, err)
 	var wg sync.WaitGroup
@@ -75,7 +76,7 @@ func TestAppender(t *testing.T) {
 	checker := &MaxSizeRotateChecker{
 		MaxSize: int(common.M) * 1,
 	}
-	rf, err := OpenRotateFile(dir, name, nil, checker, nil, nil)
+	rf, err := OpenRotateFile(dir, name, nil, checker, nil, nil, nil)
 	assert.Nil(t, err)
 	defer rf.Close()
 
@@ -86,7 +87,6 @@ func TestAppender(t *testing.T) {
 	}
 	toWrite := data.Bytes()
 
-	worker, _ := ants.NewPool(1)
 	pool, _ := ants.NewPool(1)
 	var wg sync.WaitGroup
 
@@ -147,16 +147,11 @@ func TestAppender(t *testing.T) {
 				// app.Sync()
 				t.Logf("[%s] takes %s", appender.rollbackState.file.Name(), time.Since(now))
 				assert.Nil(t, err)
-				truncate := func() {
-					defer wg.Done()
-					rf.history.TryTruncate()
-				}
-				wg.Add(1)
-				worker.Submit(truncate)
 			}
 		}
 		wg.Add(1)
-		pool.Submit(f(appender, i))
+		err := pool.Submit(f(appender, i))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Logf("1. %s", time.Since(now))
@@ -197,7 +192,7 @@ func TestReadVInfo(t *testing.T) {
 	checker := &MaxSizeRotateChecker{
 		MaxSize: int(common.M) * 1,
 	}
-	rf, _ := OpenRotateFile(dir, name, nil, checker, nil, nil)
+	rf, _ := OpenRotateFile(dir, name, nil, checker, nil, nil, nil)
 
 	var data bytes.Buffer
 	data.WriteString("helloworldhello1")
@@ -206,7 +201,6 @@ func TestReadVInfo(t *testing.T) {
 	}
 	toWrite := data.Bytes()
 
-	worker, _ := ants.NewPool(1)
 	pool, _ := ants.NewPool(1)
 	var wg sync.WaitGroup
 
@@ -227,36 +221,35 @@ func TestReadVInfo(t *testing.T) {
 						}),
 				}},
 			}
-			appender.Prepare(len(toWrite), checkpointInfo)
+			err := appender.Prepare(len(toWrite), checkpointInfo)
+			assert.Nil(t, err)
 		} else {
 			commitInfo := &entry.Info{
 				Group:    entry.GTCustomizedStart,
 				GroupLSN: common.NextGlobalSeqNum(),
 			}
-			appender.Prepare(len(toWrite), commitInfo)
+			err := appender.Prepare(len(toWrite), commitInfo)
+			assert.Nil(t, err)
 		}
 
 		f := func(app FileAppender, idx int) func() {
 			return func() {
 				defer wg.Done()
-				app.Write(toWrite)
-				app.Commit()
+				_, err := app.Write(toWrite)
+				assert.Nil(t, err)
+				err = app.Commit()
+				assert.Nil(t, err)
 				// app.Sync()
-				truncate := func() {
-					defer wg.Done()
-					rf.history.TryTruncate()
-				}
-				wg.Add(1)
-				worker.Submit(truncate)
 			}
 		}
 		wg.Add(1)
-		pool.Submit(f(appender, i))
+		err := pool.Submit(f(appender, i))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 
 	rf.Close()
 
-	rf, _ = OpenRotateFile(dir, name, nil, checker, nil, nil)
+	rf, _ = OpenRotateFile(dir, name, nil, checker, nil, nil, nil)
 	rf.Close()
 }

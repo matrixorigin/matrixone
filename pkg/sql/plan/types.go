@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -354,7 +355,7 @@ func (c CreateDatabase) String() string {
 	if c.IfNotExistFlag {
 		buf.WriteString("if not exists ")
 	}
-	buf.WriteString(fmt.Sprintf("%s", c.Id))
+	buf.WriteString(c.Id)
 	return buf.String()
 }
 
@@ -397,7 +398,7 @@ func (c CreateIndex) String() string {
 		buf.WriteString("if not exists ")
 	}
 	for _, def := range c.Defs {
-		buf.WriteString(fmt.Sprintf("%s", def.(*engine.AttributeDef).Attr.Name))
+		buf.WriteString(def.(*engine.AttributeDef).Attr.Name)
 	}
 	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
 	return buf.String()
@@ -486,7 +487,7 @@ func (s ShowTables) ResultColumns() []*Attribute {
 	return []*Attribute{
 		{
 			Ref:  1,
-			Name: fmt.Sprintf("Tables"),
+			Name: "Tables",
 			Type: types.Type{
 				Oid:  types.T_varchar,
 				Size: 24,
@@ -555,7 +556,7 @@ func (e ExplainQuery) ResultColumns() []*Attribute {
 	return []*Attribute{
 		{
 			Ref:  1,
-			Name: fmt.Sprintf("QUERY PLAN"),
+			Name: "QUERY PLAN",
 			Type: types.Type{
 				Oid:  types.T_varchar,
 				Size: 24,
@@ -595,5 +596,38 @@ func (p Update) String() string {
 }
 
 func (p Update) ResultColumns() []*Attribute {
+	return nil
+}
+
+type BeginTxn struct {
+}
+
+func (b BeginTxn) String() string {
+	return "begin transaction"
+}
+
+func (b BeginTxn) ResultColumns() []*Attribute {
+	return nil
+}
+
+type CommitTxn struct {
+}
+
+func (c CommitTxn) String() string {
+	return "commit transaction"
+}
+
+func (c CommitTxn) ResultColumns() []*Attribute {
+	return nil
+}
+
+type RollbackTxn struct {
+}
+
+func (r RollbackTxn) String() string {
+	return "rollback transaction"
+}
+
+func (r RollbackTxn) ResultColumns() []*Attribute {
 	return nil
 }

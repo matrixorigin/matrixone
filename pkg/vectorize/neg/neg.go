@@ -17,15 +17,15 @@ package neg
 import "golang.org/x/exp/constraints"
 
 var (
-	Int8Neg    = numericNeg[int8]
-	Int16Neg   = numericNeg[int16]
-	Int32Neg   = numericNeg[int32]
-	Int64Neg   = numericNeg[int64]
-	Float32Neg = numericNeg[float32]
-	Float64Neg = numericNeg[float64]
+	Int8Neg    = NumericNeg[int8]
+	Int16Neg   = NumericNeg[int16]
+	Int32Neg   = NumericNeg[int32]
+	Int64Neg   = NumericNeg[int64]
+	Float32Neg = NumericNeg[float32]
+	Float64Neg = NumericNeg[float64]
 )
 
-func numericNeg[T constraints.Signed | constraints.Float](xs, rs []T) []T {
+func NumericNeg[T constraints.Signed | constraints.Float](xs, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = -x
 	}

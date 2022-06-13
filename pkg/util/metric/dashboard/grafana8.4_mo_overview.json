@@ -1,0 +1,961 @@
+{
+    "__inputs": [
+        {
+            "name": "DS_MYSQL-MO",
+            "label": "MySQL-MO",
+            "description": "",
+            "type": "datasource",
+            "pluginId": "mysql",
+            "pluginName": "MySQL"
+        }
+    ],
+    "__elements": [],
+    "__requires": [
+        {
+            "type": "grafana",
+            "id": "grafana",
+            "name": "Grafana",
+            "version": "8.4.5"
+        },
+        {
+            "type": "datasource",
+            "id": "mysql",
+            "name": "MySQL",
+            "version": "1.0.0"
+        },
+        {
+            "type": "panel",
+            "id": "timeseries",
+            "name": "Time series",
+            "version": ""
+        }
+    ],
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "datasource": "-- Grafana --",
+                "enable": false,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "limit": 100,
+                "name": "Annotations & Alerts",
+                "showIn": 0,
+                "type": "dashboard"
+            }
+        ]
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "id": null,
+    "iteration": 1654654415181,
+    "links": [],
+    "liveNow": false,
+    "panels": [
+        {
+            "collapsed": false,
+            "gridPos": {
+                "h": 1,
+                "w": 24,
+                "x": 0,
+                "y": 0
+            },
+            "id": 15,
+            "panels": [],
+            "title": "MO-Server",
+            "type": "row"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "processed statement count increasing rate in the past 15 seconds",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 9,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineStyle": {
+                            "fill": "solid"
+                        },
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "short"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 1
+            },
+            "id": 6,
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "mean"
+                    ],
+                    "displayMode": "table",
+                    "placement": "right"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  unix_timestamp(collecttime) AS time_sec,\n  sum(value) as value,\n  type as metric\nFROM sql_statement_total\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY collecttime, type\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "table": "sql_statement_total",
+                    "timeColumn": "collecttime",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                }
+            ],
+            "title": "Statement Total",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "SQL processing time in seconds, averaged by the past 15 seconds",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 9,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineStyle": {
+                            "fill": "solid"
+                        },
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 24,
+                "x": 0,
+                "y": 9
+            },
+            "id": 16,
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "mean"
+                    ],
+                    "displayMode": "table",
+                    "placement": "right"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"15s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_latency_seconds\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"15s\", 0), type\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "table": "sql_statement_total",
+                    "timeColumn": "collecttime",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                }
+            ],
+            "title": "Statement Latency",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "Total CPU time in used by MO server",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "opacity",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "min": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "s"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 0,
+                "y": 17
+            },
+            "id": 7,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "hidden",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as value\nFROM process_cpu_seconds_total\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "table": "process_resident_memory_bytes",
+                    "timeColumn": "collecttime",
+                    "where": []
+                }
+            ],
+            "title": "Process CPU Time",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "Total memory used by MO server，averaged by the past 1 minute",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "opacity",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "min": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "bytes"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 8,
+                "y": 17
+            },
+            "id": 2,
+            "options": {
+                "legend": {
+                    "calcs": [
+                        "mean",
+                        "max"
+                    ],
+                    "displayMode": "list",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as memory\nFROM process_resident_memory_bytes\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "table": "process_resident_memory_bytes",
+                    "timeColumn": "collecttime",
+                    "where": []
+                }
+            ],
+            "title": "Process Memory",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "number of open file descriptors and its max limit",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 0,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "log": 2,
+                            "type": "log"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "short"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 16,
+                "y": 17
+            },
+            "id": 4,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n unix_timestamp(collecttime) as time_sec,\n  value as open\nFROM process_open_fds\nWHERE\n  $__timeFilter(collecttime)\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "table": "process_open_fds",
+                    "timeColumn": "collecttime",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                },
+                {
+                    "format": "time_series",
+                    "group": [],
+                    "hide": false,
+                    "metricColumn": "none",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n unix_timestamp(collecttime) as time_sec,\n  value as `limitation`\nFROM process_max_fds\nWHERE\n  $__timeFilter(collecttime)\nORDER BY collecttime\n",
+                    "refId": "B",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "timeColumn": "time",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                }
+            ],
+            "title": "File Descriptors",
+            "type": "timeseries"
+        },
+        {
+            "collapsed": false,
+            "gridPos": {
+                "h": 1,
+                "w": 24,
+                "x": 0,
+                "y": 25
+            },
+            "id": 13,
+            "panels": [],
+            "title": "Hardware",
+            "type": "row"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "CPU Percentage on the current machine, averaged by the number of logical cores",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "max": 100,
+                    "min": 0,
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "percent"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 26
+            },
+            "id": 11,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "hidden",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '30s') as time_sec,\n  avg(value) as cpu\nFROM sys_cpu_combined_percent\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '30s')\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "timeColumn": "time",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                }
+            ],
+            "title": "CPU Percentage",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${DS_MYSQL-MO}"
+            },
+            "description": "Memory usage on the current machine",
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "smooth",
+                        "lineWidth": 1,
+                        "pointSize": 5,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "never",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "normal"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 80
+                            }
+                        ]
+                    },
+                    "unit": "decbytes"
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 26
+            },
+            "id": 9,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "multi",
+                    "sort": "none"
+                }
+            },
+            "pluginVersion": "8.4.5",
+            "targets": [
+                {
+                    "format": "time_series",
+                    "group": [],
+                    "metricColumn": "none",
+                    "queryType": "randomWalk",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as used\nFROM sys_memory_used\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "refId": "A",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "timeColumn": "time",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                },
+                {
+                    "format": "time_series",
+                    "group": [],
+                    "hide": false,
+                    "metricColumn": "none",
+                    "rawQuery": true,
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as available\nFROM sys_memory_available\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "refId": "B",
+                    "select": [
+                        [
+                            {
+                                "params": [
+                                    "value"
+                                ],
+                                "type": "column"
+                            }
+                        ]
+                    ],
+                    "timeColumn": "time",
+                    "where": [
+                        {
+                            "name": "$__timeFilter",
+                            "params": [],
+                            "type": "macro"
+                        }
+                    ]
+                }
+            ],
+            "title": "Memory",
+            "type": "timeseries"
+        }
+    ],
+    "refresh": "30s",
+    "schemaVersion": 35,
+    "style": "dark",
+    "tags": [],
+    "templating": {
+        "list": [
+            {
+                "current": {
+                    "selected": false,
+                    "text": "MySQL-MO",
+                    "value": "MySQL-MO"
+                },
+                "hide": 0,
+                "includeAll": false,
+                "multi": false,
+                "name": "datasource",
+                "options": [],
+                "query": "mysql",
+                "refresh": 1,
+                "regex": "",
+                "skipUrlSync": false,
+                "type": "datasource"
+            }
+        ]
+    },
+    "time": {
+        "from": "now-30m",
+        "to": "now"
+    },
+    "timepicker": {
+        "refresh_intervals": [
+            "5s",
+            "10s",
+            "15s",
+            "30s",
+            "1m",
+            "5m",
+            "15m",
+            "30m",
+            "1h",
+            "2h",
+            "1d"
+        ]
+    },
+    "timezone": "",
+    "title": "MO-Overview",
+    "uid": "L4yqe2_7k",
+    "version": 3,
+    "weekStart": ""
+}

@@ -16,6 +16,7 @@ package rpcserver
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 	"go.uber.org/zap"
 
@@ -35,7 +36,9 @@ func New(addr string, maxsize int, log *zap.Logger) (Server, error) {
 }
 
 func (s *server) Stop() {
-	s.app.Stop()
+	if err := s.app.Stop(); err != nil {
+		panic(err)
+	}
 }
 
 func (s *server) Run() error {

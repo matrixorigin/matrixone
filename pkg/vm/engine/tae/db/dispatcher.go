@@ -54,7 +54,7 @@ func (dispatcher *asyncJobDispatcher) checkConflictLocked(scopes []common.ID) (e
 	for active := range dispatcher.actives {
 		for _, scope := range scopes {
 			if err = ScopeConflictCheck(&active, &scope); err != nil {
-				break
+				return
 			}
 		}
 	}
@@ -87,7 +87,7 @@ func (dispatcher *asyncJobDispatcher) TryDispatch(task tasks.Task) (err error) {
 	return
 }
 
-func (dispatcher *asyncJobDispatcher) OnExecDone(v interface{}) {
+func (dispatcher *asyncJobDispatcher) OnExecDone(v any) {
 	task := v.(tasks.MScopedTask)
 	scopes := task.Scopes()
 	dispatcher.Lock()

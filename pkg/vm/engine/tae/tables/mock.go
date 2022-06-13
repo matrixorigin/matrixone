@@ -31,7 +31,8 @@ func newMockTxn() *mockTxn {
 	}
 }
 
-func (txn *mockTxn) GetError() error          { return nil }
-func (txn *mockTxn) GetStore() txnif.TxnStore { return nil }
-func (txn *mockTxn) GetTxnState(bool) int32   { return 0 }
-func (txn *mockTxn) IsTerminated(bool) bool   { return false }
+func (txn *mockTxn) GetLSN() uint64                  { return 0 }
+func (txn *mockTxn) GetError() error                 { return nil }
+func (txn *mockTxn) GetStore() txnif.TxnStore        { return nil }
+func (txn *mockTxn) GetTxnState(bool) txnif.TxnState { return 0 }
+func (txn *mockTxn) IsTerminated(bool) bool          { return false }

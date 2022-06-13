@@ -53,18 +53,25 @@ func (mgr *commandManager) MakeLogIndex(csn uint32) *wal.Index {
 	return &wal.Index{LSN: mgr.lsn, CSN: csn, Size: mgr.csn}
 }
 
-func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {
+func (mgr *commandManager) ApplyTxnRecord(tid uint64) (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
 	}
+	mgr.cmd.SetCmdSize(mgr.csn)
 	var buf []byte
 	if buf, err = mgr.cmd.Marshal(); err != nil {
-		panic(err)
+		return
 	}
 	logEntry = entry.GetBase()
 	logEntry.SetType(ETTxnRecord)
-	logEntry.Unmarshal(buf)
-
+	if err = logEntry.Unmarshal(buf); err != nil {
+		return
+	}
+	info := &entry.Info{
+		Group: wal.GroupC,
+		TxnId: tid,
+	}
+	logEntry.SetInfo(info)
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupC, logEntry)
 	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
 	return

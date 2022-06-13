@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,8 +108,13 @@ type SharePart struct {
 	simdCsvLineArray [][]string
 
 	//storage
-	dbHandler    engine.Database
-	tableHandler engine.Relation
+	storage        engine.Engine
+	dbHandler      engine.Database
+	tableHandler   engine.Relation
+	dbName         string
+	tableName      string
+	txnHandler     *TxnHandler
+	oneTxnPerBatch bool
 
 	//result of load
 	result *LoadResult
@@ -389,6 +396,8 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 			vec.Col = make([]types.Decimal64, batchSize)
 		case types.T_decimal128:
 			vec.Col = make([]types.Decimal128, batchSize)
+		case types.T_timestamp:
+			vec.Col = make([]types.Timestamp, batchSize)
 		default:
 			panic("unsupported vector type")
 		}
@@ -410,7 +419,7 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	load := handler.load
 
 	var cols []*engine.AttributeDef = nil
-	defs := relation.TableDefs()
+	defs := relation.TableDefs(handler.txnHandler.GetTxn().GetCtx())
 	for _, def := range defs {
 		attr, ok := def.(*engine.AttributeDef)
 		if ok {
@@ -498,8 +507,13 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.dataColumnId2TableColumnId = handler.dataColumnId2TableColumnId
 	wHandler.batchSize = handler.batchSize
 	wHandler.attrName = handler.attrName
+	wHandler.storage = handler.storage
+	wHandler.dbName = handler.dbName
 	wHandler.dbHandler = handler.dbHandler
 	wHandler.tableHandler = handler.tableHandler
+	wHandler.tableName = handler.tableName
+	wHandler.txnHandler = handler.txnHandler
+	wHandler.oneTxnPerBatch = handler.oneTxnPerBatch
 	wHandler.timestamp = handler.timestamp
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
@@ -634,7 +648,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
-			//logutil.Infof("line %d %v ",i,line)
+			logutil.Infof("line %d %v ", i, line)
 			//wait_a := time.Now()
 			rowIdx := batchBegin + i
 			offset := i + 1
@@ -897,6 +911,57 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
+				case types.T_decimal64:
+					cols := vec.Col.([]types.Decimal64)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						fs := field
+						d, err := types.ParseStringToDecimal64(fs, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = types.Decimal64(0)
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_decimal128:
+					cols := vec.Col.([]types.Decimal128)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						fs := field
+						d, err := types.ParseStringToDecimal128(fs, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = types.InitDecimal128(0)
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_timestamp:
+					cols := vec.Col.([]types.Timestamp)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						fs := field
+						d, err := types.ParseTimestamp(fs, vec.Typ.Precision)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = types.Timestamp(0)
+						}
+						cols[rowIdx] = d
+					}
 				default:
 					panic("unsupported oid")
 				}
@@ -906,7 +971,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			//wait_b := time.Now()
 			//the row does not have field
 			for k := 0; k < len(columnFLags); k++ {
-				if 0 == columnFLags[k] {
+				if columnFLags[k] == 0 {
 					vec := batchData.Vecs[k]
 					switch vec.Typ.Oid {
 					case types.T_char, types.T_varchar:
@@ -1231,6 +1296,72 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
+			case types.T_decimal64:
+				cols := vec.Col.([]types.Decimal64)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseStringToDecimal64(field, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = types.Decimal64(0)
+							//break
+						}
+						cols[i] = d
+					}
+				}
+			case types.T_decimal128:
+				cols := vec.Col.([]types.Decimal128)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseStringToDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = types.InitDecimal128(0)
+							//break
+						}
+						cols[i] = d
+					}
+				}
+			case types.T_timestamp:
+				cols := vec.Col.([]types.Timestamp)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseTimestamp(field, vec.Typ.Precision)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = 0
+							//break
+						}
+						cols[i] = d
+					}
+				}
 			default:
 				panic("unsupported oid")
 			}
@@ -1240,7 +1371,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 		wait_b := time.Now()
 		//the row does not have field
 		for k := 0; k < len(columnFLags); k++ {
-			if 0 == columnFLags[k] {
+			if columnFLags[k] == 0 {
 				vec := batchData.Vecs[k]
 				//row
 				for i := 0; i < countOfLineArray; i++ {
@@ -1329,9 +1460,35 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
+		dbHandler := handler.dbHandler
+		txnHandler := handler.txnHandler
+		tableHandler := handler.tableHandler
 		if !handler.skipWriteBatch {
-			err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+			if handler.oneTxnPerBatch {
+				txnHandler = InitTxnHandler(config.StorageEngine)
+				_, err = txnHandler.StartByAutocommitIfNeeded()
+				if err != nil {
+					goto handleError
+				}
+				dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					goto handleError
+				}
+				tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+				if err != nil {
+					goto handleError
+				}
+			}
+			err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+			if handler.oneTxnPerBatch {
+				err = txnHandler.CommitAfterAutocommitOnly()
+				if err != nil {
+					goto handleError
+				}
+			}
 		}
+
+	handleError:
 		handler.ThreadInfo.SetCnt(0)
 		if err == nil {
 			handler.result.Records += uint64(handler.batchSize)
@@ -1343,6 +1500,13 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		} else {
 			logutil.Errorf("write failed. err: %v", err)
 			handler.result.Skipped += uint64(handler.batchSize)
+		}
+
+		if handler.oneTxnPerBatch && err != nil {
+			err2 := txnHandler.RollbackAfterAutocommitOnly()
+			if err2 != nil {
+				logutil.Errorf("rollback failed.error:%v", err2)
+			}
 		}
 
 		handler.writeBatch += time.Since(wait_a)
@@ -1419,6 +1583,15 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_datetime:
 						cols := vec.Col.([]types.Datetime)
 						vec.Col = cols[:needLen]
+					case types.T_decimal64:
+						cols := vec.Col.([]types.Decimal64)
+						vec.Col = cols[:needLen]
+					case types.T_decimal128:
+						cols := vec.Col.([]types.Decimal128)
+						vec.Col = cols[:needLen]
+					case types.T_timestamp:
+						cols := vec.Col.([]types.Timestamp)
+						vec.Col = cols[:needLen]
 					}
 				}
 
@@ -1429,9 +1602,35 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				wait_a := time.Now()
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
+				txnHandler := handler.txnHandler
+				tableHandler := handler.tableHandler
+				dbHandler := handler.dbHandler
 				if !handler.skipWriteBatch {
-					err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+					if handler.oneTxnPerBatch {
+						txnHandler = InitTxnHandler(config.StorageEngine)
+						_, err = txnHandler.StartByAutocommitIfNeeded()
+						if err != nil {
+							goto handleError2
+						}
+						dbHandler, err = handler.storage.Database(handler.dbName, txnHandler.GetTxn().GetCtx())
+						if err != nil {
+							goto handleError2
+						}
+						//new relation
+						tableHandler, err = dbHandler.Relation(handler.tableName, txnHandler.GetTxn().GetCtx())
+						if err != nil {
+							goto handleError2
+						}
+					}
+					err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
+					if handler.oneTxnPerBatch {
+						err = txnHandler.CommitAfterAutocommitOnly()
+						if err != nil {
+							goto handleError2
+						}
+					}
 				}
+			handleError2:
 				handler.ThreadInfo.SetCnt(0)
 				if err == nil {
 					handler.result.Records += uint64(needLen)
@@ -1443,6 +1642,13 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				} else {
 					logutil.Errorf("write failed. err:%v \n", err)
 					handler.result.Skipped += uint64(needLen)
+				}
+
+				if handler.oneTxnPerBatch && err != nil {
+					err2 := txnHandler.RollbackAfterAutocommitOnly()
+					if err2 != nil {
+						logutil.Errorf("rollback failed.error:%v", err2)
+					}
 				}
 			}
 		}
@@ -1513,7 +1719,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	var m sync.Mutex
@@ -1550,8 +1756,13 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			load:                 load,
 			lineIdx:              0,
 			simdCsvLineArray:     make([][]string, curBatchSize),
+			storage:              ses.Pu.StorageEngine,
 			dbHandler:            dbHandler,
 			tableHandler:         tableHandler,
+			tableName:            string(load.Table.Name()),
+			dbName:               dbName,
+			txnHandler:           ses.GetTxnHandler(),
+			oneTxnPerBatch:       ses.Pu.SV.GetOneTxnPerBatchDuringLoad(),
 			lineCount:            0,
 			batchSize:            curBatchSize,
 			result:               result,
@@ -1612,6 +1823,15 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	err = initParseLineHandler(handler)
 	if err != nil {
 		return nil, err
+	}
+
+	//TODO: remove it after tae is ready
+	if handler.oneTxnPerBatch {
+		txnHandler := ses.GetTxnHandler()
+		err = txnHandler.CommitAfterAutocommitOnly()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	wg := sync.WaitGroup{}
@@ -1676,7 +1896,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 				case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
 					NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
 					NOTIFY_EVENT_WRITE_BATCH_ERROR:
-					if !errorCanBeIgnored(ne.err) {
+					if ses.IsTaeEngine() || !errorCanBeIgnored(ne.err) {
 						retErr = ne.err
 						quit = true
 					}

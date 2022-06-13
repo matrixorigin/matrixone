@@ -23,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
-	//build select
+func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
+	query, _ := newQueryAndSelectCtx(plan.Query_UPDATE)
+
+	// build select
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
 			Exprs: tree.SelectExprs{
@@ -38,28 +40,30 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	selectCtx := &SelectContext{
-		// tableAlias:  make(map[string]string),
-		columnAlias: make(map[string]*plan.Expr),
+	binderCtx := &BinderContext{
+		columnAlias: make(map[string]*Expr),
 	}
-	err := buildSelect(selectStmt, ctx, query, selectCtx)
+	nodeId, err := buildSelect(selectStmt, ctx, query, binderCtx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	//get table def
+	query.Steps = append(query.Steps, nodeId)
+
+	// get table def
 	objRef, tableDef := getLastTableDef(query)
 	if tableDef == nil {
-		return errors.New(errno.CaseNotFound, "can not find table in sql")
+		return nil, errors.New(errno.CaseNotFound, "can not find table in sql")
 	}
 
-	getColumnName := func(name string) *plan.Expr {
+	getColumnName := func(name string) *Expr {
 		for idx, col := range tableDef.Cols {
 			if col.Name == name {
-				return &plan.Expr{
+				return &Expr{
+					TableName: tableDef.Name,
+					ColName:   col.Name,
 					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							Name:   col.Name,
+						Col: &ColRef{
 							RelPos: 0,
 							ColPos: int32(idx),
 						},
@@ -73,34 +77,41 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 
 	columnLength := len(stmt.Exprs)
 	if columnLength == 0 {
-		return errors.New(errno.CaseNotFound, "no column will be update")
+		return nil, errors.New(errno.CaseNotFound, "no column will be update")
 	}
 
-	columns := make([]*plan.Expr, 0, columnLength)
-	values := make([]*plan.Expr, 0, columnLength)
+	node := &Node{
+		NodeType: plan.Node_UPDATE,
+		ObjRef:   objRef,
+		TableDef: tableDef,
+		Children: []int32{nodeId},
+	}
+
+	columns := make([]*Expr, 0, columnLength)
+	values := make([]*Expr, 0, columnLength)
 	for _, expr := range stmt.Exprs {
 		if len(expr.Names) != 1 {
-			return errors.New(errno.CaseNotFound, "the set list of update must be one")
+			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")
 		}
 		if expr.Names[0].NumParts != 1 {
-			return errors.New(errno.CaseNotFound, "the set list of update must be one")
+			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")
 		}
 
 		column := getColumnName(expr.Names[0].Parts[0])
 		if column == nil {
-			return errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", expr.Names[0].Parts[0]))
+			return nil, errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", expr.Names[0].Parts[0]))
 		}
 
-		value, err := buildExpr(expr.Expr, ctx, query, selectCtx)
+		value, _, err := buildExpr(expr.Expr, ctx, query, node, binderCtx, false)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		//cast value type
+		// cast value type
 		if column.Typ.Id != value.Typ.Id {
-			tmp, err := appendCastExpr(value, column.Typ.Id)
+			tmp, err := appendCastExpr(value, column.Typ)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			value = tmp
 		}
@@ -109,19 +120,18 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		values = append(values, value)
 	}
 
-	node := &plan.Node{
-		NodeType: plan.Node_UPDATE,
-		UpdateList: &plan.UpdateList{
-			Columns: columns,
-			Values:  values,
-		},
-		ObjRef:   objRef,
-		TableDef: tableDef,
+	node.UpdateList = &plan.UpdateList{
+		Columns: columns,
+		Values:  values,
 	}
-	appendQueryNode(query, node, false)
+	appendQueryNode(query, node)
 
 	preNode := query.Nodes[len(query.Nodes)-1]
-	query.Steps = append(query.Steps, preNode.NodeId)
+	query.Steps[len(query.Steps)-1] = preNode.NodeId
 
-	return nil
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, nil
 }

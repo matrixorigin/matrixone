@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
@@ -56,6 +57,38 @@ func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, 
 	}
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
+	}
+	return e
+}
+
+func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts uint64) *BlockEntry {
+	e := &BlockEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: ts,
+		},
+		segment: segment,
+		state:   ES_Appendable,
+	}
+	return e
+}
+
+func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
+	e := &BlockEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		segment: segment,
+		state:   ES_Appendable,
 	}
 	return e
 }
@@ -113,9 +146,18 @@ func (entry *BlockEntry) AsCommonID() *common.ID {
 	}
 }
 
+func (entry *BlockEntry) InitData(factory DataFactory) {
+	if factory == nil {
+		return
+	}
+	dataFactory := factory.MakeBlockFactory(entry.segment.GetSegmentData().GetSegmentFile())
+	entry.blkData = dataFactory(entry)
+}
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
-
+func (entry *BlockEntry) GetFileTs() (uint64, error) {
+	return entry.GetBlockData().GetBlockFile().ReadTS()
+}
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	entry.RLock()
 	currOp := entry.CurrOp
@@ -174,5 +216,58 @@ func (entry *BlockEntry) CloneCreate() CheckpointItem {
 }
 
 func (entry *BlockEntry) DestroyData() (err error) {
+	if entry.blkData == nil {
+		return
+	}
 	return entry.blkData.Destroy()
+}
+
+func (entry *BlockEntry) MakeKey() []byte {
+	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
+}
+
+// Coarse API: no consistency check
+func (entry *BlockEntry) IsActive() bool {
+	segment := entry.GetSegment()
+	if !segment.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
+}
+
+// Coarse API: no consistency check
+func (entry *BlockEntry) GetTerminationTS() (ts uint64, terminated bool) {
+	segmentEntry := entry.GetSegment()
+	tableEntry := segmentEntry.GetTable()
+	dbEntry := tableEntry.GetDB()
+
+	dbEntry.RLock()
+	terminated = dbEntry.IsDroppedCommitted()
+	if terminated {
+		ts = dbEntry.DeleteAt
+	}
+	dbEntry.RUnlock()
+	if terminated {
+		return
+	}
+
+	tableEntry.RLock()
+	terminated = tableEntry.IsDroppedCommitted()
+	if terminated {
+		ts = tableEntry.DeleteAt
+	}
+	tableEntry.RUnlock()
+	return
+	// segmentEntry.RLock()
+	// terminated = segmentEntry.IsDroppedCommitted()
+	// if terminated {
+	// 	ts = segmentEntry.DeleteAt
+	// }
+	// segmentEntry.RUnlock()
+	// if terminated {
+	// 	return
+	// }
 }

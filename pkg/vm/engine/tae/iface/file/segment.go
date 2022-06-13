@@ -14,14 +14,17 @@
 
 package file
 
-type SegmentFileFactory = func(dir string, id uint64) Segment
+import (
+	"bytes"
+)
 
 type Segment interface {
 	Base
+	Name() string
 	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
 	WriteTS(ts uint64) error
 	ReadTS() uint64
 	String() string
 	RemoveBlock(id uint64)
-	// IsAppendable() bool
+	Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error
 }

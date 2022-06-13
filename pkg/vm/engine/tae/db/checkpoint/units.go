@@ -68,10 +68,7 @@ func (units *Units) PrepareConsume(maxDuration time.Duration) bool {
 	units.RLock()
 	duration := time.Since(units.ts)
 	units.RUnlock()
-	if duration >= maxDuration {
-		return true
-	}
-	return false
+	return duration >= maxDuration
 }
 
 type LeveledUnits struct {

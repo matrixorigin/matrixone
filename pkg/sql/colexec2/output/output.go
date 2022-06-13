@@ -17,8 +17,7 @@ package output
 import (
 	"bytes"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -33,10 +32,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
 	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
 		if err := ap.Func(ap.Data, bat); err != nil {
-			batch.Clean(bat, proc.Mp)
+			bat.Clean(proc.Mp)
 			return true, err
 		}
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc.Mp)
 	}
 	return false, nil
 }

@@ -28,6 +28,9 @@ const (
 	// any family
 	T_any T = T(plan.Type_ANY)
 
+	// bool family
+	T_bool T = T(plan.Type_BOOL)
+
 	// numeric/integer family
 	T_int8   T = T(plan.Type_INT8)
 	T_int16  T = T(plan.Type_INT16)
@@ -46,6 +49,7 @@ const (
 	T_date      T = T(plan.Type_DATE)
 	T_datetime  T = T(plan.Type_DATETIME)
 	T_timestamp T = T(plan.Type_TIMESTAMP)
+	T_interval  T = T(plan.Type_INTERVAL)
 
 	// string family
 	T_char    T = T(plan.Type_CHAR)
@@ -93,6 +97,8 @@ type Decimal128 struct {
 }
 
 var Types map[string]T = map[string]T{
+	"bool": T_bool,
+
 	"tinyint":  T_int8,
 	"smallint": T_int16,
 	"int":      T_int32,
@@ -114,6 +120,7 @@ var Types map[string]T = map[string]T{
 	"date":      T_date,
 	"datetime":  T_datetime,
 	"timestamp": T_timestamp,
+	"interval":  T_interval,
 
 	"char":    T_char,
 	"varchar": T_varchar,
@@ -134,6 +141,8 @@ func (t T) ToType() Type {
 
 	typ.Oid = t
 	switch t {
+	case T_bool:
+		typ.Size = 1
 	case T_int8:
 		typ.Size = 1
 	case T_int16:
@@ -170,6 +179,8 @@ func (t T) ToType() Type {
 
 func (t T) String() string {
 	switch t {
+	case T_bool:
+		return "BOOL"
 	case T_int8:
 		return "TINYINT"
 	case T_int16:
@@ -219,6 +230,8 @@ func (t T) String() string {
 // OidString returns T string
 func (t T) OidString() string {
 	switch t {
+	case T_bool:
+		return "T_bool"
 	case T_int64:
 		return "T_int64"
 	case T_int32:
@@ -262,6 +275,8 @@ func (t T) OidString() string {
 // GoType returns go type string for T
 func (t T) GoType() string {
 	switch t {
+	case T_bool:
+		return "bool"
 	case T_int64:
 		return "int64"
 	case T_int32:
@@ -314,7 +329,7 @@ func (t T) GoGoType() string {
 // TypeLen returns type's length whose type oid is T
 func (t T) TypeLen() int {
 	switch t {
-	case T_int8:
+	case T_int8, T_bool:
 		return 1
 	case T_int16:
 		return 2
@@ -350,7 +365,7 @@ func (t T) TypeLen() int {
 
 func (t T) FixedLength() int {
 	switch t {
-	case T_int8, T_uint8:
+	case T_int8, T_uint8, T_bool:
 		return 1
 	case T_int16, T_uint16:
 		return 2

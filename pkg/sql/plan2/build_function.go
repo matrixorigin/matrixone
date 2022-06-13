@@ -15,248 +15,348 @@
 package plan2
 
 import (
-	"fmt"
-	"math"
+	"go/constant"
+	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
-func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
-	//Get function
-	functionSig, ok := BuiltinFunctionsMap[name]
-	if !ok {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function name '%v' is not exist", name))
-	}
-
-	//Check parameters length
-	if len(functionSig.ArgType) != len(exprs) {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("number of parameters does not match for function '%v'", functionSig.Name))
-	}
-
-	//Get original input expr
-	args := make([]*plan.Expr, 0, len(exprs))
-	//todo special case  need check
-	if name == "EXTRACT" {
-		kindExpr := exprs[0].(*tree.UnresolvedName)
-		args = append(args, &plan.Expr{
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: kindExpr.Parts[0],
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:        plan.Type_VARCHAR,
-				Nullable:  false,
-				Width:     math.MaxInt32,
-				Precision: 0,
-			},
-		})
-		exprs = []tree.Expr{exprs[1]}
-	}
-
-	for _, astExpr := range exprs {
-		expr, err := buildExpr(astExpr, ctx, query, selectCtx)
-		if err != nil {
-			return nil, err
+func getFunctionExprByNameAndPlanExprs(name string, distinct bool, exprs []*Expr) (resultExpr *Expr, isAgg bool, err error) {
+	// deal with special function
+	switch name {
+	case "+":
+		if len(exprs) != 2 {
+			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "operator function need two args")
 		}
-		args = append(args, expr)
+		if exprs[0].Typ.Id == plan.Type_DATE && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_INTERVAL && exprs[1].Typ.Id == plan.Type_DATE {
+			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_DATETIME && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_INTERVAL && exprs[1].Typ.Id == plan.Type_DATETIME {
+			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_VARCHAR && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_INTERVAL && exprs[1].Typ.Id == plan.Type_VARCHAR {
+			resultExpr, err = getIntervalFunction(name, exprs[1], exprs[0])
+			return
+		}
+	case "-":
+		if exprs[0].Typ.Id == plan.Type_DATE && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_DATETIME && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+		if exprs[0].Typ.Id == plan.Type_VARCHAR && exprs[1].Typ.Id == plan.Type_INTERVAL {
+			resultExpr, err = getIntervalFunction(name, exprs[0], exprs[1])
+			return
+		}
+
+	case "and", "or", "not", "xor":
+		if err := convertValueIntoBool(name, exprs, true); err != nil {
+			return nil, false, err
+		}
+	case "=", "<", "<=", ">", ">=", "<>":
+		if err := convertValueIntoBool(name, exprs, false); err != nil {
+			return nil, false, err
+		}
 	}
 
-	//Convert input parameter types if necessary
-	returnType, err := covertArgsTypeAndGetReturnType(functionSig, args)
+	// get args(exprs) & types
+	argsLength := len(exprs)
+	argsType := make([]types.T, argsLength)
+	for idx, expr := range exprs {
+		argsType[idx] = types.T(expr.Typ.Id)
+	}
+
+	// get function definition
+	funcDef, funcId, argsCastType, err := function.GetFunctionByName(name, argsType)
 	if err != nil {
-		return nil, err
+		return
+	}
+	if argsCastType != nil {
+		if len(argsCastType) != argsLength {
+			err = errors.New(errno.SyntaxErrororAccessRuleViolation, "cast types length not match args length")
+			return
+		}
+		for idx, castType := range argsCastType {
+			if argsType[idx] != castType {
+				exprs[idx], err = appendCastExpr(exprs[idx], &plan.Type{
+					Id: plan.Type_TypeId(castType),
+				})
+				if err != nil {
+					return
+				}
+			}
+		}
 	}
 
-	return &plan.Expr{
+	// return new expr
+	returnType := &Type{
+		Id: plan.Type_TypeId(funcDef.ReturnTyp),
+	}
+	resultExpr = &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef(name),
-				Args: args,
+				Func: getFunctionObjRef(funcId, name),
+				Args: exprs,
 			},
 		},
 		Typ: returnType,
-	}, nil
-}
-
-func covertArgsTypeAndGetReturnType(fun *FunctionSig, args []*plan.Expr) (*plan.Type, error) {
-	var returnType *plan.Type
-	switch fun.Name {
-	case "+", "-", "*", "/", "%":
-		leftIsNumber := checkNumberType(args[0].Typ.Id, args[0].Alias) == nil
-		rightIsNumber := checkNumberType(args[1].Typ.Id, args[1].Alias) == nil
-
-		if !leftIsNumber && !rightIsNumber {
-			newExpr, err := appendCastExpr(args[0], plan.Type_INT64) // todo need research
-			if err != nil {
-				return nil, err
-			}
-			args[0] = newExpr
-
-			newExpr, err = appendCastExpr(args[1], plan.Type_INT64) // todo need research
-			if err != nil {
-				return nil, err
-			}
-			args[1] = newExpr
-			return &plan.Type{
-				Id: fun.ArgTypeClass[0],
-			}, nil
-		}
-
-		if !leftIsNumber {
-			newExpr, err := appendCastExpr(args[0], args[1].Typ.Id) // todo need research
-			if err != nil {
-				return nil, err
-			}
-			args[0] = newExpr
-			return &plan.Type{
-				Id: args[1].Typ.Id,
-			}, nil
-		}
-		if !rightIsNumber {
-			newExpr, err := appendCastExpr(args[1], args[0].Typ.Id) // todo need research
-			if err != nil {
-				return nil, err
-			}
-			args[0] = newExpr
-			return &plan.Type{
-				Id: args[0].Typ.Id,
-			}, nil
-		}
-
-		//equal type, return directly
-		if args[0].Typ.Id == args[1].Typ.Id {
-			return &plan.Type{
-				Id: args[0].Typ.Id,
-			}, nil
-		}
-
-		//cast low type to high type
-		_, ok := CastLowTypeToHighTypeMap[args[0].Typ.Id]
-		if !ok {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type mapping not found, arg[0] type= %v", args[0].Typ.Id))
-		}
-		highType, ok := CastLowTypeToHighTypeMap[args[0].Typ.Id][args[1].Typ.Id]
-		if !ok {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type mapping not found, arg[1] type= %v", args[1].Typ.Id))
-		}
-		if args[0].Typ.Id != highType {
-			newExpr, err := appendCastExpr(args[0], highType)
-			if err != nil {
-				return nil, err
-			}
-			args[0] = newExpr
-		}
-		if args[1].Typ.Id != highType {
-			newExpr, err := appendCastExpr(args[1], highType)
-			if err != nil {
-				return nil, err
-			}
-			args[1] = newExpr
-		}
-		return &plan.Type{
-			Id: args[0].Typ.Id,
-		}, nil
-	case "UNARY_PLUS", "UNARY_MINUS":
-		expr := args[0]
-		isNumberType := checkNumberType(expr.Typ.Id, expr.Alias) == nil
-		if !isNumberType {
-			newExpr, err := appendCastExpr(expr, plan.Type_INT64)
-			if err != nil {
-				return nil, err
-			}
-			args[0] = newExpr
-			returnType = &plan.Type{ //need check
-				Id: plan.Type_INT64,
-			}
-		} else {
-			returnType = expr.Typ
-		}
-		return returnType, nil
-	default:
-		return &plan.Type{
-			Id: fun.ArgTypeClass[0],
-		}, nil
 	}
+	isAgg = funcDef.IsAggregate()
+	if isAgg && distinct {
+		fe := resultExpr.Expr.(*plan.Expr_F)
+		fe.F.Func.Obj = int64(uint64(fe.F.Func.Obj) | function.Distinct)
+	}
+	return
 }
 
-func appendCastExpr(expr *plan.Expr, toType plan.Type_TypeId) (*plan.Expr, error) {
-	//todo check and cast constant expr in buildding
-	return &plan.Expr{
+func rewriteStarToCol(query *Query, node *Node) (string, error) {
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		return node.TableDef.Cols[0].Name, nil
+	} else {
+		for _, child := range node.Children {
+			for _, col := range query.Nodes[child].ProjectList {
+				return col.ColName, nil
+			}
+		}
+	}
+	return "", errors.New(errno.InvalidColumnReference, "can not find any column when rewrite count(*) to starcount(col)")
+}
+
+func getFunctionExprByNameAndAstExprs(name string, distinct bool, astExprs []tree.Expr, ctx CompilerContext, query *Query, node *Node, binderCtx *BinderContext, needAgg bool) (resultExpr *Expr, isAgg bool, err error) {
+	// name = strings.ToLower(name)
+	args := make([]*Expr, len(astExprs))
+	// deal with special function [rewrite some ast function expr]
+	switch name {
+	case "extract":
+		// rewrite args[0]
+		kindExpr := astExprs[0].(*tree.UnresolvedName)
+		astExprs[0] = tree.NewNumVal(constant.MakeString(kindExpr.Parts[0]), kindExpr.Parts[0], false)
+	case "count":
+		// count(*) : astExprs[0].(type) is *tree.NumVal
+		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
+		switch astExprs[0].(type) {
+		case *tree.NumVal:
+			// rewrite count(*) to starcount(col_name)
+			name = "starcount"
+			var countColName string
+			countColName, err = rewriteStarToCol(query, node)
+			if err != nil {
+				return
+			}
+			var newCountCol *tree.UnresolvedName
+			newCountCol, err = tree.NewUnresolvedName(countColName)
+			if err != nil {
+				return
+			}
+			astExprs[0] = newCountCol
+		}
+	}
+
+	isAgg = true
+
+	// get args
+	var expr *Expr
+	var paramIsAgg bool
+	for idx, astExpr := range astExprs {
+		expr, paramIsAgg, err = buildExpr(astExpr, ctx, query, node, binderCtx, needAgg)
+		if err != nil {
+			return
+		}
+		isAgg = isAgg && paramIsAgg
+		args[idx] = expr
+	}
+
+	// deal with special function
+	switch name {
+	case "date":
+		resultExpr, err = appendCastExpr(args[0], &plan.Type{
+			Id: plan.Type_DATE,
+		})
+		return
+	case "interval":
+		resultExpr, err = appendCastExpr(args[0], &plan.Type{
+			Id: plan.Type_INTERVAL,
+		})
+		return
+	case "date_add", "date_sub":
+		if len(args) != 2 {
+			return nil, false, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
+		}
+		args, err = resetIntervalFunctionExprs(args[0], args[1])
+		if err != nil {
+			return
+		}
+	}
+
+	resultExpr, paramIsAgg, err = getFunctionExprByNameAndPlanExprs(name, distinct, args)
+	if paramIsAgg {
+		node.AggList = append(node.AggList, resultExpr)
+		resultExpr = &Expr{
+			Typ: resultExpr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &ColRef{
+					RelPos: -2,
+					ColPos: int32(len(node.AggList) - 1),
+				},
+			},
+		}
+		isAgg = true
+	}
+	return
+}
+
+func appendCastExpr(expr *Expr, toType *Type) (*Expr, error) {
+	argsType := []types.T{
+		types.T(expr.Typ.Id),
+		types.T(toType.Id),
+	}
+	_, funcId, _, err := function.GetFunctionByName("cast", argsType)
+	if err != nil {
+		return nil, err
+	}
+	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
-				Func: getFunctionObjRef("CAST"),
-				Args: []*plan.Expr{expr},
+				Func: getFunctionObjRef(funcId, "cast"),
+				Args: []*Expr{expr, {
+					Expr: &plan.Expr_T{
+						T: &plan.TargetType{
+							Typ: toType,
+						},
+					},
+				}},
 			},
 		},
-		Typ: &plan.Type{
-			Id: toType,
-		},
+		Typ: toType,
 	}, nil
 }
 
-func getFunctionObjRef(name string) *plan.ObjectRef {
-	return &plan.ObjectRef{
+func getFunctionObjRef(funcId int64, name string) *ObjectRef {
+	return &ObjectRef{
+		Obj:     funcId,
 		ObjName: name,
 	}
 }
 
-func checkFloatType(typ plan.Type_TypeId, alias string) error {
-	switch typ {
-	case plan.Type_FLOAT32, plan.Type_FLOAT64:
-		return nil
-	default:
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not float", alias))
-	}
-}
+func resetIntervalFunctionExprs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+	strExpr := intervalExpr.Expr.(*plan.Expr_F).F.Args[0].Expr
+	intervalStr := strExpr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+	intervalArray := strings.Split(intervalStr, " ")
 
-func checkIntType(typ plan.Type_TypeId, alias string) error {
-	switch typ {
-	case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_INT64, plan.Type_INT128,
-		plan.Type_UINT8, plan.Type_UINT16, plan.Type_UINT32, plan.Type_UINT64, plan.Type_UINT128:
-		return nil
-	default:
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not int", alias))
-	}
-}
-
-func checkDecimalType(typ plan.Type_TypeId, alias string) error {
-	switch typ {
-	case plan.Type_DECIMAL, plan.Type_DECIMAL64, plan.Type_DECIMAL128:
-		return nil
-	default:
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not decimal", alias))
-	}
-}
-
-func checkNumberType(typ plan.Type_TypeId, alias string) error {
-	err := checkIntType(typ, alias)
-	if err == nil {
-		return nil
-	}
-	err = checkFloatType(typ, alias)
-	if err == nil {
-		return nil
-	}
-	err = checkDecimalType(typ, alias)
+	intervalType, err := types.IntervalTypeOf(intervalArray[1])
 	if err != nil {
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not number", alias))
+		return nil, err
+	}
+	returnNum, returnType, err := types.NormalizeInterval(intervalArray[0], intervalType)
+	if err != nil {
+		return nil, err
+	}
+
+	// rewrite "date '2020-10-10' - interval 1 Hour" to date_add(datetime, 1, hour)
+	if dateExpr.Typ.Id == plan.Type_DATE {
+		switch returnType {
+		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
+		default:
+			dateExpr, err = appendCastExpr(dateExpr, &plan.Type{
+				Id:   plan.Type_DATETIME,
+				Size: 8,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return []*Expr{
+		dateExpr,
+		{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Value: &plan.Const_Ival{
+						Ival: returnNum,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:   plan.Type_INT64,
+				Size: 8,
+			},
+		},
+		{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Value: &plan.Const_Ival{
+						Ival: int64(returnType),
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:   plan.Type_INT64,
+				Size: 8,
+			},
+		},
+	}, nil
+}
+
+func getIntervalFunction(name string, dateExpr *Expr, intervalExpr *Expr) (*Expr, error) {
+	exprs, err := resetIntervalFunctionExprs(dateExpr, intervalExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	// only support date operator now
+	namesMap := map[string]string{
+		"+": "date_add",
+		"-": "date_sub",
+	}
+	resultExpr, _, err := getFunctionExprByNameAndPlanExprs(namesMap[name], false, exprs)
+
+	return resultExpr, err
+}
+
+func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
+	if !isLogic && (len(args) != 2 || (args[0].Typ.Id != plan.Type_BOOL && args[1].Typ.Id != plan.Type_BOOL)) {
+		return nil
+	}
+	for _, arg := range args {
+		if arg.Typ.Id == plan.Type_BOOL {
+			continue
+		}
+		switch ex := arg.Expr.(type) {
+		case *plan.Expr_C:
+			arg.Typ.Id = plan.Type_BOOL
+			switch value := ex.C.Value.(type) {
+			case *plan.Const_Ival:
+				if value.Ival == 0 {
+					ex.C.Value = &plan.Const_Bval{Bval: false}
+				} else if value.Ival == 1 {
+					ex.C.Value = &plan.Const_Bval{Bval: true}
+				} else {
+					return errors.New("", "the params type is not right")
+				}
+			}
+		}
 	}
 	return nil
 }
-
-//todo use in time cast function
-// func checkTimeType(typ plan.Type_TypeId, alias string) error {
-// 	switch typ {
-// 	case plan.Type_DATE, plan.Type_TIME, plan.Type_DATETIME, plan.Type_TIMESTAMP, plan.Type_INTERVAL:
-// 		return nil
-// 	default:
-// 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not time", alias))
-// 	}
-// }

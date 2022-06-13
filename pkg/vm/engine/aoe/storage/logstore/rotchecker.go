@@ -15,7 +15,6 @@
 package logstore
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -29,7 +28,7 @@ type MaxSizeRotationChecker struct {
 
 func (c *MaxSizeRotationChecker) PrepareAppend(f *VersionFile, delta int64) (bool, error) {
 	if delta > int64(c.MaxSize) {
-		return false, errors.New(fmt.Sprintf("MaxSize is %d, but %d is received", c.MaxSize, delta))
+		return false, fmt.Errorf("MaxSize is %d, but %d is received", c.MaxSize, delta)
 	}
 	if f == nil {
 		return false, nil

@@ -18,9 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/segmentio"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -58,14 +59,14 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		ClosedC:     make(chan struct{}),
+		FileFactory: segmentio.SegmentFactory,
 		Closed:      new(atomic.Value),
 	}
 
 	db.Wal = wal.NewDriver(dirname, WALDir, nil)
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
-	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.Scheduler)
-	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler); err != nil {
+	dataFactory := tables.NewDataFactory(db.FileFactory, mutBufMgr, db.Scheduler, db.Dir)
+	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler, dataFactory); err != nil {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
@@ -74,6 +75,10 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory)
+
+	db.Replay(dataFactory)
+	db.Catalog.ReplayTableRows()
+
 	db.TxnMgr.Start()
 
 	db.DBLocker, dbLocker = dbLocker, nil
@@ -93,7 +98,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.TimedScanner = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
 
 	// Start workers
-	db.startWorkers()
+	db.CKPDriver.Start()
+	db.TimedScanner.Start()
 
 	return
 }
