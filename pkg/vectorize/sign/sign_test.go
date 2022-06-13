@@ -29,7 +29,7 @@ func TestSignUint8(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignUint8(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -45,7 +45,7 @@ func TestSignUint16(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignUint16(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -61,7 +61,7 @@ func TestSignUint32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignUint32(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -77,7 +77,7 @@ func TestSignUint64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignUint64(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -93,7 +93,7 @@ func TestSignInt8(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignInt8(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -109,7 +109,7 @@ func TestSignInt16(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignInt16(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -125,7 +125,7 @@ func TestSignInt32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignInt32(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -141,7 +141,7 @@ func TestSignInt64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignInt64(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -157,7 +157,7 @@ func TestSignFloat32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignFloat32(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
@@ -173,7 +173,7 @@ func TestSignFloat64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run sign function
-	newNums = sign(nums, newNums)
+	newNums = SignFloat64(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, signNums[i], newNums[i])
