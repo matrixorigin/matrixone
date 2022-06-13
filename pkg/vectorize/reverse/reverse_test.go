@@ -65,6 +65,27 @@ func TestReverse(t *testing.T) {
 				Offsets: []uint32{0},
 			},
 		},
+		{
+			name: "three strings",
+			args: &types.Bytes{
+				Data: []byte("Hello 世界"),
+				Lengths: []uint32{
+					uint32(len("Hello")),
+					uint32(len(" ")),
+					uint32(len("世界")),
+				},
+				Offsets: []uint32{0, 5, 6},
+			},
+			want: &types.Bytes{
+				Data: []byte("olleH 界世"),
+				Lengths: []uint32{
+					uint32(len("olleH")),
+					uint32(len(" ")),
+					uint32(len("界世")),
+				},
+				Offsets: []uint32{0, 5, 6},
+			},
+		},
 	}
 
 	for _, c := range cases {
