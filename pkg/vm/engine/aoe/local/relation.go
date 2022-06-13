@@ -115,6 +115,10 @@ func (r *localRoRelation) Write(_ uint64, _ *batch.Batch, _ engine.Snapshot) err
 	panic("not supported")
 }
 
+func (r *localRoRelation) Update(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+	panic(any("implement me"))
+}
+
 func (r *localRoRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
 	panic(any("implement me"))
 }

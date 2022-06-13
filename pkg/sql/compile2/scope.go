@@ -133,7 +133,7 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
 	arg.Ts = ts
-	defer arg.TableSource.Close(nil)
+	defer arg.TableSource.Close(snapshot)
 	if err := s.MergeRun(engine); err != nil {
 		return 0, err
 	}
