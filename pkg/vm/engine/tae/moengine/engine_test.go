@@ -1,6 +1,7 @@
 package moengine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,6 +40,8 @@ func TestEngine(t *testing.T) {
 
 	schema := catalog.MockSchema(13, 12)
 	defs, err := SchemaToDefs(schema)
+	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, int32(3), false)
+	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
 	assert.NoError(t, err)
 	err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
 	assert.Nil(t, err)
@@ -47,6 +50,14 @@ func TestEngine(t *testing.T) {
 
 	rel, err := dbase.Relation(schema.Name, txn.GetCtx())
 	assert.Nil(t, err)
+	rDefs := rel.TableDefs(nil)
+	assert.Equal(t, 14, len(rDefs))
+	rAttr := rDefs[5].(*engine.AttributeDef).Attr
+	assert.Equal(t, int32(3), rAttr.Default.Value.(int32))
+	rAttr = rDefs[6].(*engine.AttributeDef).Attr
+	assert.Equal(t, true, rAttr.Default.IsNull)
+	rAttr = rDefs[7].(*engine.AttributeDef).Attr
+	assert.Equal(t, false, rAttr.Default.Exist)
 	assert.Equal(t, 1, len(rel.Nodes(nil)))
 	assert.Equal(t, ADDR, rel.Nodes(nil)[0].Addr)
 	bat := catalog.MockData(schema, 100)

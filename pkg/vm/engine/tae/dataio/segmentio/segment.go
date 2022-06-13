@@ -159,8 +159,10 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				bf.rows = file.GetInode().GetRows()
 			}
 		case "update":
-			if ts == 0 {
-				bf.columns[col].ts = 0
+			if bf.ts <= ts {
+				bf.ts = ts
+			}
+			if bf.columns[col].updates.file[0] == nil {
 				bf.columns[col].updates.file[0] = file
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 				break

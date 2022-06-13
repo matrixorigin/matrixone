@@ -121,6 +121,10 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	return msecs, carry, nil
 }
 
+func (d Date) ToTimeUTC() Timestamp {
+	return Timestamp((int64(d)*secsPerDay)<<20 - (localTZ << 20))
+}
+
 // ParseTimestamp will parse a string to be a Timestamp
 // Support Format:
 // 1. all the Date value
@@ -129,7 +133,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 func ParseTimestamp(s string, precision int32) (Timestamp, error) {
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
-			return Timestamp(d.ToTime()), nil
+			return d.ToTimeUTC(), nil
 		}
 		return -1, errIncorrectTimestampValue
 	}
