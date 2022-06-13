@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -125,28 +124,23 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if !blk.meta.IsAppendable() {
 		return
 	}
-	delStats := blk.file.GetDeletesFileStat()
-	if delStats.Size() == 0 {
+	an := updates.NewCommittedAppendNode(blk.ckpTs, blk.node.rows, blk.mvcc)
+	blk.mvcc.OnReplayAppendNode(an)
+	masks, vals := blk.file.LoadUpdates()
+	if masks != nil {
+		for colIdx, mask := range masks {
+			un := updates.NewCommittedColumnNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
+			un.SetMask(mask)
+			un.SetValues(vals[colIdx])
+			if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
+				return
+			}
+		}
+	}
+	deletes, err := blk.file.LoadDeletes()
+	if err != nil || deletes == nil {
 		return
 	}
-	size := delStats.Size()
-	osize := delStats.OriginSize()
-	dnode := common.GPool.Alloc(uint64(size))
-	defer common.GPool.Free(dnode)
-	if err = blk.file.ReadDeletes(dnode.Buf[:size]); err != nil {
-		return err
-	}
-	node := common.GPool.Alloc(uint64(osize))
-	defer common.GPool.Free(node)
-
-	if _, err = compress.Decompress(dnode.Buf[:size], node.Buf[:osize], compress.Lz4); err != nil {
-		return err
-	}
-	deletes := roaring.New()
-	if err = deletes.UnmarshalBinary(node.Buf[:osize]); err != nil {
-		return err
-	}
-	logutil.Info(deletes.String())
 	deleteNode := updates.NewMergedNode(blk.ckpTs)
 	deleteNode.SetDeletes(deletes)
 	err = blk.OnReplayDelete(deleteNode)
@@ -785,6 +779,7 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 		if err != nil {
 			return
 		}
+		// logutil.Infof("ts=%d, maxVisible=%d,visible=%v", ts, blk.mvcc.LoadMaxVisible(), visible)
 		// If row is visible to txn
 		if visible {
 			var deleted bool
@@ -805,6 +800,7 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 	deleted, existed := blk.index.IsKeyDeleted(filter.Val, ts)
 	if !existed || deleted {
 		err = data.ErrNotFound
+		// panic(fmt.Sprintf("%v:%v %v:%s", existed, deleted, filter.Val, blk.index.String()))
 	}
 	return
 }

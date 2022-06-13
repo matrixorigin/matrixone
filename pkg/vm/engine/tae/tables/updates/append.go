@@ -44,6 +44,14 @@ func MockAppendNode(ts uint64, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
 	}
 }
 
+func NewCommittedAppendNode(ts uint64, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
+	return &AppendNode{
+		commitTs: ts,
+		maxRow:   maxRow,
+		mvcc:     mvcc,
+	}
+}
+
 func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
 	ts := uint64(0)
 	if txn != nil {
