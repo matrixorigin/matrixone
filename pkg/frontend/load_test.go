@@ -112,6 +112,36 @@ func Test_load(t *testing.T) {
 				Attr: engine.Attribute{
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal64,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 10,
+					},
+					Name: "o"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal128,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 20,
+					},
+					Name: "p"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_timestamp,
+						Size:      0,
+						Width:     0,
+						Scale:     0,
+						Precision: 6,
+					},
+					Name: "r"}},
 		}
 		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
@@ -147,15 +177,13 @@ func Test_load(t *testing.T) {
 				"ignore " +
 				"INTO TABLE T.A " +
 				"FIELDS TERMINATED BY ',' " +
-				"(c,d,e,f)",
+				"(@s,@t,c,d,e,f)",
 		}
 
 		for i := 0; i < len(self_handle_sql); i++ {
 			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
 			stmts, err := parsers.Parse(dialect.MYSQL, self_handle_sql[i])
-			if err != nil {
-				t.Error(err)
-			}
+			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
@@ -171,9 +199,7 @@ func Test_load(t *testing.T) {
 		defer stubs2.Reset()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
-		if err != nil {
-			t.Error(err)
-		}
+		convey.So(err, convey.ShouldBeNil)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -262,6 +288,36 @@ func Test_load(t *testing.T) {
 				Attr: engine.Attribute{
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal64,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 10,
+					},
+					Name: "o"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal128,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 20,
+					},
+					Name: "p"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_timestamp,
+						Size:      0,
+						Width:     0,
+						Scale:     0,
+						Precision: 6,
+					},
+					Name: "r"}},
 		}
 		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
@@ -327,9 +383,7 @@ func Test_load(t *testing.T) {
 
 		for i := 0; i < len(kases); i++ {
 			stmts, err := parsers.Parse(dialect.MYSQL, kases[i].sql)
-			if err != nil {
-				t.Error(err)
-			}
+			convey.So(err, convey.ShouldBeNil)
 			cws = append(cws, stmts[0].(*tree.Load))
 		}
 
@@ -337,9 +391,7 @@ func Test_load(t *testing.T) {
 		defer stubs2.Reset()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
-		if err != nil {
-			t.Error(err)
-		}
+		convey.So(err, convey.ShouldBeNil)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 

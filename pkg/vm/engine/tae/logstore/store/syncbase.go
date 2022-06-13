@@ -21,9 +21,16 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+)
+
+var (
+	ErrGroupNotExist       = errors.New("group not existed")
+	ErrLsnNotExist         = errors.New("lsn not existed")
+	ErrVFileVersionTimeOut = errors.New("get vfile version timeout")
 )
 
 type syncBase struct {
@@ -34,9 +41,12 @@ type syncBase struct {
 	ckpmu                        sync.RWMutex
 	syncing                      map[uint32]uint64
 	checkpointed, synced, ckpCnt *syncMap
-	uncommits                    map[uint32][]uint64
+	tidLsnMaps                   map[uint32]map[uint64]uint64
+	tidLsnMapmu                  *sync.RWMutex
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
+	commitCond                   sync.Cond
+	syncedVersion                uint64
 }
 
 type checkpointInfo struct {
@@ -98,13 +108,17 @@ func (info *checkpointInfo) MergeCheckpointInfo(ockp *checkpointInfo) {
 			}
 			ckpinfo.ckps.Or(ockpinfo.ckps)
 		}
+		if ckpinfo.IsAllCheckpointed() {
+			info.ranges.TryMerge(*common.NewClosedIntervalsByInt(lsn))
+			delete(info.partial, lsn)
+		}
 	}
 }
 func (info *checkpointInfo) GetCheckpointed() uint64 {
 	if info.ranges == nil || len(info.ranges.Intervals) == 0 {
 		return 0
 	}
-	if info.ranges.Intervals[0].Start != 1 {
+	if info.ranges.Intervals[0].Start > 1 {
 		return 0
 	}
 	return info.ranges.Intervals[0].End
@@ -199,10 +213,12 @@ func newSyncBase() *syncBase {
 		checkpointed:  newSyncMap(),
 		synced:        newSyncMap(),
 		ckpCnt:        newSyncMap(),
-		uncommits:     make(map[uint32][]uint64),
+		tidLsnMaps:    make(map[uint32]map[uint64]uint64),
+		tidLsnMapmu:   &sync.RWMutex{},
 		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
 		ckpmu:         sync.RWMutex{},
+		commitCond:    *sync.NewCond(new(sync.Mutex)),
 	}
 }
 
@@ -248,6 +264,7 @@ func (base *syncBase) ReadPostCommitEntry(r io.Reader) (n int64, err error) {
 		if err != nil {
 			return n, err
 		}
+		base.checkpointing[groupID] = ckpInfo
 	}
 	return
 }
@@ -290,6 +307,9 @@ func (base *syncBase) OnReplay(r *replayer) {
 	for k, v := range r.groupLSN {
 		base.synced.ids[k] = v
 	}
+	for k, v := range r.groupLSN {
+		base.syncing[k] = v
+	}
 	if r.ckpEntry != nil {
 		err := base.UnarshalPostCommitEntry(r.ckpEntry.payload)
 		if err != nil {
@@ -304,14 +324,19 @@ func (base *syncBase) OnReplay(r *replayer) {
 			ckpInfo.MergeCheckpointInfo(ckps)
 		}
 		base.checkpointed.ids[groupId] = base.checkpointing[groupId].GetCheckpointed()
+		base.ckpCnt.ids[groupId] = base.checkpointing[groupId].GetCkpCnt()
 	}
+	r.checkpointrange = base.checkpointing
+	base.syncedVersion = uint64(r.ckpVersion)
+	base.tidLsnMaps = r.tidlsnMap
 }
+
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {
 	base.addrmu.RLock()
 	defer base.addrmu.RUnlock()
 	versionsMap, ok := base.addrs[groupId]
 	if !ok {
-		return 0, errors.New("group not existed")
+		return 0, ErrGroupNotExist
 	}
 	for ver, interval := range versionsMap {
 		if interval.Contains(*common.NewClosedIntervalsByInt(lsn)) {
@@ -319,7 +344,7 @@ func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) 
 		}
 	}
 	fmt.Printf("versionsMap is %v\n", versionsMap)
-	return 0, errors.New("lsn not existed")
+	return 0, ErrLsnNotExist
 }
 
 //TODO
@@ -352,26 +377,19 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 			base.ckpmu.Unlock()
 		}
 	case entry.GTUncommit:
-		// addr := v.Addr.(*VFileAddress)
-		for _, tid := range v.Uncommits {
-			tids, ok := base.uncommits[tid.Group]
-			if !ok {
-				tids = make([]uint64, 0)
-			}
-			existed := false
-			for _, id := range tids {
-				if id == tid.Tid {
-					existed = true
-					break
-				}
-			}
-			if !existed {
-				tids = append(tids, tid.Tid)
-			}
-			base.uncommits[tid.Group] = tids
-		}
-		// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
+	case entry.GTInternal:
+		atomic.StoreUint64(&base.syncedVersion, uint64(v.PostCommitVersion))
 	default:
+		base.tidLsnMapmu.Lock()
+		if v.Group >= entry.GTCustomizedStart {
+			tidLsnMap, ok := base.tidLsnMaps[v.Group]
+			if !ok {
+				tidLsnMap = make(map[uint64]uint64)
+				base.tidLsnMaps[v.Group] = tidLsnMap
+			}
+			tidLsnMap[v.TxnId] = v.GroupLSN
+		}
+		base.tidLsnMapmu.Unlock()
 	}
 	base.syncing[v.Group] = v.GroupLSN
 	base.addrmu.Lock()
@@ -434,6 +452,9 @@ func (base *syncBase) SetCKpCnt(groupId uint32, id uint64) {
 }
 
 func (base *syncBase) OnCommit() {
+	base.commitCond.L.Lock()
+	base.commitCond.Broadcast()
+	base.commitCond.L.Unlock()
 	for group, checkpointing := range base.checkpointing {
 		checkpointingId := checkpointing.GetCheckpointed()
 		ckpcnt := checkpointing.GetCkpCnt()

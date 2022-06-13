@@ -25,18 +25,19 @@ import (
 
 func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.([]types.Date)
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]types.Date)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DateToMonth(inputValues, resultValues))
 		return resultVector, nil
 	} else {
+		inputValues := inputVector.Col.([]types.Date)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
@@ -51,18 +52,19 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.([]types.Datetime)
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsConst {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]types.Datetime)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
 		return resultVector, nil
 	} else {
+		inputValues := inputVector.Col.([]types.Datetime)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
@@ -71,6 +73,33 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
+		return resultVector, nil
+	}
+}
+
+func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_uint8, Size: 1}
+	resultElementSize := int(resultType.Size)
+	if inputVector.IsConst {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		inputValues := inputVector.Col.(*types.Bytes)
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]uint8, 1)
+		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))
+		return resultVector, nil
+	} else {
+		inputValues := inputVector.Col.(*types.Bytes)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := encoding.DecodeUint8Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues.Lengths)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }

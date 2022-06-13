@@ -115,7 +115,7 @@ func (info *appendInfo) GetDestLen() uint32 {
 }
 func (info *appendInfo) String() string {
 	s := fmt.Sprintf("[%d]: Append from [%d:%d] to blk %s[%d:%d]",
-		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.ToBlockFileName(), info.destOff, info.destLen+info.destOff)
+		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.BlockString(), info.destOff, info.destLen+info.destOff)
 	return s
 }
 func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
@@ -345,7 +345,7 @@ func (n *insertNode) execUnload() (en wal.LogEntry) {
 	}
 	en = n.makeLogEntry()
 	info := &entry.Info{
-		Group:     entry.GTUncommit,
+		Group:     wal.GroupUC,
 		Uncommits: []entry.Tid{{Group: wal.GroupC, Tid: n.table.store.txn.GetID()}},
 	}
 	en.SetInfo(info)

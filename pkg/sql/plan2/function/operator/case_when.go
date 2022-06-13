@@ -31,10 +31,75 @@ import (
 //		(else ...)
 //	`
 // format `case A when a1 then ... when a2 then ...` should be converted to required format.
+var (
+	CaseWhenUint8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[uint8](vs, proc, types.Type{Oid: types.T_uint8})
+	}
 
-type Ret interface {
-	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime
-}
+	CaseWhenUint16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[uint16](vs, proc, types.Type{Oid: types.T_uint16})
+	}
+
+	CaseWhenUint32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[uint32](vs, proc, types.Type{Oid: types.T_uint32})
+	}
+
+	CaseWhenUint64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[uint64](vs, proc, types.Type{Oid: types.T_uint64})
+	}
+
+	CaseWhenInt8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[int8](vs, proc, types.Type{Oid: types.T_int8})
+	}
+
+	CaseWhenInt16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[int16](vs, proc, types.Type{Oid: types.T_int16})
+	}
+
+	CaseWhenInt32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[int32](vs, proc, types.Type{Oid: types.T_int32})
+	}
+
+	CaseWhenInt64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[int64](vs, proc, types.Type{Oid: types.T_int64})
+	}
+
+	CaseWhenFloat32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[float32](vs, proc, types.Type{Oid: types.T_float32})
+	}
+
+	CaseWhenFloat64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[float64](vs, proc, types.Type{Oid: types.T_float64})
+	}
+
+	CaseWhenBool = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[bool](vs, proc, types.Type{Oid: types.T_bool})
+	}
+
+	CaseWhenDate = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Date](vs, proc, types.Type{Oid: types.T_date})
+	}
+
+	CaseWhenDateTime = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Datetime](vs, proc, types.Type{Oid: types.T_datetime})
+	}
+
+	CaseWhenVarchar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwString(vs, proc, types.Type{Oid: types.T_varchar})
+	}
+
+	CaseWhenChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwString(vs, proc, types.Type{Oid: types.T_char})
+	}
+
+	CaseWhenDecimal64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Decimal64](vs, proc, types.Type{Oid: types.T_decimal64})
+	}
+
+	CaseWhenDecimal128 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Decimal128](vs, proc, types.Type{Oid: types.T_decimal128})
+	}
+)
 
 // CwTypeCheckFn is type check function for case-when operator
 func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
@@ -46,31 +111,31 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 			}
 		}
 
-		allNull := true // result part (contains then part and else part) should have at least 1 owns exact type
-		for i := 1; i < l; i += 2 {
-			if inputTypes[i] == ret {
-				allNull = false
-			} else {
-				if inputTypes[i] != types.T_any {
-					return false
-				}
+		if l%2 == 1 {
+			if inputTypes[l-1] != ret && inputTypes[l-1] != types.T_any {
+				return false
 			}
 		}
-		return !allNull
+
+		for i := 1; i < l; i += 2 {
+			if inputTypes[i] != ret && inputTypes[i] != types.T_any {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
 
-// CwFn1 is fn for uint / int / float / bool
-func CwFn1[T Ret](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	var t = types.T_bool.ToType() // result vector's type
+type CwRet interface {
+	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
+		types.Decimal64 | types.Decimal128
+}
+
+// cwGeneral is a general evaluate function for case-when operator
+// whose return type is uint / int / float / bool / date / datetime
+func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	l := vector.Length(vs[0])
-	for i := 1; i < len(vs); i += 2 {
-		if !vs[i].IsScalarNull() {
-			t = vs[i].Typ
-			break
-		}
-	}
 
 	rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
 	if err != nil {
@@ -205,5 +270,187 @@ func CwFn1[T Ret](vs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 	}
 
+	return rs, nil
+}
+
+// cwString is an evaluate function for case-when operator
+// whose return type is char / varchar
+func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
+	l := vector.Length(vs[0])
+
+	rs, err := proc.AllocVector(typ, 0)
+	if err != nil {
+		return nil, err
+	}
+	rs.Col = &types.Bytes{
+		Data:    nil,
+		Offsets: make([]uint32, l),
+		Lengths: make([]uint32, l),
+	}
+	rscols := rs.Col.(*types.Bytes)
+
+	var offset uint32 = 0
+	flag := make([]bool, l) // if flag[i] is false, it couldn't adapt to any case
+
+	for i := 0; i < len(vs)-1; i += 2 {
+		whenv := vs[i]
+		thenv := vs[i+1]
+		whencols := whenv.Col.([]bool)
+		thencols := thenv.Col.(*types.Bytes)
+		switch {
+		case whenv.IsScalar() && thenv.IsScalar():
+			if whencols[0] {
+				if thenv.IsScalarNull() {
+					return proc.AllocScalarNullVector(typ), nil
+				} else {
+					r := proc.AllocScalarVector(typ)
+					r.Col = &types.Bytes{
+						Data:    make([]byte, thencols.Lengths[0]),
+						Offsets: make([]uint32, 1),
+						Lengths: make([]uint32, 1),
+					}
+					copy(r.Col.(*types.Bytes).Data, thencols.Data)
+					r.Col.(*types.Bytes).Lengths[0] = thencols.Lengths[0]
+					return r, nil
+				}
+			}
+		case whenv.IsScalar() && !thenv.IsScalar():
+			if whencols[0] {
+				rscols.Data = make([]byte, len(thencols.Data))
+				copy(rscols.Data, thencols.Data)
+				copy(rscols.Offsets, thencols.Offsets)
+				copy(rscols.Lengths, thencols.Lengths)
+				rs.Nsp.Or(thenv.Nsp)
+				return rs, nil
+			}
+		case !whenv.IsScalar() && thenv.IsScalar():
+			if thenv.IsScalarNull() {
+				var j uint64
+				temp := make([]uint64, 0, l)
+				for j = 0; j < uint64(l); j++ {
+					if flag[j] {
+						continue
+					}
+					if whencols[j] {
+						temp = append(temp, j)
+						flag[j] = true
+					}
+				}
+				nulls.Add(rs.Nsp, temp...)
+			} else {
+				for j := 0; j < l; j++ {
+					if flag[j] {
+						continue
+					}
+					if whencols[j] {
+						length := thencols.Lengths[0]
+						rscols.Data = append(rscols.Data, thencols.Data...)
+						rscols.Offsets[j] = offset
+						rscols.Lengths[j] = length
+						offset += length
+						flag[j] = true
+					}
+				}
+			}
+		case !whenv.IsScalar() && !thenv.IsScalar():
+			if nulls.Any(thenv.Nsp) {
+				var j uint64
+				temp := make([]uint64, 0, l)
+				for j = 0; j < uint64(l); j++ {
+					if whencols[j] {
+						if flag[j] {
+							continue
+						}
+						if nulls.Contains(thenv.Nsp, j) {
+							temp = append(temp, j)
+						} else {
+							length := thencols.Lengths[j]
+							o := thencols.Offsets[j]
+							rscols.Data = append(rscols.Data, thencols.Data[o:o+length]...)
+							rscols.Offsets[j] = offset
+							rscols.Lengths[j] = length
+							offset += length
+						}
+						flag[j] = true
+					}
+				}
+				nulls.Add(rs.Nsp, temp...)
+			} else {
+				for j := 0; j < l; j++ {
+					if whencols[j] {
+						if flag[j] {
+							continue
+						}
+						length := thencols.Lengths[j]
+						o := thencols.Offsets[j]
+						rscols.Data = append(rscols.Data, thencols.Data[o:o+length]...)
+						rscols.Offsets[j] = offset
+						rscols.Lengths[j] = length
+						offset += length
+						flag[j] = true
+					}
+				}
+			}
+		}
+	}
+
+	// deal the ELSE part
+	if len(vs)%2 == 0 || vs[len(vs)-1].IsScalarNull() {
+		var i uint64
+		temp := make([]uint64, 0, l)
+		for i = 0; i < uint64(l); i++ {
+			if !flag[i] {
+				temp = append(temp, i)
+			}
+		}
+		nulls.Add(rs.Nsp, temp...)
+	} else {
+		ev := vs[len(vs)-1]
+		ecols := ev.Col.(*types.Bytes)
+		if ev.IsScalar() {
+			for i := 0; i < l; i++ {
+				if !flag[i] {
+					length := ecols.Lengths[0]
+					rscols.Data = append(rscols.Data, ecols.Data...)
+					rscols.Offsets[i] = offset
+					rscols.Lengths[i] = length
+					offset += length
+					flag[i] = true
+				}
+			}
+		} else {
+			if nulls.Any(ev.Nsp) {
+				var i uint64
+				temp := make([]uint64, 0, l)
+				for i = 0; i < uint64(l); i++ {
+					if !flag[i] {
+						if nulls.Contains(ev.Nsp, i) {
+							temp = append(temp, i)
+						} else {
+							length := ecols.Lengths[i]
+							o := ecols.Offsets[i]
+							rscols.Data = append(rscols.Data, ecols.Data[o:o+length]...)
+							rscols.Offsets[i] = offset
+							rscols.Lengths[i] = length
+							offset += length
+						}
+					}
+				}
+				nulls.Add(rs.Nsp, temp...)
+			} else {
+				for i := 0; i < l; i++ {
+					if !flag[i] {
+						length := ecols.Lengths[i]
+						o := ecols.Offsets[i]
+						rscols.Data = append(rscols.Data, ecols.Data[o:o+length]...)
+						rscols.Offsets[i] = offset
+						rscols.Lengths[i] = length
+						offset += length
+					}
+				}
+			}
+		}
+	}
+	rs.Data = rscols.Data
 	return rs, nil
 }

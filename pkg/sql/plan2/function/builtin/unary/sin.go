@@ -26,18 +26,19 @@ import (
 
 func Sin[T constraints.Integer | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0] // so these kinds of indexing are always guaranteed success because all the checks are done in the plan?
-	inputValues := inputVector.Col.([]T)
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]T)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, sin.Sin[T](inputValues, resultValues))
 		return resultVector, nil
 	} else {
+		inputValues := inputVector.Col.([]T)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err

@@ -52,6 +52,8 @@ type Index interface {
 	HasDeleteFrom(key any, fromTs uint64) bool
 	GetMaxDeleteTS() uint64
 
+	String() string
+
 	ReadFrom(data.Block) error
 	WriteTo(data.Block) error
 }

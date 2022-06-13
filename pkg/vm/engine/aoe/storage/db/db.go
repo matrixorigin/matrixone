@@ -254,6 +254,8 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 	var err error
 	database, _ := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	loader := NewDBSSLoader(d.Store.Catalog, database, d.Store.DataTables, path)
+	// TODO: Tem workaround
+	time.Sleep(time.Microsecond * 10)
 	if err = loader.PrepareLoad(); err != nil {
 		return err
 	}

@@ -68,6 +68,10 @@ func (i *ClosedInterval) TryMerge(o ClosedInterval) bool {
 	return true
 }
 
+func (i *ClosedInterval) IsCoveredByInt(idx uint64) bool {
+	return idx >= i.End
+}
+
 func (i *ClosedInterval) AtomicUpdateEnd(v uint64) {
 	atomic.StoreUint64(&i.End, v)
 }

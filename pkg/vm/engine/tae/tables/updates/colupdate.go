@@ -110,9 +110,12 @@ func (node *ColumnNode) GetDLNode() *common.DLNode {
 	return node.DLNode
 }
 
+func (node *ColumnNode) SetMask(mask *roaring.Bitmap) { node.txnMask = mask }
+
 func (node *ColumnNode) GetMask() *roaring.Bitmap {
 	return node.txnMask
 }
+func (node *ColumnNode) SetValues(vals map[uint32]any) { node.txnVals = vals }
 func (node *ColumnNode) GetValues() map[uint32]any {
 	return node.txnVals
 }
@@ -300,7 +303,7 @@ func (node *ColumnNode) StringLocked() string {
 	if node.commitTs == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s](%d-%d)[", commitState, node.id.ToBlockFileName(), node.startTs, node.commitTs)
+	s := fmt.Sprintf("[%s:%s](%d-%d)[", commitState, node.id.BlockString(), node.startTs, node.commitTs)
 	for k, v := range node.txnVals {
 		s = fmt.Sprintf("%s%d:%v,", s, k, v)
 	}

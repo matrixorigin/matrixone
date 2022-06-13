@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -374,6 +376,13 @@ func (bs *baseStore) onEntries(entries []entry.Entry) *batch {
 			panic(err)
 		}
 		if err = appender.Prepare(e.TotalSize(), e.GetInfo()); err != nil {
+			if strings.Contains(err.Error(), "MaxSize") {
+				logutil.Infof("entry larger than 64M: e%d", e.GetType())
+				logutil.Infof("write into file /tmp/largeEntry")
+				file, _ := os.Create("/tmp/largeEntry")
+				n, _ := e.WriteTo(file)
+				logutil.Infof("total %d bytes", n)
+			}
 			panic(err)
 		}
 		if _, err = e.WriteTo(appender); err != nil {
@@ -448,7 +457,8 @@ func (bs *baseStore) Checkpoint(e entry.Entry) (err error) {
 }
 
 func (bs *baseStore) TryCompact() error {
-	return bs.file.GetHistory().TryTruncate()
+	c := newCompactor(&bs.syncBase)
+	return bs.file.GetHistory().TryTruncate(c)
 }
 
 func (bs *baseStore) TryTruncate(size int64) error {
@@ -538,10 +548,37 @@ func (s *baseStore) Replay(h ApplyHandle) error {
 
 func (s *baseStore) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	ver, err := s.GetVersionByGLSN(groupId, lsn)
+	if err == ErrGroupNotExist || err == ErrLsnNotExist {
+		syncedLsn := s.GetCurrSeqNum(groupId)
+		if lsn <= syncedLsn {
+			for i := 0; i < 10; i++ {
+				logutil.Infof("load retry %d-%d", groupId, lsn)
+				s.syncBase.commitCond.L.Lock()
+				ver, err = s.GetVersionByGLSN(groupId, lsn)
+				if err == nil {
+					s.syncBase.commitCond.L.Unlock()
+					break
+				}
+				s.syncBase.commitCond.Wait()
+				s.syncBase.commitCond.L.Unlock()
+				if err == nil {
+					break
+				}
+			}
+			if err != nil {
+				return nil, ErrVFileVersionTimeOut
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
-	return s.file.Load(ver, groupId, lsn)
+	vf, err := s.file.GetEntryByVersion(ver)
+	if err != nil {
+		return nil, err
+	}
+	e, err := vf.Load(groupId, lsn)
+	return e, err
 }
 
 func (s *baseStore) OnCommitVFile(vf VFile) {

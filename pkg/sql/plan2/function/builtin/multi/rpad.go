@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,15 +33,15 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
 
-	if origVecs[0].IsScalar() {
-		return nil, errors.New("The first argument of the lpad function can not be a constant")
-	}
-
 	// gets a new vector to store our result
 	resultVec, err := proc.AllocVector(origVecs[0].Typ, 24*int64(len(strs.Lengths)))
 	if err != nil {
 		return nil, err
 	}
+	if origVecs[0].IsScalar() && origVecs[1].IsScalar() && origVecs[2].IsScalar() {
+		resultVec.IsConst = true
+	}
+
 	result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
 	if err != nil {
 		return nil, err

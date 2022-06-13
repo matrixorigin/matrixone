@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -48,23 +49,22 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	ap.ctr.strHashStates = make([][3]uint64, UnitLimit)
 	ap.ctr.strHashMap = &hashtable.StringHashMap{}
 	ap.ctr.strHashMap.Init()
-	mp := make(map[int32]int)
+	ap.ctr.vecs = make([]evalVector, len(ap.Conditions[0]))
 	for i, cond := range ap.Conditions[0] { // aligning the precision of decimal
-		mp[ap.Conditions[1][i].Pos]++
-		switch cond.Typ.Oid {
+		switch types.T(cond.Expr.Typ.Id) {
 		case types.T_decimal64:
-			typ := ap.Conditions[1][i]
-			if typ.Scale > cond.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Typ.Scale
-			} else if typ.Scale < cond.Typ.Scale {
-				ap.Conditions[1][i].Scale = cond.Typ.Scale - typ.Scale
+			typ := ap.Conditions[1][i].Expr.Typ
+			if typ.Scale > cond.Expr.Typ.Scale {
+				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
+			} else if typ.Scale < cond.Expr.Typ.Scale {
+				ap.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
 			}
 		case types.T_decimal128:
-			typ := ap.Conditions[1][i]
-			if typ.Scale > cond.Typ.Scale {
-				cond.Scale = typ.Scale - cond.Typ.Scale
-			} else if typ.Scale < cond.Typ.Scale {
-				ap.Conditions[1][i].Scale = cond.Typ.Scale - typ.Scale
+			typ := ap.Conditions[1][i].Expr.Typ
+			if typ.Scale > cond.Expr.Typ.Scale {
+				cond.Scale = typ.Scale - cond.Expr.Typ.Scale
+			} else if typ.Scale < cond.Expr.Typ.Scale {
+				ap.Conditions[1][i].Scale = cond.Expr.Typ.Scale - typ.Scale
 			}
 		}
 	}
@@ -73,9 +73,6 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		for _, rp := range ap.Result {
 			if rp.Rel == 1 {
 				ap.ctr.poses = append(ap.ctr.poses, rp.Pos)
-				if _, ok := mp[rp.Pos]; ok {
-					continue
-				}
 				flg = true
 			}
 		}
@@ -101,10 +98,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat := <-proc.Reg.MergeReceivers[0].Ch
 			if bat == nil {
 				ctr.state = End
-				ctr.bat.Clean(proc.Mp)
+				if ctr.bat != nil {
+					ctr.bat.Clean(proc.Mp)
+				}
 				continue
 			}
 			if len(bat.Zs) == 0 {
+				continue
+			}
+			if ctr.bat == nil {
+				bat.Clean(proc.Mp)
 				continue
 			}
 			if err := ctr.probe(bat, ap, proc); err != nil {
@@ -151,6 +154,32 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			}
 			bat.Clean(proc.Mp)
 		}
+		for i, cond := range ap.Conditions[1] {
+			vec, err := colexec.EvalExpr(ctr.bat, proc, cond.Expr)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					if ctr.vecs[j].needFree {
+						vector.Clean(ctr.vecs[j].vec, proc.Mp)
+					}
+				}
+				return err
+			}
+			ctr.vecs[i].vec = vec
+			ctr.vecs[i].needFree = true
+			for j := range ctr.bat.Vecs {
+				if ctr.bat.Vecs[j] == vec {
+					ctr.vecs[i].needFree = false
+					break
+				}
+			}
+		}
+		defer func() {
+			for i := range ctr.vecs {
+				if ctr.vecs[i].needFree {
+					vector.Clean(ctr.vecs[i].vec, proc.Mp)
+				}
+			}
+		}()
 		count := len(ctr.bat.Zs)
 		for i := 0; i < count; i += UnitLimit {
 			n := count - i
@@ -158,8 +187,8 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				n = UnitLimit
 			}
 			copy(ctr.zValues[:n], OneInt64s[:n])
-			for _, cond := range ap.Conditions[1] {
-				vec := ctr.bat.Vecs[cond.Pos]
+			for j, cond := range ap.Conditions[1] {
+				vec := ctr.vecs[j].vec
 				switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 				case 1:
 					fillGroupStr[uint8](ctr, vec, n, 1, i)
@@ -234,6 +263,25 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				ctr.bat.Vecs[pos] = vector.New(bat.Vecs[pos].Typ)
 			}
 		}
+		for i, cond := range ap.Conditions[1] {
+			vec, err := colexec.EvalExpr(bat, proc, cond.Expr)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					if ctr.vecs[j].needFree {
+						vector.Clean(ctr.vecs[j].vec, proc.Mp)
+					}
+				}
+				return err
+			}
+			ctr.vecs[i].vec = vec
+			ctr.vecs[i].needFree = true
+			for j := range bat.Vecs {
+				if bat.Vecs[j] == vec {
+					ctr.vecs[i].needFree = false
+					break
+				}
+			}
+		}
 		count := len(bat.Zs)
 		for i := 0; i < count; i += UnitLimit {
 			n := count - i
@@ -241,8 +289,8 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				n = UnitLimit
 			}
 			copy(ctr.zValues[:n], OneInt64s[:n])
-			for _, cond := range ap.Conditions[1] {
-				vec := bat.Vecs[cond.Pos]
+			for j, cond := range ap.Conditions[1] {
+				vec := ctr.vecs[j].vec
 				switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 				case 1:
 					fillGroupStr[uint8](ctr, vec, n, 1, i)
@@ -307,6 +355,11 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
 						bat.Clean(proc.Mp)
 						ctr.bat.Clean(proc.Mp)
+						for i := range ctr.vecs {
+							if ctr.vecs[i].needFree {
+								vector.Clean(ctr.vecs[i].vec, proc.Mp)
+							}
+						}
 						return err
 					}
 
@@ -316,6 +369,11 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				ctr.keys[k] = ctr.keys[k][:0]
 			}
 			bat.Clean(proc.Mp)
+		}
+		for i := range ctr.vecs {
+			if ctr.vecs[i].needFree {
+				vector.Clean(ctr.vecs[i].vec, proc.Mp)
+			}
 		}
 	}
 }
@@ -330,6 +388,32 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
 		}
 	}
+	for i, cond := range ap.Conditions[0] {
+		vec, err := colexec.EvalExpr(bat, proc, cond.Expr)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				if ctr.vecs[j].needFree {
+					vector.Clean(ctr.vecs[j].vec, proc.Mp)
+				}
+			}
+			return err
+		}
+		ctr.vecs[i].vec = vec
+		ctr.vecs[i].needFree = true
+		for j := range bat.Vecs {
+			if bat.Vecs[j] == vec {
+				ctr.vecs[i].needFree = false
+				break
+			}
+		}
+	}
+	defer func() {
+		for i := range ctr.vecs {
+			if ctr.vecs[i].needFree {
+				vector.Clean(ctr.vecs[i].vec, proc.Mp)
+			}
+		}
+	}()
 	count := len(bat.Zs)
 	for i := 0; i < count; i += UnitLimit {
 		n := count - i
@@ -337,8 +421,8 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			n = UnitLimit
 		}
 		copy(ctr.zValues[:n], OneInt64s[:n])
-		for _, cond := range ap.Conditions[0] {
-			vec := bat.Vecs[cond.Pos]
+		for j, cond := range ap.Conditions[0] {
+			vec := ctr.vecs[j].vec
 			switch typLen := vec.Typ.Oid.FixedLength(); typLen {
 			case 1:
 				fillGroupStr[uint8](ctr, vec, n, 1, i)

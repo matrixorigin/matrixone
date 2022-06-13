@@ -577,6 +577,7 @@ func buildInsertValues(stmt *tree.Insert, plan *InsertValues, eg engine.Engine, 
 		}
 		bat.Vecs = append(bat.Vecs, vec)
 	}
+	batch.Reorder(bat, orderAttr)
 	plan.dataBatch = bat
 	return nil
 }
@@ -587,23 +588,60 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
 	}
 	switch typ.Oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_int8:
+		res := int64(value.(int8))
+		str := strconv.FormatInt(res, 10)
+		if res < 0 {
+			return tree.NewNumVal(constant.MakeUint64(uint64(-res)), str, true)
+		}
+		return tree.NewNumVal(constant.MakeInt64(res), str, false)
+	case types.T_int16:
+		res := int64(value.(int16))
+		str := strconv.FormatInt(res, 10)
+		if res < 0 {
+			return tree.NewNumVal(constant.MakeUint64(uint64(-res)), str, true)
+		}
+		return tree.NewNumVal(constant.MakeInt64(res), str, false)
+	case types.T_int32:
+		res := int64(value.(int32))
+		str := strconv.FormatInt(res, 10)
+		if res < 0 {
+			return tree.NewNumVal(constant.MakeUint64(uint64(-res)), str, true)
+		}
+		return tree.NewNumVal(constant.MakeInt64(res), str, false)
+	case types.T_int64:
 		res := value.(int64)
 		str := strconv.FormatInt(res, 10)
 		if res < 0 {
 			return tree.NewNumVal(constant.MakeUint64(uint64(-res)), str, true)
 		}
 		return tree.NewNumVal(constant.MakeInt64(res), str, false)
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8:
+		res := uint64(value.(uint8))
+		str := strconv.FormatUint(res, 10)
+		return tree.NewNumVal(constant.MakeUint64(res), str, false)
+	case types.T_uint16:
+		res := uint64(value.(uint16))
+		str := strconv.FormatUint(res, 10)
+		return tree.NewNumVal(constant.MakeUint64(res), str, false)
+	case types.T_uint32:
+		res := uint64(value.(uint32))
+		str := strconv.FormatUint(res, 10)
+		return tree.NewNumVal(constant.MakeUint64(res), str, false)
+	case types.T_uint64:
 		res := value.(uint64)
 		str := strconv.FormatUint(res, 10)
 		return tree.NewNumVal(constant.MakeUint64(res), str, false)
-	case types.T_float32, types.T_float64:
+	case types.T_float32:
+		res := float64(value.(float32))
+		str := strconv.FormatFloat(res, 'f', 10, 64)
+		return tree.NewNumVal(constant.MakeFloat64(res), str, res < 0)
+	case types.T_float64:
 		res := value.(float64)
 		str := strconv.FormatFloat(res, 'f', 10, 64)
 		return tree.NewNumVal(constant.MakeFloat64(res), str, res < 0)
 	case types.T_char, types.T_varchar:
-		res := value.(string)
+		res := string(value.([]byte)[:])
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_date:
 		res := value.(types.Date).String()
@@ -715,11 +753,12 @@ func isDefaultExpr(expr tree.Expr) bool {
 
 var (
 	// errors may happen while building constant
-	ErrDivByZero        = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
-	ErrZeroModulus      = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
-	errConstantOutRange = errors.New(errno.DataException, "constant value out of range")
-	errBinaryOutRange   = errors.New(errno.DataException, "binary result out of range")
-	errUnaryOutRange    = errors.New(errno.DataException, "unary result out of range")
+	ErrDivByZero          = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
+	ErrZeroModulus        = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
+	errConstantOutRange   = errors.New(errno.DataException, "constant value out of range")
+	errConstantNotAllowed = errors.New(errno.DataException, "constant value not allowed")
+	errBinaryOutRange     = errors.New(errno.DataException, "binary result out of range")
+	errUnaryOutRange      = errors.New(errno.DataException, "unary result out of range")
 )
 
 func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
@@ -945,13 +984,13 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return uint64(v), nil
 		case types.T_float32:
 			v, _ := constant.Float32Val(val)
-			if num.Negative() {
+			if num.Negative() && v != 0 {
 				return float32(-v), nil
 			}
 			return float32(v), nil
 		case types.T_float64:
 			v, _ := constant.Float64Val(val)
-			if num.Negative() {
+			if num.Negative() && v != 0 {
 				return float64(-v), nil
 			}
 			return float64(v), nil
@@ -1004,13 +1043,19 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return v, nil
 		case types.T_float32:
 			v, _ := constant.Float32Val(val)
-			if num.Negative() {
+			if math.IsInf(float64(v), 0) || math.IsNaN(float64(v)) {
+				return 0, errConstantNotAllowed
+			}
+			if num.Negative() && v != 0 {
 				return float32(-v), nil
 			}
 			return float32(v), nil
 		case types.T_float64:
 			v, _ := constant.Float64Val(val)
-			if num.Negative() {
+			if math.IsInf(float64(v), 0) || math.IsNaN(float64(v)) {
+				return 0, errConstantNotAllowed
+			}
+			if num.Negative() && v != 0 {
 				return float64(-v), nil
 			}
 			return float64(v), nil
