@@ -128,8 +128,13 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	masks, vals := blk.file.LoadUpdates()
 	if masks != nil {
 		for colIdx, mask := range masks {
-			logutil.Infof("%s ReplayUpdates: [TS=%d,Rows=%d,Col=%d,Cnt=%d]",
-				blk.meta.Repr(), blk.ckpTs, blk.file.ReadRows(), colIdx, mask.GetCardinality())
+			logutil.Info("[Start]",
+				common.TimestampField(blk.ckpTs),
+				common.OperationField("install-update"),
+				common.OperandNameSpace(),
+				common.AnyField("rows", blk.node.rows),
+				common.AnyField("col", colIdx),
+				common.CountField(int(mask.GetCardinality())))
 			un := updates.NewCommittedColumnNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
 			un.SetMask(mask)
 			un.SetValues(vals[colIdx])
@@ -142,8 +147,11 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if err != nil || deletes == nil {
 		return
 	}
-	logutil.Infof("%s ReplayDeletes: [TS=%d,Rows=%d,Cnt=%d]",
-		blk.meta.Repr(), blk.ckpTs, blk.file.ReadRows(), deletes.GetCardinality())
+	logutil.Info("[Start]", common.TimestampField(blk.ckpTs),
+		common.OperationField("install-del"),
+		common.OperandNameSpace(),
+		common.AnyField("rows", blk.node.rows),
+		common.CountField(int(deletes.GetCardinality())))
 	deleteNode := updates.NewMergedNode(blk.ckpTs)
 	deleteNode.SetDeletes(deletes)
 	err = blk.OnReplayDelete(deleteNode)

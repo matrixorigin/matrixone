@@ -15,6 +15,7 @@
 package jobs
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -131,8 +132,13 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 }
 
 func (task *compactBlockTask) GetNewBlock() handle.Block { return task.created }
+func (task *compactBlockTask) Name() string {
+	return fmt.Sprintf("[%d]compact", task.ID())
+}
 
 func (task *compactBlockTask) Execute() (err error) {
+	logutil.Info("[Start]", common.OperationField(task.Name()),
+		common.OperandField(task.meta.Repr()))
 	now := time.Now()
 	seg := task.compacted.GetSegment()
 	// Prepare a block placeholder
@@ -170,6 +176,9 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}
-	logutil.Infof("(%s) [Compacted] | (%s) [Created] | %s", task.compacted.Fingerprint().BlockString(), task.created.Fingerprint().BlockString(), time.Since(now))
+	logutil.Info("[Done]",
+		common.OperationField(task.Name()),
+		common.AnyField("created", task.created.Fingerprint().BlockString()),
+		common.DurationField(time.Since(now)))
 	return
 }
