@@ -16,6 +16,7 @@ package segmentio
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -152,7 +153,7 @@ func (cb *columnBlock) OpenIndexFile(idx int) (vfile common.IRWFile, err error) 
 
 func (cb *columnBlock) OpenUpdateFile() (vfile common.IRWFile, err error) {
 	cb.updates.Ref()
-	vfile = cb.data
+	vfile = cb.updates
 	return
 }
 

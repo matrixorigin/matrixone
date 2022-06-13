@@ -110,14 +110,44 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block.ckpTs = ts
 	if ts > 0 {
 		logutil.Infof("Replay BlockIndex %s: ts=%d,rows=%d", meta.Repr(), ts, block.file.ReadRows())
-		if err := block.ReplayData(); err != nil {
+		if err := block.ReplayIndex(); err != nil {
+			panic(err)
+		}
+		if err := block.ReplayDelta(); err != nil {
 			panic(err)
 		}
 	}
 	return block
 }
 
-func (blk *dataBlock) ReplayData() (err error) {
+func (blk *dataBlock) ReplayDelta() (err error) {
+	if !blk.meta.IsAppendable() {
+		return
+	}
+	an := updates.NewCommittedAppendNode(blk.ckpTs, blk.node.rows, blk.mvcc)
+	blk.mvcc.OnReplayAppendNode(an)
+	masks, vals := blk.file.LoadUpdates()
+	if masks != nil {
+		for colIdx, mask := range masks {
+			un := updates.NewCommittedColumnNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
+			un.SetMask(mask)
+			un.SetValues(vals[colIdx])
+			if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
+				return
+			}
+		}
+	}
+	deletes, err := blk.file.LoadDeletes()
+	if err != nil || deletes == nil {
+		return
+	}
+	deleteNode := updates.NewMergedNode(blk.ckpTs)
+	deleteNode.SetDeletes(deletes)
+	err = blk.OnReplayDelete(deleteNode)
+	return
+}
+
+func (blk *dataBlock) ReplayIndex() (err error) {
 	if blk.meta.IsAppendable() {
 		if !blk.meta.GetSchema().HasPK() {
 			return
@@ -641,6 +671,7 @@ func (blk *dataBlock) updateWithFineLock(
 
 func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
 	blk.mvcc.OnReplayDeleteNode(node)
+	err = node.OnApply()
 	return
 }
 
@@ -748,6 +779,7 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 		if err != nil {
 			return
 		}
+		// logutil.Infof("ts=%d, maxVisible=%d,visible=%v", ts, blk.mvcc.LoadMaxVisible(), visible)
 		// If row is visible to txn
 		if visible {
 			var deleted bool
@@ -768,6 +800,7 @@ func (blk *dataBlock) ablkGetByFilter(ts uint64, filter *handle.Filter) (offset 
 	deleted, existed := blk.index.IsKeyDeleted(filter.Val, ts)
 	if !existed || deleted {
 		err = data.ErrNotFound
+		// panic(fmt.Sprintf("%v:%v %v:%s", existed, deleted, filter.Val, blk.index.String()))
 	}
 	return
 }

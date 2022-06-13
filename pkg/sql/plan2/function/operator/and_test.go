@@ -63,8 +63,8 @@ func Test_ColAndCol(t *testing.T) {
 		for i := 1; i < len(data); i++ {
 			convey.So(data[i], convey.ShouldEqual, false)
 		}
-		NullPos := []int{2, 5, 6, 7, 8}
-		NotNullPos := []int{0, 1, 3, 4}
+		NullPos := []int{2, 6, 8}
+		NotNullPos := []int{0, 1, 3, 4, 5, 7}
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
 		}
@@ -112,14 +112,14 @@ func Test_ColAndConst(t *testing.T) {
 		for i := 0; i < 9; i++ {
 			convey.So(data[i], convey.ShouldEqual, false)
 		}
-
+		NullPos = []int{}
+		NotNullPos = []int{0, 1, 2, 3, 4, 5, 6, 7, 8}
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
 		}
 		for i := 0; i < len(NotNullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NotNullPos[i])), convey.ShouldEqual, false)
 		}
-
 	})
 }
 
@@ -133,9 +133,13 @@ func Test_ColAndNull(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		NullPos := []int{0, 1, 2, 3, 4, 5, 6, 7, 8}
+		NullPos := []int{0, 1, 2, 6, 7, 8}
+		NotNullPos := []int{3, 4, 5}
 		for i := 0; i < len(NullPos); i++ {
 			convey.So(nulls.Contains(ret.Nsp, uint64(NullPos[i])), convey.ShouldEqual, true)
+		}
+		for i := 0; i < len(NotNullPos); i++ {
+			convey.So(nulls.Contains(ret.Nsp, uint64(NotNullPos[i])), convey.ShouldEqual, false)
 		}
 
 	})
@@ -205,6 +209,15 @@ func Test_ConstAndNull(t *testing.T) {
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
 		convey.So(ret.Col, convey.ShouldBeNil)
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
+
+		vec[0].Col = []bool{false}
+		ret, err = And(vec, proc)
+		if err != nil {
+			log.Fatal(err)
+		}
+		convey.So(ret.IsConst, convey.ShouldBeTrue)
+		convey.So(ret.Col, convey.ShouldResemble, []bool{false})
+		convey.So(ret.Nsp.Np, convey.ShouldBeNil)
 	})
 }
 

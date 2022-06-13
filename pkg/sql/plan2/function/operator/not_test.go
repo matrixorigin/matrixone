@@ -34,8 +34,9 @@ func Test_NotCol(t *testing.T) {
 		if !ok {
 			log.Fatal(errors.New("the return vec type is not right"))
 		}
+		compVec := []bool{false, true, false}
 		for i := 0; i < len(data); i++ {
-			convey.So(data[i], convey.ShouldEqual, !NotboolVec[i])
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		convey.So(nulls.Contains(ret.Nsp, 2), convey.ShouldEqual, true)
 	})

@@ -15,17 +15,17 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-var LeintBool = []bool{true, true, true, true, false, true, true, true, false, false, true, false, false, true, true, true}
+var LeintBool = []bool{true, true, true, false, false, true, true, false, false, false, true, false, false, false, false, false}
 var LeintNullPos = []int{3, 7, 11, 12, 13, 14, 15}
 var LeintNotNullPos = []int{0, 1, 2, 4, 5, 6, 8, 9, 10}
 
-var LeuintBool = []bool{true, true, true, false, true, false, true, true, true}
+var LeuintBool = []bool{true, true, false, false, true, false, false, false, false}
 var LeuintNullPos = []int{2, 5, 6, 7, 8}
 var LeuintNotNullPos = []int{0, 1, 3, 4}
 
-var LeboolBool = []bool{true, false, false, true, true, true, true, true, true}
+var LeboolBool = []bool{true, false, false, true, true, false, false, false, false}
 
-var LestringBool = []bool{true, true, true, false, false, true, true, false, false, false, true, false, true, true, true, true}
+var LestringBool = []bool{true, true, true, false, false, true, true, false, false, false, true, false, false, false, false, false}
 
 type testLeFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 

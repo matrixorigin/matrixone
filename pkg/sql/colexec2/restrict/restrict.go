@@ -17,6 +17,8 @@ package restrict
 import (
 	"bytes"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 
@@ -47,6 +49,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		bat.Clean(proc.Mp)
 		return false, err
 	}
+	defer vector.Clean(vec, proc.Mp)
 	bs, ok := vec.Col.([]bool)
 	if !ok {
 		return false, errors.New(errno.SyntaxError, "only support logic expression to be filter condition")
