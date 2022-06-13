@@ -80,7 +80,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 		}
 		expr, err = appendCastBeforeExpr(expr, typ)
 	case *tree.IsNullExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("ifnull", []tree.Expr{exprImpl.Expr}, depth)
+		expr, err = b.bindFuncExprImplByAstExpr("isnull", []tree.Expr{exprImpl.Expr}, depth)
 	case *tree.IsNotNullExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("not", []tree.Expr{tree.NewIsNullExpr(exprImpl.Expr)}, depth)
 	case *tree.Tuple:
