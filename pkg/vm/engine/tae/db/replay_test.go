@@ -1301,3 +1301,36 @@ func TestReplay9(t *testing.T) {
 	assert.Equal(t, uint16(88), actv)
 	assert.NoError(t, txn.Commit())
 }
+
+func TestReplay10(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 5
+	schema.ColDefs[1].Default = catalog.Default{
+		Set:   true,
+		Null:  false,
+		Value: int16(3)}
+	schema.ColDefs[2].Default = catalog.Default{
+		Set:  true,
+		Null: true,
+	}
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows)
+	createRelationAndAppend(t, tae, defaultTestDB, schema, bat, true)
+	time.Sleep(time.Millisecond * 100)
+
+	_ = tae.Close()
+	tae, err := Open(tae.Dir, opts)
+	assert.NoError(t, err)
+	defer tae.Close()
+	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	txn, rel := getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	assert.NoError(t, txn.Commit())
+	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	assert.Equal(t, int16(3), schema1.ColDefs[1].Default.Value.(int16))
+	assert.Equal(t, true, schema1.ColDefs[2].Default.Null)
+
+}
