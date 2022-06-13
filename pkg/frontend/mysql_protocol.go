@@ -540,7 +540,10 @@ func (mp *MysqlProtocolImpl) appendStringLenEncOfUint64(data []byte, value uint6
 //return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
-	mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', 4, bitSize)
+	//TODO: it may lead to the performance degradation
+	mp.strconvBuffer = append(mp.strconvBuffer, []byte(fmt.Sprintf("%v", value))...)
+	//Original method
+	//mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', 4, bitSize)
 	return mp.appendCountOfBytesLenEnc(data, mp.strconvBuffer)
 }
 
