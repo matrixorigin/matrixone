@@ -108,6 +108,10 @@ func (info *checkpointInfo) MergeCheckpointInfo(ockp *checkpointInfo) {
 			}
 			ckpinfo.ckps.Or(ockpinfo.ckps)
 		}
+		if ckpinfo.IsAllCheckpointed() {
+			info.ranges.TryMerge(*common.NewClosedIntervalsByInt(lsn))
+			delete(info.partial, lsn)
+		}
 	}
 }
 func (info *checkpointInfo) GetCheckpointed() uint64 {
