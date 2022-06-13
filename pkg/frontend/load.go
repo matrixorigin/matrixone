@@ -396,6 +396,8 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 			vec.Col = make([]types.Decimal64, batchSize)
 		case types.T_decimal128:
 			vec.Col = make([]types.Decimal128, batchSize)
+		case types.T_timestamp:
+			vec.Col = make([]types.Timestamp, batchSize)
 		default:
 			panic("unsupported vector type")
 		}
@@ -646,7 +648,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
-			//logutil.Infof("line %d %v ",i,line)
+			logutil.Infof("line %d %v ", i, line)
 			//wait_a := time.Now()
 			rowIdx := batchBegin + i
 			offset := i + 1
@@ -906,6 +908,57 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 							}
 							result.Warnings++
 							d = 0
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_decimal64:
+					cols := vec.Col.([]types.Decimal64)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						fs := field
+						d, err := types.ParseStringToDecimal64(fs, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = types.Decimal64(0)
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_decimal128:
+					cols := vec.Col.([]types.Decimal128)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						fs := field
+						d, err := types.ParseStringToDecimal128(fs, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = types.InitDecimal128(0)
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_timestamp:
+					cols := vec.Col.([]types.Timestamp)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						fs := field
+						d, err := types.ParseTimestamp(fs, vec.Typ.Precision)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = types.Timestamp(0)
 						}
 						cols[rowIdx] = d
 					}
@@ -1243,6 +1296,72 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[i] = d
 					}
 				}
+			case types.T_decimal64:
+				cols := vec.Col.([]types.Decimal64)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseStringToDecimal64(field, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = types.Decimal64(0)
+							//break
+						}
+						cols[i] = d
+					}
+				}
+			case types.T_decimal128:
+				cols := vec.Col.([]types.Decimal128)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseStringToDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = types.InitDecimal128(0)
+							//break
+						}
+						cols[i] = d
+					}
+				}
+			case types.T_timestamp:
+				cols := vec.Col.([]types.Timestamp)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseTimestamp(field, vec.Typ.Precision)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = 0
+							//break
+						}
+						cols[i] = d
+					}
+				}
 			default:
 				panic("unsupported oid")
 			}
@@ -1463,6 +1582,15 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 						vec.Col = cols[:needLen]
 					case types.T_datetime:
 						cols := vec.Col.([]types.Datetime)
+						vec.Col = cols[:needLen]
+					case types.T_decimal64:
+						cols := vec.Col.([]types.Decimal64)
+						vec.Col = cols[:needLen]
+					case types.T_decimal128:
+						cols := vec.Col.([]types.Decimal128)
+						vec.Col = cols[:needLen]
+					case types.T_timestamp:
+						cols := vec.Col.([]types.Timestamp)
 						vec.Col = cols[:needLen]
 					}
 				}

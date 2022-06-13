@@ -55,8 +55,9 @@ func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 		results := encoding.DecodeFloat64Slice(resultVector.Data)
 		results = results[:len(origVecCol)]
 		resultVector.Col = results
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, acos.Acos[T](origVecCol, results))
+		res := acos.Acos[T](origVecCol, results)
+		nulls.Set(resultVector.Nsp, origVec.Nsp.Or(res.Nsp))
+		vector.SetCol(resultVector, res.Result)
 		return resultVector, nil
 	}
 }
