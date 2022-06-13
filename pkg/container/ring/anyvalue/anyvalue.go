@@ -230,7 +230,7 @@ func (r *AnyVRing1[T]) Free(m *mheap.Mheap) {
 	}
 }
 
-func (r *AnyVRing2) Free(m *mheap.Mheap) {
+func (r *AnyVRing2) Free(_ *mheap.Mheap) {
 	r.Vs = nil
 	r.Ns = nil
 	r.Set = nil
