@@ -302,15 +302,6 @@ var functionIdRegister = map[string]int32{
 	"cot":         COT,
 }
 
-func GetFunctionIsAggregateByName(name string) bool {
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
-		return false
-	}
-	fs := functionRegister[fid]
-	return len(fs) > 0 && fs[0].IsAggregate()
-}
-
 func GetFunctionIsWinfunByName(name string) bool {
 	fid, err := fromNameToFunctionId(name)
 	if err != nil {
