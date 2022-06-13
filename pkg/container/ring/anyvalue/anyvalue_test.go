@@ -73,3 +73,38 @@ func TestSerializationForAnyValueRing2(t *testing.T) {
 		})
 	}
 }
+
+func TestAnyValueRing1(t *testing.T) {
+	contains := func(item int32, list []int32) bool {
+		for i := range list {
+			if item == list[i] {
+				return true
+			}
+		}
+		return false
+	}
+
+	ring1 := &AnyVRing1[int32]{
+		Typ: types.Type{Oid: types.T_int32},
+		Vs:  []int32{1, 2, 3},
+		Ns:  []int64{0, 0, 0},
+		Set: []bool{true, true, false},
+	}
+	ring2 := &AnyVRing1[int32]{
+		Typ: types.Type{Oid: types.T_int32},
+		Vs:  []int32{4, 5, 6},
+		Ns:  []int64{0, 0, 0},
+		Set: []bool{true, false, true},
+	}
+	ring1.Add(ring2, 0, 0)
+	ring1.Add(ring2, 1, 1)
+	ring1.Add(ring2, 2, 2)
+	ring1.Mul(ring2, 1, 1, 1)
+	ring1.Mul(ring2, 2, 2, 2)
+	ring1.Mul(ring2, 0, 0, 3)
+	vec := ring1.Eval([]int64{1, 1, 1})
+	require.True(t, contains(vec.Col.([]int32)[0], []int32{1, 4}))
+	require.True(t, contains(vec.Col.([]int32)[1], []int32{2, 5}))
+	require.True(t, contains(vec.Col.([]int32)[2], []int32{6}))
+
+}

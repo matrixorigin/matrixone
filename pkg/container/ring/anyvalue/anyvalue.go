@@ -210,11 +210,6 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 // shouldSet returns true means we should assign the value
 func shouldSet(set bool) bool {
 	return !set
-	//if !set {
-	//	return true
-	//}
-	//d := rand.Int()
-	//return d%2 == 0
 }
 
 func (r *AnyVRing1[T]) String() string {
