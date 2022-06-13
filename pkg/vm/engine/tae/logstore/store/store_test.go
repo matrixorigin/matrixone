@@ -84,7 +84,6 @@ func appendAnotherEntry(t *testing.T, s *baseStore, buf []byte) {
 	assert.Nil(t, err)
 	assert.Nil(t, e.WaitDone())
 	e.Free()
-	return
 }
 
 func appendCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
