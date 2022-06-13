@@ -409,7 +409,6 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 	if cmd.Segment.CurrOp == OpCreate {
 		cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
 		rel.AddEntryLocked(cmd.Segment)
-		logutil.Infof("2222222222222 %s", cmd.Segment.String())
 		// cmd.Segment.ReplayFile(cache)
 	} else {
 		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
