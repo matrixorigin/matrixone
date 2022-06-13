@@ -19,6 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -374,6 +376,13 @@ func (bs *baseStore) onEntries(entries []entry.Entry) *batch {
 			panic(err)
 		}
 		if err = appender.Prepare(e.TotalSize(), e.GetInfo()); err != nil {
+			if strings.Contains(err.Error(), "MaxSize") {
+				logutil.Infof("entry larger than 64M: e%d", e.GetType())
+				logutil.Infof("write into file /tmp/largeEntry")
+				file, _ := os.Create("/tmp/largeEntry")
+				n, _ := e.WriteTo(file)
+				logutil.Infof("total %d bytes", n)
+			}
 			panic(err)
 		}
 		if _, err = e.WriteTo(appender); err != nil {
@@ -448,7 +457,8 @@ func (bs *baseStore) Checkpoint(e entry.Entry) (err error) {
 }
 
 func (bs *baseStore) TryCompact() error {
-	return bs.file.GetHistory().TryTruncate()
+	c := newCompactor(&bs.syncBase)
+	return bs.file.GetHistory().TryTruncate(c)
 }
 
 func (bs *baseStore) TryTruncate(size int64) error {
