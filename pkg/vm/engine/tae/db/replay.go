@@ -36,14 +36,19 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 	}
 }
 
-func (replayer *Replayer) ReplayMaxTS() (err error) {
+func (replayer *Replayer) PreReplayWal() (err error) {
 	processor := new(catalog.LoopProcessor)
 	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
+		entry.InitData(replayer.DataFactory)
 		blkData := entry.GetBlockData()
-		if blkData == nil {
-			return
-		}
 		replayer.OnTimeStamp(blkData.GetMaxCheckpointTS())
+		return
+	}
+	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
+		if !entry.IsActive() || entry.GetTable().IsVirtual() {
+			return catalog.ErrStopCurrRecur
+		}
+		entry.ReplayFile(replayer.cache)
 		return
 	}
 	err = replayer.db.Catalog.RecurLoop(processor)
@@ -51,7 +56,7 @@ func (replayer *Replayer) ReplayMaxTS() (err error) {
 }
 
 func (replayer *Replayer) Replay() {
-	if err := replayer.ReplayMaxTS(); err != nil {
+	if err := replayer.PreReplayWal(); err != nil {
 		panic(err)
 	}
 	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
