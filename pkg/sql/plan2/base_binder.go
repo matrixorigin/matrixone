@@ -471,43 +471,58 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 		if len(args) != 2 {
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "date_add/date_sub function need two args")
 		}
-		if args[0].Typ.Id == plan.Type_VARCHAR {
-			args[0], err = appendCastExpr(args[0], &plan.Type{
-				Id: plan.Type_DATE,
-			})
-			if err != nil {
-				return nil, err
-			}
-		}
 		args, err = resetDateFunctionArgs(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
-	case "+", "-":
+	case "+":
 		// rewrite "date '2001' + interval '1 day'" to date_add(date '2001', 1, day(unit))
 		if len(args) != 2 {
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "operator function need two args")
 		}
-		namesMap := map[string]string{
-			"+": "date_add",
-			"-": "date_sub",
-		}
 		if args[0].Typ.Id == plan.Type_DATE && args[1].Typ.Id == plan.Type_INTERVAL {
+			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-			if err != nil {
-				return nil, err
-			}
-			name = namesMap[name]
 		}
 		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATE {
-			if name == "-" {
-				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "(interval - date) is no supported")
-			}
-			args, err = resetDateFunctionArgs(args[1], args[2])
-			if err != nil {
-				return nil, err
-			}
-			name = namesMap[name]
+			name = "date_add"
+			args, err = resetDateFunctionArgs(args[1], args[0])
+		}
+		if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(args[0], args[1])
+		}
+		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATETIME {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(args[1], args[0])
+		}
+		if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(args[0], args[1])
+		}
+		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_VARCHAR {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(args[1], args[0])
+		}
+		if err != nil {
+			return nil, err
+		}
+	case "-":
+		// rewrite "date '2001' - interval '1 day'" to date_sub(date '2001', 1, day(unit))
+		if args[0].Typ.Id == plan.Type_DATE && args[1].Typ.Id == plan.Type_INTERVAL {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(args[0], args[1])
+		}
+		if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(args[0], args[1])
+		}
+		if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(args[0], args[1])
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
 

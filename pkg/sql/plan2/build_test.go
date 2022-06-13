@@ -30,7 +30,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
-	sql := `select nation.n_name from nation join nation2 on nation.n_name !='a' join region on nation.n_regionkey = region.r_regionkey`
+	sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -408,6 +408,8 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY NOT IN (1)", //test more expr
 
 		"SELECT -1",
+		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
+		"select date_sub('1997-12-31 23:59:59',INTERVAL 2 HOUR)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
