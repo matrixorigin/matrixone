@@ -119,6 +119,13 @@ func (intervals *ClosedIntervals) ContainsInterval(oIntervals ClosedInterval) bo
 	return contains
 }
 
+func (intervals *ClosedIntervals) IsCoveredByInt(i uint64) bool {
+	if intervals.Intervals == nil || len(intervals.Intervals) == 0 {
+		return true
+	}
+	return i >= intervals.Intervals[len(intervals.Intervals)-1].End
+}
+
 func (intervals *ClosedIntervals) GetCardinality() int {
 	cardinality := 0
 	for _, interval := range intervals.Intervals {

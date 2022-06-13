@@ -21,6 +21,7 @@ import (
 	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -30,6 +31,81 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+func appendUncommitEntry(t *testing.T, s *baseStore, buf []byte, tid uint64) entry.Entry {
+	e := entry.GetBase()
+	uncommitInfo := &entry.Info{
+		Group: entry.GTUncommit,
+		Uncommits: []entry.Tid{{
+			Group: 11,
+			Tid:   tid,
+		}},
+	}
+	e.SetType(entry.ETUncommitted)
+	e.SetInfo(uncommitInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTUncommit, e)
+	assert.Nil(t, err)
+	return e
+}
+
+func appendCommitEntry(t *testing.T, s *baseStore, buf []byte, tid uint64) entry.Entry {
+	txnInfo := &entry.Info{
+		Group: 11,
+		TxnId: tid,
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETTxn)
+	e.SetInfo(txnInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(11, e)
+	assert.Nil(t, err)
+	return e
+}
+
+func appendCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group:  11,
+			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: 0, End: lsn}),
+		}},
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETCheckpoint)
+	e.SetInfo(info)
+	_, err := s.AppendEntry(entry.GTCKp, e)
+	assert.Nil(t, err)
+	return e
+}
+
+func appendPartialCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
+	cmd := entry.CommandInfo{
+		Size:       2,
+		CommandIds: []uint32{0},
+	}
+	cmds := make(map[uint64]entry.CommandInfo)
+	cmds[lsn] = cmd
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group:  11,
+			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: 0, End: lsn}),
+		}},
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETCheckpoint)
+	e.SetInfo(info)
+	_, err := s.AppendEntry(entry.GTCKp, e)
+	assert.Nil(t, err)
+	return e
+}
 
 // append UC, C, CKP
 func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
@@ -91,6 +167,56 @@ func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
 	e.Free()
 }
 
+func initEnv(t *testing.T) (*baseStore, []byte) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+	return s, buf
+}
+
+func restartStore(t *testing.T, s *baseStore) *baseStore {
+	t.Log(s.file.GetHistory().String())
+	err := s.Close()
+	assert.Nil(t, err)
+
+	t.Log("******************Replay*********************")
+
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	s, err = NewBaseStore(s.dir, s.name, cfg)
+	assert.Nil(t, err)
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+		// fmt.Printf("%s", payload)
+	}
+	err = s.Replay(a)
+	assert.Nil(t, err)
+	t.Log(s.file.GetHistory().String())
+	return s
+}
+
+func logSyncbase(t *testing.T, s *baseStore) {
+	t.Log(s.groupLSN)
+	t.Log(s.checkpointing)
+	t.Log(s.syncing)
+	t.Log(s.checkpointed.ids)
+	t.Log(s.synced.ids)
+	t.Log(s.ckpCnt.ids)
+	t.Log(s.tidLsnMaps)
+	t.Log(s.addrs)
+}
+
 // uncommit, commit, ckp  vf1
 // ckp all                vf2
 // truncate
@@ -125,7 +251,7 @@ func TestTruncate(t *testing.T) {
 
 	assert.Nil(t, s.TryCompact())
 
-	assert.Equal(t, 1, len(s.file.GetHistory().EntryIds()))
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
 	t.Log(s.file.GetHistory().String())
 	err = s.Close()
 	assert.Nil(t, err)
@@ -142,16 +268,129 @@ func TestTruncate(t *testing.T) {
 
 	appendEntries(t, s2, buf, 4)
 
-	assert.Equal(t, 2, len(s2.file.GetHistory().EntryIds()))
+	assert.Equal(t, 1, len(s2.file.GetHistory().EntryIds()))
 	t.Log(s2.file.GetHistory().String())
 
 	assert.Nil(t, s2.TryCompact())
 
-	assert.Equal(t, 1, len(s2.file.GetHistory().EntryIds()))
+	assert.Equal(t, 0, len(s2.file.GetHistory().EntryIds()))
 	t.Log(s2.file.GetHistory().String())
 
 	err = s2.Close()
 	assert.Nil(t, err)
+}
+
+func TestTruncate2(t *testing.T) {
+	s, buf := initEnv(t)
+	tidAlloc := &common.IdAllocator{}
+	cmtEntryCnt := 5
+	wg := sync.WaitGroup{}
+	worker, _ := ants.NewPool(cmtEntryCnt)
+	f := func() {
+		tid := tidAlloc.Alloc()
+		e1 := appendUncommitEntry(t, s, buf, tid)
+		e2 := appendCommitEntry(t, s, buf, tid)
+		err := e1.WaitDone()
+		assert.Nil(t, err)
+		err = e2.WaitDone()
+		assert.Nil(t, err)
+		e1.Free()
+		e2.Free()
+		wg.Done()
+	}
+	wg.Add(cmtEntryCnt)
+	for i := 0; i < cmtEntryCnt; i++ {
+		err := worker.Submit(f)
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+
+	s = restartStore(t, s)
+
+	assert.Equal(t, uint64(cmtEntryCnt), s.GetCurrSeqNum(11))
+	e := appendCkpEntry(t, s, uint64(cmtEntryCnt))
+	err := e.WaitDone()
+	assert.Nil(t, err)
+	e.Free()
+	testutils.WaitExpect(400, func() bool {
+		return s.GetCheckpointed(11) == uint64(cmtEntryCnt)
+	})
+	assert.Equal(t, uint64(cmtEntryCnt), s.GetCheckpointed(11))
+	err = s.TryCompact()
+	assert.Nil(t, err)
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+}
+
+func TestReplay2(t *testing.T) {
+	s, buf := initEnv(t)
+	tidAlloc := &common.IdAllocator{}
+	cmtEntryCnt := 5
+	wg := sync.WaitGroup{}
+	worker, _ := ants.NewPool(cmtEntryCnt)
+	f := func() {
+		tid := tidAlloc.Alloc()
+		e1 := appendUncommitEntry(t, s, buf, tid)
+		e2 := appendCommitEntry(t, s, buf, tid)
+		e3 := appendPartialCkpEntry(t, s, e2.GetInfo().(*entry.Info).GroupLSN)
+		err := e1.WaitDone()
+		assert.Nil(t, err)
+		err = e2.WaitDone()
+		assert.Nil(t, err)
+		err = e3.WaitDone()
+		assert.Nil(t, err)
+		e1.Free()
+		e2.Free()
+		e3.Free()
+		wg.Done()
+	}
+	wg.Add(cmtEntryCnt)
+	for i := 0; i < cmtEntryCnt; i++ {
+		err := worker.Submit(f)
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+
+	//check syncbase
+	testutils.WaitExpect(400, func() bool {
+		return s.GetSynced(entry.GTCKp) == s.GetCurrSeqNum(entry.GTCKp)
+	})
+	testutils.WaitExpect(400, func() bool {
+		version := atomic.LoadUint64(&s.syncedVersion)
+		committedversion := uint64(s.file.GetHistory().EntryIds()[len(s.file.GetHistory().EntryIds())-1])
+		return version == committedversion
+	})
+	assert.Equal(t, s.GetSynced(entry.GTCKp), s.GetCurrSeqNum(entry.GTCKp))
+
+	logSyncbase(t, s)
+	s = restartStore(t, s)
+	logSyncbase(t, s)
+
+	tid := tidAlloc.Alloc()
+	e1 := appendUncommitEntry(t, s, buf, tid)
+	e2 := appendCommitEntry(t, s, buf, tid)
+	err := e1.WaitDone()
+	assert.Nil(t, err)
+	err = e2.WaitDone()
+	assert.Nil(t, err)
+	e1.Free()
+	e2.Free()
+	testutils.WaitExpect(400, func() bool {
+		return s.GetSynced(11) == s.GetCurrSeqNum(11)
+	})
+	assert.Equal(t, s.GetSynced(11), s.GetCurrSeqNum(11))
+	testutils.WaitExpect(400, func() bool {
+		version := atomic.LoadUint64(&s.syncedVersion)
+		committedversion := uint64(s.file.GetHistory().EntryIds()[len(s.file.GetHistory().EntryIds())-1])
+		return version == committedversion
+	})
+	testutils.WaitExpect(400, func() bool {
+		return s.GetSynced(4) == s.GetCurrSeqNum(4)
+	})
+	assert.Equal(t, s.GetSynced(4), s.GetCurrSeqNum(4))
+	assert.Equal(t, s.GetSynced(entry.GTCKp), s.GetCurrSeqNum(entry.GTCKp))
+	logSyncbase(t, s)
+	s.Close()
 }
 
 func TestAddrVersion(t *testing.T) {
@@ -352,9 +591,7 @@ func TestStore(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
+	err = s.TryCompact()
 	assert.Nil(t, err)
 }
 
@@ -469,6 +706,9 @@ func TestPartialCkp(t *testing.T) {
 	ckp2.Free()
 	anotherEntry.Free()
 
+	testutils.WaitExpect(400, func() bool {
+		return s.GetCheckpointed(entry.GTCustomizedStart) == 1
+	})
 	err = s.TryCompact()
 	assert.Nil(t, err)
 	_, err = s.Load(entry.GTUncommit, lsn)
@@ -627,9 +867,7 @@ func TestReplay(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
+	err = s.TryCompact()
 	assert.Nil(t, err)
 
 	s.Close()
@@ -827,9 +1065,7 @@ func TestLoad(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	// t.Log(h.String())
-	err = h.TryTruncate()
+	err = s.TryCompact()
 	assert.Nil(t, err)
 
 	s.Close()
