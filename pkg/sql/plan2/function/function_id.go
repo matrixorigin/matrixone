@@ -14,6 +14,8 @@
 
 package function
 
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 const (
 	Distinct     = 0x8000000000000000
 	DistinctMask = 0x7FFFFFFFFFFFFFFF
@@ -298,4 +300,13 @@ var functionIdRegister = map[string]int32{
 	"atan":        ATAN,
 	"cos":         COS,
 	"cot":         COT,
+}
+
+func GetFunctionIsWinfunByName(name string) bool {
+	fid, err := fromNameToFunctionId(name)
+	if err != nil {
+		return false
+	}
+	fs := functionRegister[fid]
+	return len(fs) > 0 && fs[0].Flag == plan.Function_WIN
 }
