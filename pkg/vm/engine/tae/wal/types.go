@@ -49,7 +49,7 @@ type Driver interface {
 	LoadEntry(groupId uint32, lsn uint64) (LogEntry, error)
 	GetCurrSeqNum() uint64
 	GetPenddingCnt() uint64
-	Compact() error
+	Compact(bool) error
 	Replay(handle store.ApplyHandle) (err error)
 	Close() error
 }

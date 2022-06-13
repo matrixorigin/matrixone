@@ -95,8 +95,13 @@ func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
 	return
 }
 
-func (driver *walDriver) Compact() error {
-	return driver.impl.TryCompact()
+func (driver *walDriver) Compact(async bool) error {
+	if async {
+		go driver.impl.TryCompact()
+		return nil
+	} else {
+		return driver.impl.TryCompact()
+	}
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {

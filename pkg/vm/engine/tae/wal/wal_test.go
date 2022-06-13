@@ -91,7 +91,7 @@ func TestCheckpoint1(t *testing.T) {
 	err = flush2.WaitDone()
 	assert.Nil(t, err)
 
-	err = driver.Compact()
+	err = driver.Compact(false)
 	assert.Nil(t, err)
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
@@ -124,7 +124,7 @@ func TestCheckpoint1(t *testing.T) {
 	err = flush3.WaitDone()
 	assert.Nil(t, err)
 
-	err = driver.Compact()
+	err = driver.Compact(false)
 	assert.Nil(t, err)
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.NotNil(t, err)
@@ -227,7 +227,7 @@ func TestCheckpoint2(t *testing.T) {
 	err = flush2.WaitDone()
 	assert.Nil(t, err)
 
-	err = driver.Compact()
+	err = driver.Compact(false)
 	assert.Nil(t, err)
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.NotNil(t, err)
