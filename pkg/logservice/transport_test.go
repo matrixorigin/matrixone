@@ -167,6 +167,7 @@ func testWriteResponse(t *testing.T, sz int) {
 	assert.Equal(t, resp.Size(), int(binaryEnc.Uint32(szbuf)))
 	data := make([]byte, binaryEnc.Uint32(szbuf))
 	_, err = conn.Read(data)
+	assert.NoError(t, err)
 	var respResult pb.Response
 	assert.NoError(t, respResult.Unmarshal(data))
 	assert.Equal(t, resp, respResult)

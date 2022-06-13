@@ -64,7 +64,6 @@ func runClientTest(t *testing.T,
 
 func TestClientCanBeCreated(t *testing.T) {
 	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
-		return
 	}
 	runClientTest(t, false, fn)
 	runClientTest(t, true, fn)

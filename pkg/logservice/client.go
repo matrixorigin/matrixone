@@ -84,7 +84,10 @@ func CreateClient(ctx context.Context,
 }
 
 func (c *client) Close() error {
-	return sendPoison(c.conn, poisonNumber[:])
+	if err := sendPoison(c.conn, poisonNumber[:]); err != nil {
+		return err
+	}
+	return waitPoisonAck(c.conn)
 }
 
 func (c *client) Config() LogServiceClientConfig {

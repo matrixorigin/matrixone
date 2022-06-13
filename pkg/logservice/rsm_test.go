@@ -230,7 +230,8 @@ func TestStateMachineLookupPanicOnUnexpectedInputValue(t *testing.T) {
 		}
 	}()
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	tsm.Lookup(uint16(1234))
+	_, err := tsm.Lookup(uint16(1234))
+	assert.NoError(t, err)
 }
 
 func TestStateMachineLookupPanicOnUnexpectedInputType(t *testing.T) {
@@ -240,5 +241,6 @@ func TestStateMachineLookupPanicOnUnexpectedInputType(t *testing.T) {
 		}
 	}()
 	tsm := newStateMachine(1, 2).(*stateMachine)
-	tsm.Lookup(uint64(1234))
+	_, err := tsm.Lookup(uint64(1234))
+	assert.NoError(t, err)
 }

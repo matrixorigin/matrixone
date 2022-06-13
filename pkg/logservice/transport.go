@@ -61,16 +61,16 @@ func sendPoisonAck(conn net.Conn, poisonAck []byte) error {
 	return sendPoison(conn, poisonAck)
 }
 
-func waitPoisonAck(conn net.Conn) {
+func waitPoisonAck(conn net.Conn) error {
 	ack := make([]byte, len(poisonNumber))
 	tt := time.Now().Add(keepAlivePeriod)
 	if err := conn.SetReadDeadline(tt); err != nil {
-		return
+		return err
 	}
 	if _, err := io.ReadFull(conn, ack); err != nil {
-		plog.Errorf("failed to wait for the poison ack, %v", err)
-		return
+		return err
 	}
+	return nil
 }
 
 func readSize(conn net.Conn, buf []byte) (int, error) {
