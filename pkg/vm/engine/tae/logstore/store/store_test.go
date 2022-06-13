@@ -69,6 +69,24 @@ func appendCommitEntry(t *testing.T, s *baseStore, buf []byte, tid uint64) entry
 	return e
 }
 
+func appendAnotherEntry(t *testing.T, s *baseStore, buf []byte) {
+	txnInfo := &entry.Info{
+		Group: 12,
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETTxn)
+	e.SetInfo(txnInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(11, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+	e.Free()
+	return
+}
+
 func appendCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
 	info := &entry.Info{
 		Group: entry.GTCKp,
@@ -85,18 +103,18 @@ func appendCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
 	return e
 }
 
-func appendPartialCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
+func appendPartialCkpEntry(t *testing.T, s *baseStore, lsn uint64, csns []uint32, size uint32) entry.Entry {
 	cmd := entry.CommandInfo{
-		Size:       2,
-		CommandIds: []uint32{0},
+		Size:       size,
+		CommandIds: csns,
 	}
 	cmds := make(map[uint64]entry.CommandInfo)
 	cmds[lsn] = cmd
 	info := &entry.Info{
 		Group: entry.GTCKp,
 		Checkpoints: []entry.CkpRanges{{
-			Group:  11,
-			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: 0, End: lsn}),
+			Group:   11,
+			Command: cmds,
 		}},
 	}
 	e := entry.GetBase()
@@ -217,6 +235,37 @@ func logSyncbase(t *testing.T, s *baseStore) {
 	t.Log(s.addrs)
 }
 
+func TestMergePartialCKp(t *testing.T) {
+	s, buf := initEnv(t)
+
+	e1 := appendCommitEntry(t, s, buf, 1)
+	e2 := appendUncommitEntry(t, s, buf, 1)
+	e3 := appendPartialCkpEntry(t, s, 1, []uint32{0}, 2)
+	assert.Nil(t, e3.WaitDone())
+	e1.Free()
+	e2.Free()
+	e3.Free()
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+
+	appendAnotherEntry(t, s, buf)
+	e2 = appendPartialCkpEntry(t, s, 1, []uint32{1}, 2)
+	assert.Nil(t, e2.WaitDone())
+	e2.Free()
+	testutils.WaitExpect(400, func() bool {
+		return s.GetCheckpointed(11) == 1
+	})
+	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+
+	assert.Nil(t, s.TryCompact())
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+
+	s = restartStore(t, s)
+
+	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+
+	assert.Nil(t, s.Close())
+}
+
 // uncommit, commit, ckp  vf1
 // ckp all                vf2
 // truncate
@@ -332,7 +381,7 @@ func TestReplay2(t *testing.T) {
 		tid := tidAlloc.Alloc()
 		e1 := appendUncommitEntry(t, s, buf, tid)
 		e2 := appendCommitEntry(t, s, buf, tid)
-		e3 := appendPartialCkpEntry(t, s, e2.GetInfo().(*entry.Info).GroupLSN)
+		e3 := appendPartialCkpEntry(t, s, e2.GetInfo().(*entry.Info).GroupLSN, []uint32{0}, 2)
 		err := e1.WaitDone()
 		assert.Nil(t, err)
 		err = e2.WaitDone()
