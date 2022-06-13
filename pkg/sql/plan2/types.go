@@ -15,6 +15,8 @@
 package plan2
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -86,4 +88,136 @@ type BinderContext struct {
 	// when we use buildUnresolvedName(), and the colName = 'a' and tableName = 'S', we reset tableName=''
 	// because the ProjectNode(after JoinNode) had coalesced the using cols
 	usingCols map[string]string
+}
+
+///////////////////////////////
+// Data structures for refactor
+///////////////////////////////
+
+type QueryBuilder struct {
+	qry     *plan.Query
+	compCtx CompilerContext
+
+	ctxByNode  []*BindContext
+	tagsByNode [][]int32
+	nextTag    int32
+}
+
+type BindContext struct {
+	binder Binder
+
+	cteTables map[string]*plan.TableDef
+
+	groupTag     int32
+	aggregateTag int32
+	projectTag   int32
+
+	groups     []*plan.Expr
+	aggregates []*plan.Expr
+	projects   []*plan.Expr
+	results    []*plan.Expr
+
+	headings []string
+
+	groupByAst     map[string]int32
+	aggregateByAst map[string]int32
+	projectByExpr  map[string]int32
+
+	aliasMap map[string]int32
+
+	bindings       []*Binding
+	bindingByTag   map[int32]*Binding //rel_pos
+	bindingByTable map[string]*Binding
+	bindingByCol   map[string]*Binding
+
+	// for join tables
+	bindingTree *BindingTreeNode
+
+	corrCols []*plan.CorrColRef
+
+	parent     *BindContext
+	leftChild  *BindContext
+	rightChild *BindContext
+}
+
+type NameTuple struct {
+	table string
+	col   string
+}
+
+type BindingTreeNode struct {
+	using []NameTuple
+
+	binding *Binding
+
+	left  *BindingTreeNode
+	right *BindingTreeNode
+}
+
+type Binder interface {
+	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
+	BindColRef(*tree.UnresolvedName, int32) (*plan.Expr, error)
+	BindAggFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
+	BindWinFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
+	BindSubquery(*tree.Subquery) (*plan.Expr, error)
+}
+
+type baseBinder struct {
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []string
+}
+
+type TableBinder struct {
+	baseBinder
+}
+
+type WhereBinder struct {
+	baseBinder
+}
+
+type GroupBinder struct {
+	baseBinder
+}
+
+type HavingBinder struct {
+	baseBinder
+	insideAgg bool
+}
+
+type ProjectionBinder struct {
+	baseBinder
+	havingBinder *HavingBinder
+}
+
+type OrderBinder struct {
+	*ProjectionBinder
+	selectList tree.SelectExprs
+}
+
+type LimitBinder struct {
+	baseBinder
+}
+
+var _ Binder = (*TableBinder)(nil)
+var _ Binder = (*WhereBinder)(nil)
+var _ Binder = (*GroupBinder)(nil)
+var _ Binder = (*HavingBinder)(nil)
+var _ Binder = (*ProjectionBinder)(nil)
+var _ Binder = (*LimitBinder)(nil)
+
+const (
+	NotFound      int32 = math.MaxInt32
+	AmbiguousName int32 = math.MinInt32
+)
+
+type Binding struct {
+	tag         int32
+	nodeId      int32
+	table       string
+	cols        []string
+	types       []*plan.Type
+	refCnts     []uint
+	colIdByName map[string]int32
 }
