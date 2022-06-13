@@ -52,18 +52,19 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.([]types.Datetime)
 	resultType := types.Type{Oid: types.T_uint16, Size: 2}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.([]types.Datetime)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint16, 1)
 		vector.SetCol(resultVector, year.DatetimeToYear(inputValues, resultValues))
 		return resultVector, nil
 	} else {
+		inputValues := inputVector.Col.([]types.Datetime)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
@@ -78,18 +79,19 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 
 func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	inputValues := inputVector.Col.(*types.Bytes)
 	resultType := types.Type{Oid: types.T_uint16, Size: 2}
 	resultElementSize := int(resultType.Size)
 	if inputVector.IsConst {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
+		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint16, 1)
 		vector.SetCol(resultVector, year.DateStringToYear(inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
+		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
 		if err != nil {
 			return nil, err
