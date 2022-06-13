@@ -345,7 +345,7 @@ func (n *insertNode) execUnload() (en wal.LogEntry) {
 	}
 	en = n.makeLogEntry()
 	info := &entry.Info{
-		Group:     entry.GTUncommit,
+		Group:     wal.GroupUC,
 		Uncommits: []entry.Tid{{Group: wal.GroupC, Tid: n.table.store.txn.GetID()}},
 	}
 	en.SetInfo(info)
