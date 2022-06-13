@@ -244,6 +244,7 @@ var functionIdRegister = map[string]int32{
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
+	"any_value":             ANY_VALUE,
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
