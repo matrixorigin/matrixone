@@ -15,6 +15,7 @@
 package moengine
 
 import (
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -134,6 +135,10 @@ func (rel *txnRelation) Attribute() []engine.Attribute {
 
 func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	return rel.handle.Append(bat)
+}
+
+func (rel *txnRelation) Update(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+	return errors.New("doesn't support now")
 }
 
 func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engine.Snapshot) error {
