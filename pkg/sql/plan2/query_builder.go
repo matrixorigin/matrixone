@@ -983,19 +983,19 @@ func (builder *QueryBuilder) pushdownOnlist(node *Node) {
 	}
 	node.WhereList = append(node.WhereList, toWhereList...)
 	node.OnList = toOnList
+	builder.pushdownOnlistToWhereList(node, pushDownList)
+}
 
-	leftNodeId := node.Children[0]
-	rightNodeId := node.Children[1]
-	leftTag := builder.tagsByNode[leftNodeId][0]
-	rightTag := builder.tagsByNode[rightNodeId][0]
-
-	for k, v := range pushDownList {
-		if k == leftTag {
-			builder.qry.Nodes[leftNodeId].WhereList = append(builder.qry.Nodes[leftNodeId].WhereList, v...)
+func (builder *QueryBuilder) pushdownOnlistToWhereList(node *Node, pushDownList map[int32][]*Expr) {
+	for child := range node.Children {
+		childNode := builder.qry.Nodes[child]
+		if childNode.NodeType == plan.Node_TABLE_SCAN {
+			tag := builder.tagsByNode[childNode.NodeId][0]
+			if list, ok := pushDownList[tag]; ok {
+				childNode.WhereList = append(childNode.WhereList, list...)
+			}
 		}
-		if k == rightTag {
-			builder.qry.Nodes[rightNodeId].WhereList = append(builder.qry.Nodes[rightNodeId].WhereList, v...)
-		}
+		builder.pushdownOnlistToWhereList(builder.qry.Nodes[child], pushDownList)
 	}
 }
 
