@@ -753,11 +753,12 @@ func isDefaultExpr(expr tree.Expr) bool {
 
 var (
 	// errors may happen while building constant
-	ErrDivByZero        = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
-	ErrZeroModulus      = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
-	errConstantOutRange = errors.New(errno.DataException, "constant value out of range")
-	errBinaryOutRange   = errors.New(errno.DataException, "binary result out of range")
-	errUnaryOutRange    = errors.New(errno.DataException, "unary result out of range")
+	ErrDivByZero          = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
+	ErrZeroModulus        = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
+	errConstantOutRange   = errors.New(errno.DataException, "constant value out of range")
+	errConstantNotAllowed = errors.New(errno.DataException, "constant value not allowed")
+	errBinaryOutRange     = errors.New(errno.DataException, "binary result out of range")
+	errUnaryOutRange      = errors.New(errno.DataException, "unary result out of range")
 )
 
 func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
@@ -983,13 +984,13 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return uint64(v), nil
 		case types.T_float32:
 			v, _ := constant.Float32Val(val)
-			if num.Negative() {
+			if num.Negative() && v != 0 {
 				return float32(-v), nil
 			}
 			return float32(v), nil
 		case types.T_float64:
 			v, _ := constant.Float64Val(val)
-			if num.Negative() {
+			if num.Negative() && v != 0 {
 				return float64(-v), nil
 			}
 			return float64(v), nil
@@ -1042,13 +1043,19 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return v, nil
 		case types.T_float32:
 			v, _ := constant.Float32Val(val)
-			if num.Negative() {
+			if math.IsInf(float64(v), 0) || math.IsNaN(float64(v)) {
+				return 0, errConstantNotAllowed
+			}
+			if num.Negative() && v != 0 {
 				return float32(-v), nil
 			}
 			return float32(v), nil
 		case types.T_float64:
 			v, _ := constant.Float64Val(val)
-			if num.Negative() {
+			if math.IsInf(float64(v), 0) || math.IsNaN(float64(v)) {
+				return 0, errConstantNotAllowed
+			}
+			if num.Negative() && v != 0 {
 				return float64(-v), nil
 			}
 			return float64(v), nil
