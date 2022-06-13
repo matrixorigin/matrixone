@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -40,10 +41,12 @@ type syncBase struct {
 	ckpmu                        sync.RWMutex
 	syncing                      map[uint32]uint64
 	checkpointed, synced, ckpCnt *syncMap
-	uncommits                    map[uint32][]uint64
+	tidLsnMaps                   map[uint32]map[uint64]uint64
+	tidLsnMapmu                  *sync.RWMutex
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 	commitCond                   sync.Cond
+	syncedVersion                uint64
 }
 
 type checkpointInfo struct {
@@ -111,7 +114,7 @@ func (info *checkpointInfo) GetCheckpointed() uint64 {
 	if info.ranges == nil || len(info.ranges.Intervals) == 0 {
 		return 0
 	}
-	if info.ranges.Intervals[0].Start != 1 {
+	if info.ranges.Intervals[0].Start > 1 {
 		return 0
 	}
 	return info.ranges.Intervals[0].End
@@ -206,7 +209,8 @@ func newSyncBase() *syncBase {
 		checkpointed:  newSyncMap(),
 		synced:        newSyncMap(),
 		ckpCnt:        newSyncMap(),
-		uncommits:     make(map[uint32][]uint64),
+		tidLsnMaps:    make(map[uint32]map[uint64]uint64),
+		tidLsnMapmu:   &sync.RWMutex{},
 		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:        sync.RWMutex{},
 		ckpmu:         sync.RWMutex{},
@@ -299,6 +303,9 @@ func (base *syncBase) OnReplay(r *replayer) {
 	for k, v := range r.groupLSN {
 		base.synced.ids[k] = v
 	}
+	for k, v := range r.groupLSN {
+		base.syncing[k] = v
+	}
 	if r.ckpEntry != nil {
 		err := base.UnarshalPostCommitEntry(r.ckpEntry.payload)
 		if err != nil {
@@ -316,6 +323,8 @@ func (base *syncBase) OnReplay(r *replayer) {
 		base.ckpCnt.ids[groupId] = base.checkpointing[groupId].GetCkpCnt()
 	}
 	r.checkpointrange = base.checkpointing
+	base.syncedVersion = uint64(r.ckpVersion)
+	base.tidLsnMaps = r.tidlsnMap
 }
 
 func (base *syncBase) GetVersionByGLSN(groupId uint32, lsn uint64) (int, error) {
@@ -364,26 +373,19 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 			base.ckpmu.Unlock()
 		}
 	case entry.GTUncommit:
-		// addr := v.Addr.(*VFileAddress)
-		for _, tid := range v.Uncommits {
-			tids, ok := base.uncommits[tid.Group]
-			if !ok {
-				tids = make([]uint64, 0)
-			}
-			existed := false
-			for _, id := range tids {
-				if id == tid.Tid {
-					existed = true
-					break
-				}
-			}
-			if !existed {
-				tids = append(tids, tid.Tid)
-			}
-			base.uncommits[tid.Group] = tids
-		}
-		// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
+	case entry.GTInternal:
+		atomic.StoreUint64(&base.syncedVersion, uint64(v.PostCommitVersion))
 	default:
+		base.tidLsnMapmu.Lock()
+		if v.Group >= entry.GTCustomizedStart {
+			tidLsnMap, ok := base.tidLsnMaps[v.Group]
+			if !ok {
+				tidLsnMap = make(map[uint64]uint64)
+				base.tidLsnMaps[v.Group] = tidLsnMap
+			}
+			tidLsnMap[v.TxnId] = v.GroupLSN
+		}
+		base.tidLsnMapmu.Unlock()
 	}
 	base.syncing[v.Group] = v.GroupLSN
 	base.addrmu.Lock()

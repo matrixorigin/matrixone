@@ -44,8 +44,11 @@ type replayer struct {
 	applyEntry      ApplyHandle
 
 	//syncbase
-	addrs      map[uint32]map[int]common.ClosedIntervals
-	groupLSN   map[uint32]uint64
+	addrs     map[uint32]map[int]common.ClosedIntervals
+	groupLSN  map[uint32]uint64
+	tidlsnMap map[uint32]map[uint64]uint64
+
+	//internal entry
 	ckpVersion int
 	ckpEntry   *replayEntry
 
@@ -95,6 +98,7 @@ func newReplayer(h ApplyHandle) *replayer {
 		applyEntry:      h,
 		addrs:           make(map[uint32]map[int]common.ClosedIntervals),
 		groupLSN:        make(map[uint32]uint64),
+		tidlsnMap:       make(map[uint32]map[uint64]uint64),
 		vinfoAddrs:      make(map[uint32]map[uint64]int),
 	}
 }
@@ -235,6 +239,12 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 			commitId:  info.GroupLSN,
 			payload:   make([]byte, e.GetPayloadSize()),
 		}
+		tidlsnMap, ok := r.tidlsnMap[info.Group]
+		if !ok {
+			tidlsnMap = make(map[uint64]uint64)
+			r.tidlsnMap[info.Group] = tidlsnMap
+		}
+		tidlsnMap[info.TxnId] = info.GroupLSN
 		copy(replayEty.payload, e.GetPayload())
 		r.entrys = append(r.entrys, replayEty)
 	}

@@ -87,7 +87,6 @@ func TestAppender(t *testing.T) {
 	}
 	toWrite := data.Bytes()
 
-	worker, _ := ants.NewPool(1)
 	pool, _ := ants.NewPool(1)
 	var wg sync.WaitGroup
 
@@ -148,14 +147,6 @@ func TestAppender(t *testing.T) {
 				// app.Sync()
 				t.Logf("[%s] takes %s", appender.rollbackState.file.Name(), time.Since(now))
 				assert.Nil(t, err)
-				truncate := func() {
-					defer wg.Done()
-					err := rf.history.TryTruncate()
-					assert.Nil(t, err)
-				}
-				wg.Add(1)
-				err = worker.Submit(truncate)
-				assert.Nil(t, err)
 			}
 		}
 		wg.Add(1)
@@ -210,7 +201,6 @@ func TestReadVInfo(t *testing.T) {
 	}
 	toWrite := data.Bytes()
 
-	worker, _ := ants.NewPool(1)
 	pool, _ := ants.NewPool(1)
 	var wg sync.WaitGroup
 
@@ -250,14 +240,6 @@ func TestReadVInfo(t *testing.T) {
 				err = app.Commit()
 				assert.Nil(t, err)
 				// app.Sync()
-				truncate := func() {
-					defer wg.Done()
-					err := rf.history.TryTruncate()
-					assert.Nil(t, err)
-				}
-				wg.Add(1)
-				err = worker.Submit(truncate)
-				assert.Nil(t, err)
 			}
 		}
 		wg.Add(1)
