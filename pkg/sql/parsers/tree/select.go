@@ -169,12 +169,17 @@ type SelectClause struct {
 	Where    *Where
 	GroupBy  GroupBy
 	Having   *Where
+	Option   string
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
 	ctx.WriteString("select ")
 	if node.Distinct {
 		ctx.WriteString("distinct ")
+	}
+	if node.Option != "" {
+		ctx.WriteString(node.Option)
+		ctx.WriteByte(' ')
 	}
 	node.Exprs.Format(ctx)
 	if len(node.From.Tables) > 0 {

@@ -148,18 +148,18 @@ func (info *vInfo) PrepareCompactor(c *compactor) {
 // TODO: for ckp with payload, merge ckp after IsCovered()
 func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 	toDelete = true
-	for _, g := range info.groups {
-		g.MergeCheckpointInfo(c)
-	}
+	// for _, g := range info.groups {
+	// 	g.MergeCheckpointInfo(c)
+	// }
 	for _, g := range info.groups {
 		if !g.IsCovered(c) {
 			// logutil.Infof("not covered %d\ntcmap:%v\nckp%v\ng:%v\n",info.vf.Id(),c.tidCidMap,c.gIntervals,g)
 			toDelete = false
 		}
 	}
-	if c.ckpInfoVersion < info.ckpInfoVersion {
-		c.ckpInfoVersion = info.ckpInfoVersion
-	}
+	// if c.ckpInfoVersion < info.ckpInfoVersion {
+	// 	c.ckpInfoVersion = info.ckpInfoVersion
+	// }
 	return
 }
 
