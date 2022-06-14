@@ -19,11 +19,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"io"
 	"math/rand"
 	"sort"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -159,16 +160,16 @@ func (s *Schema) GetSortKeyCnt() int {
 }
 
 func MarshalDefault(w *bytes.Buffer, typ types.Type, data Default) (err error) {
+	if err = binary.Write(w, binary.BigEndian, data.Set); err != nil {
+		return
+	}
 	if !data.Set {
-		if err = binary.Write(w, binary.BigEndian, data.Set); err != nil {
-			return
-		}
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, data.Null); err != nil {
 		return
 	}
 	if data.Null {
-		if err = binary.Write(w, binary.BigEndian, data.Null); err != nil {
-			return
-		}
 		return
 	}
 	value := compute.EncodeKey(data.Value, typ)

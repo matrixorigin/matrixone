@@ -81,7 +81,7 @@ jobs:
         run: |
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh  2>&1
+          ./run.sh -n 2>&1
 
       - name: Stop Current MO-Server
         if: ${{ env.Job-Status }} == 2
@@ -122,7 +122,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           sleep 60s
-          ./run.sh 2>&1
+          ./run.sh -n 2>&1
 
       - name: BVT Compare
         if: ${{ env.Job-Status }} == 2
@@ -223,7 +223,7 @@ jobs:
         run: |
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -g 2>&1
+          ./run.sh -n -g 2>&1
 
       - name: Stop Current MO-Server
         if: ${{ env.Job-Status }} == 2
@@ -264,7 +264,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           sleep 60s
-          ./run.sh -g 2>&1
+          ./run.sh -n -g 2>&1
 
       - name: BVT Compare
         if: ${{ env.Job-Status }} == 2

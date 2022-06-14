@@ -9,6 +9,7 @@ import (
 	proto "github.com/gogo/protobuf/proto"
 	io "io"
 	math "math"
+	math_bits "math/bits"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -20,9 +21,9 @@ var _ = math.Inf
 // is compatible with the proto package it is being compiled against.
 // A compilation error at this line likely means your copy of the
 // proto package needs to be updated.
-const _ = proto.GoGoProtoPackageIsVersion2 // please upgrade the proto package
+const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
-// DN dn node metadata
+// DN dn shard metadata
 type DN struct {
 	// ID the id of the DN. The ID is not modified after the DN is created.
 	ID uint64 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -57,7 +58,7 @@ func (m *DN) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return xxx_messageInfo_DN.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
-		n, err := m.MarshalTo(b)
+		n, err := m.MarshalToSizedBuffer(b)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +148,7 @@ var fileDescriptor_56d9f74966f40d04 = []byte{
 func (m *DN) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
-	n, err := m.MarshalTo(dAtA)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
 	if err != nil {
 		return nil, err
 	}
@@ -155,57 +156,68 @@ func (m *DN) Marshal() (dAtA []byte, err error) {
 }
 
 func (m *DN) MarshalTo(dAtA []byte) (int, error) {
-	var i int
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DN) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
 	_ = i
 	var l int
 	_ = l
-	if m.ID != 0 {
-		dAtA[i] = 0x8
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(m.ID))
-	}
-	if m.ReplicaID != 0 {
-		dAtA[i] = 0x10
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(m.ReplicaID))
-	}
-	if m.LogShardID != 0 {
-		dAtA[i] = 0x18
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(m.LogShardID))
-	}
-	if len(m.Start) > 0 {
-		dAtA[i] = 0x22
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(len(m.Start)))
-		i += copy(dAtA[i:], m.Start)
-	}
-	if len(m.End) > 0 {
-		dAtA[i] = 0x2a
-		i++
-		i = encodeVarintMetadata(dAtA, i, uint64(len(m.End)))
-		i += copy(dAtA[i:], m.End)
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.Address) > 0 {
-		dAtA[i] = 0x32
-		i++
+		i -= len(m.Address)
+		copy(dAtA[i:], m.Address)
 		i = encodeVarintMetadata(dAtA, i, uint64(len(m.Address)))
-		i += copy(dAtA[i:], m.Address)
+		i--
+		dAtA[i] = 0x32
 	}
-	if m.XXX_unrecognized != nil {
-		i += copy(dAtA[i:], m.XXX_unrecognized)
+	if len(m.End) > 0 {
+		i -= len(m.End)
+		copy(dAtA[i:], m.End)
+		i = encodeVarintMetadata(dAtA, i, uint64(len(m.End)))
+		i--
+		dAtA[i] = 0x2a
 	}
-	return i, nil
+	if len(m.Start) > 0 {
+		i -= len(m.Start)
+		copy(dAtA[i:], m.Start)
+		i = encodeVarintMetadata(dAtA, i, uint64(len(m.Start)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if m.LogShardID != 0 {
+		i = encodeVarintMetadata(dAtA, i, uint64(m.LogShardID))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.ReplicaID != 0 {
+		i = encodeVarintMetadata(dAtA, i, uint64(m.ReplicaID))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.ID != 0 {
+		i = encodeVarintMetadata(dAtA, i, uint64(m.ID))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
 }
 
 func encodeVarintMetadata(dAtA []byte, offset int, v uint64) int {
+	offset -= sovMetadata(v)
+	base := offset
 	for v >= 1<<7 {
 		dAtA[offset] = uint8(v&0x7f | 0x80)
 		v >>= 7
 		offset++
 	}
 	dAtA[offset] = uint8(v)
-	return offset + 1
+	return base
 }
 func (m *DN) Size() (n int) {
 	if m == nil {
@@ -241,14 +253,7 @@ func (m *DN) Size() (n int) {
 }
 
 func sovMetadata(x uint64) (n int) {
-	for {
-		n++
-		x >>= 7
-		if x == 0 {
-			break
-		}
-	}
-	return n
+	return (math_bits.Len64(x|1) + 6) / 7
 }
 func sozMetadata(x uint64) (n int) {
 	return sovMetadata(uint64((x << 1) ^ uint64((int64(x) >> 63))))
@@ -445,10 +450,7 @@ func (m *DN) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthMetadata
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthMetadata
 			}
 			if (iNdEx + skippy) > l {
@@ -467,6 +469,7 @@ func (m *DN) Unmarshal(dAtA []byte) error {
 func skipMetadata(dAtA []byte) (n int, err error) {
 	l := len(dAtA)
 	iNdEx := 0
+	depth := 0
 	for iNdEx < l {
 		var wire uint64
 		for shift := uint(0); ; shift += 7 {
@@ -498,10 +501,8 @@ func skipMetadata(dAtA []byte) (n int, err error) {
 					break
 				}
 			}
-			return iNdEx, nil
 		case 1:
 			iNdEx += 8
-			return iNdEx, nil
 		case 2:
 			var length int
 			for shift := uint(0); ; shift += 7 {
@@ -522,55 +523,30 @@ func skipMetadata(dAtA []byte) (n int, err error) {
 				return 0, ErrInvalidLengthMetadata
 			}
 			iNdEx += length
-			if iNdEx < 0 {
-				return 0, ErrInvalidLengthMetadata
-			}
-			return iNdEx, nil
 		case 3:
-			for {
-				var innerWire uint64
-				var start int = iNdEx
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return 0, ErrIntOverflowMetadata
-					}
-					if iNdEx >= l {
-						return 0, io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					innerWire |= (uint64(b) & 0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				innerWireType := int(innerWire & 0x7)
-				if innerWireType == 4 {
-					break
-				}
-				next, err := skipMetadata(dAtA[start:])
-				if err != nil {
-					return 0, err
-				}
-				iNdEx = start + next
-				if iNdEx < 0 {
-					return 0, ErrInvalidLengthMetadata
-				}
-			}
-			return iNdEx, nil
+			depth++
 		case 4:
-			return iNdEx, nil
+			if depth == 0 {
+				return 0, ErrUnexpectedEndOfGroupMetadata
+			}
+			depth--
 		case 5:
 			iNdEx += 4
-			return iNdEx, nil
 		default:
 			return 0, fmt.Errorf("proto: illegal wireType %d", wireType)
 		}
+		if iNdEx < 0 {
+			return 0, ErrInvalidLengthMetadata
+		}
+		if depth == 0 {
+			return iNdEx, nil
+		}
 	}
-	panic("unreachable")
+	return 0, io.ErrUnexpectedEOF
 }
 
 var (
-	ErrInvalidLengthMetadata = fmt.Errorf("proto: negative length found during unmarshaling")
-	ErrIntOverflowMetadata   = fmt.Errorf("proto: integer overflow")
+	ErrInvalidLengthMetadata        = fmt.Errorf("proto: negative length found during unmarshaling")
+	ErrIntOverflowMetadata          = fmt.Errorf("proto: integer overflow")
+	ErrUnexpectedEndOfGroupMetadata = fmt.Errorf("proto: unexpected end of group")
 )
