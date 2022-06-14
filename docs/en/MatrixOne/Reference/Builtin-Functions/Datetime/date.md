@@ -4,21 +4,19 @@
 
 Extracts the date part of the date or datetime expression expr.
 
-
 ## **Syntax**
 
 ```
 > DATE(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Required.  The date/datetime to extract the date from. |
 
-
-
 ## **Examples**
-
 
 ```sql
 > drop table if exists t1;

@@ -1,6 +1,7 @@
 # **CREATE DATABASE**
 
 ## **Description**
+
 Create a database.
 
 ## **Syntax**
@@ -15,11 +16,12 @@ Create a database.
 }
 ```
 
-#### create_database_statement:
+#### create_database_statement
 
 ![Create Database Diagram](https://github.com/matrixorigin/artwork/blob/main/docs/reference/create_database_statement.png?raw=true)
 
 ## **Examples**
+
 ```
 > CREATE DATABASE test01;
 

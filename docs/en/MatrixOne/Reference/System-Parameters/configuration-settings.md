@@ -13,9 +13,7 @@ The 0.1.0 version is a standalone version, only the following parameters should 
 | sendRow  | bool | false  | [true, false] | send data row while producing  |
 | dumpEnv  | bool | false  | [true, false] | dump Environment with memEngine Null nodes for testing  |
 
-
 ### Debug Settings
-
 
 |  Parameter   | Type  |  Default Value   | Range  | Functionality | 
 |  ----  | ----  |  --------  |  --- | --- |
@@ -25,7 +23,6 @@ The 0.1.0 version is a standalone version, only the following parameters should 
 | max-size  | int64 | 	512  |  [0 - 314572800] | maximum log file size|
 | max-days  | int64 | 	0  |  [0 - 314572800] | maximum log file days kept|
 | max-backups  | int64 | 	0  |  [0 - 314572800] | maximum numbers of old log files to retain|
-
 
 ### Memory Settings
 
@@ -39,5 +36,3 @@ The 0.1.0 version is a standalone version, only the following parameters should 
 | processLimitationBatchRows  | int64 | 42949672960  | [0 - 42949672960] | process.Limitation.BatchRows. default: 10 << 32 = 42949672960  |
 | processLimitationBatchRows  | int64 | 42949672960  | [0 - 42949672960] | process.Limitation.BatchRows. default: 10 << 32 = 42949672960  |
 | processLimitationPartitionRows  | int64 | 42949672960  | [0 - 42949672960] | process.Limitation.PartitionRows. default: 10 << 32 = 42949672960  |
-
-

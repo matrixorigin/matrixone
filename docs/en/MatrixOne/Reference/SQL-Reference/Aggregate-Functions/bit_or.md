@@ -6,17 +6,17 @@ Aggregate function.
 
 The BIT_OR(expr) function returns the bitwise OR of all bits in expr.
 
-
 ## **Syntax**
 
 ```
 > BIT_OR(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | UINT data types |
-
 
 ## **Examples**
 

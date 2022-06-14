@@ -33,8 +33,6 @@ pip3 install -r requirements.txt
 !!! info 
     `Pymysql` is the only ORM tool supported by MatrixOne. The other python MySQL ORM tools as `SQLAlchemy`, `mysql-connector`, `MySQLdb` are not supported yet.
 
-
-
 ## **Step1: prepare and load historical dataset**
 
 At first, we need to load the historical stock data in MatrixOne. 
@@ -61,7 +59,6 @@ pool = pro.stock_basic(exchange = '',
 ```
 
 As we only need the P/E and P/B information, we call the `daily_basic` method and get each stock with data frames with `ts_code`, `trade_date`, `pe` and `pb` fields. Without any specification of start date and end date, `Tushare` will automatically output 5000 lastest records.
-
 
 ```python
 
@@ -129,7 +126,6 @@ if df.empty == False:
         cursor.executemany(" insert into pe (ts_code, trade_date,pe,pb) values (%s, %s,%s,%s)", val_to_insert)
         
 ```
-
 
 ## **Step2: find the historical lowest P/E or P/B stock**
 

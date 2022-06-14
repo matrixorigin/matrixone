@@ -13,11 +13,13 @@ The MAX() function calculates the maximum value across a group of values.
 ```
 
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Any expression |
 
 ## **Returned Value**
+
 Returns the minimum value of expr. MIN() may take a string argument, in such cases, it returns the minimum string value. 
 
 ## **Examples**
@@ -50,6 +52,6 @@ Returns the minimum value of expr. MIN() may take a string argument, in such cas
 +------+
 ```
 
-
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

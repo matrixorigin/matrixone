@@ -9,15 +9,14 @@ Returns the day of the year for date, in the range 1 to 366.
 ```
 > DAYOFYEAR(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Required.  The date to get the day from. Must be date type. |
 
-
-
 ## **Examples**
-
 
 ```sql
 > drop table if exists t1;

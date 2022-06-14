@@ -34,6 +34,13 @@ const (
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000 + iota
 	OUT_OF_RANGE
+
+	// Group 3: invalid input
+	BAD_CONFIGURATION = 3000 + iota
+	INVALID_INPUT
+
+	// Group 4: unexpected state
+	INVALID_STATE = 4000 + iota
 )
 
 type Error struct {
