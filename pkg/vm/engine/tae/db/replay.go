@@ -137,6 +137,9 @@ func (replayer *Replayer) PostReplayWal() {
 			return
 		}
 		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+			if !entry.GetTable().IsVirtual() {
+				activeSegs[entry.ID] = entry
+			}
 			return
 		}
 		if err = gcSegmentClosure(entry, GCType_Segment)(); err != nil {
