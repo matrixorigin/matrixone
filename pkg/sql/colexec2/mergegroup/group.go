@@ -481,7 +481,7 @@ func (ctr *Container) batchFill(i int, n int, bat *batch.Batch, proc *process.Pr
 }
 
 func fillGroup[T1, T2 any](ctr *Container, vec *vector.Vector, keys []T2, n int, sz uint32, start int) {
-	vs := vector.DecodeFixedCol[T1](vec, int(sz))
+	vs := vector.GetFixedVectorValues[T1](vec, int(sz))
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {
 			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
@@ -503,10 +503,7 @@ func fillGroup[T1, T2 any](ctr *Container, vec *vector.Vector, keys []T2, n int,
 }
 
 func fillStringGroup[T any](ctr *Container, vec *vector.Vector, keys []T, n int, sz uint32, start int) {
-	vs := vec.Col.(*types.Bytes)
-	vData := vs.Data
-	vOff := vs.Offsets
-	vLen := vs.Lengths
+	vData, vOff, vLen := vector.GetStrVectorValues(vec)
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {
 			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
@@ -528,7 +525,7 @@ func fillStringGroup[T any](ctr *Container, vec *vector.Vector, keys []T, n int,
 }
 
 func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, start int) {
-	vs := vector.DecodeFixedCol[T](vec, sz)
+	vs := vector.GetFixedVectorValues[T](vec, int(sz))
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {
