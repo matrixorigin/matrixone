@@ -174,6 +174,8 @@ const (
 	TRIM          // TRIM
 	UNIFORM       // UNIFORM
 	UTC_TIMESTAMP
+	UNIX_TIMESTAMP
+	FROM_UNIXTIME
 	UPPER      // UPPER
 	VAR_POP    // VAR_POP
 	VAR_SAMPLE // VAR_SAMPLE
@@ -254,17 +256,19 @@ var functionIdRegister = map[string]int32{
 	"startswith": STARTSWITH,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
-	"ceil":          CEIL,
-	"ceiling":       CEIL,
-	"concat_ws":     CONCAT_WS,
-	"floor":         FLOOR,
-	"lpad":          LPAD,
-	"pi":            PI,
-	"round":         ROUND,
-	"rpad":          RPAD,
-	"substr":        SUBSTRING,
-	"substring":     SUBSTRING,
-	"utc_timestamp": UTC_TIMESTAMP,
+	"ceil":           CEIL,
+	"ceiling":        CEIL,
+	"concat_ws":      CONCAT_WS,
+	"floor":          FLOOR,
+	"lpad":           LPAD,
+	"pi":             PI,
+	"round":          ROUND,
+	"rpad":           RPAD,
+	"substr":         SUBSTRING,
+	"substring":      SUBSTRING,
+	"utc_timestamp":  UTC_TIMESTAMP,
+	"unix_timestamp": UNIX_TIMESTAMP,
+	"from_unixtime":  FROM_UNIXTIME,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":         ABS,
