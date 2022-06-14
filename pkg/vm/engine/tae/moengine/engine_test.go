@@ -247,8 +247,10 @@ func TestTxnRelation_Update(t *testing.T) {
 			assert.Equal(t, int32(5), bat.Vecs[0].Col.([]int32)[0])
 			assert.Equal(t, int32(6), bat.Vecs[0].Col.([]int32)[1])
 			assert.Equal(t, int32(8), bat.Vecs[0].Col.([]int32)[3])
+			assert.Equal(t, update.Vecs[1].Col.([]int32)[2], bat.Vecs[0].Col.([]int32)[2])
 			assert.Equal(t, int32(9), bat.Vecs[1].Col.([]int32)[0])
 			assert.Equal(t, int32(10), bat.Vecs[1].Col.([]int32)[1])
+			assert.Equal(t, update.Vecs[2].Col.([]int32)[2], bat.Vecs[1].Col.([]int32)[2])
 		}
 	}
 
@@ -272,8 +274,10 @@ func TestTxnRelation_Update(t *testing.T) {
 			assert.Equal(t, int32(5), bat.Vecs[0].Col.([]int32)[0])
 			assert.Equal(t, int32(6), bat.Vecs[0].Col.([]int32)[1])
 			assert.Equal(t, int32(8), bat.Vecs[0].Col.([]int32)[3])
+			assert.Equal(t, update.Vecs[1].Col.([]int32)[2], bat.Vecs[0].Col.([]int32)[2])
 			assert.Equal(t, int32(9), bat.Vecs[1].Col.([]int32)[0])
 			assert.Equal(t, int32(10), bat.Vecs[1].Col.([]int32)[1])
+			assert.Equal(t, update.Vecs[2].Col.([]int32)[2], bat.Vecs[1].Col.([]int32)[2])
 		}
 	}
 }
