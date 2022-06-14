@@ -11,4 +11,3 @@ Once two new `Raft-Groups` are created, a re-election will immediately be hold. 
 The belowing diagram illustrates how the shard splitting works:
 
 ![Shard Splitting](https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixcube-shard-splitting.svg?raw=true)
-

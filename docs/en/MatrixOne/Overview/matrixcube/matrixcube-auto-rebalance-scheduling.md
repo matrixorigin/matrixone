@@ -38,4 +38,3 @@ For each `Shard`, it has several `Replicas` distributed in several `Stores`. The
 ## **Event Notify**
 
 The `Heartbeat` information collected will be synchronized to all MatrixCube `Stores`. Each `Store` will form the global routing table. 
-

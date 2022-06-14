@@ -1,7 +1,9 @@
 # **SELECT**
 
 ## **语法描述**
+
 `SELECT`语句用于从表中检索数据。
+
 ## **语法结构**
 
 ``` sql
@@ -20,8 +22,8 @@
     ]
 ```
 
-
 ### **SELECT INTO**
+
 `SELECT INTO` statement enables a query result to be stored in variables or written to a file  
 `SELECT INTO` 语句将查询结果存储在变量或者导出为文件。
 
@@ -29,7 +31,6 @@
 * SELECT ... INTO OUTFILE writes the selected rows to a file. Column and line terminators can be specified to produce a specific output format.
 * SELECT ... INTO ***var_list*** 可以检索列值并将其存储到变量中。
 * SELECT ... INTO OUTFILE 将检索结果输出为文件，可以使用行/列分隔符来生成特定的格式。 
-
 
 ``` sql
 > SELECT <expr_list> 
@@ -62,13 +63,11 @@
 !!! info 建议
     如果不设置`MAX_FILE_SIZE`，当表的数据量很大时会输出一个极大的文件，可能因此发生导出失败的情况；因此我们建议您根据实际情况设置该值。
 
-
 #### 限制
 
  * 相同目录下若存在同名文件，则会导致导出失败。
  * 目前只支持导出 ***.csv*** 类型的文件。
  * 目前只支持通过绝对路径将文件导出到服务器主机，而不能导出到远程客户端。
-
 
 ## **示例**
 

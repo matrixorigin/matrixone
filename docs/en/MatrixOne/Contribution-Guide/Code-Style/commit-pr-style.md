@@ -49,6 +49,7 @@ Please follow the following style for **all your commits**:
     - If the changes affect three or more subsystems, you can use `*` instead, like `*:`.
     - Use a lowercase letter on the text that immediately follows the colon. For example: "media: **update** the DM architecture image"
     - Do not add a period at the end of a commit message.
+
 - For the second line, always leave it blank.
 - For the why part, if there is no specific reason for the change, you can use one of the generic reasons like "Improve performance", "Improve test coverage."
 - For other lines, use no more than 80 characters.
@@ -71,7 +72,6 @@ Please follow the following style for **all your commits**:
 - Use relatively short sentences
 - Do not use lengthy compound words
 - Do not abbreviate unless it's absolutely necessary
-
 
 ## Pull Request description style
 

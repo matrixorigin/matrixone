@@ -31,10 +31,6 @@ no-trailing-punctuation:
 # MD027
 no-multiple-space-blockquote: true
 
-# MD029
-ol-prefix:
-  style: ordered
-
 # MD030
 list-marker-space: true
 
@@ -58,7 +54,3 @@ no-space-in-links: true
 
 # MD042
 no-empty-links: true
-
-# MD046
-code-block-style:
-  style: fenced

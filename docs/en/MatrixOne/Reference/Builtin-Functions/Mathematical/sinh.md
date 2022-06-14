@@ -4,17 +4,17 @@
 
 The SINH() function returns the hyperbolic sine of the input number(given in radians).
 
-
 ## **Syntax**
 
 ```
 > SINH(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
-
 
 ## **Examples**
 
@@ -29,4 +29,5 @@ The SINH() function returns the hyperbolic sine of the input number(given in rad
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.
