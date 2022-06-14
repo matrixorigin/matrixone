@@ -407,9 +407,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 	cmd.Segment.table = rel
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	if cmd.Segment.CurrOp == OpCreate {
-		cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
 		rel.AddEntryLocked(cmd.Segment)
-		// cmd.Segment.ReplayFile(cache)
 	} else {
 		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
 		if seg != nil {

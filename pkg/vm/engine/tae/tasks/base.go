@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var WaitableCtx = &Context{Waitable: true}
@@ -62,7 +61,7 @@ func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 		impl = task
 	}
 	task.Op = ops.Op{
-		Impl:   impl.(iops.IOpInternal),
+		Impl:   impl.(base.IOpInternal),
 		DoneCB: doneCB,
 	}
 	if doneCB == nil {

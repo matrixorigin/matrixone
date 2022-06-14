@@ -55,6 +55,7 @@ func (replayer *Replayer) PreReplayWal() {
 		if dropCommit != nil && dropCommit.LogIndex.LSN <= replayer.db.Wal.GetCheckpointed() {
 			return catalog.ErrStopCurrRecur
 		}
+		entry.InitData(replayer.DataFactory)
 		entry.ReplayFile(replayer.cache)
 		return
 	}

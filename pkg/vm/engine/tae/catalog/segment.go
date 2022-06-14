@@ -263,6 +263,13 @@ func (entry *SegmentEntry) AsCommonID() *common.ID {
 
 func (entry *SegmentEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
 
+func (entry *SegmentEntry) InitData(factory DataFactory) {
+	if factory == nil {
+		return
+	}
+	dataFactory := factory.MakeSegmentFactory()
+	entry.segData = dataFactory(entry)
+}
 func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData }
 
 func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
