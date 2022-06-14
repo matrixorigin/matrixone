@@ -15,6 +15,7 @@
 package unary
 
 import (
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -22,24 +23,44 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+var (
+	errorReverseStringFailed = errors.New("errors happened in reversing string")
+)
+
 func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(vectors) == 0 || proc == nil {
+		return nil, errorParameterIsInvalid
+	}
+	if vectors[0] == nil {
+		return nil, errorParameterIsInvalid
+	}
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.(*types.Bytes)
+		inputValues, ok := inputVector.Col.(*types.Bytes)
+		if !ok {
+			return nil, errorParameterIsNotString
+		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := &types.Bytes{
 			Data:    make([]byte, len(inputValues.Data)),
 			Offsets: make([]uint32, len(inputValues.Offsets)),
 			Lengths: make([]uint32, len(inputValues.Lengths)),
 		}
-		vector.SetCol(resultVector, reverse.ReverseChar(inputValues, resultValues))
+		res := reverse.ReverseChar(inputValues, resultValues)
+		if res == nil {
+			return nil, errorReverseStringFailed
+		}
+		vector.SetCol(resultVector, res)
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.(*types.Bytes)
+		inputValues, ok := inputVector.Col.(*types.Bytes)
+		if !ok {
+			return nil, errorParameterIsNotString
+		}
 		resultVector, err := proc.AllocVector(resultType, int64(len(inputValues.Data)))
 		if err != nil {
 			return nil, err
@@ -50,7 +71,11 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			Lengths: make([]uint32, len(inputValues.Lengths)),
 		}
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, reverse.ReverseChar(inputValues, resultValues))
+		res := reverse.ReverseChar(inputValues, resultValues)
+		if res == nil {
+			return nil, errorReverseStringFailed
+		}
+		vector.SetCol(resultVector, res)
 		return resultVector, nil
 	}
 }

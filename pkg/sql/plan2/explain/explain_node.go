@@ -225,7 +225,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	}
 
 	// Get Filter list info
-	if ndesc.Node.WhereList != nil {
+	if ndesc.Node.WhereList != nil && len(ndesc.Node.WhereList) != 0 {
 		filterInfo, err := ndesc.GetWhereConditionInfo(options)
 		if err != nil {
 			return nil, err

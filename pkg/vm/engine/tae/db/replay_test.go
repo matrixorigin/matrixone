@@ -1208,3 +1208,129 @@ func TestReplay8(t *testing.T) {
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
 	_ = txn.Rollback()
 }
+
+func TestReplay9(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 3)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockData(schema, schema.BlockMaxRows*3+2)
+	bats := compute.SplitBatch(bat, 4)
+
+	tae.createRelAndAppend(bats[0], true)
+	txn, rel := tae.getRelation()
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	v := getSingleSortKeyValue(bats[0], schema, 2)
+	filter := handle.NewEQFilter(v)
+	err := rel.UpdateByFilter(filter, 2, int32(999))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+	txn, rel = tae.getRelation()
+	actv, err := rel.GetValueByFilter(filter, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(999), actv)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactABlocks(false)
+
+	tae.restart()
+	txn, rel = tae.getRelation()
+	_, _, err = rel.GetByFilter(filter)
+	assert.NoError(t, err)
+	actv, err = rel.GetValueByFilter(filter, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(999), actv)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	tae.compactBlocks(false)
+
+	txn, rel = tae.getRelation()
+	v2 := getSingleSortKeyValue(bats[0], schema, 4)
+	filter2 := handle.NewEQFilter(v2)
+	err = rel.UpdateByFilter(filter2, 1, int16(199))
+	assert.NoError(t, err)
+	actv, err = rel.GetValueByFilter(filter2, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, int16(199), actv)
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	actv, err = rel.GetValueByFilter(filter2, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, int16(199), actv)
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	err = rel.Append(bats[3])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactBlocks(false)
+	tae.mergeBlocks(false)
+
+	txn, rel = tae.getRelation()
+	v3 := getSingleSortKeyValue(bats[1], schema, 3)
+	filter3 := handle.NewEQFilter(v3)
+	err = rel.UpdateByFilter(filter3, 5, uint16(88))
+	assert.NoError(t, err)
+	actv, err = rel.GetValueByFilter(filter3, 5)
+	assert.NoError(t, err)
+	assert.Equal(t, uint16(88), actv)
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	actv, err = rel.GetValueByFilter(filter, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(999), actv)
+	actv, err = rel.GetValueByFilter(filter2, 1)
+	assert.NoError(t, err)
+	assert.Equal(t, int16(199), actv)
+	actv, err = rel.GetValueByFilter(filter3, 5)
+	assert.NoError(t, err)
+	assert.Equal(t, uint16(88), actv)
+	assert.NoError(t, txn.Commit())
+}
+
+func TestReplay10(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := initDB(t, opts)
+	schema := catalog.MockSchemaAll(3, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 5
+	schema.ColDefs[1].Default = catalog.Default{
+		Set:   true,
+		Null:  false,
+		Value: int16(3)}
+	schema.ColDefs[2].Default = catalog.Default{
+		Set:  true,
+		Null: true,
+	}
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows)
+	createRelationAndAppend(t, tae, defaultTestDB, schema, bat, true)
+	time.Sleep(time.Millisecond * 100)
+
+	_ = tae.Close()
+	tae, err := Open(tae.Dir, opts)
+	assert.NoError(t, err)
+	defer tae.Close()
+	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	txn, rel := getDefaultRelation(t, tae, schema.Name)
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	assert.NoError(t, txn.Commit())
+	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
+	assert.Equal(t, int16(3), schema1.ColDefs[1].Default.Value.(int16))
+	assert.Equal(t, true, schema1.ColDefs[2].Default.Null)
+
+}

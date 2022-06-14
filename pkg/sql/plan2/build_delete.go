@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -64,14 +65,12 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	var useKey *ColDef = nil
 	var useProjectExprs tree.SelectExprs = nil
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
-	if priKeys != nil {
-		for _, key := range priKeys {
-			e, _ := tree.NewUnresolvedName(key.Name)
-			if isDuplicated(e, &projectExprs) {
-				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-				useKey = key
-				break
-			}
+	for _, key := range priKeys {
+		e, _ := tree.NewUnresolvedName(key.Name)
+		if isDuplicated(e, &projectExprs) {
+			useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+			useKey = key
+			break
 		}
 	}
 	if useKey == nil {
@@ -125,34 +124,34 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}, nil
 }
 
-func checkColumns(projectExprs tree.SelectExprs, tableDef *TableDef) ([]string, error) {
-	var cols []string = nil
-	for _, e := range projectExprs {
-		col, _ := e.Expr.(*tree.UnresolvedName)
-		colName := col.Parts[0]
-		cols = append(cols, colName)
-		if !inTableDef(colName, tableDef) {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("column '%v' not in table '%v'", colName, tableDef.Name))
-		}
-	}
-	return cols, nil
-}
+// func checkColumns(projectExprs tree.SelectExprs, tableDef *TableDef) ([]string, error) {
+// 	var cols []string = nil
+// 	for _, e := range projectExprs {
+// 		col, _ := e.Expr.(*tree.UnresolvedName)
+// 		colName := col.Parts[0]
+// 		cols = append(cols, colName)
+// 		if !inTableDef(colName, tableDef) {
+// 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("column '%v' not in table '%v'", colName, tableDef.Name))
+// 		}
+// 	}
+// 	return cols, nil
+// }
 
-func inTableDef(colName string, tableDef *TableDef) bool {
-	for _, def := range tableDef.Cols {
-		if colName == def.Name {
-			return true
-		}
-	}
-	return false
-}
+// func inTableDef(colName string, tableDef *TableDef) bool {
+// 	for _, def := range tableDef.Cols {
+// 		if colName == def.Name {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
 
-func buildStarProjection() tree.SelectExprs {
-	expr := tree.SelectExpr{
-		Expr: tree.UnqualifiedStar{},
-	}
-	return tree.SelectExprs{expr}
-}
+// func buildStarProjection() tree.SelectExprs {
+// 	expr := tree.SelectExpr{
+// 		Expr: tree.UnqualifiedStar{},
+// 	}
+// 	return tree.SelectExprs{expr}
+// }
 
 func buildProjectionFromExpr(expr tree.Expr, selectExprs *tree.SelectExprs) error {
 	switch e := expr.(type) {

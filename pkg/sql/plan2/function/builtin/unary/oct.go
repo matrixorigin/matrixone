@@ -48,8 +48,8 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		}
 		resultValues := &types.Bytes{
 			Data:    []byte{},
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
+			Offsets: make([]uint32, len(inputValues)),
+			Lengths: make([]uint32, len(inputValues)),
 		}
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
 		vector.SetCol(resultVector, oct.Oct(inputValues, resultValues))

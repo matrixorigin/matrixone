@@ -139,17 +139,16 @@ type entryWrapper struct {
 // One worker
 // h.mu.Rlock
 // wrapper
-func (h *history) TryTruncate() error {
-	c := newCompactor()
+func (h *history) TryTruncate(c *compactor) error {
 	toDelete := make([]entryWrapper, 0, 4)
 	h.mu.RLock()
 	entries := make([]VFile, len(h.entries))
 	copy(entries, h.entries)
 	h.mu.RUnlock()
-	for i := len(entries) - 1; i >= 0; i-- {
-		e := entries[i]
-		e.PrepareCompactor(c)
-	}
+	// for i := len(entries) - 1; i >= 0; i-- {
+	// 	e := entries[i]
+	// 	e.PrepareCompactor(c)
+	// }
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
 		// err := e.LoadMeta()
@@ -173,6 +172,16 @@ func (h *history) TryTruncate() error {
 			return err
 		}
 	}
+	c.tidCidMapMu.Lock()
+	for group, tidCidMap := range c.tidCidMap {
+		ckp := c.checkpointed[group]
+		for tid, lsn := range tidCidMap {
+			if lsn < ckp {
+				delete(tidCidMap, tid)
+			}
+		}
+	}
+	c.tidCidMapMu.Unlock()
 	return nil
 }
 

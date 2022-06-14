@@ -29,6 +29,7 @@ const (
 	ERROR_START = 1000 + iota
 	INTERNAL_ERROR
 	NYI
+	ERROR_FUNCTION_PARAMETER
 
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000 + iota

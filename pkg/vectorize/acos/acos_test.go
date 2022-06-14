@@ -15,9 +15,10 @@
 package acos
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestAcosFloat32(t *testing.T) {

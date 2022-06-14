@@ -144,6 +144,10 @@ func (f Function) IsAggregate() bool {
 	return f.Flag == plan.Function_AGG
 }
 
+func (f Function) isFunction() bool {
+	return f.Layout == STANDARD_FUNCTION || f.Layout >= NOPARAMETER_FUNCTION
+}
+
 // functionRegister records the information about
 // all the operator, built-function and aggregate function.
 //
@@ -160,7 +164,7 @@ func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function '%s' doesn't register, get id failed", name))
+	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function or operator '%s' is not implemented", name))
 }
 
 // EncodeOverloadID convert function-id and overload-index to be an overloadID
@@ -185,6 +189,15 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 	fid, overloadIndex := DecodeOverloadID(overloadID)
 	fs := functionRegister[fid]
 	return fs[overloadIndex], nil
+}
+
+func GetFunctionIsAggregateByName(name string) bool {
+	fid, err := fromNameToFunctionId(name)
+	if err != nil {
+		return false
+	}
+	fs := functionRegister[fid]
+	return len(fs) > 0 && fs[0].IsAggregate()
 }
 
 // GetFunctionByName check a function exist or not according to input function name and arg types,
@@ -227,7 +240,13 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	if len(matches) == 1 {
 		return matches[0], EncodeOverloadID(fid, matches[0].Index), nil, nil
 	} else if len(matches) > 1 {
-		errMessage := "too much function matches:"
+		// if contains any ScalarNull as param, just return the first one.
+		for i := range args {
+			if args[i] == ScalarNull {
+				return matches[0], EncodeOverloadID(fid, matches[0].Index), nil, nil
+			}
+		}
+		errMessage := "too many functions matched:"
 		for i := range matches {
 			errMessage += "\n"
 			errMessage += name
@@ -240,7 +259,10 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 			return levelUpFunction, EncodeOverloadID(fid, levelUpFunction.Index), finalLevelUpTypes, nil
 		}
 	}
-	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
+	if len(fs) > 0 && fs[0].isFunction() {
+		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("unsupported parameter types %v for function '%s'", args, name))
+	}
+	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("unsupported parameter types %v for operator '%s'", args, name))
 }
 
 // strictTypeCheck is a general type check method.
@@ -252,6 +274,22 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	}
 	for i := range args {
 		if args[i] != require[i] && isNotScalarNull(args[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// todo(broccoli): change this to a general function
+func concatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) <= 1 {
+		return false
+	}
+	for _, arg := range args {
+		if arg != types.T_varchar && arg != types.T_char {
+			return false
+		}
+		if isScalarNull(arg) {
 			return false
 		}
 	}
@@ -376,6 +414,10 @@ func compare(f1, f2 Function) (f Function, change bool) {
 
 func isNotScalarNull(t types.T) bool {
 	return t != ScalarNull
+}
+
+func isScalarNull(t types.T) bool {
+	return t == ScalarNull
 }
 
 var (
