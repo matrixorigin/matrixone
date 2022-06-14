@@ -31,10 +31,11 @@ const (
 	P_hexnum
 	P_null
 	P_bool
-	P_int64
+	P_uint64
 	P_float64
 	P_char
-	P_decimal128
+	P_decimal
+	P_bit
 )
 
 //the AST for the constant numeric value.

@@ -12052,10 +12052,10 @@ yydefault:
 			}
 			if ival > 0 {
 				yyLOCAL = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, false, ival)
-				yyLOCAL.ValType = tree.P_int64
+				yyLOCAL.ValType = tree.P_uint64
 			} else {
 				yyLOCAL = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, true, ival)
-				yyLOCAL.ValType = tree.P_int64
+				yyLOCAL.ValType = tree.P_uint64
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -12073,7 +12073,7 @@ yydefault:
 //line mysql_sql.y:5330
 		{
 			ival := util.GetUint64(yyDollar[1].item)
-			yyLOCAL = tree.NewNumValWithType(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+			yyLOCAL = tree.NewNumValWithType(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
 		}
 		yyVAL.union = yyLOCAL
 	case 956:
@@ -12123,7 +12123,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:5357
 		{
-			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_decimal128)
+			yyLOCAL = tree.NewNumValWithType(constant.MakeString(yyDollar[1].str), yyDollar[1].str, false, tree.P_decimal)
 		}
 		yyVAL.union = yyLOCAL
 	case 962:

@@ -5314,10 +5314,10 @@ int_num_val:
         }
         if ival > 0 {
             $$ = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, false, ival)
-            $$.ValType = tree.P_int64
+            $$.ValType = tree.P_uint64
         } else {
             $$ = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, true, ival)
-            $$.ValType = tree.P_int64
+            $$.ValType = tree.P_uint64
         }
     }
 
@@ -5329,7 +5329,7 @@ literal:
 |   INTEGRAL
     {
         ival := util.GetUint64($1)
-        $$ = tree.NewNumValWithType(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+        $$ = tree.NewNumValWithType(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
     }
 |   FLOAT
     {
@@ -5355,7 +5355,7 @@ literal:
 	}
 |   DECIMAL_VALUE
     {
-        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal128)
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
     }
 // |   HEX
 // |   BIT_LITERAL
