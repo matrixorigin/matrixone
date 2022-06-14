@@ -143,6 +143,9 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		}
 		bat.Clean(proc.Mp)
 	}
+	if ctr.bat == nil || len(ctr.bat.Zs) == 0 {
+		return nil
+	}
 	for i, cond := range ap.Conditions[1] {
 		vec, err := colexec.EvalExpr(ctr.bat, proc, cond.Expr)
 		if err != nil {
