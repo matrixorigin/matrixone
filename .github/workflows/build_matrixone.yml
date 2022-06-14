@@ -67,10 +67,6 @@ jobs:
         run: |
           make ut
 
-      - name: Build Verification Testing
-        run: |
-          make bvt
-
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
         continue-on-error: true
