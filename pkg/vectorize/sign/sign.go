@@ -15,7 +15,6 @@
 package sign
 
 /*
-#include<stdio.h>
 void sign_int8(void *a,void * res){
 	signed char tmp = *(signed char *)a;
 	*(signed char*)res = (tmp > 0) - (tmp < 0);
