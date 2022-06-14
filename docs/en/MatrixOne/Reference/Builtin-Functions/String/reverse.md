@@ -4,20 +4,19 @@
 
 Returns the string str with the order of the characters reversed.
 
-
 ## **Syntax**
 
 ```
 > REVERSE(str)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | Str | Required. both CHAR and VARCHAR are supported. |
 
-
 ## **Examples**
-
 
 ```SQL
 > drop table if exists t1;
@@ -54,5 +53,5 @@ Returns the string str with the order of the characters reversed.
 ```
 
 ## Constraints
-Currently, MatrixOne doesn't support select function() without from tables.
 
+Currently, MatrixOne doesn't support select function() without from tables.

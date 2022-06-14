@@ -4,19 +4,18 @@
 
 POWER(X, Y) returns the value of X raised to the power of Y.
 
-
-
 ## **Syntax**
 
 ```
 > POWER(X, Y)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | X | Required. Any numeric data type supported now. |
 | Y | Required. Any numeric data type supported now. |
-
 
 ## **Examples**
 
@@ -47,4 +46,5 @@ POWER(X, Y) returns the value of X raised to the power of Y.
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

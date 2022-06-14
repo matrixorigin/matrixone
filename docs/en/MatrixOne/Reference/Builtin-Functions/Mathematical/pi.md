@@ -4,14 +4,11 @@
 
 PI() returns the value of π (pi).
 
-
-
 ## **Syntax**
 
 ```
 > PI()
 ```
-
 
 ## **Examples**
 
@@ -49,4 +46,5 @@ PI() returns the value of π (pi).
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.
