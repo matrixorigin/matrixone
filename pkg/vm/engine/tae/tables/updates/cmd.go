@@ -17,6 +17,7 @@ package updates
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -113,7 +114,14 @@ func (c *UpdateCmd) GetDest() *common.ID {
 
 // TODO
 func (c *UpdateCmd) String() string {
-	return ""
+	if c.cmdType == txnbase.CmdAppend {
+		return fmt.Sprintf("[CmdAppend]: Dest=%s,Payload=%s", c.dest.BlockString(), c.append.GeneralDesc())
+	} else if c.cmdType == txnbase.CmdUpdate {
+		return fmt.Sprintf("[CmdUpdate]: Dest=%s,Payload=%s", c.dest.BlockString(), c.update.GeneralDesc())
+	} else if c.cmdType == txnbase.CmdDelete {
+		return fmt.Sprintf("[CmdDelete]: Dest=%s,Payload=%s", c.dest.BlockString(), c.delete.GeneralDesc())
+	}
+	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
 }
 
 func (c *UpdateCmd) GetType() int16 { return c.cmdType }
