@@ -16,7 +16,7 @@ jobs:
   tae-ut:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
-    name: Build on CentOS/x64
+    name: Staticcheck and UT Test on CentOS/x64
 
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
@@ -70,7 +70,7 @@ jobs:
   tae-bvt:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
-    name: Build Plan2-TAE on CentOS/x64
+    name: BVT Test on CentOS/x64
     timeout-minutes: 30
     env:
       #Job-Status: 2-uncertain, 1-fail, 0-success
