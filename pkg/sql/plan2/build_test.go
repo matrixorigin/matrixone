@@ -30,7 +30,8 @@ func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
-	sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
+	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
+	sql := "select @str_var, @int_var, @bool_var, @float_var, @null_var"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -410,6 +411,8 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT -1",
 		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
 		"select date_sub('1997-12-31 23:59:59',INTERVAL 2 HOUR)",
+		"select @str_var, @int_var, @bool_var, @float_var, @null_var",
+		"select n_name from nation where n_name != @str_var and n_regionkey > @int_var",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -422,6 +425,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME FROM NATION WHERE ffff(N_REGIONKEY) > 0",             //function name not exist
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
+		"select n_name from nation where n_name != @not_exist_var",
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
 	}
