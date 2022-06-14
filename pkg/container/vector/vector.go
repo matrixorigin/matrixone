@@ -29,6 +29,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+func GetStrVectorValues(v *Vector) ([]byte, []uint32, []uint32) {
+	if v.IsConst {
+		col := v.Col.(*types.Bytes)
+		data := make([]byte, 0, len(col.Data)*v.Length)
+		os := make([]uint32, v.Length)
+		ns := make([]uint32, v.Length)
+		o := uint32(0)
+		for i := 0; i < v.Length; i++ {
+			os[i] = o
+			ns[i] = uint32(len(col.Data))
+			o += uint32(len(col.Data))
+			data = append(data, col.Data...)
+		}
+		return data, os, ns
+	}
+	vs := v.Col.(*types.Bytes)
+	return vs.Data, vs.Offsets, vs.Lengths
+}
+
+func GetFixedVectorValues[T any](v *Vector, sz int) []T {
+	if v.IsConst {
+		vs := make([]T, v.Length)
+		data := unsafe.Slice((*byte)((unsafe.Pointer(uintptr((*(*emptyInterface)(unsafe.Pointer(&v.Col))).word)))), sz)
+		val := encoding.DecodeFixedSlice[T](data, sz)[0]
+		for i := range vs {
+			vs[i] = val
+		}
+		return vs
+	}
+	return DecodeFixedCol[T](v, sz)
+}
+
 func DecodeFixedCol[T any](v *Vector, sz int) []T {
 	return encoding.DecodeFixedSlice[T](v.Data, sz)
 }

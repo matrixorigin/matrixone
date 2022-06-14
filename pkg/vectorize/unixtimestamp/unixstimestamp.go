@@ -27,6 +27,9 @@ func init() {
 func unixTimestamp(xs []types.Datetime, rs []int64) []int64 {
 	for i := range xs {
 		rs[i] = xs[i].UnixTimestamp()
+		if rs[i] < 0 || rs[i] > 32536771199 {
+			rs[i] = 0
+		}
 	}
 	return rs
 }
