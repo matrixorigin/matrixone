@@ -73,7 +73,7 @@ MatrixCube实现的分布式存储服务具有容错性、高可用性。若一�
 
 分布式系统应该充分利用所有节点的计算能力和存储能力。对于MatrixCube集群，当增加或减少`Stores`时，将发生`Auto-Rebalance`，它将在`Store`之间转移数据，以达到每个`Store`的负载平衡。
 
-详情请见[Auto-Rebalance的工作机制]：(matrixcube-auto-rebalance-scheduling.md)。
+详情请见[Auto-Rebalance的工作机制](matrixcube-auto-rebalance-scheduling.md)。
 
 ### **Scale-out**
 
