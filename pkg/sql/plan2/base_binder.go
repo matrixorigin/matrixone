@@ -244,7 +244,7 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32) (expr *plan
 	case types.Decimal64, types.Decimal128:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, "decimal var not support now")
 	default:
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not find var'%q'", astExpr.Name))
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type of var %q is not support now", astExpr.Name))
 	}
 	return
 }
