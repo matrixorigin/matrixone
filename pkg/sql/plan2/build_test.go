@@ -31,7 +31,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "select @str_var, @int_var, @bool_var, @float_var, @null_var"
+	sql := "select @str_var, @int_var, @bool_var, @@global.float_var, @@session.null_var"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -412,7 +412,9 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
 		"select date_sub('1997-12-31 23:59:59',INTERVAL 2 HOUR)",
 		"select @str_var, @int_var, @bool_var, @float_var, @null_var",
+		"select @str_var, @@global.int_var, @@session.bool_var",
 		"select n_name from nation where n_name != @str_var and n_regionkey > @int_var",
+		"select n_name from nation where n_name != @@global.str_var and n_regionkey > @@session.int_var",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
