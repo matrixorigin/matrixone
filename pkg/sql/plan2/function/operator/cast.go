@@ -317,6 +317,15 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		}
 	}
 
+	if isString(lv.Typ.Oid) && isDecimal(rv.Typ.Oid) {
+		switch rv.Typ.Oid {
+		case types.T_decimal64:
+			return CastStringAsDecimal64(lv, rv, proc)
+		case types.T_decimal128:
+			return CastStringAsDecimal128(lv, rv, proc)
+		}
+	}
+
 	if isInteger(lv.Typ.Oid) && isString(rv.Typ.Oid) {
 		switch lv.Typ.Oid {
 		case types.T_int8:
@@ -960,6 +969,89 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
+// CastStringAsDecimal64: onverts char/varchar as decimal64
+func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	resultType.Size = 8
+	if lv.IsScalar() {
+		vs := lv.Col.(*types.Bytes)
+		srcStr := vs.Get(0)
+		vec := proc.AllocScalarVector(resultType)
+		rs := make([]types.Decimal64, 1)
+		decimal64, err := types.ParseStringToDecimal64(string(srcStr), resultType.Width, resultType.Scale)
+		if err != nil {
+			return nil, err
+		}
+		rs[0] = decimal64
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vs := lv.Col.(*types.Bytes)
+
+	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs.Lengths)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs = rs[:len(vs.Lengths)]
+	for i := range vs.Lengths {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		strValue := vs.Get(int64(i))
+		decimal64, err2 := types.ParseStringToDecimal64(string(strValue), resultType.Width, resultType.Scale)
+		if err2 != nil {
+			return nil, err2
+		}
+		rs[i] = decimal64
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// CastStringAsDecimal128: onverts char/varchar as decimal128
+func CastStringAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	resultType.Size = 16
+	if lv.IsScalar() {
+		vs := lv.Col.(*types.Bytes)
+		srcStr := vs.Get(0)
+		vec := proc.AllocScalarVector(resultType)
+		rs := make([]types.Decimal128, 1)
+		decimal128, err := types.ParseStringToDecimal128(string(srcStr), resultType.Width, resultType.Scale)
+		if err != nil {
+			return nil, err
+		}
+		rs[0] = decimal128
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vs := lv.Col.(*types.Bytes)
+	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs.Lengths)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs = rs[:len(vs.Lengths)]
+	for i := range vs.Lengths {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		strValue := vs.Get(int64(i))
+		decimal128, err2 := types.ParseStringToDecimal128(string(strValue), resultType.Width, resultType.Scale)
+		if err2 != nil {
+			return nil, err2
+		}
+		rs[i] = decimal128
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
 //  isInteger return true if the types.T is integer type
 func isInteger(t types.T) bool {
 	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
@@ -1012,6 +1104,14 @@ func isString(t types.T) bool {
 //  isDateSeries: return true if the types.T is date related type
 func isDateSeries(t types.T) bool {
 	if t == types.T_date || t == types.T_datetime || t == types.T_timestamp {
+		return true
+	}
+	return false
+}
+
+// isDecimal: return true if the types.T is decimal64 or decimal128
+func isDecimal(t types.T) bool {
+	if t == types.T_decimal64 || t == types.T_decimal128 {
 		return true
 	}
 	return false

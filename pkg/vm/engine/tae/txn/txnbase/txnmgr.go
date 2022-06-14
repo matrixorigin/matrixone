@@ -61,9 +61,9 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 }
 
 func (mgr *TxnManager) Init(prevTxnId uint64, prevTs uint64) error {
-	logutil.Infof("TxnManager Init: PrevTxnId=%d, PrevTS=%d", prevTxnId, prevTs)
 	mgr.IdAlloc.SetStart(prevTxnId)
 	mgr.TsAlloc.SetStart(prevTs)
+	logutil.Info("[INIT]", TxnMgrField(mgr))
 	return nil
 }
 
@@ -129,7 +129,7 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 func (mgr *TxnManager) onPreCommit(txn txnif.AsyncTxn) {
 	now := time.Now()
 	txn.SetError(txn.PreCommit())
-	logutil.Debugf("%s PreCommit Takes: %s", txn.String(), time.Since(now))
+	logutil.Debug("[PreCommit]", TxnField(txn), common.DurationField(time.Since(now)))
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
@@ -189,7 +189,10 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 			panic(err)
 		}
 	}
-	logutil.Infof("PrepareCommit %d Txns Takes: %s", len(items), time.Since(now))
+	logutil.Info("[PrepareCommit]",
+		common.NameSpaceField("txns"),
+		common.DurationField(time.Since(now)),
+		common.CountField(len(items)))
 }
 
 // TODO
@@ -202,19 +205,21 @@ func (mgr *TxnManager) onCommit(items ...any) {
 		case OpCommit:
 			if err = op.Txn.ApplyCommit(); err != nil {
 				mgr.OnException(err)
-				logutil.Warnf("ApplyCommit %s: %v", op.Txn.Repr(), err)
+				logutil.Warn("[ApplyCommit]", TxnField(op.Txn), common.ErrorField(err))
 			}
 		case OpRollback:
 			if err = op.Txn.ApplyRollback(); err != nil {
 				mgr.OnException(err)
-				logutil.Warnf("ApplyRollback %s: %v", op.Txn.Repr(), err)
+				logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 			}
 		}
 		// Here only wait the txn to be done. The err returned can be access via op.Txn.GetError()
 		_ = op.Txn.WaitDone(err)
-		logutil.Debugf("%s Done", op.Repr())
 	}
-	logutil.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
+	logutil.Info("[Commit]",
+		common.NameSpaceField("txns"),
+		common.CountField(len(items)),
+		common.DurationField(time.Since(now)))
 }
 
 func (mgr *TxnManager) OnException(new error) {
@@ -230,5 +235,5 @@ func (mgr *TxnManager) OnException(new error) {
 func (mgr *TxnManager) Stop() {
 	mgr.StateMachine.Stop()
 	mgr.OnException(common.ClosedErr)
-	logutil.Infof("TxnManager Stop: CurrTxnId=%d, CurrTS=%d", mgr.IdAlloc.Get(), mgr.TsAlloc.Get())
+	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

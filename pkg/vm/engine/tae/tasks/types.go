@@ -16,6 +16,7 @@ package tasks
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -44,6 +45,27 @@ const (
 	IOTask
 )
 
+var taskNames = map[TaskType]string{
+	NoopTask:           "Noop",
+	MockTask:           "Mock",
+	DataCompactionTask: "Compaction",
+	CheckpointTask:     "Checkpoint",
+	GCTask:             "GC",
+	IOTask:             "IO",
+}
+
+func RegisterType(t TaskType, name string) {
+	_, ok := taskNames[t]
+	if ok {
+		panic(fmt.Errorf("duplicate task type: %d, %s", t, name))
+	}
+	taskNames[t] = name
+}
+
+func TaskName(t TaskType) string {
+	return taskNames[t]
+}
+
 func init() {
 	taskIdAlloctor = common.NewIdAlloctor(1)
 }
@@ -59,6 +81,7 @@ type Task interface {
 	ID() uint64
 	Type() TaskType
 	Cancel() error
+	Name() string
 }
 
 type ScopedTask interface {
