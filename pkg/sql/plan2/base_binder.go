@@ -116,7 +116,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 	case *tree.MaxValue:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl))
 	case *tree.VarExpr:
-		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl))
+		expr, err = b.baseBindVar(exprImpl, depth)
 	case *tree.StrVal:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl))
 	case *tree.ExprList:
@@ -129,6 +129,123 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl))
 	}
 
+	return
+}
+
+func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32) (expr *plan.Expr, err error) {
+	var getVal interface{}
+	getVal, err = b.builder.compCtx.ResolveVariable(astExpr.Name, astExpr.System, astExpr.Global)
+	if err != nil {
+		return nil, err
+	}
+	getIntExpr := func(data int64) *plan.Expr {
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Ival{
+						Ival: data,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_INT64,
+				Nullable: false,
+				Size:     8,
+			},
+		}
+	}
+	getFloatExpr := func(data float64) *plan.Expr {
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Dval{
+						Dval: data,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_FLOAT64,
+				Nullable: false,
+				Size:     8,
+			},
+		}
+	}
+
+	switch val := getVal.(type) {
+	case string:
+		expr = &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: val,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_VARCHAR,
+				Nullable: false,
+				Size:     4,
+				Width:    math.MaxInt32,
+			},
+		}
+	case int:
+		expr = getIntExpr(int64(val))
+	case uint8:
+		expr = getIntExpr(int64(val))
+	case uint16:
+		expr = getIntExpr(int64(val))
+	case uint32:
+		expr = getIntExpr(int64(val))
+	case int8:
+		expr = getIntExpr(int64(val))
+	case int16:
+		expr = getIntExpr(int64(val))
+	case int32:
+		expr = getIntExpr(int64(val))
+	case int64:
+		expr = getIntExpr(val)
+	case uint64:
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, "decimal var not support now")
+	case float32:
+		expr = getFloatExpr(float64(val))
+	case float64:
+		expr = getFloatExpr(val)
+	case bool:
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Bval{
+						Bval: val,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_BOOL,
+				Nullable: false,
+				Size:     1,
+			},
+		}, nil
+	case nil:
+		expr = &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: true,
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_ANY,
+				Nullable: true,
+			},
+		}
+	case types.Decimal64, types.Decimal128:
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, "decimal var not support now")
+	default:
+		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type of var %q is not support now", astExpr.Name))
+	}
 	return
 }
 
