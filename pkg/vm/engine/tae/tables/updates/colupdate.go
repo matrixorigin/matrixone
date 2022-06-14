@@ -110,9 +110,12 @@ func (node *ColumnNode) GetDLNode() *common.DLNode {
 	return node.DLNode
 }
 
+func (node *ColumnNode) SetMask(mask *roaring.Bitmap) { node.txnMask = mask }
+
 func (node *ColumnNode) GetMask() *roaring.Bitmap {
 	return node.txnMask
 }
+func (node *ColumnNode) SetValues(vals map[uint32]any) { node.txnVals = vals }
 func (node *ColumnNode) GetValues() map[uint32]any {
 	return node.txnVals
 }

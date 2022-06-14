@@ -146,6 +146,13 @@ func (entry *BlockEntry) AsCommonID() *common.ID {
 	}
 }
 
+func (entry *BlockEntry) InitData(factory DataFactory) {
+	if factory == nil {
+		return
+	}
+	dataFactory := factory.MakeBlockFactory(entry.segment.GetSegmentData().GetSegmentFile())
+	entry.blkData = dataFactory(entry)
+}
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
 func (entry *BlockEntry) GetFileTs() (uint64, error) {

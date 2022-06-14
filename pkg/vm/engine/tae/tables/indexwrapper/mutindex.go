@@ -84,6 +84,9 @@ func (idx *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
 	return
 }
 
+func (idx *mutableIndex) String() string {
+	return idx.art.String()
+}
 func (idx *mutableIndex) Dedup(any) error { panic("implement me") }
 func (idx *mutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)

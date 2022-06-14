@@ -126,7 +126,7 @@ func (catalog *Catalog) InitSystemDB() {
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 
-func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, datafactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
+func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
 	switch txncmd.GetType() {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
@@ -134,17 +134,17 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, datafactory DataFactory, 
 		for i, cmds := range cmds.Cmds {
 			idx := idxCtx.Clone()
 			idx.CSN = uint32(i)
-			catalog.ReplayCmd(cmds, datafactory, idx, observer, cache)
+			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache)
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayBlock(cmd, datafactory)
+		catalog.onReplayBlock(cmd, dataFactory)
 	case CmdLogSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplaySegment(cmd, datafactory, cache)
+		catalog.onReplaySegment(cmd, dataFactory, cache)
 	case CmdLogTable:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayTable(cmd, datafactory)
+		catalog.onReplayTable(cmd, dataFactory)
 	case CmdLogDatabase:
 		cmd := txncmd.(*EntryCommand)
 		catalog.onReplayDatabase(cmd)
@@ -153,13 +153,13 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, datafactory DataFactory, 
 		catalog.onReplayCreateDatabase(cmd, idxCtx, observer)
 	case CmdCreateTable:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayCreateTable(cmd, datafactory, idxCtx, observer)
+		catalog.onReplayCreateTable(cmd, dataFactory, idxCtx, observer)
 	case CmdCreateSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayCreateSegment(cmd, datafactory, idxCtx, observer, cache)
+		catalog.onReplayCreateSegment(cmd, dataFactory, idxCtx, observer, cache)
 	case CmdCreateBlock:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayCreateBlock(cmd, datafactory, idxCtx, observer)
+		catalog.onReplayCreateBlock(cmd, dataFactory, idxCtx, observer)
 	case CmdDropTable:
 		cmd := txncmd.(*EntryCommand)
 		catalog.onReplayDropTable(cmd, idxCtx, observer)
@@ -251,7 +251,7 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 	}
 }
 
-func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
 	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -268,7 +268,7 @@ func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, datafactory DataF
 		return
 	}
 	cmd.Table.db = db
-	cmd.Table.tableData = datafactory.MakeTableFactory()(cmd.Table)
+	cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
 	catalog.OnReplayTableID(cmd.Table.ID)
 	cmd.Table.LogIndex = idx
 	err = db.AddEntryLocked(cmd.Table)
@@ -305,7 +305,7 @@ func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, obs
 	}
 }
 
-func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory) {
+func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -313,7 +313,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 	cmd.Table.db = db
 	catalog.OnReplayTableID(cmd.Table.ID)
 	if cmd.Table.CurrOp == OpCreate {
-		cmd.Table.tableData = datafactory.MakeTableFactory()(cmd.Table)
+		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
 		err = db.AddEntryLocked(cmd.Table)
 	} else {
 		rel, _ := db.GetTableEntryByID(cmd.Table.ID)
@@ -331,7 +331,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, datafactory DataFactory
 	}
 }
 
-func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
+func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
 	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -356,7 +356,7 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, datafactory Dat
 	cmd.Segment.CurrOp = OpCreate
 	cmd.Segment.link = new(common.Link)
 	cmd.Segment.entries = make(map[uint64]*common.DLNode)
-	cmd.Segment.segData = datafactory.MakeSegmentFactory()(cmd.Segment)
+	cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
 	cmd.Segment.ReplayFile(cache)
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	tbl.AddEntryLocked(cmd.Segment)
@@ -395,7 +395,7 @@ func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, o
 	}
 }
 
-func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFactory, cache *bytes.Buffer) {
+func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFactory, cache *bytes.Buffer) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -407,9 +407,10 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 	cmd.Segment.table = rel
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	if cmd.Segment.CurrOp == OpCreate {
-		cmd.Segment.segData = datafactory.MakeSegmentFactory()(cmd.Segment)
+		cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
 		rel.AddEntryLocked(cmd.Segment)
-		cmd.Segment.ReplayFile(cache)
+		logutil.Infof("2222222222222 %s", cmd.Segment.String())
+		// cmd.Segment.ReplayFile(cache)
 	} else {
 		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
 		if seg != nil {
@@ -422,7 +423,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, datafactory DataFacto
 	}
 }
 
-func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
 	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -449,7 +450,7 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, datafactory DataF
 	cmd.Block.RWMutex = new(sync.RWMutex)
 	cmd.Block.CurrOp = OpCreate
 	cmd.Block.segment = seg
-	cmd.Block.blkData = datafactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
+	cmd.Block.blkData = dataFactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
 	ts := cmd.Block.blkData.GetMaxCheckpointTS()
 	if observer != nil {
 		observer.OnTimeStamp(ts)
@@ -496,7 +497,7 @@ func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, obs
 	}
 }
 
-func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory) {
+func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory) {
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -512,8 +513,6 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, datafactory DataFactory
 	cmd.Block.segment = seg
 	catalog.OnReplayBlockID(cmd.Block.ID)
 	if cmd.Block.CurrOp == OpCreate {
-		cmd.Block.blkData = datafactory.MakeBlockFactory(seg.segData.GetSegmentFile())(cmd.Block)
-		// cmd.Block.blkData.ReplayData()
 		seg.AddEntryLocked(cmd.Block)
 	} else {
 		blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)

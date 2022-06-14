@@ -41,7 +41,7 @@ type blockFile struct {
 }
 
 func (bf *blockFile) GetDeletesFileStat() common.FileInfo {
-	panic("implement me")
+	panic(any("implement me"))
 }
 
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
@@ -285,4 +285,9 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 		}
 	}
 	return
+}
+
+func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) { panic("implement me") }
+func (bf *blockFile) LoadUpdates() (map[uint16]*roaring.Bitmap, map[uint16]map[uint32]any) {
+	panic("implement me")
 }

@@ -29,6 +29,7 @@ const (
 	BitXor
 	BitOr
 	StdDevPop
+	AnyValue
 )
 
 var Names = [...]string{
@@ -44,6 +45,7 @@ var Names = [...]string{
 	BitXor:              "bit_xor",
 	BitOr:               "bit_or",
 	StdDevPop:           "stddev_pop",
+	AnyValue:            "any",
 }
 
 type Aggregate struct {

@@ -21,100 +21,43 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/acos"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
-func AcosUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultElementSize := int(resultType.Size)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	origVec := vs[0]
+	//Here we need to classfy it into three scenes
+	//1. if it is a constant
+	//	1.1 if it's not a null value
+	//  1.2 if it's a null value
+	//2 common scene
+	if origVec.IsScalar() {
+		if origVec.IsScalarNull() {
+			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
+		} else {
+			origVecCol := origVec.Col.([]T)
+			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
+			resultValues := make([]float64, 1)
+			// nulls.Set(resultVector.Nsp, origVec.Nsp)
+			results := acos.Acos[T](origVecCol, resultValues)
+			if nulls.Any(results.Nsp) {
+				return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
+			}
+			vector.SetCol(resultVector, results.Result)
+			return resultVector, nil
 		}
-		inputValues := inputVector.Col.([]uint64)
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]float64, 1)
-		results := acos.AcosUint64(inputValues, resultValues)
-		if nulls.Any(results.Nsp) {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		vector.SetCol(resultVector, results.Result)
-		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]uint64)
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		origVecCol := origVec.Col.([]T)
+		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		results := acos.AcosUint64(inputValues, resultValues)
-		nulls.Or(inputVector.Nsp, results.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, results.Result)
-		return resultVector, nil
-	}
-}
-
-func AcosInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultElementSize := int(resultType.Size)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		inputValues := inputVector.Col.([]int64)
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]float64, 1)
-		results := acos.AcosInt64(inputValues, resultValues)
-		if nulls.Any(results.Nsp) {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		vector.SetCol(resultVector, results.Result)
-		return resultVector, nil
-	} else {
-		inputValues := inputVector.Col.([]int64)
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		results := acos.AcosInt64(inputValues, resultValues)
-		nulls.Or(inputVector.Nsp, results.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, results.Result)
-		return resultVector, nil
-	}
-}
-
-func AcosFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultElementSize := int(resultType.Size)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		inputValues := inputVector.Col.([]float64)
-		resultVector := vector.NewConst(resultType)
-		resultValues := make([]float64, 1)
-		results := acos.AcosFloat64(inputValues, resultValues)
-		if nulls.Any(results.Nsp) {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		vector.SetCol(resultVector, results.Result)
-		return resultVector, nil
-	} else {
-		inputValues := inputVector.Col.([]float64)
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		results := acos.AcosFloat64(inputValues, resultValues)
-		nulls.Or(inputVector.Nsp, results.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, results.Result)
+		results := encoding.DecodeFloat64Slice(resultVector.Data)
+		results = results[:len(origVecCol)]
+		resultVector.Col = results
+		res := acos.Acos[T](origVecCol, results)
+		nulls.Set(resultVector.Nsp, origVec.Nsp.Or(res.Nsp))
+		vector.SetCol(resultVector, res.Result)
 		return resultVector, nil
 	}
 }

@@ -73,6 +73,10 @@ func (e *testEngine) compactBlocks(skipConflict bool) {
 	compactBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
+func (e *testEngine) mergeBlocks(skipConflict bool) {
+	mergeBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+}
+
 func initDB(t *testing.T, opts *options.Options) *DB {
 	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)

@@ -142,6 +142,10 @@ func (r *relation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapsho
 	panic(any("implement me"))
 }
 
+func (r *relation) Update(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+	panic(any("implement me"))
+}
+
 func (r *relation) CreateIndex(_ uint64, _ []engine.TableDef) error {
 	return nil
 }
