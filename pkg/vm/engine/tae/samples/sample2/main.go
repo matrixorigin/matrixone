@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/panjf2000/ants/v2"
 )
@@ -42,41 +42,42 @@ func init() {
 
 func startProfile() {
 	f, _ := os.Create(cpuprofile)
-	pprof.StartCPUProfile(f)
+	if err := pprof.StartCPUProfile(f); err != nil {
+		panic(err)
+	}
 }
 
 func stopProfile() {
 	pprof.StopCPUProfile()
 	memf, _ := os.Create(memprofile)
 	defer memf.Close()
-	pprof.Lookup("heap").WriteTo(memf, 0)
+	_ = pprof.Lookup("heap").WriteTo(memf, 0)
 }
 
 func main() {
 	tae, _ := db.Open(sampleDir, nil)
 	defer tae.Close()
 
-	schema := catalog.MockSchemaAll(10)
+	schema := catalog.MockSchemaAll(10, 3)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
-	schema.PrimaryKey = 3
-	batchCnt := uint64(10)
-	batchRows := uint64(schema.BlockMaxRows) * 1 / 2 * batchCnt
+	batchCnt := uint32(10)
+	batchRows := schema.BlockMaxRows * 1 / 2 * batchCnt
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
-		db.CreateRelation(schema)
+		_, _ = db.CreateRelation(schema)
 		if err := txn.Commit(); err != nil {
 			panic(err)
 		}
 	}
-	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	bat := catalog.MockData(schema, batchRows)
 	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {
 		return func() {
 			defer wg.Done()
-			txn := tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			db, err := txn.GetDatabase(dbName)
 			if err != nil {
 				panic(err)
@@ -98,14 +99,14 @@ func main() {
 	startProfile()
 	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend(b))
+		_ = p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	stopProfile()
 	logutil.Infof("Append takes: %s", time.Since(now))
 
 	{
-		txn := tae.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		db, err := txn.GetDatabase(dbName)
 		if err != nil {
 			panic(err)
@@ -127,7 +128,7 @@ func main() {
 				compressed.Reset()
 				decompressed.Reset()
 				view, err := blk.GetColumnDataById(0, &compressed, &decompressed)
-				logutil.Infof("Block %s Rows %d", blk.Fingerprint().ToBlockFileName(), vector.Length(view.AppliedVec))
+				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), vector.Length(view.AppliedVec))
 				if err != nil {
 					panic(err)
 				}

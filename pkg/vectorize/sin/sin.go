@@ -14,7 +14,10 @@
 
 package sin
 
-import "math"
+import (
+	"golang.org/x/exp/constraints"
+	"math"
+)
 
 var (
 	SinUint8   func([]uint8, []float64) []float64
@@ -110,4 +113,11 @@ func sinInt64(xs []int64, rs []float64) []float64 {
 		rs[i] = math.Sin(float64(n))
 	}
 	return rs
+}
+
+func Sin[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) []float64 {
+	for i, n := range inputValues {
+		resultValues[i] = math.Sin(float64(n))
+	}
+	return resultValues
 }

@@ -16,7 +16,7 @@ package order
 
 import (
 	"bytes"
-	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/partition"
@@ -34,7 +34,7 @@ func String(arg interface{}, buf *bytes.Buffer) {
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("])"))
+	buf.WriteString("])")
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {
@@ -79,7 +79,9 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	if len(ctr.attrs) == 1 {
 		bat.Sels = sels
 		bat.SelsData = data
-		batch.Shuffle(bat, proc.Mp)
+		if err := batch.Shuffle(bat, proc.Mp); err != nil {
+			panic(err)
+		}
 		return false, nil
 	}
 	ps := make([]int64, 0, 16)
@@ -99,6 +101,8 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	}
 	bat.Sels = sels
 	bat.SelsData = data
-	batch.Shuffle(bat, proc.Mp)
+	if err := batch.Shuffle(bat, proc.Mp); err != nil {
+		panic(err)
+	}
 	return false, nil
 }

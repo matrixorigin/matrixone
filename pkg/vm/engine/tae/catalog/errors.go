@@ -17,11 +17,12 @@ package catalog
 import "errors"
 
 var (
-	ErrNotFound   = errors.New("tae catalog: not found")
-	ErrDuplicate  = errors.New("tae catalog: duplicate")
-	ErrCheckpoint = errors.New("tae catalog: checkpoint")
+	ErrNotFound     = errors.New("tae catalog: not found")
+	ErrDuplicate    = errors.New("tae catalog: duplicate")
+	ErrCheckpoint   = errors.New("tae catalog: checkpoint")
+	ErrNotPermitted = errors.New("tae catalog: operation not permitted")
 
-	ErrValidation = errors.New("tae catalog: validataion")
+	ErrSchemaValidation = errors.New("tae catalog: schema validation")
 
 	ErrStopCurrRecur = errors.New("tae catalog: stop current recursion")
 )

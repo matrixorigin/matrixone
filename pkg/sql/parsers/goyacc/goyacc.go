@@ -734,7 +734,10 @@ outer:
 	}
 
 	// put out names of tokens
-	ftable.WriteRune('\n')
+	_, err := ftable.WriteRune('\n')
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "var %sToknames = [...]string{\n", prefix)
 	for i := 1; i <= ntokens; i++ {
 		fmt.Fprintf(ftable, "\t%q,\n", tokset[i].name)
@@ -744,14 +747,20 @@ outer:
 	// put out names of states.
 	// commented out to avoid a huge table just for debugging.
 	// re-enable to have the names in the binary.
-	ftable.WriteRune('\n')
+	_, err = ftable.WriteRune('\n')
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "var %sStatenames = [...]string{\n", prefix)
 	//	for i:=TOKSTART; i<=ntokens; i++ {
 	//		fmt.Fprintf(ftable, "\t%q,\n", tokset[i].name);
 	//	}
 	fmt.Fprintf(ftable, "}\n")
 
-	ftable.WriteRune('\n')
+	_, err = ftable.WriteRune('\n')
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "const %sEofCode = 1\n", prefix)
 	fmt.Fprintf(ftable, "const %sErrCode = 2\n", prefix)
 	fmt.Fprintf(ftable, "const %sInitialStackSize = %v\n", prefix, initialstacksize)
@@ -768,7 +777,10 @@ outer:
 			if c == EOF {
 				break
 			}
-			ftable.WriteRune(c)
+			_, err := ftable.WriteRune(c)
+			if err != nil {
+				panic("ftable write rune failed")
+			}
 		}
 	}
 }
@@ -1103,7 +1115,10 @@ func typeinfo() {
 			break
 		}
 	}
-	ftable.Write(ftypes.Bytes())
+	_, err := ftable.Write(ftypes.Bytes())
+	if err != nil {
+		panic("ftable write failed")
+	}
 	fmt.Fprintf(ftable, "\n\tyys int")
 	fmt.Fprintf(ftable, "\n}\n\n")
 
@@ -1320,7 +1335,10 @@ func lines(code []rune) [][]rune {
 //
 func writecode(code []rune) {
 	for _, r := range code {
-		ftable.WriteRune(r)
+		_, err := ftable.WriteRune(r)
+		if err != nil {
+			panic("ftable write rune failed")
+		}
 	}
 }
 
@@ -2413,7 +2431,10 @@ func output() {
 	}
 
 	fmt.Fprintf(ftable, "}\n")
-	ftable.WriteRune('\n')
+	_, err := ftable.WriteRune('\n')
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "const %sPrivate = %v\n", prefix, PRIVATE)
 }
 
@@ -2846,7 +2867,10 @@ func callopt() {
 			for i = 0; i < 10; i++ {
 				fmt.Fprintf(ftable, "%v  ", amem[p+i])
 			}
-			ftable.WriteRune('\n')
+			_, err := ftable.WriteRune('\n')
+			if err != nil {
+				panic("ftable write rune failed")
+			}
 		}
 	}
 
@@ -2998,7 +3022,10 @@ nextn:
 // write out the optimized parser
 //
 func aoutput() {
-	ftable.WriteRune('\n')
+	_, err := ftable.WriteRune('\n')
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "const %sLast = %v\n", prefix, maxa+1)
 	arout("Act", amem, maxa+1)
 	arout("Pact", indgo, nstate)
@@ -3081,7 +3108,10 @@ func others() {
 	arout("Tok2", temp1, c+1)
 
 	// table 3 has everything else
-	ftable.WriteRune('\n')
+	_, err := ftable.WriteRune('\n')
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "var %sTok3 = [...]int{\n\t", prefix)
 	c = 0
 	for i = 1; i <= ntokens; i++ {
@@ -3094,7 +3124,10 @@ func others() {
 		}
 
 		if c%5 != 0 {
-			ftable.WriteRune(' ')
+			_, err := ftable.WriteRune(' ')
+			if err != nil {
+				panic("ftable write rune failed")
+			}
 		}
 		fmt.Fprintf(ftable, "%d, %d,", j, i)
 		c++
@@ -3103,7 +3136,10 @@ func others() {
 		}
 	}
 	if c%5 != 0 {
-		ftable.WriteRune(' ')
+		_, err := ftable.WriteRune(' ')
+		if err != nil {
+			panic("ftable write rune failed")
+		}
 	}
 	fmt.Fprintf(ftable, "%d,\n}\n", 0)
 
@@ -3124,7 +3160,10 @@ func others() {
 	// copy parser text
 	ch := getrune(finput)
 	for ch != EOF {
-		ftable.WriteRune(ch)
+		_, err := ftable.WriteRune(ch)
+		if err != nil {
+			panic("ftable write rune failed")
+		}
 		ch = getrune(finput)
 	}
 
@@ -3135,7 +3174,10 @@ func others() {
 
 	parts := strings.SplitN(yaccpar, prefix+"run()", 2)
 	fmt.Fprintf(ftable, "%v", parts[0])
-	ftable.Write(fcode.Bytes())
+	_, err = ftable.Write(fcode.Bytes())
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "%v", parts[1])
 }
 
@@ -3194,13 +3236,19 @@ Loop:
 
 func arout(s string, v []int, n int) {
 	s = prefix + s
-	ftable.WriteRune('\n')
+	_, err := ftable.WriteRune('\n')
+	if err != nil {
+		panic("ftable write rune failed")
+	}
 	fmt.Fprintf(ftable, "var %v = [...]int{", s)
 	for i := 0; i < n; i++ {
 		if i%10 == 0 {
 			fmt.Fprintf(ftable, "\n\t")
 		} else {
-			ftable.WriteRune(' ')
+			_, err := ftable.WriteRune(' ')
+			if err != nil {
+				panic("ftable write rune failed")
+			}
 		}
 		fmt.Fprintf(ftable, "%d,", v[i])
 	}
@@ -3441,7 +3489,10 @@ func gofmt() {
 	if err != nil {
 		return
 	}
-	ioutil.WriteFile(oflag, src, 0666)
+	err = ioutil.WriteFile(oflag, src, 0666)
+	if err != nil {
+		panic("ioutil write file failed")
+	}
 }
 
 func gofmtForConsts() {
@@ -3454,7 +3505,10 @@ func gofmtForConsts() {
 	if err != nil {
 		return
 	}
-	ioutil.WriteFile(filename, src, 0666)
+	err = ioutil.WriteFile(filename, src, 0666)
+	if err != nil {
+		panic("ioutil write file failed")
+	}
 }
 
 var yaccpar string // will be processed version of yaccpartext: s/$$/prefix/g

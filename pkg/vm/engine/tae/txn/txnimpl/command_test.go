@@ -20,7 +20,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
@@ -82,9 +82,9 @@ func TestComposedCmd(t *testing.T) {
 	}
 	batCnt := 5
 
-	schema := catalog.MockSchema(4)
+	schema := catalog.MockSchema(4, 0)
 	for i := 0; i < batCnt; i++ {
-		data := compute.MockBatch(schema.Types(), (uint64(i)+1)*5, int(schema.PrimaryKey), nil)
+		data := catalog.MockData(schema, uint32((i+1)*5))
 		bat, err := compute.CopyToIBatch(data, uint64(txnbase.MaxNodeRows))
 		assert.Nil(t, err)
 		batCmd := txnbase.NewBatchCmd(bat, schema.Types())
@@ -139,34 +139,15 @@ func TestComposedCmd(t *testing.T) {
 	}
 }
 
-func TestAppendCmd(t *testing.T) {
-	infos := make([]*appendInfo, 0)
-	infos = append(infos, mockAppendInfo())
-	node := mockInsertNodeWithAppendInfo(infos)
-	cmd, _, err := node.MakeCommand(0, true)
-	assert.Nil(t, err)
-
-	var w bytes.Buffer
-	_, err = cmd.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-
-	cmd2, _, err := txnbase.BuildCommandFrom(r)
-	assert.Nil(t, err)
-	checkAppendCmdIsEqual(t, cmd.(*AppendCmd), cmd2.(*AppendCmd))
-}
-
 func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *AppendCmd) {
 	assert.Equal(t, cmd1.ID, cmd2.ID)
 	assert.Equal(t, len(cmd1.Cmds), len(cmd2.Cmds))
 	for i, subcmd1 := range cmd1.Cmds {
 		assert.Equal(t, subcmd1.GetType(), cmd2.Cmds[i].GetType())
 	}
-	assert.Equal(t, len(cmd1.infos), len(cmd2.infos))
-	for i, info1 := range cmd1.infos {
-		checkAppendInfoIsEqual(t, info1, cmd2.infos[i])
+	assert.Equal(t, len(cmd1.Infos), len(cmd2.Infos))
+	for i, info1 := range cmd1.Infos {
+		checkAppendInfoIsEqual(t, info1, cmd2.Infos[i])
 	}
 }
 

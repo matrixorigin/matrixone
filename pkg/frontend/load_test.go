@@ -112,11 +112,41 @@ func Test_load(t *testing.T) {
 				Attr: engine.Attribute{
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal64,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 10,
+					},
+					Name: "o"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal128,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 20,
+					},
+					Name: "p"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_timestamp,
+						Size:      0,
+						Width:     0,
+						Scale:     0,
+						Precision: 6,
+					},
+					Name: "r"}},
 		}
-		rel.EXPECT().TableDefs().Return(tableDefs).AnyTimes()
+		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
-		rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(a, b interface{}) error {
+		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).DoAndReturn(
+			func(a, b, c interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return nil
@@ -127,8 +157,8 @@ func Test_load(t *testing.T) {
 				return fmt.Errorf("fake error")
 			},
 		).AnyTimes()
-		db.EXPECT().Relation(gomock.Any()).Return(rel, nil).AnyTimes()
-		eng.EXPECT().Database(gomock.Any()).Return(db, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), nil).Return(rel, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(db, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -147,18 +177,16 @@ func Test_load(t *testing.T) {
 				"ignore " +
 				"INTO TABLE T.A " +
 				"FIELDS TERMINATED BY ',' " +
-				"(c,d,e,f)",
+				"(@s,@t,c,d,e,f)",
 		}
 
 		for i := 0; i < len(self_handle_sql); i++ {
 			select_2 := mock_frontend.NewMockComputationWrapper(ctrl)
 			stmts, err := parsers.Parse(dialect.MYSQL, self_handle_sql[i])
-			if err != nil {
-				t.Error(err)
-			}
+			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
-			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			select_2.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 
 			cws = append(cws, select_2)
@@ -171,9 +199,7 @@ func Test_load(t *testing.T) {
 		defer stubs2.Reset()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
-		if err != nil {
-			t.Error(err)
-		}
+		convey.So(err, convey.ShouldBeNil)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -181,7 +207,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -262,11 +288,41 @@ func Test_load(t *testing.T) {
 				Attr: engine.Attribute{
 					Type: types.Type{Oid: types.T_datetime},
 					Name: "n"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal64,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 10,
+					},
+					Name: "o"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_decimal128,
+						Size:      0,
+						Width:     0,
+						Scale:     2,
+						Precision: 20,
+					},
+					Name: "p"}},
+			&engine.AttributeDef{
+				Attr: engine.Attribute{
+					Type: types.Type{
+						Oid:       types.T_timestamp,
+						Size:      0,
+						Width:     0,
+						Scale:     0,
+						Precision: 6,
+					},
+					Name: "r"}},
 		}
-		rel.EXPECT().TableDefs().Return(tableDefs).AnyTimes()
+		rel.EXPECT().TableDefs(nil).Return(tableDefs).AnyTimes()
 		cnt := 0
-		rel.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(a, b interface{}) error {
+		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).DoAndReturn(
+			func(a, b, c interface{}) error {
 				cnt++
 				if cnt == 1 {
 					return fmt.Errorf("fake error")
@@ -277,8 +333,8 @@ func Test_load(t *testing.T) {
 				return nil
 			},
 		).AnyTimes()
-		db.EXPECT().Relation(gomock.Any()).Return(rel, nil).AnyTimes()
-		eng.EXPECT().Database(gomock.Any()).Return(db, nil).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), nil).Return(rel, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), nil).Return(db, nil).AnyTimes()
 
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
@@ -327,9 +383,7 @@ func Test_load(t *testing.T) {
 
 		for i := 0; i < len(kases); i++ {
 			stmts, err := parsers.Parse(dialect.MYSQL, kases[i].sql)
-			if err != nil {
-				t.Error(err)
-			}
+			convey.So(err, convey.ShouldBeNil)
 			cws = append(cws, stmts[0].(*tree.Load))
 		}
 
@@ -337,9 +391,7 @@ func Test_load(t *testing.T) {
 		defer stubs2.Reset()
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng)
-		if err != nil {
-			t.Error(err)
-		}
+		convey.So(err, convey.ShouldBeNil)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -347,7 +399,7 @@ func Test_load(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu)
 
-		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu)
+		ses := NewSession(proto, epochgc, guestMmu, pu.Mempool, pu, gSysVariables)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -358,11 +410,18 @@ func Test_load(t *testing.T) {
 			if i == 3 {
 				row2col = gostub.Stub(&row2colChoose, false)
 			}
-			_, err := mce.LoadLoop(cws[i], db, rel)
+			_, err = ses.txnHandler.StartByAutocommitIfNeeded()
+			convey.So(err, convey.ShouldBeNil)
+
+			_, err := mce.LoadLoop(cws[i], db, rel, "T")
 			if kases[i].fail {
 				convey.So(err, convey.ShouldBeError)
+				//err = ses.txnHandler.RollbackAfterAutocommitOnly()
+				//convey.So(err, convey.ShouldBeNil)
 			} else {
 				convey.So(err, convey.ShouldBeNil)
+				//err = ses.txnHandler.CommitAfterAutocommitOnly()
+				//convey.So(err, convey.ShouldBeNil)
 			}
 
 			if i == 3 {
@@ -412,7 +471,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		rel := mock_frontend.NewMockRelation(ctrl)
-		rel.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		rel.EXPECT().Write(gomock.Any(), gomock.Any(), nil).Return(nil).AnyTimes()
 
 		var curBatchSize int = 13
 		handler := &WriteBatchHandler{

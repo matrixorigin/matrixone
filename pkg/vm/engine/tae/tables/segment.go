@@ -34,8 +34,11 @@ type dataSegment struct {
 	scheduler tasks.TaskScheduler
 }
 
-func newSegment(meta *catalog.SegmentEntry, factory file.SegmentFileFactory, bufMgr base.INodeManager) *dataSegment {
-	segFile := factory("xxx", meta.GetID())
+func newSegment(meta *catalog.SegmentEntry,
+	factory file.SegmentFactory,
+	bufMgr base.INodeManager,
+	dir string) *dataSegment {
+	segFile := factory.Build(dir, meta.GetID())
 	seg := &dataSegment{
 		meta:      meta,
 		file:      segFile,

@@ -20,34 +20,70 @@ import (
 )
 
 type TableDef = plan.TableDef
+type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
+type ColRef = plan.ColRef
 type Cost = plan.Cost
 type Const = plan.Const
 type Expr = plan.Expr
 type Node = plan.Node
 type RowsetData = plan.RowsetData
 type Query = plan.Query
+type Plan = plan.Plan
+type Type = plan.Type
 
 type CompilerContext interface {
-	Resolve(name string) (*ObjectRef, *TableDef)
-	Cost(obj *ObjectRef, e *Expr) *Cost //change Cost to *Cost to fixed "return copies lock value" warning in new proto code generated
+	// Default database/schema in context
+	DefaultDatabase() string
+	// check if database exist
+	DatabaseExists(name string) bool
+	// get table definition by database/schema
+	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get the value of variable
+	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	// get the definition of primary key
+	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
+	// get the definition of hide key
+	GetHideKeyDef(dbName string, tableName string) *ColDef
+	// get estimated cost by table & expr
+	Cost(obj *ObjectRef, e *Expr) *Cost
 }
 
 type Optimizer interface {
-	Optimize(stmt tree.Statement) (*Query, error) //todo confirm interface change
+	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
 }
 
+type Rule interface {
+	Match(*Node) bool    // rule match?
+	Apply(*Node, *Query) // apply the rule
+}
+
+// BaseOptimizer is base optimizer, capable of handling only a few simple rules
+type BaseOptimizer struct {
+	qry   *Query
+	rules []Rule
+	ctx   CompilerContext
+}
+
 //use for build select
-type SelectContext struct {
-	//when build_projection we may set columnAlias and then use in build_orderby
+type BinderContext struct {
+	// when build_projection we may set columnAlias and then use in build_orderby
 	columnAlias map[string]*Expr
-	//when build_cte will set cteTables and use in build_from
+	// when build_cte will set cteTables and use in build_from
 	cteTables map[string]*TableDef
 
-	//use for build subquery
-	subQueryIsCorrelated bool
-	subQueryIsScalar     bool
+	// use for build subquery
+	subqueryIsCorrelated bool
+	// unused, commented out for now.
+	// subqueryIsScalar     bool
 
-	subQueryParentId []int32
+	subqueryParentIds []int32
+
+	// use to storage the using columns.
+	// select R.*, S.* from R, S using(a) where S.a > 10
+	// then we store {'a':'S'},
+	// when we use buildUnresolvedName(), and the colName = 'a' and tableName = 'S', we reset tableName=''
+	// because the ProjectNode(after JoinNode) had coalesced the using cols
+	usingCols map[string]string
 }

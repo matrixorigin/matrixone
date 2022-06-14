@@ -21,7 +21,7 @@ type Database interface {
 
 	GetID() uint64
 	GetName() string
-	CreateRelation(def interface{}) (Relation, error)
+	CreateRelation(def any) (Relation, error)
 	DropRelationByName(name string) (Relation, error)
 
 	GetRelationByName(name string) (Relation, error)
@@ -30,5 +30,5 @@ type Database interface {
 
 	MakeRelationIt() RelationIt
 	String() string
-	GetMeta() interface{}
+	GetMeta() any
 }

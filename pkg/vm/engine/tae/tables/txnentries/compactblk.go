@@ -17,9 +17,10 @@ package txnentries
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -49,13 +50,25 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 }
 func (entry *compactBlockEntry) ApplyRollback() (err error) { return }
 func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
-	entry.scheduler.Checkpoint([]*wal.Index{index})
-	entry.PostCommit()
-	return
+	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
+		// TODO:
+		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
+		// We'll ensure the schduler can only be stopped after txn manager being stopped.
+		logutil.Warnf("Schedule checkpoint task failed: %v", err)
+		err = nil
+	}
+	return entry.PostCommit()
 }
-func (entry *compactBlockEntry) PostCommit() {
+func (entry *compactBlockEntry) PostCommit() (err error) {
 	meta := entry.from.GetMeta().(*catalog.BlockEntry)
-	entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+	if _, err = entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS())); err != nil {
+		// TODO:
+		// Right now scheduler may be stopped before ApplyCommit and then it returns schedule error here.
+		// We'll ensure the schduler can only be stopped after txn manager being stopped.
+		logutil.Warnf("Schedule checkpoint task failed: %v", err)
+		err = nil
+	}
+	return
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()), (*common.ID)(entry.to.Fingerprint()))
@@ -64,8 +77,8 @@ func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err e
 
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	view := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
-	if view == nil {
+	view, err := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
+	if view == nil || err != nil {
 		return
 	}
 	deletes := view.DeleteMask

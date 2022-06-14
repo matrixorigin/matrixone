@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -45,17 +46,30 @@ func (task *ScheduledTxnTask) Scope() *common.ID {
 }
 
 func (task *ScheduledTxnTask) Execute() (err error) {
-	txn := task.db.StartTxn(nil)
+	txn, err := task.db.StartTxn(nil)
+	if err != nil {
+		return
+	}
 	txnTask, err := task.factory(nil, txn)
 	if err != nil {
-		txn.Rollback()
+		err2 := txn.Rollback()
+		if err2 != nil {
+			panic(err2)
+		}
+		logutil.Warnf("Execute ScheduleTxnTask: %v. Rollbacked", err)
 		return
 	}
 	err = txnTask.OnExec()
 	if err != nil {
-		txn.Rollback()
+		err2 := txn.Rollback()
+		if err2 != nil {
+			panic(err)
+		}
 	} else {
-		txn.Commit()
+		err = txn.Commit()
+		if err != nil {
+			return
+		}
 		err = txn.GetError()
 	}
 	return

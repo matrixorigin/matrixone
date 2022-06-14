@@ -14,17 +14,22 @@
 
 package year
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 // vectorize year and toYear function
 var (
-	DateToYear     func([]types.Date, []uint16) []uint16
-	DatetimeToYear func([]types.Datetime, []uint16) []uint16
+	DateToYear       func([]types.Date, []uint16) []uint16
+	DatetimeToYear   func([]types.Datetime, []uint16) []uint16
+	DateStringToYear func(*types.Bytes, *nulls.Nulls, []uint16) []uint16
 )
 
 func init() {
 	DateToYear = dateToYear
 	DatetimeToYear = datetimeToYear
+	DateStringToYear = dateStringToYear
 }
 
 func dateToYear(xs []types.Date, rs []uint16) []uint16 {
@@ -37,6 +42,21 @@ func dateToYear(xs []types.Date, rs []uint16) []uint16 {
 func datetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
 	for i, x := range xs {
 		rs[i] = x.Year()
+	}
+	return rs
+}
+
+func dateStringToYear(xs *types.Bytes, ns *nulls.Nulls, rs []uint16) []uint16 {
+	for i := range xs.Lengths {
+		str := string(xs.Get(int64(i)))
+		d, e := types.ParseDatetime(str)
+		if e != nil {
+			// set null
+			nulls.Add(ns, uint64(i))
+			rs[i] = 0
+			continue
+		}
+		rs[i] = d.Year()
 	}
 	return rs
 }

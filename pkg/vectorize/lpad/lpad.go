@@ -14,13 +14,17 @@
 
 package lpad
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 var (
-	LpadVarchar func(*types.Bytes, []int64, *types.Bytes) *types.Bytes
+	Lpad        func(res *types.Bytes, src *types.Bytes, length uint32, pad *types.Bytes) *types.Bytes
+	LpadVarchar func(a *types.Bytes, b []int64, c *types.Bytes) *types.Bytes
 )
 
 func init() {
+	Lpad = lpadPure
 	LpadVarchar = lpadVarcharPure
 }
 
@@ -49,4 +53,83 @@ func lpadVarcharPure(a *types.Bytes, b []int64, c *types.Bytes) *types.Bytes {
 		}
 	}
 	return res
+}
+
+func lpadPure(res *types.Bytes, src *types.Bytes, length uint32, pad *types.Bytes) *types.Bytes {
+	var retCursor uint32 = 0
+	padLengh := pad.Lengths[0]
+	padOffset := pad.Offsets[0]
+	padBytes := pad.Data[padOffset:padLengh]
+	for idx, offset := range src.Offsets {
+		cursor := offset
+		curLen := src.Lengths[idx]
+		bytes := src.Data[cursor : cursor+curLen]
+
+		if length <= src.Lengths[idx] {
+			slice, size := getSliceFromLeft(bytes, length)
+			for _, b := range slice {
+				res.Data[retCursor] = b
+				retCursor++
+			}
+			if idx != 0 {
+				res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
+			} else {
+				res.Offsets[idx] = uint32(0)
+			}
+			res.Lengths[idx] = uint32(size)
+		} else {
+			diff := length - curLen
+			if diff <= padLengh {
+				leftpad, size := getSliceFromLeft(padBytes, diff)
+				for _, b := range leftpad {
+					res.Data[retCursor] = b
+					retCursor++
+				}
+				for _, b := range bytes {
+					res.Data[retCursor] = b
+					retCursor++
+				}
+				if idx != 0 {
+					res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
+				} else {
+					res.Offsets[idx] = uint32(0)
+				}
+				res.Lengths[idx] = uint32(size) + curLen
+			} else {
+				frequency := diff / padLengh
+				remainder := diff % padLengh
+
+				for i := uint32(0); i < frequency; i++ {
+					for j := uint32(0); j < padLengh; j++ {
+						res.Data[retCursor] = padBytes[j]
+						retCursor++
+					}
+				}
+				for k := uint32(0); k < remainder; k++ {
+					res.Data[retCursor] = padBytes[k]
+					retCursor++
+				}
+				for _, b := range bytes {
+					res.Data[retCursor] = b
+					retCursor++
+				}
+				if idx != 0 {
+					res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
+				} else {
+					res.Offsets[idx] = uint32(0)
+				}
+				res.Lengths[idx] = uint32(length)
+			}
+		}
+	}
+	return res
+}
+
+//Slice from left to right, starting from 0
+func getSliceFromLeft(bytes []byte, length uint32) ([]byte, uint32) {
+	elemsize := uint32(len(bytes))
+	if length > elemsize {
+		return bytes, elemsize
+	}
+	return bytes[0:length], length
 }

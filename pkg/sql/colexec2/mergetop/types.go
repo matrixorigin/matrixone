@@ -15,9 +15,9 @@
 package mergetop
 
 import (
-	compare "github.com/matrixorigin/matrixone/pkg/compare2"
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
-	top "github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/top"
 )
 
 const (
@@ -27,8 +27,8 @@ const (
 )
 
 type Container struct {
+	n     int // result vector number
 	state int
-	n     int // number of attributes involved in sorting
 	sels  []int64
 	poses []int32           // sorted list of attributes
 	cmps  []compare.Compare // compare structure used to do sort work
@@ -43,8 +43,8 @@ type Argument struct {
 }
 
 func (ctr *Container) compare(vi, vj int, i, j int64) int {
-	for k := 0; k < ctr.n; k++ {
-		if r := ctr.cmps[k].Compare(vi, vj, i, j); r != 0 {
+	for _, pos := range ctr.poses {
+		if r := ctr.cmps[pos].Compare(vi, vj, i, j); r != 0 {
 			return r
 		}
 	}

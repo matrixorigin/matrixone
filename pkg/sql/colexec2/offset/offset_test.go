@@ -19,14 +19,14 @@ import (
 	"strconv"
 	"testing"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,16 +101,23 @@ func TestOffset(t *testing.T) {
 		Prepare(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		Call(tc.proc, tc.arg)
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+		}
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		Call(tc.proc, tc.arg)
+		if tc.proc.Reg.InputBatch != nil {
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+		}
 		tc.proc.Reg.InputBatch = &batch.Batch{}
 		Call(tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		Call(tc.proc, tc.arg)
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
 	}
 }
 
-func BenchmarkLimit(b *testing.B) {
+func BenchmarkOffset(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		hm := host.New(1 << 30)
 		gm := guest.New(1<<30, hm)
@@ -132,6 +139,9 @@ func BenchmarkLimit(b *testing.B) {
 			Prepare(tc.proc, tc.arg)
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
 			Call(tc.proc, tc.arg)
+			if tc.proc.Reg.InputBatch != nil {
+				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+			}
 			tc.proc.Reg.InputBatch = &batch.Batch{}
 			Call(tc.proc, tc.arg)
 			tc.proc.Reg.InputBatch = nil
@@ -142,7 +152,7 @@ func BenchmarkLimit(b *testing.B) {
 
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	bat := batch.New(len(ts))
+	bat := batch.NewWithSize(len(ts))
 	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])

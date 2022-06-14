@@ -138,8 +138,7 @@ MatrixOne的架构图如下图所示：
   <img alt="MatrixOne" height="500" width="700" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png?raw=true">
 </p>
 
-关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.3.0/MatrixOne/Overview/matrixone-architecture/)与[MatrixOne技术设计](https://docs.matrixorigin.cn/0.3.0/MatrixOne/Overview/MatrixOne-Tech-Design/matrixone-techdesign/)
-
+关于更详细的MatrixOne技术架构，可以参考[MatrixOne架构](https://docs.matrixorigin.io/cn/0.3.0/MatrixOne/Overview/matrixone-architecture/)与[MatrixOne技术设计](https://docs.matrixorigin.io/cn/0.3.0/MatrixOne/Overview/MatrixOne-Tech-Design/matrixone-techdesign/)
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 

@@ -98,7 +98,7 @@ func (v *VectorWrapper) Clean(p *process.Process) {
 	panic("readonly")
 }
 
-func (v *VectorWrapper) SetCol(col interface{}) {
+func (v *VectorWrapper) SetCol(col any) {
 	panic("readonly")
 }
 
@@ -111,7 +111,7 @@ func (v *VectorWrapper) FreeMemory() {
 	}
 }
 
-func (v *VectorWrapper) Append(n int, vals interface{}) error {
+func (v *VectorWrapper) Append(n int, vals any) error {
 	return ErrVecWriteRo
 }
 
@@ -127,11 +127,11 @@ func (v *VectorWrapper) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *VectorWrapper) SetValue(idx int, val interface{}) error {
+func (v *VectorWrapper) SetValue(idx int, val any) error {
 	return ErrVecWriteRo
 }
 
-func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
+func (v *VectorWrapper) GetValue(idx int) (any, error) {
 	if idx >= v.Length() || idx < 0 {
 		return nil, ErrVecInvalidOffset
 	}
@@ -168,7 +168,7 @@ func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
 	case types.T_sel:
 		return v.Col.([]int64)[idx], nil
 	case types.T_tuple:
-		return v.Col.([][]interface{})[idx], nil
+		return v.Col.([][]any)[idx], nil
 	default:
 		return nil, ErrVecTypeNotSupport
 	}
@@ -316,16 +316,25 @@ func (vec *VectorWrapper) ReadWithBuffer(r io.Reader, compressed *bytes.Buffer, 
 	case compress.Lz4:
 		loadSize := stat.Size()
 		originSize := stat.OriginSize()
-		compressed.Reset()
-		deCompressed.Reset()
-		if int(loadSize) > compressed.Cap() {
-			compressed.Grow(int(loadSize))
+		var tmpBuf []byte
+
+		if compressed == nil {
+			tmpNode := common.GPool.Alloc(uint64(loadSize))
+			defer common.GPool.Free(tmpNode)
+			tmpBuf = tmpNode.Buf
+		} else {
+			compressed.Reset()
+			if int(loadSize) > compressed.Cap() {
+				compressed.Grow(int(loadSize))
+			}
+			tmpBuf = compressed.Bytes()
 		}
+		tmpBuf = tmpBuf[:loadSize]
+
+		deCompressed.Reset()
 		if int(originSize) > deCompressed.Cap() {
 			deCompressed.Grow(int(originSize))
 		}
-		tmpBuf := compressed.Bytes()
-		tmpBuf = tmpBuf[:loadSize]
 		buf := deCompressed.Bytes()
 		buf = buf[:originSize]
 		nr, err := r.Read(tmpBuf)

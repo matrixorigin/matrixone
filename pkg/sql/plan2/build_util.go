@@ -16,8 +16,14 @@ package plan2
 
 import (
 	"fmt"
+	"go/constant"
+	"math"
+	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -40,319 +46,398 @@ func splitExprToAND(expr tree.Expr) []*tree.Expr {
 	return exprs
 }
 
-func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
-	for idx, col := range tableDef.Cols {
-		if strings.ToUpper(col.Name) == strings.ToUpper(name) {
-			return int32(idx)
+func getColumnIndexAndType(projectList []*Expr, colName string) (int32, *Type) {
+	for idx, expr := range projectList {
+		if expr.ColName == colName {
+			return int32(idx), expr.Typ
 		}
 	}
-	return -1
+	return -1, nil
 }
 
-func getColumnsWithSameName(left *plan.TableDef, right *plan.TableDef) []*plan.Expr {
-	var exprs []*plan.Expr
+func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) ([]*Expr, map[string]int, error) {
+	var commonList []*Expr
+	usingCols := make(map[string]int)
+	leftMap := make(map[string]int)
 
-	funName := getFunctionObjRef("=")
-	for leftIdx, leftCol := range left.Cols {
-		for rightIdx, rightCol := range right.Cols {
-			if leftCol.Name == rightCol.Name {
-				exprs = append(exprs, &plan.Expr{
-					Expr: &plan.Expr_F{
-						F: &plan.Function{
-							Func: funName,
-							Args: []*plan.Expr{
-								{
-									Expr: &plan.Expr_Col{
-										Col: &plan.ColRef{
-											Name:   leftCol.Name,
-											RelPos: 0,
-											ColPos: int32(leftIdx),
-										},
-									},
-								},
-								{
-									Expr: &plan.Expr_Col{
-										Col: &plan.ColRef{
-											Name:   rightCol.Name,
-											RelPos: 1,
-											ColPos: int32(rightIdx),
-										},
-									},
-								},
-							},
-						},
-					},
-				})
-			}
-		}
+	for idx, col := range leftProjList {
+		leftMap[col.ColName] = idx
 	}
-	return exprs
-}
-
-func appendQueryNode(query *Query, node *plan.Node, isFrom bool) {
-	nodeLength := len(query.Nodes)
-	node.NodeId = int32(nodeLength)
-	query.Nodes = append(query.Nodes, node)
-
-	if !isFrom && node.Children == nil && nodeLength > 0 {
-		node.Children = []int32{int32(nodeLength) - 1}
-	}
-}
-
-func fillTableScanProjectList(query *Query, alias string) {
-	// log.Printf("fillTableScanProjectList")
-	node := query.Nodes[len(query.Nodes)-1]
-
-	//special sql like: select abs(-1)
-	if node.TableDef == nil {
-		return
-	}
-
-	if alias == "" {
-		alias = node.TableDef.Name
-	}
-	exprs := make([]*plan.Expr, 0, len(node.TableDef.Cols))
-	for idx, col := range node.TableDef.Cols {
-		exprs = append(exprs,
-			&plan.Expr{
-				Alias: alias + "." + col.Name,
+	for idx, col := range rightProjList {
+		if leftIdx, ok := leftMap[col.ColName]; ok {
+			leftColExpr := &plan.Expr{
+				TableName: leftProjList[leftIdx].TableName,
+				ColName:   col.ColName,
 				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						Name:   col.Name,
-						ColPos: int32(idx),
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(leftIdx),
 					},
 				},
 				Typ: col.Typ,
-			})
+			}
+			rightColExpr := &plan.Expr{
+				TableName: col.TableName,
+				ColName:   col.ColName,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 1,
+						ColPos: int32(idx),
+					},
+				},
+				Typ: leftProjList[leftIdx].Typ,
+			}
+
+			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", false, []*Expr{leftColExpr, rightColExpr})
+			if err != nil {
+				return nil, nil, err
+			}
+			usingCols[col.ColName] = len(commonList)
+			commonList = append(commonList, equalFunctionExpr)
+		}
 	}
-	node.ProjectList = exprs
+
+	return commonList, usingCols, nil
 }
 
-func fillJoinProjectList(node *plan.Node, leftNode *plan.Node, rightNode *plan.Node) {
-	exprs := make([]*plan.Expr, 0, len(leftNode.ProjectList)+len(rightNode.ProjectList))
-	for idx, expr := range leftNode.ProjectList {
-		exprs = append(exprs, &plan.Expr{
+func appendQueryNode(query *Query, node *Node) int32 {
+	nodeId := int32(len(query.Nodes))
+	node.NodeId = nodeId
+	query.Nodes = append(query.Nodes, node)
+
+	return nodeId
+}
+
+func fillTableProjectList(query *Query, nodeId int32, alias tree.AliasClause) (int32, error) {
+	node := query.Nodes[nodeId]
+	if node.ProjectList == nil {
+		if node.TableDef == nil {
+			return nodeId, nil
+		}
+
+		if len(alias.Cols) > len(node.TableDef.Cols) {
+			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
+		}
+
+		// Table scan
+		if alias.Alias != "" {
+			node.TableDef.Alias = string(alias.Alias)
+		} else {
+			node.TableDef.Alias = node.TableDef.Name
+		}
+
+		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
+		for idx, col := range node.TableDef.Cols {
+			if idx < len(alias.Cols) {
+				col.Alias = string(alias.Cols[idx])
+			} else {
+				col.Alias = col.Name
+			}
+
+			node.ProjectList[idx] = &Expr{
+				Typ:       col.Typ,
+				TableName: node.TableDef.Alias,
+				ColName:   col.Alias,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(idx),
+					},
+				},
+			}
+		}
+	} else {
+		// Subquery
+		if len(alias.Cols) > len(node.ProjectList) {
+			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.ProjectList), len(alias.Cols)))
+		}
+
+		projNode := &Node{
+			NodeType: plan.Node_PROJECT,
+			Children: []int32{nodeId},
+		}
+		projNode.ProjectList = make([]*Expr, len(node.ProjectList))
+		tableName := string(alias.Alias)
+		var colName string
+		for idx, col := range node.ProjectList {
+			if idx < len(alias.Cols) {
+				colName = string(alias.Cols[idx])
+			} else {
+				colName = col.ColName
+			}
+
+			col.TableName = tableName
+			col.ColName = colName
+
+			projNode.ProjectList[idx] = &Expr{
+				Typ:       col.Typ,
+				TableName: tableName,
+				ColName:   colName,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: 0,
+						ColPos: int32(idx),
+					},
+				},
+			}
+		}
+		nodeId = appendQueryNode(query, projNode)
+	}
+
+	return nodeId, nil
+}
+
+func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, node *Node, leftChild *Node, rightChild *Node, projectNodeWhere []*Expr) *Node {
+	joinResultLen := len(leftChild.ProjectList) + len(rightChild.ProjectList)
+	usingColsLen := len(usingCols)
+	projectResultLen := joinResultLen - usingColsLen
+
+	isSemiOrAntiJoin := leftChild.JoinType&(plan.Node_SEMI|plan.Node_ANTI) != 0
+	if isSemiOrAntiJoin {
+		projectResultLen = len(leftChild.ProjectList)
+	}
+
+	// add new projectionNode after joinNode
+	projectNode := &Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{node.NodeId},
+		ProjectList: make([]*plan.Expr, projectResultLen),
+		WhereList:   projectNodeWhere,
+	}
+
+	node.ProjectList = make([]*Expr, projectResultLen)
+	joinNodeIdx := 0
+	projNodeIdx := usingColsLen
+	for i, expr := range leftChild.ProjectList {
+		colExpr := &Expr{
+			Typ:       expr.Typ,
+			TableName: expr.TableName,
+			ColName:   expr.ColName,
 			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					// Name:   expr.Expr.(*plan.Expr_Col).Col.Name,
-					Name:   expr.Alias,
+				Col: &ColRef{
 					RelPos: 0,
-					ColPos: int32(idx),
+					ColPos: int32(i),
 				},
 			},
-			Alias: expr.Alias,
-			Typ:   expr.Typ,
-		})
-	}
-	for idx, expr := range rightNode.ProjectList {
-		exprs = append(exprs, &plan.Expr{
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					// Name:   expr.Expr.(*plan.Expr_Col).Col.Name,
-					Name:   expr.Alias,
-					RelPos: 1,
-					ColPos: int32(idx),
-				},
-			},
-			Alias: expr.Alias,
-			Typ:   expr.Typ,
-		})
+		}
+
+		colIdx, ok := usingCols[expr.ColName]
+		// we pop using columns to top.
+		// R(r1, r2, b, r3, a),   S(s1, a, b, s2)
+		// select * from R join S using(a, b)
+		// we get projectList as :  [a, b, r1, r2, r3, s1, s2]
+		if ok {
+			node.ProjectList[colIdx] = DeepCopyExpr(colExpr)
+			projectNode.ProjectList[colIdx] = DeepCopyExpr(colExpr)
+		} else {
+			node.ProjectList[projNodeIdx] = DeepCopyExpr(colExpr)
+			projectNode.ProjectList[projNodeIdx] = DeepCopyExpr(colExpr)
+			projNodeIdx++
+		}
+		joinNodeIdx++
 	}
 
-	node.ProjectList = exprs
+	for i, expr := range rightChild.ProjectList {
+		// semi join or anti join, rightChild.ProjectList will abandon in the ProjectNode(after JoinNode)
+		if !isSemiOrAntiJoin {
+			// other join, we coalesced the using cols in the ProjectNode(after JoinNode)
+			_, ok := usingCols[expr.ColName]
+			if ok {
+				binderCtx.usingCols[expr.ColName] = expr.TableName
+			} else {
+				node.ProjectList[projNodeIdx] = &Expr{
+					Typ:       expr.Typ,
+					TableName: expr.TableName,
+					ColName:   expr.ColName,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: 1,
+							ColPos: int32(i),
+						},
+					},
+				}
+
+				projectNode.ProjectList[projNodeIdx] = &Expr{
+					Typ:       expr.Typ,
+					TableName: expr.TableName,
+					ColName:   expr.ColName,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: 0,
+							ColPos: int32(projNodeIdx),
+						},
+					},
+				}
+				projNodeIdx++
+			}
+		}
+
+		joinNodeIdx++
+	}
+	return projectNode
 }
 
-func getExprFromUnresolvedName(query *Query, name string, table string, selectCtx *SelectContext) (*plan.Expr, error) {
-	aliasName := table + "." + name
-	colRef := &plan.ColRef{
-		Name: "",
+func buildUnresolvedName(query *Query, node *Node, colName string, tableName string, binderCtx *BinderContext) (*Expr, error) {
+	colRef := &ColRef{
+		RelPos: -1,
+		ColPos: -1,
 	}
-	colExpr := &plan.Expr{
+	colExpr := &Expr{
 		Expr: &plan.Expr_Col{
 			Col: colRef,
 		},
 	}
 
-	matchName := func(alias string) bool {
-		if table == "" {
-			arr := strings.SplitN(alias, ".", 2)
-			if len(arr) > 1 {
-				return strings.ToUpper(arr[1]) == strings.ToUpper(name)
-			} else {
-				return strings.ToUpper(arr[0]) == strings.ToUpper(name)
-			}
+	if colTblName, ok := binderCtx.usingCols[colName]; ok {
+		if colTblName == tableName {
+			tableName = ""
 		}
-		return strings.ToUpper(alias) == strings.ToUpper(aliasName)
 	}
 
-	//get name from select
-	preNode := query.Nodes[len(query.Nodes)-1]
-	for {
-		if preNode.ProjectList != nil {
-			for idx, col := range preNode.ProjectList {
-				// log.Printf("col=%v, search=%v", col.Alias, aliasName)
-				if matchName(col.Alias) {
-					if colRef.Name != "" {
-						return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' in the field list is ambiguous", name))
-					}
-					colRef.Name = col.Alias
-					colRef.RelPos = 0
-					colRef.ColPos = int32(idx)
+	matchName := func(expr *Expr) bool {
+		return colName == expr.ColName && (len(tableName) == 0 || tableName == expr.TableName)
+	}
 
-					colExpr.Alias = col.Alias
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		// search name from TableDef
+		if len(tableName) == 0 || tableName == node.TableDef.Alias {
+			for j, col := range node.TableDef.Cols {
+				if colName == col.Alias {
+					if colRef.RelPos != -1 {
+						return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference '%v' is ambiguous", colName))
+					}
+					colRef.RelPos = 0
+					colRef.ColPos = int32(j)
+
 					colExpr.Typ = col.Typ
+					colExpr.ColName = colName
+					colExpr.TableName = tableName
 				}
 			}
-			break
 		}
-		if preNode.Children == nil {
-			break
+	} else {
+		// Search name from children
+		for i, child := range node.Children {
+			for j, col := range query.Nodes[child].ProjectList {
+				if matchName(col) {
+					if colRef.RelPos != -1 {
+						return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference '%v' is ambiguous", colName))
+					}
+					colRef.RelPos = int32(i)
+					colRef.ColPos = int32(j)
+
+					colExpr.Typ = col.Typ
+					colExpr.ColName = col.ColName
+					colExpr.TableName = col.TableName
+				}
+			}
 		}
-		preNode = query.Nodes[preNode.Children[0]]
 	}
 
-	//if get from select ok, then return
-	//see tpch-11
-	if colRef.Name != "" {
+	if colRef.RelPos != -1 {
 		return colExpr, nil
 	}
 
-	//get from parent query
-	corrRef := &plan.CorrColRef{
-		Name: "",
+	if len(binderCtx.subqueryParentIds) == 0 {
+		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", colName))
 	}
-	corrExpr := &plan.Expr{
+
+	// Search from parent queries
+	corrRef := &plan.CorrColRef{
+		NodeId: -1,
+		ColPos: -1,
+	}
+	corrExpr := &Expr{
 		Expr: &plan.Expr_Corr{
 			Corr: corrRef,
 		},
 	}
-	getNode := func(id int32) *plan.Node {
-		for _, node := range query.Nodes {
-			if node.NodeId == id {
-				return node
+
+	for _, parentId := range binderCtx.subqueryParentIds {
+		for i, col := range query.Nodes[parentId].ProjectList {
+			if matchName(col) {
+				if corrRef.NodeId != -1 {
+					return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' in the field list is ambiguous", colName))
+				}
+				corrRef.NodeId = parentId
+				corrRef.ColPos = int32(i)
+
+				corrExpr.Typ = col.Typ
+				corrExpr.ColName = col.ColName
+				corrExpr.TableName = col.TableName
 			}
 		}
-		return nil
-	}
-
-	if selectCtx.subQueryParentId != nil {
-		// log.Printf("parentId=%+v", selectCtx.subQueryParentId)
-		for _, parentId := range selectCtx.subQueryParentId {
-			preNode = getNode(parentId)
-			if preNode == nil {
-				return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("parent node id not found in subquery"))
-			}
-			for {
-				if preNode.ProjectList != nil {
-					for idx, col := range preNode.ProjectList {
-						if matchName(col.Alias) {
-							if corrRef.Name != "" {
-								return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' in the field list is ambiguous", name))
-							}
-							selectCtx.subQueryIsCorrelated = true
-							corrRef.Name = col.Alias
-							corrRef.RelPos = 0
-							corrRef.ColPos = int32(idx)
-							corrRef.NodeId = parentId
-
-							corrExpr.Alias = col.Alias
-							corrExpr.Typ = col.Typ
-						}
-					}
-					break
-				}
-				if preNode.Children == nil {
-					break
-				}
-				preNode = query.Nodes[preNode.Children[0]]
-			}
+		if corrRef.ColPos != -1 {
+			return corrExpr, nil
 		}
 	}
 
-	if corrRef.Name != "" {
-		return corrExpr, nil
-	}
-	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' not found", name))
+	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", colName))
 }
 
 //if table == ""  => select * from tbl
 //if table is not empty => select a.* from a,b on a.id = b.id
-func unfoldStar(query *Query, list *plan.ExprList, table string) error {
-	preNode := query.Nodes[len(query.Nodes)-1]
-
-	matchName := func(alias string) bool {
-		if table != "" {
-			arr := strings.SplitN(alias, ".", 2)
-			return arr[0] == table
-		}
-		return true
-	}
-
-	for _, expr := range preNode.ProjectList {
-		if matchName(expr.Alias) {
-			list.List = append(list.List, expr)
-		}
-	}
-	return nil
-}
-
-func setDerivedTableAlias(query *Query, ctx CompilerContext, selectCtx *SelectContext, alias string, cols tree.IdentifierList) error {
-	//create a project node for reset projection list
-	node := &plan.Node{
-		NodeType: plan.Node_PROJECT,
-	}
-	preNode := query.Nodes[len(query.Nodes)-1]
-	exprs := make([]*plan.Expr, 0, len(preNode.ProjectList))
-	prefix := alias + "."
-	if cols != nil {
-		if len(preNode.ProjectList) != len(cols) {
-			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Derived table column length not match"))
-		}
-		for idx, col := range cols {
-			exprs = append(exprs, &plan.Expr{
-				Expr:  nil,
-				Alias: prefix + string(col),
-				Typ:   preNode.ProjectList[idx].Typ,
-			})
-		}
-		node.ProjectList = exprs
-	} else {
-		for _, col := range preNode.ProjectList {
-			alias := col.Alias
-			if !strings.HasPrefix(col.Alias, prefix) {
-				alias = prefix + alias
+func unfoldStar(query *Query, node *Node, list *plan.ExprList, table string) error {
+	// if node is TABLE_SCAN, we unfold star from tableDef (because this node have no children)
+	if node.NodeType == plan.Node_TABLE_SCAN {
+		if len(table) == 0 || table == node.TableDef.Name {
+			for i, col := range node.TableDef.Cols {
+				list.List = append(list.List, &Expr{
+					Typ:       col.Typ,
+					ColName:   col.Name,
+					TableName: node.TableDef.Name,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: 0,
+							ColPos: int32(i),
+						},
+					},
+				})
 			}
-			exprs = append(exprs, &plan.Expr{
-				Expr:  nil,
-				Alias: alias,
-				Typ:   col.Typ,
-			})
 		}
-		node.ProjectList = exprs
+	} else {
+		// other case, we unfold star from Children's projectionList. like unresolvename
+		for idx, child := range node.Children {
+			for _, col := range query.Nodes[child].ProjectList {
+				if len(table) == 0 || table == col.TableName {
+					if idx > 0 {
+						// like `select * from a join b`.  we unfoldStar in joinNode,
+						// we will reset col.ColPos to child's index
+						resetColPos(col, int32(idx))
+					}
+					list.List = append(list.List, col)
+				}
+			}
+		}
 	}
-	appendQueryNode(query, node, false)
 
-	//create new project node by default。
-	//if next node is join, you need remove this node
-	tmpNode := &plan.Node{
-		NodeType: plan.Node_PROJECT,
-	}
-	appendQueryNode(query, tmpNode, false)
 	return nil
 }
 
-func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectContext) (*plan.ObjectRef, *plan.TableDef, bool) {
-	//get table from context
-	objRef, tableDef := ctx.Resolve(tblName)
+func resetColPos(col *plan.Expr, newPos int32) {
+	switch expr := col.Expr.(type) {
+	case *plan.Expr_Col:
+		expr.Col.ColPos = newPos
+	case *plan.Expr_F:
+		for _, e := range expr.F.Args {
+			resetColPos(e, newPos)
+		}
+	}
+}
+
+func getResolveTable(dbName string, tableName string, ctx CompilerContext, binderCtx *BinderContext) (*ObjectRef, *TableDef, bool) {
+	// get table from context
+	objRef, tableDef := ctx.Resolve(dbName, tableName)
 	if tableDef != nil {
 		return objRef, tableDef, false
 	}
 
-	//get table from CTE
-	tableDef, ok := selectCtx.cteTables[strings.ToUpper(tblName)]
+	// get table from CTE
+	tableDef, ok := binderCtx.cteTables[tableName]
 	if ok {
-		objRef = &plan.ObjectRef{
-			ObjName: tblName,
+		objRef = &ObjectRef{
+			SchemaName: dbName,
+			ObjName:    tableName,
 		}
 		return objRef, tableDef, true
 	}
@@ -360,7 +445,8 @@ func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectConte
 }
 
 //getLastTableDef get insert/update/delete tableDef
-func getLastTableDef(query *Query) (*plan.ObjectRef, *plan.TableDef) {
+// FIXME
+func getLastTableDef(query *Query) (*ObjectRef, *TableDef) {
 	node := query.Nodes[query.Steps[len(query.Steps)-1]]
 	for {
 		if node.TableDef != nil {
@@ -372,4 +458,695 @@ func getLastTableDef(query *Query) (*plan.ObjectRef, *plan.TableDef) {
 		node = query.Nodes[node.Children[0]]
 	}
 	return nil, nil
+}
+
+func newQueryAndSelectCtx(typ plan.Query_StatementType) (*Query, *BinderContext) {
+	binderCtx := &BinderContext{
+		columnAlias: make(map[string]*Expr),
+		cteTables:   make(map[string]*TableDef),
+		usingCols:   make(map[string]string),
+	}
+	query := &Query{
+		StmtType: typ,
+	}
+	return query, binderCtx
+}
+
+func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
+	if n, ok := typ.(*tree.T); ok {
+		switch uint8(n.InternalType.Oid) {
+		case defines.MYSQL_TYPE_TINY:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT8, Width: n.InternalType.Width, Size: 1}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT8, Width: n.InternalType.Width, Size: 1}, nil
+		case defines.MYSQL_TYPE_SHORT:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT16, Width: n.InternalType.Width, Size: 2}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT16, Width: n.InternalType.Width, Size: 2}, nil
+		case defines.MYSQL_TYPE_LONG:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT32, Width: n.InternalType.Width, Size: 4}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT32, Width: n.InternalType.Width, Size: 4}, nil
+		case defines.MYSQL_TYPE_LONGLONG:
+			if n.InternalType.Unsigned {
+				return &plan.Type{Id: plan.Type_UINT64, Width: n.InternalType.Width, Size: 8}, nil
+			}
+			return &plan.Type{Id: plan.Type_INT64, Width: n.InternalType.Width, Size: 8}, nil
+		case defines.MYSQL_TYPE_FLOAT:
+			return &plan.Type{Id: plan.Type_FLOAT32, Width: n.InternalType.Width, Size: 4, Precision: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_DOUBLE:
+			return &plan.Type{Id: plan.Type_FLOAT64, Width: n.InternalType.Width, Size: 8, Precision: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_STRING:
+			if n.InternalType.DisplayWith == -1 { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
+		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
+			if n.InternalType.DisplayWith == -1 { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
+		case defines.MYSQL_TYPE_DATE:
+			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
+		case defines.MYSQL_TYPE_DATETIME:
+			return &plan.Type{Id: plan.Type_DATETIME, Size: 8}, nil
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			return &plan.Type{Id: plan.Type_TIMESTAMP, Size: 8, Precision: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_DECIMAL:
+			if n.InternalType.DisplayWith > 18 {
+				return &plan.Type{Id: plan.Type_DECIMAL128, Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
+			}
+			return &plan.Type{Id: plan.Type_DECIMAL64, Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
+		case defines.MYSQL_TYPE_BOOL:
+			return &plan.Type{Id: plan.Type_BOOL, Size: 1}, nil
+		}
+	}
+	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport type: '%v'", typ))
+}
+
+func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*plan.DefaultExpr, error) {
+	allowNull := true // be false when column has not null constraint
+	isNullExpr := func(expr tree.Expr) bool {
+		v, ok := expr.(*tree.NumVal)
+		return ok && v.Value.Kind() == constant.Unknown
+	}
+
+	// get isAllowNull setting
+	{
+		for _, attr := range column.Attributes {
+			if nullAttr, ok := attr.(*tree.AttributeNull); ok && !nullAttr.Is {
+				allowNull = false
+				break
+			}
+		}
+	}
+
+	for _, attr := range column.Attributes {
+		if d, ok := attr.(*tree.AttributeDefault); ok {
+			defaultExpr := d.Expr
+			// check allowNull
+			if isNullExpr(defaultExpr) {
+				if !allowNull {
+					return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+				}
+				return &plan.DefaultExpr{
+					Exist:  true,
+					Value:  nil,
+					IsNull: true,
+				}, nil
+			}
+
+			value, err := buildConstant(typ, d.Expr)
+			if err != nil {
+				return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+			}
+			_, err = rangeCheck(value, typ, "", 0)
+			if err != nil {
+				return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+			}
+			constantValue := convertToPlanValue(value)
+			return &plan.DefaultExpr{
+				Exist:  true,
+				Value:  constantValue,
+				IsNull: false,
+			}, nil
+		}
+	}
+	if allowNull {
+		return &plan.DefaultExpr{
+			Exist:  true,
+			Value:  nil,
+			IsNull: true,
+		}, nil
+	}
+	return &plan.DefaultExpr{
+		Exist: false,
+	}, nil
+}
+
+func convertToPlanValue(value interface{}) *plan.ConstantValue {
+	switch v := value.(type) {
+	case int64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Int64V{Int64V: v},
+		}
+	case uint64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Uint64V{Uint64V: v},
+		}
+	case float32:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Float32V{Float32V: v},
+		}
+	case float64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Float64V{Float64V: v},
+		}
+	case string:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_StringV{StringV: v},
+		}
+	case types.Date:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_DateV{DateV: int32(v)},
+		}
+	case types.Datetime:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_DateTimeV{DateTimeV: int64(v)},
+		}
+	case types.Timestamp:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_TimeStampV{TimeStampV: int64(v)},
+		}
+	case types.Decimal64:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Decimal64V{Decimal64V: int64(v)},
+		}
+	case types.Decimal128:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_Decimal128V{Decimal128V: &plan.Decimal128{
+				Lo: v.Lo,
+				Hi: v.Hi,
+			}},
+		}
+	}
+	return &plan.ConstantValue{
+		ConstantValue: &plan.ConstantValue_UnknownV{UnknownV: 1},
+	}
+}
+
+// rangeCheck do range check for value, and do type conversion.
+func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber int) (interface{}, error) {
+	errString := "Out of range value for column '%s' at row %d"
+
+	switch v := value.(type) {
+	case int64:
+		switch typ.GetId() {
+		case plan.Type_INT8:
+			if v <= math.MaxInt8 && v >= math.MinInt8 {
+				return v, nil
+			}
+		case plan.Type_INT16:
+			if v <= math.MaxInt16 && v >= math.MinInt16 {
+				return v, nil
+			}
+		case plan.Type_INT32:
+			if v <= math.MaxInt32 && v >= math.MinInt32 {
+				return v, nil
+			}
+		case plan.Type_INT64:
+			return v, nil
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
+		}
+		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
+	case uint64:
+		switch typ.GetId() {
+		case plan.Type_UINT8:
+			if v <= math.MaxUint8 {
+				return v, nil
+			}
+		case plan.Type_UINT16:
+			if v <= math.MaxUint16 {
+				return v, nil
+			}
+		case plan.Type_UINT32:
+			if v <= math.MaxUint32 {
+				return v, nil
+			}
+		case plan.Type_UINT64:
+			return v, nil
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
+		}
+		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
+	case float32:
+		if typ.GetId() == plan.Type_FLOAT32 {
+			return v, nil
+		}
+		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
+	case float64:
+		switch typ.GetId() {
+		case plan.Type_FLOAT32:
+			if v <= math.MaxFloat32 && v >= -math.MaxFloat32 {
+				return v, nil
+			}
+		case plan.Type_FLOAT64:
+			return v, nil
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
+		}
+		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
+	case string:
+		switch typ.GetId() {
+		case plan.Type_CHAR, plan.Type_VARCHAR: // string family should compare the length but not value
+			if len(v) > math.MaxUint16 {
+				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar value")
+			}
+			if len(v) <= int(typ.Width) {
+				return v, nil
+			}
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
+		}
+		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
+	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
+		return v, nil
+	default:
+		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
+	}
+}
+
+var (
+	// errors may happen while building constant
+	ErrDivByZero        = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
+	ErrZeroModulus      = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
+	errConstantOutRange = errors.New(errno.DataException, "constant value out of range")
+	errBinaryOutRange   = errors.New(errno.DataException, "binary result out of range")
+	errUnaryOutRange    = errors.New(errno.DataException, "unary result out of range")
+)
+
+func buildConstant(typ *plan.Type, n tree.Expr) (interface{}, error) {
+	switch e := n.(type) {
+	case *tree.ParenExpr:
+		return buildConstant(typ, e.Expr)
+	case *tree.NumVal:
+		return buildConstantValue(typ, e)
+	case *tree.UnaryExpr:
+		if e.Op == tree.UNARY_PLUS {
+			return buildConstant(typ, e.Expr)
+		}
+		if e.Op == tree.UNARY_MINUS {
+			switch n := e.Expr.(type) {
+			case *tree.NumVal:
+				return buildConstantValue(typ, tree.NewNumVal(n.Value, "-"+n.String(), true))
+			}
+
+			v, err := buildConstant(typ, e.Expr)
+			if err != nil {
+				return nil, err
+			}
+			switch val := v.(type) {
+			case int64:
+				return val * -1, nil
+			case uint64:
+				if val != 0 {
+					return nil, errUnaryOutRange
+				}
+			case float32:
+				return val * -1, nil
+			case float64:
+				return val * -1, nil
+			}
+			return v, nil
+		}
+	case *tree.BinaryExpr:
+		var floatResult float64
+		var argTyp = &plan.Type{Id: plan.Type_FLOAT64, Size: 8}
+		// build values of Part left and Part right.
+		left, err := buildConstant(argTyp, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := buildConstant(argTyp, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		// evaluate the result and make sure binary result is within range of float64.
+		lf, rf := left.(float64), right.(float64)
+		switch e.Op {
+		case tree.PLUS:
+			floatResult = lf + rf
+			if lf > 0 && rf > 0 && floatResult <= 0 {
+				return nil, errBinaryOutRange
+			}
+			if lf < 0 && rf < 0 && floatResult >= 0 {
+				return nil, errBinaryOutRange
+			}
+		case tree.MINUS:
+			floatResult = lf - rf
+			if lf < 0 && rf > 0 && floatResult >= 0 {
+				return nil, errBinaryOutRange
+			}
+			if lf > 0 && rf < 0 && floatResult <= 0 {
+				return nil, errBinaryOutRange
+			}
+		case tree.MULTI:
+			floatResult = lf * rf
+			if floatResult < 0 {
+				if (lf > 0 && rf > 0) || (lf < 0 && rf < 0) {
+					return nil, errBinaryOutRange
+				}
+			} else if floatResult > 0 {
+				if (lf > 0 && rf < 0) || (lf < 0 && rf > 0) {
+					return nil, errBinaryOutRange
+				}
+			}
+		case tree.DIV:
+			if rf == 0 {
+				return nil, ErrDivByZero
+			}
+			floatResult = lf / rf
+			if floatResult < 0 {
+				if (lf > 0 && rf > 0) || (lf < 0 && rf < 0) {
+					return nil, errBinaryOutRange
+				}
+			} else if floatResult > 0 {
+				if (lf > 0 && rf < 0) || (lf < 0 && rf > 0) {
+					return nil, errBinaryOutRange
+				}
+			}
+		case tree.INTEGER_DIV:
+			if rf == 0 {
+				return nil, ErrDivByZero
+			}
+			tempResult := lf / rf
+			if tempResult > math.MaxInt64 || tempResult < math.MinInt64 {
+				return nil, errBinaryOutRange
+			}
+			floatResult = float64(int64(tempResult))
+		case tree.MOD:
+			if rf == 0 {
+				return nil, ErrZeroModulus
+			}
+			tempResult := int(lf / rf)
+			floatResult = lf - float64(tempResult)*rf
+		default:
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
+		}
+		// buildConstant should make sure result is within int64 or uint64 or float32 or float64
+		switch typ.GetId() {
+		case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_INT64:
+			if floatResult > 0 {
+				if floatResult+0.5 > math.MaxInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult + 0.5), nil
+			} else if floatResult < 0 {
+				if floatResult-0.5 < math.MinInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult - 0.5), nil
+			}
+			return int64(floatResult), nil
+		case plan.Type_UINT8, plan.Type_UINT16, plan.Type_UINT32, plan.Type_UINT64:
+			if floatResult < 0 || floatResult+0.5 > math.MaxInt64 {
+				return nil, errBinaryOutRange
+			}
+			return uint64(floatResult + 0.5), nil
+		case plan.Type_FLOAT32:
+			if floatResult == 0 {
+				return float32(0), nil
+			}
+			if floatResult > math.MaxFloat32 || floatResult < -math.MaxFloat32 {
+				return nil, errBinaryOutRange
+			}
+			return float32(floatResult), nil
+		case plan.Type_FLOAT64:
+			return floatResult, nil
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, e.Op))
+		}
+	case *tree.UnresolvedName:
+		floatResult, err := strconv.ParseFloat(e.Parts[0], 64)
+		if err != nil {
+			return nil, err
+		}
+		switch typ.GetId() {
+		case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_INT64:
+			if floatResult > 0 {
+				if floatResult+0.5 > math.MaxInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult + 0.5), nil
+			} else if floatResult < 0 {
+				if floatResult-0.5 < math.MinInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult - 0.5), nil
+			}
+			return int64(floatResult), nil
+		case plan.Type_UINT8, plan.Type_UINT16, plan.Type_UINT32, plan.Type_UINT64:
+			if floatResult < 0 || floatResult+0.5 > math.MaxInt64 {
+				return nil, errBinaryOutRange
+			}
+			return uint64(floatResult + 0.5), nil
+		case plan.Type_FLOAT32:
+			if floatResult == 0 {
+				return float32(0), nil
+			}
+			if floatResult > math.MaxFloat32 || floatResult < -math.MaxFloat32 {
+				return nil, errBinaryOutRange
+			}
+			return float32(floatResult), nil
+		case plan.Type_FLOAT64:
+			return floatResult, nil
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, floatResult))
+		}
+	}
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+}
+
+func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
+	val := num.Value
+	str := num.String()
+
+	switch val.Kind() {
+	case constant.Unknown:
+		return nil, nil
+	case constant.Int:
+		switch typ.GetId() {
+		case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_INT64:
+			if num.Negative() {
+				v, _ := constant.Uint64Val(val)
+				if v > -math.MinInt64 {
+					return nil, errConstantOutRange
+				}
+				return int64(-v), nil
+			} else {
+				v, _ := constant.Int64Val(val)
+				if v < 0 {
+					return nil, errConstantOutRange
+				}
+				return int64(v), nil
+			}
+		case plan.Type_DECIMAL64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case plan.Type_DECIMAL128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
+		case plan.Type_UINT8, plan.Type_UINT16, plan.Type_UINT32, plan.Type_UINT64:
+			v, _ := constant.Uint64Val(val)
+			if num.Negative() {
+				if v != 0 {
+					return nil, errConstantOutRange
+				}
+			}
+			return uint64(v), nil
+		case plan.Type_FLOAT32:
+			v, _ := constant.Float32Val(val)
+			if num.Negative() {
+				return float32(-v), nil
+			}
+			return float32(v), nil
+		case plan.Type_FLOAT64:
+			v, _ := constant.Float64Val(val)
+			if num.Negative() {
+				return float64(-v), nil
+			}
+			return float64(v), nil
+		case plan.Type_DATE:
+			if !num.Negative() {
+				return types.ParseDate(str)
+			}
+		case plan.Type_DATETIME:
+			if !num.Negative() {
+				return types.ParseDatetime(str)
+			}
+		}
+	case constant.Float:
+		switch typ.GetId() {
+		case plan.Type_INT64, plan.Type_INT32, plan.Type_INT16, plan.Type_INT8:
+			parts := strings.Split(str, ".")
+			if len(parts) <= 1 { // integer constant within int64 range will be constant.Int but not constant.Float.
+				return nil, errConstantOutRange
+			}
+			v, err := strconv.ParseInt(parts[0], 10, 64)
+			if err != nil {
+				return nil, errConstantOutRange
+			}
+			if len(parts[1]) > 0 && parts[1][0] >= '5' {
+				if num.Negative() {
+					if v-1 > v {
+						return nil, errConstantOutRange
+					}
+					v--
+				} else {
+					if v+1 < v {
+						return nil, errConstantOutRange
+					}
+					v++
+				}
+			}
+			return v, nil
+		case plan.Type_UINT64, plan.Type_UINT32, plan.Type_UINT16, plan.Type_UINT8:
+			parts := strings.Split(str, ".")
+			v, err := strconv.ParseUint(parts[0], 10, 64)
+			if err != nil || len(parts) == 1 {
+				return v, errConstantOutRange
+			}
+			if len(parts[1]) > 0 && parts[1][0] >= '5' {
+				if v+1 < v {
+					return nil, errConstantOutRange
+				}
+				v++
+			}
+			return v, nil
+		case plan.Type_FLOAT32:
+			v, _ := constant.Float32Val(val)
+			if num.Negative() {
+				return float32(-v), nil
+			}
+			return float32(v), nil
+		case plan.Type_FLOAT64:
+			v, _ := constant.Float64Val(val)
+			if num.Negative() {
+				return float64(-v), nil
+			}
+			return float64(v), nil
+		case plan.Type_DATETIME:
+			return types.ParseDatetime(str)
+		case plan.Type_DECIMAL64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case plan.Type_DECIMAL128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
+		}
+	case constant.String:
+		switch typ.GetId() {
+		case plan.Type_DECIMAL64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case plan.Type_DECIMAL128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
+		}
+		if !num.Negative() {
+			switch typ.GetId() {
+			case plan.Type_CHAR, plan.Type_VARCHAR:
+				return constant.StringVal(val), nil
+			case plan.Type_DATE:
+				return types.ParseDate(constant.StringVal(val))
+			case plan.Type_DATETIME:
+				return types.ParseDatetime(constant.StringVal(val))
+			case plan.Type_TIMESTAMP:
+				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
+			}
+		}
+	}
+	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
+}
+
+func DeepCopyExpr(expr *Expr) *Expr {
+	new_expr := &Expr{
+		Typ: &plan.Type{
+			Id:        expr.Typ.GetId(),
+			Nullable:  expr.Typ.GetNullable(),
+			Width:     expr.Typ.GetWidth(),
+			Precision: expr.Typ.GetPrecision(),
+			Size:      expr.Typ.GetSize(),
+			Scale:     expr.Typ.GetScale(),
+		},
+		TableName: expr.TableName,
+		ColName:   expr.ColName,
+	}
+
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_C:
+		new_expr.Expr = &plan.Expr_C{
+			C: &plan.Const{
+				Isnull: item.C.GetIsnull(),
+				Value:  item.C.GetValue(),
+			},
+		}
+	case *plan.Expr_P:
+		new_expr.Expr = &plan.Expr_P{
+			P: &plan.ParamRef{
+				Pos: item.P.GetPos(),
+			},
+		}
+	case *plan.Expr_V:
+		new_expr.Expr = &plan.Expr_V{
+			V: &plan.VarRef{
+				Name: item.V.GetName(),
+			},
+		}
+	case *plan.Expr_Col:
+		new_expr.Expr = &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: item.Col.GetRelPos(),
+				ColPos: item.Col.GetColPos(),
+			},
+		}
+	case *plan.Expr_F:
+		new_args := make([]*Expr, len(item.F.Args))
+		for idx, arg := range item.F.Args {
+			new_args[idx] = DeepCopyExpr(arg)
+		}
+		new_expr.Expr = &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Server:     item.F.Func.GetServer(),
+					Db:         item.F.Func.GetDb(),
+					Schema:     item.F.Func.GetSchema(),
+					Obj:        item.F.Func.GetObj(),
+					ServerName: item.F.Func.GetServerName(),
+					DbName:     item.F.Func.GetDbName(),
+					SchemaName: item.F.Func.GetSchemaName(),
+					ObjName:    item.F.Func.GetObjName(),
+				},
+				Args: new_args,
+			},
+		}
+	case *plan.Expr_List:
+		new_list := make([]*Expr, len(item.List.List))
+		for idx, arg := range item.List.List {
+			new_list[idx] = DeepCopyExpr(arg)
+		}
+		new_expr.Expr = &plan.Expr_List{
+			List: &plan.ExprList{
+				List: new_list,
+			},
+		}
+	case *plan.Expr_Sub:
+		new_expr.Expr = &plan.Expr_Sub{
+			Sub: &plan.SubQuery{
+				NodeId:       item.Sub.GetNodeId(),
+				IsCorrelated: item.Sub.GetIsCorrelated(),
+				IsScalar:     item.Sub.GetIsScalar(),
+			},
+		}
+	case *plan.Expr_Corr:
+		new_expr.Expr = &plan.Expr_Corr{
+			Corr: &plan.CorrColRef{
+				NodeId: item.Corr.GetNodeId(),
+				ColPos: item.Corr.GetColPos(),
+			},
+		}
+	case *plan.Expr_T:
+		new_expr.Expr = &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: &plan.Type{
+					Id:        item.T.Typ.GetId(),
+					Nullable:  item.T.Typ.GetNullable(),
+					Width:     item.T.Typ.GetWidth(),
+					Precision: item.T.Typ.GetPrecision(),
+					Size:      item.T.Typ.GetSize(),
+					Scale:     item.T.Typ.GetScale(),
+				},
+			},
+		}
+	}
+
+	return new_expr
 }

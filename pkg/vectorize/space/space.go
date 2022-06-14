@@ -12,16 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// for input value greater than 8000, function space will output NULL,
+// for input value less than 0, function space will output empty string ""
+// for positive float inputs, function space will round(away from zero)
+
 package space
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"golang.org/x/exp/constraints"
 	"math"
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sum"
 )
+
+var MaxAllowedValue = int64(8000)
 
 func CountSpacesForUnsignedInt(originalVecCol interface{}) int64 {
 	switch col := originalVecCol.(type) {
@@ -59,26 +67,134 @@ func CountSpacesForSignedInt(originalVecCol interface{}) int64 {
 	}
 }
 
-func CountSpacesForFloat(originalVecCol interface{}) int64 {
+type Result struct {
+	Result *types.Bytes
+	Nsp    *nulls.Nulls
+}
+
+func CountSpacesSigned[T constraints.Signed](columnValues []T) int64 {
+	result := int64(0)
+	for _, columnValue := range columnValues {
+		if columnValue <= 0 || int64(columnValue) > MaxAllowedValue {
+			continue
+		} else {
+			result += int64(columnValue)
+		}
+	}
+	if result < 0 {
+		return 0
+	} else {
+		return result
+	}
+}
+
+func CountSpacesUnsigned[T constraints.Unsigned](columnValues []T) int64 {
+	result := int64(0)
+	for _, columnValue := range columnValues {
+		if int64(columnValue) > MaxAllowedValue {
+			continue
+		} else {
+			result += int64(columnValue)
+		}
+	}
+	return result
+}
+
+func CountSpacesFloat[T constraints.Float](columnValues []T) int64 {
 	var result int64
 
-	switch col := originalVecCol.(type) {
-	case []float32:
-		for _, i := range col {
-			if i < 0 {
-				continue
-			}
-
-			result += int64(math.Round(float64(i)))
+	for _, columnValue := range columnValues {
+		if columnValue < 0 || int64(columnValue) > MaxAllowedValue {
+			continue
 		}
-	case []float64:
-		for _, i := range col {
-			if i < 0 {
-				continue
-			}
+		result += int64(math.Round(float64(columnValue)))
+	}
+	if result < 0 {
+		return 0
+	} else {
+		return result
+	}
+}
 
-			result += int64(math.Round(i))
+func FillSpacesUnsigned[T constraints.Unsigned](originalVecCol []T, resultBytes *types.Bytes) Result {
+	result := Result{Result: resultBytes, Nsp: new(nulls.Nulls)}
+	var offset uint32 = 0
+	for i, length := range originalVecCol {
+		if int64(length) > MaxAllowedValue {
+			resultBytes.Lengths[i] = 0
+			resultBytes.Offsets[i] = offset
+			nulls.Add(result.Nsp, uint64(i))
+		} else {
+			resultBytes.Lengths[i] = uint32(length)
+			resultBytes.Offsets[i] = offset
+			offset += uint32(length)
 		}
+	}
+	for i := range resultBytes.Data {
+		resultBytes.Data[i] = ' '
+	}
+	return result
+}
+
+func FillSpacesSigned[T constraints.Signed](originalVecCol []T, resultBytes *types.Bytes) Result {
+	result := Result{Result: resultBytes, Nsp: new(nulls.Nulls)}
+	var offset uint32 = 0
+	for i, length := range originalVecCol {
+		if length <= 0 {
+			resultBytes.Lengths[i] = 0
+			resultBytes.Offsets[i] = offset
+		} else if int64(length) > MaxAllowedValue {
+			resultBytes.Lengths[i] = 0
+			resultBytes.Offsets[i] = offset
+			nulls.Add(result.Nsp, uint64(i))
+		} else {
+			resultBytes.Lengths[i] = uint32(length) // this cast is guaranteed safe because length > 0
+			resultBytes.Offsets[i] = offset
+			offset += uint32(length)
+		}
+	}
+	for i := range resultBytes.Data {
+		resultBytes.Data[i] = ' '
+	}
+	return result
+}
+
+func FillSpacesFloat[T constraints.Float](originalVecCol []T, resultBytes *types.Bytes) Result {
+	result := Result{Result: resultBytes, Nsp: new(nulls.Nulls)}
+	var offset uint32 = 0
+	for i, length := range originalVecCol {
+		roundLen := math.Round(float64(length))
+		if roundLen <= 0 {
+			resultBytes.Lengths[i] = 0
+			resultBytes.Offsets[i] = offset
+		} else if int64(length) > MaxAllowedValue {
+			resultBytes.Lengths[i] = 0
+			resultBytes.Offsets[i] = offset
+			nulls.Add(result.Nsp, uint64(i))
+		} else {
+			resultBytes.Lengths[i] = uint32(roundLen)
+			resultBytes.Offsets[i] = offset
+			offset += uint32(roundLen)
+		}
+	}
+	for i := range resultBytes.Data {
+		resultBytes.Data[i] = ' '
+	}
+	return result
+}
+
+func CountSpacesForUint64(columnValues []uint64) int64 {
+	return int64(sum.Uint64Sum(columnValues))
+}
+func CountSpacesForFloat[T constraints.Float](columnValues []T) int64 {
+	var result int64
+
+	for _, i := range columnValues {
+		if i < 0 {
+			continue
+		}
+
+		result += int64(math.Round(float64(i)))
 	}
 
 	return result
@@ -109,11 +225,9 @@ func parseStringAsInt64(s string) int64 {
 
 func CountSpacesForCharVarChar(originalVecCol *types.Bytes) int64 {
 	var result int64
-
 	for i, offset := range originalVecCol.Offsets {
 		result += parseStringAsInt64(string(originalVecCol.Data[offset : offset+originalVecCol.Lengths[i]]))
 	}
-
 	return result
 }
 
@@ -258,6 +372,24 @@ func FillSpacesInt64(originalVecCol []int64, result *types.Bytes) *types.Bytes {
 
 	return result
 }
+
+/*
+func FillSpacesSigned[T constraints.Integer](originalVecCol []T, result *types.Bytes) *types.Bytes {
+	var offset uint32 = 0
+	for i, length := range originalVecCol {
+		result.Lengths[i] = uint32(length)
+		result.Offsets[i] = offset
+		offset += uint32(length)
+	}
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
+
+	return result
+}
+
+*/
 
 func FillSpacesFloat32(originalVecCol []float32, result *types.Bytes) *types.Bytes {
 	var offset uint32 = 0

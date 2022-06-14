@@ -36,3 +36,17 @@ type FloatRing struct {
 	Vs  []float64
 	Typ types.Type
 }
+
+type Decimal64Ring struct {
+	Da  []byte
+	Ns  []int64
+	Vs  []types.Decimal64
+	Typ types.Type
+}
+
+type Decimal128Ring struct {
+	Da  []byte
+	Ns  []int64
+	Vs  []types.Decimal128
+	Typ types.Type
+}

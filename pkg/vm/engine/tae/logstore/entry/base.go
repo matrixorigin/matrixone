@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	_basePool = sync.Pool{New: func() interface{} {
+	_basePool = sync.Pool{New: func() any {
 		return &Base{
 			descriptor: newDescriptor(),
 		}
@@ -38,7 +38,7 @@ type Base struct {
 	*descriptor
 	node      *common.MemNode
 	payload   []byte
-	info      interface{}
+	info      any
 	infobuf   []byte
 	wg        sync.WaitGroup
 	t0        time.Time
@@ -55,7 +55,8 @@ type Info struct {
 
 	GroupLSN uint64
 
-	Info interface{}
+	PostCommitVersion int
+	Info              any
 }
 
 func (info *Info) Marshal() []byte {
@@ -64,6 +65,9 @@ func (info *Info) Marshal() []byte {
 	binary.BigEndian.PutUint32(buf[pos:pos+4], info.Group)
 	pos += 4
 	binary.BigEndian.PutUint64(buf[pos:pos+8], info.TxnId)
+	pos += 8
+
+	binary.BigEndian.PutUint64(buf[pos:pos+8], uint64(info.PostCommitVersion))
 	pos += 8
 
 	length := uint64(len(info.Checkpoints))
@@ -155,6 +159,9 @@ func Unmarshal(buf []byte) *Info {
 	pos += 4
 	info.TxnId = binary.BigEndian.Uint64(buf[pos : pos+8])
 	pos += 8
+	id := binary.BigEndian.Uint64(buf[pos : pos+8])
+	pos += 8
+	info.PostCommitVersion = int(id)
 
 	length := binary.BigEndian.Uint64(buf[pos : pos+8])
 	pos += 8
@@ -209,7 +216,6 @@ func Unmarshal(buf []byte) *Info {
 		info.Uncommits = append(info.Uncommits, tidInfo)
 	}
 	info.GroupLSN = binary.BigEndian.Uint64(buf[pos : pos+8])
-	pos += 8
 	return info
 }
 
@@ -354,11 +360,11 @@ func (b *Base) GetPayload() []byte {
 	return b.payload
 }
 
-func (b *Base) SetInfo(info interface{}) {
+func (b *Base) SetInfo(info any) {
 	b.info = info
 }
 
-func (b *Base) GetInfo() interface{} {
+func (b *Base) GetInfo() any {
 	return b.info
 }
 

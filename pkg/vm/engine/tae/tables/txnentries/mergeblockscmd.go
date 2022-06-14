@@ -103,7 +103,7 @@ func WriteUint32Array(w io.Writer, array []uint32) (n int64, err error) {
 	}
 	n = 4
 	for _, i := range array {
-		if binary.Write(w, binary.BigEndian, i); err != nil {
+		if err = binary.Write(w, binary.BigEndian, i); err != nil {
 			return
 		}
 		n += 4
@@ -119,7 +119,7 @@ func ReadUint32Array(r io.Reader) (array []uint32, n int64, err error) {
 	n = 4
 	array = make([]uint32, length)
 	for i := 0; i < int(length); i++ {
-		if binary.Read(r, binary.BigEndian, &array[i]); err != nil {
+		if err = binary.Read(r, binary.BigEndian, &array[i]); err != nil {
 			return
 		}
 		n += 4
@@ -170,7 +170,7 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 		n += sn
 	}
 
-	createdBlksLength := uint32(len(cmd.createdSegs))
+	createdBlksLength := uint32(len(cmd.createdBlks))
 	if err = binary.Write(w, binary.BigEndian, createdBlksLength); err != nil {
 		return
 	}

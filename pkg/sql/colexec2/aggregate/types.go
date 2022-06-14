@@ -14,6 +14,8 @@
 
 package aggregate
 
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 const (
 	Sum = iota
 	Avg
@@ -27,6 +29,7 @@ const (
 	BitXor
 	BitOr
 	StdDevPop
+	AnyValue
 )
 
 var Names = [...]string{
@@ -42,9 +45,11 @@ var Names = [...]string{
 	BitXor:              "bit_xor",
 	BitOr:               "bit_or",
 	StdDevPop:           "stddev_pop",
+	AnyValue:            "any",
 }
 
 type Aggregate struct {
-	Op  int
-	Pos int32
+	Op   int
+	Dist bool
+	E    *plan.Expr
 }

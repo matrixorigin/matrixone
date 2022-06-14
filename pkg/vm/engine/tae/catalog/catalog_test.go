@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -32,6 +33,33 @@ const (
 	ModuleName = "TAECATALOG"
 )
 
+func TestCompoundPKSchema(t *testing.T) {
+	schema := NewEmptySchema(t.Name())
+	err := schema.AppendPKCol("pk1", types.T_int32.ToType(), 1)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk2", types.T_int32.ToType(), 2)
+	assert.NoError(t, err)
+	err = schema.Finalize(false)
+	assert.NoError(t, err)
+	assert.Equal(t, 3, schema.SortKey.Size())
+	assert.Equal(t, int8(0), schema.SortKey.GetDef(0).SortIdx)
+	assert.Equal(t, int8(1), schema.SortKey.GetDef(1).SortIdx)
+	assert.Equal(t, int8(2), schema.SortKey.GetDef(2).SortIdx)
+	assert.Equal(t, "pk0", schema.SortKey.GetDef(0).Name)
+	assert.Equal(t, "pk1", schema.SortKey.GetDef(1).Name)
+	assert.Equal(t, "pk2", schema.SortKey.GetDef(2).Name)
+
+	schema = NewEmptySchema(t.Name())
+	err = schema.AppendPKCol("pk1", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
+	assert.NoError(t, err)
+	err = schema.Finalize(false)
+	assert.ErrorIs(t, err, ErrSchemaValidation)
+}
+
 func TestCreateDB1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	catalog := MockCatalog(dir, "mock", nil, nil)
@@ -41,26 +69,26 @@ func TestCreateDB1(t *testing.T) {
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 
 	name := fmt.Sprintf("%s-%d", t.Name(), 1)
 	db1, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
 	t.Log(db1.String())
 
-	assert.Equal(t, 1, len(catalog.entries))
+	assert.Equal(t, 2, len(catalog.entries))
 	cnt := 0
 	catalog.link.Loop(func(n *common.DLNode) bool {
 		t.Log(n.GetPayload().(*DBEntry).GetID())
 		cnt++
 		return true
 	}, true)
-	assert.Equal(t, 1, cnt)
+	assert.Equal(t, 2, cnt)
 
 	_, err = txn1.CreateDatabase(name)
 	assert.Equal(t, ErrDuplicate, err)
 
-	txn2 := txnMgr.StartTxn(nil)
+	txn2, _ := txnMgr.StartTxn(nil)
 
 	_, err = txn2.CreateDatabase(name)
 	assert.Equal(t, txnif.TxnWWConflictErr, err)
@@ -68,7 +96,8 @@ func TestCreateDB1(t *testing.T) {
 	_, err = txn1.GetDatabase(name)
 	assert.Nil(t, err)
 
-	txn1.Commit()
+	err = txn1.Commit()
+	assert.Nil(t, err)
 
 	assert.Nil(t, err)
 	// assert.False(t, db1.(*mcokDBHandle).entry.IsCommitting())
@@ -79,7 +108,7 @@ func TestCreateDB1(t *testing.T) {
 	_, err = txn2.DropDatabase(name)
 	assert.Equal(t, ErrNotFound, err)
 
-	txn3 := txnMgr.StartTxn(nil)
+	txn3, _ := txnMgr.StartTxn(nil)
 	_, err = txn3.DropDatabase(name)
 	assert.Nil(t, err)
 	// assert.True(t, db1.(*mcokDBHandle).entry.IsDroppedUncommitted())
@@ -93,11 +122,12 @@ func TestCreateDB1(t *testing.T) {
 		cnt++
 		return true
 	}, true)
-	assert.Equal(t, 2, cnt)
+	assert.Equal(t, 3, cnt)
 
-	txn4 := txnMgr.StartTxn(nil)
+	txn4, _ := txnMgr.StartTxn(nil)
 
 	h, err := txn4.GetDatabase(name)
+	assert.Nil(t, err)
 	assert.NotNil(t, h)
 	// assert.Equal(t, db1.(*mcokDBHandle).entry, h.(*mcokDBHandle).entry)
 }
@@ -125,13 +155,13 @@ func TestTableEntry1(t *testing.T) {
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 	name := "db1"
 	db1, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
 	t.Log(db1.String())
 
-	schema := MockSchema(2)
+	schema := MockSchema(2, 0)
 	schema.Name = "tb1"
 	tb1, err := db1.CreateRelation(schema)
 	assert.Nil(t, err)
@@ -143,7 +173,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = db1.CreateRelation(schema)
 	assert.Equal(t, ErrDuplicate, err)
 
-	txn2 := txnMgr.StartTxn(nil)
+	txn2, _ := txnMgr.StartTxn(nil)
 	_, err = txn2.GetDatabase(schema.Name)
 	assert.Equal(t, err, ErrNotFound)
 
@@ -159,7 +189,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = txn2.DropDatabase(name)
 	assert.Equal(t, err, ErrNotFound)
 
-	txn3 := txnMgr.StartTxn(nil)
+	txn3, _ := txnMgr.StartTxn(nil)
 	db, err := txn3.GetDatabase(name)
 	assert.Nil(t, err)
 
@@ -170,7 +200,7 @@ func TestTableEntry1(t *testing.T) {
 	_, err = db.GetRelationByName(schema.Name)
 	assert.Equal(t, ErrNotFound, err)
 
-	txn4 := txnMgr.StartTxn(nil)
+	txn4, _ := txnMgr.StartTxn(nil)
 	db, err = txn4.GetDatabase(name)
 	assert.Nil(t, err)
 	_, err = db.GetRelationByName(schema.Name)
@@ -184,7 +214,7 @@ func TestTableEntry1(t *testing.T) {
 
 	t.Log(tb1.String())
 
-	txn5 := txnMgr.StartTxn(nil)
+	txn5, _ := txnMgr.StartTxn(nil)
 	db, err = txn5.GetDatabase(name)
 	assert.Nil(t, err)
 	_, err = db.GetRelationByName(schema.Name)
@@ -200,17 +230,17 @@ func TestTableEntry2(t *testing.T) {
 	txnMgr.Start()
 	defer txnMgr.Stop()
 
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 	name := "db1"
 	db, err := txn1.CreateDatabase(name)
 	assert.Nil(t, err)
-	schema := MockSchema(2)
+	schema := MockSchema(2, 0)
 	schema.Name = "tb1"
 	_, err = db.CreateRelation(schema)
 	assert.Nil(t, err)
 
 	for i := 0; i < 1000; i++ {
-		s := MockSchema(1)
+		s := MockSchema(1, 0)
 		s.Name = fmt.Sprintf("xx%d", i)
 		_, err = db.CreateRelation(s)
 		assert.Nil(t, err)
@@ -218,7 +248,7 @@ func TestTableEntry2(t *testing.T) {
 	err = txn1.Commit()
 	assert.Nil(t, err)
 
-	txn2 := txnMgr.StartTxn(nil)
+	txn2, _ := txnMgr.StartTxn(nil)
 	db, err = txn2.GetDatabase(name)
 	assert.Nil(t, err)
 	rel, err := db.DropRelationByName(schema.Name)
@@ -231,7 +261,7 @@ func TestTableEntry2(t *testing.T) {
 	var wg sync.WaitGroup
 	txns := []txnif.AsyncTxn{txn2}
 	for i := 0; i < 10; i++ {
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		txns = append(txns, txn)
 	}
 	now := time.Now()
@@ -269,7 +299,7 @@ func TestDB1(t *testing.T) {
 	var wg sync.WaitGroup
 	flow := func() {
 		defer wg.Done()
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.GetDatabase(name)
 		if err == ErrNotFound {
 			_, err = txn.CreateDatabase(name)
@@ -306,12 +336,12 @@ func TestTable1(t *testing.T) {
 	var wg sync.WaitGroup
 	flow := func() {
 		defer wg.Done()
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		db, err := txn.GetDatabase(name)
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(tbName)
 		if err == ErrNotFound {
-			schema := MockSchema(1)
+			schema := MockSchema(1, 0)
 			schema.Name = tbName
 			if rel, err = db.CreateRelation(schema); err != nil {
 				return
@@ -327,7 +357,7 @@ func TestTable1(t *testing.T) {
 		// t.Log(rel.String())
 	}
 	{
-		txn := txnMgr.StartTxn(nil)
+		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.CreateDatabase(name)
 		assert.Nil(t, err)
 		err = txn.Commit()
@@ -389,7 +419,7 @@ func TestCommand(t *testing.T) {
 	assert.Equal(t, db.DeleteAt, eCmd.entry.DeleteAt)
 	assert.Equal(t, db.ID, eCmd.entry.ID)
 
-	schema := MockSchemaAll(13)
+	schema := MockSchemaAll(13, 0)
 	tb := NewTableEntry(db, schema, nil, nil)
 	tb.CreateAt = common.NextGlobalSeqNum()
 	tb.ID = common.NextGlobalSeqNum()
@@ -449,10 +479,10 @@ func TestSegment1(t *testing.T) {
 	defer txnMgr.Stop()
 	name := "db"
 	tbName := "tb"
-	txn1 := txnMgr.StartTxn(nil)
+	txn1, _ := txnMgr.StartTxn(nil)
 	db, err := catalog.CreateDBEntry(name, txn1)
 	assert.Nil(t, err)
-	schema := MockSchema(1)
+	schema := MockSchema(1, 0)
 	schema.Name = tbName
 	tb, err := db.CreateTableEntry(schema, txn1, nil)
 	assert.Nil(t, err)

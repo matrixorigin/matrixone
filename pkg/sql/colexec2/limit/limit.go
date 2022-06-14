@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
-	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
-	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -34,13 +34,16 @@ func Prepare(_ *process.Process, _ interface{}) error {
 // returning only the first n tuples from its input
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
 		return false, nil
 	}
 	n := arg.(*Argument)
 	if n.Seen >= n.Limit {
 		proc.Reg.InputBatch = nil
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc.Mp)
 		return true, nil
 	}
 	length := len(bat.Zs)

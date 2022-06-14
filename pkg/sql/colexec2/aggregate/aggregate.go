@@ -15,8 +15,8 @@
 package aggregate
 
 import (
-	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/anyvalue"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
@@ -76,17 +76,23 @@ func ReturnType(op int, typ types.T) types.T {
 	return 0
 }
 
-func New(op int, typ types.Type) (ring.Ring, error) {
+func New(op int, dist bool, typ types.Type) (ring.Ring, error) {
 	switch op {
 	case Sum:
 		return NewSum(typ)
 	case Avg:
+		if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+			return avg.NewDecimalRing(typ), nil
+		}
 		return avg.NewAvg(typ), nil
 	case Max:
 		return NewMax(typ)
 	case Min:
 		return NewMin(typ)
 	case Count:
+		if dist {
+			return count.NewDistinctCount(typ), nil
+		}
 		return count.NewCount(typ), nil
 	case StarCount:
 		return starcount.NewCount(typ), nil
@@ -102,6 +108,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return NewBitOr(typ)
 	case StdDevPop:
 		return stddevpop.NewStdDevPopRingWithTypeCheck(typ)
+	case AnyValue:
+		return anyvalue.NewAnyValueRingWithTypeCheck(typ)
 	}
 	return nil, nil
 }
@@ -111,7 +119,7 @@ func NewBitAnd(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
 		return bitand.NewNumeric(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support BitAnd", typ))
+	return nil, fmt.Errorf("'%v' not support BitAnd", typ)
 }
 
 func NewBitOr(typ types.Type) (ring.Ring, error) {
@@ -119,7 +127,7 @@ func NewBitOr(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
 		return bitor.NewBitOr(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support BitOr", typ))
+	return nil, fmt.Errorf("'%v' not support BitOr", typ)
 }
 
 func NewBitXor(typ types.Type) (ring.Ring, error) {
@@ -127,7 +135,7 @@ func NewBitXor(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
 		return bitxor.NewBitXor(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support BitXor", typ))
+	return nil, fmt.Errorf("'%v' not support BitXor", typ)
 }
 
 func NewSum(typ types.Type) (ring.Ring, error) {
@@ -139,11 +147,13 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return sum.NewUint(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Sum", typ))
+	return nil, fmt.Errorf("'%v' not support Sum", typ)
 }
 
 func NewMax(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return max.NewBool(typ), nil
 	case types.T_int8:
 		return max.NewInt8(typ), nil
 	case types.T_int16:
@@ -171,11 +181,13 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 	case types.T_datetime:
 		return max.NewDatetime(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Max", typ))
+	return nil, fmt.Errorf("'%v' not support Max", typ)
 }
 
 func NewMin(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return min.NewBool(typ), nil
 	case types.T_int8:
 		return min.NewInt8(typ), nil
 	case types.T_int16:
@@ -203,5 +215,5 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 	case types.T_datetime:
 		return min.NewDatetime(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Min", typ))
+	return nil, fmt.Errorf("'%v' not support Min", typ)
 }

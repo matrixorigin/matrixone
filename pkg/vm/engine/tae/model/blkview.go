@@ -21,8 +21,8 @@ import (
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -32,7 +32,7 @@ type BlockView struct {
 	Raw              batch.IBatch
 	RawBatch         *mobat.Batch
 	UpdateMasks      map[uint16]*roaring.Bitmap
-	UpdateVals       map[uint16]map[uint32]interface{}
+	UpdateVals       map[uint16]map[uint32]any
 	DeleteMask       *roaring.Bitmap
 	AppliedIBatch    batch.IBatch
 	AppliedBatch     *mobat.Batch
@@ -44,7 +44,7 @@ func NewBlockView(ts uint64) *BlockView {
 	return &BlockView{
 		Ts:            ts,
 		UpdateMasks:   make(map[uint16]*roaring.Bitmap),
-		UpdateVals:    make(map[uint16]map[uint32]interface{}),
+		UpdateVals:    make(map[uint16]map[uint32]any),
 		ColLogIndexes: make(map[uint16][]*wal.Index),
 	}
 }
@@ -148,6 +148,5 @@ func (view *BlockView) Unmarshal(buf []byte) (err error) {
 		return
 	}
 	view.AppliedIBatch = &batch.Batch{}
-	view.AppliedIBatch.Unmarshal(buf[pos : pos+int(batLength)])
-	return
+	return view.AppliedIBatch.Unmarshal(buf[pos : pos+int(batLength)])
 }

@@ -21,10 +21,8 @@ import (
 	"math/rand"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
-
-	// "time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -33,6 +31,468 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+func appendUncommitEntry(t *testing.T, s *baseStore, buf []byte, tid uint64) entry.Entry {
+	e := entry.GetBase()
+	uncommitInfo := &entry.Info{
+		Group: entry.GTUncommit,
+		Uncommits: []entry.Tid{{
+			Group: 11,
+			Tid:   tid,
+		}},
+	}
+	e.SetType(entry.ETUncommitted)
+	e.SetInfo(uncommitInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTUncommit, e)
+	assert.Nil(t, err)
+	return e
+}
+
+func appendCommitEntry(t *testing.T, s *baseStore, buf []byte, tid uint64) entry.Entry {
+	txnInfo := &entry.Info{
+		Group: 11,
+		TxnId: tid,
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETTxn)
+	e.SetInfo(txnInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(11, e)
+	assert.Nil(t, err)
+	return e
+}
+
+func appendAnotherEntry(t *testing.T, s *baseStore, buf []byte) {
+	txnInfo := &entry.Info{
+		Group: 12,
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETTxn)
+	e.SetInfo(txnInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(11, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+	e.Free()
+}
+
+func appendCkpEntry(t *testing.T, s *baseStore, lsn uint64) entry.Entry {
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group:  11,
+			Ranges: common.NewClosedIntervalsByInterval(&common.ClosedInterval{Start: 0, End: lsn}),
+		}},
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETCheckpoint)
+	e.SetInfo(info)
+	_, err := s.AppendEntry(entry.GTCKp, e)
+	assert.Nil(t, err)
+	return e
+}
+
+func appendPartialCkpEntry(t *testing.T, s *baseStore, lsn uint64, csns []uint32, size uint32) entry.Entry {
+	cmd := entry.CommandInfo{
+		Size:       size,
+		CommandIds: csns,
+	}
+	cmds := make(map[uint64]entry.CommandInfo)
+	cmds[lsn] = cmd
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group:   11,
+			Command: cmds,
+		}},
+	}
+	e := entry.GetBase()
+	e.SetType(entry.ETCheckpoint)
+	e.SetInfo(info)
+	_, err := s.AppendEntry(entry.GTCKp, e)
+	assert.Nil(t, err)
+	return e
+}
+
+// append UC, C, CKP
+func appendEntries(t *testing.T, s *baseStore, buf []byte, tid uint64) {
+	e := entry.GetBase()
+	uncommitInfo := &entry.Info{
+		Group: entry.GTUncommit,
+		Uncommits: []entry.Tid{{
+			Group: 11,
+			Tid:   tid,
+		}},
+	}
+	e.SetType(entry.ETUncommitted)
+	e.SetInfo(uncommitInfo)
+	n := common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err := e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTUncommit, e)
+	assert.Nil(t, err)
+	err = e.WaitDone()
+	assert.Nil(t, err)
+	e.Free()
+
+	txnInfo := &entry.Info{
+		Group: 11,
+		TxnId: tid,
+	}
+	e = entry.GetBase()
+	e.SetType(entry.ETTxn)
+	e.SetInfo(txnInfo)
+	n = common.GPool.Alloc(common.K)
+	copy(n.GetBuf(), buf)
+	err = e.UnmarshalFromNode(n, true)
+	assert.Nil(t, err)
+	cmtLsn, err := s.AppendEntry(11, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+	e.Free()
+
+	cmd := entry.CommandInfo{
+		Size:       2,
+		CommandIds: []uint32{0, 1},
+	}
+	cmds := make(map[uint64]entry.CommandInfo)
+	cmds[cmtLsn] = cmd
+	info := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group:   11,
+			Command: cmds,
+		}},
+	}
+	e = entry.GetBase()
+	e.SetType(entry.ETCheckpoint)
+	e.SetInfo(info)
+	_, err = s.AppendEntry(entry.GTCKp, e)
+	assert.Nil(t, err)
+	assert.Nil(t, e.WaitDone())
+	e.Free()
+}
+
+func initEnv(t *testing.T) (*baseStore, []byte) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+	return s, buf
+}
+
+func restartStore(t *testing.T, s *baseStore) *baseStore {
+	t.Log(s.file.GetHistory().String())
+	err := s.Close()
+	assert.Nil(t, err)
+
+	t.Log("******************Replay*********************")
+
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	s, err = NewBaseStore(s.dir, s.name, cfg)
+	assert.Nil(t, err)
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+		// fmt.Printf("%s", payload)
+	}
+	err = s.Replay(a)
+	assert.Nil(t, err)
+	t.Log(s.file.GetHistory().String())
+	return s
+}
+
+func logSyncbase(t *testing.T, s *baseStore) {
+	t.Log(s.groupLSN)
+	t.Log(s.checkpointing)
+	t.Log(s.syncing)
+	t.Log(s.checkpointed.ids)
+	t.Log(s.synced.ids)
+	t.Log(s.ckpCnt.ids)
+	t.Log(s.tidLsnMaps)
+	t.Log(s.addrs)
+}
+
+func TestMergePartialCKp(t *testing.T) {
+	s, buf := initEnv(t)
+
+	e1 := appendCommitEntry(t, s, buf, 1)
+	e2 := appendUncommitEntry(t, s, buf, 1)
+	e3 := appendPartialCkpEntry(t, s, 1, []uint32{0}, 2)
+	assert.Nil(t, e3.WaitDone())
+	e1.Free()
+	e2.Free()
+	e3.Free()
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+
+	appendAnotherEntry(t, s, buf)
+	e2 = appendPartialCkpEntry(t, s, 1, []uint32{1}, 2)
+	assert.Nil(t, e2.WaitDone())
+	e2.Free()
+	testutils.WaitExpect(400, func() bool {
+		return s.GetCheckpointed(11) == 1
+	})
+	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+
+	assert.Nil(t, s.TryCompact())
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+
+	s = restartStore(t, s)
+
+	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+
+	assert.Nil(t, s.Close())
+}
+
+// uncommit, commit, ckp  vf1
+// ckp all                vf2
+// truncate
+// check vinfo not exist
+// uncommit, commit       vf2
+// replay
+// ckp all                vf3
+// truncate
+// check vinfo not exist
+func TestTruncate(t *testing.T) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+
+	appendEntries(t, s, buf, 1)
+	appendEntries(t, s, buf, 2)
+	appendEntries(t, s, buf, 3)
+
+	assert.Equal(t, 2, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+
+	assert.Nil(t, s.TryCompact())
+
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+	err = s.Close()
+	assert.Nil(t, err)
+
+	t.Log("******************Replay*********************")
+
+	s2, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+		// fmt.Printf("%s", payload)
+	}
+	err = s2.Replay(a)
+	assert.Nil(t, err)
+
+	appendEntries(t, s2, buf, 4)
+
+	assert.Equal(t, 1, len(s2.file.GetHistory().EntryIds()))
+	t.Log(s2.file.GetHistory().String())
+
+	assert.Nil(t, s2.TryCompact())
+
+	assert.Equal(t, 0, len(s2.file.GetHistory().EntryIds()))
+	t.Log(s2.file.GetHistory().String())
+
+	err = s2.Close()
+	assert.Nil(t, err)
+}
+
+func TestTruncate2(t *testing.T) {
+	s, buf := initEnv(t)
+	tidAlloc := &common.IdAllocator{}
+	cmtEntryCnt := 5
+	wg := sync.WaitGroup{}
+	worker, _ := ants.NewPool(cmtEntryCnt)
+	f := func() {
+		tid := tidAlloc.Alloc()
+		e1 := appendUncommitEntry(t, s, buf, tid)
+		e2 := appendCommitEntry(t, s, buf, tid)
+		err := e1.WaitDone()
+		assert.Nil(t, err)
+		err = e2.WaitDone()
+		assert.Nil(t, err)
+		e1.Free()
+		e2.Free()
+		wg.Done()
+	}
+	wg.Add(cmtEntryCnt)
+	for i := 0; i < cmtEntryCnt; i++ {
+		err := worker.Submit(f)
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+
+	s = restartStore(t, s)
+
+	assert.Equal(t, uint64(cmtEntryCnt), s.GetCurrSeqNum(11))
+	e := appendCkpEntry(t, s, uint64(cmtEntryCnt))
+	err := e.WaitDone()
+	assert.Nil(t, err)
+	e.Free()
+	testutils.WaitExpect(400, func() bool {
+		return s.GetCheckpointed(11) == uint64(cmtEntryCnt)
+	})
+	assert.Equal(t, uint64(cmtEntryCnt), s.GetCheckpointed(11))
+	err = s.TryCompact()
+	assert.Nil(t, err)
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+	t.Log(s.file.GetHistory().String())
+}
+
+func TestReplay2(t *testing.T) {
+	s, buf := initEnv(t)
+	tidAlloc := &common.IdAllocator{}
+	cmtEntryCnt := 5
+	wg := sync.WaitGroup{}
+	worker, _ := ants.NewPool(cmtEntryCnt)
+	f := func() {
+		tid := tidAlloc.Alloc()
+		e1 := appendUncommitEntry(t, s, buf, tid)
+		e2 := appendCommitEntry(t, s, buf, tid)
+		e3 := appendPartialCkpEntry(t, s, e2.GetInfo().(*entry.Info).GroupLSN, []uint32{0}, 2)
+		err := e1.WaitDone()
+		assert.Nil(t, err)
+		err = e2.WaitDone()
+		assert.Nil(t, err)
+		err = e3.WaitDone()
+		assert.Nil(t, err)
+		e1.Free()
+		e2.Free()
+		e3.Free()
+		wg.Done()
+	}
+	wg.Add(cmtEntryCnt)
+	for i := 0; i < cmtEntryCnt; i++ {
+		err := worker.Submit(f)
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+
+	//check syncbase
+	testutils.WaitExpect(400, func() bool {
+		return s.GetSynced(entry.GTCKp) == s.GetCurrSeqNum(entry.GTCKp)
+	})
+	testutils.WaitExpect(400, func() bool {
+		version := atomic.LoadUint64(&s.syncedVersion)
+		committedversion := uint64(s.file.GetHistory().EntryIds()[len(s.file.GetHistory().EntryIds())-1])
+		return version == committedversion
+	})
+	assert.Equal(t, s.GetSynced(entry.GTCKp), s.GetCurrSeqNum(entry.GTCKp))
+
+	logSyncbase(t, s)
+	s = restartStore(t, s)
+	logSyncbase(t, s)
+
+	tid := tidAlloc.Alloc()
+	e1 := appendUncommitEntry(t, s, buf, tid)
+	e2 := appendCommitEntry(t, s, buf, tid)
+	err := e1.WaitDone()
+	assert.Nil(t, err)
+	err = e2.WaitDone()
+	assert.Nil(t, err)
+	e1.Free()
+	e2.Free()
+	testutils.WaitExpect(400, func() bool {
+		return s.GetSynced(11) == s.GetCurrSeqNum(11)
+	})
+	assert.Equal(t, s.GetSynced(11), s.GetCurrSeqNum(11))
+	testutils.WaitExpect(400, func() bool {
+		version := atomic.LoadUint64(&s.syncedVersion)
+		committedversion := uint64(s.file.GetHistory().EntryIds()[len(s.file.GetHistory().EntryIds())-1])
+		return version == committedversion
+	})
+	testutils.WaitExpect(400, func() bool {
+		return s.GetSynced(4) == s.GetCurrSeqNum(4)
+	})
+	assert.Equal(t, s.GetSynced(4), s.GetCurrSeqNum(4))
+	assert.Equal(t, s.GetSynced(entry.GTCKp), s.GetCurrSeqNum(entry.GTCKp))
+	logSyncbase(t, s)
+	s.Close()
+}
+
+func TestAddrVersion(t *testing.T) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 3),
+	}
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+	defer s.Close()
+
+	var bs bytes.Buffer
+	for i := 0; i < 3000; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	for i := 0; i < 10; i++ {
+		e := entry.GetBase()
+		uncommitInfo := &entry.Info{
+			Group: entry.GTUncommit,
+			Uncommits: []entry.Tid{{
+				Group: 11,
+				Tid:   1,
+			}},
+		}
+		e.SetType(entry.ETUncommitted)
+		e.SetInfo(uncommitInfo)
+		n := common.GPool.Alloc(common.K)
+		copy(n.GetBuf(), buf)
+		err = e.UnmarshalFromNode(n, true)
+		assert.Nil(t, err)
+		_, err = s.AppendEntry(entry.GTUncommit, e)
+		assert.Nil(t, err)
+		err := e.WaitDone()
+		assert.Nil(t, err)
+		e.Free()
+	}
+
+	testutils.WaitExpect(4000, func() bool {
+		t.Log(s.GetSynced(entry.GTUncommit))
+		return s.GetSynced(entry.GTUncommit) == 10
+	})
+	s.addrmu.RLock()
+	defer s.addrmu.RUnlock()
+	assert.Equal(t, 5, len(s.addrs[entry.GTUncommit]))
+	t.Log(s.addrs[entry.GTUncommit])
+	for version, lsns := range s.addrs[entry.GTUncommit] {
+		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version)*2 - 1)))
+		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version) * 2)))
+	}
+}
 
 func TestStore(t *testing.T) {
 	dir := "/tmp/logstore/teststore"
@@ -60,6 +520,7 @@ func TestStore(t *testing.T) {
 				err := e.WaitDone()
 				assert.Nil(t, err)
 				v := e.GetInfo()
+				e.Free()
 				if v != nil {
 					info := v.(*entry.Info)
 					t.Logf("group-%d", info.Group)
@@ -78,7 +539,7 @@ func TestStore(t *testing.T) {
 	}
 	buf := bs.Bytes()
 
-	entryPerGroup := 5000
+	entryPerGroup := 1000
 	groupCnt := 1
 	worker, _ := ants.NewPool(groupCnt)
 	fwg.Add(entryPerGroup * groupCnt)
@@ -103,8 +564,10 @@ func TestStore(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
-					s.AppendEntry(entry.GTUncommit, e)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
+					_, err = s.AppendEntry(entry.GTUncommit, e)
+					assert.Nil(t, err)
 				case 99:
 					end := ckp - 1
 					checkpointInfo := &entry.Info{
@@ -128,8 +591,10 @@ func TestStore(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
-					s.AppendEntry(entry.GTCKp, e)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
+					_, err = s.AppendEntry(entry.GTCKp, e)
+					assert.Nil(t, err)
 				case 50, 51, 52, 53:
 					txnInfo := &entry.Info{
 						Group: groupNo,
@@ -140,7 +605,8 @@ func TestStore(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err := s.AppendEntry(groupNo, e)
 					assert.Nil(t, err)
 					ckp = lsn
@@ -153,7 +619,8 @@ func TestStore(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err := s.AppendEntry(groupNo, e)
 					assert.Nil(t, err)
 					ckp = lsn
@@ -164,16 +631,15 @@ func TestStore(t *testing.T) {
 	}
 
 	for j := 0; j < groupCnt; j++ {
-		worker.Submit(f(uint32(j) + entry.GTCustomizedStart))
+		err := worker.Submit(f(uint32(j) + entry.GTCustomizedStart))
+		assert.Nil(t, err)
 	}
 
 	fwg.Wait()
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
+	err = s.TryCompact()
 	assert.Nil(t, err)
 }
 
@@ -204,10 +670,13 @@ func TestPartialCkp(t *testing.T) {
 	uncommit.SetInfo(uncommitInfo)
 	buf2 := make([]byte, common.K)
 	copy(buf2, buf)
-	uncommit.Unmarshal(buf2)
+	err = uncommit.Unmarshal(buf2)
+	assert.Nil(t, err)
 	lsn, err := s.AppendEntry(entry.GTUncommit, uncommit)
 	assert.Nil(t, err)
-	uncommit.WaitDone()
+	err = uncommit.WaitDone()
+	assert.Nil(t, err)
+	uncommit.Free()
 	testutils.WaitExpect(400, func() bool {
 		_, err = s.Load(entry.GTUncommit, lsn)
 		return err == nil
@@ -223,7 +692,8 @@ func TestPartialCkp(t *testing.T) {
 	commit.SetInfo(commitInfo)
 	buf2 = make([]byte, common.K)
 	copy(buf2, buf)
-	commit.Unmarshal(buf2)
+	err = commit.Unmarshal(buf2)
+	assert.Nil(t, err)
 	commitLsn, err := s.AppendEntry(entry.GTCustomizedStart, commit)
 	assert.Nil(t, err)
 
@@ -241,8 +711,10 @@ func TestPartialCkp(t *testing.T) {
 	ckp1.SetInfo(checkpointInfo)
 	buf2 = make([]byte, common.K)
 	copy(buf2, buf)
-	ckp1.Unmarshal(buf2)
-	s.AppendEntry(entry.GTCKp, ckp1)
+	err = ckp1.Unmarshal(buf2)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTCKp, ckp1)
+	assert.Nil(t, err)
 
 	ckp2 := entry.GetBase()
 	checkpointInfo2 := &entry.Info{
@@ -258,8 +730,10 @@ func TestPartialCkp(t *testing.T) {
 	ckp2.SetInfo(checkpointInfo2)
 	buf2 = make([]byte, common.K)
 	copy(buf2, buf)
-	ckp2.Unmarshal(buf2)
-	s.AppendEntry(entry.GTCKp, ckp2)
+	err = ckp2.Unmarshal(buf2)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTCKp, ckp2)
+	assert.Nil(t, err)
 
 	anotherEntry := entry.GetBase()
 	commitInfo = &entry.Info{
@@ -268,11 +742,23 @@ func TestPartialCkp(t *testing.T) {
 	anotherEntry.SetInfo(commitInfo)
 	buf2 = make([]byte, common.K)
 	copy(buf2, buf)
-	anotherEntry.Unmarshal(buf2)
-	s.AppendEntry(entry.GTCustomizedStart, anotherEntry)
-	anotherEntry.WaitDone()
+	err = anotherEntry.Unmarshal(buf2)
+	assert.Nil(t, err)
+	_, err = s.AppendEntry(entry.GTCustomizedStart, anotherEntry)
+	assert.Nil(t, err)
+	err = anotherEntry.WaitDone()
+	assert.Nil(t, err)
 
-	s.TryCompact()
+	commit.Free()
+	ckp1.Free()
+	ckp2.Free()
+	anotherEntry.Free()
+
+	testutils.WaitExpect(400, func() bool {
+		return s.GetCheckpointed(entry.GTCustomizedStart) == 1
+	})
+	err = s.TryCompact()
+	assert.Nil(t, err)
 	_, err = s.Load(entry.GTUncommit, lsn)
 	assert.NotNil(t, err)
 
@@ -303,6 +789,7 @@ func TestReplay(t *testing.T) {
 			case e := <-ch:
 				info := e.GetInfo()
 				err := e.WaitDone()
+				e.Free()
 				assert.Nil(t, err)
 				if info != nil {
 					groupNo := info.(*entry.Info).Group
@@ -343,8 +830,10 @@ func TestReplay(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
-					s.AppendEntry(entry.GTUncommit, e)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
+					_, err = s.AppendEntry(entry.GTUncommit, e)
+					assert.Nil(t, err)
 				case 49: //ckp entry
 					e.SetType(entry.ETCheckpoint)
 					end := ckp
@@ -366,8 +855,10 @@ func TestReplay(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
-					s.AppendEntry(entry.GTCKp, e)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
+					_, err = s.AppendEntry(entry.GTCKp, e)
+					assert.Nil(t, err)
 				case 20, 21, 22, 23: //txn entry
 					e.SetType(entry.ETTxn)
 					txnInfo := &entry.Info{
@@ -380,15 +871,18 @@ func TestReplay(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err := s.AppendEntry(groupNo, e)
 					assert.Nil(t, err)
 					ckp = lsn
 				case 26, 28: //flush entry
 					e.SetType(entry.ETFlush)
 					payload := make([]byte, 0)
-					e.Unmarshal(payload)
-					s.AppendEntry(entry.GTNoop, e)
+					err := e.Unmarshal(payload)
+					assert.Nil(t, err)
+					_, err = s.AppendEntry(entry.GTNoop, e)
+					assert.Nil(t, err)
 				default: //commit entry
 					e.SetType(entry.ETCustomizedStart)
 					commitInterval := &entry.Info{
@@ -400,7 +894,8 @@ func TestReplay(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err := s.AppendEntry(groupNo, e)
 					assert.Nil(t, err)
 					ckp = lsn
@@ -411,7 +906,8 @@ func TestReplay(t *testing.T) {
 	}
 
 	for j := 0; j < groupCnt; j++ {
-		worker.Submit(f(entry.GTCustomizedStart + uint32(j)))
+		err := worker.Submit(f(entry.GTCustomizedStart + uint32(j)))
+		assert.Nil(t, err)
 		// worker.Submit(f(uint32(j)))
 	}
 
@@ -419,17 +915,14 @@ func TestReplay(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
+	err = s.TryCompact()
 	assert.Nil(t, err)
 
 	s.Close()
 
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
 		t.Logf("%s", payload)
-		return nil
 	}
 	r := newReplayer(a)
 	o := &noopObserver{}
@@ -472,19 +965,11 @@ func TestLoad(t *testing.T) {
 				err := e.entry.WaitDone()
 				assert.Nil(t, err)
 				infoin := e.entry.GetInfo()
-				fmt.Printf("entry is %s", e.entry.GetPayload())
+				t.Logf("entry is %s", e.entry.GetPayload())
+				e.entry.Free()
 				if infoin != nil {
 					info := infoin.(*entry.Info)
-					var loadedEntry entry.Entry
-					for i := 0; i < 5; i++ {
-						loadedEntry, err = s.Load(info.Group, e.lsn)
-						if err == nil {
-							fmt.Printf("loaded entry is %s", loadedEntry.GetPayload())
-							break
-						}
-						fmt.Printf("%d-%d:%v\n", info.Group, info.GroupLSN, err)
-						time.Sleep(time.Millisecond * 500)
-					}
+					_, err = s.Load(info.Group, e.lsn)
 					assert.Nil(t, err)
 					t.Logf("synced %d", s.GetSynced(info.Group))
 					t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
@@ -502,7 +987,6 @@ func TestLoad(t *testing.T) {
 	fwg.Add(entryPerGroup * groupCnt)
 	f := func(groupNo uint32) func() {
 		return func() {
-			var err error
 			tidAlloc := &common.IdAllocator{}
 			pre := uint64(0)
 			ckp := uint64(0)
@@ -525,14 +1009,15 @@ func TestLoad(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err = s.AppendEntry(entry.GTUncommit, e)
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
 						lsn:   lsn,
 					}
-					fmt.Printf("alloc %d-%d\n", entry.GTUncommit, lsn)
+					t.Logf("alloc %d-%d", entry.GTUncommit, lsn)
 				case 49: //ckp entry
 					e.SetType(entry.ETCheckpoint)
 					checkpointInfo := &entry.Info{
@@ -552,14 +1037,15 @@ func TestLoad(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err = s.AppendEntry(entry.GTCKp, e)
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
 						lsn:   lsn,
 					}
-					fmt.Printf("alloc %d-%d\n", entry.GTCKp, lsn)
+					t.Logf("alloc %d-%d", entry.GTCKp, lsn)
 				case 20, 21, 22, 23: //txn entry
 					e.SetType(entry.ETTxn)
 					txnInfo := &entry.Info{
@@ -571,7 +1057,8 @@ func TestLoad(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err = s.AppendEntry(groupNo, e)
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
@@ -579,18 +1066,19 @@ func TestLoad(t *testing.T) {
 						lsn:   lsn,
 					}
 					ckp = lsn
-					fmt.Printf("alloc %d-%d\n", groupNo, lsn)
+					t.Logf("alloc %d-%d", groupNo, lsn)
 				case 26, 28: //flush entry
 					e.SetType(entry.ETFlush)
 					payload := make([]byte, 0)
-					e.Unmarshal(payload)
+					err := e.Unmarshal(payload)
+					assert.Nil(t, err)
 					lsn, err = s.AppendEntry(entry.GTNoop, e)
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
 						lsn:   lsn,
 					}
-					fmt.Printf("alloc %d-%d\n", entry.GTNoop, lsn)
+					t.Logf("alloc %d-%d", entry.GTNoop, lsn)
 				default: //commit entry
 					e.SetType(entry.ETCustomizedStart)
 					commitInterval := &entry.Info{}
@@ -600,7 +1088,8 @@ func TestLoad(t *testing.T) {
 					n := common.GPool.Alloc(uint64(len(buf)))
 					n.Buf = n.Buf[:len(buf)]
 					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
+					err := e.UnmarshalFromNode(n, true)
+					assert.Nil(t, err)
 					lsn, err = s.AppendEntry(groupNo, e)
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
@@ -608,7 +1097,7 @@ func TestLoad(t *testing.T) {
 						lsn:   lsn,
 					}
 					ckp = lsn
-					fmt.Printf("alloc %d-%d\n", groupNo, lsn)
+					t.Logf("alloc %d-%d", groupNo, lsn)
 				}
 				ch <- entrywithlsn
 			}
@@ -616,56 +1105,39 @@ func TestLoad(t *testing.T) {
 	}
 
 	for j := entry.GTCustomizedStart; j < entry.GTCustomizedStart+uint32(groupCnt); j++ {
-		worker.Submit(f(uint32(j)))
+		err := worker.Submit(f(uint32(j)))
+		assert.Nil(t, err)
 	}
 
 	fwg.Wait()
 	cancel()
 	wg.Wait()
 
-	h := s.file.GetHistory()
-	// t.Log(h.String())
-	err = h.TryTruncate()
+	err = s.TryCompact()
 	assert.Nil(t, err)
 
 	s.Close()
 
 	fmt.Printf("\n***********replay***********\n\n")
 	s, _ = NewBaseStore(dir, name, cfg)
-	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
-		fmt.Printf("%s", payload)
-		return nil
+	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+		t.Logf("%s", payload)
 	}
-	s.Replay(a)
-	// r := newReplayer(a)
-	// o := &noopObserver{}
-	// err = s.file.Replay(r.replayHandler, o)
-	// if err != nil {
-	// 	fmt.Printf("err is %v", err)
-	// }
-	// r.Apply()
+	err = s.Replay(a)
+	assert.Nil(t, err)
 
 	for _, e := range ch2 {
-		err := e.entry.WaitDone()
-		assert.Nil(t, err)
 		infoin := e.entry.GetInfo()
-		fmt.Printf("entry is %s", e.entry.GetPayload())
+		t.Logf("entry is %s", e.entry.GetPayload())
 		if infoin != nil {
 			info := infoin.(*entry.Info)
-			var loadedEntry entry.Entry
-			for i := 0; i < 5; i++ {
-				loadedEntry, err = s.Load(info.Group, e.lsn)
-				if err == nil {
-					fmt.Printf("loaded entry is %s", loadedEntry.GetPayload())
-					break
-				}
-				fmt.Printf("%d-%d:%v\n", info.Group, info.GroupLSN, err)
-				time.Sleep(time.Millisecond * 500)
+			if info.Group != entry.GTNoop {
+				_, err = s.Load(info.Group, e.lsn)
+				assert.Nil(t, err)
+				t.Logf("synced %d", s.GetSynced(info.Group))
+				t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
+				t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
 			}
-			assert.Nil(t, err)
-			t.Logf("synced %d", s.GetSynced(info.Group))
-			t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-			t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
 		}
 	}
 

@@ -32,6 +32,13 @@ func (a *Bytes) Window(start, end int) *Bytes {
 	}
 }
 
+func (a *Bytes) AppendOnce(v []byte) {
+	o := uint32(len(a.Data))
+	a.Offsets = append(a.Offsets, o)
+	a.Data = append(a.Data, v...)
+	a.Lengths = append(a.Lengths, uint32(len(v)))
+}
+
 func (a *Bytes) Append(vs [][]byte) error {
 	o := uint32(len(a.Data))
 	for _, v := range vs {

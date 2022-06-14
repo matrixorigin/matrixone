@@ -18,33 +18,25 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
 type blockAppender struct {
-	node          *appendableNode
-	indexAppender acif.IAppendableBlockIndexHolder
-	placeholder   uint32
-	rows          uint32
+	node        *appendableNode
+	placeholder uint32
+	rows        uint32
 }
 
-func newAppender(node *appendableNode, idxApd acif.IAppendableBlockIndexHolder) *blockAppender {
+func newAppender(node *appendableNode) *blockAppender {
 	appender := new(blockAppender)
 	appender.node = node
-	appender.indexAppender = idxApd
 	appender.rows = node.Rows(nil, true)
 	return appender
 }
 
-func (appender *blockAppender) Close() error {
-	// if appender.handle != nil {
-	// 	appender.handle.Close()
-	// 	appender.handle = nil
-	// }
-	return nil
-}
-
-func (appender *blockAppender) GetMeta() interface{} {
+func (appender *blockAppender) GetMeta() any {
 	return appender.node.block.meta
 }
 
@@ -69,29 +61,80 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 	appender.placeholder += n
 	return
 }
+func (appender *blockAppender) OnReplayAppendNode(an txnif.AppendNode) {
+	appendNode := an.(*updates.AppendNode)
+	appender.node.block.mvcc.OnReplayAppendNode(appendNode)
+}
+func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
+	err = appender.node.DoWithPin(func() (err error) {
+		err = appender.node.Expand(0, func() error {
+			var err error
+			from, err = appender.node.ApplyAppend(bat, offset, length, txn)
+			return err
+		})
+		schema := appender.node.block.meta.GetSchema()
+		if schema.HasPK() {
+			keysCtx := new(index.KeysCtx)
+			if schema.IsSinglePK() {
+				keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+			} else {
+				cols := appender.node.block.GetSortColumns(schema, bat)
+				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+			}
+			keysCtx.Start = offset
+			keysCtx.Count = length
+			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
+			err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+			if err != nil {
+				panic(err)
+			}
+		}
+		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
 
-func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
-	h := appender.node.mgr.Pin(appender.node)
-	if h == nil {
-		panic("not expected")
-	}
-	defer h.Close()
-	writeLock := appender.node.block.mvcc.GetExclusiveLock()
-	defer writeLock.Unlock()
-	err = appender.node.Expand(0, func() error {
-		var err error
-		from, err = appender.node.ApplyAppend(bat, offset, length, txn)
-		return err
+		return
 	})
+	return
+}
+func (appender *blockAppender) ApplyAppend(
+	bat *gbat.Batch,
+	offset, length uint32,
+	txn txnif.AsyncTxn,
+	anode txnif.AppendNode) (node txnif.AppendNode, from uint32, err error) {
+	err = appender.node.DoWithPin(func() (err error) {
+		appender.node.block.mvcc.Lock()
+		defer appender.node.block.mvcc.Unlock()
+		err = appender.node.Expand(0, func() error {
+			var err error
+			from, err = appender.node.ApplyAppend(bat, offset, length, txn)
+			return err
+		})
 
-	pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
-	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-	err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
-	if err != nil {
-		panic(err)
-	}
-	node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
-	// appender.node.block.mvcc.SetMaxVisible(txn.GetCommitTS())
+		schema := appender.node.block.meta.GetSchema()
+		if schema.HasPK() {
+			keysCtx := new(index.KeysCtx)
 
+			if schema.IsSinglePK() {
+				keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+			} else {
+				cols := appender.node.block.GetSortColumns(schema, bat)
+				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+			}
+			keysCtx.Start = offset
+			keysCtx.Count = length
+			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
+			err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
+			if err != nil {
+				panic(err)
+			}
+		}
+		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
+		if anode != nil {
+			anode.(*updates.AppendNode).SetMaxRow(appender.node.rows)
+			node = anode
+		} else {
+			node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
+		}
+		return
+	})
 	return
 }

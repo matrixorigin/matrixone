@@ -18,7 +18,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 )
 
@@ -28,7 +28,7 @@ type ColumnView struct {
 	RawVec      *movec.Vector
 	RawIVec     vector.IVector
 	UpdateMask  *roaring.Bitmap
-	UpdateVals  map[uint32]interface{}
+	UpdateVals  map[uint32]any
 	DeleteMask  *roaring.Bitmap
 	AppliedVec  *movec.Vector
 	AppliedIVec vector.IVector
@@ -75,7 +75,11 @@ func (view *ColumnView) Length() int {
 	return movec.Length(view.AppliedVec)
 }
 
-func (view *ColumnView) GetValue(row uint32) interface{} {
+func (view *ColumnView) String() string {
+	return view.AppliedVec.String()
+}
+
+func (view *ColumnView) GetValue(row uint32) any {
 	return compute.GetValue(view.AppliedVec, row)
 }
 

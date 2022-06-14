@@ -17,6 +17,10 @@ package index
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+
 	roaring2 "github.com/RoaringBitmap/roaring"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -24,9 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/index/bsi"
-	"os"
-	"path/filepath"
-	"sync"
 )
 
 type sortedSegmentHolder struct {
@@ -111,7 +112,7 @@ func (holder *sortedSegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error 
 	idxes, ok := holder.self.colIndices[colIdx]
 	if !ok || len(idxes) == 0 {
 		ctx.BoolRes = true
-		return errors.New(fmt.Sprintf("index for column %d not found", colIdx))
+		return fmt.Errorf("index for column %d not found", colIdx)
 	}
 	var err error
 	hasBsi := false

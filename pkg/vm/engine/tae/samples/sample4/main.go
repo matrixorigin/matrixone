@@ -14,87 +14,88 @@
 
 package main
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
+// import (
+// 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+// 	"github.com/matrixorigin/matrixone/pkg/logutil"
+// 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+// 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+// )
 
-var sampleDir = "/tmp/sample4"
+// var sampleDir = "/tmp/sample4"
 
-var querys = []string{
-	"CREATE DATABASE IF NOT EXISTS test;",
-	"CREATE DATABASE db;",
-	"CREATE DATABASE IF NOT EXISTS db;",
-	"CREATE TABLE table1(a int);",
-	"CREATE TABLE IF NOT EXISTS table1(a int);",
-	// "CREATE INDEX idx on table1(a);",
-	// "DROP INDEX idx on table1;",
-	"SHOW DATABASES;",
-	"SHOW TABLES;",
-	// "SHOW COLUMNS FROM table1;",
-	// "SHOW CREATE TABLE table1;",
-	// "SHOW CREATE DATABASE db;",
-	"INSERT INTO table1 values(12),(13),(14),(15);",
-	"SELECT * FROM table1;",
-	"DROP TABLE table1;",
-	"DROP DATABASE IF EXISTS db;",
-}
+// var querys = []string{
+// 	"CREATE DATABASE IF NOT EXISTS test;",
+// 	"CREATE DATABASE db;",
+// 	"CREATE DATABASE IF NOT EXISTS db;",
+// 	"CREATE TABLE table1(a int);",
+// 	"CREATE TABLE IF NOT EXISTS table1(a int);",
+// 	// "CREATE INDEX idx on table1(a);",
+// 	// "DROP INDEX idx on table1;",
+// 	"SHOW DATABASES;",
+// 	"SHOW TABLES;",
+// 	// "SHOW COLUMNS FROM table1;",
+// 	// "SHOW CREATE TABLE table1;",
+// 	// "SHOW CREATE DATABASE db;",
+// 	"INSERT INTO table1 values(12),(13),(14),(15);",
+// 	"SELECT * FROM table1;",
+// 	"DROP TABLE table1;",
+// 	"DROP DATABASE IF EXISTS db;",
+// }
 
-func main() {
-	tae, _ := db.Open(sampleDir, nil)
-	defer tae.Close()
+// func main() {
+// 	tae, _ := db.Open(sampleDir, nil)
+// 	defer tae.Close()
 
-	compile.InitAddress("127.0.0.1")
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	proc := process.New(mheap.New(gm))
-	for _, query := range querys {
-		txn := tae.StartTxn(nil)
-		e := moengine.NewEngine(txn)
-		processQuery(query, e, proc)
-		if err := txn.Commit(); err != nil {
-			panic(err)
-		}
-		logutil.Info(txn.String())
-	}
-	logutil.Infof("%d", tae.TxnBufMgr.Count())
-	logutil.Infof("%d", tae.MTBufMgr.Count())
-	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
-}
+// 	e := moengine.NewEngine(tae)
 
-func sqlOutput(_ interface{}, bat *batch.Batch) error {
-	logutil.Infof("%v\n", bat.Zs)
-	logutil.Infof("%v\n", bat)
-	return nil
-}
+// 	compile.InitAddress("127.0.0.1")
+// 	hm := host.New(1 << 30)
+// 	gm := guest.New(1<<30, hm)
+// 	proc := process.New(mheap.New(gm))
+// 	for _, query := range querys {
+// 		txn, err := e.StartTxn(nil)
+// 		processQuery(query, e, proc)
+// 		if err := txn.Commit(); err != nil {
+// 			panic(err)
+// 		}
+// 		logutil.Info(txn.String())
+// 	}
+// 	logutil.Infof("%d", tae.TxnBufMgr.Count())
+// 	logutil.Infof("%d", tae.MTBufMgr.Count())
+// 	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
+// }
 
-func processQuery(query string, e engine.Engine, proc *process.Process) {
-	c := compile.New("test", query, "", e, proc)
-	es, err := c.Build()
-	if err != nil {
-		panic(err)
-	}
-	for _, e := range es {
-		logutil.Infof("%s\n", query)
-		if err := e.Compile(nil, sqlOutput); err != nil {
-			panic(err)
-		}
-		attrs := e.Columns()
-		logutil.Infof("result:\n")
-		for i, attr := range attrs {
-			logutil.Infof("\t[%v] = %v:%v\n", i, attr.Name, attr.Typ)
-		}
-		if err := e.Run(0); err != nil {
-			panic(err)
-		}
-	}
-}
+// func sqlOutput(_ interface{}, bat *batch.Batch) error {
+// 	logutil.Infof("%v\n", bat.Zs)
+// 	logutil.Infof("%v\n", bat)
+// 	return nil
+// }
+
+// func processQuery(query string, e engine.Engine, ctx []byte, proc *process.Process) {
+// 	c := compile.New("test", query, "", e, proc)
+// 	es, err := c.Build()
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	for _, e := range es {
+// 		logutil.Infof("%s\n", query)
+// 		if err := e.Compile(nil, sqlOutput); err != nil {
+// 			panic(err)
+// 		}
+// 		attrs := e.Columns()
+// 		logutil.Infof("result:\n")
+// 		for i, attr := range attrs {
+// 			logutil.Infof("\t[%v] = %v:%v\n", i, attr.Name, attr.Typ)
+// 		}
+// 		if err := e.Run(0); err != nil {
+// 			panic(err)
+// 		}
+// 	}
+// }

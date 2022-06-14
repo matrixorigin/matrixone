@@ -35,7 +35,8 @@ func TestBase(t *testing.T) {
 		e.SetType(ETFlush)
 		n := common.GPool.Alloc(30)
 		copy(n.GetBuf(), buf)
-		e.UnmarshalFromNode(n, true)
+		err := e.UnmarshalFromNode(n, true)
+		assert.Nil(t, err)
 		e.Free()
 	}
 	t.Logf("takes %s", time.Since(now))

@@ -15,7 +15,11 @@
 package store
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
+	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -23,8 +27,8 @@ import (
 )
 
 type VGroup interface { //append(vfile) ckp(by what) compact/iscovered
-	Log(interface{}) error
-	OnCheckpoint(interface{}) //ckp info
+	Log(any) error
+	OnCheckpoint(any) //ckp info
 	IsCovered(c *compactor) bool
 	MergeCheckpointInfo(c *compactor) //only commit group
 	PrepareMerge(c *compactor)
@@ -40,17 +44,25 @@ type compactor struct {
 	//tid-cid map
 	//partial ckp
 	//ckp ranges
-	gIntervals map[uint32]*common.ClosedIntervals
-	tidCidMap  map[uint32]map[uint64]uint64
-	partialCKP map[uint32]map[uint64]*partialCkpInfo
+	checkpointed   map[uint32]uint64
+	tidCidMap      map[uint32]map[uint64]uint64
+	tidCidMapMu    *sync.RWMutex
+	ckpInfoVersion int
 }
 
-func newCompactor() *compactor {
-	return &compactor{
-		gIntervals: make(map[uint32]*common.ClosedIntervals),
-		tidCidMap:  make(map[uint32]map[uint64]uint64),
-		partialCKP: make(map[uint32]map[uint64]*partialCkpInfo),
+func newCompactor(base *syncBase) *compactor {
+	c := &compactor{
+		checkpointed: make(map[uint32]uint64),
 	}
+	base.checkpointed.RWMutex.RLock()
+	for group, ckped := range base.checkpointed.ids {
+		c.checkpointed[group] = ckped
+	}
+	base.checkpointed.RWMutex.RUnlock()
+	c.tidCidMap = base.tidLsnMaps
+	c.tidCidMapMu = base.tidLsnMapmu
+	c.ckpInfoVersion = int(atomic.LoadUint64(&base.syncedVersion))
+	return c
 }
 
 type baseGroup struct {
@@ -90,6 +102,10 @@ func newPartialCkpInfo(size uint32) *partialCkpInfo {
 	}
 }
 
+func (info *partialCkpInfo) String() string {
+	return fmt.Sprintf("%s/%d", info.ckps.String(), info.size)
+}
+
 func (info *partialCkpInfo) IsAllCheckpointed() bool {
 	return info.size == uint32(info.ckps.GetCardinality())
 }
@@ -108,6 +124,33 @@ func (info *partialCkpInfo) MergeCommandInfos(cmds *entry.CommandInfo) {
 	for _, csn := range cmds.CommandIds {
 		info.ckps.Add(csn)
 	}
+}
+
+func (info *partialCkpInfo) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, info.size); err != nil {
+		return
+	}
+	n += 4
+	ckpsn, err := info.ckps.WriteTo(w)
+	n += ckpsn
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (info *partialCkpInfo) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &info.size); err != nil {
+		return
+	}
+	n += 4
+	info.ckps = roaring.New()
+	ckpsn, err := info.ckps.ReadFrom(r)
+	n += ckpsn
+	if err != nil {
+		return
+	}
+	return
 }
 
 func newcommitGroup(v *vInfo, gid uint32) *commitGroup {
@@ -132,7 +175,7 @@ func (g *commitGroup) String() string {
 	return s
 }
 
-func (g *commitGroup) Log(info interface{}) error {
+func (g *commitGroup) Log(info any) error {
 	commitInfo := info.(*entry.Info)
 	if g.Commits == nil {
 		g.Commits = &common.ClosedInterval{}
@@ -143,14 +186,14 @@ func (g *commitGroup) Log(info interface{}) error {
 }
 
 func (g *commitGroup) IsCovered(c *compactor) bool {
-	interval, ok := c.gIntervals[g.groupId]
+	ckp, ok := c.checkpointed[g.groupId]
 	if !ok {
 		return false
 	}
-	if g.Commits != nil && !interval.ContainsInterval(*g.Commits) {
+	if g.Commits != nil && !g.Commits.IsCoveredByInt(ckp) {
 		return false
 	}
-	return interval.Contains(*g.ckps)
+	return true
 }
 
 func (g *commitGroup) IsCommitGroup() bool {
@@ -169,44 +212,44 @@ func (g *commitGroup) PrepareMerge(c *compactor) {
 }
 func (g *commitGroup) MergeCheckpointInfo(c *compactor) {
 	//merge partialckp
-	partialMap, ok := c.partialCKP[g.groupId]
-	if !ok {
-		partialMap = make(map[uint64]*partialCkpInfo)
-	}
-	gMap := c.tidCidMap[g.groupId]
-	for lsn, commandsInfo := range g.partialCkp {
-		partial, ok := partialMap[lsn]
-		if !ok {
-			partial = newPartialCkpInfo(commandsInfo.size)
-		}
-		if partial.size != commandsInfo.size {
-			panic("logic error")
-		}
-		partial.ckps.Or(commandsInfo.ckps)
-		if partial.ckps.GetCardinality() == uint64(partial.size) {
-			if gMap != nil {
-				g.ckps.TryMerge(*common.NewClosedIntervalsByInt(lsn))
-				delete(partialMap, lsn)
-			}
-		}
-		partialMap[lsn] = partial
-	}
-	c.partialCKP[g.groupId] = partialMap
-	//merge ckps
-	if len(g.ckps.Intervals) == 0 {
-		return
-	}
-	if c.gIntervals == nil {
-		ret := make(map[uint32]*common.ClosedIntervals)
-		ret[g.groupId] = common.NewClosedIntervalsByIntervals(g.ckps)
-		c.gIntervals = ret
-		return
-	}
-	_, ok = c.gIntervals[g.groupId]
-	if !ok {
-		c.gIntervals[g.groupId] = &common.ClosedIntervals{}
-	}
-	c.gIntervals[g.groupId].TryMerge(*g.ckps)
+	// partialMap, ok := c.partialCKP[g.groupId]
+	// if !ok {
+	// 	partialMap = make(map[uint64]*partialCkpInfo)
+	// }
+	// gMap := c.tidCidMap[g.groupId]
+	// for lsn, commandsInfo := range g.partialCkp {
+	// 	partial, ok := partialMap[lsn]
+	// 	if !ok {
+	// 		partial = newPartialCkpInfo(commandsInfo.size)
+	// 	}
+	// 	if partial.size != commandsInfo.size {
+	// 		panic("logic error")
+	// 	}
+	// 	partial.ckps.Or(commandsInfo.ckps)
+	// 	if partial.ckps.GetCardinality() == uint64(partial.size) {
+	// 		if gMap != nil {
+	// 			g.ckps.TryMerge(*common.NewClosedIntervalsByInt(lsn))
+	// 			delete(partialMap, lsn)
+	// 		}
+	// 	}
+	// 	partialMap[lsn] = partial
+	// }
+	// c.partialCKP[g.groupId] = partialMap
+	// //merge ckps
+	// if len(g.ckps.Intervals) == 0 {
+	// 	return
+	// }
+	// if c.gIntervals == nil {
+	// 	ret := make(map[uint32]*common.ClosedIntervals)
+	// 	ret[g.groupId] = common.NewClosedIntervalsByIntervals(g.ckps)
+	// 	c.gIntervals = ret
+	// 	return
+	// }
+	// _, ok = c.gIntervals[g.groupId]
+	// if !ok {
+	// 	c.gIntervals[g.groupId] = &common.ClosedIntervals{}
+	// }
+	// c.gIntervals[g.groupId].TryMerge(*g.ckps)
 }
 
 func (g *commitGroup) IsCheckpointGroup() bool {
@@ -215,7 +258,7 @@ func (g *commitGroup) IsCheckpointGroup() bool {
 func (g *commitGroup) IsUncommitGroup() bool {
 	return false
 }
-func (g *commitGroup) OnCheckpoint(info interface{}) {
+func (g *commitGroup) OnCheckpoint(info any) {
 	ranges := info.(*entry.CkpRanges)
 	if ranges.Ranges != nil {
 		g.ckps.TryMerge(*ranges.Ranges)
@@ -252,23 +295,25 @@ func (g *uncommitGroup) String() string {
 	s = fmt.Sprintf("%s]", s)
 	return s
 }
-func (g *uncommitGroup) OnCheckpoint(interface{}) {} //calculate ckp when compact
+func (g *uncommitGroup) OnCheckpoint(any) {} //calculate ckp when compact
 func (g *uncommitGroup) IsCovered(c *compactor) bool {
+	c.tidCidMapMu.RLock()
+	defer c.tidCidMapMu.RUnlock()
 	for group, tids := range g.UncommitTxn {
 		tidMap, ok := c.tidCidMap[group]
 		if !ok {
 			return false
 		}
-		interval, ok := c.gIntervals[group]
+		ckp, ok := c.checkpointed[group]
 		if !ok {
 			return false
 		}
 		for _, tid := range tids {
-			cid, ok := tidMap[tid]
+			lsn, ok := tidMap[tid]
 			if !ok {
 				return false
 			}
-			if !interval.ContainsInterval(common.ClosedInterval{Start: cid, End: cid}) {
+			if lsn > ckp {
 				return false
 			}
 		}
@@ -288,7 +333,7 @@ func (g *uncommitGroup) IsUncommitGroup() bool {
 func (g *uncommitGroup) IsCommitGroup() bool {
 	return false
 }
-func (g *uncommitGroup) Log(info interface{}) error {
+func (g *uncommitGroup) Log(info any) error {
 	uncommitInfo := info.(*entry.Info)
 	for _, uncommit := range uncommitInfo.Uncommits {
 		tids, ok := g.UncommitTxn[uncommit.Group]
@@ -321,8 +366,11 @@ func newcheckpointGroup(v *vInfo, gid uint32) *checkpointGroup {
 		baseGroup: newbaseGroup(v, gid),
 	}
 }
-func (g *checkpointGroup) OnCheckpoint(interface{})         {} //ckp info
-func (g *checkpointGroup) IsCovered(c *compactor) bool      { return false }
+func (g *checkpointGroup) OnCheckpoint(any) {} //ckp info
+func (g *checkpointGroup) IsCovered(c *compactor) bool {
+	//TODO: not compact ckp entry with payload
+	return g.vInfo.ckpInfoVersion <= c.ckpInfoVersion
+}
 func (g *checkpointGroup) MergeCheckpointInfo(c *compactor) {}
 func (g *checkpointGroup) IsCheckpointGroup() bool {
 	return true
@@ -332,7 +380,7 @@ func (g *checkpointGroup) IsCommitGroup() bool {
 }
 func (g *checkpointGroup) IsUncommitGroup() bool { return false }
 
-func (g *checkpointGroup) Log(info interface{}) error {
+func (g *checkpointGroup) Log(info any) error {
 	checkpointInfo := info.(*entry.Info)
 	for _, interval := range checkpointInfo.Checkpoints {
 		group := g.vInfo.getGroupById(interval.Group) //todo new group if not exist

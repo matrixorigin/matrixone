@@ -28,7 +28,7 @@ type Op struct {
 	ErrorC     chan error
 	Worker     iworker.IOpWorker
 	Err        error
-	Result     interface{}
+	Result     any
 	CreateTime time.Time
 	StartTime  time.Time
 	EndTime    time.Time

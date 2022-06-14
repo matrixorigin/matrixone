@@ -37,7 +37,7 @@ func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) erro
 	if err != nil {
 		return err
 	}
-	db, err := b.e.Database(dbName)
+	db, err := b.e.Database(dbName, nil)
 	if err != nil {
 		return err
 	}
@@ -190,6 +190,8 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error
 func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch uint8(n.InternalType.Oid) {
+		case defines.MYSQL_TYPE_BOOL:
+			return &types.Type{Oid: types.T_bool, Size: 1, Width: n.InternalType.Width}, nil
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
 				return &types.Type{Oid: types.T_uint8, Size: 1, Width: n.InternalType.Width}, nil
@@ -253,7 +255,7 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 
 	{
 		for _, attr := range column.Attributes {
-			if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is == false {
+			if nullAttr, ok := attr.(*tree.AttributeNull); ok && !nullAttr.Is {
 				allowNull = false
 				break
 			}
@@ -318,15 +320,15 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 	case uint64:
 		switch typ.Oid {
 		case types.T_uint8:
-			if v <= math.MaxUint8 && v >= 0 {
+			if v <= math.MaxUint8 {
 				return uint8(v), nil
 			}
 		case types.T_uint16:
-			if v <= math.MaxUint16 && v >= 0 {
+			if v <= math.MaxUint16 {
 				return uint16(v), nil
 			}
 		case types.T_uint32:
-			if v <= math.MaxUint32 && v >= 0 {
+			if v <= math.MaxUint32 {
 				return uint32(v), nil
 			}
 		case types.T_uint64:
@@ -365,7 +367,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
-	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
+	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128, bool:
 		return v, nil
 	default:
 		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")

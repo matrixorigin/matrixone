@@ -23,13 +23,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
-type noopObserver struct {
-}
+type noopObserver struct{}
 
 func (o *noopObserver) OnNewEntry(_ int) {
 }
 
-func (o *noopObserver) OnNewCommit(*entry.Info)             {}
+func (o *noopObserver) OnLogInfo(*entry.Info)               {}
 func (o *noopObserver) OnNewCheckpoint(*entry.Info)         {}
 func (o *noopObserver) OnNewTxn(*entry.Info)                {}
 func (o *noopObserver) OnNewUncommit(addrs []*VFileAddress) {}
@@ -39,14 +38,19 @@ type replayer struct {
 	state           vFileState
 	uncommit        map[uint32]map[uint64][]*replayEntry
 	entrys          []*replayEntry
-	checkpointrange map[uint32]*common.ClosedIntervals
+	checkpointrange map[uint32]*checkpointInfo
 	checkpoints     []*replayEntry
 	mergeFuncs      map[uint32]func(pre, curr []byte) []byte
 	applyEntry      ApplyHandle
 
 	//syncbase
-	addrs    map[uint32]map[int]common.ClosedInterval
-	groupLSN map[uint32]uint64
+	addrs     map[uint32]map[int]common.ClosedIntervals
+	groupLSN  map[uint32]uint64
+	tidlsnMap map[uint32]map[uint64]uint64
+
+	//internal entry
+	ckpVersion int
+	ckpEntry   *replayEntry
 
 	//vinfo
 	// Commits     map[uint32]*common.ClosedInterval
@@ -67,13 +71,13 @@ func (r *replayer) updateaddrs(groupId uint32, version int, lsn uint64) {
 	}
 	m, ok := r.addrs[groupId]
 	if !ok {
-		m = make(map[int]common.ClosedInterval)
+		m = make(map[int]common.ClosedIntervals)
 	}
 	interval, ok := m[version]
 	if !ok {
-		interval = common.ClosedInterval{}
+		interval = *common.NewClosedIntervals()
 	}
-	interval.TryMerge(common.ClosedInterval{Start: lsn, End: lsn})
+	interval.TryMerge(*common.NewClosedIntervalsByInt(lsn))
 	m[version] = interval
 	r.addrs[groupId] = m
 }
@@ -88,12 +92,13 @@ func newReplayer(h ApplyHandle) *replayer {
 	return &replayer{
 		uncommit:        make(map[uint32]map[uint64][]*replayEntry),
 		entrys:          make([]*replayEntry, 0),
-		checkpointrange: make(map[uint32]*common.ClosedIntervals),
+		checkpointrange: make(map[uint32]*checkpointInfo),
 		checkpoints:     make([]*replayEntry, 0),
 		mergeFuncs:      make(map[uint32]func(pre []byte, curr []byte) []byte),
 		applyEntry:      h,
-		addrs:           make(map[uint32]map[int]common.ClosedInterval),
+		addrs:           make(map[uint32]map[int]common.ClosedIntervals),
 		groupLSN:        make(map[uint32]uint64),
+		tidlsnMap:       make(map[uint32]map[uint64]uint64),
 		vinfoAddrs:      make(map[uint32]map[uint64]int),
 	}
 }
@@ -119,9 +124,9 @@ func (r *replayer) Apply() {
 	}
 
 	for _, e := range r.entrys {
-		interval, ok := r.checkpointrange[e.group]
+		ckpinfo, ok := r.checkpointrange[e.group]
 		if ok {
-			if interval.ContainsInterval(
+			if ckpinfo.ranges.ContainsInterval(
 				common.ClosedInterval{Start: e.commitId, End: e.commitId}) {
 				continue
 			}
@@ -134,12 +139,9 @@ func (r *replayer) Apply() {
 				if ok {
 					for _, entry := range entries {
 						r.applyEntry(entry.group, entry.commitId, entry.payload, entry.entryType, nil)
-						// pre = r.mergeUncommittedEntries(
-						// 	pre, entry)
 					}
 				}
 			}
-			// e = r.mergeUncommittedEntries(pre, e)
 			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
 		} else {
 			r.applyEntry(e.group, e.commitId, e.payload, e.entryType, nil)
@@ -155,36 +157,31 @@ type replayEntry struct {
 	tid uint64
 	// checkpointRange *common.ClosedInterval
 	payload []byte
-	info    interface{}
+	info    any
 }
 
 func (r *replayEntry) String() string {
 	return fmt.Sprintf("%v\n", r.info)
 }
 func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
-	typ := e.GetType()
-	switch typ {
-	case entry.ETFlush:
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
+	infobuf := e.GetInfoBuf()
+	info := entry.Unmarshal(infobuf)
+	r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+	r.updateaddrs(info.Group, r.version, info.GroupLSN)
+	if e.GetType() == entry.ETFlush {
 		return nil
-	case entry.ETCheckpoint:
-		// fmt.Printf("ETCheckpoint\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
-		info.Info = &VFileAddress{
-			Group:   info.Group,
-			LSN:     info.GroupLSN,
-			Version: r.version,
-			Offset:  r.state.pos,
-		}
+	}
+	r.updateGroupLSN(info.Group, info.GroupLSN)
+	info.Info = &VFileAddress{
+		Group:   info.Group,
+		LSN:     info.GroupLSN,
+		Version: r.version,
+		Offset:  r.state.pos,
+	}
+	switch info.Group {
+	case entry.GTCKp:
 		replayEty := &replayEntry{
-			entryType: typ,
+			entryType: e.GetType(),
 			payload:   make([]byte, e.GetPayloadSize()),
 			info:      info,
 		}
@@ -192,23 +189,22 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		r.checkpoints = append(r.checkpoints, replayEty)
 
 		for _, ckp := range info.Checkpoints {
-			interval, ok := r.checkpointrange[ckp.Group]
+			ckpInfo, ok := r.checkpointrange[ckp.Group]
 			if !ok {
-				//TODO: all the ranges
-				interval = common.NewClosedIntervalsByIntervals(ckp.Ranges)
-			} else {
-				interval.TryMerge(*ckp.Ranges)
+				ckpInfo = newCheckpointInfo()
+
+				r.checkpointrange[ckp.Group] = ckpInfo
 			}
-			r.checkpointrange[ckp.Group] = interval
+			if ckp.Ranges != nil && len(ckp.Ranges.Intervals) > 0 {
+				ckpInfo.UpdateWtihRanges(ckp.Ranges)
+			}
+			if ckp.Command != nil {
+				for lsn, cmds := range ckp.Command {
+					ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
+				}
+			}
 		}
-		vf.OnNewCheckpoint(info)
-	case entry.ETUncommitted:
-		// fmt.Printf("ETUncommitted\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
+	case entry.GTUncommit:
 		for _, tinfo := range info.Uncommits {
 			tidMap, ok := r.uncommit[tinfo.Group]
 			if !ok {
@@ -227,52 +223,32 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 			tidMap[info.TxnId] = entries
 			r.uncommit[tinfo.Group] = tidMap
 		}
-	case entry.ETTxn:
-		// fmt.Printf("ETTxn\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
-		info.Info = &VFileAddress{
-			Group:   info.Group,
-			LSN:     info.GroupLSN,
-			Version: r.version,
-			Offset:  r.state.pos,
+	case entry.GTInternal:
+		if info.PostCommitVersion >= r.ckpVersion {
+			r.ckpVersion = info.PostCommitVersion
+			replayEty := &replayEntry{
+				payload: make([]byte, e.GetPayloadSize()),
+			}
+			copy(replayEty.payload, e.GetPayload())
+			r.ckpEntry = replayEty
 		}
-		replayEty := &replayEntry{
-			entryType: e.GetType(),
-			group:     info.Group,
-			commitId:  info.GroupLSN,
-			tid:       info.TxnId,
-			payload:   make([]byte, e.GetPayloadSize()),
-		}
-		copy(replayEty.payload, e.GetPayload())
-		r.entrys = append(r.entrys, replayEty)
-		vf.OnNewTxn(info)
 	default:
-		// fmt.Printf("default\n")
-		infobuf := e.GetInfoBuf()
-		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
-		r.updateaddrs(info.Group, r.version, info.GroupLSN)
-		r.updateGroupLSN(info.Group, info.GroupLSN)
-		info.Info = &VFileAddress{
-			Group:   info.Group,
-			LSN:     info.GroupLSN,
-			Version: r.version,
-			Offset:  r.state.pos,
-		}
 		replayEty := &replayEntry{
 			entryType: e.GetType(),
 			group:     info.Group,
 			commitId:  info.GroupLSN,
 			payload:   make([]byte, e.GetPayloadSize()),
 		}
+		tidlsnMap, ok := r.tidlsnMap[info.Group]
+		if !ok {
+			tidlsnMap = make(map[uint64]uint64)
+			r.tidlsnMap[info.Group] = tidlsnMap
+		}
+		tidlsnMap[info.TxnId] = info.GroupLSN
 		copy(replayEty.payload, e.GetPayload())
 		r.entrys = append(r.entrys, replayEty)
-		vf.OnNewCommit(info)
 	}
+	vf.OnLogInfo(info)
 	return nil
 }
 
@@ -280,6 +256,7 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 	vfile := v.(*vFile)
 	if vfile.version != r.version {
 		r.state.pos = 0
+		r.version = vfile.version
 	}
 	current := vfile.GetState()
 	entry := entry.GetBase()
@@ -291,7 +268,10 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		if !errors.Is(err, io.EOF) {
 			return err
 		}
-		vfile.Truncate(int64(r.state.pos))
+		err2 := vfile.Truncate(int64(r.state.pos))
+		if err2 != nil {
+			panic(err2)
+		}
 		return err
 	}
 
@@ -300,16 +280,24 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		if !errors.Is(err, io.EOF) {
 			return err
 		}
-		vfile.Truncate(int64(r.state.pos))
-		return err
+		panic("wrong wal")
+		// err2 := vfile.Truncate(int64(r.state.pos))
+		// if err2 != nil {
+		// 	panic(err2)
+		// }
+		// return err
 	}
 	if int(n) != entry.TotalSizeExpectMeta() {
 		if current.pos == r.state.pos+int(n) {
-			vfile.Truncate(int64(current.pos))
-			return io.EOF
+			panic("wrong wal")
+			// err2 := vfile.Truncate(int64(current.pos))
+			// if err2 != nil {
+			// 	logutil.Infof("lalala")
+			// 	return err
+			// }
+			// return io.EOF
 		} else {
-			return errors.New(fmt.Sprintf(
-				"payload mismatch: %d != %d", n, entry.GetPayloadSize()))
+			return fmt.Errorf("payload mismatch: %d != %d", n, entry.GetPayloadSize())
 		}
 	}
 	if err = r.onReplayEntry(entry, o); err != nil {

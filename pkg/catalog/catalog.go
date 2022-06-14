@@ -852,7 +852,7 @@ func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 	if err != nil {
 		return err
 	}
-	if tbs == nil || len(tbs) == 0 {
+	if len(tbs) == 0 {
 		return nil
 	}
 	for _, tbl := range tbs {

@@ -19,13 +19,16 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"io"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type IndexT uint16
@@ -41,6 +44,12 @@ type IndexInfo struct {
 	Columns []uint16
 }
 
+type Default struct {
+	Set   bool
+	Null  bool
+	Value any
+}
+
 func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
 	index := &IndexInfo{
 		Name:    name,
@@ -54,18 +63,67 @@ func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
 }
 
 type ColDef struct {
-	Name string
-	Idx  int
-	Type types.Type
+	Name          string
+	Idx           int
+	Type          types.Type
+	Hidden        int8
+	NullAbility   int8
+	AutoIncrement int8
+	SortIdx       int8
+	SortKey       int8
+	Primary       int8
+	Comment       string
+	Default       Default
 }
 
+func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
+func (def *ColDef) IsPrimary() bool { return def.Primary == int8(1) }
+func (def *ColDef) IsSortKey() bool { return def.SortKey == int8(1) }
+
+type SortKey struct {
+	Defs      []*ColDef
+	search    map[int]int
+	isPrimary bool
+}
+
+func NewSortKey() *SortKey {
+	return &SortKey{
+		Defs:   make([]*ColDef, 0),
+		search: make(map[int]int),
+	}
+}
+
+func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
+	_, found := cpk.search[def.Idx]
+	if found {
+		return false
+	}
+	if def.IsPrimary() {
+		cpk.isPrimary = true
+	}
+	cpk.Defs = append(cpk.Defs, def)
+	sort.Slice(cpk.Defs, func(i, j int) bool { return cpk.Defs[i].SortIdx < cpk.Defs[j].SortIdx })
+	cpk.search[def.Idx] = int(def.SortIdx)
+	return true
+}
+
+func (cpk *SortKey) IsSinglePK() bool               { return cpk.isPrimary && cpk.Size() == 1 }
+func (cpk *SortKey) IsPrimary() bool                { return cpk.isPrimary }
+func (cpk *SortKey) Size() int                      { return len(cpk.Defs) }
+func (cpk *SortKey) GetDef(pos int) *ColDef         { return cpk.Defs[pos] }
+func (cpk *SortKey) HasColumn(idx int) (found bool) { _, found = cpk.search[idx]; return }
+func (cpk *SortKey) GetSingleIdx() int              { return cpk.Defs[0].Idx }
+
 type Schema struct {
-	Name             string         `json:"name"`
-	ColDefs          []*ColDef      `json:"cols"`
-	NameIndex        map[string]int `json:"nindex"`
-	BlockMaxRows     uint32         `json:"blkrows"`
-	PrimaryKey       int32          `json:"primarykey"`
-	SegmentMaxBlocks uint16         `json:"segblocks"`
+	Name             string
+	ColDefs          []*ColDef
+	NameIndex        map[string]int
+	BlockMaxRows     uint32
+	SegmentMaxBlocks uint16
+	Comment          string
+
+	SortKey   *SortKey
+	HiddenKey *ColDef
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -76,40 +134,153 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
-func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
+func (s *Schema) GetSortKeyType() types.Type {
+	if s.IsSinglePK() {
+		return s.GetSingleSortKey().Type
+	}
+	return model.CompoundKeyType
+}
+func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
+func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
+func (s *Schema) IsCompoundPK() bool      { return s.IsCompoundSortKey() && s.SortKey.IsPrimary() }
+func (s *Schema) IsCompoundSortKey() bool { return s.SortKey != nil && s.SortKey.Size() > 1 }
+func (s *Schema) HasPK() bool             { return s.SortKey != nil && s.SortKey.IsPrimary() }
+func (s *Schema) HasSortKey() bool        { return s.SortKey != nil }
+
+// Should be call only if IsSinglePK is checked
+func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
+func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
+
+func (s *Schema) GetSortKeyCnt() int {
+	if s.SortKey == nil {
+		return 0
+	}
+	return s.SortKey.Size()
+}
+
+func MarshalDefault(w *bytes.Buffer, typ types.Type, data Default) (err error) {
+	if err = binary.Write(w, binary.BigEndian, data.Set); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &s.PrimaryKey); err != nil {
+	if !data.Set {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, data.Null); err != nil {
+		return
+	}
+	if data.Null {
+		return
+	}
+	value := compute.EncodeKey(data.Value, typ)
+	if err = binary.Write(w, binary.BigEndian, uint16(len(value))); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, value); err != nil {
+		return
+	}
+	return nil
+}
+func UnMarshalDefault(r io.Reader, typ types.Type, data *Default) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &data.Set); err != nil {
+		return
+	}
+	n = 1
+	if !data.Set {
+		return n, nil
+	}
+	if err = binary.Read(r, binary.BigEndian, &data.Null); err != nil {
+		return
+	}
+	n += 1
+	if data.Null {
+		return n, nil
+	}
+	var valueLen uint16 = 0
+	if err = binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return
+	}
+	n += 2
+	buf := make([]byte, valueLen)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	data.Value = compute.DecodeKey(buf, typ)
+	n += int64(valueLen)
+	return n, nil
+}
+
+func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
 		return
 	}
 	if err = binary.Read(r, binary.BigEndian, &s.SegmentMaxBlocks); err != nil {
 		return
 	}
+	n = 4 + 4
 	var sn int64
 	if s.Name, sn, err = common.ReadString(r); err != nil {
 		return
 	}
+	n += sn
+	if s.Comment, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
 	colCnt := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
 		return
 	}
-	n = sn + 4 + 4 + 4 + 2
+	n += 2
 	colBuf := make([]byte, encoding.TypeSize)
 	for i := uint16(0); i < colCnt; i++ {
 		if _, err = r.Read(colBuf); err != nil {
 			return
 		}
 		n += int64(encoding.TypeSize)
-		colDef := new(ColDef)
-		colDef.Type = encoding.DecodeType(colBuf)
-		if colDef.Name, sn, err = common.ReadString(r); err != nil {
+		def := new(ColDef)
+		def.Type = encoding.DecodeType(colBuf)
+		if def.Name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
 		n += sn
-		s.ColDefs = append(s.ColDefs, colDef)
-		colDef.Idx = int(i)
+		if def.Comment, sn, err = common.ReadString(r); err != nil {
+			return
+		}
+		n += sn
+		if err = binary.Read(r, binary.BigEndian, &def.NullAbility); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.Hidden); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.AutoIncrement); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.SortIdx); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.Primary); err != nil {
+			return
+		}
+		n += 1
+		if err = binary.Read(r, binary.BigEndian, &def.SortKey); err != nil {
+			return
+		}
+		n += 1
+		def.Default = Default{}
+		if sn, err = UnMarshalDefault(r, def.Type, &def.Default); err != nil {
+			return
+		}
+		n += sn
+		if err = s.AppendColDef(def); err != nil {
+			return
+		}
 	}
+	err = s.Finalize(true)
 	return
 }
 
@@ -118,23 +289,47 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if err = binary.Write(&w, binary.BigEndian, s.BlockMaxRows); err != nil {
 		return
 	}
-	if err = binary.Write(&w, binary.BigEndian, s.PrimaryKey); err != nil {
-		return
-	}
 	if err = binary.Write(&w, binary.BigEndian, s.SegmentMaxBlocks); err != nil {
 		return
 	}
 	if _, err = common.WriteString(s.Name, &w); err != nil {
 		return
 	}
+	if _, err = common.WriteString(s.Comment, &w); err != nil {
+		return
+	}
 	if err = binary.Write(&w, binary.BigEndian, uint16(len(s.ColDefs))); err != nil {
 		return
 	}
-	for _, colDef := range s.ColDefs {
-		if _, err = w.Write(encoding.EncodeType(colDef.Type)); err != nil {
+	for _, def := range s.ColDefs {
+		if _, err = w.Write(encoding.EncodeType(def.Type)); err != nil {
 			return
 		}
-		if _, err = common.WriteString(colDef.Name, &w); err != nil {
+		if _, err = common.WriteString(def.Name, &w); err != nil {
+			return
+		}
+		if _, err = common.WriteString(def.Comment, &w); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.NullAbility); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.Hidden); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.AutoIncrement); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.SortIdx); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.Primary); err != nil {
+			return
+		}
+		if err = binary.Write(&w, binary.BigEndian, def.SortKey); err != nil {
+			return
+		}
+		if err = MarshalDefault(&w, def.Type, def.Default); err != nil {
 			return
 		}
 	}
@@ -142,14 +337,59 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (s *Schema) AppendCol(name string, typ types.Type) {
-	colDef := &ColDef{
-		Name: name,
-		Type: typ,
-		Idx:  len(s.ColDefs),
+func (s *Schema) AppendColDef(def *ColDef) (err error) {
+	def.Idx = len(s.ColDefs)
+	s.ColDefs = append(s.ColDefs, def)
+	_, existed := s.NameIndex[def.Name]
+	if existed {
+		err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+		return
 	}
-	s.ColDefs = append(s.ColDefs, colDef)
-	s.NameIndex[name] = colDef.Idx
+	s.NameIndex[def.Name] = def.Idx
+	return
+}
+
+func (s *Schema) AppendSortKey(name string, typ types.Type, idx int, isPrimary bool) error {
+	def := &ColDef{
+		Name:    name,
+		Type:    typ,
+		SortIdx: int8(idx),
+		SortKey: int8(1),
+	}
+	if isPrimary {
+		def.Primary = int8(1)
+	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
+	def := &ColDef{
+		Name:    name,
+		Type:    typ,
+		SortIdx: int8(idx),
+		SortKey: int8(1),
+		Primary: int8(1),
+	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendCol(name string, typ types.Type) error {
+	def := &ColDef{
+		Name:    name,
+		Type:    typ,
+		SortIdx: -1,
+	}
+	return s.AppendColDef(def)
+}
+
+func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) error {
+	def := &ColDef{
+		Name:    name,
+		Type:    typ,
+		SortIdx: -1,
+		Default: val,
+	}
+	return s.AppendColDef(def)
 }
 
 func (s *Schema) String() string {
@@ -157,50 +397,122 @@ func (s *Schema) String() string {
 	return string(buf)
 }
 
-func (s *Schema) GetPKType() types.Type {
-	return s.ColDefs[s.PrimaryKey].Type
-}
-
-func (s *Schema) GetPKColumnDef() *ColDef {
-	return s.ColDefs[s.PrimaryKey]
+func (s *Schema) IsPartOfPK(idx int) bool {
+	return s.ColDefs[idx].IsPrimary()
 }
 
 func (s *Schema) Attrs() []string {
-	attrs := make([]string, len(s.ColDefs))
-	for i, colDef := range s.ColDefs {
-		attrs[i] = colDef.Name
+	attrs := make([]string, 0, len(s.ColDefs)-1)
+	for _, def := range s.ColDefs {
+		if def.IsHidden() {
+			continue
+		}
+		attrs = append(attrs, def.Name)
 	}
 	return attrs
 }
 
 func (s *Schema) Types() []types.Type {
-	ts := make([]types.Type, len(s.ColDefs))
-	for i, colDef := range s.ColDefs {
-		ts[i] = colDef.Type
+	ts := make([]types.Type, 0, len(s.ColDefs)-1)
+	for _, def := range s.ColDefs {
+		if def.IsHidden() {
+			continue
+		}
+		ts = append(ts, def.Type)
 	}
 	return ts
 }
 
-func (s *Schema) Valid() bool {
+func (s *Schema) AllTypes() []types.Type {
+	ts := make([]types.Type, 0, len(s.ColDefs))
+	for _, def := range s.ColDefs {
+		ts = append(ts, def.Type)
+	}
+	return ts
+}
+
+func (s *Schema) Finalize(rebuild bool) (err error) {
 	if s == nil {
-		return false
+		err = fmt.Errorf("%w: nil schema", ErrSchemaValidation)
+		return
 	}
 	if len(s.ColDefs) == 0 {
-		return false
+		err = fmt.Errorf("%w: empty schema", ErrSchemaValidation)
+		return
+	}
+	if !rebuild {
+		hiddenDef := &ColDef{
+			Name:    HiddenColumnName,
+			Comment: HiddenColumnComment,
+			Type:    HiddenColumnType,
+			Hidden:  int8(1),
+		}
+		if err = s.AppendColDef(hiddenDef); err != nil {
+			return
+		}
 	}
 
+	sortIdx := make([]int, 0)
 	names := make(map[string]bool)
-	for idx, colDef := range s.ColDefs {
-		if idx != colDef.Idx {
-			return false
+	for idx, def := range s.ColDefs {
+		// Check column idx validility
+		if idx != def.Idx {
+			err = fmt.Errorf("%w: wrong column index %d specified for \"%s\"", ErrSchemaValidation, def.Idx, def.Name)
+			return
 		}
-		_, ok := names[colDef.Name]
+		// Check unique name
+		_, ok := names[def.Name]
 		if ok {
-			return false
+			err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+			return
 		}
-		names[colDef.Name] = true
+		names[def.Name] = true
+		if def.IsSortKey() {
+			sortIdx = append(sortIdx, idx)
+		}
+		if def.IsHidden() {
+			if s.HiddenKey != nil {
+				err = fmt.Errorf("%w: duplicated hidden column \"%s\"", ErrSchemaValidation, def.Name)
+				return
+			}
+			s.HiddenKey = def
+		}
 	}
-	return true
+
+	if len(sortIdx) == 1 {
+		def := s.ColDefs[sortIdx[0]]
+		if def.SortIdx != 0 {
+			err = fmt.Errorf("%w: bad sort idx %d, should be 0", ErrSchemaValidation, def.SortIdx)
+			return
+		}
+		s.SortKey = NewSortKey()
+		s.SortKey.AddDef(def)
+	} else if len(sortIdx) > 1 {
+		s.SortKey = NewSortKey()
+		for _, idx := range sortIdx {
+			def := s.ColDefs[idx]
+			if def.Idx != idx {
+				err = fmt.Errorf("%w: bad column def", ErrSchemaValidation)
+				return
+			}
+			if ok := s.SortKey.AddDef(def); !ok {
+				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
+				return
+			}
+		}
+		isPrimary := s.SortKey.Defs[0].IsPrimary()
+		for i, def := range s.SortKey.Defs {
+			if int(def.SortIdx) != i {
+				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
+				return
+			}
+			if def.IsPrimary() != isPrimary {
+				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
+				return
+			}
+		}
+	}
+	return
 }
 
 // GetColIdx returns column index for the given column name
@@ -213,112 +525,128 @@ func (s *Schema) GetColIdx(attr string) int {
 	return idx
 }
 
-func MockSchema(colCnt int) *Schema {
+func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
 	rand.Seed(time.Now().UnixNano())
 	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
 	prefix := "mock_"
+	m := make(map[int]int)
+	for i, idx := range pkIdx {
+		m[idx] = i
+	}
 	for i := 0; i < colCnt; i++ {
-		schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
+		if pos, ok := m[i]; ok {
+			if err := schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, pos); err != nil {
+				panic(err)
+			}
+		} else {
+			if err := schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}); err != nil {
+				panic(err)
+			}
+		}
+	}
+	if err := schema.Finalize(false); err != nil {
+		panic(err)
 	}
 	return schema
 }
 
+func MockSchema(colCnt int, pkIdx int) *Schema {
+	rand.Seed(time.Now().UnixNano())
+	schema := NewEmptySchema(time.Now().String())
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		if pkIdx == i {
+			_ = schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4}, 0)
+		} else {
+			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
+		}
+	}
+	_ = schema.Finalize(false)
+	return schema
+}
+
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
-func MockSchemaAll(colCnt int) *Schema {
-	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
+// pkIdx == -1 means no pk defined
+func MockSchemaAll(colCnt int, pkIdx int) *Schema {
+	schema := NewEmptySchema(time.Now().String())
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
 		name := fmt.Sprintf("%s%d", prefix, i)
 		var typ types.Type
-		switch i {
+		switch i % 18 {
 		case 0:
-			typ = types.Type{
-				Oid:   types.T_int8,
-				Size:  1,
-				Width: 8,
-			}
+			typ = types.T_int8.ToType()
+			typ.Width = 8
 		case 1:
-			typ = types.Type{
-				Oid:   types.T_int16,
-				Size:  2,
-				Width: 16,
-			}
+			typ = types.T_int16.ToType()
+			typ.Width = 16
 		case 2:
-			typ = types.Type{
-				Oid:   types.T_int32,
-				Size:  4,
-				Width: 32,
-			}
+			typ = types.T_int32.ToType()
+			typ.Width = 32
 		case 3:
-			typ = types.Type{
-				Oid:   types.T_int64,
-				Size:  8,
-				Width: 64,
-			}
+			typ = types.T_int64.ToType()
+			typ.Width = 64
 		case 4:
-			typ = types.Type{
-				Oid:   types.T_uint8,
-				Size:  1,
-				Width: 8,
-			}
+			typ = types.T_uint8.ToType()
+			typ.Width = 8
 		case 5:
-			typ = types.Type{
-				Oid:   types.T_uint16,
-				Size:  2,
-				Width: 16,
-			}
+			typ = types.T_uint16.ToType()
+			typ.Width = 16
 		case 6:
-			typ = types.Type{
-				Oid:   types.T_uint32,
-				Size:  4,
-				Width: 32,
-			}
+			typ = types.T_uint32.ToType()
+			typ.Width = 32
 		case 7:
-			typ = types.Type{
-				Oid:   types.T_uint64,
-				Size:  8,
-				Width: 64,
-			}
+			typ = types.T_uint64.ToType()
+			typ.Width = 64
 		case 8:
-			typ = types.Type{
-				Oid:   types.T_float32,
-				Size:  4,
-				Width: 32,
-			}
+			typ = types.T_float32.ToType()
+			typ.Width = 32
 		case 9:
-			typ = types.Type{
-				Oid:   types.T_float64,
-				Size:  8,
-				Width: 64,
-			}
+			typ = types.T_float64.ToType()
+			typ.Width = 64
 		case 10:
-			typ = types.Type{
-				Oid:   types.T_date,
-				Size:  4,
-				Width: 32,
-			}
+			typ = types.T_date.ToType()
+			typ.Width = 32
 		case 11:
-			typ = types.Type{
-				Oid:   types.T_datetime,
-				Size:  8,
-				Width: 64,
-			}
+			typ = types.T_datetime.ToType()
+			typ.Width = 64
 		case 12:
-			typ = types.Type{
-				Oid:   types.T_varchar,
-				Size:  24,
-				Width: 100,
-			}
+			typ = types.T_varchar.ToType()
+			typ.Width = 100
 		case 13:
-			typ = types.Type{
-				Oid:   types.T_char,
-				Size:  24,
-				Width: 100,
-			}
+			typ = types.T_char.ToType()
+			typ.Width = 100
+		case 14:
+			typ = types.T_timestamp.ToType()
+			typ.Width = 64
+		case 15:
+			typ = types.T_decimal64.ToType()
+			typ.Width = 64
+		case 16:
+			typ = types.T_decimal128.ToType()
+			typ.Width = 128
+		case 17:
+			typ = types.T_bool.ToType()
+			typ.Width = 8
 		}
-		schema.AppendCol(name, typ)
+
+		if pkIdx == i {
+			_ = schema.AppendPKCol(name, typ, 0)
+		} else {
+			_ = schema.AppendCol(name, typ)
+		}
 	}
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
+	_ = schema.Finalize(false)
 	return schema
+}
+
+func GetAttrIdx(attrs []string, name string) int {
+	for i, attr := range attrs {
+		if attr == name {
+			return i
+		}
+	}
+	panic("logic error")
 }

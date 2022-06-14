@@ -341,16 +341,16 @@ func (b *build) buildJoinedScope(ss *ScopeSet) (*Scope, error) {
 func (b *build) getSchemaInfo(schema string, name string) ([]string, map[string]*Attribute, int64, error) {
 	var attrs []string
 
-	db, err := b.e.Database(schema)
+	db, err := b.e.Database(schema, nil)
 	if err != nil {
 		return nil, nil, -1, errors.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
 	}
-	r, err := db.Relation(name)
+	r, err := db.Relation(name, nil)
 	if err != nil {
 		return nil, nil, -1, errors.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
 	}
-	defer r.Close()
-	defs := r.TableDefs()
+	defer r.Close(nil)
+	defs := r.TableDefs(nil)
 	attrsMap := make(map[string]*Attribute)
 	for _, def := range defs {
 		if v, ok := def.(*engine.AttributeDef); ok {
@@ -362,7 +362,7 @@ func (b *build) getSchemaInfo(schema string, name string) ([]string, map[string]
 		}
 	}
 	if b.isModify {
-		priKeys, _ := r.GetPriKeyOrHideKey()
+		priKeys, _ := r.GetPriKeyOrHideKey(nil)
 		if priKeys == nil {
 			return nil, nil, -1, errors.New(errno.CaseNotFound, " can not find the primary or hide key of table")
 		}

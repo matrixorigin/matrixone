@@ -15,11 +15,13 @@
 package catalog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -65,6 +67,54 @@ func NewReplaySegmentEntry() *SegmentEntry {
 		link:      new(common.Link),
 		entries:   make(map[uint64]*common.DLNode),
 	}
+	return e
+}
+
+func NewStandaloneSegment(table *TableEntry, id uint64, ts uint64) *SegmentEntry {
+	e := &SegmentEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: ts,
+		},
+		table:   table,
+		link:    new(common.Link),
+		entries: make(map[uint64]*common.DLNode),
+		state:   ES_Appendable,
+	}
+	return e
+}
+
+func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
+	e := &SegmentEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		table:   table,
+		link:    new(common.Link),
+		entries: make(map[uint64]*common.DLNode),
+		state:   ES_Appendable,
+	}
+	var bid uint64
+	if table.schema.Name == SystemTableSchema.Name {
+		bid = SystemBlock_Table_ID
+	} else if table.schema.Name == SystemDBSchema.Name {
+		bid = SystemBlock_DB_ID
+	} else if table.schema.Name == SystemColumnSchema.Name {
+		bid = SystemBlock_Columns_ID
+	} else {
+		panic("not supported")
+	}
+	block := NewSysBlockEntry(e, bid)
+	e.AddEntryLocked(block)
 	return e
 }
 
@@ -175,7 +225,7 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 	entry.Lock()
 	defer entry.Unlock()
 	created = NewBlockEntry(entry, txn, state, dataFactory)
-	entry.addEntryLocked(created)
+	entry.AddEntryLocked(created)
 	return
 }
 
@@ -199,7 +249,7 @@ func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.LinkIt {
 	return common.NewLinkIt(entry.RWMutex, entry.link, reverse)
 }
 
-func (entry *SegmentEntry) addEntryLocked(block *BlockEntry) {
+func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
 	n := entry.link.Insert(block)
 	entry.entries[block.GetID()] = n
 }
@@ -220,6 +270,7 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 		return ErrNotFound
 	} else {
 		entry.link.Delete(n)
+		delete(entry.entries, block.GetID())
 	}
 	return nil
 }
@@ -233,9 +284,16 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 func (entry *SegmentEntry) PrepareRollback() (err error) {
 	entry.RLock()
 	currOp := entry.CurrOp
+	logutil.Infof("PrepareRollback %s", entry.StringLocked())
 	entry.RUnlock()
 	if currOp == OpCreate {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
+			return
+		}
+		//TODO: maybe scheduled?
+		// entry.GetCatalog().GetScheduler().ScheduleScopedFn(nil, tasks.IOTask, entry.AsCommonID(), entry.DestroyData)
+		if err = entry.DestroyData(); err != nil {
+			logutil.Fatalf("Cannot destroy uncommitted segment [%s] data: %v", entry.Repr(), err)
 			return
 		}
 	}
@@ -278,7 +336,18 @@ func (entry *SegmentEntry) Clone() CheckpointItem {
 	}
 	return cloned
 }
-
+func (entry *SegmentEntry) ReplayFile(cache *bytes.Buffer) {
+	colCnt := len(entry.table.GetSchema().ColDefs)
+	indexCnt := make(map[int]int)
+	if entry.table.GetSchema().IsSingleSortKey() {
+		indexCnt[entry.table.GetSchema().GetSingleSortKey().Idx] = 2
+	} else if entry.table.GetSchema().IsCompoundSortKey() {
+		panic("implement me")
+	}
+	if err := entry.GetSegmentData().GetSegmentFile().Replay(colCnt, indexCnt, cache); err != nil {
+		panic(err)
+	}
+}
 func (entry *SegmentEntry) CloneCreate() CheckpointItem {
 	cloned := &SegmentEntry{
 		BaseEntry: entry.BaseEntry.CloneCreate(),
@@ -318,5 +387,20 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 }
 
 func (entry *SegmentEntry) DestroyData() (err error) {
-	return entry.segData.Destory()
+	if entry.segData != nil {
+		err = entry.segData.Destory()
+	}
+	return
+}
+
+// Coarse API: no consistency check
+func (entry *SegmentEntry) IsActive() bool {
+	table := entry.GetTable()
+	if !table.IsActive() {
+		return false
+	}
+	entry.RLock()
+	dropped := entry.IsDroppedCommitted()
+	entry.RUnlock()
+	return !dropped
 }

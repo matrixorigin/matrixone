@@ -18,31 +18,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/io"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
-func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumnData *vector.Vector) (err error) {
+func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData *vector.Vector) (err error) {
 	// write indexes, collect their meta, and refresh host's index holder
 	schema := meta.GetSchema()
-	pkColumn, err := file.OpenColumn(int(schema.PrimaryKey))
+	sortCol, err := file.OpenColumn(schema.SortKey.Defs[0].Idx)
 	if err != nil {
 		return
 	}
 	zmIdx := uint16(0)
 	sfIdx := uint16(1)
-	metas := idxCommon.NewEmptyIndicesMeta()
+	metas := indexwrapper.NewEmptyIndicesMeta()
 
-	zoneMapWriter := io.NewBlockZoneMapIndexWriter()
-	zmFile, err := pkColumn.OpenIndexFile(int(zmIdx))
+	zoneMapWriter := indexwrapper.NewZMWriter()
+	zmFile, err := sortCol.OpenIndexFile(int(zmIdx))
 	if err != nil {
 		return err
 	}
-	err = zoneMapWriter.Init(zmFile, idxCommon.Plain, uint16(schema.PrimaryKey), zmIdx)
+	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), zmIdx)
 	if err != nil {
 		return err
 	}
-	err = zoneMapWriter.AddValues(pkColumnData)
+	err = zoneMapWriter.AddValues(columnData)
 	if err != nil {
 		return err
 	}
@@ -52,20 +51,20 @@ func BuildAndFlushBlockIndex(file file.Block, meta *catalog.BlockEntry, pkColumn
 	}
 	metas.AddIndex(*zmMeta)
 
-	staticFilterWriter := io.NewStaticFilterIndexWriter()
-	sfFile, err := pkColumn.OpenIndexFile(int(sfIdx))
+	bfWriter := indexwrapper.NewBFWriter()
+	sfFile, err := sortCol.OpenIndexFile(int(sfIdx))
 	if err != nil {
 		return err
 	}
-	err = staticFilterWriter.Init(sfFile, idxCommon.Plain, uint16(schema.PrimaryKey), sfIdx)
+	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), sfIdx)
 	if err != nil {
 		return err
 	}
-	err = staticFilterWriter.AddValues(pkColumnData)
+	err = bfWriter.AddValues(columnData)
 	if err != nil {
 		return err
 	}
-	sfMeta, err := staticFilterWriter.Finalize()
+	sfMeta, err := bfWriter.Finalize()
 	if err != nil {
 		return err
 	}

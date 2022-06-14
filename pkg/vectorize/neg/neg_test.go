@@ -39,12 +39,12 @@ func TestF64Sum(t *testing.T) {
 	xs := makeFbuffer(100)
 	rs := make([]float32, 100)
 	fmt.Printf("float neg: %v\n", Float32Neg(xs, rs))
-	fmt.Printf("pure float neg: %v\n", numericNeg(xs, rs))
+	fmt.Printf("pure float neg: %v\n", NumericNeg(xs, rs))
 }
 
 func TestI64Sum(t *testing.T) {
 	xs := makeIbuffer(100)
 	rs := make([]int64, 100)
 	fmt.Printf("int neg: %v\n", Int64Neg(xs, rs))
-	fmt.Printf("pure int neg: %v\n", numericNeg(xs, rs))
+	fmt.Printf("pure int neg: %v\n", NumericNeg(xs, rs))
 }
