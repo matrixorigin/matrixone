@@ -527,7 +527,7 @@ func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
 	tableProcessor := new(LoopProcessor)
 	tableProcessor.BlockFn = func(be *BlockEntry) error {
-		if be.IsDroppedCommitted() {
+		if !be.IsActive() {
 			return nil
 		}
 		rows += be.GetBlockData().GetRowsOnReplay()

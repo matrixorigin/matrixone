@@ -404,3 +404,18 @@ func (entry *SegmentEntry) IsActive() bool {
 	entry.RUnlock()
 	return !dropped
 }
+
+func (entry *SegmentEntry) TreeMaxDropCommitEntry() *BaseEntry {
+	table := entry.GetTable()
+	db := table.GetDB()
+	if db.IsDroppedCommitted() {
+		return db.BaseEntry
+	}
+	if table.IsDroppedCommitted() {
+		return table.BaseEntry
+	}
+	if entry.IsDroppedCommitted() {
+		return entry.BaseEntry
+	}
+	return nil
+}

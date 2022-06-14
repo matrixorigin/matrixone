@@ -16,6 +16,7 @@ package updates
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"sync"
 
@@ -65,6 +66,11 @@ func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, mvcc *MVCCHandle) *AppendN
 	}
 	return n
 }
+
+func (n *AppendNode) GeneralDesc() string {
+	return fmt.Sprintf("TS=%d,MaxRow=%d", n.commitTs, n.maxRow)
+}
+
 func (n *AppendNode) SetLogIndex(idx *wal.Index) {
 	n.logIndex = idx
 }
