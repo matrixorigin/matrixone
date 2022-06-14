@@ -20,5 +20,5 @@ jobs:
     - name: Lint docs
       uses: docker://avtodev/markdown-lint:v1 # fastest way
       with:
-        config: './markdownlint.yaml'
+        config: './.markdownlint.yaml'
         args: './docs/cn ./docs/en'
