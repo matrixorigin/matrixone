@@ -1,0 +1,24 @@
+name: Lint Docs
+
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+    branches: [main]
+    paths:
+      - 'docs/cn/**'
+      - 'docs/en/**'
+  workflow_dispatch:
+
+jobs:
+  lint-docs:
+    name: Lint Docs
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v2
+
+    - name: Lint changelog file
+      uses: docker://avtodev/markdown-lint:v1 # fastest way
+      with:
+        config: './markdownlint.yaml'
+        args: './docs/cn ./docs/en'
