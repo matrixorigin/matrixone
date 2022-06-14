@@ -4,20 +4,19 @@
 
 The length() function returns the length of the string.  
 
-
 ## **Syntax**
 
 ```
 > LENGTH(str)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required. String you want to calculate. |
 
-
 ## **Examples**
-
 
 ```
 > select a,length(a) from t1;
@@ -29,5 +28,5 @@ abc     3
 ```
 
 ## Constraints
-Currently, MatrixOne doesn't support select function() without from tables.
 
+Currently, MatrixOne doesn't support select function() without from tables.

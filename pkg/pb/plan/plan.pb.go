@@ -6785,6 +6785,8 @@ func (m *Node) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i--
 			dAtA[i] = 0x5a
 		}
+		i--
+		dAtA[i] = 0x6a
 	}
 	if len(m.GroupingSet) > 0 {
 		for iNdEx := len(m.GroupingSet) - 1; iNdEx >= 0; iNdEx-- {

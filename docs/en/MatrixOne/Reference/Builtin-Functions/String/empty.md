@@ -5,22 +5,23 @@
 Checks whether the input string is empty.
 A string is considered non-empty if it contains at least one byte, even if this is a space or a null byte.
 
-
 ## **Syntax**
 
 ```
 > EMPTY(str)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required. both CHAR and VARCHAR are supported. |
 
 ## **Returned Values**
+
 Returns 1 for an empty string or 0 for a non-empty string.
 
 ## **Examples**
-
 
 ```SQL
 > drop table if exists t1;
@@ -37,5 +38,5 @@ Returns 1 for an empty string or 0 for a non-empty string.
 ```
 
 ## **Constraints**
-Currently, MatrixOne doesn't support select function() without from tables.
 
+Currently, MatrixOne doesn't support select function() without from tables.

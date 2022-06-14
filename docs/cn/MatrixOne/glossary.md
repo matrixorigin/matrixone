@@ -32,10 +32,7 @@
  | Shard Splitting | 当一个Shard超过了规定的存储容量限制时，MatrixCube将会把该Shard分裂（Split）为两个存储量相当的Shard。 |
   | Shard Proxy | Shard Proxy是接受用户读写请求的中心模块，在收到请求后将其发送到相应的节点以做出回应|
 
-
 ### **重要概念**
-
-
 
 |  概念   |定义   |
 |  ----  | ----  |

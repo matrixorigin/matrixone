@@ -5,10 +5,13 @@
 Shows the list of databases that exist on the instance.
 
 ## **Syntax**
+
 ```
 > SHOW DATABASES [LIKE expr | WHERE expr]
 ```
+
 ## **Examples**
+
 ```sql
 > SHOW DATABASES;
 +----------+
@@ -26,4 +29,3 @@ Shows the list of databases that exist on the instance.
 +----------+
 9 rows in set (0.00 sec)
 ```
-
