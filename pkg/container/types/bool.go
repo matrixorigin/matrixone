@@ -36,3 +36,12 @@ func ParseValueToBool(num *tree.NumVal) (bool, error) {
 	}
 	return false, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", str))
 }
+
+func AppendBoolToByteArray(b bool, arr []byte) []byte {
+	if b {
+		arr = append(arr, '1')
+	} else {
+		arr = append(arr, '0')
+	}
+	return arr
+}
