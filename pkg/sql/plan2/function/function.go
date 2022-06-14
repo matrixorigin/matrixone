@@ -282,6 +282,25 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	return true
 }
 
+func toDateTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) != 2 {
+		return false
+	}
+	if args[0] != types.T_char && args[0] != types.T_varchar {
+		return false
+	}
+	if args[0] == ScalarNull {
+		return false
+	}
+	if args[1] != types.T_char && args[1] != types.T_varchar {
+		return false
+	}
+	if args[1] == ScalarNull {
+		return false
+	}
+	return true
+}
+
 // todo(broccoli): change this to a general function
 func concatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	if len(args) <= 1 {

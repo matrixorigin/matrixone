@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -157,7 +158,7 @@ func (node *appendableNode) GetBlockMaxFlushTS() uint64 {
 
 func (node *appendableNode) OnLoad() {
 	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
+		logutil.Error("[Exception]", common.ExceptionField(exception))
 		return
 	}
 	var err error
@@ -169,14 +170,19 @@ func (node *appendableNode) OnLoad() {
 
 func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err error) {
 	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
+		logutil.Error("[Exception]", common.ExceptionField(exception))
 		err = exception.(error)
 		return
 	}
 	mvcc := node.block.mvcc
 	if node.GetBlockMaxFlushTS() == ts {
-		logutil.Infof("[TS=%d] Unloading block with no flush: %s", ts, node.block.meta.AsCommonID().String())
-		return data.ErrStaleRequest
+		err = data.ErrStaleRequest
+		logutil.Info("[Done]", common.TimestampField(ts),
+			common.OperationField("flush"),
+			common.ErrorField(err),
+			common.ReasonField("already flushed"),
+			common.OperandField(node.block.meta.AsCommonID().String()))
+		return
 	}
 	masks := make(map[uint16]*roaring.Bitmap)
 	vals := make(map[uint16]map[uint32]any)
@@ -206,7 +212,9 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 		return
 	}
 	dnode := n.(*updates.DeleteNode)
-	logutil.Infof("[TS=%d] Unloading block %s", ts, node.block.meta.AsCommonID().String())
+	logutil.Info("[Running]", common.OperationField("flush"),
+		common.OperandField(node.block.meta.AsCommonID().String()),
+		common.TimestampField(ts))
 	var deletes *roaring.Bitmap
 	if dnode != nil {
 		deletes = dnode.GetDeleteMaskLocked()
