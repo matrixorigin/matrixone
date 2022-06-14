@@ -163,7 +163,7 @@ func (replayer *Replayer) PostReplayWal() {
 	_ = replayer.db.Catalog.RecurLoop(processor)
 
 	files := replayer.scanFiles()
-	for id, _ := range activeSegs {
+	for id := range activeSegs {
 		_, ok := files[id]
 		if !ok {
 			panic(fmt.Errorf("Cannot find segment file for: %d", id))
