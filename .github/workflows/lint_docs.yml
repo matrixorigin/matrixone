@@ -17,7 +17,7 @@ jobs:
     - name: Check out code
       uses: actions/checkout@v2
 
-    - name: Lint changelog file
+    - name: Lint docs
       uses: docker://avtodev/markdown-lint:v1 # fastest way
       with:
         config: './markdownlint.yaml'
