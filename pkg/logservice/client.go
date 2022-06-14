@@ -27,6 +27,14 @@ var (
 	ErrIncompatibleClient = moerr.NewError(moerr.INVALID_INPUT, "incompatible client")
 )
 
+// IsTempError returns a boolean value indicating whether the specified error is a temp
+// error that worth to be retried, e.g. timeouts, temp network issues, operation can be
+// completed as Raft leader is being elected. Non-temp error means the error is caused
+// by program logics rather than some external factors.
+func IsTempError(err error) bool {
+	return isTempError(err)
+}
+
 type LogServiceClientConfig struct {
 	ReadOnly  bool
 	ShardID   uint64

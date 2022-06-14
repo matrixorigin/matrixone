@@ -141,7 +141,7 @@ func (s *Service) serve(conn net.Conn) {
 				}
 				return
 			}
-			if errors.Is(err, ErrBadMessage) {
+			if errors.Is(err, errBadMessage) {
 				return
 			}
 			operr, ok := err.(net.Error)
