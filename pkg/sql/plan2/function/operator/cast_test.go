@@ -19,9 +19,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"unsafe"
 )
 
 func TestCastSameType(t *testing.T) {
@@ -1983,6 +1986,95 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
 	}
+}
+
+func TestCastStringAsDecimal64(t *testing.T) {
+
+	makeDecimal64Vector := func(values []int64, nsp []uint64, width int32, scale int32) *vector.Vector {
+		d64 := types.Type{
+			Oid:   types.T_decimal64,
+			Size:  8,
+			Width: width,
+			Scale: scale,
+		}
+		vec := vector.New(d64)
+		for _, n := range nsp {
+			nulls.Add(vec.Nsp, n)
+		}
+		ptr := (*[]types.Decimal64)(unsafe.Pointer(&values))
+		vec.Col = *ptr
+		return vec
+	}
+
+	makeScalarDecimal64 := func(v int64, length int, width int32, scale int32) *vector.Vector {
+		d64 := types.Type{
+			Oid:   types.T_decimal64,
+			Size:  8,
+			Width: width,
+			Scale: scale,
+		}
+		vec := testutil.NewProc().AllocScalarVector(d64)
+		vec.Length = length
+		vec.Col = []types.Decimal64{types.Decimal64(v)}
+		return vec
+	}
+
+	convey.Convey("TestCastStringAsDecimal64", t, func() {
+		type kase struct {
+			s    string
+			want int64
+		}
+
+		kases := []kase{
+			{
+				s:    "333.333",
+				want: 33333300,
+			},
+			{
+				s:    "-1234.5",
+				want: -123450000,
+			},
+		}
+
+		var inStr []string
+		var wantDecimal64 []int64
+		for _, k := range kases {
+			inStr = append(inStr, k.s)
+			wantDecimal64 = append(wantDecimal64, k.want)
+		}
+
+		inVector := testutil.MakeVarcharVector(inStr, nil)
+		destVector := makeDecimal64Vector(nil, nil, 10, 5)
+		wantVector := makeDecimal64Vector(wantDecimal64, nil, 10, 5)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{inVector, destVector}, proc)
+		//res, err := CastStringAsDecimal64(inVector, destVector, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVector, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("TestCasetScalarStringAsDecimal64", t, func() {
+		type kase struct {
+			s    string
+			want int64
+		}
+
+		k := kase{
+			s:    "333.123",
+			want: 33312300,
+		}
+
+		inVector := testutil.MakeScalarVarchar(k.s, 10)
+		wantVector := makeScalarDecimal64(k.want, 10, 10, 5)
+		destVector := makeDecimal64Vector(nil, nil, 10, 5)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{inVector, destVector}, proc)
+		//res, err := CastStringAsDecimal64(inVector, destVector, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVector, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
 }
 
 //func TestCastTimeStampAsDatetime(t *testing.T) {
