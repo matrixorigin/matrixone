@@ -161,7 +161,9 @@ func (c *hardwareStatsCollector) Collect(ch chan<- prom.Metric) {
 		m, err := e.Metric(stats)
 		if err != nil {
 			logutil.Warnf("[Metric] %s collect a error: %v", e.Desc().String(), err)
+		} else {
+			// as we logged already, no need to issue a InvalidMetric
+			ch <- m
 		}
-		ch <- m
 	}
 }
