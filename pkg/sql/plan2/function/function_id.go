@@ -166,10 +166,11 @@ const (
 	SUBSTR        // SUBSTR
 	SUM           // SUM
 	TAN           // TAN
-	TO_INTERVAL   // TO_INTERVAL
-	TRANSLATE     // TRANSLATE
-	TRIM          // TRIM
-	UNIFORM       // UNIFORM
+	TO_DATE
+	TO_INTERVAL // TO_INTERVAL
+	TRANSLATE   // TRANSLATE
+	TRIM        // TRIM
+	UNIFORM     // UNIFORM
 	UTC_TIMESTAMP
 	UPPER      // UPPER
 	VAR_POP    // VAR_POP
@@ -245,6 +246,7 @@ var functionIdRegister = map[string]int32{
 	"findinset":  FINDINSET,
 	"power":      POW,
 	"startswith": STARTSWITH,
+	"to_date":    TO_DATE,
 	// variadic functions
 	"ceil":          CEIL,
 	"ceiling":       CEIL,

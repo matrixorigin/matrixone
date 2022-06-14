@@ -1838,6 +1838,17 @@ var builtins = map[int][]Function{
 			Fn:          unary.Sinh[float64],
 		},
 	},
+	TO_DATE: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_varchar},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: toDateTypeCheck,
+			Fn:          binary.ToDate,
+		},
+	},
 	ATAN: {
 		{
 			Index:       0,

@@ -258,6 +258,38 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	return true
 }
 
+func toDateTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+
+	/*
+		if len(vectors) != 2 {
+			return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "function to_date takes two parameters\n"+usage)
+		}
+		if vectors[0].Typ.Oid != types.T_varchar && vectors[0].Typ.Oid != types.T_char || vectors[0].IsScalarNull() {
+			return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the first parameter of function to_date must be char/varchar\n"+usage)
+		}
+		if (vectors[1].Typ.Oid != types.T_varchar && vectors[1].Typ.Oid != types.T_char) || !vectors[1].IsScalar() || vectors[1].IsScalarNull() {
+			return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the second parameter of function to_date must be char/varchar constant\n"+usage)
+		}
+
+	*/
+	if len(args) != 2 {
+		return false
+	}
+	if args[0] != types.T_char && args[0] != types.T_varchar {
+		return false
+	}
+	if args[0] == ScalarNull {
+		return false
+	}
+	if args[1] != types.T_char && args[1] != types.T_varchar {
+		return false
+	}
+	if args[1] == ScalarNull {
+		return false
+	}
+	return true
+}
+
 // returns the cost if t1 can level up to t2
 func up(t1, t2 types.T) int {
 	return levelUp[t1][t2]
