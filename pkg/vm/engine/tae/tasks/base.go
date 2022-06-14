@@ -15,7 +15,11 @@
 package tasks
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
@@ -33,15 +37,17 @@ type Context struct {
 
 type BaseTask struct {
 	ops.Op
+	impl     Task
 	id       uint64
 	taskType TaskType
 	exec     func(Task) error
 }
 
-func NewBaseTask(impl base.IOpInternal, taskType TaskType, ctx *Context) *BaseTask {
+func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 	task := &BaseTask{
 		id:       NextTaskId(),
 		taskType: taskType,
+		impl:     impl,
 	}
 	var doneCB ops.OpDoneCB
 	if ctx != nil {
@@ -55,7 +61,7 @@ func NewBaseTask(impl base.IOpInternal, taskType TaskType, ctx *Context) *BaseTa
 		impl = task
 	}
 	task.Op = ops.Op{
-		Impl:   impl,
+		Impl:   impl.(base.IOpInternal),
 		DoneCB: doneCB,
 	}
 	if doneCB == nil {
@@ -65,7 +71,9 @@ func NewBaseTask(impl base.IOpInternal, taskType TaskType, ctx *Context) *BaseTa
 }
 
 func (task *BaseTask) onDone(_ base.IOp) {
-	/* Noop */
+	logutil.Info("[Done]", common.OperationField(task.impl.Name()),
+		common.DurationField(time.Duration(task.GetExecutTime())),
+		common.ErrorField(task.Err))
 }
 func (task *BaseTask) Type() TaskType      { return task.taskType }
 func (task *BaseTask) Cancel() (err error) { panic("todo") }
@@ -76,4 +84,7 @@ func (task *BaseTask) Execute() (err error) {
 	}
 	logutil.Debugf("Execute Task Type=%d, ID=%d", task.taskType, task.id)
 	return nil
+}
+func (task *BaseTask) Name() string {
+	return fmt.Sprintf("Task[ID=%d][T=%s]", task.id, TaskName(task.taskType))
 }

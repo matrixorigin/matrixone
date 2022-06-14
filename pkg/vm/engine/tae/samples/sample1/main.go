@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -50,7 +51,8 @@ func stopProfile() {
 }
 
 func main() {
-	tae, _ := db.Open(sampleDir, nil)
+	opts := config.WithOpts(nil, 1)
+	tae, _ := db.Open(sampleDir, opts)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(10, 3)
@@ -114,7 +116,12 @@ func main() {
 
 	stopProfile()
 	logutil.Infof("Append takes: %s", time.Since(now))
-	// time.Sleep(time.Second * 100)
+	waitTime := time.Millisecond * time.Duration(batchCnt/200+1) * 300
+	for i := 0; i < 5; i++ {
+		time.Sleep(waitTime)
+		_ = tae.Wal.Compact()
+		tae.PrintStats()
+	}
 	logutil.Info(tae.TxnBufMgr.String())
 	logutil.Info(tae.MTBufMgr.String())
 }

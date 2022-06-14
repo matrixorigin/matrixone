@@ -187,6 +187,10 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	return
 }
 
+func (node *DeleteNode) GeneralDesc() string {
+	return fmt.Sprintf("TS=%d,Cnt=%d", node.commitTs, node.mask.GetCardinality())
+}
+
 func (node *DeleteNode) StringLocked() string {
 	ntype := "TXN"
 	if node.nt == NT_Merge {
