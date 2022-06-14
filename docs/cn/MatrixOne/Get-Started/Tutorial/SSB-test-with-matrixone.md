@@ -6,7 +6,6 @@ SSB星型模式基准测试是OLAP数据库性能测试的常用场景，通过�
 
 确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.md)并[连接到MatrixOne服务](../connect-to-matrixone-server.md).
   
-
 ## **1. 编译dbgen**
 
 ```
@@ -27,8 +26,8 @@ $ ./dbgen -s 1 -T s
 $ ./dbgen -s 1 -T d
 ```
 
-
 ## **3. 在MatrixOne中建表**
+
 ```
 create database if not exists ssb;
 use ssb;
@@ -154,7 +153,9 @@ CREATE TABLE lineorder_flat(
 ```
 
 ## **4. 导入数据**
+
 将`system_vars_config.toml`参数增大，例如10GB，然后重新启动MatrixOne服务。
+
 ```
 max-entry-bytes = "10GB"
 ```
@@ -187,6 +188,7 @@ load data infile '/ssb-dbgen-path/lineorder_flat.tbl ' into table lineorder_flat
 ## **5. 运行SSB测试命令**
 
 ### **单表查询**
+
 ```sql
 --Q1.1
 SELECT sum(LO_EXTENDEDPRICE * LO_DISCOUNT) AS revenue FROM lineorder_flat WHERE year(LO_ORDERDATE)=1993 AND LO_DISCOUNT BETWEEN 1 AND 3 AND LO_QUANTITY < 25;

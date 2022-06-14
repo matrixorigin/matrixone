@@ -4,20 +4,19 @@
 
 The lengthUTF8() function returns the length of the string str, measured in code points. A multibyte character counts as a single code point. This means that, for a string containing two 3-byte characters, LENGTH() returns 6, whereas LENGTHUTF8() returns 2.  
 
-
 ## **Syntax**
 
 ```
 > LENGTHUTF8(str)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required. String you want to calculate. |
 
-
 ## **Examples**
-
 
 ```sql
 > drop table if exists t1;
@@ -33,5 +32,5 @@ The lengthUTF8() function returns the length of the string str, measured in code
 ```
 
 ## Constraints
-Currently, MatrixOne doesn't support select function() without from tables.
 
+Currently, MatrixOne doesn't support select function() without from tables.

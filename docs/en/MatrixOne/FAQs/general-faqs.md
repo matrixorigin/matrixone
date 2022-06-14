@@ -54,6 +54,7 @@
 <br>
 
 ## **Deployment FAQs**
+
 * <font size=4>Are there any hardware requirements for deploying MatrixOne?</font>
 
    Standalone setting specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ Operating System.
@@ -67,7 +68,6 @@
  
    No, they are not case sensitive.
 <br>
-
 
 * <font size=4>**How do I export data from MatrixOne to a file?**</font>
   

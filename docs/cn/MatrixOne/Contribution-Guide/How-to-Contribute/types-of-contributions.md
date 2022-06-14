@@ -14,7 +14,7 @@
 
 | 类型            | 说明                                                |
 | --------------------------------------------- | ------------------------------------------------------------ |
-| 报告或修复技术文档的问题| 您可以点击文档网站上的 *edit the page* 按键，可以直接在当前页面进行修改并[提交PR](https://github.com/matrixorigin/matrixone/pulls)。当然您可以可以在GitHub的[issue]中提出问题，并描述相关信息(https://github.com/matrixorigin/matrixone/issues/new/choose)。|
+| 报告或修复技术文档的问题| 您可以点击文档网站上的 *edit the page* 按键，可以直接在当前页面进行修改并[提交PR](https://github.com/matrixorigin/matrixone/pulls)。当然您可以可以在GitHub的[issue]中提出问题，并描述相关信息(<https://github.com/matrixorigin/matrixone/issues/new/choose>)。|
 | 提交一份新的文档 | 在撰写一份完整的文档之前，请阅读[文档贡献指南](contribute-documentation.md). |
 
 ## 其他
