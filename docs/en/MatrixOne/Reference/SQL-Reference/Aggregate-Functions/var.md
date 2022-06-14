@@ -6,17 +6,17 @@ Aggregate function.
 
 The VAR(expr) function returns the population standard variance of expr.
 
-
 ## **Syntax**
 
 ```
 > VAR(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Any numerical expressions |
-
 
 ## **Examples**
 

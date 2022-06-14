@@ -1,13 +1,13 @@
 # **Develop an aggregate function**
 
 ## **Prerequisite**
+
 To develop an aggregate function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to get some Golang basic concepts. 
 
 ## **Preparation**
 
 Before you start, please make sure that you have `Go` installed, cloned the `MatrixOne` code base.
 Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribute Code](../How-to-Contribute/contribute-code.md) for more details.
-
 
 ## **What is an aggregation function?**
 
@@ -36,7 +36,6 @@ In MatrixOne's implementation, the factorisation method pushs down the calculati
 a lot in computational and storage cost. This factorisation 
 is realized by the `Ring` interface and its inner functions. 
 
-
 To checkout more about the factorisation theory and factorized database, please refer to [Principles of Factorised Databases](https://fdbresearch.github.io/principles.html).
 
 ## **What is a `Ring`**
@@ -46,7 +45,6 @@ An algebraic `Ring` is a set equipped with two binary operations  `+` (addition)
 
 A `Ring` in MatrixOne is an interface, with several functions similar to the algebraic `Ring` structure. We use `Ring` interface to implement aggragate functions,
 the `+`(addition) is defined as merging two `Ring`s groups, the `⋅`(multiplication) operation is defined as the computation of a grouped aggregate value combined with its grouping key frequency information.
-
 
 | Method of Ring Interface | Do What                                                |
 | ------------------------ | ------------------------------------------------------ |
@@ -68,16 +66,12 @@ the `+`(addition) is defined as merging two `Ring`s groups, the `⋅`(multiplica
 | BatchAdd                 | Merge several couples of groups for two Rings                           |
 | Mul                      | Multiplication between groups for two Rings, called when join occurs      |
 
-
-
 The implementation of `Ring` data structure is under `/pkg/container/ring/`. 
-
 
 ## **How does `Ring` work with query:**
 
 To better understand the `Ring` interface, we can take aggregate function `sum()` as an example. We'll walk you through the whole process
 of `Ring`.
-
 
 There are two different scenarios for aggregation functions with `Ring`s.
 
@@ -108,16 +102,21 @@ select class, sum(age) from T1 group by class;
 ```
 
 For example, if two `Ring`s were generated, the first `Ring` holds the group sums of the first 4 rows, which will be like:
+
 ```sql
 |  one   |  23+20+22 |
 |  two   |  20       |
 ```
+
 The second `Ring` holds the group sums of the last 6 rows, which will be like:
+
 ```sql
 |  two   |  19       |
 |  three |  18+20+21+24+19 |
 ```
+
 Then the `Add` method of `Ring` will be called to merge two groups together, and at last the `Eval` method will return the overall result to user.
+
 ```sql
 |  one   |  23+20+22       |
 |  two   |  20+19       |
@@ -171,12 +170,12 @@ for performing `join` operation.
 
 The `Ring-Tc` is created in the same time as `join` is performed. This `Ring-Tc` will count the appearing frequency `f` of id. Then the `Mul` method
 of `Ring-Ts` is called, to calculate the sum calculated from the `Ring-Ts` and frequency from `Ring-Tc`.
+
 ```
 sum[i] = sum[i] * f[i]
 ```
 
 Now we get values of `[class, sum(age)]`, then performing a group by with class will give us the final result.
-
 
 ## **The secret of factorisation**
 
@@ -187,6 +186,7 @@ deal with costly Cartesian product. As the joined table number increases, the fa
 Take the implementation of `Variance` function as an example. 
 
 The variance formula is as below:
+
 ```
 Variance = Σ [(xi - x̅)^2]/n
 
@@ -201,6 +201,7 @@ as we store all values during processing.
 But in the `Avg` implementation, it doesn't store all values in the `Ring`. Instead it stores only the `sum` of each group and the null numbers.  It returns the final result with a simple division. This method saves a lot of memory space.
 
 Now let's turn the `Variance` formula a bit to a different form:
+
 ```
 Variance = Σ (xi^2)/n-x̅^2
 
@@ -253,7 +254,6 @@ MatrixOne doesn't distinguish between operators and functions.
 In our code repository, the file `pkg/sql/viewexec/transformer/types.go` register aggregate functions as operators 
 and we assign each operator a distinct integer number. 
 To add a new function `var()`, add a new const `Variance` in the const declaration and `var` in the name declaration.
-
 
 ```go
    const (
@@ -416,6 +416,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       }
 
 ```
+
 * `Eval` function  
 
 ```go
@@ -468,21 +469,15 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       }
 ```
 
-
-
 *3. Implement encoding and decoding for `VarRing`*
 
-
 In the `pkg/sql/protocol/protocol.go` file, implement the code for serialization and deserialization of `VarRing`. 
-
 
    | Serialization function | Deserialization function    |
    | ------------------ | ----------------------------------- |
    | EncodeRing         | DecodeRing<br>DecodeRingWithProcess |
 
-
 Serialization: 
-
 
 ```go
    case *variance.VarRing:
@@ -552,12 +547,12 @@ Deserialization:
 
 Here we go. Now we can fire up MatrixOne and try with our `var()` function.
 
-
 ## **Compile and run MatrixOne**
 
 Once the aggregation function is ready, we could compile and run MatrixOne to see the function behavior. 
 
 Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file. 
+
 ```
 make config
 make build
@@ -567,6 +562,7 @@ make build
     `make config` generates a new configuration file, in this tutorial, you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
 
 Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting. 
+
 ```
 ./mo-server system_vars_config.toml
 ```
@@ -578,10 +574,8 @@ Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the Matrix
 	
 	level = "error"
 
-
 !!! info 
 	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
-
 
 Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
 
@@ -593,10 +587,8 @@ $ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-
 Step4: Test your function behavior with some data. Below is an example. You can check if you get the right mathematical variance result. 
 You can also try an `inner join` and check the result, if the result is correct, the factorisation is valid. 
-
 
 ```sql
 mysql>select * from variance;
@@ -642,9 +634,7 @@ mysql> select variance.a, var(variance.b) from variance inner join variance2 on 
 2 rows in set (0.04 sec)
 ```
 
-
 Bingo!
-
 
 !!! info 
     Except for `var()`, MatrixOne has already some neat examples for aggregate functions, such as `sum()`, `count()`, `max()`, `min()` and `avg()`. With some minor corresponding changes, the procedure is quite the same as other functions.
@@ -652,9 +642,9 @@ Bingo!
 
 ## **Write unit Test for your function**
 
-
 We recommend you to also write a unit test for the new function. 
 Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal but complete testing experience. It automates execution of any function of the form.
+
 ```
 func TestXxx(*testing.T)
 ```
@@ -663,7 +653,6 @@ To write a new test suite, create a file whose name ends `_test.go` that contain
 
 Step1: Create a file named `variance_test.go` under `pkg/container/ring/variance/` directory. 
 Import the `testing` framework and the `reflect` framework we are going to use for testing. 
-
 
 ```go
 package variance
@@ -752,20 +741,19 @@ You can check the complete test code of `VarRing` there.
 
 ```
 
-
-
 Step4: Launch Test.
 
 Within the same directory as the test:
+
 ```
 go test
 ```
+
 This picks up any files matching packagename_test.go.
 If you are getting a `PASS`, you are passing the unit test. 
 
 In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your make a pull request to the code base, the test will automatically run.
 You code will be merged only if the `bvt` test pass.
-
 
 ## **Conduct a Performance Test**
 

@@ -1,13 +1,17 @@
 # **SHOW TABLES**
 
 ## **Description**
+
 Shows the list of tables in the currently selected database.
 
 ## **Syntax**
+
 ```
 > SHOW TABLES  [LIKE 'pattern' | WHERE expr | FROM 'pattern' | IN 'pattern']
 ```
+
 ## **Examples**
+
 ```sql
 > SHOW TABLES;
 +---------------+

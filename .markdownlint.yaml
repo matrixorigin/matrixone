@@ -1,0 +1,56 @@
+# disable all by default
+default: false
+
+# MD003
+heading-style:
+  style: atx
+
+# MD012
+no-multiple-blanks: true
+
+# MD018
+no-missing-space-atx: true
+
+# MD019
+no-multiple-space-atx: true
+
+# MD022
+blanks-around-headings: true
+
+# MD023
+heading-start-left: true
+
+# MD024
+no-duplicate-heading:
+  siblings_only: true
+
+# MD026
+no-trailing-punctuation:
+  punctuation: '.,;:!。，；：！'
+
+# MD027
+no-multiple-space-blockquote: true
+
+# MD030
+list-marker-space: true
+
+# MD031
+blanks-around-fences: true
+
+# MD032
+blanks-around-lists: true
+
+# MD034
+no-bare-urls: true
+
+# MD037
+no-space-in-emphasis: true
+
+# MD038
+no-space-in-code: true
+
+# MD039
+no-space-in-links: true
+
+# MD042
+no-empty-links: true
