@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -33,7 +32,6 @@ func TestFromUnixtime(t *testing.T) {
 	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetimeMe("2022-01-01 22:23:00"))
 	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetimeMe("2022-01-01 22:23:00"))
 	FromUnixtimeCase(t, types.T_int64, 1641046980, MustDatetimeMe("2022-01-01 22:23:00"))
-	fmt.Println(int64(MustDatetimeMe("2038-01-19 03:14:07")))
 }
 
 //func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error)
