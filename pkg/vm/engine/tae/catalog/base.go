@@ -56,6 +56,11 @@ func (info *CommitInfo) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n = 1
+	var ni int64
+	if ni, err = info.LogIndex.WriteTo(w); err != nil {
+		return
+	}
+	n += ni
 	return
 }
 
@@ -64,6 +69,12 @@ func (info *CommitInfo) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n = 1
+	var ni int64
+	info.LogIndex = new(wal.Index)
+	if ni, err = info.LogIndex.ReadFrom(r); err != nil {
+		return
+	}
+	n += ni
 	return
 }
 

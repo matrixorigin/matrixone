@@ -150,11 +150,11 @@ func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type
 	for i := 0; i < len(vs)-1; i += 2 {
 		whenv := vs[i]
 		thenv := vs[i+1]
-		whencols := whenv.Col.([]bool)
-		thencols := thenv.Col.([]T)
+		whencols := vector.MustTCols[bool](whenv)
+		thencols := vector.MustTCols[T](thenv)
 		switch {
 		case whenv.IsScalar() && thenv.IsScalar():
-			if whencols[0] {
+			if !whenv.IsScalarNull() && whencols[0] {
 				if thenv.IsScalarNull() {
 					return proc.AllocScalarNullVector(t), nil
 				} else {
@@ -165,7 +165,7 @@ func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type
 				}
 			}
 		case whenv.IsScalar() && !thenv.IsScalar():
-			if whencols[0] {
+			if !whenv.IsScalarNull() && whencols[0] {
 				copy(rscols, thencols)
 				rs.Nsp.Or(thenv.Nsp)
 				return rs, nil
@@ -295,11 +295,11 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 	for i := 0; i < len(vs)-1; i += 2 {
 		whenv := vs[i]
 		thenv := vs[i+1]
-		whencols := whenv.Col.([]bool)
-		thencols := thenv.Col.(*types.Bytes)
+		whencols := vector.MustTCols[bool](whenv)
+		thencols := vector.MustBytesCols(thenv)
 		switch {
 		case whenv.IsScalar() && thenv.IsScalar():
-			if whencols[0] {
+			if !whenv.IsScalarNull() && whencols[0] {
 				if thenv.IsScalarNull() {
 					return proc.AllocScalarNullVector(typ), nil
 				} else {
@@ -315,7 +315,7 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 				}
 			}
 		case whenv.IsScalar() && !thenv.IsScalar():
-			if whencols[0] {
+			if !whenv.IsScalarNull() && whencols[0] {
 				rscols.Data = make([]byte, len(thencols.Data))
 				copy(rscols.Data, thencols.Data)
 				copy(rscols.Offsets, thencols.Offsets)

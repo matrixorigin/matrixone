@@ -151,6 +151,7 @@ func (monitor *catalogStatsMonitor) PreExecute() error {
 }
 
 func (monitor *catalogStatsMonitor) PostExecute() error {
+	monitor.db.PrintStats()
 	if monitor.unCheckpointedCnt == 0 {
 		monitor.lastScheduleTime = time.Now()
 		return nil
