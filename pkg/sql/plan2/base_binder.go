@@ -569,8 +569,8 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
-	switch astExpr.Value.Kind() {
-	case constant.Unknown:
+	switch astExpr.ValType {
+	case tree.P_null:
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -582,7 +582,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Nullable: true,
 			},
 		}, nil
-	case constant.Bool:
+	case tree.P_bool:
 		boolValue := constant.BoolVal(astExpr.Value)
 		return &Expr{
 			Expr: &plan.Expr_C{
@@ -599,7 +599,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Size:     1,
 			},
 		}, nil
-	case constant.Int:
+	case tree.P_int64:
 		intValue, _ := constant.Int64Val(astExpr.Value)
 		if astExpr.Negative() {
 			intValue = -intValue
@@ -619,7 +619,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Size:     8,
 			},
 		}, nil
-	case constant.Float:
+	case tree.P_float64:
 		floatValue, _ := constant.Float64Val(astExpr.Value)
 		if astExpr.Negative() {
 			floatValue = -floatValue
@@ -639,7 +639,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Size:     8,
 			},
 		}, nil
-	case constant.String:
+	case tree.P_char:
 		stringValue := constant.StringVal(astExpr.Value)
 		return &Expr{
 			Expr: &plan.Expr_C{
@@ -655,6 +655,28 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Nullable: false,
 				Size:     4,
 				Width:    math.MaxInt32,
+			},
+		}, nil
+	case tree.P_decimal128:
+		// select col1 + 99999999999.24343424334 from t1
+		stringValue := constant.StringVal(astExpr.Value)
+		_, scale, err := types.ParseStringToDecimal128WithoutTable(stringValue)
+		if err != nil {
+			return nil, err
+		}
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Decval{
+						Decval: stringValue,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_DECIMAL128,
+				Nullable: false,
+				Scale:    scale,
 			},
 		}, nil
 	default:

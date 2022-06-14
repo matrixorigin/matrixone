@@ -29,10 +29,11 @@ import (
 )
 
 var (
-	constBType = types.Type{Oid: types.T_bool}
-	constIType = types.Type{Oid: types.T_int64}
-	constDType = types.Type{Oid: types.T_float64}
-	constSType = types.Type{Oid: types.T_varchar}
+	constBType       = types.Type{Oid: types.T_bool}
+	constIType       = types.Type{Oid: types.T_int64}
+	constDType       = types.Type{Oid: types.T_float64}
+	constSType       = types.Type{Oid: types.T_varchar}
+	constDecimalType = types.Type{Oid: types.T_decimal128}
 )
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
@@ -62,6 +63,13 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 					Offsets: []uint32{0},
 					Lengths: []uint32{uint32(len(sval))},
 				}
+			case *plan.Const_Decval:
+				vec = vector.NewConst(constDecimalType)
+				decimalVal, _, err := types.ParseStringToDecimal128WithoutTable(t.C.GetDecval())
+				if err != nil {
+					return nil, err
+				}
+				vec.Col = []types.Decimal128{decimalVal}
 			default:
 				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
