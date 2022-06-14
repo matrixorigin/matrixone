@@ -26,12 +26,12 @@ func NewPredicatePushdown() *PredicatePushdown {
 }
 
 func (r *PredicatePushdown) Match(n *plan.Node) bool {
-	return n.NodeType != plan.Node_TABLE_SCAN && len(n.WhereList) > 0
+	return n.NodeType != plan.Node_TABLE_SCAN && len(n.FilterList) > 0
 }
 
 func (r *PredicatePushdown) Apply(n *plan.Node, qry *plan.Query) {
-	es := n.WhereList
-	n.WhereList = make([]*plan.Expr, 0, len(es))
+	es := n.FilterList
+	n.FilterList = make([]*plan.Expr, 0, len(es))
 	for i := range es {
 		r.pushdown(es[i], n, qry)
 	}
@@ -41,17 +41,17 @@ func (r *PredicatePushdown) pushdown(e *plan.Expr, n *plan.Node, qry *plan.Query
 	var ne *plan.Expr // new expr
 
 	if n.NodeType == plan.Node_TABLE_SCAN {
-		n.WhereList = append(n.WhereList, e)
+		n.FilterList = append(n.FilterList, e)
 		return false
 	}
 	relPos := int32(-1)
 	relPos, ne = r.newExpr(relPos, e, n, qry)
 	if ne == nil {
-		n.WhereList = append(n.WhereList, e)
+		n.FilterList = append(n.FilterList, e)
 		return false
 	}
 	if !r.pushdown(ne, qry.Nodes[relPos], qry) {
-		n.WhereList = append(n.WhereList, e)
+		n.FilterList = append(n.FilterList, e)
 		return false
 	}
 	return true

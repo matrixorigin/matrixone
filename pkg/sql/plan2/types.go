@@ -111,6 +111,7 @@ type BindContext struct {
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
+	resultTag    int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr

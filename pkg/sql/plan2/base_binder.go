@@ -48,26 +48,49 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
 		expr, err = b.bindNumVal(exprImpl)
+
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+
 	case *tree.OrExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("or", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
+
 	case *tree.NotExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("not", []tree.Expr{exprImpl.Expr}, depth)
+		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+		if err != nil {
+			return
+		}
+
+		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
+			if subquery.Sub.Typ == plan.SubqueryRef_EXISTS {
+				subquery.Sub.Typ = plan.SubqueryRef_NOT_EXISTS
+				break
+			}
+		}
+
+		expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
+
 	case *tree.AndExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("and", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
+
 	case *tree.UnaryExpr:
 		expr, err = b.bindUnaryExpr(exprImpl, depth)
+
 	case *tree.BinaryExpr:
 		expr, err = b.bindBinaryExpr(exprImpl, depth)
+
 	case *tree.ComparisonExpr:
 		expr, err = b.bindComparisonExpr(exprImpl, depth)
+
 	case *tree.FuncExpr:
 		expr, err = b.bindFuncExpr(exprImpl, depth)
+
 	case *tree.RangeCond:
 		expr, err = b.bindRangeCond(exprImpl, depth)
+
 	case *tree.UnresolvedName:
 		expr, err = b.impl.BindColRef(exprImpl, depth)
+
 	case *tree.CastExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
 		if err != nil {
@@ -79,10 +102,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 			return
 		}
 		expr, err = appendCastBeforeExpr(expr, typ)
+
 	case *tree.IsNullExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("isnull", []tree.Expr{exprImpl.Expr}, depth)
+
 	case *tree.IsNotNullExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("not", []tree.Expr{tree.NewIsNullExpr(exprImpl.Expr)}, depth)
+
 	case *tree.Tuple:
 		exprs := make([]*Expr, 0, len(exprImpl.Exprs))
 		var planItem *Expr
@@ -103,28 +129,39 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32) (expr *Expr, e
 				Id: plan.Type_TUPLE,
 			},
 		}
+
 	case *tree.CaseExpr:
 		expr, err = b.bindCaseExpr(exprImpl, depth)
+
 	case *tree.IntervalExpr:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", exprImpl))
+
 	case *tree.XorExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("xor", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
+
 	case *tree.Subquery:
 		expr, err = b.impl.BindSubquery(exprImpl)
+
 	case *tree.DefaultVal:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr default'%v' is not support now", exprImpl))
+
 	case *tree.MaxValue:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr max'%v' is not support now", exprImpl))
+
 	case *tree.VarExpr:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr var'%v' is not support now", exprImpl))
+
 	case *tree.StrVal:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr str'%v' is not support now", exprImpl))
+
 	case *tree.ExprList:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr plan.ExprList'%v' is not support now", exprImpl))
+
 	case tree.UnqualifiedStar:
 		// select * from table
 		// * should only appear in SELECT clause
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, "unqualified star should only appear in SELECT clause")
+
 	default:
 		err = errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr '%+v' is not support now", exprImpl))
 	}
@@ -230,17 +267,26 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery) (*Expr, error) {
 			Id: plan.Type_TUPLE,
 		},
 		Expr: &plan.Expr_Sub{
-			Sub: &plan.SubQuery{
+			Sub: &plan.SubqueryRef{
 				NodeId: nodeId,
 			},
 		},
 	}
 	if astExpr.Exists {
-		returnExpr, err = b.bindFuncExprImplByPlanExpr("exists", []*Expr{returnExpr})
-		if err != nil {
-			return nil, err
+		returnExpr.Typ = &plan.Type{
+			Id:       plan.Type_BOOL,
+			Nullable: false,
+			Size:     1,
 		}
+		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
+	} else {
+		if len(subCtx.projects) > 1 {
+			// TODO: may support row constructor in the future?
+			return nil, errors.New(errno.SyntaxError, "subquery must return only one column")
+		}
+		returnExpr.Typ = subCtx.projects[0].Typ
 	}
+
 	return returnExpr, nil
 }
 
@@ -314,24 +360,34 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32) (*Exp
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32) (*Expr, error) {
+	var op string
+
 	switch astExpr.Op {
 	case tree.EQUAL:
-		return b.bindFuncExprImplByAstExpr("=", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		op = "="
+
 	case tree.LESS_THAN:
-		return b.bindFuncExprImplByAstExpr("<", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		op = "<"
+
 	case tree.LESS_THAN_EQUAL:
-		return b.bindFuncExprImplByAstExpr("<=", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		op = "<="
+
 	case tree.GREAT_THAN:
-		return b.bindFuncExprImplByAstExpr(">", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		op = ">"
+
 	case tree.GREAT_THAN_EQUAL:
-		return b.bindFuncExprImplByAstExpr(">=", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		op = ">="
+
 	case tree.NOT_EQUAL:
-		return b.bindFuncExprImplByAstExpr("<>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		op = "<>"
+
 	case tree.LIKE:
-		return b.bindFuncExprImplByAstExpr("like", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+		op = "like"
+
 	case tree.NOT_LIKE:
 		new_expr := tree.NewComparisonExpr(tree.LIKE, astExpr.Left, astExpr.Right)
 		return b.bindFuncExprImplByAstExpr("not", []tree.Expr{new_expr}, depth)
+
 	case tree.IN:
 		switch list := astExpr.Right.(type) {
 		case *tree.Tuple:
@@ -345,10 +401,27 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				}
 			}
 			return b.impl.BindExpr(new_expr, depth, false)
+
 		default:
-			// TODO can unnesting subquery here
-			return b.bindFuncExprImplByAstExpr("in", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
+			if err != nil {
+				return nil, err
+			}
+
+			rightArg, err := b.impl.BindExpr(astExpr.Right, depth, false)
+			if err != nil {
+				return nil, err
+			}
+
+			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
+				subquery.Sub.Typ = plan.SubqueryRef_IN
+				subquery.Sub.Child = leftArg
+				return rightArg, nil
+			} else {
+				return bindFuncExprImplByPlanExpr("in", []*plan.Expr{leftArg, rightArg})
+			}
 		}
+
 	case tree.NOT_IN:
 		switch list := astExpr.Right.(type) {
 		case *tree.Tuple:
@@ -362,13 +435,65 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				}
 			}
 			return b.impl.BindExpr(new_expr, depth, false)
+
 		default:
-			// TODO can unnesting subquery here
-			new_expr := tree.NewComparisonExpr(tree.IN, astExpr.Left, astExpr.Right)
-			return b.bindFuncExprImplByAstExpr("not", []tree.Expr{new_expr}, depth)
+			leftArg, err := b.impl.BindExpr(astExpr.Left, depth, false)
+			if err != nil {
+				return nil, err
+			}
+
+			rightArg, err := b.impl.BindExpr(astExpr.Right, depth, false)
+			if err != nil {
+				return nil, err
+			}
+
+			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
+				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
+				subquery.Sub.Child = leftArg
+				return rightArg, nil
+			} else {
+				expr, err := bindFuncExprImplByPlanExpr("in", []*plan.Expr{leftArg, rightArg})
+				if err != nil {
+					return nil, err
+				}
+
+				return bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
+			}
+		}
+
+	default:
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
+	}
+
+	if astExpr.SubOp >= tree.ANY {
+		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
+		if err != nil {
+			return nil, err
+		}
+
+		child, err := b.impl.BindExpr(astExpr.Left, depth, false)
+		if err != nil {
+			return nil, err
+		}
+
+		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
+			subquery.Sub.Op = op
+			subquery.Sub.Child = child
+
+			switch astExpr.SubOp {
+			case tree.ANY, tree.SOME:
+				subquery.Sub.Typ = plan.SubqueryRef_ANY
+			case tree.ALL:
+				subquery.Sub.Typ = plan.SubqueryRef_ALL
+			}
+
+			return expr, nil
+		} else {
+			return nil, errors.New(errno.InternalError, fmt.Sprintf("%q can only quantify subquery", astExpr.SubOp.ToString()))
 		}
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", astExpr))
+
+	return b.bindFuncExprImplByAstExpr(op, []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 }
 
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, error) {
@@ -426,10 +551,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		args[idx] = expr
 	}
 
-	return b.bindFuncExprImplByPlanExpr(name, args)
+	return bindFuncExprImplByPlanExpr(name, args)
 }
 
-func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
+func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	var err error
 
 	// deal with some special function
