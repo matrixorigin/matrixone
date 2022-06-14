@@ -16,6 +16,7 @@ package aggregate
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/anyvalue"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
@@ -75,7 +76,7 @@ func ReturnType(op int, typ types.T) types.T {
 	return 0
 }
 
-func New(op int, typ types.Type) (ring.Ring, error) {
+func New(op int, dist bool, typ types.Type) (ring.Ring, error) {
 	switch op {
 	case Sum:
 		return NewSum(typ)
@@ -89,6 +90,9 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case Min:
 		return NewMin(typ)
 	case Count:
+		if dist {
+			return count.NewDistinctCount(typ), nil
+		}
 		return count.NewCount(typ), nil
 	case StarCount:
 		return starcount.NewCount(typ), nil
@@ -104,6 +108,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return NewBitOr(typ)
 	case StdDevPop:
 		return stddevpop.NewStdDevPopRingWithTypeCheck(typ)
+	case AnyValue:
+		return anyvalue.NewAnyValueRingWithTypeCheck(typ)
 	}
 	return nil, nil
 }

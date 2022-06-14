@@ -60,11 +60,11 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.UnloadFunc = impl.OnUnload
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadableFunc = impl.CheckUnloadable
-	// impl.DestroyFunc = impl.OnDestory
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
 	impl.flushTs = flushTs
+	impl.rows = file.ReadRows()
 	mgr.RegisterNode(impl)
 	return impl
 }

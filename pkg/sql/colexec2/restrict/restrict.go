@@ -18,6 +18,10 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -45,14 +49,24 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		bat.Clean(proc.Mp)
 		return false, err
 	}
-	bs := vec.Col.([]bool)
-	sels := make([]int64, 0, 8)
-	for i, b := range bs {
-		if b {
-			sels = append(sels, int64(i))
-		}
+	defer vector.Clean(vec, proc.Mp)
+	bs, ok := vec.Col.([]bool)
+	if !ok {
+		return false, errors.New(errno.SyntaxError, "only support logic expression to be filter condition")
 	}
-	bat.Shrink(sels)
+	if vec.IsScalar() {
+		if !bs[0] {
+			bat.Shrink(nil)
+		}
+	} else {
+		sels := make([]int64, 0, 8)
+		for i, b := range bs {
+			if b {
+				sels = append(sels, int64(i))
+			}
+		}
+		bat.Shrink(sels)
+	}
 	proc.Reg.InputBatch = bat
 	return false, nil
 }

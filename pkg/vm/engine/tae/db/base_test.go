@@ -6,8 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -24,6 +25,57 @@ const (
 	ModuleName    = "TAEDB"
 	defaultTestDB = "db"
 )
+
+type testEngine struct {
+	*DB
+	t      *testing.T
+	schema *catalog.Schema
+}
+
+func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
+	db := initDB(t, opts)
+	return &testEngine{
+		DB: db,
+	}
+}
+
+func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
+
+func (e *testEngine) restart() {
+	_ = e.DB.Close()
+	var err error
+	e.DB, err = Open(e.Dir, e.Opts)
+	assert.NoError(e.t, err)
+}
+
+func (e *testEngine) Close() error {
+	return e.DB.Close()
+}
+
+func (e *testEngine) createRelAndAppend(bat *mobat.Batch, createDB bool) (handle.Database, handle.Relation) {
+	return createRelationAndAppend(e.t, e.DB, defaultTestDB, e.schema, bat, createDB)
+}
+
+func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
+	return getDefaultRelation(e.t, e.DB, e.schema.Name)
+}
+
+func (e *testEngine) checkpointCatalog() {
+	err := e.DB.Catalog.Checkpoint(e.DB.TxnMgr.StatSafeTS())
+	assert.NoError(e.t, err)
+}
+
+func (e *testEngine) compactABlocks(skipConflict bool) {
+	forceCompactABlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+}
+
+func (e *testEngine) compactBlocks(skipConflict bool) {
+	compactBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+}
+
+func (e *testEngine) mergeBlocks(skipConflict bool) {
+	mergeBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+}
 
 func initDB(t *testing.T, opts *options.Options) *DB {
 	mockio.ResetFS()
@@ -65,9 +117,18 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	return
 }
 
+func lenOfBats(bats []*mobat.Batch) int {
+	rows := 0
+	for _, bat := range bats {
+		rows += compute.LengthOfBatch(bat)
+	}
+	return rows
+}
+
 func printCheckpointStats(t *testing.T, tae *DB) {
 	t.Logf("GetCheckpointedLSN: %d", tae.Wal.GetCheckpointed())
 	t.Logf("GetPenddingLSNCnt: %d", tae.Wal.GetPenddingCnt())
+	t.Logf("GetCurrSeqNum: %d", tae.Wal.GetCurrSeqNum())
 }
 
 func createDB(t *testing.T, e *DB, dbName string) {
@@ -122,7 +183,7 @@ func createRelationAndAppend(
 	e *DB,
 	dbName string,
 	schema *catalog.Schema,
-	bat *gbat.Batch,
+	bat *mobat.Batch,
 	createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
@@ -212,7 +273,7 @@ func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	}
 }
 
-func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendFailClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -226,7 +287,7 @@ func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *s
 	}
 }
 
-func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -240,7 +301,7 @@ func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.
 	}
 }
 
-func tryAppendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func tryAppendClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -259,29 +320,49 @@ func tryAppendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sy
 		_ = txn.Commit()
 	}
 }
-
-func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
-	txn, _ := e.StartTxn(nil)
-	db, _ := txn.GetDatabase(dbName)
-	rel, _ := db.GetRelationByName(schema.Name)
+func forceCompactABlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, rel := getRelation(t, e, dbName, schema.Name)
 
 	var metas []*catalog.BlockEntry
 	it := rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		if blk.Rows() < int(schema.BlockMaxRows) {
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		// if blk.Rows() >= int(schema.BlockMaxRows) {
+		if !meta.IsAppendable() {
 			it.Next()
 			continue
 		}
-		meta := blk.GetMeta().(*catalog.BlockEntry)
 		metas = append(metas, meta)
 		it.Next()
 	}
 	_ = txn.Commit()
 	for _, meta := range metas {
-		txn, _ = e.StartTxn(nil)
-		db, _ = txn.GetDatabase(dbName)
-		rel, _ = db.GetRelationByName(schema.Name)
+		err := meta.GetBlockData().ForceCompact()
+		if !skipConflict {
+			assert.NoError(t, err)
+		}
+	}
+}
+
+func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, rel := getRelation(t, e, dbName, schema.Name)
+
+	var metas []*catalog.BlockEntry
+	it := rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		if blk.Rows() < int(schema.BlockMaxRows) {
+			it.Next()
+			continue
+		}
+		metas = append(metas, meta)
+		it.Next()
+	}
+	_ = txn.Commit()
+	for _, meta := range metas {
+		txn, _ := getRelation(t, e, dbName, schema.Name)
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
 		assert.NoError(t, err)
 		err = task.OnExec()
@@ -307,7 +388,9 @@ func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, ski
 	segIt := rel.MakeSegmentIt()
 	for segIt.Valid() {
 		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		segs = append(segs, seg)
+		if seg.GetAppendableBlockCnt() == int(seg.GetTable().GetSchema().SegmentMaxBlocks) {
+			segs = append(segs, seg)
+		}
 		segIt.Next()
 	}
 	_ = txn.Commit()
@@ -315,7 +398,14 @@ func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, ski
 		txn, _ = e.StartTxn(nil)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, _ := rel.GetSegment(seg.ID)
+		segHandle, err := rel.GetSegment(seg.ID)
+		if err != nil {
+			if skipConflict {
+				_ = txn.Rollback()
+				continue
+			}
+			assert.NoErrorf(t, err, "Txn Ts=%d", txn.GetStartTS())
+		}
 		var metas []*catalog.BlockEntry
 		it := segHandle.MakeBlockIt()
 		for it.Valid() {
@@ -362,4 +452,9 @@ func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 		assert.NoError(t, err)
 	}
 	assert.NoError(t, txn.Commit())
+}
+
+func getSingleSortKeyValue(bat *mobat.Batch, schema *catalog.Schema, row int) (v any) {
+	v = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], uint32(row))
+	return
 }

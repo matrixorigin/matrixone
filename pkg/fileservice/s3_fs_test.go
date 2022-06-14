@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build test_s3
-
 package fileservice
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -26,13 +25,20 @@ import (
 )
 
 func TestS3FS(t *testing.T) {
+
+	var sharedConfig S3Config
+	content, err := os.ReadFile("s3.json")
+	if os.IsNotExist(err) {
+		fmt.Printf("s3.json not found, skip s3 test\n")
+		return // not using t.Skip because the CI does not know SKIP cases
+	}
+	assert.Nil(t, err)
+	err = json.Unmarshal(content, &sharedConfig)
+	assert.Nil(t, err)
+
 	testFileService(t, func() FileService {
 
-		var config S3Config
-		content, err := os.ReadFile("s3.json")
-		assert.Nil(t, err)
-		err = json.Unmarshal(content, &config)
-		assert.Nil(t, err)
+		config := sharedConfig
 		config.KeyPrefix = time.Now().Format("2006-01-02T15:04:05")
 
 		fs, err := NewS3FS(config)

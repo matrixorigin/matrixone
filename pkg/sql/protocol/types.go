@@ -90,6 +90,23 @@ const (
 	BitXorRing
 	// StdDevPop
 	StdDevPopRing
+	// AnyValue
+	AnyValueBoolRing
+	AnyValueInt8Ring
+	AnyValueInt32Ring
+	AnyValueDateRing
+	AnyValueInt16Ring
+	AnyValueInt64Ring
+	AnyValueDatetimeRing
+	AnyValueUInt8Ring
+	AnyValueUInt16Ring
+	AnyValueUInt32Ring
+	AnyValueUInt64Ring
+	AnyValueFloat32Ring
+	AnyValueFloat64Ring
+	AnyValueDecimal64Ring
+	AnyValueDecimal128Ring
+	AnyValueStrRing
 )
 
 // colexec

@@ -145,7 +145,11 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	for i, entry := range vector.Entries {
 		pivot.Offset = entry.Offset
 		pivot.Size = entry.Size
-		pivot.Data = make([]byte, 0, entry.Size)
+		if len(entry.Data) < entry.Size {
+			pivot.Data = make([]byte, entry.Size)
+		} else {
+			pivot.Data = entry.Data[:entry.Size]
+		}
 
 		m.tree.DescendLessOrEqual(pivot, func(item btree.Item) bool {
 			src := item.(*_MemIOEntry)
@@ -164,7 +168,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 			if endPos > src.Size {
 				endPos = src.Size
 			}
-			pivot.Data = append(pivot.Data, src.Data[startPos:endPos]...)
+			copy(pivot.Data[entry.Size-pivot.Size:], src.Data[startPos:endPos])
 			n := endPos - startPos
 			pivot.Offset += n
 			pivot.Size -= n
@@ -188,7 +192,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 			if endPos > src.Size {
 				endPos = src.Size
 			}
-			pivot.Data = append(pivot.Data, src.Data[startPos:endPos]...)
+			copy(pivot.Data[entry.Size-pivot.Size:], src.Data[startPos:endPos])
 			n := endPos - startPos
 			pivot.Offset += n
 			pivot.Size -= n

@@ -103,7 +103,7 @@ func TestFunctionRegister(t *testing.T) {
 			id:    2,
 			fname: "f1",
 			args:  []types.T{types.T_int64, ScalarNull},
-			index: notFound,
+			index: 0,
 		},
 		{
 			id:    3,
@@ -148,17 +148,17 @@ func TestFunctionRegister(t *testing.T) {
 	// test errMsg
 	{
 		_, _, _, err := GetFunctionByName("testFunctionName", nil)
-		require.Equal(t, errors.New(errno.UndefinedFunction, "function 'testFunctionName' doesn't register, get id failed"), err)
+		require.Equal(t, errors.New(errno.UndefinedFunction, "function or operator 'testFunctionName' is not implemented"), err)
 	}
 	{
 		_, _, _, err := GetFunctionByName("f1", []types.T{})
-		require.Equal(t, errors.New(errno.UndefinedFunction, "undefined function f1[]"), err)
+		require.Equal(t, errors.New(errno.UndefinedFunction, "unsupported parameter types [] for function 'f1'"), err)
 	}
 	{
-		errMessage := "too much function matches:\n" +
-			"f1[BIGINT BIGINT]\n" +
-			"f1[BIGINT DOUBLE]"
-		_, _, _, err := GetFunctionByName("f1", []types.T{types.T_int64, ScalarNull})
+		errMessage := "too many functions matched:\n" +
+			"f2[]\n" +
+			"f2[]"
+		_, _, _, err := GetFunctionByName("f2", []types.T{types.T_int64})
 		require.Equal(t, errors.New(errno.SyntaxError, errMessage), err)
 	}
 }

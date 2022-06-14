@@ -15,17 +15,17 @@ import (
 	"github.com/smartystreets/goconvey/convey"
 )
 
-var NeintBool = []bool{false, true, true, true, true, false, true, false, true, true, false, true, true, false, true, false}
+var NeintBool = []bool{false, true, true, false, true, false, true, false, true, true, false, false, false, false, false, false}
 var NeintNullPos = []int{3, 7, 11, 12, 13, 14, 15}
 var NeintNotNullPos = []int{0, 1, 2, 4, 5, 6, 8, 9, 10}
 
-var NeuintBool = []bool{false, true, false, true, false, true, false, true, false}
+var NeuintBool = []bool{false, true, false, true, false, false, false, false, false}
 var NeuintNullPos = []int{2, 5, 6, 7, 8}
 var NeuintNotNullPos = []int{0, 1, 3, 4}
 
-var NeboolBool = []bool{false, true, true, true, false, false, true, false, false}
+var NeboolBool = []bool{false, true, false, true, false, false, false, false, false}
 
-var NestringBool = []bool{false, true, true, true, true, false, true, true, true, true, false, true, true, true, true, false}
+var NestringBool = []bool{false, true, true, false, true, false, true, false, true, true, false, false, false, false, false, false}
 
 type testNeFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 

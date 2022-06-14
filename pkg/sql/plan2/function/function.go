@@ -16,6 +16,7 @@ package function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 	"math"
 	"reflect"
 
@@ -143,6 +144,10 @@ func (f Function) IsAggregate() bool {
 	return f.Flag == plan.Function_AGG
 }
 
+func (f Function) isFunction() bool {
+	return f.Layout == STANDARD_FUNCTION || f.Layout >= NOPARAMETER_FUNCTION
+}
+
 // functionRegister records the information about
 // all the operator, built-function and aggregate function.
 //
@@ -159,7 +164,7 @@ func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function '%s' doesn't register, get id failed", name))
+	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function or operator '%s' is not implemented", name))
 }
 
 // EncodeOverloadID convert function-id and overload-index to be an overloadID
@@ -186,6 +191,15 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 	return fs[overloadIndex], nil
 }
 
+func GetFunctionIsAggregateByName(name string) bool {
+	fid, err := fromNameToFunctionId(name)
+	if err != nil {
+		return false
+	}
+	fs := functionRegister[fid]
+	return len(fs) > 0 && fs[0].IsAggregate()
+}
+
 // GetFunctionByName check a function exist or not according to input function name and arg types,
 // if matches,
 // return function structure and encoded overload id
@@ -193,6 +207,7 @@ func GetFunctionByID(overloadID int64) (Function, error) {
 func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T, error) {
 	levelUpFunction, get, minCost := emptyFunction, false, math.MaxInt32 // store the best function which can be matched by type level-up
 	matches := make([]Function, 0, 4)                                    // functions can be matched directly
+	finalLevelUpTypes := make([]types.T, len(args))                      // store the final argument types of levelUpFunction
 
 	fid, err := fromNameToFunctionId(name)
 	if err != nil {
@@ -200,8 +215,9 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	}
 
 	fs := functionRegister[fid]
+	b := false
 	for _, f := range fs {
-		if cost := f.typeCheckWithLevelUp(args); cost != matchFailed {
+		if cost, finalParamTypes := f.typeCheckWithLevelUp(args); cost != matchFailed {
 			if cost == matchDirectly {
 				matches = append(matches, f)
 			} else {
@@ -209,10 +225,13 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 					levelUpFunction = f
 					get = true
 					minCost = cost
+					copy(finalLevelUpTypes, finalParamTypes)
 				} else if cost == minCost {
-					levelUpFunction = compare(levelUpFunction, f)
+					levelUpFunction, b = compare(levelUpFunction, f)
+					if b {
+						copy(finalLevelUpTypes, finalParamTypes)
+					}
 					get = true
-					minCost = cost
 				}
 			}
 		}
@@ -221,7 +240,13 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	if len(matches) == 1 {
 		return matches[0], EncodeOverloadID(fid, matches[0].Index), nil, nil
 	} else if len(matches) > 1 {
-		errMessage := "too much function matches:"
+		// if contains any ScalarNull as param, just return the first one.
+		for i := range args {
+			if args[i] == ScalarNull {
+				return matches[0], EncodeOverloadID(fid, matches[0].Index), nil, nil
+			}
+		}
+		errMessage := "too many functions matched:"
 		for i := range matches {
 			errMessage += "\n"
 			errMessage += name
@@ -229,12 +254,15 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 		}
 		return emptyFunction, -1, nil, errors.New(errno.SyntaxError, errMessage)
 	} else {
-		// len(matches) == 0
+		// no function matched directly, but get the best function can be matched by level-up for params
 		if get {
-			return levelUpFunction, EncodeOverloadID(fid, levelUpFunction.Index), levelUpFunction.Args, nil
+			return levelUpFunction, EncodeOverloadID(fid, levelUpFunction.Index), finalLevelUpTypes, nil
 		}
 	}
-	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
+	if len(fs) > 0 && fs[0].isFunction() {
+		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("unsupported parameter types %v for function '%s'", args, name))
+	}
+	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("unsupported parameter types %v for operator '%s'", args, name))
 }
 
 // strictTypeCheck is a general type check method.
@@ -252,47 +280,144 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	return true
 }
 
+// todo(broccoli): change this to a general function
+func concatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) <= 1 {
+		return false
+	}
+	for _, arg := range args {
+		if arg != types.T_varchar && arg != types.T_char {
+			return false
+		}
+		if isScalarNull(arg) {
+			return false
+		}
+	}
+	return true
+}
+
 // returns the cost if t1 can level up to t2
 func up(t1, t2 types.T) int {
 	return levelUp[t1][t2]
 }
 
+var (
+	strictTypeCheckPointer   = reflect.ValueOf(strictTypeCheck).Pointer()
+	caseWhenTypeCheckPointer = reflect.ValueOf(operator.CwTypeCheckFn).Pointer()
+	ifTypeCheckPointer       = reflect.ValueOf(operator.IfTypeCheckFn).Pointer()
+)
+
 // typeCheckWithLevelUp check if the input parameters meet the function requirements.
 // If the level-up by parameter type can meet successfully, return the cost.
 // Else, just return matchDirectly or matchFailed.
-func (f *Function) typeCheckWithLevelUp(sources []types.T) int {
+func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
 	if f.TypeCheck(sources) {
-		return matchDirectly
+		return matchDirectly, nil
 	}
-	if len(f.Args) != len(sources) {
-		return matchFailed
-	}
-	if reflect.ValueOf(f.TypeCheckFn).Pointer() == reflect.ValueOf(strictTypeCheck).Pointer() {
+	switch reflect.ValueOf(f.TypeCheckFn).Pointer() {
+	case strictTypeCheckPointer:
 		// types of function's arguments are clear and not confused.
+		if len(f.Args) != len(sources) {
+			return matchFailed, nil
+		}
 		cost := 0
 		for i := range sources {
+			if sources[i] == ScalarNull {
+				continue
+			}
 			c := up(sources[i], f.Args[i])
 			if c == upFailed {
-				return matchFailed
+				return matchFailed, nil
 			}
 			cost += c
 		}
-		return cost
+		return cost, f.Args
+	case caseWhenTypeCheckPointer:
+		// special type up rule for case-when operator
+		rt, _ := f.ReturnType()
+		l := len(sources)
+		cost := 0
+		finalTypes := make([]types.T, l)
+		if l >= 2 {
+			for i := 0; i < l-1; i += 2 {
+				if sources[i] != types.T_bool {
+					return matchFailed, nil
+				}
+				finalTypes[i] = types.T_bool
+			}
+
+			if l%2 == 1 {
+				if sources[l-1] != ScalarNull {
+					c := up(sources[l-1], rt)
+					if c == upFailed {
+						return matchFailed, nil
+					}
+					cost += c
+					finalTypes[l-1] = rt
+				} else {
+					finalTypes[l-1] = ScalarNull
+				}
+			}
+
+			for i := 1; i < l; i += 2 {
+				if sources[i] != ScalarNull {
+					c := up(sources[i], rt)
+					if c == upFailed {
+						return matchFailed, nil
+					}
+					cost += c
+					finalTypes[i] = rt
+				} else {
+					finalTypes[i] = ScalarNull
+				}
+			}
+			return cost, finalTypes
+		}
+	case ifTypeCheckPointer:
+		// special type up rule for if operator
+		if len(sources) == 3 && sources[0] == types.T_bool {
+			cost := 0
+			rt, _ := f.ReturnType()
+			finalTypes := make([]types.T, 3)
+			finalTypes[0] = types.T_bool
+			if sources[1] != ScalarNull {
+				c := up(sources[1], rt)
+				if c == upFailed {
+					return matchFailed, nil
+				}
+				cost += c
+				finalTypes[1] = rt
+			}
+			if sources[2] != ScalarNull {
+				c := up(sources[2], rt)
+				if c == upFailed {
+					return matchFailed, nil
+				}
+				cost += c
+				finalTypes[1] = rt
+			}
+			return cost, finalTypes
+		}
 	}
-	return matchFailed
+	return matchFailed, nil
 }
 
 // choose a function when convert cost is equal
 // and just return the small-index one.
-func compare(f1, f2 Function) Function {
+// if right is smaller, return true.
+func compare(f1, f2 Function) (f Function, change bool) {
 	if f1.Index < f2.Index {
-		return f1
+		return f1, false
 	}
-	return f2
+	return f2, true
 }
 
 func isNotScalarNull(t types.T) bool {
 	return t != ScalarNull
+}
+
+func isScalarNull(t types.T) bool {
+	return t == ScalarNull
 }
 
 var (

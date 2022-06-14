@@ -69,7 +69,6 @@ func TestTables1(t *testing.T) {
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
 	assert.Nil(t, err)
 	assert.Equal(t, uint32(0), toAppend)
-	appender.Close()
 
 	appender, err = handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableBlockNotFound, err)
@@ -81,7 +80,6 @@ func TestTables1(t *testing.T) {
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
 	assert.Nil(t, err)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
-	appender.Close()
 
 	appender, err = handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)

@@ -88,7 +88,7 @@ func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) ([]*Exp
 				Typ: leftProjList[leftIdx].Typ,
 			}
 
-			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rightColExpr})
+			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", false, []*Expr{leftColExpr, rightColExpr})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -344,7 +344,7 @@ func buildUnresolvedName(query *Query, node *Node, colName string, tableName str
 
 	// Search from parent queries
 	corrRef := &plan.CorrColRef{
-		NodeId: -1,
+		RelPos: -1,
 		ColPos: -1,
 	}
 	corrExpr := &Expr{
@@ -356,10 +356,10 @@ func buildUnresolvedName(query *Query, node *Node, colName string, tableName str
 	for _, parentId := range binderCtx.subqueryParentIds {
 		for i, col := range query.Nodes[parentId].ProjectList {
 			if matchName(col) {
-				if corrRef.NodeId != -1 {
+				if corrRef.RelPos != -1 {
 					return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' in the field list is ambiguous", colName))
 				}
-				corrRef.NodeId = parentId
+				corrRef.RelPos = parentId
 				corrRef.ColPos = int32(i)
 
 				corrExpr.Typ = col.Typ
@@ -554,6 +554,7 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 				}
 				return &plan.DefaultExpr{
 					Exist:  true,
+					Value:  nil,
 					IsNull: true,
 				}, nil
 			}
@@ -573,6 +574,13 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 				IsNull: false,
 			}, nil
 		}
+	}
+	if allowNull {
+		return &plan.DefaultExpr{
+			Exist:  true,
+			Value:  nil,
+			IsNull: true,
+		}, nil
 	}
 	return &plan.DefaultExpr{
 		Exist: false,
@@ -1123,6 +1131,8 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			Corr: &plan.CorrColRef{
 				NodeId: item.Corr.GetNodeId(),
 				ColPos: item.Corr.GetColPos(),
+				RelPos: item.Corr.GetRelPos(),
+				Depth:  item.Corr.GetDepth(),
 			},
 		}
 	case *plan.Expr_T:

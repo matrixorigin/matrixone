@@ -220,7 +220,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 
 			// append equal function expr to onlist
 			var equalFunctionExpr *Expr
-			equalFunctionExpr, _, err = getFunctionExprByNameAndPlanExprs("=", []*Expr{leftColExpr, rigthColExpr})
+			equalFunctionExpr, _, err = getFunctionExprByNameAndPlanExprs("=", false, []*Expr{leftColExpr, rigthColExpr})
 			if err != nil {
 				return
 			}

@@ -16,6 +16,8 @@ package segmentio
 
 import (
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -39,6 +41,10 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	}
 	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
+		cb.indexes[i].dataFile.file = make([]*DriverFile, 1)
+		cb.indexes[i].dataFile.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
+			fmt.Sprintf("%d_%d_%d.idx", cb.col, cb.block.id, i))
+		cb.indexes[i].dataFile.file[0].snode.algo = compress.None
 	}
 	cb.updates = newUpdates(cb)
 	cb.updates.file = make([]*DriverFile, 1)
@@ -61,6 +67,7 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	}
 	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
+		cb.indexes[i].file = make([]*DriverFile, 1)
 	}
 	cb.updates = newUpdates(cb)
 	cb.updates.file = make([]*DriverFile, 1)
@@ -146,7 +153,7 @@ func (cb *columnBlock) OpenIndexFile(idx int) (vfile common.IRWFile, err error) 
 
 func (cb *columnBlock) OpenUpdateFile() (vfile common.IRWFile, err error) {
 	cb.updates.Ref()
-	vfile = cb.data
+	vfile = cb.updates
 	return
 }
 
@@ -181,7 +188,14 @@ func (cb *columnBlock) Destroy() {
 			if file == nil {
 				continue
 			}
-			cb.block.seg.GetSegmentFile().ReleaseFile(file)
+			file.driver.ReleaseFile(file)
 		}
+	}
+
+	for _, index := range cb.indexes {
+		if index.dataFile == nil || index.dataFile.file[0] == nil {
+			continue
+		}
+		index.dataFile.file[0].driver.ReleaseFile(index.dataFile.file[0])
 	}
 }

@@ -1,6 +1,22 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package operator
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,8 +62,15 @@ var StrLeOpFuncVec = []StrCompOpFunc{
 	lequalCol_Col, lequalCol_Const, lequalConst_Col, lequalConst_Const,
 }
 
-func lequalCol_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func lequalCol_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = le.StrLe(lvs, rvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -59,15 +82,23 @@ func lequalCol_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) || nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func lequalCol_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func lequalCol_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(lvs.Lengths))
 	rs = ge.StrGeScalar(rvs.Data, lvs, rs)
 	col := make([]bool, len(lvs.Lengths))
@@ -79,15 +110,23 @@ func lequalCol_Const(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d1.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func lequalConst_Col(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
+func lequalConst_Col(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
 	rs := make([]int64, len(rvs.Lengths))
 	rs = le.StrLeScalar(lvs.Data, rvs, rs)
 	col := make([]bool, len(rvs.Lengths))
@@ -99,16 +138,24 @@ func lequalConst_Col(d1, d2 interface{}) []bool {
 		if int64(i) == rs[rsi] {
 			col[i] = true
 			rsi++
-		} else {
+		}
+		if nulls.Contains(d2.Nsp, uint64(i)) {
 			col[i] = false
 		}
 	}
-	return col
+	return col, nil
 }
 
-func lequalConst_Const(d1, d2 interface{}) []bool {
-	lvs, rvs := d1.(*types.Bytes), d2.(*types.Bytes)
-	return []bool{string(lvs.Data) <= string(rvs.Data)}
+func lequalConst_Const(d1, d2 *vector.Vector) ([]bool, error) {
+	lvs, ok := d1.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the left col type is not *types.Bytes")
+	}
+	rvs, ok := d2.Col.(*types.Bytes)
+	if !ok {
+		return nil, errors.New("the right col type is not *types.Bytes")
+	}
+	return []bool{string(lvs.Data) <= string(rvs.Data)}, nil
 }
 
 func InitStrLeOpFuncMap() {
@@ -124,7 +171,11 @@ func ColLeCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vecto
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_col, LeOpFuncMap, StrLeOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_col, LeOpFuncMap, StrLeOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -135,7 +186,11 @@ func ColLeConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, col_const, LeOpFuncMap, StrLeOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, col_const, LeOpFuncMap, StrLeOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -144,19 +199,27 @@ func ColLeNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vect
 }
 
 func ConstLeCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	n := GetRetColLen[T](lv)
+	n := GetRetColLen[T](rv)
 	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
 	if err != nil {
 		return nil, err
 	}
 	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, GetRetCol[T](lv, rv, const_col, LeOpFuncMap, StrLeOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, const_col, LeOpFuncMap, StrLeOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
 func ConstLeConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec := proc.AllocScalarVector(proc.GetBoolTyp(lv.Typ))
-	vector.SetCol(vec, GetRetCol[T](lv, rv, const_const, LeOpFuncMap, StrLeOpFuncMap))
+	col, err := GetRetCol[T](lv, rv, const_const, LeOpFuncMap, StrLeOpFuncMap)
+	if err != nil {
+		return nil, err
+	}
+	vector.SetCol(vec, col)
 	return vec, nil
 }
 
@@ -233,7 +296,7 @@ func LeDataValue[T DataValue](vectors []*vector.Vector, proc *process.Process) (
 	dataID := GetDatatypeID[T]()
 	vec, err := LeFuncMap[(lt*3+rt)*dataTypeNum+dataID](lv, rv, proc)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Le function: " + err.Error())
 	}
 	return vec, nil
 }

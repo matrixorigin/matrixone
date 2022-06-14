@@ -37,6 +37,10 @@ type Block interface {
 	// OpenDeletesFile() common.IRWFile
 	WriteDeletes(buf []byte) error
 	ReadDeletes(buf []byte) error
+	GetDeletesFileStat() common.FileInfo
+	LoadDeletes() (*roaring.Bitmap, error)
+
+	LoadUpdates() (map[uint16]*roaring.Bitmap, map[uint16]map[uint32]any)
 
 	LoadIndexMeta() (any, error)
 	WriteIndexMeta(buf []byte) (err error)

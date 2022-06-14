@@ -24,6 +24,19 @@ type Constant interface {
 	Expr
 }
 
+type P_TYPE uint8
+
+const (
+	P_any P_TYPE = iota
+	P_hexnum
+	P_null
+	P_bool
+	P_int64
+	P_float64
+	P_char
+	P_decimal128
+)
+
 //the AST for the constant numeric value.
 type NumVal struct {
 	Constant
@@ -38,6 +51,7 @@ type NumVal struct {
 	//converted result
 	resInt   int64
 	resFloat float64
+	ValType  P_TYPE
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
@@ -66,6 +80,15 @@ func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
 		Value:      value,
 		origString: origString,
 		negative:   negative,
+	}
+}
+
+func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
+	return &NumVal{
+		Value:      value,
+		origString: origString,
+		negative:   negative,
+		ValType:    typ,
 	}
 }
 

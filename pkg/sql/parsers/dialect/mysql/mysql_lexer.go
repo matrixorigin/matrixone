@@ -87,8 +87,9 @@ func (l *Lexer) toInt(lval *yySymType, str string) int {
 	ival, err := strconv.ParseUint(str, 10, 64)
 	if err != nil {
 		// TODO: toDecimal()
-		l.scanner.LastError = err
-		return LEX_ERROR
+		// l.scanner.LastError = err
+		lval.str = str
+		return DECIMAL_VALUE
 	}
 	switch {
 	case ival <= math.MaxInt64:
@@ -118,8 +119,9 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 	ival, err := strconv.ParseUint(str[2:], 16, 64)
 	if err != nil {
 		// TODO: toDecimal()
-		l.scanner.LastError = err
-		return LEX_ERROR
+		//l.scanner.LastError = err
+		lval.str = str
+		return HEXNUM
 	}
 	switch {
 	case ival <= math.MaxInt64:

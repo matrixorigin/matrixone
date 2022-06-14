@@ -131,6 +131,10 @@ func (r *relation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapsho
 	return nil
 }
 
+func (r *relation) Update(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+	return errors.New("doesn't support now")
+}
+
 func (r *relation) update() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

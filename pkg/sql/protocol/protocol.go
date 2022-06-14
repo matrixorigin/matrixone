@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/anyvalue"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
@@ -1945,6 +1946,70 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
+	case *anyvalue.AnyVRing1[uint8]:
+		buf.WriteByte(AnyValueUInt8Ring)
+		anyvalue.EncodeAnyValueRing1[uint8](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[uint16]:
+		buf.WriteByte(AnyValueUInt16Ring)
+		anyvalue.EncodeAnyValueRing1[uint16](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[uint32]:
+		buf.WriteByte(AnyValueUInt32Ring)
+		anyvalue.EncodeAnyValueRing1[uint32](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[uint64]:
+		buf.WriteByte(AnyValueUInt64Ring)
+		anyvalue.EncodeAnyValueRing1[uint64](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[int8]:
+		buf.WriteByte(AnyValueInt8Ring)
+		anyvalue.EncodeAnyValueRing1[int8](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[int16]:
+		buf.WriteByte(AnyValueInt16Ring)
+		anyvalue.EncodeAnyValueRing1[int16](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[int32]:
+		buf.WriteByte(AnyValueInt32Ring)
+		anyvalue.EncodeAnyValueRing1[int32](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[int64]:
+		buf.WriteByte(AnyValueInt64Ring)
+		anyvalue.EncodeAnyValueRing1[int64](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[float32]:
+		buf.WriteByte(AnyValueFloat32Ring)
+		anyvalue.EncodeAnyValueRing1[float32](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[float64]:
+		buf.WriteByte(AnyValueFloat64Ring)
+		anyvalue.EncodeAnyValueRing1[float64](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[types.Date]:
+		buf.WriteByte(AnyValueDateRing)
+		anyvalue.EncodeAnyValueRing1[types.Date](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[types.Datetime]:
+		buf.WriteByte(AnyValueDatetimeRing)
+		anyvalue.EncodeAnyValueRing1[types.Datetime](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[types.Decimal64]:
+		buf.WriteByte(AnyValueDecimal64Ring)
+		anyvalue.EncodeAnyValueRing1[types.Decimal64](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[types.Decimal128]:
+		buf.WriteByte(AnyValueDecimal128Ring)
+		anyvalue.EncodeAnyValueRing1[types.Decimal128](v, buf)
+		return nil
+	case *anyvalue.AnyVRing1[bool]:
+		buf.WriteByte(AnyValueBoolRing)
+		anyvalue.EncodeAnyValueRing1[bool](v, buf)
+		return nil
+	case *anyvalue.AnyVRing2:
+		buf.WriteByte(AnyValueStrRing)
+		anyvalue.EncodeAnyRing2(v, buf)
+		return nil
 	}
 	return fmt.Errorf("'%v' ring not yet support", r)
 }
@@ -3177,6 +3242,54 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		data = data[encoding.TypeSize:]
 		result.Typ = typ
 		return result, data, nil
+	case AnyValueBoolRing:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[bool](data, types.Type{Oid: types.T_bool})
+	case AnyValueInt8Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[int8](data, types.Type{Oid: types.T_int8})
+	case AnyValueInt16Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[int16](data, types.Type{Oid: types.T_int16})
+	case AnyValueInt32Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[int32](data, types.Type{Oid: types.T_int32})
+	case AnyValueInt64Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[int64](data, types.Type{Oid: types.T_int64})
+	case AnyValueDateRing:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[types.Date](data, types.Type{Oid: types.T_date})
+	case AnyValueDatetimeRing:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[types.Datetime](data, types.Type{Oid: types.T_datetime})
+	case AnyValueUInt8Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[uint8](data, types.Type{Oid: types.T_uint8})
+	case AnyValueUInt16Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[uint16](data, types.Type{Oid: types.T_uint16})
+	case AnyValueUInt32Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[uint32](data, types.Type{Oid: types.T_uint32})
+	case AnyValueUInt64Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[uint64](data, types.Type{Oid: types.T_uint64})
+	case AnyValueFloat32Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[float32](data, types.Type{Oid: types.T_float32})
+	case AnyValueFloat64Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[float64](data, types.Type{Oid: types.T_float64})
+	case AnyValueDecimal64Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[types.Decimal64](data, types.Type{Oid: types.T_decimal64})
+	case AnyValueDecimal128Ring:
+		data = data[1:]
+		return anyvalue.DecodeAnyValueRing1[types.Decimal128](data, types.Type{Oid: types.T_decimal128})
+	case AnyValueStrRing:
+		data = data[1:]
+		return anyvalue.DecodeAnyRing2(data)
 	}
 	return nil, nil, fmt.Errorf("type '%v' ring not yet support", data[0])
 }
