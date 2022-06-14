@@ -9,13 +9,16 @@ Returns 1 whether string starts with the specified prefix, otherwise it returns 
 ```
 > STARTSWITH(str,prefix)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required.  CHAR and VARCHAR both are supported.|
 | prefix | Required.  CHAR and VARCHAR both are supported.|
 
 ## **Returned Values**
+
 * 1, if the string starts with the specified prefix.
 * 0, if the string does not start with the specified prefix.
 
@@ -51,4 +54,5 @@ Returns 1 whether string starts with the specified prefix, otherwise it returns 
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

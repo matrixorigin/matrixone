@@ -2,7 +2,6 @@
 
 MatrixOne的SQL语法兼容了MySQL 8.0.23版本。
 
-
 |  语句类型   | 语法 |  兼容性  |
 |  ----  | ----  |  ----  |
 | DDL  | CREATE DATABASE | 以中文作为表名会导致显示错误 | 
@@ -64,9 +63,3 @@ MatrixOne的SQL语法兼容了MySQL 8.0.23版本。
 |   | XOR | 暂不支持 | 
 |   | MAX, MIN, COUNT, AVG | 同MySQL  | 
 |   | CAST | 部分支持 | 
-
-
-
-
-
-

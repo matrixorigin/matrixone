@@ -172,13 +172,16 @@ func init() {
 }
 
 ```
+
 some annotations for this code snippet above:
 
 1.process.Get: MatrixOne assigns each query a "virtual process", during the execution of a query, we may need to generate new Vector, allocate memory for it, and we do it using this Get function
+
 ```go
 // proc: the process for this query, size: the memory allocation size  we are asking for, type: the new Vector's type.
 func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error)
 ```
+
 since we need a float32 vector here, its size should be 4 * len(origVecCol), 4 bytes for each float32.
 
 2.encoding.DecodeFloat32Slice: this is just type casting. 
@@ -357,6 +360,7 @@ Here we go. Now we can fire up MatrixOne and take our abs function for a little 
 Once the function is ready, we could compile and run MatrixOne to see the function behavior. 
 
 Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file. 
+
 ```
 make config
 make build
@@ -366,6 +370,7 @@ make build
     `make config` generates a new configuration file, in this tutorial, you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
 
 Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting. 
+
 ```
 ./mo-server system_vars_config.toml
 ```
@@ -384,6 +389,7 @@ Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test ac
 
 user: dump
 password: 111
+
 ```
 $ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
@@ -420,10 +426,12 @@ Bingo!
 !!! info 
     Except for `abs()`, MatrixOne has already some neat examples for built-in functions, such as `floor()`, `round()`, `year()`. With some minor corresponding changes, the procedure is quite the same as other functions.
 ​
+
 ## **Write a unit Test for your function**
 
 We recommend you to also write a unit test for the new function. 
 Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal but complete testing experience. It automates execution of any function of the form.
+
 ```
 func TestXxx(*testing.T)
 ```
@@ -448,7 +456,9 @@ function TestAbsFloat64(t *testing.T) {
 
 }
 ```
+
 Step2: Implement the `TestXxx` functions with some predefined values.
+
 ```
 func TestAbsFloat32(t *testing.T) {
     //Test values
@@ -482,11 +492,14 @@ func TestAbsFloat64(t *testing.T) {
     }
 }
 ```
+
 Step3: Launch Test.
 Within the same directory as the test:
+
 ```
 go test
 ```
+
 This picks up any files matching packagename_test.go.
 If you are getting a `PASS`, you are passing the unit test. 
 

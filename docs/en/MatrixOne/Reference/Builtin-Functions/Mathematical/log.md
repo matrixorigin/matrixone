@@ -4,17 +4,17 @@
 
 LOG(X) returns the natural logarithm of X. 
 
-
 ## **Syntax**
 
 ```
 > LOG(X)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | X | Required. Any numeric data type supported now. |
-
 
 ## **Examples**
 
@@ -31,5 +31,6 @@ LOG(X) returns the natural logarithm of X.
 ```
 
 ## **Constraints**
+
 * LOG(X) only support one parameter input for now. 
 * Currently, MatrixOne doesn't support select function() without from tables.

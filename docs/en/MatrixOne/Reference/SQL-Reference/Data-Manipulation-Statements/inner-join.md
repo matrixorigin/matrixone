@@ -1,10 +1,11 @@
 # **INNER JOIN**
 
 ## **Description**
+
 The INNER JOIN keyword selects records that have matching values in both tables.(Same as `JOIN`)
 
-
 ## **Syntax**
+
 ```
 > SELECT column_name(s)
 FROM table1
@@ -12,7 +13,6 @@ INNER JOIN table2
 ON table1.column_name = table2.column_name;
 
 ```
-
 
 ## **Examples**
 
@@ -59,5 +59,5 @@ ON table1.column_name = table2.column_name;
 ```
 
 ## **Constraints**
-Currently, `INNER JOIN` statement may cause crashing when executing some quiries.
 
+Currently, `INNER JOIN` statement may cause crashing when executing some quiries.

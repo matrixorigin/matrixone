@@ -6,17 +6,17 @@ Aggregate function.
 
 The BIT_XOR(expr) function returns the bitwise XOR of all bits in expr.
 
-
 ## **Syntax**
 
 ```
 > BIT_XOR(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | UINT data types |
-
 
 ## **Examples**
 

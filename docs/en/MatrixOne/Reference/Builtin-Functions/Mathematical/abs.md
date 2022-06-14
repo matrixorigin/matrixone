@@ -4,13 +4,14 @@
 
 ABS(X) Returns the absolute value of X, or NULL if X is NULL.
 
-
 ## **Syntax**
 
 ```
 > ABS(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
@@ -34,4 +35,5 @@ The result type is derived from the argument type.
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.
