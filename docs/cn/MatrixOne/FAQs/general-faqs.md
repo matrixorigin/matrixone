@@ -45,7 +45,6 @@
   MatrixOne是一个完全在Github上进行的开源项目，欢迎所有开发者的贡献。可以参考我们的[贡献指南](../Contribution-Guide/make-your-first-contribution.md)
 <br>
 
-
 ## **部署常见问题**
 
 * <font size=4>**MatrixOne对部署硬件的配置要求如何？**</font>

@@ -7,13 +7,14 @@
 用户可以将该请求发送到系统里任意`Store`中，其中的`Shard Proxy`将处理该请求，它将通过全路由表`Global Routing` 来寻找到正确的`Store`。  
 
 正如我们对`Raft Group`与`Leader`的解释，`Leader` 代表了一个`Raft Group`，所有的读写操作只由它处理。因此，当我们执行对某些数据行的查询请求时： 
+
 * 首先，需要定位这些数据行所在的`Shard`。
 * 其次，找到这个`Shard`所对应的`Raft Group`中的`Leader Replica`。 
 * 接着，将请求路由到`Leader Replica`所在的`Store`。
 * 最后，`Leader Replica`执行请求并作出响应。 
 
-
 ## **示例**
+
 如果我们有一个由三个`Store`组成的集群，它们的状态如下：
 
 ||Range|Store1|Store2|Store3|
@@ -22,9 +23,6 @@
 |Shard2|[key10-key20)|Follower|Leader|Follower|
 |Shard3|[key20-key30)|Follower|Follower|Leader|
 
-
 用户分别向key1，key10和key20数据发送请求，下图说明了请求如何通过`Shard Proxy`路由组件并被转发。
 
-
 ![User Request Routing Diagram](https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixcube-requests.svg?raw=true)
-

@@ -4,17 +4,17 @@
 
 The COT() function returns the cotangent of input number(given in radians).
 
-
 ## **Syntax**
 
 ```
 > COT(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
-
 
 ## **Examples**
 
@@ -33,4 +33,5 @@ The COT() function returns the cotangent of input number(given in radians).
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

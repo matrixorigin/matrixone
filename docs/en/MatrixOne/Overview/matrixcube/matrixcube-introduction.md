@@ -4,13 +4,9 @@ MatrixCube is a fundamental library for building distributed systems, which offe
 
 Unlike many other distributed systems, MatrixCube is designed as part of the storage nodes. A matrixone distributed deployment doesn't not have dedicated scheduling nodes. MatrixCube cannot work as a standalone module. 
 
-
 ## **MatrixCube Architecture**
 
-
 ![Matrix Cube](https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixcube-architecture.svg?raw=true) 
-
-
 
 ## **Key Concepts**
 
@@ -60,11 +56,6 @@ Learn more about [How does Prophet handle the scheduling?](matrixcube-auto-rebal
 
 Learn more about [How do the `Shard Proxy` and `Global Routing` work?](matrixcube-proxy-routing.md)
 
-
-
-
-
-
 ## **Key Features**
 
 ### **Strong Consistency** 
@@ -76,7 +67,6 @@ MatrixCube provides a strong consistency. It is guaranteed that after any succes
 The distributed storage service implemented by MatrixCube is a fault tolerant and high available service. When a `Shard` has `2*N+1` `Replicas`, the system can still work until `N+1` `Replicas` fail.
 
 For example, a cluster with 3 `Stores` can survive with 1 `Store` failure; a cluster with 5 `Stores` can survive with 2 `Stores` failure.
-
 
 ### **Shard Splitting**
 
@@ -101,8 +91,3 @@ MatrixCube has no limit to standalone data storage engine. Any storage engine im
 ### **User-defined Read/Write**
 
 As a general distributed framework, different distributed storage system could be build based on MatrixCube. User can also customize their read/write commands. As long as it works in a standalone version, MatrixCube can help you upgrading it to a distributed version. 
-
-
-
-
-

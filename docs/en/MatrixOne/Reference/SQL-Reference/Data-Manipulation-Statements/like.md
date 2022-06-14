@@ -1,6 +1,7 @@
 # **LIKE**
 
 ## **Description**
+
 The LIKE operator is used in a WHERE clause to search for a specified pattern in a column.
 
 There are two wildcards often used in conjunction with the LIKE operator:
@@ -9,12 +10,15 @@ There are two wildcards often used in conjunction with the LIKE operator:
 * The underscore sign (_) represents one, single character
 
 ## **Syntax**
+
 ```
 > SELECT column1, column2, ...
 FROM table_name
 WHERE columnN LIKE pattern;
 ```
+
 ## **Examples**
+
 ```sql
 > SELECT * FROM Customers
 WHERE CustomerName LIKE 'a%'; //The following SQL statement selects all customers with a CustomerName starting with "a"
