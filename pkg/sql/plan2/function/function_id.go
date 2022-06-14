@@ -169,10 +169,11 @@ const (
 	SUBSTR        // SUBSTR
 	SUM           // SUM
 	TAN           // TAN
-	TO_INTERVAL   // TO_INTERVAL
-	TRANSLATE     // TRANSLATE
-	TRIM          // TRIM
-	UNIFORM       // UNIFORM
+	TO_DATE
+	TO_INTERVAL // TO_INTERVAL
+	TRANSLATE   // TRANSLATE
+	TRIM        // TRIM
+	UNIFORM     // UNIFORM
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
 	FROM_UNIXTIME
@@ -254,6 +255,7 @@ var functionIdRegister = map[string]int32{
 	"findinset":  FINDINSET,
 	"power":      POW,
 	"startswith": STARTSWITH,
+	"to_date":    TO_DATE,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
 	"ceil":           CEIL,
