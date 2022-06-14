@@ -2,6 +2,7 @@ package moengine
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -183,7 +184,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	dbase, err := e.Database("db", txn.GetCtx())
 	assert.Nil(t, err)
 
-	schema := catalog.MockSchema(13, 15)
+	schema := catalog.MockSchema(13, 2)
 	defs, err := SchemaToDefs(schema)
 	assert.NoError(t, err)
 	err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
@@ -267,8 +268,12 @@ func TestTxnRelation_Update(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	readers = rel.NewReader(10, nil, nil, nil)
+	updatePK := bat
 	for _, reader := range readers {
-		bat, err := reader.Read([]uint64{uint64(1), uint64(1)}, []string{schema.ColDefs[0].Name, schema.ColDefs[1].Name})
+		bat, err := reader.Read([]uint64{uint64(1), uint64(1), uint64(1), uint64(1)},
+			[]string{schema.ColDefs[0].Name,
+				schema.ColDefs[1].Name, schema.ColDefs[2].Name,
+				schema.ColDefs[13].Name})
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, int32(5), bat.Vecs[0].Col.([]int32)[0])
@@ -278,6 +283,17 @@ func TestTxnRelation_Update(t *testing.T) {
 			assert.Equal(t, int32(9), bat.Vecs[1].Col.([]int32)[0])
 			assert.Equal(t, int32(10), bat.Vecs[1].Col.([]int32)[1])
 			assert.Equal(t, update.Vecs[2].Col.([]int32)[2], bat.Vecs[1].Col.([]int32)[2])
+			updatePK = bat
 		}
 	}
+	updatePK.Vecs[2].Col.([]int32)[0] = 20
+	txn, err = e.StartTxn(nil)
+	assert.Nil(t, err)
+	dbase, err = e.Database("db", txn.GetCtx())
+	assert.Nil(t, err)
+	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	assert.Nil(t, err)
+	err = rel.Update(0, updatePK, nil)
+	assert.NotNil(t, err)
+	assert.Equal(t, data.ErrUpdateUniqueKey, err)
 }
