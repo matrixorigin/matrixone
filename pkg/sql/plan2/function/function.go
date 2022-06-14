@@ -16,9 +16,10 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 	"math"
 	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -76,7 +77,8 @@ var (
 			types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
 		},
 		types.T_int64:     {types.T_float64, types.T_decimal64, types.T_decimal128},
-		types.T_float32:   {types.T_float64},
+		types.T_float32:   {types.T_float64, types.T_decimal64, types.T_decimal128},
+		types.T_float64:   {types.T_decimal128},
 		types.T_decimal64: {types.T_decimal128},
 		types.T_char:      {types.T_varchar},
 		types.T_varchar:   {types.T_char},

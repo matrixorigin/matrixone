@@ -17,7 +17,6 @@ package plan2
 import (
 	"fmt"
 	"go/constant"
-	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -569,6 +568,26 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
+	getDecimalExpr := func() *Expr {
+		val := astExpr.String()
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Decval{
+						Decval: val,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_DECIMAL128,
+				Width:    int32(len(val)),
+				Scale:    0,
+				Nullable: false,
+			},
+		}
+	}
+
 	switch astExpr.ValType {
 	case tree.P_null:
 		return &Expr{
@@ -599,8 +618,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Size:     1,
 			},
 		}, nil
-	case tree.P_int64:
-		intValue, _ := constant.Int64Val(astExpr.Value)
+	case tree.P_uint64:
+		intValue, ok := constant.Int64Val(astExpr.Value)
+		if !ok {
+			return getDecimalExpr(), nil
+		}
 		if astExpr.Negative() {
 			intValue = -intValue
 		}
@@ -620,7 +642,10 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			},
 		}, nil
 	case tree.P_float64:
-		floatValue, _ := constant.Float64Val(astExpr.Value)
+		floatValue, ok := constant.Float64Val(astExpr.Value)
+		if !ok {
+			return getDecimalExpr(), nil
+		}
 		if astExpr.Negative() {
 			floatValue = -floatValue
 		}
@@ -654,31 +679,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Id:       plan.Type_VARCHAR,
 				Nullable: false,
 				Size:     4,
-				Width:    math.MaxInt32,
+				Width:    int32(len(stringValue)),
 			},
 		}, nil
-	case tree.P_decimal128:
-		// select col1 + 99999999999.24343424334 from t1
-		stringValue := constant.StringVal(astExpr.Value)
-		_, scale, err := types.ParseStringToDecimal128WithoutTable(stringValue)
-		if err != nil {
-			return nil, err
-		}
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Decval{
-						Decval: stringValue,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_DECIMAL128,
-				Nullable: false,
-				Scale:    scale,
-			},
-		}, nil
+	case tree.P_decimal:
+		return getDecimalExpr(), nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", astExpr.Value))
 	}
