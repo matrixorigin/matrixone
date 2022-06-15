@@ -357,6 +357,14 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			return CastSpecials2Float[float64](lv, rv, proc)
 		}
 	}
+	// if isDecimal(lv.Typ.Oid) && isDecimal(rv.Typ.Oid) {
+	// 	switch lv.Typ.Oid {
+	// 	case types.T_decimal64:
+	// 		return CastSpecials2Decimal[decimal64](lv, rv, proc)
+	// 	case types.T_decimal128:
+	// 		return CastSpecials2Decimal[decimal128](lv, rv, proc)
+	// 	}
+	// }
 
 	if isString(lv.Typ.Oid) && isString(rv.Typ.Oid) {
 		return CastSpecials3(lv, rv, proc)
@@ -682,6 +690,30 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 	vector.SetCol(vec, col)
 	return vec, nil
 }
+
+// func CastSpecials2Decimal[T constraints.decimal](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// 	var err error
+// 	lvs := lv.Col.([]T)
+// 	col := &types.Bytes{
+// 		Data:    make([]byte, 0, len(lvs)),
+// 		Offsets: make([]uint32, 0, len(lvs)),
+// 		Lengths: make([]uint32, 0, len(lvs)),
+// 	}
+// 	if col, err = typecast.FloatToBytes(lvs, col); err != nil {
+// 		return nil, err
+// 	}
+// 	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
+// 		return nil, err
+// 	}
+// 	vec := vector.New(rv.Typ)
+// 	if lv.IsScalar() {
+// 		vec.IsConst = true
+// 	}
+// 	vec.Data = col.Data
+// 	nulls.Set(vec.Nsp, lv.Nsp)
+// 	vector.SetCol(vec, col)
+// 	return vec, nil
+// }
 
 //
 //  CastSpecials3:  Cast converts string to string ,Contains the following:

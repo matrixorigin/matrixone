@@ -32,6 +32,12 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	if inVec.IsScalar() {
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_datetime, Size: int32(size)})
 		rs := make([]types.Datetime, 1)
+		if times[0] < 0 || times[0] > 32536771199 {
+			if inVec.Nsp.Np == nil {
+				inVec.Nsp.Np = &roaring64.Bitmap{}
+			}
+			inVec.Nsp.Np.AddInt(0)
+		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
 		vector.SetCol(vec, fromunixtime.UnixToDatetime(times, rs))
 		return vec, nil
