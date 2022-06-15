@@ -26,8 +26,7 @@ import (
 )
 
 var (
-	ErrInvalidBuffer   = moerr.NewError(moerr.INVALID_STATE, "invalid buffer size")
-	ErrBadMessage      = moerr.NewError(moerr.INVALID_INPUT, "invalid message")
+	errBadMessage      = moerr.NewError(moerr.INVALID_INPUT, "invalid message")
 	errPoisonReceived  = moerr.NewError(moerr.INVALID_STATE, "poison received")
 	ErrDeadlineNotSet  = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
 	ErrInvalidDeadline = moerr.NewError(moerr.INVALID_INPUT, "invalid deadline")
@@ -273,7 +272,7 @@ func readMagicNumber(conn net.Conn, buf []byte) error {
 		return errPoisonReceived
 	}
 	if !bytes.Equal(buf, magicNumber[:]) {
-		return ErrBadMessage
+		return errBadMessage
 	}
 	return nil
 }

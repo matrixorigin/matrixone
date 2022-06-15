@@ -369,7 +369,7 @@ func newcheckpointGroup(v *vInfo, gid uint32) *checkpointGroup {
 func (g *checkpointGroup) OnCheckpoint(any) {} //ckp info
 func (g *checkpointGroup) IsCovered(c *compactor) bool {
 	//TODO: not compact ckp entry with payload
-	return g.vInfo.ckpInfoVersion <= c.ckpInfoVersion
+	return g.vInfo.vf.Id() <= c.ckpInfoVersion
 }
 func (g *checkpointGroup) MergeCheckpointInfo(c *compactor) {}
 func (g *checkpointGroup) IsCheckpointGroup() bool {

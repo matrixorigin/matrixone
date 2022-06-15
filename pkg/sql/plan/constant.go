@@ -606,7 +606,7 @@ func toDatetime(e *extend.ValueExtend) error {
 	vec.Ref = 1
 
 	if e.V.Typ.Oid == types.T_char || e.V.Typ.Oid == types.T_varchar {
-		d, err := types.ParseDatetime(string(e.V.Col.(*types.Bytes).Get(0)))
+		d, err := types.ParseDatetime(string(e.V.Col.(*types.Bytes).Get(0)), 6)
 		if err != nil {
 			return err
 		}

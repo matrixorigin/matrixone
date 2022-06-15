@@ -189,6 +189,7 @@ jobs:
           echo '--------Cases only passed in base----------'
           uniq -u cmp.txt
           if [ "$(uniq -u cmp.txt | wc -l)" -gt 0 ]; then echo 'Some cases passed in base but failed in head. Pls check head version'; exit 3; fi
+          if [ "$( cat ./head-log/run.log | grep "panic runtime error:" | wc -l )" -gt "$( cat ./base-log/run.log | grep "panic runtime error:" | wc -l )" ]; then echo 'Less panic in base sha. Pls check head version'; exit 2; fi
 
       - name: remove some files
         if: ${{ always() }}
