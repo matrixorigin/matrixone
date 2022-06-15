@@ -9,15 +9,14 @@
 ```
 > DATE(expr)
 ```
+
 ## **参数释义**
+
 |  参数   | 说明  |
 |  ----  | ----  |
 | expr  | 必要参数。需要提取日期的date或者datetime格式的输入值 |
 
-
-
 ## **示例**
-
 
 ```sql
 > drop table if exists t1;

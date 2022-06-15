@@ -5,20 +5,19 @@
 The ROUND() function rounds a number to a specified number of decimal places.  
 The function returns the nearest number of the specified order. In case when given number has equal distance to surrounding numbers, the function uses banker’s rounding for float number types and rounds away from zero for the other number types (Decimal).
 
-
 ## **Syntax**
 
 ```
 > ROUND(number, decimals)
 > ROUND(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required.  The number to round, including any numeric data type supported now. |
 | decimals| Optional. An integer that represents the number of decimal places you want to round to. Default value is 0. <br> **decimals>0** then the function rounds the value to the right of the decimal point. <br> **decimals<0** then the function rounds the value to the left of the decimal point. <br> **decimals=0** then the function rounds the value to integer.|
-
-
 
 ## **Examples**
 
@@ -92,4 +91,5 @@ The function returns the nearest number of the specified order. In case when giv
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

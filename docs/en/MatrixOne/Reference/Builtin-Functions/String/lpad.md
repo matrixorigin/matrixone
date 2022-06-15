@@ -9,14 +9,14 @@ This function LPAD(str,len,padstr) returns the string *str*, left-padded with th
 ```
 > LPAD(str,len,padstr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required.  The string to be padded. CHAR and VARCHAR both are supported.|
 | len | Required.  |
 | padstr | Required. The string used to pad on the left. CHAR and VARCHAR both are supported.|
-
-
 
 ## **Examples**
 
@@ -78,4 +78,5 @@ VALUES
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

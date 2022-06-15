@@ -6,17 +6,17 @@ Aggregate function.
 
 The STDDEV_POP(expr) function returns the population standard deviation of expr.
 
-
 ## **Syntax**
 
 ```
 > STDDEV_POP(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Any numerical expressions |
-
 
 ## **Examples**
 

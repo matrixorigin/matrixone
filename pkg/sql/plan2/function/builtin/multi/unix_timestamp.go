@@ -57,7 +57,7 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 }
 
 func MustDatetimeMe(s string) types.Datetime {
-	datetime, err := types.ParseDatetime(s)
+	datetime, err := types.ParseDatetime(s, 6)
 	if err != nil {
 		panic("bad datetime")
 	}

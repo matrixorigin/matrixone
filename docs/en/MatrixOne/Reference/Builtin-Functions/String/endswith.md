@@ -9,13 +9,16 @@ Returns whether to end with the specified suffix. Returns 1 if the string ends w
 ```
 > ENDSWITH(str,suffix)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required.  CHAR and VARCHAR both are supported.|
 | suffix | Required.  CHAR and VARCHAR both are supported.|
 
 ## **Returned Values**
+
 * 1, if the string ends with the specified suffix.
 * 0, if the string does not end with the specified suffix.
 
@@ -52,4 +55,5 @@ Returns whether to end with the specified suffix. Returns 1 if the string ends w
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.
