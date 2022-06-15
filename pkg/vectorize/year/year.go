@@ -49,7 +49,7 @@ func datetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
 func dateStringToYear(xs *types.Bytes, ns *nulls.Nulls, rs []uint16) []uint16 {
 	for i := range xs.Lengths {
 		str := string(xs.Get(int64(i)))
-		d, e := types.ParseDatetime(str)
+		d, e := types.ParseDatetime(str, 0)
 		if e != nil {
 			// set null
 			nulls.Add(ns, uint64(i))
