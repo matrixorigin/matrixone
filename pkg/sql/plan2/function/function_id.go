@@ -244,6 +244,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
