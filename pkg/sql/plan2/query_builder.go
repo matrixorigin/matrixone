@@ -470,9 +470,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if err != nil {
 				return 0, err
 			}
+			if offsetExpr.Typ.Id == plan.Type_DECIMAL64 || offsetExpr.Typ.Id == plan.Type_DECIMAL128 {
+				return 0, errors.New(errno.SyntaxErrororAccessRuleViolation, "offset expression must be int64")
+			}
 		}
 		if stmt.Limit.Count != nil {
 			limitExpr, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
+			if limitExpr.Typ.Id == plan.Type_DECIMAL64 || limitExpr.Typ.Id == plan.Type_DECIMAL128 {
+				return 0, errors.New(errno.SyntaxErrororAccessRuleViolation, "limit expression must be int64")
+			}
 			if err != nil {
 				return 0, err
 			}
