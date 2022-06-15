@@ -2,6 +2,7 @@ package types
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"golang.org/x/exp/constraints"
 )
 
 type TypeId = types.T
@@ -48,13 +49,12 @@ type Bytes = types.Bytes
 
 var CompareDecimal128Decimal128Aligned = types.CompareDecimal128Decimal128Aligned
 
-type FixedSizeT interface {
-	bool | int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 |
-		float64 | Date | Datetime | Timestamp | Decimal64 | Decimal128
+type OrderedT interface {
+	constraints.Ordered | Date | Datetime | Timestamp | Decimal64
 }
 
-type FixedSizeSliceT[T FixedSizeT] interface {
-	[]T
+type FixedSizeT interface {
+	bool | constraints.Ordered | Date | Datetime | Timestamp | Decimal64 | Decimal128
 }
 
 type VarSizeT interface {

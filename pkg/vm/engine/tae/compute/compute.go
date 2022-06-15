@@ -747,335 +747,96 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes
 	return destMask, destVals, destDelets
 }
 
+func CheckRowExists_B(column []bool, val bool, deletes *roaring.Bitmap) (offset uint32, exist bool) {
+	compare := func(left, right bool) int {
+		if left && right {
+			return 0
+		} else if !left && !right {
+			return 0
+		} else if left {
+			return 1
+		} else {
+			return -1
+		}
+	}
+	start, end := 0, len(column)-1
+	var mid int
+	for start <= end {
+		mid = (start + end) / 2
+		ret := compare(column[mid], val)
+		if ret == 1 {
+			end = mid - 1
+		} else if ret == -1 {
+			start = mid + 1
+		} else {
+			if deletes != nil && deletes.Contains(uint32(mid)) {
+				return
+			}
+			offset = uint32(mid)
+			exist = true
+			return
+		}
+	}
+	return
+}
+
+func CheckRowExistsOrdered[T types.OrderedT](vs, v any, deletes *roaring.Bitmap) (offset uint32, exist bool) {
+	column := vs.([]T)
+	val := v.(T)
+	start, end := 0, len(column)-1
+	var mid int
+	for start <= end {
+		mid = (start + end) / 2
+		if column[mid] > val {
+			end = mid - 1
+		} else if column[mid] < val {
+			start = mid + 1
+		} else {
+			if deletes != nil && deletes.Contains(uint32(mid)) {
+				return
+			}
+			offset = uint32(mid)
+			exist = true
+			return
+		}
+	}
+	return
+}
+
 func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset uint32, exist bool) {
 	switch data.Typ.Oid {
 	case types.Type_BOOL:
 		column := data.Col.([]bool)
 		val := v.(bool)
-		compare := func(left, right bool) int {
-			if left && right {
-				return 0
-			} else if !left && !right {
-				return 0
-			} else if left {
-				return 1
-			} else {
-				return -1
-			}
-		}
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			ret := compare(column[mid], val)
-			if ret == 1 {
-				end = mid - 1
-			} else if ret == -1 {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExists_B(column, val, deletes)
 	case types.Type_INT8:
-		column := data.Col.([]int8)
-		val := v.(int8)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[int8](data.Col, v, deletes)
 	case types.Type_INT16:
-		column := data.Col.([]int16)
-		val := v.(int16)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[int16](data.Col, v, deletes)
 	case types.Type_INT32:
-		column := data.Col.([]int32)
-		val := v.(int32)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[int32](data.Col, v, deletes)
 	case types.Type_INT64:
-		column := data.Col.([]int64)
-		val := v.(int64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[int64](data.Col, v, deletes)
 	case types.Type_UINT8:
-		column := data.Col.([]uint8)
-		val := v.(uint8)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[uint8](data.Col, v, deletes)
 	case types.Type_UINT16:
-		column := data.Col.([]uint16)
-		val := v.(uint16)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[uint16](data.Col, v, deletes)
 	case types.Type_UINT32:
-		column := data.Col.([]uint32)
-		val := v.(uint32)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[uint32](data.Col, v, deletes)
 	case types.Type_UINT64:
-		column := data.Col.([]uint64)
-		val := v.(uint64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[uint64](data.Col, v, deletes)
 	case types.Type_FLOAT32:
-		column := data.Col.([]float32)
-		val := v.(float32)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[float32](data.Col, v, deletes)
 	case types.Type_FLOAT64:
-		column := data.Col.([]float64)
-		val := v.(float64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[float64](data.Col, v, deletes)
 	case types.Type_DATE:
-		column := data.Col.([]types.Date)
-		val := v.(types.Date)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[types.Date](data.Col, v, deletes)
 	case types.Type_DATETIME:
-		column := data.Col.([]types.Datetime)
-		val := v.(types.Datetime)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[types.Datetime](data.Col, v, deletes)
 	case types.Type_TIMESTAMP:
-		column := data.Col.([]types.Timestamp)
-		val := v.(types.Timestamp)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[types.Timestamp](data.Col, v, deletes)
 	case types.Type_DECIMAL64:
-		column := data.Col.([]types.Decimal64)
-		val := v.(types.Decimal64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return CheckRowExistsOrdered[types.Decimal64](data.Col, v, deletes)
 	case types.Type_DECIMAL128:
 		column := data.Col.([]types.Decimal128)
 		val := v.(types.Decimal128)
