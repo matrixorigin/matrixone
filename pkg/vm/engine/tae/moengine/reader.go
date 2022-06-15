@@ -34,8 +34,10 @@ func newReader(rel handle.Relation, it handle.BlockIt) *txnReader {
 	cds := make([]*bytes.Buffer, attrCnt)
 	dds := make([]*bytes.Buffer, attrCnt)
 	for i := 0; i < attrCnt; i++ {
-		cds[i] = bytes.NewBuffer(make([]byte, 1<<20))
-		dds[i] = bytes.NewBuffer(make([]byte, 1<<20))
+		//cds[i] = bytes.NewBuffer(make([]byte, 1<<20))
+		//dds[i] = bytes.NewBuffer(make([]byte, 1<<20))
+		cds[i] = new(bytes.Buffer)
+		dds[i] = new(bytes.Buffer)
 	}
 	return &txnReader{
 		compressed:   cds,
