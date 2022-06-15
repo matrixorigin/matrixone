@@ -100,31 +100,30 @@ func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 }
 
 func getConstantValue(vec *vector.Vector) *plan.Const {
+	if nulls.Any(vec.Nsp) {
+		return &plan.Const{Isnull: true}
+	}
 	switch vec.Typ.Oid {
 	case types.T_bool:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Bval{
 				Bval: vec.Col.([]bool)[0],
 			},
 		}
 	case types.T_int64:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Ival{
 				Ival: vec.Col.([]int64)[0],
 			},
 		}
 	case types.T_float64:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Dval{
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
 	case types.T_varchar:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Sval{
 				Sval: string(vec.Col.(*types.Bytes).Data),
 			},

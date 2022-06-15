@@ -1574,7 +1574,7 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect, *tree.Update, *tree.Delete, *tree.Insert:
-		opt := plan2.NewBaseOptimizr(ctx)
+		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
 			return nil, err
