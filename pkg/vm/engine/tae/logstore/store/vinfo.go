@@ -153,7 +153,7 @@ func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 	// }
 	for _, g := range info.groups {
 		if !g.IsCovered(c) {
-			// logutil.Infof("not covered %d\ntcmap:%v\nckp%v\ng:%v\n",info.vf.Id(),c.tidCidMap,c.checkpointed,g)
+			// logutil.Infof("not covered %d\ntcmap:%v\nckp%v\nckpver %d\ng:%v\n",info.vf.Id(),c.tidCidMap,c.checkpointed,c.ckpInfoVersion,g)
 			toDelete = false
 		}
 	}

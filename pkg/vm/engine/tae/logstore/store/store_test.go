@@ -540,7 +540,7 @@ func TestAddrVersion(t *testing.T) {
 	t.Log(s.addrs[entry.GTUncommit])
 	for version, lsns := range s.addrs[entry.GTUncommit] {
 		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version)*2 - 1)))
-		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version) * 2)))
+		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version)*2)))
 	}
 }
 
