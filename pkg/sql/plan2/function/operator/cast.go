@@ -15,6 +15,8 @@
 package operator
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -373,6 +375,19 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		}
 	}
 
+	if isSignedInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal64 {
+		switch lv.Typ.Oid {
+		case types.T_int8:
+			return CastSpecials4_64[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastSpecials4_64[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastSpecials4_64[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastSpecials4_64[int64](lv, rv, proc)
+		}
+	}
+
 	if isUnsignedInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal128 {
 		switch lv.Typ.Oid {
 		case types.T_uint8:
@@ -386,6 +401,23 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		}
 	}
 
+	if isFloat(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal128 {
+		switch lv.Typ.Oid {
+		case types.T_float32:
+			return CastFloatAsDecimal128[float32](lv, rv, proc)
+		case types.T_float64:
+			return CastFloatAsDecimal128[float64](lv, rv, proc)
+		}
+	}
+
+	if isFloat(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal64 {
+		switch lv.Typ.Oid {
+		case types.T_float32:
+			return CastFloatAsDecimal64[float32](lv, rv, proc)
+		case types.T_float64:
+			return CastFloatAsDecimal64[float64](lv, rv, proc)
+		}
+	}
 	// sametype
 	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_decimal64 {
 		return CastDecimal64AsDecimal64(lv, rv, proc)
@@ -712,16 +744,133 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 	return vec, nil
 }
 
+func CastSpecialIntToDecimal_64[T constraints.Integer](
+	lv, rv *vector.Vector,
+	i2d func(xs []T, rs []types.Decimal64) ([]types.Decimal64, error),
+	proc *process.Process) (*vector.Vector, error) {
+	resultScale := int32(0)
+	resultTyp := types.Type{Oid: types.T_decimal64, Size: 8, Width: 38, Scale: resultScale}
+	lvs := lv.Col.([]T)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(resultTyp)
+		rs := make([]types.Decimal64, 1)
+		if _, err := i2d(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(resultTyp, int64(resultTyp.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := i2d(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
 //  CastSpecials4: Cast converts signed integer to decimal128 ,Contains the following:
 // (int8/int16/int32/int64) to decimal128
 func CastSpecials4[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CastSpecialIntToDecimal(lv, rv, typecast.IntToDecimal128[T], proc)
 }
 
+func CastSpecials4_64[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CastSpecialIntToDecimal_64(lv, rv, typecast.IntToDecimal64[T], proc)
+}
+
 //  CastSpecialu4: Cast converts signed integer to decimal128 ,Contains the following:
 // (uint8/uint16/uint32/uint64) to decimal128
 func CastSpecialu4[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CastSpecialIntToDecimal(lv, rv, typecast.UintToDecimal128[T], proc)
+}
+
+func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	resultType.Size = 16
+	if lv.IsScalar() {
+		vs := lv.Col.([]T)
+		srcStr := fmt.Sprintf("%f", vs[0])
+		vec := proc.AllocScalarVector(resultType)
+		rs := make([]types.Decimal128, 1)
+		decimal128, err := types.ParseStringToDecimal128(string(srcStr), resultType.Width, resultType.Scale)
+		if err != nil {
+			return nil, err
+		}
+		rs[0] = decimal128
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vs := lv.Col.([]T)
+	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal128Slice(vec.Data)
+	rs = rs[:len(vs)]
+	for i := 0; i < len(vs); i++ {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		strValue := fmt.Sprintf("%f", vs[i])
+		decimal128, err2 := types.ParseStringToDecimal128(string(strValue), resultType.Width, resultType.Scale)
+		if err2 != nil {
+			return nil, err2
+		}
+		rs[i] = decimal128
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	resultType.Size = 8
+	if lv.IsScalar() {
+		vs := lv.Col.([]T)
+		srcStr := fmt.Sprintf("%f", vs[0])
+		vec := proc.AllocScalarVector(resultType)
+		rs := make([]types.Decimal64, 1)
+		decimal64, err := types.ParseStringToDecimal64(string(srcStr), resultType.Width, resultType.Scale)
+		if err != nil {
+			return nil, err
+		}
+		rs[0] = decimal64
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vs := lv.Col.([]T)
+
+	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeDecimal64Slice(vec.Data)
+	rs = rs[:len(vs)]
+	for i := 0; i < len(vs); i++ {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		strValue := fmt.Sprintf("%f", vs[i])
+		decimal64, err2 := types.ParseStringToDecimal64(string(strValue), resultType.Width, resultType.Scale)
+		if err2 != nil {
+			return nil, err2
+		}
+		rs[i] = decimal64
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
 }
 
 //  CastVarcharAsDate : Cast converts varchar to date type
