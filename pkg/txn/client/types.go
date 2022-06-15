@@ -17,7 +17,6 @@ package client
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
@@ -42,14 +41,14 @@ type TxnCoordinator interface {
 	// Read transaction read operation, the Coordinator routes the message based
 	// on the given DN node information and waits for the read data synchronously.
 	// The transaction has been aborted if ErrTxnAborted returned.
-	Read(ctx context.Context, ops []txn.DNOpRequest) ([]txn.DNOpResponse, error)
+	Read(ctx context.Context, ops []txn.TxnRequest) ([]txn.TxnResponse, error)
 	// Write transaction write operation, and the Coordinator will record the DN
 	// nodes written by the current transaction, and when it finds that multiple
 	// DN nodes are written, it will start distributed transaction processing.
 	// The transaction has been aborted if ErrTxnAborted returned.
-	Write(ctx context.Context, ops []txn.DNOpRequest) ([]txn.DNOpResponse, error)
+	Write(ctx context.Context, ops []txn.TxnRequest) ([]txn.TxnResponse, error)
 	// WriteAndCommit is similar to Write, but commit the transaction after write.
-	WriteAndCommit(ctx context.Context, ops []txn.DNOpRequest) ([]txn.DNOpResponse, error)
+	WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) ([]txn.TxnResponse, error)
 	// Commit the transaction. If data has been written to multiple DN nodes, a
 	// 2pc distributed transaction commit process is used.
 	Commit(ctx context.Context) error
@@ -60,7 +59,9 @@ type TxnCoordinator interface {
 // TxnSender is used to send transaction requests to the DN nodes.
 type TxnSender interface {
 	// Send send request to the specified DN node, and wait for response synchronously.
-	Send(context.Context, metadata.DN, []txn.DNOpRequest) ([]txn.DNOpResponse, error)
+	// For any reason, if no response is received, the internal will keep retrying until
+	// the Context times out.
+	Send(context.Context, []txn.TxnRequest) ([]txn.TxnResponse, error)
 }
 
 // TxnIDGenerator txn id generator

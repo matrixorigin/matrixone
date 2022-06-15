@@ -34,6 +34,12 @@ const (
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000 + iota
 	OUT_OF_RANGE
+
+	// Group 10: txn
+	// ErrTxnAborted read and write a transaction that has been rolled back.
+	ErrTxnAborted = 10000 + iota
+	// ErrTxnClosed read and write a transaction after Commit or Rollback method called.
+	ErrTxnClosed
 )
 
 type Error struct {

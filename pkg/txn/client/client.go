@@ -37,6 +37,13 @@ func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
 	}
 }
 
+// WithClock setup clock
+func WithClock(clock clock.Clock) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.clock = clock
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
@@ -64,7 +71,7 @@ func (client *txnClient) adjust() {
 	}
 
 	if client.clock == nil {
-		clock.NewHLCClock(func() int64 {
+		client.clock = clock.NewHLCClock(func() int64 {
 			return time.Now().Unix()
 		}, 0)
 	}
@@ -79,5 +86,6 @@ func (client *txnClient) New(options ...TxnOption) TxnCoordinator {
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
+	options = append(options, WithTxnLogger(client.logger))
 	return newTxnCoordinator(client.sender, txnMeta, options...)
 }

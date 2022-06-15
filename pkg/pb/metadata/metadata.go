@@ -12,13 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package metadata
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
-
-var (
-	errTxnAborted = moerr.NewError(moerr.ErrTxnAborted, "the transaction has been aborted")
-	errTxnClosed  = moerr.NewError(moerr.ErrTxnAborted, "the transaction has been closed")
-)
+// IsEmpty return true if is a empty dn
+func (m DN) IsEmpty() bool {
+	return m.ID == 0
+}

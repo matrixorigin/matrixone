@@ -21,6 +21,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
+	github.com/google/uuid v1.1.2
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220511071845-cfc4bac02bb4
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/minio/minio-go/v7 v7.0.27
@@ -48,7 +49,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.9.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.13.6 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
-	github.com/google/uuid v1.1.2 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/lni/goutils v1.3.0 // indirect
 	github.com/minio/md5-simd v1.1.0 // indirect

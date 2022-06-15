@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package metadata
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-var (
-	errTxnAborted = moerr.NewError(moerr.ErrTxnAborted, "the transaction has been aborted")
-	errTxnClosed  = moerr.NewError(moerr.ErrTxnAborted, "the transaction has been closed")
-)
+func TestIsEmptyDN(t *testing.T) {
+	v := DN{ID: 0}
+	assert.True(t, v.IsEmpty())
+
+	v.ID = 1
+	assert.False(t, v.IsEmpty())
+}

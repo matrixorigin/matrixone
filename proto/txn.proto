@@ -19,6 +19,7 @@ import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "timestamp.proto";
 import "metadata.proto";
 
+option (gogoproto.goproto_enum_prefix_all) = true;
 
 // TxnStatus transaction status
 enum TxnStatus {
@@ -68,35 +69,38 @@ enum TxnStatus {
 message TxnMeta {
     // ID transaction id, generated at the CN node at the time of transaction creation, 
     // globally unique.
-    bytes               id         = 1 [(gogoproto.customname) = "ID"];
+    bytes               ID          = 1;
     // Status transaction status
-    TxnStatus           status     = 2;
+    TxnStatus           Status      = 2;
     // SnapshotTS transaction read timestamp, generated at the CN node at the time of 
     // transaction creation. All data.TS < txn.SnapshotTS is visible for the current 
     // transaction.
-    timestamp.Timestamp snapshotTS = 3 [(gogoproto.nullable) = false];
+    timestamp.Timestamp SnapshotTS  = 3 [(gogoproto.nullable) = false];
     // PreparedTS timestamp to complete the first phase of a 2pc commit transaction.
-    timestamp.Timestamp preparedTS = 4;
+    timestamp.Timestamp PreparedTS  = 4;
     // CommitTS transaction commit timestamp. For a 2pc transaction, commitTS = max(preparedTS).
-    timestamp.Timestamp commitTS   = 5;
+    timestamp.Timestamp CommitTS    = 5;
+    // Coordinator the coordinator DN. CN uses the first DN of the transaction operation
+    // as the Coordinator.
+    metadata.DN         Coordinator = 6;
 }
 
 // CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 
 // single transaction, then the transaction becomes a 2pc transaction.
 message CNOpRequest {
     // OpCode request operation type
-    uint32      opCode  = 1;
+    uint32      OpCode  = 1;
     // Payload the content of the request, TxnClient does not perceive the exact
     // format and content
-    bytes       payload = 2;
+    bytes       Payload = 2;
     // Target target to which the request was sent
-	metadata.DN target  = 3; 
+	metadata.DN Target  = 3 [(gogoproto.nullable) = false]; 
 }
 
 // CNOpResponse cn read/write response, DN -> CN. A request corresponds to a response.
 message CNOpResponse {
     // Payload response payload
-	bytes payload = 1;
+	bytes Payload = 1;
 }
 
 // TxnOp transaction operations
@@ -126,54 +130,133 @@ enum TxnOp {
     RollbackPartition = 7;
 }
 
-// TxnRequest transaction request. 
+// TxnRequest transaction request. All requests for the transaction are made using TxnRequest, so that 
+// the codec and logical processing of the RPC can be unified. Specific requests are selected according 
+// to TxnOp.
+//
+// Request flow of TxnRequest as below:
 // 1. CN -> DN (TxnOp.Read, TxnOp.Write, TxnOp.Commit, TxnOp.Rollback)
 // 2. DN -> DN (TxnOp.Prepare, TxnOp.GetStatus, TxnOp.CommitPartition, TxnOp.RollbackPartition)
 message TxnRequest {
-    TxnMeta                     txn                      = 1;
-    TxnOp                       op                       = 2;
-    CNOpRequest                 cnRequest                = 3 [(gogoproto.customname) = "CNRequest"]; 
-    TxnCommitRequest            commitRequest            = 4;
-    TxnRollbackRequest          rollbackRequest          = 5;
-    TxnPrepareRequest           prepareRequest           = 6;
-    TxnGetStatusRequest         getStatusRequest         = 7;
-    TxnCommitPartitionRequest   commitPartitionRequest   = 8;
-    TxnRollbackPartitionRequest rollbackPartitionRequest = 9;
+    // Txn transaction metadata
+    TxnMeta                     Txn                      = 1 [(gogoproto.nullable) = false];
+    // TxnOp TxnRequest opCode, select the Request defined below according to TxnOp.
+    TxnOp                       Op                       = 2;
+    // Flag request flag
+    uint32                      Flag                     = 3;
+    // CNOpRequest corresponds to TxnOp.Read, TxnOp.Write
+    CNOpRequest                 CNRequest                = 4; 
+    // TxnCommitRequest corresponds to TxnOp.Commit
+    TxnCommitRequest            CommitRequest            = 5;
+    // TxnRollbackRequest corresponds to TxnOp.Rollback
+    TxnRollbackRequest          RollbackRequest          = 6;
+    // TxnPrepareRequest corresponds to TxnOp.Prepare
+    TxnPrepareRequest           PrepareRequest           = 7;
+    // TxnGetStatusRequest corresponds to TxnOp.GetStatus
+    TxnGetStatusRequest         GetStatusRequest         = 8;
+    // TxnCommitPartitionRequest corresponds to TxnOp.CommitPartition
+    TxnCommitPartitionRequest   CommitPartitionRequest   = 9;
+    // TxnRollbackPartitionRequest corresponds to TxnOp.RollbackPartition
+    TxnRollbackPartitionRequest RollbackPartitionRequest = 10;
+}
+
+// TxnResponse response of TxnRequest.
+message TxnResponse {
+    // Txn transaction metadata. TxnResponse.TxnMeta and TxnRequest.TxnMeta may differ 
+    // in that the node initiating the TxnRequest needs to process the returned TxnMeta, 
+    // e.g. to determine whether the transaction is Aborted by the status of the returned 
+    // TxnMeta.
+    TxnMeta                      Txn                       = 1;
+    // Op same as TxnRequest.TxnOp
+    TxnOp                        Op                        = 2;
+    // Flag request flag, same as the corresponding request
+    uint32                       Flag                      = 3;
+    // TxnError explicit error
+    TxnError                     TxnError                  = 4;
+    // CNOpResponse corresponds to TxnOp.Read, TxnOp.Write response
+    CNOpResponse                 CNOpResponse              = 5; 
+    // TxnCommitResponse corresponds to TxnOp.Commit response
+    TxnCommitResponse            CommitResponse            = 6;
+    // TxnRollbackResponse corresponds to TxnOp.Rollback response
+    TxnRollbackResponse          RollbackResponse          = 7;
+    // TxnPrepareResponse corresponds to TxnOp.Prepare response
+    TxnPrepareResponse           PrepareResponse           = 8;
+    // TxnGetStatusResponse corresponds to TxnOp.GetStatus response
+    TxnGetStatusResponse         GetStatusResponse         = 9;
+    // TxnCommitPartitionResponse corresponds to TxnOp.CommitPartition response
+    TxnCommitPartitionResponse   CommitPartitionResponse   = 10;
+    // TxnRollbackPartitionResponse corresponds to TxnOp.RollbackPartition response
+    TxnRollbackPartitionResponse RollbackPartitionResponse = 11;
 }
 
 // TxnCommitRequest CN sent the commit request to coordinator DN.
 message TxnCommitRequest {
     // Partitions DNs for which data has been written in the current transaction.
-    repeated metadata.DN partitions = 1 [(gogoproto.nullable) = false]; 
+    repeated metadata.DN Partitions = 1 [(gogoproto.nullable) = false]; 
+}
+
+// TxnCommitResponse response of TxnCommitRequest. 
+message TxnCommitResponse {
 }
 
 // TxnCommitRequest CN sent the rollback request to coordinator DN.
 message TxnRollbackRequest {
     // Partitions DNs for which data has been written in the current transaction.
-    repeated metadata.DN partitions = 1 [(gogoproto.nullable) = false]; 
+    repeated metadata.DN Partitions = 1 [(gogoproto.nullable) = false]; 
+}
+
+// TxnRollbackResponse response of TxnRollbackRequest.
+message TxnRollbackResponse {
 }
 
 // TxnPrepareRequest when a DN(coordinator) receives a Commit request from a CN, if 
 // more than one DN is involved, the 2PC commit process is enabled and the first phase
 // is to send prepare requests to all DNs.
 message TxnPrepareRequest {
-    // Coordinator the coordinator DN.
-    metadata.DN coordinator = 1;
+    // Partition prepare DN
+    metadata.DN          Partition  = 1;
+    // Partitions if the partition is the coordinator DN, partitions is not empty, 
+    // otherwise is empty. The coordinator DN needs to write the partitions and prepare 
+    // data together atomically to the LogService. So during error recovery we can use 
+    // the coordinator DN to find all the DNs involved in the transaction to commit or
+    // rollback the transaction.
+    repeated metadata.DN Partitions = 2 [(gogoproto.nullable) = false]; 
+}
+
+// TxnPrepareResponse response of TxnPrepareRequest
+message TxnPrepareResponse {
+
 }
 
 // TxnGetStatusRequest query the status of a transaction on DN
 message TxnGetStatusRequest {
-    // Partition query target DN
-    metadata.DN partition = 1;
+    // Partition target DN
+    metadata.DN Partition = 1;
+}
+
+// TxnGetStatusResponse response of TxnGetStatusRequest
+message TxnGetStatusResponse {
 }
 
 // TxnCommitPartitionRequest commit txn on partition. Data needs to be written to the 
 // LogService.
 message TxnCommitPartitionRequest {
+     // Partition target DN
+     metadata.DN Partition = 1;
+}
+
+// TxnCommitPartitionResponse response of TxnCommitPartitionRequest
+message TxnCommitPartitionResponse {
 }
 
 // TxnCommitPartitionRequest rollback txn on partition
 message TxnRollbackPartitionRequest {
+     // Partition target DN
+     metadata.DN Partition = 1;
+}
+
+// TxnRollbackPartitionResponse response of TxnRollbackPartitionRequest
+message TxnRollbackPartitionResponse {
 }
 
 // TxnError all explicit errors in transaction operations.
