@@ -3802,7 +3802,7 @@ var operators = map[int][]Function{
 			Fn:          operator.Cast,
 		},
 		{
-			Index:       168,
+			Index:       176,
 			Flag:        plan.Function_STRICT,
 			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_decimal64},
@@ -3811,7 +3811,7 @@ var operators = map[int][]Function{
 			Fn:          operator.Cast,
 		},
 		{
-			Index:       169,
+			Index:       177,
 			Flag:        plan.Function_STRICT,
 			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_decimal64},
@@ -3820,7 +3820,7 @@ var operators = map[int][]Function{
 			Fn:          operator.Cast,
 		},
 		{
-			Index:       170,
+			Index:       178,
 			Flag:        plan.Function_STRICT,
 			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float64, types.T_decimal128},
@@ -3829,7 +3829,7 @@ var operators = map[int][]Function{
 			Fn:          operator.Cast,
 		},
 		{
-			Index:       171,
+			Index:       179,
 			Flag:        plan.Function_STRICT,
 			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_float32, types.T_decimal128},
