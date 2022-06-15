@@ -110,7 +110,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
 			return
 		}
-		if err = gcDatabaseClosure(entry)(); err != nil {
+		if err = entry.GetCatalog().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
 		err = catalog.ErrStopCurrRecur
@@ -123,7 +123,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
 			return
 		}
-		if err = gcTableClosure(entry, GCType_Table)(); err != nil {
+		if err = entry.GetDB().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
 		err = catalog.ErrStopCurrRecur
@@ -142,7 +142,7 @@ func (replayer *Replayer) PostReplayWal() {
 			}
 			return
 		}
-		if err = gcSegmentClosure(entry, GCType_Segment)(); err != nil {
+		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
 		err = catalog.ErrStopCurrRecur
