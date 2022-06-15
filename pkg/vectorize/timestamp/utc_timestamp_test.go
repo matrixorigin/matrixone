@@ -21,7 +21,7 @@ import (
 
 func TestUTCTimeStamp(t *testing.T) {
 	timestampStr := GetUTCTimestamp().String()
-	if _, err := types.ParseDatetime(timestampStr); err != nil {
+	if _, err := types.ParseDatetime(timestampStr, 6); err != nil {
 		t.Errorf("GetUTCTimestamp() error = %v\n", err)
 	}
 }

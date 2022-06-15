@@ -234,7 +234,7 @@ func logSyncbase(t *testing.T, s *baseStore) {
 	t.Log(s.addrs)
 }
 
-func TestMergePartialCKp(t *testing.T) {
+func TestMergePartialCKP(t *testing.T) {
 	s, buf := initEnv(t)
 
 	e1 := appendCommitEntry(t, s, buf, 1)
@@ -255,6 +255,13 @@ func TestMergePartialCKp(t *testing.T) {
 	})
 	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
 
+	testutils.WaitExpect(4000, func() bool {
+		preversion := atomic.LoadUint64(&s.syncedVersion)
+		return preversion >= 1
+	})
+	preversion := atomic.LoadUint64(&s.syncedVersion)
+	assert.Less(t, uint64(0), preversion)
+
 	assert.Nil(t, s.TryCompact())
 	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
 
@@ -274,7 +281,7 @@ func TestMergePartialCKp(t *testing.T) {
 // ckp all                vf3
 // truncate
 // check vinfo not exist
-func TestTruncate(t *testing.T) {
+func TestTruncate1(t *testing.T) {
 	dir := "/tmp/logstore/teststore"
 	name := "mock"
 	os.RemoveAll(dir)
@@ -297,6 +304,16 @@ func TestTruncate(t *testing.T) {
 	assert.Equal(t, 2, len(s.file.GetHistory().EntryIds()))
 	t.Log(s.file.GetHistory().String())
 
+	testutils.WaitExpect(400, func() bool {
+		return s.GetCheckpointed(11) == 3
+	})
+	assert.Equal(t, uint64(3), s.GetCheckpointed(11))
+
+	testutils.WaitExpect(400, func() bool {
+		return s.GetSynced(entry.GTInternal) >= 2
+	})
+	assert.Less(t, uint64(1), s.GetSynced(4))
+
 	assert.Nil(t, s.TryCompact())
 
 	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
@@ -318,6 +335,16 @@ func TestTruncate(t *testing.T) {
 
 	assert.Equal(t, 1, len(s2.file.GetHistory().EntryIds()))
 	t.Log(s2.file.GetHistory().String())
+
+	testutils.WaitExpect(400, func() bool {
+		return s2.GetCheckpointed(11) == 4
+	})
+	assert.Equal(t, uint64(4), s2.GetCheckpointed(11))
+
+	testutils.WaitExpect(400, func() bool {
+		return s2.GetSynced(entry.GTInternal) >= 3
+	})
+	assert.Less(t, uint64(2), s2.GetSynced(4))
 
 	assert.Nil(t, s2.TryCompact())
 
@@ -370,6 +397,46 @@ func TestTruncate2(t *testing.T) {
 	t.Log(s.file.GetHistory().String())
 }
 
+//1. vf1 - vfn: C & lots of CKP
+//2. vf n+1: anotherEntry
+//3. compact
+//4. replay
+//5. check ckped
+func TestTruncate3(t *testing.T) {
+	s, buf := initEnv(t)
+	ckpSize := 100
+
+	e1 := appendCommitEntry(t, s, buf, 1)
+	entries := make([]entry.Entry, ckpSize)
+	for i := 0; i < ckpSize; i++ {
+		entries[i] = appendPartialCkpEntry(t, s, 1, []uint32{uint32(i)}, uint32(ckpSize))
+	}
+
+	appendAnotherEntry(t, s, buf)
+	appendAnotherEntry(t, s, buf)
+
+	e1.Free()
+	for i := 0; i < ckpSize; i++ {
+		entries[i].Free()
+	}
+
+	s.TryCompact()
+	testutils.WaitExpect(400, func() bool {
+		return uint64(1) == s.GetCheckpointed(11)
+	})
+	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+	t.Log(s.GetCurrSeqNum(4))
+
+	s = restartStore(t, s)
+	t.Log(s.addrs)
+
+	testutils.WaitExpect(400, func() bool {
+		return uint64(1) == s.GetCheckpointed(11)
+	})
+	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+
+	s.Close()
+}
 func TestReplay2(t *testing.T) {
 	s, buf := initEnv(t)
 	tidAlloc := &common.IdAllocator{}
@@ -410,9 +477,9 @@ func TestReplay2(t *testing.T) {
 	})
 	assert.Equal(t, s.GetSynced(entry.GTCKp), s.GetCurrSeqNum(entry.GTCKp))
 
-	logSyncbase(t, s)
+	// logSyncbase(t, s)
 	s = restartStore(t, s)
-	logSyncbase(t, s)
+	// logSyncbase(t, s)
 
 	tid := tidAlloc.Alloc()
 	e1 := appendUncommitEntry(t, s, buf, tid)

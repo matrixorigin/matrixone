@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"time"
 )
@@ -30,18 +29,9 @@ var (
 )
 
 func newReader(rel handle.Relation, it handle.BlockIt) *txnReader {
-	attrCnt := len(rel.GetMeta().(*catalog.TableEntry).GetSchema().ColDefs)
-	cds := make([]*bytes.Buffer, attrCnt)
-	dds := make([]*bytes.Buffer, attrCnt)
-	for i := 0; i < attrCnt; i++ {
-		cds[i] = bytes.NewBuffer(make([]byte, 1<<20))
-		dds[i] = bytes.NewBuffer(make([]byte, 1<<20))
-	}
 	return &txnReader{
-		compressed:   cds,
-		decompressed: dds,
-		handle:       rel,
-		it:           it,
+		handle: rel,
+		it:     it,
 	}
 }
 
@@ -52,6 +42,16 @@ func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 		logutil.Infof("reader: %p, read latency: %d ms",
 			r, r.latency)
 		return nil, nil
+	}
+	if r.compressed == nil {
+		r.compressed = make([]*bytes.Buffer, len(attrs))
+		r.decompressed = make([]*bytes.Buffer, len(attrs))
+		for i := 0; i < len(attrs); i++ {
+			//cds[i] = bytes.NewBuffer(make([]byte, 1<<20))
+			//dds[i] = bytes.NewBuffer(make([]byte, 1<<20))
+			r.compressed[i] = new(bytes.Buffer)
+			r.decompressed[i] = new(bytes.Buffer)
+		}
 	}
 	h := r.it.GetBlock()
 	r.it.Next()

@@ -54,7 +54,7 @@ func dateStringAdd(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs 
 				continue
 			}
 		}
-		d, e := types.ParseDatetime(str)
+		d, e := types.ParseDatetime(str, 0)
 		if e != nil {
 			// set null
 			nulls.Add(ns, uint64(i))
