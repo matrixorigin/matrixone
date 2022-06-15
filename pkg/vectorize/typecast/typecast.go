@@ -157,6 +157,11 @@ var (
 
 	TimestampToDatetime = timestampToDatetime
 	TimestampToVarchar  = timestampToVarchar
+	BoolToBytes         = boolToBytes
+	DateToBytes         = dateToBytes
+	DateToDatetime      = dateToDateTime
+	DateTimeToBytes     = datetimeToBytes
+	DateTimeToDate      = datetimeToDate
 )
 
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
@@ -253,6 +258,56 @@ func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes) (*types.Bytes, er
 		newLen := uint32(len(rs.Data))
 		rs.Offsets[i] = oldLen
 		rs.Lengths[i] = newLen - oldLen
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func boolToBytes(xs []bool, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = types.AppendBoolToByteArray(x, rs.Data)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, error) {
+	for i := range xs {
+		rs[i] = xs[i].ToTime()
+	}
+	return rs, nil
+}
+
+func dateToBytes(xs []types.Date, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, []byte(x.String())...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) {
+	for i := range xs {
+		rs[i] = xs[i].ToDate()
+	}
+	return rs, nil
+}
+
+func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, []byte(x.String())...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
 		oldLen = newLen
 	}
 	return rs, nil
