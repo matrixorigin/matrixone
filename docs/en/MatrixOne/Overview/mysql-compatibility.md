@@ -2,14 +2,12 @@
 
 MatrixOne SQL syntax conforms with MySQL 8.0.23 version. 
 
-
-
 |  SQL Type   | SQL Syntax  |  Compability with MySQL8.0.23   |
 |  ----  | ----  |  ----  |
 | DDL  | CREATE DATABASE | A database with Chinese name will be displayed incorrectly.  | 
 |   |   | Names with Latins support limitedly.  | 
 |   |   | ENCRYPTION can be used but doesn't work till now. |
-|   | CREATE TABLE | Temporary tables are not supported seperatedly.  | 
+|   | CREATE TABLE | Temporary tables are not supported separately.  | 
 |   |   | Partition tables are not supported.  | 
 |   |   | Create table .. as clause is not supported now. |
 |   |   | All column level constraints are not supported now. |
@@ -38,8 +36,8 @@ MatrixOne SQL syntax conforms with MySQL 8.0.23 version.
 |   |   | For clause is not supported now.  | 
 |   |   | INTO OUTFILE is limitedly support. | 
 |   | LOAD DATA | Only csv files can be loaded currently.  | 
-|   |   | The enclosed character shoud be "".  | 
-|   |   | FILEDS TERMINATED BY should be "," or "|". | 
+|   |   | The enclosed character should be "".  | 
+|   |   | FIELDS TERMINATED BY should be "," or "|". | 
 |   |   | LINES TERMINATED BY should be "\n". | 
 |   |   | SET is not supported now. | 
 |   |   | Local key word is not supported now. | 
@@ -53,11 +51,11 @@ MatrixOne SQL syntax conforms with MySQL 8.0.23 version.
 |   | Other statements | Not supported now.  | 
 | Data Types  | Int/Bigint/Smallint/Tinyint | Same as MySQL.  | 
 |   | char/varchar | Same as MySQL.  | 
-|   | Float/double | The precsion is a bit different with MySQL. It will be adjusted in future release.  | 
+|   | Float/double | The precision is a bit different with MySQL. It will be adjusted in future release.  | 
 |   | Date | Only 'YYYY-MM-DD' and 'YYYYMMDD' formats are supported.  | 
 |   | Datetime | Only 'YYYY-MM-DD HH:MM:SS' and 'YYYYMMDD HH:MM:SS' formats are supported.  | 
 |   | Other types | Not supported now.  | 
-| Operatiors  | "+","-","*","/" | Same as MySQL.  | 
+| Operators  | "+","-","*","/" | Same as MySQL.  | 
 |   | DIV, %, MOD | Not supported now.  | 
 |   | LIKE | Supported with constraints.  | 
 |   | IN | Supported for constant lists  | 
@@ -65,9 +63,3 @@ MatrixOne SQL syntax conforms with MySQL 8.0.23 version.
 |   | XOR | Not supported now.  | 
 |   | MAX, MIN, COUNT, AVG | Same as MySQL.  | 
 |   | CAST | Supported limitedly.  | 
-
-
-
-
-
-

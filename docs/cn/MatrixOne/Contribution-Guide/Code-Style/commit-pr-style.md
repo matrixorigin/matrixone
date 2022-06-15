@@ -16,7 +16,6 @@
 
 1. **What is your change? (必要)**
 
-
     它可能修复了一个特定的bug，添加了一个feature，提高了性能、可靠性或稳定性，或者只是保障安全性而进行的更改。
 
 2. **Why this change was made? (必要)**
@@ -49,6 +48,7 @@
     - 如果该改动影响了三个及以上的模块，请使用`*`，如`*:`。
     - 在冒号后的文本中使用小写字母。例如："media: **update** the DM architecture image"
     - 不要在最后添加句号。
+
 - 第二行请留白
 - 第三行“why”部分，如果没有特定的原因，您可以使用以下表述，如"Improve performance", "Improve test coverage."
 - 其他行不超过80个字符。
@@ -72,11 +72,9 @@
 - 不要使用过长的复合词
 - 非必要不缩写
 
-
 ## **Pull Request规范**
 
 关于Pull Request中的描述，请参考下面的Pull Request模板，涵盖必要信息：
-
 
 ```
 **What type of PR is this?**

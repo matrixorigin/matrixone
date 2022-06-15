@@ -13,18 +13,20 @@ Note: NULL values are not counted.
 ```
 > COUNT(expr)
 ```
+
 ***
 
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Any expression.This may be a column name, the result of another function, or a math operation. * is also allowed, to indicate pure row counting. |
 
 ## **Returned Value**
+
 Returns a count of the number of non-NULL values of `expr` in the rows retrieved by a SELECT statement. The result is a BIGINT value.
 
 If there are no matching rows, COUNT() returns 0.
-
 
 ## **Examples**
 
@@ -54,4 +56,5 @@ If there are no matching rows, COUNT() returns 0.
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

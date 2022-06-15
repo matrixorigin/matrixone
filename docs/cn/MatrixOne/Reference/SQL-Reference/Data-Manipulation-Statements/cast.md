@@ -1,28 +1,31 @@
 # **CAST**
 
 ## **函数说明**
+
 CAST()函数可以将任何类型的一个值转化为另一个特定类型 。
 
 ## **语法语法**
+
 ```
 > CAST(value AS datatype)
 
 ```
 
 ## **相关参数**
+
 |  参数  | 说明 |
 |  ----  | ----  |
 | value  | 必要参数，待转化的值 |
 | datatype  | 必要参数，目标数据类型 |
 
-
 目前，`cast` 可以进行如下转换：
+
 * 数值类型之间转换，主要包括SIGNED，UNSIGNED，FLOAT，DOUBLE类型
 * 数值类型向字符CHAR类型转换
 * 格式为数值的字符类型向数值类型转换（负数需要转换为SIGNED）
 
-
 ## *示例**
+
 ```sql
 > drop table if exists t1;
 > CREATE TABLE t1 (a int,b float,c char(1),d varchar(15));
@@ -43,7 +46,9 @@ CAST()函数可以将任何类型的一个值转化为另一个特定类型 。
 ```
 
 ## **限制**
+
 MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。  
+
 * 非数值的字符类型无法转化为数值类型
 * 日期格式的数值类型、字符类型无法转化为Date类型
 * Date，Datetime类型无法转化为字符类型

@@ -169,10 +169,11 @@ const (
 	SUBSTR        // SUBSTR
 	SUM           // SUM
 	TAN           // TAN
-	TO_INTERVAL   // TO_INTERVAL
-	TRANSLATE     // TRANSLATE
-	TRIM          // TRIM
-	UNIFORM       // UNIFORM
+	TO_DATE
+	TO_INTERVAL // TO_INTERVAL
+	TRANSLATE   // TRANSLATE
+	TRIM        // TRIM
+	UNIFORM     // UNIFORM
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
 	FROM_UNIXTIME
@@ -254,21 +255,23 @@ var functionIdRegister = map[string]int32{
 	"findinset":  FINDINSET,
 	"power":      POW,
 	"startswith": STARTSWITH,
+	"to_date":    TO_DATE,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
-	"ceil":           CEIL,
-	"ceiling":        CEIL,
-	"concat_ws":      CONCAT_WS,
-	"floor":          FLOOR,
-	"lpad":           LPAD,
-	"pi":             PI,
-	"round":          ROUND,
-	"rpad":           RPAD,
-	"substr":         SUBSTRING,
-	"substring":      SUBSTRING,
-	"utc_timestamp":  UTC_TIMESTAMP,
-	"unix_timestamp": UNIX_TIMESTAMP,
-	"from_unixtime":  FROM_UNIXTIME,
+	"ceil":              CEIL,
+	"ceiling":           CEIL,
+	"concat_ws":         CONCAT_WS,
+	"current_timestamp": CURRENT_TIMESTAMP,
+	"floor":             FLOOR,
+	"lpad":              LPAD,
+	"pi":                PI,
+	"round":             ROUND,
+	"rpad":              RPAD,
+	"substr":            SUBSTRING,
+	"substring":         SUBSTRING,
+	"utc_timestamp":     UTC_TIMESTAMP,
+	"unix_timestamp":    UNIX_TIMESTAMP,
+	"from_unixtime":     FROM_UNIXTIME,
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":         ABS,

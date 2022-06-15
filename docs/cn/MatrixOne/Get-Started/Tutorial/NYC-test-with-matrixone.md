@@ -4,6 +4,7 @@
 通过本教程，您将了解如何使用MatrixOne来完成对NYC Taxi数据集的查询。
 
 该数据集的详细信息以及下载教程可参见：   
+
 * [https://github.com/toddwschneider/nyc-taxi-data](https://github.com/toddwschneider/nyc-taxi-data)  
 
 * [http://tech.marksblogg.com/billion-nyc-taxi-rides-redshift.html](http://tech.marksblogg.com/billion-nyc-taxi-rides-redshift.html). 
@@ -12,8 +13,8 @@
 
 确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.md)并[连接到MatrixOne服务](../connect-to-matrixone-server.md).
   
-
 ## **1. 下载并导入数据**
+
 本节教程参考[https://github.com/toddwschneider/nyc-taxi-data](https://github.com/toddwschneider/nyc-taxi-data)，您可以从此处了解关于数据集下载和导入的详细信息。  
 该数据集共有17亿行数据，占用450 GB的空间，请确保有足够的空间来存放数据。
 
@@ -26,6 +27,7 @@
 ```
 ./download_raw_data.sh && ./remove_bad_rows.sh
 ```
+
 `remove_bad_rows.sh`脚本修复了两个特定的文件，其中数据极少但是列字段很多。
 
 * <font size=4>**初始化数据库**</font>
@@ -49,7 +51,6 @@ FiveThirtyEight Uber数据集包含了2014年4月至9月的Uber出行记录。Ub
 ./download_raw_2014_uber_data.sh 
 ./import_2014_uber_trip_data.sh
 ```
-
 
 ## **2. 从PostgreSQL导出数据**
 
@@ -124,8 +125,8 @@ COPY
 ) TO '/matrixone/export_data/trips.tsv';
 ```
 
-
 ## **3. 在MatrixOne中建表**
+
 ```
 CREATE TABLE trips
 (

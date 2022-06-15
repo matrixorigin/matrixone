@@ -4,21 +4,19 @@
 
 The MONTH() function returns the month part for a given date (a number from 1 to 12).
 
-
 ## **Syntax**
 
 ```
 > MONTH(date)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | date  | Required.  The date/datetime to extract the month from |
 
-
-
 ## **Examples**
-
 
 ```sql
 > drop table if exists t1;

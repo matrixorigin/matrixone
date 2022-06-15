@@ -15,6 +15,8 @@
 package moengine
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -84,6 +86,11 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 			}
 		}
 	}
-	schema.Finalize(false)
+	if err = schema.Finalize(false); err != nil {
+		return
+	}
+	if schema.IsCompoundSortKey() {
+		err = fmt.Errorf("%w: compound idx not supported yet", catalog.ErrSchemaValidation)
+	}
 	return
 }

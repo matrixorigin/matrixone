@@ -30,7 +30,8 @@ func TestSingleSql(t *testing.T) {
 	// sql := `SELECT * FROM (SELECT relname as Tables_in_mo FROM mo_tables WHERE reldatabase = 'mo') a`
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
-	sql := `select distinct(n_name), ((abs(n_regionkey))) from nation`
+	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
+	sql := "select @str_var, @int_var, @bool_var, @@global.float_var, @@session.null_var"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -383,6 +384,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 
 	// should pass
 	sqls := []string{
+		"SELECT '1900-01-01 00:00:00' + INTERVAL 2147483648 SECOND",
 		"SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10, 20",
 		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC", //test alias
 		"SELECT NATION.N_NAME FROM NATION",                                       //test alias
@@ -410,6 +412,10 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT -1",
 		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
 		"select date_sub('1997-12-31 23:59:59',INTERVAL 2 HOUR)",
+		"select @str_var, @int_var, @bool_var, @float_var, @null_var",
+		"select @str_var, @@global.int_var, @@session.bool_var",
+		"select n_name from nation where n_name != @str_var and n_regionkey > @int_var",
+		"select n_name from nation where n_name != @@global.str_var and n_regionkey > @@session.int_var",
 		"select distinct(n_name), ((abs(n_regionkey))) from nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
@@ -423,6 +429,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT N_NAME FROM NATION WHERE ffff(N_REGIONKEY) > 0",             //function name not exist
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
+		"select n_name from nation where n_name != @not_exist_var",
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
 	}

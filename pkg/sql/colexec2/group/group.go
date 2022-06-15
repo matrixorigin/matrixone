@@ -85,7 +85,7 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 	}
 	for i, agg := range ap.Aggs {
 		vec, err := colexec.EvalExpr(bat, proc, agg.E)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
@@ -172,7 +172,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 	}
 	for i, agg := range ap.Aggs {
 		vec, err := colexec.EvalExpr(bat, proc, agg.E)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)

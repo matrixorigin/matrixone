@@ -20,14 +20,15 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-func (blk *dataBlock) CheckpointWALClosure(endTs uint64) tasks.FuncT {
+func (blk *dataBlock) CheckpointWALClosure(currTs uint64) tasks.FuncT {
 	return func() error {
-		return blk.CheckpointWAL(endTs)
+		return blk.CheckpointWAL(currTs)
 	}
 }
 
@@ -49,20 +50,29 @@ func (blk *dataBlock) ABlkFlushDataClosure(ts uint64, bat batch.IBatch, masks ma
 	}
 }
 
-func (blk *dataBlock) CheckpointWAL(endTs uint64) (err error) {
+func (blk *dataBlock) CheckpointWAL(currTs uint64) (err error) {
 	if blk.meta.IsAppendable() {
-		return blk.ABlkCheckpointWAL(endTs)
+		return blk.ABlkCheckpointWAL(currTs)
 	}
-	return blk.BlkCheckpointWAL(endTs)
+	return blk.BlkCheckpointWAL(currTs)
 }
 
-func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
+func (blk *dataBlock) BlkCheckpointWAL(currTs uint64) (err error) {
+	defer func() {
+		logutil.Info("[Done]", common.ReprerField("blk", blk.meta),
+			common.OperationField("ckp-wal"),
+			common.ErrorField(err),
+			common.AnyField("curr", currTs))
+	}()
 	ckpTs := blk.GetMaxCheckpointTS()
-	logutil.Infof("BlkCheckpointWAL | %s | [%d/%d]", blk.meta.Repr(), ckpTs, endTs)
-	if endTs <= ckpTs {
+	logutil.Info("[Start]", common.ReprerField("blk", blk.meta),
+		common.OperationField("ckp-wal"),
+		common.AnyField("ckped", ckpTs),
+		common.AnyField("curr", currTs))
+	if currTs <= ckpTs {
 		return
 	}
-	view, err := blk.CollectChangesInRange(ckpTs+1, endTs)
+	view, err := blk.CollectChangesInRange(ckpTs+1, currTs)
 	if err != nil {
 		return
 	}
@@ -79,22 +89,31 @@ func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
 	if err = blk.scheduler.Checkpoint(view.DeleteLogIndexes); err != nil {
 		return
 	}
-	// logutil.Infof("BLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, cnt, blk.meta.String())
-	blk.SetMaxCheckpointTS(endTs)
+	blk.SetMaxCheckpointTS(currTs)
 	return
 }
 
-func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
+func (blk *dataBlock) ABlkCheckpointWAL(currTs uint64) (err error) {
+	defer func() {
+		if err != nil {
+			logutil.Warn("[Done]", common.ReprerField("blk", blk.meta),
+				common.OperationField("ckp-wal"),
+				common.ErrorField(err))
+		}
+	}()
 	ckpTs := blk.GetMaxCheckpointTS()
-	logutil.Infof("ABlkCheckpointWAL | %s | [%d/%d]", blk.meta.Repr(), ckpTs, endTs)
-	if endTs <= ckpTs {
+	logutil.Info("[Start]", common.ReprerField("blk", blk.meta),
+		common.OperationField("ckp-wal"),
+		common.AnyField("ckpTs", ckpTs),
+		common.AnyField("curr", currTs))
+	if currTs <= ckpTs {
 		return
 	}
-	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, endTs+1)
+	indexes, err := blk.CollectAppendLogIndexes(ckpTs+1, currTs+1)
 	if err != nil {
 		return
 	}
-	view, err := blk.CollectChangesInRange(ckpTs+1, endTs+1)
+	view, err := blk.CollectChangesInRange(ckpTs+1, currTs+1)
 	if err != nil {
 		return
 	}
@@ -112,14 +131,16 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	if err = blk.scheduler.Checkpoint(view.DeleteLogIndexes); err != nil {
 		return
 	}
-	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, len(indexes), blk.meta.String())
+	logutil.Info("[Done]", common.ReprerField("blk", blk.meta),
+		common.OperationField("ckp-wal"),
+		common.CountField(len(indexes)))
 	// for _, index := range indexes {
 	// 	logutil.Infof("Ckp1Index  %s", index.String())
 	// }
 	// for _, index := range view.DeleteLogIndexes {
 	// 	logutil.Infof("Ckp1Index  %s", index.String())
 	// }
-	blk.SetMaxCheckpointTS(endTs)
+	blk.SetMaxCheckpointTS(currTs)
 	return
 }
 
@@ -188,12 +209,18 @@ func (blk *dataBlock) ForceCompact() (err error) {
 func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
 	flushTs := blk.node.GetBlockMaxFlushTS()
 	if ts <= flushTs {
-		logutil.Infof("FLUSH ABLK | [%s] | CANCELLED | (Stale Request: Already Flushed)", blk.meta.String())
+		logutil.Info("[Cancelled]",
+			common.ReprerField("blk", blk.meta),
+			common.OperationField("flush"),
+			common.ReasonField("State Request: Already Flushed"))
 		return data.ErrStaleRequest
 	}
 	ckpTs := blk.GetMaxCheckpointTS()
 	if ts <= ckpTs {
-		logutil.Infof("FLUSH ABLK | [%s] | CANCELLED | (Stale Request: Already Compacted)", blk.meta.String())
+		logutil.Info("[Cancelled]",
+			common.ReprerField("blk", blk.meta),
+			common.OperationField("flush"),
+			common.ReasonField("State Request: Already Flushed"))
 		return data.ErrStaleRequest
 	}
 
@@ -214,6 +241,10 @@ func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint1
 	}
 	blk.node.SetBlockMaxFlushTS(ts)
 	blk.resetNice()
-	logutil.Infof("FLUSH ABLK | [%s] | Done | MaxRow=%d | MaxTs=%d", blk.meta.String(), bat.Length(), ts)
+	logutil.Info("[Done]",
+		common.ReprerField("blk", blk.meta),
+		common.OperationField("flush"),
+		common.AnyField("maxRow", bat.Length()),
+		common.AnyField("maxTs", ts))
 	return
 }

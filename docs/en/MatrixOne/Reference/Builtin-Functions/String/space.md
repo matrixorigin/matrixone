@@ -4,21 +4,19 @@
 
 SPACE(N) Returns a string consisting of N space characters.
 
-
-
 ## **Syntax**
 
 ```
 > SPACE(N)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | N | Required. UINT Type |
 
-
 ## **Examples**
-
 
 ```SQL
 > drop table if exists t1;
@@ -50,5 +48,5 @@ VALUES
 ```
 
 ## Constraints
-Currently, MatrixOne doesn't support select function() without from tables.
 
+Currently, MatrixOne doesn't support select function() without from tables.
