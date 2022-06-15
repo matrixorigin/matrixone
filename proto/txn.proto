@@ -82,19 +82,19 @@ message TxnMeta {
     timestamp.Timestamp CommitTS    = 5;
     // Coordinator the coordinator DN. CN uses the first DN of the transaction operation
     // as the Coordinator.
-    metadata.DN         Coordinator = 6;
+    metadata.DNShard    Coordinator = 6;
 }
 
 // CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 
 // single transaction, then the transaction becomes a 2pc transaction.
 message CNOpRequest {
     // OpCode request operation type
-    uint32      OpCode  = 1;
+    uint32           OpCode  = 1;
     // Payload the content of the request, TxnClient does not perceive the exact
     // format and content
-    bytes       Payload = 2;
+    bytes            Payload = 2;
     // Target target to which the request was sent
-	metadata.DN Target  = 3 [(gogoproto.nullable) = false]; 
+	metadata.DNShard Target  = 3 [(gogoproto.nullable) = false]; 
 }
 
 // CNOpResponse cn read/write response, DN -> CN. A request corresponds to a response.
@@ -103,8 +103,8 @@ message CNOpResponse {
 	bytes Payload = 1;
 }
 
-// TxnOp transaction operations
-enum TxnOp {
+// TxnMethod transaction operations
+enum TxnMethod {
     // Read transaction read
     Read              = 0;
     // Write transaction write
@@ -132,31 +132,31 @@ enum TxnOp {
 
 // TxnRequest transaction request. All requests for the transaction are made using TxnRequest, so that 
 // the codec and logical processing of the RPC can be unified. Specific requests are selected according 
-// to TxnOp.
+// to TxnMethod.
 //
 // Request flow of TxnRequest as below:
-// 1. CN -> DN (TxnOp.Read, TxnOp.Write, TxnOp.Commit, TxnOp.Rollback)
-// 2. DN -> DN (TxnOp.Prepare, TxnOp.GetStatus, TxnOp.CommitPartition, TxnOp.RollbackPartition)
+// 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
+// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitPartition, TxnMethod.RollbackPartition)
 message TxnRequest {
     // Txn transaction metadata
     TxnMeta                     Txn                      = 1 [(gogoproto.nullable) = false];
-    // TxnOp TxnRequest opCode, select the Request defined below according to TxnOp.
-    TxnOp                       Op                       = 2;
+    // TxnMethod TxnRequest opCode, select the Request defined below according to TxnMethod.
+    TxnMethod                   Method                   = 2;
     // Flag request flag
     uint32                      Flag                     = 3;
-    // CNOpRequest corresponds to TxnOp.Read, TxnOp.Write
+    // CNOpRequest corresponds to TxnMethod.Read, TxnMethod.Write
     CNOpRequest                 CNRequest                = 4; 
-    // TxnCommitRequest corresponds to TxnOp.Commit
+    // TxnCommitRequest corresponds to TxnMethod.Commit
     TxnCommitRequest            CommitRequest            = 5;
-    // TxnRollbackRequest corresponds to TxnOp.Rollback
+    // TxnRollbackRequest corresponds to TxnMethod.Rollback
     TxnRollbackRequest          RollbackRequest          = 6;
-    // TxnPrepareRequest corresponds to TxnOp.Prepare
+    // TxnPrepareRequest corresponds to TxnMethod.Prepare
     TxnPrepareRequest           PrepareRequest           = 7;
-    // TxnGetStatusRequest corresponds to TxnOp.GetStatus
+    // TxnGetStatusRequest corresponds to TxnMethod.GetStatus
     TxnGetStatusRequest         GetStatusRequest         = 8;
-    // TxnCommitPartitionRequest corresponds to TxnOp.CommitPartition
+    // TxnCommitPartitionRequest corresponds to TxnMethod.CommitPartition
     TxnCommitPartitionRequest   CommitPartitionRequest   = 9;
-    // TxnRollbackPartitionRequest corresponds to TxnOp.RollbackPartition
+    // TxnRollbackPartitionRequest corresponds to TxnMethod.RollbackPartition
     TxnRollbackPartitionRequest RollbackPartitionRequest = 10;
 }
 
@@ -167,32 +167,34 @@ message TxnResponse {
     // e.g. to determine whether the transaction is Aborted by the status of the returned 
     // TxnMeta.
     TxnMeta                      Txn                       = 1;
-    // Op same as TxnRequest.TxnOp
-    TxnOp                        Op                        = 2;
+    // TxnMethod same as TxnRequest.TxnMethod
+    TxnMethod                    Method                    = 2;
     // Flag request flag, same as the corresponding request
     uint32                       Flag                      = 3;
     // TxnError explicit error
     TxnError                     TxnError                  = 4;
-    // CNOpResponse corresponds to TxnOp.Read, TxnOp.Write response
+    // CNOpResponse corresponds to TxnMethod.Read, TxnMethod.Write response
     CNOpResponse                 CNOpResponse              = 5; 
-    // TxnCommitResponse corresponds to TxnOp.Commit response
+    // TxnCommitResponse corresponds to TxnMethod.Commit response
     TxnCommitResponse            CommitResponse            = 6;
-    // TxnRollbackResponse corresponds to TxnOp.Rollback response
+    // TxnRollbackResponse corresponds to TxnMethod.Rollback response
     TxnRollbackResponse          RollbackResponse          = 7;
-    // TxnPrepareResponse corresponds to TxnOp.Prepare response
+    // TxnPrepareResponse corresponds to TxnMethod.Prepare response
     TxnPrepareResponse           PrepareResponse           = 8;
-    // TxnGetStatusResponse corresponds to TxnOp.GetStatus response
+    // TxnGetStatusResponse corresponds to TxnMethod.GetStatus response
     TxnGetStatusResponse         GetStatusResponse         = 9;
-    // TxnCommitPartitionResponse corresponds to TxnOp.CommitPartition response
+    // TxnCommitPartitionResponse corresponds to TxnMethod.CommitPartition response
     TxnCommitPartitionResponse   CommitPartitionResponse   = 10;
-    // TxnRollbackPartitionResponse corresponds to TxnOp.RollbackPartition response
+    // TxnRollbackPartitionResponse corresponds to TxnMethod.RollbackPartition response
     TxnRollbackPartitionResponse RollbackPartitionResponse = 11;
 }
 
 // TxnCommitRequest CN sent the commit request to coordinator DN.
 message TxnCommitRequest {
     // Partitions DNs for which data has been written in the current transaction.
-    repeated metadata.DN Partitions = 1 [(gogoproto.nullable) = false]; 
+    // The first DN is the coordinator of the transaction.
+    repeated metadata.DNShard Partitions    = 1 [(gogoproto.nullable) = false]; 
+    bool                      disable1PCOpt = 2;
 }
 
 // TxnCommitResponse response of TxnCommitRequest. 
@@ -202,7 +204,7 @@ message TxnCommitResponse {
 // TxnCommitRequest CN sent the rollback request to coordinator DN.
 message TxnRollbackRequest {
     // Partitions DNs for which data has been written in the current transaction.
-    repeated metadata.DN Partitions = 1 [(gogoproto.nullable) = false]; 
+    repeated metadata.DNShard Partitions = 1 [(gogoproto.nullable) = false]; 
 }
 
 // TxnRollbackResponse response of TxnRollbackRequest.
@@ -214,13 +216,13 @@ message TxnRollbackResponse {
 // is to send prepare requests to all DNs.
 message TxnPrepareRequest {
     // Partition prepare DN
-    metadata.DN          Partition  = 1;
+    metadata.DNShard          Partition  = 1;
     // Partitions if the partition is the coordinator DN, partitions is not empty, 
     // otherwise is empty. The coordinator DN needs to write the partitions and prepare 
     // data together atomically to the LogService. So during error recovery we can use 
     // the coordinator DN to find all the DNs involved in the transaction to commit or
     // rollback the transaction.
-    repeated metadata.DN Partitions = 2 [(gogoproto.nullable) = false]; 
+    repeated metadata.DNShard Partitions = 2 [(gogoproto.nullable) = false]; 
 }
 
 // TxnPrepareResponse response of TxnPrepareRequest
@@ -231,7 +233,7 @@ message TxnPrepareResponse {
 // TxnGetStatusRequest query the status of a transaction on DN
 message TxnGetStatusRequest {
     // Partition target DN
-    metadata.DN Partition = 1;
+    metadata.DNShard Partition = 1;
 }
 
 // TxnGetStatusResponse response of TxnGetStatusRequest
@@ -242,7 +244,7 @@ message TxnGetStatusResponse {
 // LogService.
 message TxnCommitPartitionRequest {
      // Partition target DN
-     metadata.DN Partition = 1;
+     metadata.DNShard Partition = 1;
 }
 
 // TxnCommitPartitionResponse response of TxnCommitPartitionRequest
@@ -252,7 +254,7 @@ message TxnCommitPartitionResponse {
 // TxnCommitPartitionRequest rollback txn on partition
 message TxnRollbackPartitionRequest {
      // Partition target DN
-     metadata.DN Partition = 1;
+     metadata.DNShard Partition = 1;
 }
 
 // TxnRollbackPartitionResponse response of TxnRollbackPartitionRequest

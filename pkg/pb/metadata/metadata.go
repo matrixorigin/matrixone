@@ -14,7 +14,29 @@
 
 package metadata
 
-// IsEmpty return true if is a empty dn
-func (m DN) IsEmpty() bool {
-	return m.ID == 0
+import (
+	"bytes"
+	"fmt"
+)
+
+// IsEmpty return true if is a empty DNShard
+func (m DNShard) IsEmpty() bool {
+	return m.ShardID == 0
+}
+
+// DebugString returns debug string
+func (m DNShard) DebugString() string {
+	var buffer bytes.Buffer
+
+	buffer.WriteString("shard-id: ")
+	buffer.WriteString(fmt.Sprintf("%d", m.ShardID))
+	buffer.WriteString(", ")
+
+	buffer.WriteString("replica-id: ")
+	buffer.WriteString(fmt.Sprintf("%d", m.ReplicaID))
+	buffer.WriteString(", ")
+
+	buffer.WriteString("address: ")
+	buffer.WriteString(m.Address)
+	return buffer.String()
 }

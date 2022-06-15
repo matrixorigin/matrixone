@@ -21,9 +21,9 @@ import (
 )
 
 func TestIsEmptyDN(t *testing.T) {
-	v := DN{ID: 0}
+	v := DNShard{}
 	assert.True(t, v.IsEmpty())
 
-	v.ID = 1
+	v.ShardID = 1
 	assert.False(t, v.IsEmpty())
 }

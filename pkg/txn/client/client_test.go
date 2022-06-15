@@ -64,14 +64,14 @@ func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) ([
 	respones := make([]txn.TxnResponse, 0, len(requests))
 	for _, req := range requests {
 		resp := txn.TxnResponse{
-			Txn:  &req.Txn,
-			Op:   req.Op,
-			Flag: req.Flag,
+			Txn:    &req.Txn,
+			Method: req.Method,
+			Flag:   req.Flag,
 		}
-		switch resp.Op {
-		case txn.TxnOp_Read:
+		switch resp.Method {
+		case txn.TxnMethod_Read:
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("r-%d", req.CNRequest.OpCode))}
-		case txn.TxnOp_Write:
+		case txn.TxnMethod_Write:
 			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("w-%d", req.CNRequest.OpCode))}
 		}
 
