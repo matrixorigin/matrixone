@@ -178,6 +178,7 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 }
 
 func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayDBID(cmd.DB.ID)
 	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -193,7 +194,6 @@ func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index
 	err = catalog.AddEntryLocked(cmd.DB)
 	cmd.DB.catalog = catalog
 	cmd.DB.LogIndex = idx
-	catalog.OnReplayDBID(cmd.DB.ID)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.CreateAt)
 	}
@@ -203,6 +203,7 @@ func (catalog *Catalog) onReplayCreateDatabase(cmd *EntryCommand, idx *wal.Index
 }
 
 func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayDBID(cmd.DBID)
 	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -214,7 +215,6 @@ func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, 
 	if err != nil {
 		panic(err)
 	}
-	catalog.OnReplayDBID(cmd.DBID)
 	err = db.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -240,6 +240,7 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 			cmd.DB.entries = db.entries
 			cmd.DB.link = db.link
 			cmd.DB.nameNodes = db.nameNodes
+			db.ApplyDeleteCmd(cmd.DB.DeleteAt, cmd.DB.LogIndex)
 			if err = catalog.RemoveEntry(db); err != nil {
 				panic(err)
 			}
@@ -252,6 +253,7 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 }
 
 func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayTableID(cmd.Table.ID)
 	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -269,7 +271,6 @@ func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, dataFactory DataF
 	}
 	cmd.Table.db = db
 	cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
-	catalog.OnReplayTableID(cmd.Table.ID)
 	cmd.Table.LogIndex = idx
 	err = db.AddEntryLocked(cmd.Table)
 	if observer != nil {
@@ -281,6 +282,7 @@ func (catalog *Catalog) onReplayCreateTable(cmd *EntryCommand, dataFactory DataF
 }
 
 func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayTableID(cmd.TableID)
 	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -295,7 +297,6 @@ func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, obs
 	if err != nil {
 		panic(err)
 	}
-	catalog.OnReplayTableID(cmd.TableID)
 	err = tbl.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -306,12 +307,12 @@ func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, obs
 }
 
 func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory) {
+	catalog.OnReplayTableID(cmd.Table.ID)
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
 	}
 	cmd.Table.db = db
-	catalog.OnReplayTableID(cmd.Table.ID)
 	if cmd.Table.CurrOp == OpCreate {
 		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
 		err = db.AddEntryLocked(cmd.Table)
@@ -320,6 +321,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 		if rel != nil {
 			cmd.Table.entries = rel.entries
 			cmd.Table.link = rel.link
+			rel.ApplyDeleteCmd(cmd.Table.DeleteAt, cmd.Table.LogIndex)
 			if err = db.RemoveEntry(rel); err != nil {
 				panic(err)
 			}
@@ -332,6 +334,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 }
 
 func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
+	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -358,7 +361,6 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory Dat
 	cmd.Segment.entries = make(map[uint64]*common.DLNode)
 	cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
 	cmd.Segment.ReplayFile(cache)
-	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	tbl.AddEntryLocked(cmd.Segment)
 	cmd.Segment.LogIndex = idx
 	if observer != nil {
@@ -367,6 +369,7 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory Dat
 }
 
 func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplaySegmentID(cmd.entry.ID)
 	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -385,7 +388,6 @@ func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, o
 	if err != nil {
 		panic(err)
 	}
-	catalog.OnReplaySegmentID(cmd.entry.ID)
 	err = seg.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -396,6 +398,7 @@ func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, o
 }
 
 func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFactory, cache *bytes.Buffer) {
+	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -405,7 +408,6 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 		panic(err)
 	}
 	cmd.Segment.table = rel
-	catalog.OnReplaySegmentID(cmd.Segment.ID)
 	if cmd.Segment.CurrOp == OpCreate {
 		rel.AddEntryLocked(cmd.Segment)
 	} else {
@@ -421,6 +423,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 }
 
 func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayBlockID(cmd.Block.ID)
 	if cmd.entry.CreateAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -452,8 +455,6 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, dataFactory DataF
 	if observer != nil {
 		observer.OnTimeStamp(ts)
 	}
-	// cmd.Block.blkData.ReplayData()
-	catalog.OnReplayBlockID(cmd.Block.ID)
 	cmd.Block.LogIndex = idx
 	seg.AddEntryLocked(cmd.Block)
 	if observer != nil {
@@ -462,6 +463,7 @@ func (catalog *Catalog) onReplayCreateBlock(cmd *EntryCommand, dataFactory DataF
 }
 
 func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+	catalog.OnReplayBlockID(cmd.entry.ID)
 	if cmd.entry.DeleteAt <= catalog.GetCheckpointed().MaxTS {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
@@ -484,7 +486,6 @@ func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, obs
 	if err != nil {
 		panic(err)
 	}
-	catalog.OnReplayBlockID(cmd.entry.ID)
 	err = blk.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
@@ -495,6 +496,7 @@ func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, obs
 }
 
 func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory) {
+	catalog.OnReplayBlockID(cmd.Block.ID)
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -508,7 +510,6 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 		panic(err)
 	}
 	cmd.Block.segment = seg
-	catalog.OnReplayBlockID(cmd.Block.ID)
 	if cmd.Block.CurrOp == OpCreate {
 		seg.AddEntryLocked(cmd.Block)
 	} else {
@@ -679,6 +680,8 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 		logutil.Warnf("system db cannot be removed")
 		return ErrNotPermitted
 	}
+	logutil.Info("[Catalog]", common.OperationField("remove"),
+		common.OperandField(database.String()))
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {
