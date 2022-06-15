@@ -15,19 +15,22 @@
 package client
 
 import (
-	"github.com/google/uuid"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-var _ TxnIDGenerator = (*uuidTxnIDGenerator)(nil)
+func TestGenerateUUID(t *testing.T) {
+	gen := newUUIDTxnIDGenerator()
+	assert.NotEmpty(t, gen.Generate())
 
-type uuidTxnIDGenerator struct {
-}
-
-func newUUIDTxnIDGenerator() TxnIDGenerator {
-	return &uuidTxnIDGenerator{}
-}
-
-func (gen *uuidTxnIDGenerator) Generate() []byte {
-	id := uuid.New()
-	return id[:]
+	n := 100000
+	ids := make(map[string]struct{}, n)
+	for i := 0; i < n; i++ {
+		id := string(gen.Generate())
+		if _, ok := ids[id]; ok {
+			assert.Fail(t, "repeat uuid")
+		}
+		ids[id] = struct{}{}
+	}
 }
