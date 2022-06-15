@@ -26,7 +26,26 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	inVec := lv[0]
 	times := inVec.Col.([]int64)
 	size := types.T(types.T_datetime).TypeLen()
-	vec := proc.AllocScalarVector(types.Type{Oid: types.T_datetime, Size: int32(size)})
+	if inVec.IsScalarNull() {
+		return proc.AllocScalarNullVector(types.Type{Oid: types.T_datetime, Size: int32(size)}), nil
+	}
+	if inVec.IsScalar() {
+		vec := proc.AllocScalarVector(types.Type{Oid: types.T_datetime, Size: int32(size)})
+		rs := make([]types.Datetime, 1)
+		if times[0] < 0 || times[0] > 32536771199 {
+			if inVec.Nsp.Np == nil {
+				inVec.Nsp.Np = &roaring64.Bitmap{}
+			}
+			inVec.Nsp.Np.AddInt(0)
+		}
+		nulls.Set(vec.Nsp, inVec.Nsp)
+		vector.SetCol(vec, fromunixtime.UnixToDatetime(times, rs))
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
+	if err != nil {
+		return nil, err
+	}
 	rs := make([]types.Datetime, len(times))
 	for i := 0; i < len(times); i++ {
 		if inVec.Nsp.Np == nil {
