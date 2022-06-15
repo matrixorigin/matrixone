@@ -15,12 +15,17 @@
 package unary
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/space"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
+)
+
+var (
+	errorSpaceCountExceedsThreshold = fmt.Errorf("total space count exceeds %d MB", space.TotalMaximumSpaceCount/1024/1024)
 )
 
 // the function registeration for generics functions may have some problem now, change this to generics later
@@ -34,6 +39,9 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		inputValues := inputVector.Col.([]int64)
 		resultVector := vector.NewConst(resultType)
 		bytesNeed := space.CountSpacesSigned(inputValues)
+		if bytesNeed < 0 {
+			return nil, errorSpaceCountExceedsThreshold
+		}
 		results := &types.Bytes{
 			Data:    make([]byte, bytesNeed),
 			Offsets: make([]uint32, 1),
@@ -46,6 +54,9 @@ func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 	inputValues := inputVector.Col.([]int64)
 	bytesNeed := space.CountSpacesSigned(inputValues)
+	if bytesNeed < 0 {
+		return nil, errorSpaceCountExceedsThreshold
+	}
 	resultVector, err := proc.AllocVector(resultType, bytesNeed)
 	if err != nil {
 		return nil, err
@@ -71,6 +82,9 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		inputValues := inputVector.Col.([]uint64)
 		resultVector := vector.NewConst(resultType)
 		bytesNeed := space.CountSpacesUnsigned[uint64](inputValues)
+		if bytesNeed < 0 {
+			return nil, errorSpaceCountExceedsThreshold
+		}
 		results := &types.Bytes{
 			Data:    make([]byte, bytesNeed),
 			Offsets: make([]uint32, 1),
@@ -83,6 +97,9 @@ func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	}
 	inputValues := inputVector.Col.([]uint64)
 	bytesNeed := space.CountSpacesUnsigned[uint64](inputValues)
+	if bytesNeed < 0 {
+		return nil, errorSpaceCountExceedsThreshold
+	}
 	resultVector, err := proc.AllocVector(resultType, bytesNeed)
 	if err != nil {
 		return nil, err
@@ -108,6 +125,9 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 		inputValues := inputVector.Col.([]T)
 		resultVector := vector.NewConst(resultType)
 		bytesNeed := space.CountSpacesFloat[T](inputValues)
+		if bytesNeed < 0 {
+			return nil, errorSpaceCountExceedsThreshold
+		}
 		results := &types.Bytes{
 			Data:    make([]byte, bytesNeed),
 			Offsets: make([]uint32, 1),
@@ -120,6 +140,9 @@ func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Pro
 	}
 	inputValues := inputVector.Col.([]T)
 	bytesNeed := space.CountSpacesFloat[T](inputValues)
+	if bytesNeed < 0 {
+		return nil, errorSpaceCountExceedsThreshold
+	}
 	resultVector, err := proc.AllocVector(resultType, bytesNeed)
 	if err != nil {
 		return nil, err
