@@ -156,6 +156,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 			rf.history.Extend(vfiles[:len(vfiles)-1]...)
 			rf.uncommitted = append(
 				rf.uncommitted, vfiles[len(vfiles)-1].(*vFile))
+			rf.nextVer = uint64(vfiles[len(vfiles)-1].Id())
 		}
 	} else {
 		err = rf.scheduleNew()
@@ -245,8 +246,8 @@ func (rf *rotateFile) Close() error {
 }
 
 func (rf *rotateFile) scheduleNew() error {
-	fname := MakeVersionFile(rf.dir, rf.name, rf.nextVer)
 	rf.nextVer++
+	fname := MakeVersionFile(rf.dir, rf.name, rf.nextVer)
 	vf, err := newVFile(nil, fname, int(rf.nextVer), rf.history, rf.bsInfo)
 	if err != nil {
 		return err
