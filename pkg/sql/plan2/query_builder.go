@@ -84,9 +84,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 
 			returnMap[getColMapKey(tag, int32(idx))] = [2]int32{0, int32(idx)}
 		}
-
 		for _, expr := range node.FilterList {
-			builder.remapExpr(expr, returnMap)
+			err := builder.remapExpr(expr, returnMap)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 	case plan.Node_JOIN:

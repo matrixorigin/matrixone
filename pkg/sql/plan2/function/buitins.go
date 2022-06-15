@@ -330,6 +330,17 @@ var builtins = map[int][]Function{
 			Fn:          unary.Exp[float64],
 		},
 	},
+	EXTRACT: {
+		{
+			Index:       0,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_date},
+			ReturnTyp:   types.T_uint32,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          binary.ExtractFromDate,
+		},
+	},
 	LENGTH: {
 		{
 			Index:       0,
@@ -1711,26 +1722,29 @@ var builtins = map[int][]Function{
 			Fn:          multi.UTCTimestamp,
 		},
 	},
-	EXTRACT: {
-		{
-			Index:       0,
-			Flag:        plan.Function_STRICT,
-			Layout:      STANDARD_FUNCTION,
-			Args:        []types.T{types.T_varchar, types.T_date},
-			ReturnTyp:   types.T_float64,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
+	/*
+		EXTRACT: {
+			{
+				Index:       0,
+				Flag:        plan.Function_STRICT,
+				Layout:      STANDARD_FUNCTION,
+				Args:        []types.T{types.T_varchar, types.T_date},
+				ReturnTyp:   types.T_float64,
+				TypeCheckFn: strictTypeCheck,
+				Fn:          nil,
+			},
+			{
+				Index:       1,
+				Flag:        plan.Function_STRICT,
+				Layout:      STANDARD_FUNCTION,
+				Args:        []types.T{types.T_varchar, types.T_datetime},
+				ReturnTyp:   types.T_float64,
+				TypeCheckFn: strictTypeCheck,
+				Fn:          nil,
+			},
 		},
-		{
-			Index:       1,
-			Flag:        plan.Function_STRICT,
-			Layout:      STANDARD_FUNCTION,
-			Args:        []types.T{types.T_varchar, types.T_datetime},
-			ReturnTyp:   types.T_float64,
-			TypeCheckFn: strictTypeCheck,
-			Fn:          nil,
-		},
-	},
+
+	*/
 	DATE_ADD: {
 		{
 			Index:       0,
