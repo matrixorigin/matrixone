@@ -23,30 +23,42 @@ import (
 
 func TestDateAdd(t *testing.T) {
 	testCases := []struct {
-		name  string
-		args1 []types.Date
-		args2 []int64
-		args3 []int64
-		want  []types.Date
+		name    string
+		args1   []types.Date
+		args2   []int64
+		args3   []int64
+		want    []types.Date
+		success bool
 	}{
 		{
-			args1: []types.Date{types.FromCalendar(2021, 8, 13)},
-			args2: []int64{1},
-			args3: []int64{int64(types.Day)},
-			want:  []types.Date{types.FromCalendar(2021, 8, 14)},
+			args1:   []types.Date{types.FromCalendar(2021, 8, 13)},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Day)},
+			want:    []types.Date{types.FromCalendar(2021, 8, 14)},
+			success: true,
 		},
 		{
-			args1: []types.Date{types.FromCalendar(2021, 1, 31)},
-			args2: []int64{1},
-			args3: []int64{int64(types.Month)},
-			want:  []types.Date{types.FromCalendar(2021, 2, 28)},
+			args1:   []types.Date{types.FromCalendar(2021, 1, 31)},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Month)},
+			want:    []types.Date{types.FromCalendar(2021, 2, 28)},
+			success: true,
+		},
+		{
+			args1:   []types.Date{types.FromCalendar(9999, 12, 31)},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Day)},
+			want:    []types.Date{types.FromCalendar(1, 1, 1)},
+			success: false,
 		},
 	}
 
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Date, len(c.args1))
-			require.Equal(t, c.want, dateAdd(c.args1, c.args2, c.args3, got))
+			nu := &nulls.Nulls{}
+			require.Equal(t, c.want, dateAdd(c.args1, c.args2, c.args3, nu, got))
+			require.Equal(t, c.success, !nulls.Contains(nu, 0))
 		})
 	}
 
@@ -54,30 +66,42 @@ func TestDateAdd(t *testing.T) {
 
 func TestDatetimeAdd(t *testing.T) {
 	testCases := []struct {
-		name  string
-		args1 []types.Datetime
-		args2 []int64
-		args3 []int64
-		want  []types.Datetime
+		name    string
+		args1   []types.Datetime
+		args2   []int64
+		args3   []int64
+		want    []types.Datetime
+		success bool
 	}{
 		{
-			args1: []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
-			args2: []int64{1},
-			args3: []int64{int64(types.MicroSecond)},
-			want:  []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 2)},
+			args1:   []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.MicroSecond)},
+			want:    []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 2)},
+			success: true,
 		},
 		{
-			args1: []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
-			args2: []int64{1},
-			args3: []int64{int64(types.Second)},
-			want:  []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 2, 1)},
+			args1:   []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 1, 1)},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Second)},
+			want:    []types.Datetime{types.FromClock(2020, 1, 1, 1, 1, 2, 1)},
+			success: true,
+		},
+		{
+			args1:   []types.Datetime{types.FromClock(9999, 1, 1, 1, 1, 1, 1)},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Year)},
+			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0)},
+			success: false,
 		},
 	}
 
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Datetime, len(c.args1))
-			require.Equal(t, c.want, datetimeAdd(c.args1, c.args2, c.args3, got))
+			nu := &nulls.Nulls{}
+			require.Equal(t, c.want, datetimeAdd(c.args1, c.args2, c.args3, nu, got))
+			require.Equal(t, c.success, !nulls.Contains(nu, 0))
 		})
 	}
 
@@ -125,6 +149,13 @@ func TestDateStringAdd(t *testing.T) {
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
 			want:    &types.Bytes{Data: []byte("2018-01-02 00:00:012018-01-02"), Offsets: []uint32{0, 0, 19}, Lengths: []uint32{0, 19, 10}},
+			contain: true,
+		},
+		{
+			args1:   &types.Bytes{Data: []byte("9999-01-01"), Offsets: []uint32{0}, Lengths: []uint32{10}},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Year)},
+			want:    &types.Bytes{Data: []byte(""), Offsets: []uint32{0}, Lengths: []uint32{0}},
 			contain: true,
 		},
 	}
