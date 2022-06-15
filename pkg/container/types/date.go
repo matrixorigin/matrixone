@@ -16,11 +16,10 @@ package types
 
 import (
 	"fmt"
-	"strconv"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"strconv"
+	"time"
 )
 
 const (
@@ -398,6 +397,13 @@ func isLeap(year int32) bool {
 
 func (d Date) ToTime() Datetime {
 	return Datetime(int64(d)*secsPerDay) << 20
+}
+
+func DateToTimestamp(xs []Date, rs []Timestamp) ([]Timestamp, error) {
+	for i, x := range xs {
+		rs[i] = x.ToTimeUTC()
+	}
+	return rs, nil
 }
 
 func (d Date) Month() uint8 {
