@@ -1551,9 +1551,23 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
-	cwft.plan, err = plan2.BuildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
-	if err != nil {
-		return nil, err
+	switch stmt := cwft.stmt.(type) {
+	case *tree.Select:
+		opt := plan2.NewBaseOptimizr(cwft.ses.GetTxnCompilerContext())
+		optimized, err := opt.Optimize(stmt)
+		if err != nil {
+			return nil, err
+		}
+		cwft.plan = &plan2.Plan{
+			Plan: &plan2.Plan_Query{
+				Query: optimized,
+			},
+		}
+	default:
+		cwft.plan, err = plan2.BuildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cwft.proc.UnixTime = time.Now().UnixNano()
