@@ -15,6 +15,9 @@
 package operator
 
 import (
+	"testing"
+	"unsafe"
+
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"unsafe"
 )
 
 func TestCastSameType(t *testing.T) {
@@ -1914,6 +1915,63 @@ func TestCastVarcharAsDate(t *testing.T) {
 		compare := testutil.CompareVectors(wantVec, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
+}
+
+func TestCastTimestampAsVarchar(t *testing.T) {
+	//Cast converts timestamp to varchar
+	//procs := testutil.NewProc()
+	cases := []struct {
+		name     string
+		vecs     []*vector.Vector
+		proc     *process.Process
+		input    []types.Timestamp
+		expected *types.Bytes
+		isScalar bool
+	}{
+		//{
+		//	name:  "01 - normal test",
+		//	proc:  procs,
+		//	input: []types.Timestamp{66823357574906480},
+		//	expected: &types.Bytes{
+		//		Data:    []byte("2020-06-14 16:24:15.230000"),
+		//		Offsets: []uint32{0},
+		//		Lengths: []uint32{26},
+		//	},
+		//	isScalar: false,
+		//},
+		//{
+		//	name:  "02 - scalar test",
+		//	proc:  procs,
+		//	input: []types.Timestamp{66823357574906480},
+		//	expected: &types.Bytes{
+		//		Data:    []byte("2020-06-14 16:24:15.230000"),
+		//		Offsets: []uint32{0},
+		//		Lengths: []uint32{26},
+		//	},
+		//	isScalar: true,
+		//},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vecs := make([]*vector.Vector, 2)
+			if c.input != nil {
+				vecs[0] = vector.New(types.T_timestamp.ToType())
+				vecs[0].Col = c.input
+				vecs[0].IsConst = c.isScalar
+			} else {
+				vecs[0] = testutil.MakeScalarNull(0)
+			}
+			vecs[1] = vector.New(types.T_varchar.ToType())
+
+			result, err := Cast(vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.expected, result.Col.(*types.Bytes))
+			require.Equal(t, c.isScalar, result.IsScalar())
+		})
+	}
 }
 
 func TestCastDecimal64AsDecimal128(t *testing.T) {

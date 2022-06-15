@@ -414,6 +414,11 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_datetime {
 		return castTimeStampAsDatetime(lv, rv, proc)
 	}
+
+	if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_varchar {
+		return castTimestampAsVarchar(lv, rv, proc)
+	}
+
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "parameter types of cast function do not match")
 }
 
@@ -920,6 +925,43 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 	rs := encoding.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := typecast.TimestampToDatetime(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+//  castTimestampAsVarchar : Cast converts timestamp to varchar
+func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	lvs := lv.Col.([]types.Timestamp)
+	resultType := rv.Typ
+	resultElementSize := int(resultType.Size)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(resultType)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 1),
+			Lengths: make([]uint32, 1),
+		}
+		if _, err := typecast.TimestampToVarchar(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(resultType, int64(resultElementSize*len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
+		Offsets: make([]uint32, len(lvs)),
+		Lengths: make([]uint32, len(lvs)),
+	}
+	if _, err := typecast.TimestampToVarchar(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
