@@ -29,11 +29,10 @@ import (
 )
 
 var (
-	constBType       = types.Type{Oid: types.T_bool}
-	constIType       = types.Type{Oid: types.T_int64}
-	constDType       = types.Type{Oid: types.T_float64}
-	constSType       = types.Type{Oid: types.T_varchar}
-	constDecimalType = types.Type{Oid: types.T_decimal128}
+	constBType = types.Type{Oid: types.T_bool}
+	constIType = types.Type{Oid: types.T_int64}
+	constDType = types.Type{Oid: types.T_float64}
+	constSType = types.Type{Oid: types.T_varchar}
 )
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
