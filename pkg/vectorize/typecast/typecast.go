@@ -241,6 +241,13 @@ func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]ty
 	return rs, nil
 }
 
+func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64) ([]types.Decimal64, error) {
+	for i, x := range xs {
+		rs[i] = types.InitDecimal64(int64(x))
+	}
+	return rs, nil
+}
+
 func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]types.Decimal128, error) {
 	for i, x := range xs {
 		rs[i] = types.InitDecimal128UsingUint(uint64(x))
