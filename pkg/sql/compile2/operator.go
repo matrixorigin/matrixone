@@ -124,7 +124,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 
 func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
-		E: colexec.RewriteFilterExprList(n.WhereList),
+		E: colexec.RewriteFilterExprList(n.FilterList),
 	}
 }
 
