@@ -46,7 +46,11 @@ type syncBase struct {
 	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
 	addrmu                       sync.RWMutex
 	commitCond                   sync.Cond
-	syncedVersion                uint64
+
+	// internal entry
+	calculatedVersion uint64
+	calculatedCond    sync.Cond
+	syncedVersion     uint64
 }
 
 type checkpointInfo struct {
@@ -107,13 +111,14 @@ func (info *checkpointInfo) MergeCheckpointInfo(ockp *checkpointInfo) {
 				panic("logic err")
 			}
 			ckpinfo.ckps.Or(ockpinfo.ckps)
-		}
-		if ckpinfo.IsAllCheckpointed() {
-			info.ranges.TryMerge(*common.NewClosedIntervalsByInt(lsn))
-			delete(info.partial, lsn)
+			if ckpinfo.IsAllCheckpointed() {
+				info.ranges.TryMerge(*common.NewClosedIntervalsByInt(lsn))
+				delete(info.partial, lsn)
+			}
 		}
 	}
 }
+
 func (info *checkpointInfo) GetCheckpointed() uint64 {
 	if info.ranges == nil || len(info.ranges.Intervals) == 0 {
 		return 0
@@ -206,19 +211,20 @@ func newSyncMap() *syncMap {
 }
 func newSyncBase() *syncBase {
 	return &syncBase{
-		groupLSN:      make(map[uint32]uint64),
-		lsnmu:         sync.RWMutex{},
-		checkpointing: make(map[uint32]*checkpointInfo),
-		syncing:       make(map[uint32]uint64),
-		checkpointed:  newSyncMap(),
-		synced:        newSyncMap(),
-		ckpCnt:        newSyncMap(),
-		tidLsnMaps:    make(map[uint32]map[uint64]uint64),
-		tidLsnMapmu:   &sync.RWMutex{},
-		addrs:         make(map[uint32]map[int]common.ClosedIntervals),
-		addrmu:        sync.RWMutex{},
-		ckpmu:         sync.RWMutex{},
-		commitCond:    *sync.NewCond(new(sync.Mutex)),
+		groupLSN:       make(map[uint32]uint64),
+		lsnmu:          sync.RWMutex{},
+		checkpointing:  make(map[uint32]*checkpointInfo),
+		syncing:        make(map[uint32]uint64),
+		checkpointed:   newSyncMap(),
+		synced:         newSyncMap(),
+		ckpCnt:         newSyncMap(),
+		tidLsnMaps:     make(map[uint32]map[uint64]uint64),
+		tidLsnMapmu:    &sync.RWMutex{},
+		addrs:          make(map[uint32]map[int]common.ClosedIntervals),
+		addrmu:         sync.RWMutex{},
+		ckpmu:          sync.RWMutex{},
+		commitCond:     *sync.NewCond(new(sync.Mutex)),
+		calculatedCond: *sync.NewCond(new(sync.Mutex)),
 	}
 }
 
@@ -285,6 +291,17 @@ func (base *syncBase) UnarshalPostCommitEntry(buf []byte) error {
 
 func (base *syncBase) MakePostCommitEntry(id int) entry.Entry {
 	e := entry.GetBase()
+	calculated := atomic.LoadUint64(&base.calculatedVersion)
+	for calculated < uint64(id) {
+		base.calculatedCond.L.Lock()
+		calculated = atomic.LoadUint64(&base.calculatedVersion)
+		if calculated >= uint64(id) {
+			base.calculatedCond.L.Unlock()
+			break
+		}
+		base.calculatedCond.Wait()
+		base.calculatedCond.L.Unlock()
+	}
 	e.SetType(entry.ETPostCommit)
 	buf, err := base.MarshalPostCommitEntry()
 	if err != nil {
@@ -356,6 +373,16 @@ func (base *syncBase) GetLastAddr(groupName uint32, tid uint64) *VFileAddress {
 	return nil
 }
 
+func (base *syncBase) OnCalculateVersion(id int) {
+	pre := atomic.LoadUint64(&base.calculatedVersion)
+	if id > int(pre) {
+		atomic.StoreUint64(&base.calculatedVersion, uint64(id))
+		base.calculatedCond.L.Lock()
+		base.calculatedCond.Broadcast()
+		base.calculatedCond.L.Unlock()
+	}
+}
+
 func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	switch v.Group {
 	case entry.GTCKp:
@@ -399,6 +426,7 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	if !ok {
 		versionRanges = make(map[int]common.ClosedIntervals)
 	}
+	base.OnCalculateVersion(addr.Version)
 	interval, ok := versionRanges[addr.Version]
 	if !ok {
 		interval = *common.NewClosedIntervals()
