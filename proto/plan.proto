@@ -225,6 +225,7 @@ message ConstantValue {
 		int64 dateTime_v = 9;
 		int64 timeStamp_v = 10;
 		string string_v = 11;
+		bool bool_v = 12;
 	}
 }
 

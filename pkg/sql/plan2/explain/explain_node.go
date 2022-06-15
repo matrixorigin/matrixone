@@ -412,7 +412,8 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 	//(cost=11.75..13.15 rows=140 width=4)
 	var result string
 	if c.Cost == nil {
-		result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
+		result = " (cost=0.0..0.0 rows=0 ndv=0 rowsize=0)"
+		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
 		result = "(cost=" +
 			strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
