@@ -156,6 +156,8 @@ var (
 	Uint64ToDecimal128 = UintToDecimal128[uint64]
 
 	TimestampToDatetime = timestampToDatetime
+	DatetimeToTimestamp = datetimeToTimestamp
+	DateToTimestamp     = dateToTimestamp
 	TimestampToVarchar  = timestampToVarchar
 )
 
@@ -243,6 +245,14 @@ func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]t
 
 func timestampToDatetime(xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
 	return types.TimestampToDatetime(xs, rs)
+}
+
+func datetimeToTimestamp(xs []types.Datetime, rs []types.Timestamp) ([]types.Timestamp, error) {
+	return types.DatetimeToTimestamp(xs, rs)
+}
+
+func dateToTimestamp(xs []types.Date, rs []types.Timestamp) ([]types.Timestamp, error) {
+	return types.DateToTimestamp(xs, rs)
 }
 
 func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes) (*types.Bytes, error) {
