@@ -215,7 +215,9 @@ func (catalog *Catalog) onReplayDropDatabase(cmd *EntryCommand, idx *wal.Index, 
 	if err != nil {
 		panic(err)
 	}
-	err = db.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if err = db.ApplyDeleteCmd(cmd.entry.DeleteAt, idx); err != nil {
+		panic(err)
+	}
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
 	}
@@ -240,7 +242,9 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 			cmd.DB.entries = db.entries
 			cmd.DB.link = db.link
 			cmd.DB.nameNodes = db.nameNodes
-			db.ApplyDeleteCmd(cmd.DB.DeleteAt, cmd.DB.LogIndex)
+			if err = db.ApplyDeleteCmd(cmd.DB.DeleteAt, cmd.DB.LogIndex); err != nil {
+				panic(err)
+			}
 			if err = catalog.RemoveEntry(db); err != nil {
 				panic(err)
 			}
@@ -297,7 +301,9 @@ func (catalog *Catalog) onReplayDropTable(cmd *EntryCommand, idx *wal.Index, obs
 	if err != nil {
 		panic(err)
 	}
-	err = tbl.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if err = tbl.ApplyDeleteCmd(cmd.entry.DeleteAt, idx); err != nil {
+		panic(err)
+	}
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
 	}
@@ -321,7 +327,9 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 		if rel != nil {
 			cmd.Table.entries = rel.entries
 			cmd.Table.link = rel.link
-			rel.ApplyDeleteCmd(cmd.Table.DeleteAt, cmd.Table.LogIndex)
+			if err = rel.ApplyDeleteCmd(cmd.Table.DeleteAt, cmd.Table.LogIndex); err != nil {
+				panic(err)
+			}
 			if err = db.RemoveEntry(rel); err != nil {
 				panic(err)
 			}
@@ -388,7 +396,9 @@ func (catalog *Catalog) onReplayDropSegment(cmd *EntryCommand, idx *wal.Index, o
 	if err != nil {
 		panic(err)
 	}
-	err = seg.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if err = seg.ApplyDeleteCmd(cmd.entry.DeleteAt, idx); err != nil {
+		panic(err)
+	}
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
 	}
@@ -486,7 +496,9 @@ func (catalog *Catalog) onReplayDropBlock(cmd *EntryCommand, idx *wal.Index, obs
 	if err != nil {
 		panic(err)
 	}
-	err = blk.ApplyDeleteCmd(cmd.entry.DeleteAt, idx)
+	if err = blk.ApplyDeleteCmd(cmd.entry.DeleteAt, idx); err != nil {
+		panic(err)
+	}
 	if observer != nil {
 		observer.OnTimeStamp(cmd.entry.DeleteAt)
 	}
