@@ -737,7 +737,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			}
 		case types.T_datetime:
 			if !num.Negative() {
-				return types.ParseDatetime(str)
+				return types.ParseDatetime(str, typ.Precision)
 			}
 		}
 	case constant.Float:
@@ -791,7 +791,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			}
 			return float64(v), nil
 		case types.T_datetime:
-			return types.ParseDatetime(str)
+			return types.ParseDatetime(str, typ.Precision)
 		case types.T_decimal64:
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case types.T_decimal128:
@@ -811,7 +811,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			case types.T_date:
 				return types.ParseDate(constant.StringVal(val))
 			case types.T_datetime:
-				return types.ParseDatetime(constant.StringVal(val))
+				return types.ParseDatetime(constant.StringVal(val), typ.Precision)
 			case types.T_timestamp:
 				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
 			}

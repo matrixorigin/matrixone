@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -199,6 +200,36 @@ func (d Date) Year() uint16 {
 	year := uint16(y) + 1
 
 	return year
+}
+
+func (d Date) YearMonth() uint32 {
+	year, month, _, _ := d.Calendar(true)
+	yearStr := fmt.Sprintf("%04d", year)
+	monthStr := fmt.Sprintf("%02d", month)
+	// fmt.Println(yearStr, monthStr, "--------")
+	result, _ := strconv.ParseUint(yearStr+monthStr, 10, 32)
+	// fmt.Println(result)
+	return uint32(result)
+}
+
+var monthToQuarter = map[uint8]uint32{
+	1:  1,
+	2:  1,
+	3:  1,
+	4:  2,
+	5:  2,
+	6:  2,
+	7:  3,
+	8:  3,
+	9:  3,
+	10: 4,
+	11: 4,
+	12: 4,
+}
+
+func (d Date) Quarter() uint32 {
+	_, month, _, _ := d.Calendar(true)
+	return monthToQuarter[month]
 }
 
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
