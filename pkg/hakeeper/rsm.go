@@ -51,6 +51,7 @@ const (
 	dnHeartbeatTag
 	logHeartbeatTag
 	checkTag
+	getIDTag
 )
 
 type logShardIDQuery struct {
@@ -80,6 +81,13 @@ type stateMachine struct {
 
 func parseCmdTag(cmd []byte) uint16 {
 	return binaryEnc.Uint16(cmd)
+}
+
+func getGetIDCmd(count uint64) []byte {
+	cmd := make([]byte, headerSize+8)
+	binaryEnc.PutUint16(cmd, getIDTag)
+	binaryEnc.PutUint64(cmd[headerSize:], count)
+	return cmd
 }
 
 func getCreateLogShardCmd(name string) []byte {
@@ -132,6 +140,14 @@ func isTickCmd(cmd []byte) bool {
 
 func isCheckCmd(cmd []byte) bool {
 	return len(cmd) == headerSize && binaryEnc.Uint16(cmd) == checkTag
+}
+
+func isGetIDCmd(cmd []byte) bool {
+	return len(cmd) == headerSize+8 && binaryEnc.Uint16(cmd) == getIDTag
+}
+
+func parseGetIDCmd(cmd []byte) uint64 {
+	return binaryEnc.Uint64(cmd[headerSize:])
 }
 
 func GetTickCmd() []byte {
@@ -232,6 +248,15 @@ func (s *stateMachine) handleCheck(cmd []byte) (sm.Result, error) {
 	return sm.Result{}, nil
 }
 
+func (s *stateMachine) handleGetIDCmd(cmd []byte) (sm.Result, error) {
+	count := parseGetIDCmd(cmd)
+	s.NextID++
+	v := s.NextID
+	s.NextID += (count - 1)
+	plog.Infof("get id returned [%d, %d)", v, v+count)
+	return sm.Result{Value: v}, nil
+}
+
 func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	if _, ok := isCreateLogShardCmd(cmd); ok {
@@ -244,6 +269,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleTick(cmd)
 	} else if isCheckCmd(cmd) {
 		return s.handleCheck(cmd)
+	} else if isGetIDCmd(cmd) {
+		return s.handleGetIDCmd(cmd)
 	}
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }

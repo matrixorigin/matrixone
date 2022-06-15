@@ -209,3 +209,19 @@ func TestHandleDNHeartbeat(t *testing.T) {
 	require.Equal(t, 3, len(dninfo.Shards))
 	assert.Equal(t, hb.Shards, dninfo.Shards)
 }
+
+func TestGetIDCmd(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := getGetIDCmd(100)
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 1}, result)
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 101}, result)
+	assert.Equal(t, uint64(201), tsm1.assignID())
+
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 202}, result)
+}
