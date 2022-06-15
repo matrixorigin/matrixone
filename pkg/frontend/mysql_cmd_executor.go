@@ -498,6 +498,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal128)
 					row[i] = vs[rowIndex].Decimal128ToString(scale)
+					fmt.Println(row[i])
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
