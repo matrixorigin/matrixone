@@ -15,13 +15,13 @@ It's helpful to understand a few terms before reading our architecture documenta
 | E  |  |
   | Event Notify | The machanism of synchronizing heartbeat information to all nodes is called an event notify. |
   | F  |  |
-  | Factorization | The factorization method uses basic factorization formula to reduce any algebraic or quadratic equation into its simpler form. MatrixOne uses compact factorised representations at the physical layer to reduce data redundancy and boost query performance. |
+  | Factorization | The factorization method uses basic factorization formula to reduce any algebraic or quadratic equation into its simpler form. MatrixOne uses compact factorized representations at the physical layer to reduce data redundancy and boost query performance. |
   | H  |  |
   | Heartbeat | Every node in a MatrixOne cluster will periodically sends its status information, this information is called a heartbeat. |
  | M  |  |
   | MatrixCube | MatrixCube is a framework for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. | 
  | P  |  |
-  | Prophet | Prophet is a scheduling module in MatrixCube. It takes charge of Auto-Rebalance, which keeps the system storage level and read/write throughput level balanced across Stores. The inital 3 Stores of a MatrixCube cluster are all Prophet Nodes. |
+  | Prophet | Prophet is a scheduling module in MatrixCube. It takes charge of Auto-Rebalance, which keeps the system storage level and read/write throughput level balanced across Stores. The initial 3 Stores of a MatrixCube cluster are all Prophet Nodes. |
    | Pure Storage | In contrast to Prophet, pure storage is another type of node, which doesn't handle any scheduling job and works as simple storage. |
 | R  |  |
   | Replica | To provide reliable service, each shard is stored not only once, it will have several copy stored in different stores. Every copy of a shard is called a Replica. |
@@ -32,11 +32,9 @@ It's helpful to understand a few terms before reading our architecture documenta
  | Shard Splitting | There is a certain limit to a Shard size. Whenever a Shard exceeds its storage limit, MatrixCube splits a Shard into two Shards and keep each Shard with the same storage level. |
   | Shard Proxy | The Shard Proxy is a central module to accept all user read/write requests and route requests to corresponding nodes.|
 
-
 ### **Concepts**
 
 MatrixOne relies heavily on the following concepts. Being familiar with them will help you understand what our architecture achieves.
-
 
 |  Term   | Definition   |
 |  ----  | ----  |
@@ -51,7 +49,7 @@ MatrixOne relies heavily on the following concepts. Being familiar with them wil
 | J  |  |
 | JIT Compilation  | Turns SQL plan tree or Intermediate Representation code into a native program using LLVM at runtime.  |
 | M  |  |
-| Monolitic Engine  | A monolithic database engine is designed to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc.  |
+| Monolithic Engine  | A monolithic database engine is designed to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc.  |
 | Materialized View  | A materialized view is a pre-computed data set derived from a query specification (the SELECT in the view definition) and stored for later use. Materialized view is usually used for increasing performance and efficiency. |
 | Metadata  | Metadata is the data that describes the structure and creation method of data in a database. |
 | P  |  |

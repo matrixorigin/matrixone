@@ -37,14 +37,12 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 | Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD/YYYYMMDD |
 | DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
 
-
 ## **Decimal Types(Beta)**
 
 |  Data Type   | Size  |  Precision   | Syntax |
 |  ----  | ----  |  ----  | ----  |
 | Decimal64  | 8 byte | 	19 digits  | Decimal(N,S), N range(1,18), S range(0,N) |
 | Decimal128  | 16 byte | 	38 digits  | Decimal(N,S), N range(19,38), S range(0,N) |
-
 
 ## **Examples**
 

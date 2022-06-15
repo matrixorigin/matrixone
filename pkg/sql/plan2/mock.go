@@ -15,8 +15,10 @@
 package plan2
 
 import (
+	"errors"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -27,7 +29,20 @@ type MockCompilerContext struct {
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-	return nil, nil
+	vars := make(map[string]interface{})
+	vars["str_var"] = "str"
+	vars["int_var"] = 20
+	vars["bool_var"] = false
+	vars["float_var"] = 20.20
+	dec, _ := types.ParseStringToDecimal128("200.001", 2, 2)
+	vars["decimal_var"] = dec
+	vars["null_var"] = nil
+
+	if result, ok := vars[varName]; ok {
+		return result, nil
+	}
+
+	return nil, errors.New("var not found")
 }
 
 type col struct {

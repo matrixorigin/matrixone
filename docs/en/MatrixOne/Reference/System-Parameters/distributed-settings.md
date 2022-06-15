@@ -1,7 +1,5 @@
 For a distributed setting, the following parameters should be paied attention to. 
 
-
-
 ### Configuration Settings
 
 To configurate a distributed setting, following parameters need to be modified in the default Configuration file 'system_vars_config.toml'.
@@ -34,7 +32,6 @@ To configurate a distributed setting, following parameters need to be modified i
     addr-advertise-raft = "${HOST}:10000"
     ```
 
-
 * **addr-client and addr-advertise-client**
 
     `addr-client` is the address for cube service.
@@ -57,7 +54,6 @@ To configurate a distributed setting, following parameters need to be modified i
     ```
     addr-advertise-client = "${HOST}:20000"
     ```
-
 
 * **dir-data**
 
@@ -196,4 +192,3 @@ To configurate a distributed setting, following parameters need to be modified i
     ```
     max-replicas = 3
     ```
-

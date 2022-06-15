@@ -15,7 +15,6 @@
 package moengine
 
 import (
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -137,8 +136,23 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) err
 	return rel.handle.Append(bat)
 }
 
-func (rel *txnRelation) Update(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
-	return errors.New("doesn't support now")
+func (rel *txnRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) error {
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	hiddenIdx := catalog.GetAttrIdx(data.Attrs, schema.HiddenKey.Name)
+	for idx := 0; idx < vector.Length(data.Vecs[hiddenIdx]); idx++ {
+		v := compute.GetValue(data.Vecs[hiddenIdx], uint32(idx))
+		for i, attr := range data.Attrs {
+			if schema.HiddenKey.Name == attr {
+				continue
+			}
+			colIdx := schema.GetColIdx(attr)
+			err := rel.handle.UpdateByHiddenKey(v, colIdx, compute.GetValue(data.Vecs[i], uint32(idx)))
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engine.Snapshot) error {
