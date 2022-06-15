@@ -329,6 +329,16 @@ func TestTruncate1(t *testing.T) {
 	assert.Equal(t, 1, len(s2.file.GetHistory().EntryIds()))
 	t.Log(s2.file.GetHistory().String())
 
+	testutils.WaitExpect(400, func() bool {
+		return s2.GetCheckpointed(11) == 4
+	})
+	assert.Equal(t, uint64(4), s2.GetCheckpointed(11))
+
+	testutils.WaitExpect(400, func() bool {
+		return s2.GetSynced(entry.GTInternal) >= 3
+	})
+	assert.Less(t, uint64(2), s2.GetSynced(4))
+
 	assert.Nil(t, s2.TryCompact())
 
 	assert.Equal(t, 0, len(s2.file.GetHistory().EntryIds()))
@@ -387,7 +397,7 @@ func TestTruncate2(t *testing.T) {
 //5. check ckped
 func TestTruncate3(t *testing.T) {
 	s, buf := initEnv(t)
-	ckpSize := 1000
+	ckpSize := 100
 
 	e1 := appendCommitEntry(t, s, buf, 1)
 	entries := make([]entry.Entry, ckpSize)
@@ -460,9 +470,9 @@ func TestReplay2(t *testing.T) {
 	})
 	assert.Equal(t, s.GetSynced(entry.GTCKp), s.GetCurrSeqNum(entry.GTCKp))
 
-	logSyncbase(t, s)
+	// logSyncbase(t, s)
 	s = restartStore(t, s)
-	logSyncbase(t, s)
+	// logSyncbase(t, s)
 
 	tid := tidAlloc.Alloc()
 	e1 := appendUncommitEntry(t, s, buf, tid)
@@ -540,7 +550,7 @@ func TestAddrVersion(t *testing.T) {
 	t.Log(s.addrs[entry.GTUncommit])
 	for version, lsns := range s.addrs[entry.GTUncommit] {
 		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version)*2 - 1)))
-		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version)*2)))
+		assert.True(t, lsns.Contains(*common.NewClosedIntervalsByInt(uint64(version) * 2)))
 	}
 }
 

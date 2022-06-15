@@ -292,10 +292,10 @@ func (base *syncBase) UnarshalPostCommitEntry(buf []byte) error {
 func (base *syncBase) MakePostCommitEntry(id int) entry.Entry {
 	e := entry.GetBase()
 	calculated := atomic.LoadUint64(&base.calculatedVersion)
-	for calculated < uint64(id) {
+	for calculated <= uint64(id) {
 		base.calculatedCond.L.Lock()
 		calculated = atomic.LoadUint64(&base.calculatedVersion)
-		if calculated >= uint64(id) {
+		if calculated > uint64(id) {
 			base.calculatedCond.L.Unlock()
 			break
 		}

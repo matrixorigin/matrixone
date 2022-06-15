@@ -156,7 +156,7 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 			rf.history.Extend(vfiles[:len(vfiles)-1]...)
 			rf.uncommitted = append(
 				rf.uncommitted, vfiles[len(vfiles)-1].(*vFile))
-			rf.nextVer = uint64(len(vfiles))
+			rf.nextVer = uint64(vfiles[len(vfiles)-1].Id())
 		}
 	} else {
 		err = rf.scheduleNew()
