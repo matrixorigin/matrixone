@@ -138,6 +138,14 @@ func isConstant(e *plan.Expr) bool {
 	case *plan.Expr_C:
 		return true
 	case *plan.Expr_F:
+		overloadId := ef.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
+		if err != nil {
+			return false
+		}
+		if f.Volatile { // function cannot be fold
+			return false
+		}
 		for i := range ef.F.Args {
 			if !isConstant(ef.F.Args[i]) {
 				return false
