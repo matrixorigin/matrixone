@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"go.uber.org/zap/zapcore"
 )
 
 var CompactSegmentTaskFactory = func(mergedBlks []*catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
@@ -126,17 +127,23 @@ func (task *mergeBlocksTask) mergeColumnWithOutSort(column []*vector.Vector, fro
 	return
 }
 
-func (task *mergeBlocksTask) Execute() (err error) {
-	segStr := ""
-	for _, seg := range task.mergedSegs {
-		segStr = fmt.Sprintf("%d,", seg.GetID())
-	}
-	message := fmt.Sprintf("[MergeBlocks] | Segments[%s] | Blocks[", segStr)
+func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
+	blks := ""
 	for _, blk := range task.mergedBlks {
-		message = fmt.Sprintf("%s%d,", message, blk.GetID())
+		blks = fmt.Sprintf("%s%d,", blks, blk.GetID())
 	}
-	message = fmt.Sprintf("%s] | Started", message)
-	logutil.Info(message)
+	enc.AddString("blks", blks)
+	segs := ""
+	for _, seg := range task.mergedSegs {
+		segs = fmt.Sprintf("%s%d,", segs, seg.GetID())
+	}
+	enc.AddString("segs", segs)
+	return
+}
+
+func (task *mergeBlocksTask) Execute() (err error) {
+	logutil.Info("[Start]", common.OperationField(fmt.Sprintf("[%d]mergeblocks", task.ID())),
+		common.OperandField(task))
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {

@@ -41,7 +41,7 @@ func TestExpr_1(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -82,7 +82,7 @@ func TestExpr_2(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -123,7 +123,7 @@ func TestExpr_3(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -165,7 +165,7 @@ func TestExpr_4(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -193,7 +193,7 @@ func TestExpr_5(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -221,7 +221,7 @@ func TestExpr_6(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -249,7 +249,7 @@ func TestExpr_7(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -277,7 +277,7 @@ func TestExpr_8(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -308,7 +308,7 @@ func TestExpr_9(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -336,7 +336,7 @@ func TestExpr_A(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
@@ -364,7 +364,7 @@ func TestExpr_B(t *testing.T) {
 			if !ok {
 				t.Fatalf("%+v", errors.New("return type is not right"))
 			}
-			expr := query.Query.Nodes[0].ProjectList[0]
+			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
 				t.Fatalf("%+v", errors.New("the parse expr type is not right"))

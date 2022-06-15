@@ -4,20 +4,19 @@
 
 The FLOOR() function returns the largest round number that is less than or equal to the number.
 
-
 ## **Syntax**
 
 ```
 > FLOOR(number, decimals)
 > FLOOR(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
 | decimals| Optional. An integer that represents the number of decimal places. By default it is zero, which means to round to an integer.<br>**decimals** may also be negative.|
-
-
 
 ## **Examples**
 
@@ -79,4 +78,5 @@ The FLOOR() function returns the largest round number that is less than or equal
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

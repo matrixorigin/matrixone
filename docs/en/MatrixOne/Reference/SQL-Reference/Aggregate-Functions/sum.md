@@ -15,17 +15,18 @@ Note: NULL values are not counted.
 ```
 
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Any expression |
 
 ## **Returned Value**
+
 Returns the sum of expr. A double if the input type is double, otherwise integer.
 
 If there are no matching rows, SUM() returns NULL.
 
 ## **Examples**
-
 
 ```sql
 > drop table if exists tbl1,tbl2;
@@ -57,4 +58,5 @@ If there are no matching rows, SUM() returns NULL.
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

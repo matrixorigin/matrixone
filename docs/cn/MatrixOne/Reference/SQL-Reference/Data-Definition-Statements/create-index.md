@@ -1,6 +1,7 @@
 # **CREATE INDEX**
 
 ## **语法说明**
+
 `CREATE INDEX` 语句为已有表`table_name`的某列添加新索引。
 
 ## **语法结构**
@@ -10,8 +11,8 @@
 
 ```
 
-
 ## **示例**
+
 ```
 > CREATE INDEX PIndex ON Persons (LastName);
 

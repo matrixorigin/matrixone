@@ -156,6 +156,7 @@ var (
 	Uint64ToDecimal128 = UintToDecimal128[uint64]
 
 	TimestampToDatetime = timestampToDatetime
+	TimestampToVarchar  = timestampToVarchar
 )
 
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
@@ -242,4 +243,17 @@ func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]t
 
 func timestampToDatetime(xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
 	return types.TimestampToDatetime(xs, rs)
+}
+
+func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for i, x := range xs {
+		//todo: pass precision arg?
+		rs.Data = append(rs.Data, []byte(x.String())...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets[i] = oldLen
+		rs.Lengths[i] = newLen - oldLen
+		oldLen = newLen
+	}
+	return rs, nil
 }

@@ -598,6 +598,15 @@ func isWriteBatchTimeoutError(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded)
 }
 
+func judgeInterge(field string) bool {
+	for i := 0; i < len(field); i++ {
+		if field[i] > '9' || field[i] < '0' {
+			return false
+		}
+	}
+	return true
+}
+
 func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, row2colChoose bool) error {
 	begin := time.Now()
 	defer func() {
@@ -696,137 +705,234 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt8 || d > math.MaxInt8 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 8)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							//mysql warning ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = int8(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt8 || d > math.MaxInt8 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[rowIdx] = int8(d)
+
 						}
-						cols[rowIdx] = int8(d)
 					}
 				case types.T_int16:
 					cols := vec.Col.([]int16)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt16 || d > math.MaxInt16 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 16)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = int16(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt16 || d > math.MaxInt16 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[rowIdx] = int16(d)
 						}
-						cols[rowIdx] = int16(d)
 					}
 				case types.T_int32:
 					cols := vec.Col.([]int32)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt32 || d > math.MaxInt32 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 32)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = int32(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt32 || d > math.MaxInt32 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[rowIdx] = int32(d)
 						}
-						cols[rowIdx] = int32(d)
 					}
 				case types.T_int64:
 					cols := vec.Col.([]int64)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt64 || d > math.MaxInt64 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 64)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = d
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt64 || d > math.MaxInt64 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[rowIdx] = int64(d)
 						}
-						cols[rowIdx] = int64(d)
 					}
 				case types.T_uint8:
 					cols := vec.Col.([]uint8)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint8 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 8)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = uint8(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint8 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[rowIdx] = uint8(d)
 						}
-						cols[rowIdx] = uint8(d)
 					}
 				case types.T_uint16:
 					cols := vec.Col.([]uint16)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint16 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 16)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = uint16(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint16 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[rowIdx] = uint16(d)
 						}
-						cols[rowIdx] = uint16(d)
 					}
 				case types.T_uint32:
 					cols := vec.Col.([]uint32)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint32 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 32)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = uint32(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint32 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[rowIdx] = uint32(d)
 						}
-						cols[rowIdx] = uint32(d)
 					}
 				case types.T_uint64:
 					cols := vec.Col.([]uint64)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint64 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 64)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[rowIdx] = d
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint64 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+								}
+								result.Warnings++
+								d = 0
+								//break
+							}
+							cols[rowIdx] = uint64(d)
 						}
-						cols[rowIdx] = uint64(d)
 					}
 				case types.T_float32:
 					cols := vec.Col.([]float32)
@@ -1023,17 +1129,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt8 || d > math.MaxInt8 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 8)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = int8(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt8 || d > math.MaxInt8 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[i] = int8(d)
 						}
-						cols[i] = int8(d)
 					}
 				}
 			case types.T_int16:
@@ -1045,17 +1163,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt16 || d > math.MaxInt16 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 16)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = int16(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt16 || d > math.MaxInt16 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[i] = int16(d)
 						}
-						cols[i] = int16(d)
 					}
 				}
 			case types.T_int32:
@@ -1067,17 +1197,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt32 || d > math.MaxInt32 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 32)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = int32(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt32 || d > math.MaxInt32 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[i] = int32(d)
 						}
-						cols[i] = int32(d)
 					}
 				}
 			case types.T_int64:
@@ -1089,17 +1231,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < math.MinInt64 || d > math.MaxInt64 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseInt(field, 10, 64)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = d
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < math.MinInt64 || d > math.MaxInt64 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[i] = int64(d)
 						}
-						cols[i] = int64(d)
 					}
 				}
 			case types.T_uint8:
@@ -1111,17 +1265,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint8 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 8)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = uint8(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint8 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[i] = uint8(d)
 						}
-						cols[i] = uint8(d)
 					}
 				}
 			case types.T_uint16:
@@ -1133,17 +1299,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint16 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 16)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = uint16(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint16 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+							}
+							cols[i] = uint16(d)
 						}
-						cols[i] = uint16(d)
 					}
 				}
 			case types.T_uint32:
@@ -1155,17 +1333,30 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint32 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 32)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = uint32(d)
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint32 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+								//break
+							}
+							cols[i] = uint32(d)
 						}
-						cols[i] = uint32(d)
 					}
 				}
 			case types.T_uint64:
@@ -1177,17 +1368,30 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(i))
 					} else {
 						field := line[j]
-						d, err := strconv.ParseFloat(field, 64)
-						if err != nil || d < 0 || d > math.MaxUint64 {
-							logutil.Errorf("parse field[%v] err:%v", field, err)
-							if !ignoreFieldError {
-								return err
+						if judgeInterge(field) {
+							d, err := strconv.ParseUint(field, 10, 64)
+							if err != nil {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
 							}
-							result.Warnings++
-							d = 0
-							//break
+							cols[i] = d
+						} else {
+							d, err := strconv.ParseFloat(field, 64)
+							if err != nil || d < 0 || d > math.MaxUint64 {
+								logutil.Errorf("parse field[%v] err:%v", field, err)
+								if !ignoreFieldError {
+									return err
+								}
+								result.Warnings++
+								d = 0
+								//break
+							}
+							cols[i] = uint64(d)
 						}
-						cols[i] = uint64(d)
 					}
 				}
 			case types.T_float32:

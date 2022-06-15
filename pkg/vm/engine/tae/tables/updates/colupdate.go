@@ -292,6 +292,10 @@ func (node *ColumnNode) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap)
 	return vec
 }
 
+func (node *ColumnNode) GeneralDesc() string {
+	return fmt.Sprintf("TS=%d,Cnt=%d", node.commitTs, len(node.txnVals))
+}
+
 func (node *ColumnNode) String() string {
 	node.RLock()
 	defer node.RUnlock()

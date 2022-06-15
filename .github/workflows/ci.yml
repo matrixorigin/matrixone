@@ -13,10 +13,64 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
-  tae-build:
+  tae-ut:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
-    name: Build Plan2-TAE on CentOS/x64
+    name: Staticcheck and UT Test on CentOS/x64
+
+    # Steps represent a sequence of tasks that will be executed as part of the job.
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.18
+
+      - name: Formats Check
+        run: |
+          cd $GITHUB_WORKSPACE && make clean
+          if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
+
+      - name: Detect non-ascii characters
+        run: |
+          na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
+          if [[ -n $na_characters ]]; then
+            echo "Detected non-ascii characters in annotation or log info. Please refer to CONTRIBUTING.md."
+            printf '%s\n' "${na_characters[*]}"
+            exit 1
+          fi
+
+      - name: Build MatrixOne
+        run: |
+          cd $GITHUB_WORKSPACE && make clean && make config && make build
+
+      - name: Static Code Analysis
+        run: |
+          cd $GITHUB_WORKSPACE
+          make install-static-check-tools
+          make static-check
+
+      - name: Unit Testing
+        run: |
+          make ut
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        continue-on-error: true
+        with:
+          name: test_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+
+  tae-bvt:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    name: BVT Test on CentOS/x64
     timeout-minutes: 30
     env:
       #Job-Status: 2-uncertain, 1-fail, 0-success
@@ -81,7 +135,7 @@ jobs:
         run: |
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh  2>&1
+          ./run.sh -n 2>&1
 
       - name: Stop Current MO-Server
         if: ${{ env.Job-Status }} == 2
@@ -122,7 +176,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/mo-tester
           sleep 60s
-          ./run.sh 2>&1
+          ./run.sh -n 2>&1
 
       - name: BVT Compare
         if: ${{ env.Job-Status }} == 2
@@ -151,148 +205,6 @@ jobs:
         continue-on-error: true
         with:
           name: tae_test_reports
-          path: |
-            ${{ github.workspace }}
-          retention-days: 7
-
-  aoe-build:
-    # The type of runner that the job will run on.
-    runs-on: ubuntu-latest
-    name: Build Plan2-AOE on CentOS/x64
-    timeout-minutes: 30
-    env:
-      #Job-Status: 2-uncertain, 1-fail, 0-success
-      Job-Status: 2
-
-    # Steps represent a sequence of tasks that will be executed as part of the job.
-    steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
-      - name: Dump GitHub context
-        env:
-          GITHUB_CONTEXT: ${{ toJson(github) }}
-        run: echo "$GITHUB_CONTEXT"
-
-      - name: checkout head
-        uses: actions/checkout@v2
-        if: ${{ env.Job-Status }} == 2
-        with:
-          fetch-depth: '3'
-          path: ./head
-
-      - name: Set up Go
-        uses: actions/setup-go@v2
-        if: ${{ env.Job-Status }} == 2
-        with:
-          go-version: 1.18
-
-      - name: Build MatrixOne
-        if: ${{ env.Job-Status }} == 2
-        run: |
-          cd $GITHUB_WORKSPACE/head && make clean && make config && make build
-          git rev-parse --short HEAD 
-          echo "base sha: ${{ github.event.pull_request.base.sha }}"
-          echo "head sha: ${{ github.event.pull_request.head.sha }}"
-          cat system_vars_config.toml | sed 's/usePlan2 = false/usePlan2 = true/g' | sed 's/storageEngine = "aoe"/storageEngine = "aoe"/g' > config.toml
-
-      - name: Start MO
-        if: ${{ env.Job-Status }} == 2
-        run: |
-          cd $GITHUB_WORKSPACE/head
-          ./mo-server ./config.toml &>mo-server.log &
-
-      - name: Clone test-tool repository
-        if: ${{ env.Job-Status }} == 2
-        uses: actions/checkout@v2
-        with:
-          repository: matrixorigin/mo-tester
-          path: ./mo-tester
-          ref: main
-
-      - name: Set up JDK 8 for x64
-        if: ${{ env.Job-Status }} == 2
-        uses: actions/setup-java@v3
-        with:
-          java-version: '8'
-          distribution: 'adopt'
-          architecture: x64
-
-      - name: Start BVT Test
-        if: ${{ env.Job-Status }} == 2
-        id: bvt_on_pr_version
-        continue-on-error: true
-        run: |
-          sleep 60s
-          cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -g 2>&1
-
-      - name: Stop Current MO-Server
-        if: ${{ env.Job-Status }} == 2
-        run: |
-          if [ ${{ steps.bvt_on_pr_version.outcome }} == 'success' ]; then echo "Job-Status=0" >> $GITHUB_ENV; exit 0; fi
-          echo "BVT on pr version failed. Stop running mo-server， switch to the base sha."
-          cd $GITHUB_WORKSPACE/mo-tester
-          mv log head-log
-          mv report head-report
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; echo "Job-Status=1" >> $GITHUB_ENV; exit 1; fi
-
-
-      - uses: actions/checkout@v2
-        if: ${{ env.Job-Status }} == 2
-        with:
-          fetch-depth: '3'
-          path: ./base
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: Build MatrixOne@base
-        if: ${{ env.Job-Status }} == 2
-        run: |
-          cd $GITHUB_WORKSPACE/base && make clean && make config && make build
-          git rev-parse --short HEAD 
-          cat system_vars_config.toml | sed 's/usePlan2 = false/usePlan2 = true/g' | sed 's/storageEngine = "aoe"/storageEngine = "aoe"/g' > config.toml
-
-
-      - name: Start MatrixOne@base
-        if: ${{ env.Job-Status }} == 2
-        run: |
-          cd $GITHUB_WORKSPACE/base
-          ./mo-server ./config.toml &>mo-server.log &
-
-      - name: Start BVT Test for Comparing
-        id: bvt_on_base
-        continue-on-error: true
-        if: ${{ env.Job-Status }} == 2
-        run: |
-          cd $GITHUB_WORKSPACE/mo-tester
-          sleep 60s
-          ./run.sh -g 2>&1
-
-      - name: BVT Compare
-        if: ${{ env.Job-Status }} == 2
-        run: |
-          cd $GITHUB_WORKSPACE/mo-tester
-          mv log base-log
-          mv report base-report
-          if [ ${{ steps.bvt_on_base.outcome }} == 'success' ]; then echo 'Base sha passed all bvt cases. Pls check head version'; exit 1; fi
-          cat ./base-report/success.txt ./head-report/success.txt ./head-report/success.txt | sort > cmp.txt
-          echo '--------Cases only passed in base----------'
-          uniq -u cmp.txt
-          if [ "$(uniq -u cmp.txt | wc -l)" -gt 0 ]; then echo 'Some cases passed in base but failed in head. Pls check head version'; exit 3; fi
-
-      - name: remove some files
-        if: ${{ always() }}
-        continue-on-error: true
-        run: |
-          cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/store/"  ]; then rm -rf ./head/store/; fi
-          if  [ -d  "./base/store/"  ]; then rm -rf ./base/store/; fi
-          rm -rf ./head/mo-server
-          rm -rf ./base/mo-server
-
-      - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
-        continue-on-error: true
-        with:
-          name: aoe_test_reports
           path: |
             ${{ github.workspace }}
           retention-days: 7

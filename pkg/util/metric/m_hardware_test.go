@@ -15,6 +15,7 @@
 package metric
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -55,5 +56,30 @@ func TestHardwareMem(t *testing.T) {
 		mf, err := reg.Gather()
 		So(err, ShouldBeNil)
 		So(len(mf), ShouldEqual, 2)
+	})
+}
+
+type errorMetric struct{}
+
+func (c errorMetric) Desc() *prom.Desc {
+	return prom.NewDesc(
+		"test_error_metric",
+		"a metric returning errors",
+		nil, nil,
+	)
+}
+
+func (c errorMetric) Metric(_ *stats) (prom.Metric, error) {
+	return nil, errors.New("Something went wrong")
+}
+
+func TestHardwareError(t *testing.T) {
+	Convey("collect no error metric", t, func() {
+		reg := prom.NewRegistry()
+		reg.MustRegister(newHardwareStatsCollector(errorMetric{}))
+
+		mf, err := reg.Gather()
+		So(err, ShouldBeNil)
+		So(len(mf), ShouldEqual, 0)
 	})
 }

@@ -110,6 +110,21 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	return opts
 }
 
+func WithOpts(in *options.Options, factor float64) (opts *options.Options) {
+	if in == nil {
+		opts = new(options.Options)
+	} else {
+		opts = in
+	}
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 1000 * int64(factor)
+	opts.CheckpointCfg.ExecutionLevels = 2
+	opts.CheckpointCfg.ExecutionInterval = 1000 * int64(factor)
+	opts.CheckpointCfg.CatalogCkpInterval = 1000 * int64(factor)
+	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	return opts
+}
+
 func WithLongScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	if in == nil {
 		opts = new(options.Options)

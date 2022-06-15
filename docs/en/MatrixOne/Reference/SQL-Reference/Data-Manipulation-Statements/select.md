@@ -1,6 +1,7 @@
 # **SELECT**
 
 ## **Description**
+
 Retrieves data from a table.
 
 ## **Syntax**
@@ -21,13 +22,12 @@ Retrieves data from a table.
     ]
 ```
 
-
 ### **SELECT INTO**
+
 `SELECT INTO` statement enables a query result to be stored in variables or written to a file  
 
 * SELECT ... INTO ***var_list*** selects column values and stores them into variables.
 * SELECT ... INTO OUTFILE writes the selected rows to a file. Column and line terminators can be specified to produce a specific output format.
-
 
 ``` sql
 > SELECT <expr_list> 
@@ -55,12 +55,11 @@ Retrieves data from a table.
 * You can limit the maximum size of the file using `MAX_FILE_SIZE` in KB.
   For example, with `MAX_FILE_SIZE`=5242880(5GB), tables with size of 10GB are exported as two files distinguished  by the ordinal number in their name.  
   When this value is not set, one file will be exported by default.
-* `FORCE_QUOTE` is used to add double quotes for every `NOT NULL ` value in the specified column.
+* `FORCE_QUOTE` is used to add double quotes for every `NOT NULL` value in the specified column.
 * `NULL` values will be exported as `\N`.
 
 !!! info Suggestions
     If `MAX_FILE_SIZE` is not set, a large file may be exported and the operation may fail. Therefore, we recommend you to set this value case by case.
-
 
 #### Constraints  
 

@@ -13,8 +13,6 @@ salary DECIMAL(5,2)
 如果小数精度为0的话，DECIMAL相当于纯整数，不含任何小数。
 MatrixOne中DECIMAL类型的最大位数为38位。另外DECIMAL中指定的整数或小数位数在实际列被赋值的时候超出指定范围，实际数值将会被自动转换成相应精度。
 
-
-
 ## Decimal数据类型特点
 
  该部分内容主要介绍Decimal数据类型的一些特点，尤其是在位数精度和存储形式上的。
@@ -30,4 +28,3 @@ DECIMAL列的数值以二进制的形式进行存储，在MatrixOne内部，只�
 |  19-38  | 16个字节  |
 
 对于详细的Decimal类型实现方法，可以参考Decimal的[设计文档](https://github.com/matrixorigin/matrixone/issues/1867)。
-
