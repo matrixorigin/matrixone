@@ -252,11 +252,12 @@ var functionIdRegister = map[string]int32{
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
-	"endswith":   ENDSWITH,
-	"findinset":  FINDINSET,
-	"power":      POW,
-	"startswith": STARTSWITH,
-	"to_date":    TO_DATE,
+	"endswith":    ENDSWITH,
+	"findinset":   FINDINSET,
+	"find_in_set": FINDINSET,
+	"power":       POW,
+	"startswith":  STARTSWITH,
+	"to_date":     TO_DATE,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
 	"ceil":              CEIL,
