@@ -27,7 +27,7 @@ func parseDate(s string) types.Date {
 }
 
 func parseDatetime(s string) types.Datetime {
-	datetime, _ := types.ParseDatetime(s)
+	datetime, _ := types.ParseDatetime(s, 6)
 	return datetime
 }
 

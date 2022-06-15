@@ -964,7 +964,7 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 			}
 		case plan.Type_DATETIME:
 			if !num.Negative() {
-				return types.ParseDatetime(str)
+				return types.ParseDatetime(str, typ.Precision)
 			}
 		}
 	case constant.Float:
@@ -1018,7 +1018,7 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 			}
 			return float64(v), nil
 		case plan.Type_DATETIME:
-			return types.ParseDatetime(str)
+			return types.ParseDatetime(str, typ.Precision)
 		case plan.Type_DECIMAL64:
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case plan.Type_DECIMAL128:
@@ -1038,7 +1038,7 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 			case plan.Type_DATE:
 				return types.ParseDate(constant.StringVal(val))
 			case plan.Type_DATETIME:
-				return types.ParseDatetime(constant.StringVal(val))
+				return types.ParseDatetime(constant.StringVal(val), typ.Precision)
 			case plan.Type_TIMESTAMP:
 				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
 			}

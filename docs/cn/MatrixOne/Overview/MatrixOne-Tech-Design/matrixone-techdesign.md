@@ -4,9 +4,11 @@
 而本章主要给出MatrixOne架构的详细解释和组件介绍。
 
 ## **MatrixOne架构特点**  
+
 MatrixOne当前整体架构可以用NewSQL+MPP来定义，并且正在进化成为一个为OLAP增强的分布式HTAP数据库，之后将开始向面向云边一体的场景进一步演进。另外MatrixOne将极简易用作为重要的设计准则，尽管是分布式数据库，但在部署上只提供单一Binary，每个节点只运行完全同样的单一进程即可。  
 
 ### **MatrixOne的NewSQL架构特点**
+
 众所周知，关系型数据库自SystemR确立了关系模型+SQL+事务处理老三样以来，已经存在了超过30年，直到NewSQL的出现。NewSQL是指以Google Spanner为起点，CockroachDB，TiDB，YugabyteDB等作为开源代表出现的分布式数据库，采用以复制状态机(Replicate State Machine)为核心，同时解决传统单机数据库伸缩性和高可用问题的分布式架构。  
 在计算机领域，复制状态机是实现容错服务的主要方式。状态机开始于给定的起始状态。每个收到的输入都通过状态转移机制来产生一个新的状态以及相应的输出。在复制状态机中，一组Server的状态机计算相同状态的副本，即使有一部分Server宕机了，它们仍然能够继续运行。一致性协议是复制状态机背景下提出的，用来保证复制日志的一致性，常用的一致性协议有Paxos，Raft等。在复制状态机架构下，通过挂载Key Value存储引擎进而实现OLTP能力，就是以上NewSQL的主要构型。  
 MatrixOne的当前架构，跟以上NewSQL数据库的区别在于，它是可以挂在多种存储引擎的。当前的0.2版本已经挂载了一个Key-Value存储引擎，用来存放Catalog等元数据。以及一个列存引擎，提供OLAP分析能力。当然，根据需要，它也可以挂载任意存储引擎，包括但不限于行存，图，专用时序，专用NoSQL等多模引擎。不同的存储引擎可以去满足不同场景中的应用，也非常欢迎社区的开发者来贡献想法和代码。  
@@ -14,6 +16,7 @@ MatrixOne的当前架构，跟以上NewSQL数据库的区别在于，它是可�
 ![Raft的复制状态机实现](https://github.com/matrixorigin/artwork/blob/main/docs/overview/consensus-modules.png?raw=true)
 
 ### **MatrixOne的MPP架构特点**
+
 MPP（Massively Parallel Processing）大规模并行处理是一种针对大规模的数据分析的计算架构。简单来说，MPP是将任务并行的分散到多个服务器和节点上，在每个节点上计算完成后，将各自部分的结果汇总在一起得到最终的结果。这个架构最早被Teradata和Greenplum等第一代OLAP数据库采用，后来为Hadoop体系奠基的MapReduce也借鉴了MPP架构的做法。但是两者在处理的数据体量，SQL的支持程度，数据处理类型及效率上有较大差别。用今天的概念来讲，Hadoop方案更偏数据湖，可以存储和处理上百PB数据，可以在读取的时候再定义schema，可以放大量的非结构化和半结构化数据，但是SQL支持，查询性能和实时流式处理不太理想。基于MPP架构的数据库方案更像是大幅强化了查询能力的关系型数据库，仍然兼具良好的SQL支持和ACID事务属性。新一代的开源MPP计算引擎代表有Clickhouse，Presto，Impala，GreenPlum，Apache Doris等。  
 
 MatrixOne也在MPP架构的基础上提供强大的OLAP能力，与其他项目不同的是。目前MatrixOne的MPP SQL计算引擎目前是用Golang实现的最快SQL引擎，相比C++的计算引擎，也可以在性能上一较高下。而且通过向量化和因子化加速之后，在如非主键join，多表复杂join等方面表现更优。  
@@ -25,7 +28,6 @@ MatrixOne也在MPP架构的基础上提供强大的OLAP能力，与其他项目�
 MatrixOne整体分为前端，计算层，元数据层，分布式框架和存储层这几个层次。
 
 ![MatrixOne的整体架构](https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone-modules.png?raw=true)
-
 
 **组件介绍**  
 
@@ -50,7 +52,7 @@ MatrixOne整体分为前端，计算层，元数据层，分布式框架和存�
 
 接下来我们整体介绍MatrixOne的代码仓库结构，以便各位开发者对感兴趣的部分进行深入研究或者参与贡献。    
 
-MatrixOne的内核代码都在`matrixone/pkg/ ` 这个文件夹下面。与上述架构图中对应的模块代码库位置：
+MatrixOne的内核代码都在`matrixone/pkg/` 这个文件夹下面。与上述架构图中对应的模块代码库位置：
 
 * SQL Frontend：frontend/
 * SQL Parser：sql/parser
@@ -62,7 +64,6 @@ MatrixOne的内核代码都在`matrixone/pkg/ ` 这个文件夹下面。与上�
 	* AOE：vm/engine/aoe
 	* TPE：vm/engine/tpe
   
-
-
 ## **更多信息**
+
 如果你对以上某个模块感兴趣并想要尝试上手开发，请参照[贡献指南](../../Contribution-Guide/How-to-Contribute/preparation.md)。  

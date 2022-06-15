@@ -1,8 +1,10 @@
 # **Reviews**
+
 For MatrixOne, any type of review for a pull request is crucial, where you can classify the pull request to help look for more suitable experts to solve relative problems or propose your suggestions to codes for not only contents but style.
 It's not necessary to doubt whether your review is constructive and useful enough because no matter how tiny, a suggestion may make a profound influence on MatrixOne. Certainly, before reviewing we wish you can browse this page to learn basic requirements and relative methods.
 
 ## **Principles of the code review**
+
 When you review a pull request, there are several rules and suggestions you should take to propose better comments.  
 Regardless of the specifics, we suggest you stay friendly first:  
 
@@ -27,6 +29,7 @@ It's difficult to decide whether it's more reasonable to accept or reject when y
 Some pull request authors may not be familiar with MatrixOne, MatriOne development workflow, or MatrixOne community. They don't know what labels should be added to the pull requests and which expert could be asked for a review. If you are able to, it would be great for you to triage the pull requests, add suitable labels to the pull requests, asking corresponding experts to review the pull requests. These actions could help more contributors notice the pull requests and make quick responses.  
 
 ## **Checking pull requests**
+
 There are some basic aspects to check when you review a pull request:
 
 * **Concentration**  
@@ -41,4 +44,3 @@ There are some basic aspects to check when you review a pull request:
   If a pull request changes how users build, test, interact with, or release code, you must check whether it also updates the related documentation such as `README.md` and any generated reference docs. Similarly, if a pull request deletes or deprecates code, you must check whether or not the corresponding documentation should also be deleted.
 * **Performance**  
   If you find the pull request may affect performance, you could ask the author to provide a benchmark result.
-

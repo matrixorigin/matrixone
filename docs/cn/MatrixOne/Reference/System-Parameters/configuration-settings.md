@@ -3,6 +3,7 @@
 MatrixOne的配置文件位于[matrixone/pkg/config/test/system_vars_config.toml](https://github.com/matrixorigin/matrixone/blob/main/pkg/config/test/system_vars_def.toml)。
 
 ### 常规设置
+
 | 参数  | 数据类型  |  默认值   | 取值范围  | 作用 | 
 |  ----  | ----  |  --------  |  --- | --- |
 | rootpassword  | string | 	""  | string value |  用户的密码|
@@ -12,9 +13,7 @@ MatrixOne的配置文件位于[matrixone/pkg/config/test/system_vars_config.toml
 | sendRow  | bool | false  | [true, false] | send data row while producing  |
 | dumpEnv  | bool | false  | [true, false] | dump Environment with memEngine Null nodes for testing  |
 
-
 ### Debug设置
-
 
 | 参数  | 数据类型  |  默认值   | 取值范围  | 作用 | 
 |  ----  | ----  |  --------  |  --- | --- |
@@ -24,7 +23,6 @@ MatrixOne的配置文件位于[matrixone/pkg/config/test/system_vars_config.toml
 | max-size  | int64 | 	512  |  [0 - 314572800] | 最大日志文件大小|
 | max-days  | int64 | 	0  |  [0 - 314572800] | 日志文件保存的最大天数|
 | max-backups  | int64 | 	0  |  [0 - 314572800] | 要保留的旧日志文件的最大数量|
-
 
 ### 内存设置
 
@@ -38,5 +36,3 @@ MatrixOne的配置文件位于[matrixone/pkg/config/test/system_vars_config.toml
 | processLimitationBatchRows  | i | 42949672960  | [0 - 42949672960] | process.Limitation.BatchRows，默认值: 10 << 32 = 42949672960  |nt64
 | processLimitationBatchRows  | int64 | 42949672960  | [0 - 42949672960] | process.Limitation.BatchRows，默认值: 10 << 32 = 42949672960  |
 | processLimitationPartitionRows  | int64 | 42949672960  | [0 - 42949672960] | process.Limitation.PartitionRows，默认值: 10 << 32 = 42949672960  |
-
-

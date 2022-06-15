@@ -11,16 +11,16 @@ SUBSTR()是SUBSTRING()的同义词.
 > SUBSTRING(str,pos) 
 > SUBSTR(str,pos,len) 
 ```
+
 ## **参数释义**
+
 |  参数   | 说明  |
 |  ----  | ----  |
 | str | 必要参数，母字符串。CHAR与VARCHAR类型均可。 |
 | pos | 必要参数，开始位置 |
 | len | 可选参数，返回子字符串长度 |
 
-
 ## **示例**
-
 
 ```SQL
 > CREATE TABLE IF NOT EXISTS t1 (
@@ -65,5 +65,6 @@ estd date NOT NULL DEFAULT '2000-01-01'
 ```
 
 ## **限制**
+
 * MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。
 * Substring函数目前不支持在函数中使用FROM与FOR操作符。
