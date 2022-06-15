@@ -370,6 +370,36 @@ func TestTruncate2(t *testing.T) {
 	t.Log(s.file.GetHistory().String())
 }
 
+//1. vf1: C & lots of CKP
+//2. vf2: anotherEntry
+//3. compact
+//4. replay
+//5. check ckped
+func TestTruncate3(t *testing.T) {
+	s, buf := initEnv(t)
+	ckpSize:=20
+
+	e1 := appendCommitEntry(t, s, buf, 1)
+	entries:=make([]entry.Entry,ckpSize)
+	for i:=0;i<ckpSize;i++{
+		entries[i]=appendPartialCkpEntry(t,s,1,[]uint32{uint32(i)},uint32(ckpSize))
+	}
+
+	appendAnotherEntry(t,s,buf)
+	e1.Free()
+	for i:=0;i<ckpSize;i++{
+		entries[i].Free()
+	}
+
+	s.TryCompact()
+
+	s=restartStore(t,s)
+	t.Log(s.addrs)
+
+	assert.Equal(t,uint64(1),s.GetCheckpointed(11))
+
+	s.Close()
+}
 func TestReplay2(t *testing.T) {
 	s, buf := initEnv(t)
 	tidAlloc := &common.IdAllocator{}

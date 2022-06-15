@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -336,10 +335,6 @@ func (b *Base) GetError() error {
 
 func (b *Base) WaitDone() error {
 	b.wg.Wait()
-	a := rand.Intn(10000)
-	if a == 33 {
-		fmt.Printf("entry takes %v \n", b.Duration())
-	}
 	return b.err
 }
 
