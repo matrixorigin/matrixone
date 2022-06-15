@@ -244,6 +244,7 @@ var functionIdRegister = map[string]int32{
 	"bit_or":                BIT_OR,
 	"bit_and":               BIT_AND,
 	"bit_xor":               BIT_XOR,
+	"std":                   STDDEV_POP,
 	"stddev_pop":            STDDEV_POP,
 	"variance":              VAR_POP,
 	"approx_count_distinct": APPROX_COUNT_DISTINCT,
@@ -251,11 +252,12 @@ var functionIdRegister = map[string]int32{
 	// builtin
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// binary functions
-	"endswith":   ENDSWITH,
-	"findinset":  FINDINSET,
-	"power":      POW,
-	"startswith": STARTSWITH,
-	"to_date":    TO_DATE,
+	"endswith":    ENDSWITH,
+	"findinset":   FINDINSET,
+	"find_in_set": FINDINSET,
+	"power":       POW,
+	"startswith":  STARTSWITH,
+	"to_date":     TO_DATE,
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	// variadic functions
 	"ceil":              CEIL,
