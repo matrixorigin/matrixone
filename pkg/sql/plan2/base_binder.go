@@ -716,7 +716,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	}
 
 	switch astExpr.ValType {
-	case tree.P_null:
+	case tree.P_null, tree.P_any:
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
