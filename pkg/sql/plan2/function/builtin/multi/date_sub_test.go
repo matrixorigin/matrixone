@@ -163,7 +163,7 @@ func makeDateSubVectors(str string, isConst bool, num int64, unit types.Interval
 func makeDatetimeSubVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
 
-	datetime, _ := types.ParseDatetime(str)
+	datetime, _ := types.ParseDatetime(str, 0)
 
 	vec[0] = &vector.Vector{
 		Col:     []types.Datetime{datetime},

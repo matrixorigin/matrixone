@@ -456,15 +456,16 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 			case types.T_datetime:
+				precision := vec.Typ.Precision
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Datetime)
-					row[i] = vs[rowIndex]
+					row[i] = vs[rowIndex].String2(precision)
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]types.Datetime)
-						row[i] = vs[rowIndex]
+						row[i] = vs[rowIndex].String2(precision)
 					}
 				}
 			case types.T_timestamp:
