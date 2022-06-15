@@ -77,6 +77,12 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
+	case *semi.Argument:
+		rin.Arg = &semi.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
 			IsPreBuild: arg.IsPreBuild,
