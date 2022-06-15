@@ -42,7 +42,7 @@ func (builder *QueryBuilder) flattenSubqueries(nodeId int32, expr *plan.Expr, ct
 }
 
 func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
-	// FIXME: should use SINGLE JOIN for scalar subquery and MARK JOIN for quantified subquery
+	// TODO: use SINGLE JOIN for scalar subquery and MARK JOIN for quantified subquery
 
 	subId := subquery.NodeId
 	subCtx := builder.ctxByNode[subId]
