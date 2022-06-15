@@ -234,7 +234,7 @@ func TestReadMagicNumber(t *testing.T) {
 	conn := newTestConn()
 	_, err := conn.Write([]byte{0, 0})
 	assert.NoError(t, err)
-	assert.Equal(t, ErrBadMessage, readMagicNumber(conn, nil))
+	assert.Equal(t, errBadMessage, readMagicNumber(conn, nil))
 
 	conn = newTestConn()
 	_, err = conn.Write(magicNumber[:])
