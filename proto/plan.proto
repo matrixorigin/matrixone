@@ -89,7 +89,6 @@ message Const {
 		double dval 	= 3;
 		string sval		= 4;
 		bool bval 		= 5;
-		string decval   = 6;
 	}
 }
 

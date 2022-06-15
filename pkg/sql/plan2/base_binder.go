@@ -187,7 +187,7 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32) (expr *plan
 				Id:       plan.Type_VARCHAR,
 				Nullable: false,
 				Size:     4,
-				Width:    math.MaxInt32,
+				Width:    int32(len(val)),
 			},
 		}
 	case int:
@@ -685,24 +685,34 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
-	getDecimalExpr := func() *Expr {
-		val := astExpr.String()
+	getStringExpr := func(str string) *Expr {
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Isnull: false,
-					Value: &plan.Const_Decval{
-						Decval: val,
+					Value: &plan.Const_Sval{
+						Sval: str,
 					},
 				},
 			},
 			Typ: &plan.Type{
-				Id:       plan.Type_DECIMAL128,
-				Width:    int32(len(val)),
-				Scale:    0,
+				Id:       plan.Type_VARCHAR,
 				Nullable: false,
+				Size:     4,
+				Width:    int32(len(str)),
 			},
 		}
+	}
+
+	returnDecimalExpr := func() (*Expr, error) {
+		val := astExpr.String()
+		typ := &plan.Type{
+			Id:       plan.Type_DECIMAL128,
+			Width:    int32(len(val)),
+			Scale:    0,
+			Nullable: false,
+		}
+		return appendCastBeforeExpr(getStringExpr(val), typ)
 	}
 
 	switch astExpr.ValType {
@@ -738,7 +748,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	case tree.P_uint64:
 		intValue, ok := constant.Int64Val(astExpr.Value)
 		if !ok {
-			return getDecimalExpr(), nil
+			return returnDecimalExpr()
 		}
 		if astExpr.Negative() {
 			intValue = -intValue
@@ -761,7 +771,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 	case tree.P_float64:
 		floatValue, ok := constant.Float64Val(astExpr.Value)
 		if !ok {
-			return getDecimalExpr(), nil
+			return returnDecimalExpr()
 		}
 		if astExpr.Negative() {
 			floatValue = -floatValue
@@ -783,24 +793,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 		}, nil
 	case tree.P_char:
 		stringValue := constant.StringVal(astExpr.Value)
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: stringValue,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_VARCHAR,
-				Nullable: false,
-				Size:     4,
-				Width:    int32(len(stringValue)),
-			},
-		}, nil
+		return getStringExpr(stringValue), nil
 	case tree.P_decimal:
-		return getDecimalExpr(), nil
+		return returnDecimalExpr()
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", astExpr.Value))
 	}
