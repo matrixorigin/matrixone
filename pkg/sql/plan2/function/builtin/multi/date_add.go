@@ -88,7 +88,7 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	firstValues := vector.MustBytesCols(vectors[0])
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.Type{Oid: types.T_varchar, Size: maxGeneratedElementSize}
 	if firstVector.IsScalar() {
 		if firstVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil

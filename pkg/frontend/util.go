@@ -686,7 +686,7 @@ func FillBatchWithData(data [][]string, batch *batch.Batch) {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
 					fs := field
-					d, err := types.ParseDatetime(fs)
+					d, err := types.ParseDatetime(fs, vec.Typ.Precision)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
 						d = 0

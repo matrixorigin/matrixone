@@ -22,7 +22,7 @@ import (
 )
 
 func mustDatetime(s string) types.Datetime {
-	datetime, err := types.ParseDatetime(s)
+	datetime, err := types.ParseDatetime(s, 6)
 	if err != nil {
 		panic("bad datetime")
 	}

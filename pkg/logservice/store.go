@@ -35,8 +35,9 @@ import (
 var (
 	ErrInvalidTruncateIndex = moerr.NewError(moerr.INVALID_INPUT, "invalid input")
 	ErrNotLeaseHolder       = moerr.NewError(moerr.INVALID_STATE, "not lease holder")
-	ErrOutOfRange           = moerr.NewError(moerr.INVALID_INPUT, "query out of range")
 	ErrInvalidShardID       = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
+
+	ErrOutOfRange = dragonboat.ErrInvalidRange
 )
 
 type logStoreMeta struct {

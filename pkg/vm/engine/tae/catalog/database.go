@@ -221,7 +221,8 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 			e.catalog.AddColumnCnt(-1 * len(table.schema.ColDefs))
 		}
 	}()
-	logutil.Infof("Removing: %s", table.String())
+	logutil.Info("[Catalog]", common.OperationField("remove"),
+		common.OperandField(table.String()))
 	e.Lock()
 	defer e.Unlock()
 	if n, ok := e.entries[table.GetID()]; !ok {
