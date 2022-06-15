@@ -394,8 +394,8 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["aoe","tae"]
-comment = "default engine is 'aoe'."
+values = ["tae", "aoe"]
+comment = "default engine is 'tae'."
 update-mode = "dynamic"
 
 [[parameter]]
@@ -414,8 +414,8 @@ scope = ["global"]
 access = ["file"]
 type = "bool"
 domain-type = "set"
-values = []
-comment = "default is false. true : use plan2/compile2 false : use stuff in v0.4.0"
+values = ["true", "false"]
+comment = "default is true. true : use plan2/compile2 false : use stuff in v0.4.0"
 update-mode = "dynamic"
 
 [[parameter]]
