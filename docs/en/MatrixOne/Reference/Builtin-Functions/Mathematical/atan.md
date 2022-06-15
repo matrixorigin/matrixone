@@ -4,17 +4,17 @@
 
 The ATAN() function returns the arctangent(given in radians) of the input number.
 
-
 ## **Syntax**
 
 ```
 > ATAN(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
-
 
 ## **Examples**
 
@@ -34,4 +34,5 @@ The ATAN() function returns the arctangent(given in radians) of the input number
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

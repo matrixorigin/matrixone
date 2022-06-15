@@ -127,18 +127,18 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 //  2. 1-1 is parsed out as 1, 1 '-' is delim, so is '+', '.' etc.
 //	3. we will not support int32 overflow.
 //
-func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int32, error) {
-	ret := make([]int32, 0)
+func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, error) {
+	ret := make([]int64, 0)
 	numLength := 0
 	cur := -1
 	for _, c := range s {
 		if c >= rune('0') && c <= rune('9') {
 			if cur < 0 {
 				cur = len(ret)
-				ret = append(ret, c-rune('0'))
+				ret = append(ret, int64(c-rune('0')))
 				numLength++
 			} else {
-				ret[cur] = 10*ret[cur] + c - rune('0')
+				ret[cur] = 10*ret[cur] + int64(c-rune('0'))
 				numLength++
 				if ret[cur] < 0 {
 					return nil, errors.New(errno.DataException, "Invalid string interval value")
@@ -153,13 +153,13 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int32, err
 	}
 	if isxxxMicrosecond {
 		if len(ret) == typeMaxLength {
-			ret[len(ret)-1] *= int32(math.Pow10(6 - numLength))
+			ret[len(ret)-1] *= int64(math.Pow10(6 - numLength))
 		}
 	}
 	return ret, nil
 }
 
-func conv(a []int32, mul []int64, rt IntervalType) (int64, IntervalType, error) {
+func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) {
 	if len(a) > len(mul) {
 		return 0, IntervalTypeInvalid, errors.New(errno.DataException, "Invalid interval format")
 	}

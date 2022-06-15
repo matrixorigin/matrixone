@@ -17,6 +17,7 @@ package catalog
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -38,6 +39,25 @@ const (
 	CmdLogSegment
 	CmdLogBlock
 )
+
+var cmdNames = map[int16]string{
+	CmdCreateDatabase: "CDB",
+	CmdDropDatabase:   "DDB",
+	CmdCreateTable:    "CTBL",
+	CmdDropTable:      "DTBL",
+	CmdCreateSegment:  "CSEG",
+	CmdDropSegment:    "DSEG",
+	CmdCreateBlock:    "CBLK",
+	CmdDropBlock:      "DBLK",
+	CmdLogDatabase:    "LDB",
+	CmdLogTable:       "LTBL",
+	CmdLogSegment:     "LSEG",
+	CmdLogBlock:       "LBLK",
+}
+
+func CmdName(t int16) string {
+	return cmdNames[t]
+}
 
 func init() {
 	txnif.RegisterCmdFactory(CmdCreateDatabase, func(cmdType int16) txnif.TxnCmd {
@@ -145,7 +165,7 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
 
 // TODO
 func (cmd *EntryCommand) String() string {
-	return ""
+	return fmt.Sprintf("[%s]%s", CmdName(cmd.cmdType), cmd.entry.String())
 }
 func (cmd *EntryCommand) GetType() int16 { return cmd.cmdType }
 

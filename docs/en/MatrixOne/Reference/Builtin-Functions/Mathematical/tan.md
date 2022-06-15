@@ -4,17 +4,17 @@
 
 The TAN() function returns the tangent of input number(given in radians).
 
-
 ## **Syntax**
 
 ```
 > SIN(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
-
 
 ## **Examples**
 
@@ -33,4 +33,5 @@ The TAN() function returns the tangent of input number(given in radians).
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

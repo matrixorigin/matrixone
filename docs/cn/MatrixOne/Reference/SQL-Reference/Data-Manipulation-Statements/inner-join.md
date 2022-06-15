@@ -1,10 +1,11 @@
 # **INNER JOIN**
 
 ## **语法说明**
+
 `INNER JOIN` 选取两个表中具有匹配值的数据记录。（等同于`JOIN`）
 
-
 ## **语法结构**
+
 ```
 > SELECT column_name(s)
 FROM table1
@@ -14,8 +15,6 @@ ON table1.column_name = table2.column_name;
 ```
 
 ## **参数释义**
-
-
 
 ## **示例**
 
@@ -61,6 +60,6 @@ ON table1.column_name = table2.column_name;
 
 ```
 
-
 ## **限制**
+
 目前， `INNER JOIN`语句在进行某些查询时将导致崩溃（与服务器失去连接）。

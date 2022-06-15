@@ -1,11 +1,14 @@
 # **Report Issues**
+
 Any problem is encouraged to be published when you participate in MatrixOne, and you can [report issues](https://github.com/matrixorigin/matrixone/issues/new/choose) about this problem in GitHub with relative templates and labels we suggest.  
 This page is intended to introduce templates, labels, and precautions you will follow when you report issues.
 
 ## **Avoid Duplicated Issues**
+
 Before reporting an issue, you should see whether the problem has already been reported. You can use the [search bar](https://docs.github.com/en/issues/tracking-your-work-with-issues/filtering-and-searching-issues-and-pull-requests) to search existing issues.
 
 ## **Issue Templates**
+
 If the problem you're reporting is not already in the issue tracker, you can file an issue with your GitHub account. MatrixOne uses issue templates for different kinds of issues. Issue templates are a bundle of questions to collect necessary information about the problem to make it easy for other contributors to participate.
 MatrixOne suggests 6 types of issue templates: 
 
@@ -36,7 +39,6 @@ A `Documentation Issue` consists of information below:
 * **Additional context**  
   Add any other context about the problem here.
 
-
 A `Performance Question` consists of information below:  
 
 * **Detail Environment**  
@@ -57,7 +59,6 @@ A concise description of what you're expecting/suggesting.
 A concise description of the reason/motivation.
 * **Anything else**  
 Anything that will give us more dectail about your issue!
-
 
 A `Refactoring Request` consists of information below:  
 
@@ -81,13 +82,12 @@ Before asking a question, make sure you have:
   - [MatrixOne Readme](https://github.com/matrixorigin/matrixone)
   - [MatrixOne Doc](https://docs.matrixorigin.io/)
 
-
 ## **Issue Labels**
 
 Once your issue is submitted, it will be automatically labeled with `needs-triage`, a MatrixOne maintainer will look at the issue, tag it with more suitable labels and assign it to a suitable developer. 
 If you'd like to work on the issue by yourself, you can comment `/assign` on the issue you would like to work on, you will be automatically assigned to the issue. You can then find yourself listed under Assignees section.
 
 ## **Good First Issues**
+
 When you make the first contribution to MatrixOne, you can select one of the issues labeled [`good-first-issues`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) each of which is relatively approachable for first-time contributors.
 For detailed suggestions you need when you make the first contribution, you can see [Make Your First Contribution](../make-your-first-contribution.md). 
-

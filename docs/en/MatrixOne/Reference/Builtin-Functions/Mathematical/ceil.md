@@ -4,23 +4,19 @@
 
 The CEIL(X) function returns the smallest integer value not less than X.
 
-
 ## **Syntax**
 
 ```
 > CEIL(X)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | X | Required. Any numeric data type supported now. |
 
-
 For exact-value numeric arguments, the return value has an exact-value numeric type. For floating-point arguments, the return value has a floating-point type.
-
-
-
-
 
 ## **Examples**
 
@@ -66,4 +62,5 @@ For exact-value numeric arguments, the return value has an exact-value numeric t
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

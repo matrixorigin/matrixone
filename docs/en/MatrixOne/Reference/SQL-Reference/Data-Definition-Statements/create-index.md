@@ -1,6 +1,7 @@
 # **CREATE INDEX**
 
 ## **Description**
+
 Create an index on a table column.
 
 ## **Syntax**
@@ -10,8 +11,8 @@ Create an index on a table column.
 
 ```
 
-
 ## **Examples**
+
 ```
 > CREATE INDEX PIndex ON Persons (LastName);
 
