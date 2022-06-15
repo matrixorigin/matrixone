@@ -44,6 +44,10 @@ func (r *PredicatePushdown) pushdown(e *plan.Expr, n *plan.Node, qry *plan.Query
 		n.WhereList = append(n.WhereList, e)
 		return false
 	}
+	if len(n.Children) > 0 && qry.Nodes[n.Children[0]].NodeType == plan.Node_JOIN {
+		n.WhereList = append(n.WhereList, e)
+		return false
+	}
 	relPos := int32(-1)
 	relPos, ne = r.newExpr(relPos, e, n, qry)
 	if ne == nil {
