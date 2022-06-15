@@ -1,0 +1,62 @@
+package types
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+type TypeId = types.T
+
+const (
+	Type_ANY = types.T_any
+
+	Type_BOOL = types.T_bool
+
+	Type_INT8   = types.T_int8
+	Type_INT16  = types.T_int16
+	Type_INT32  = types.T_int32
+	Type_INT64  = types.T_int64
+	Type_UINT8  = types.T_uint8
+	Type_UINT16 = types.T_uint16
+	Type_UINT32 = types.T_uint32
+	Type_UINT64 = types.T_uint64
+
+	Type_FLOAT32 = types.T_float32
+	Type_FLOAT64 = types.T_float64
+
+	Type_DATE      = types.T_date
+	Type_DATETIME  = types.T_datetime
+	Type_TIMESTAMP = types.T_timestamp
+	Type_INTERVAL  = types.T_interval
+
+	Type_CHAR    = types.T_char
+	Type_VARCHAR = types.T_varchar
+
+	Type_JSON = types.T_json
+
+	Type_DECIMAL64  = types.T_decimal64
+	Type_DECIMAL128 = types.T_decimal128
+)
+
+type Type = types.Type
+
+type Date = types.Date
+type Datetime = types.Datetime
+type Timestamp = types.Timestamp
+type Decimal64 = types.Decimal64
+type Decimal128 = types.Decimal128
+type Bytes = types.Bytes
+
+var CompareDecimal128Decimal128Aligned = types.CompareDecimal128Decimal128Aligned
+
+type FixedSizeT interface {
+	bool | int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64 | float32 |
+		float64 | Date | Datetime | Timestamp | Decimal64 | Decimal128
+}
+
+type FixedSizeSliceT[T FixedSizeT] interface {
+	[]T
+}
+
+type VarSizeT interface {
+	Bytes
+}
