@@ -26,8 +26,8 @@ const (
 	NoLeader uint64 = 0
 )
 
-// DNShardInfo contins information on a list of shards.
-type DNShardInfo struct {
+// DNStoreInfo contins information on a list of shards.
+type DNStoreInfo struct {
 	Tick   uint64
 	Shards []logservice.DNShardInfo
 }
@@ -35,14 +35,14 @@ type DNShardInfo struct {
 // DNState contains all DN details known to the HAKeeper.
 type DNState struct {
 	// Stores is keyed by DN store UUID, it contains details found on each DN
-	// store.
-	Stores map[string]DNShardInfo
+	// store. Each DNStoreInfo reflects what was last reported by each DN store.
+	Stores map[string]DNStoreInfo
 }
 
 // NewDNState creates a new DNState.
 func NewDNState() DNState {
 	return DNState{
-		Stores: make(map[string]DNShardInfo),
+		Stores: make(map[string]DNStoreInfo),
 	}
 }
 
@@ -50,17 +50,17 @@ func NewDNState() DNState {
 // current tick of the HAKeeper which can be used as the timestamp of the
 // heartbeat.
 func (s *DNState) Update(hb logservice.DNStoreHeartbeat, tick uint64) {
-	shardInfo, ok := s.Stores[hb.UUID]
+	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
-		shardInfo = DNShardInfo{}
+		storeInfo = DNStoreInfo{}
 	}
-	shardInfo.Tick = tick
-	shardInfo.Shards = hb.Shards
-	s.Stores[hb.UUID] = shardInfo
+	storeInfo.Tick = tick
+	storeInfo.Shards = hb.Shards
+	s.Stores[hb.UUID] = storeInfo
 }
 
-// LogShardInfo contains information of all replicas found on a Log store.
-type LogShardInfo struct {
+// LogStoreInfo contains information of all replicas found on a Log store.
+type LogStoreInfo struct {
 	Tick           uint64
 	RaftAddress    string
 	ServiceAddress string
@@ -75,15 +75,15 @@ type LogState struct {
 	// shard.
 	Shards map[uint64]logservice.LogShardInfo
 	// Stores is keyed by log store UUID, it contains details found on each store.
-	// Each LogShardInfo here reflects what was last reported by each Log store.
-	Stores map[string]LogShardInfo
+	// Each LogStoreInfo here reflects what was last reported by each Log store.
+	Stores map[string]LogStoreInfo
 }
 
 // NewLogState creates a new LogState.
 func NewLogState() LogState {
 	return LogState{
 		Shards: make(map[uint64]logservice.LogShardInfo),
-		Stores: make(map[string]LogShardInfo),
+		Stores: make(map[string]LogStoreInfo),
 	}
 }
 
@@ -95,16 +95,16 @@ func (s *LogState) Update(hb logservice.LogStoreHeartbeat, tick uint64) {
 }
 
 func (s *LogState) updateStores(hb logservice.LogStoreHeartbeat, tick uint64) {
-	shardInfo, ok := s.Stores[hb.UUID]
+	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
-		shardInfo = LogShardInfo{}
+		storeInfo = LogStoreInfo{}
 	}
-	shardInfo.Tick = tick
-	shardInfo.RaftAddress = hb.RaftAddress
-	shardInfo.ServiceAddress = hb.ServiceAddress
-	shardInfo.GossipAddress = hb.GossipAddress
-	shardInfo.Shards = hb.Shards
-	s.Stores[hb.UUID] = shardInfo
+	storeInfo.Tick = tick
+	storeInfo.RaftAddress = hb.RaftAddress
+	storeInfo.ServiceAddress = hb.ServiceAddress
+	storeInfo.GossipAddress = hb.GossipAddress
+	storeInfo.Shards = hb.Shards
+	s.Stores[hb.UUID] = storeInfo
 }
 
 func (s *LogState) updateShards(hb logservice.LogStoreHeartbeat) {
