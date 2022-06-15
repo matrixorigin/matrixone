@@ -69,12 +69,12 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
-	return b.baseBindExpr(astExpr, depth)
+	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
-func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
+func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
-		expr, err := b.baseBindColRef(astExpr, depth)
+		expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -89,7 +89,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*p
 	}
 }
 
-func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot be nested")
 	}
@@ -120,7 +120,7 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}, nil
 }
 
-func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot contain window function calls")
 	} else {
@@ -128,6 +128,6 @@ func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}
 }
 
-func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
-	return b.baseBindSubquery(astExpr)
+func (b *HavingBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	return b.baseBindSubquery(astExpr, isRoot)
 }

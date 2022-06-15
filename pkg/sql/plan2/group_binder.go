@@ -32,7 +32,7 @@ func NewGroupBinder(builder *QueryBuilder, ctx *BindContext) *GroupBinder {
 }
 
 func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
-	expr, err := b.baseBindExpr(astExpr, depth)
+	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -50,8 +50,8 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	return expr, err
 }
 
-func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
-	expr, err := b.baseBindColRef(astExpr, depth)
+func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	expr, err := b.baseBindColRef(astExpr, depth, isRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -63,14 +63,14 @@ func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*pl
 	return expr, nil
 }
 
-func (b *GroupBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *GroupBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.GroupingError, "GROUP BY clause cannot contain aggregate functions!")
 }
 
-func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "GROUP BY clause cannot contain window functions!")
 }
 
-func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
+func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.GroupingError, "subquery in GROUP BY clause not yet supported")
 }

@@ -587,6 +587,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		if proj == nil {
+			// TODO: implement MARK join to better support non-scalar subqueries
 			return 0, errors.New(errno.InternalError, "non-scalar subquery in SELECT clause not yet supported")
 		}
 
