@@ -28,7 +28,7 @@ func IsNotNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*v
 	inputIsNull := input.IsScalarNull()
 
 	cols, ok := input.Col.([]T)
-	if !ok {
+	if !ok && !inputIsNull {
 		return nil, errors.New("IsNotNull: the input vec col is un-declare type")
 	}
 
@@ -43,7 +43,7 @@ func IsNotNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*v
 
 	col := make([]bool, l)
 	if inputIsNull {
-		col[0] = true
+		col[0] = false
 	} else {
 		for i := range cols {
 			if nulls.Contains(input.Nsp, uint64(i)) {

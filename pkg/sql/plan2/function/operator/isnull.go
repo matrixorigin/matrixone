@@ -28,7 +28,7 @@ func IsNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*vect
 	inputIsNull := input.IsScalarNull()
 
 	cols, ok := input.Col.([]T)
-	if !ok {
+	if !ok && !inputIsNull {
 		return nil, errors.New("IsNUll: the input vec col is un-declare type")
 	}
 

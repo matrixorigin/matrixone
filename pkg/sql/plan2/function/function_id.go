@@ -243,6 +243,7 @@ var functionIdRegister = map[string]int32{
 	"isnot":       ISNOT,
 	"is_null":     ISNULL,
 	"isnull":      ISNULL,
+	"ifnull":      ISNULL,
 	"is_not_null": ISNOTNULL,
 	"isnotnull":   ISNOTNULL,
 	// aggregate
