@@ -27,10 +27,11 @@ var defaultRules = []Rule{}
 func init() {
 	defaultRules = []Rule{
 		rule.NewConstantFlod(),
+		rule.NewPredicatePushdown(),
 	}
 }
 
-func NewBaseOptimizr(ctx CompilerContext) *BaseOptimizer {
+func NewBaseOptimizer(ctx CompilerContext) *BaseOptimizer {
 	return &BaseOptimizer{
 		ctx:   ctx,
 		rules: defaultRules,
