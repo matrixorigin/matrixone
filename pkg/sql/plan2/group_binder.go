@@ -37,10 +37,6 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 
-	if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
-		return nil, errors.New(errno.GroupingError, "correlated columns in GROUP BY clause not yet supported")
-	}
-
 	if isRoot {
 		astStr := tree.String(astExpr, dialect.MYSQL)
 		if _, ok := b.ctx.groupByAst[astStr]; ok {
@@ -55,7 +51,16 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 }
 
 func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
-	return b.baseBindColRef(astExpr, depth)
+	expr, err := b.baseBindColRef(astExpr, depth)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+		return nil, errors.New(errno.GroupingError, "correlated columns in GROUP BY clause not yet supported")
+	}
+
+	return expr, nil
 }
 
 func (b *GroupBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {

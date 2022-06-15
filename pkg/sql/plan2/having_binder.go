@@ -74,7 +74,16 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
 	if b.insideAgg {
-		return b.baseBindColRef(astExpr, depth)
+		expr, err := b.baseBindColRef(astExpr, depth)
+		if err != nil {
+			return nil, err
+		}
+
+		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			return nil, errors.New(errno.GroupingError, "correlated columns in aggregate function not yet supported")
+		}
+
+		return expr, nil
 	} else {
 		return nil, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL)))
 	}

@@ -124,7 +124,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			returnMap[getColMapKey(builder.tagsByNode[nodeId][0], 0)] = [2]int32{0, colIdx}
 			colIdx++
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: nil,
+				Typ: &plan.Type{
+					Id:       plan.Type_BOOL,
+					Nullable: true,
+					Size:     1,
+				},
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: -1,
