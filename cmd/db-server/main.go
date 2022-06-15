@@ -314,7 +314,7 @@ func main() {
 	}
 
 	//just initialize the tae after configuration has been loaded
-	if len(args) == 2 && args[1] == "init_db" {
+	if len(args) == 2 && args[1] == "initdb" {
 		fmt.Println("Initialize the TAE engine ...")
 		taeWrapper := initTae()
 		err := frontend.InitDB(taeWrapper.eng)
