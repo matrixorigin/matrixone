@@ -83,7 +83,10 @@ func (builder *QueryBuilder) resetNode(nodeId int32) (map[int64][2]int32, error)
 			returnMap[getColMapKey(tag, int32(idx))] = [2]int32{0, int32(idx)}
 		}
 		for _, expr := range node.WhereList {
-			builder.resetPosition(expr, returnMap)
+			err := builder.resetPosition(expr, returnMap)
+			if err != nil {
+				return nil, err
+			}
 		}
 	case plan.Node_JOIN:
 		// TODO deal with using
