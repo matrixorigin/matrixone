@@ -383,6 +383,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 
 	// should pass
 	sqls := []string{
+		"SELECT '1900-01-01 00:00:00' + INTERVAL 2147483648 SECOND",
 		"SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10, 20",
 		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC", //test alias
 		"SELECT NATION.N_NAME FROM NATION",                                       //test alias

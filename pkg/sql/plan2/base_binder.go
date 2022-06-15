@@ -599,24 +599,19 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 		if args[0].Typ.Id == plan.Type_DATE && args[1].Typ.Id == plan.Type_INTERVAL {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		}
-		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATE {
+		} else if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATE {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		}
-		if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		}
-		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATETIME {
+		} else if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_DATETIME {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
-		}
-		if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		}
-		if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_VARCHAR {
+		} else if args[0].Typ.Id == plan.Type_INTERVAL && args[1].Typ.Id == plan.Type_VARCHAR {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(args[1], args[0])
 		}
@@ -628,12 +623,10 @@ func (b *baseBinder) bindFuncExprImplByPlanExpr(name string, args []*Expr) (*pla
 		if args[0].Typ.Id == plan.Type_DATE && args[1].Typ.Id == plan.Type_INTERVAL {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		}
-		if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == plan.Type_DATETIME && args[1].Typ.Id == plan.Type_INTERVAL {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
-		}
-		if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
+		} else if args[0].Typ.Id == plan.Type_VARCHAR && args[1].Typ.Id == plan.Type_INTERVAL {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(args[0], args[1])
 		}
