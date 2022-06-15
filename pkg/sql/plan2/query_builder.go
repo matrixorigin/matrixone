@@ -92,28 +92,65 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_JOIN:
-		colIdx := 0
 		joinCondMap := make(map[int64][2]int32)
 
-		for idx, child := range node.Children {
-			colIdx = len(returnMap)
+		childId := node.Children[0]
+		childMap, err := builder.remapAllColRefs(childId)
+		if err != nil {
+			return nil, err
+		}
 
-			childMap, err := builder.remapAllColRefs(child)
-			if err != nil {
-				return nil, err
-			}
+		for k, v := range childMap {
+			returnMap[k] = v
+			joinCondMap[k] = v
+		}
 
-			for k, v := range childMap {
-				returnMap[k] = [2]int32{0, int32(colIdx) + v[1]}
-				joinCondMap[k] = [2]int32{int32(idx), v[1]}
-			}
+		for prjIdx, prj := range builder.qry.Nodes[childId].ProjectList {
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: prj.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(prjIdx),
+					},
+				},
+			})
+		}
 
-			for prjIdx, prj := range builder.qry.Nodes[child].ProjectList {
+		colIdx := int32(len(returnMap))
+		childId = node.Children[1]
+
+		if node.JoinType == plan.Node_MARK {
+			returnMap[getColMapKey(builder.tagsByNode[nodeId][0], 0)] = [2]int32{0, colIdx}
+			colIdx++
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: nil,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: 0,
+					},
+				},
+			})
+		}
+
+		childMap, err = builder.remapAllColRefs(childId)
+		if err != nil {
+			return nil, err
+		}
+
+		for k, v := range childMap {
+			returnMap[k] = [2]int32{0, colIdx + v[1]}
+			joinCondMap[k] = [2]int32{1, v[1]}
+		}
+
+		if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI && node.JoinType != plan.Node_MARK {
+			for prjIdx, prj := range builder.qry.Nodes[childId].ProjectList {
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
 					Typ: prj.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
-							RelPos: int32(idx),
+							RelPos: 1,
 							ColPos: int32(prjIdx),
 						},
 					},
