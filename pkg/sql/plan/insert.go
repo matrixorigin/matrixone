@@ -570,7 +570,7 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		res := value.(types.Date).String()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_datetime:
-		res := value.(types.Datetime).String()
+		res := value.(types.Datetime).String2(typ.Precision)
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
