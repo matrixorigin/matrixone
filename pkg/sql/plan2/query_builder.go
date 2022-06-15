@@ -581,10 +581,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// append PROJECT node
 	for i, proj := range ctx.projects {
-		nodeId, ctx.projects[i], err = builder.flattenSubqueries(nodeId, proj, ctx)
+		nodeId, proj, err = builder.flattenSubqueries(nodeId, proj, ctx)
 		if err != nil {
 			return 0, err
 		}
+
+		if proj == nil {
+			return 0, errors.New(errno.InternalError, "non-scalar subquery in SELECT clause not yet supported")
+		}
+
+		ctx.projects[i] = proj
 	}
 
 	nodeId = builder.appendNode(&plan.Node{
