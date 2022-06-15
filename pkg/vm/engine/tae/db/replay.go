@@ -2,6 +2,10 @@ package db
 
 import (
 	"bytes"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -66,6 +70,26 @@ func (replayer *Replayer) PreReplayWal() {
 	}
 }
 
+func (replayer *Replayer) scanFiles() map[uint64]string {
+	files := make(map[uint64]string)
+	infos, err := ioutil.ReadDir(replayer.db.Dir)
+	if err != nil {
+		panic(err)
+	}
+	for _, info := range infos {
+		if info.IsDir() {
+			continue
+		}
+		name := info.Name()
+		id, err := replayer.db.FileFactory.DecodeName(name)
+		if err != nil {
+			continue
+		}
+		files[id] = path.Join(replayer.db.Dir, name)
+	}
+	return files
+}
+
 func (replayer *Replayer) Replay() {
 	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
 		panic(err)
@@ -77,6 +101,7 @@ func (replayer *Replayer) Replay() {
 }
 
 func (replayer *Replayer) PostReplayWal() {
+	activeSegs := make(map[uint64]*catalog.SegmentEntry)
 	processor := new(catalog.LoopProcessor)
 	processor.DatabaseFn = func(entry *catalog.DBEntry) (err error) {
 		if entry.IsActive() {
@@ -85,7 +110,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
 			return
 		}
-		if err = gcDatabaseClosure(entry)(); err != nil {
+		if err = entry.GetCatalog().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
 		err = catalog.ErrStopCurrRecur
@@ -98,7 +123,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
 			return
 		}
-		if err = gcTableClosure(entry, GCType_Table)(); err != nil {
+		if err = entry.GetDB().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
 		err = catalog.ErrStopCurrRecur
@@ -106,12 +131,18 @@ func (replayer *Replayer) PostReplayWal() {
 	}
 	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
 		if entry.IsActive() {
+			if !entry.GetTable().IsVirtual() {
+				activeSegs[entry.ID] = entry
+			}
 			return
 		}
 		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+			if !entry.GetTable().IsVirtual() {
+				activeSegs[entry.ID] = entry
+			}
 			return
 		}
-		if err = gcSegmentClosure(entry, GCType_Segment)(); err != nil {
+		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
 		err = catalog.ErrStopCurrRecur
@@ -130,6 +161,23 @@ func (replayer *Replayer) PostReplayWal() {
 		return
 	}
 	_ = replayer.db.Catalog.RecurLoop(processor)
+
+	files := replayer.scanFiles()
+	for id := range activeSegs {
+		_, ok := files[id]
+		if !ok {
+			panic(fmt.Errorf("Cannot find segment file for: %d", id))
+		}
+		delete(files, id)
+	}
+	for _, file := range files {
+		logutil.Info("[Replay]", common.OperationField("clean-segment"),
+			common.OperandField(file))
+		if err := os.Remove(file); err != nil {
+			panic(err)
+		}
+	}
+
 	logutil.Info(replayer.db.Catalog.SimplePPString(common.PPL1))
 }
 

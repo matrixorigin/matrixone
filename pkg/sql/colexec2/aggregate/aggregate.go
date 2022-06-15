@@ -36,21 +36,26 @@ import (
 )
 
 var sumReturnTypes = map[types.T]types.T{
-	types.T_int8:    types.T_int64,
-	types.T_int16:   types.T_int64,
-	types.T_int32:   types.T_int64,
-	types.T_int64:   types.T_int64,
-	types.T_uint8:   types.T_uint64,
-	types.T_uint16:  types.T_uint64,
-	types.T_uint32:  types.T_uint64,
-	types.T_uint64:  types.T_uint64,
-	types.T_float32: types.T_float64,
-	types.T_float64: types.T_float64,
+	types.T_int8:       types.T_int64,
+	types.T_int16:      types.T_int64,
+	types.T_int32:      types.T_int64,
+	types.T_int64:      types.T_int64,
+	types.T_uint8:      types.T_uint64,
+	types.T_uint16:     types.T_uint64,
+	types.T_uint32:     types.T_uint64,
+	types.T_uint64:     types.T_uint64,
+	types.T_float32:    types.T_float64,
+	types.T_float64:    types.T_float64,
+	types.T_decimal64:  types.T_decimal64,
+	types.T_decimal128: types.T_decimal128,
 }
 
 func ReturnType(op int, typ types.T) types.T {
 	switch op {
 	case Avg:
+		if typ == types.T_decimal64 || typ == types.T_decimal128 {
+			return types.T_decimal128
+		}
 		return types.T_float64
 	case Max:
 		return typ
@@ -146,6 +151,10 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 		return sum.NewInt(typ), nil
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return sum.NewUint(typ), nil
+	case types.T_decimal64:
+		return sum.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return sum.NewDecimal128(typ), nil
 	}
 	return nil, fmt.Errorf("'%v' not support Sum", typ)
 }
@@ -180,6 +189,10 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 		return max.NewDate(typ), nil
 	case types.T_datetime:
 		return max.NewDatetime(typ), nil
+	case types.T_decimal64:
+		return max.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return max.NewDecimal128(typ), nil
 	}
 	return nil, fmt.Errorf("'%v' not support Max", typ)
 }
@@ -214,6 +227,10 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 		return min.NewDate(typ), nil
 	case types.T_datetime:
 		return min.NewDatetime(typ), nil
+	case types.T_decimal64:
+		return min.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return min.NewDecimal128(typ), nil
 	}
 	return nil, fmt.Errorf("'%v' not support Min", typ)
 }

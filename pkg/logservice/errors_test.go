@@ -18,6 +18,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/lni/dragonboat/v4"
 	"github.com/stretchr/testify/assert"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -43,4 +44,37 @@ func TestUnknownErrorIsHandled(t *testing.T) {
 	code, str := toErrorCode(err)
 	assert.Equal(t, pb.ErrorCode_OtherSystemError, code)
 	assert.Equal(t, err.Error(), str)
+}
+
+func TestIsTempError(t *testing.T) {
+	tests := []struct {
+		err  error
+		temp bool
+	}{
+		{dragonboat.ErrInvalidOperation, false},
+		{dragonboat.ErrInvalidAddress, false},
+		{dragonboat.ErrInvalidSession, false},
+		{dragonboat.ErrTimeoutTooSmall, false},
+		{dragonboat.ErrPayloadTooBig, false},
+		{dragonboat.ErrSystemBusy, true},
+		{dragonboat.ErrShardClosed, true},
+		{dragonboat.ErrShardNotInitialized, true},
+		{dragonboat.ErrTimeout, true},
+		{dragonboat.ErrClosed, true},
+		{dragonboat.ErrCanceled, false},
+		{dragonboat.ErrRejected, false},
+		{dragonboat.ErrShardNotReady, true},
+		{dragonboat.ErrInvalidTarget, false},
+		{dragonboat.ErrInvalidRange, false},
+
+		{ErrDeadlineNotSet, false},
+		{ErrInvalidDeadline, false},
+		{ErrInvalidTruncateIndex, false},
+		{ErrNotLeaseHolder, false},
+		{ErrOutOfRange, false},
+		{ErrInvalidShardID, false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.temp, isTempError(tt.err))
+	}
 }

@@ -292,7 +292,7 @@ func initCast() {
 						continue
 					}
 					varcharValue := vs.Get(int64(i))
-					data, err2 := types.ParseDatetime(string(varcharValue))
+					data, err2 := types.ParseDatetime(string(varcharValue), 6) // default datetime precision is 6
 					if err2 != nil {
 						return nil, err2
 					}

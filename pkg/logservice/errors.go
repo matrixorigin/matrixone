@@ -15,6 +15,8 @@
 package logservice
 
 import (
+	"net"
+
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
 
@@ -45,10 +47,10 @@ func getErrorToCodeMapping() []errorToCode {
 		{dragonboat.ErrShardNotReady, pb.ErrorCode_ShardNotReady, true},
 		{dragonboat.ErrSystemBusy, pb.ErrorCode_ShardNotReady, false},
 		{dragonboat.ErrClosed, pb.ErrorCode_SystemClosed, true},
+		{dragonboat.ErrInvalidRange, pb.ErrorCode_OutOfRange, true},
 
 		{ErrInvalidTruncateIndex, pb.ErrorCode_IndexAlreadyTruncated, true},
 		{ErrNotLeaseHolder, pb.ErrorCode_NotLeaseHolder, true},
-		{ErrOutOfRange, pb.ErrorCode_OutOfRange, true},
 	}
 }
 
@@ -82,4 +84,14 @@ func toError(resp pb.Response) error {
 	plog.Panicf("Unknown error code: %d", resp.ErrorCode)
 	// will never reach here
 	return nil
+}
+
+func isTempError(err error) bool {
+	if dragonboat.IsTempError(err) {
+		return true
+	}
+	if _, ok := err.(net.Error); ok {
+		return true
+	}
+	return false
 }
