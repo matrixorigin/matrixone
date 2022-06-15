@@ -1552,7 +1552,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
 	switch stmt := cwft.stmt.(type) {
-	case *tree.Select:
+	case *tree.Select, *tree.ParenSelect:
 		opt := plan2.NewBaseOptimizr(cwft.ses.GetTxnCompilerContext())
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
