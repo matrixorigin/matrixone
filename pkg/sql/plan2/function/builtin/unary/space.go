@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,7 +25,7 @@ import (
 )
 
 var (
-	errorSpaceCountExceedsThreshold = errors.New(fmt.Sprintf("total space count exceeds %d MB", space.TotalMaximumSpaceCount/1024/1024))
+	errorSpaceCountExceedsThreshold = fmt.Errorf("total space count exceeds %d MB", space.TotalMaximumSpaceCount/1024/1024)
 )
 
 // the function registeration for generics functions may have some problem now, change this to generics later
