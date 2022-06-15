@@ -393,6 +393,23 @@ func constructJoinResult(expr *plan.Expr) (int32, int32) {
 }
 
 func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
+	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
+		b, ok := e.C.Value.(*plan.Const_Bval)
+		if !ok {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+		}
+		if b.Bval {
+			return expr, expr
+		}
+		return expr, &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Value: &plan.Const_Bval{Bval: true},
+				},
+			},
+		}
+	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
