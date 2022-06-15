@@ -67,5 +67,4 @@ MatrixOne是一款面向未来的超融合异构数据库，通过超融合数�
 ## **相关信息**
 
 本节描述了MatrixOne的产品核心特性和用户价值主张，如果您想了解有关MatrixOne产品架构设计的更多信息，请参阅以下内容：  
-
-* [MatrixOne技术架构](matrixone-architecture.md)
+- [MatrixOne技术架构](matrixone-architecture.md)
