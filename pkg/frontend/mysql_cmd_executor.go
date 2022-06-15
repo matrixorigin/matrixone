@@ -1699,6 +1699,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	defer mce.afterRun(stmt, beginInstant)
 	// it is weired to do for loop here, why don't we ensure that run only one sql once
 	// it seems that mysql protocol has done that for us when reading packet from tcp
+	type TxnCommand int
+	const (
+		TxnNoCommand TxnCommand = iota
+		TxnBegin
+		TxnCommit
+		TxnRollback
+	)
 	for _, cw := range cws {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
@@ -1706,19 +1713,23 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
 		statementCount++
 
+		var fromTxnCommand TxnCommand = TxnNoCommand
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
+			fromTxnCommand = TxnBegin
 			err = txnHandler.StartByBegin()
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.CommitTransaction:
+			fromTxnCommand = TxnCommit
 			err = txnHandler.CommitAfterBegin()
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
+			fromTxnCommand = TxnRollback
 			err = txnHandler.Rollback()
 			if err != nil {
 				goto handleFailed
@@ -1799,6 +1810,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		selfHandle = false
 
 		switch st := stmt.(type) {
+		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			selfHandle = true
+			err = proto.sendOKPacket(0, 0, 0, 0, "")
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.Use:
 			selfHandle = true
 			err = mce.handleChangeDB(st.Name)
@@ -2055,7 +2072,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		}
 	handleSucceeded:
+		//load data handle txn failure internally
 		if !fromLoadData {
+			//txn begin,commit,rollback do not need to be committed
+			if fromTxnCommand != TxnNoCommand {
+				goto handleNext
+			}
 			txnErr = txnHandler.CommitAfterAutocommitOnly()
 			if txnErr != nil {
 				return txnErr
@@ -2063,9 +2085,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		}
 		goto handleNext
 	handleFailed:
-		txnErr = txnHandler.RollbackAfterAutocommitOnly()
-		if txnErr != nil {
-			return txnErr
+		//the failures due to txn begin,commit,rollback do not need to be rollback.
+		if fromTxnCommand == TxnNoCommand {
+			txnErr = txnHandler.RollbackAfterAutocommitOnly()
+			if txnErr != nil {
+				return txnErr
+			}
 		}
 		return err
 	handleNext:
