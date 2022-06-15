@@ -24,10 +24,25 @@ import (
 
 func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := lv[0]
-	times := inVec.Col.([]types.Datetime)
 	size := types.T(types.T_int64).TypeLen()
+	if inVec.IsScalarNull() {
+		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
+	}
+	times := inVec.Col.([]types.Datetime)
 
-	vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
+	if inVec.IsScalar() {
+		{
+			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
+			rs := make([]int64, 1)
+			nulls.Set(vec.Nsp, inVec.Nsp)
+			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+			return vec, nil
+		}
+	}
+	vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: int32(size)}, int64(len(times))*int64(size))
+	if err != nil {
+		return nil, err
+	}
 	rs := make([]int64, len(times))
 	for i := 0; i < len(times); i++ {
 		if inVec.Nsp.Np == nil {
@@ -44,12 +59,31 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 
 func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := lv[0]
-	times_ := inVec.Col.(*types.Bytes)
-
-	times := []types.Datetime{MustDatetimeMe(string(times_.Data))}
 	size := types.T(types.T_int64).TypeLen()
+	if inVec.IsScalarNull() {
+		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
+	}
+	times_ := inVec.Col.(*types.Bytes)
+	var times []types.Datetime
+	for i := 0; i < len(times_.Lengths); i++ {
+		times = append(times, MustDatetimeMe(string(times_.Get(int64(i)))))
+	}
+	if inVec.IsScalar() {
+		if inVec.IsScalarNull() {
+			return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
+		} else {
+			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
+			rs := make([]int64, 1)
+			nulls.Set(vec.Nsp, inVec.Nsp)
+			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+			return vec, nil
+		}
+	}
 
-	vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
+	vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: int32(size)}, int64(len(times))*int64(size))
+	if err != nil {
+		return nil, err
+	}
 	rs := make([]int64, len(times))
 	nulls.Set(vec.Nsp, inVec.Nsp)
 	vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
