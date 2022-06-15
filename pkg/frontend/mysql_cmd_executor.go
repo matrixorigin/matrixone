@@ -983,7 +983,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	buildPlan, err := plan2.BuildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	buildPlan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1551,23 +1551,9 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
-	switch stmt := cwft.stmt.(type) {
-	case *tree.Select, *tree.ParenSelect:
-		opt := plan2.NewBaseOptimizr(cwft.ses.GetTxnCompilerContext())
-		optimized, err := opt.Optimize(stmt)
-		if err != nil {
-			return nil, err
-		}
-		cwft.plan = &plan2.Plan{
-			Plan: &plan2.Plan_Query{
-				Query: optimized,
-			},
-		}
-	default:
-		cwft.plan, err = plan2.BuildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
-		if err != nil {
-			return nil, err
-		}
+	cwft.plan, err = buildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
+	if err != nil {
+		return nil, err
 	}
 
 	cwft.proc.UnixTime = time.Now().UnixNano()
@@ -1583,6 +1569,24 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 	return nil
+}
+
+func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	switch stmt := stmt.(type) {
+	case *tree.Select, *tree.ParenSelect, *tree.Update, *tree.Delete, *tree.Insert:
+		opt := plan2.NewBaseOptimizr(ctx)
+		optimized, err := opt.Optimize(stmt)
+		if err != nil {
+			return nil, err
+		}
+		return &plan2.Plan{
+			Plan: &plan2.Plan_Query{
+				Query: optimized,
+			},
+		}, nil
+	default:
+		return plan2.BuildPlan(ctx, stmt)
+	}
 }
 
 /*
