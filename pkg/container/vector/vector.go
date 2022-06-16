@@ -102,6 +102,8 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	case types.T_char, types.T_varchar, types.T_json:
 		col := v.Col.(*types.Bytes)
 		if nulls.Any(v.Nsp) {
+			col.Offsets = col.Offsets[:0]
+			col.Lengths = col.Lengths[:0]
 			for i := 0; i < v.Length; i++ {
 				nulls.Add(v.Nsp, uint64(i))
 				col.Offsets = append(col.Offsets, 0)
