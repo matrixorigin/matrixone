@@ -20,11 +20,11 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 var (
@@ -38,7 +38,7 @@ type IVectorWriter interface {
 	io.Closer
 	SetValue(int, any) error
 	Append(int, any) error
-	AppendVector(*ro.Vector, int) (int, error)
+	AppendVector(*movec.Vector, int) (int, error)
 }
 
 type IVector interface {
@@ -88,7 +88,7 @@ type StrVector struct {
 
 func NewVector(t types.Type, capacity uint64) IVector {
 	switch t.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		return NewStrVector(t, capacity)
 	default:
 		return NewStdVector(t, capacity)

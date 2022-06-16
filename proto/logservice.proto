@@ -16,22 +16,6 @@ package logservice;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
-// ShardState represents the state of a registered Shard. 
-message ShardState {
-  enum State {
-    REGISTERED = 0;
-    LAUNCHING  = 1;
-    LAUNCHED   = 2;
-    ABORTED    = 3;
-  }
-  string Name = 1;
-  uint64 ShardID = 2;
-  State LaunchState = 3;
-  // InitialReplicas is a map of ReplicaID to LogStore UUIDs, it describes the
-  // initial replicas assigned for the given shard. 
-  map<uint64, string> InitialReplicas = 4;
-};
-
 // LogShardInfo contains information of a launched shard.  
 message LogShardInfo {
   uint64 ShardID               = 1;
