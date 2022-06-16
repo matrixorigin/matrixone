@@ -500,7 +500,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 }
 
 func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := 4
+	rtl := 8
 	lvs := lv.Col.([]types.Timestamp)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
@@ -520,16 +520,20 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	}
 	rs := encoding.DecodeDatetimeSlice(vec.Data)
 	rs = rs[:len(lvs)]
-	rs2 := make([]types.Date, len(lvs))
+	rs2 := make([]types.Date, len(lvs), cap(lvs))
 	if _, err := typecast.TimestampToDatetime(lvs, rs); err != nil {
 		return nil, err
 	}
 	for i := 0; i < len(rs2); i++ {
 		rs2[i] = rs[i].ToDate()
 	}
-	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, rs2)
-	return vec, nil
+	vec2, err := proc.AllocVector(rv.Typ, 4*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	nulls.Set(vec2.Nsp, lv.Nsp)
+	vector.SetCol(vec2, rs2)
+	return vec2, nil
 }
 
 // func CastTimestampAsTime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
