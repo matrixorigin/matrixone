@@ -46,7 +46,8 @@ func TestDateSub(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Date, len(c.args1))
-			require.Equal(t, c.want, dateSub(c.args1, c.args2, c.args3, got))
+			nu := &nulls.Nulls{}
+			require.Equal(t, c.want, dateSub(c.args1, c.args2, c.args3, nu, got))
 		})
 	}
 
@@ -77,7 +78,8 @@ func TestDatetimeSub(t *testing.T) {
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := make([]types.Datetime, len(c.args1))
-			require.Equal(t, c.want, datetimeSub(c.args1, c.args2, c.args3, got))
+			nu := &nulls.Nulls{}
+			require.Equal(t, c.want, datetimeSub(c.args1, c.args2, c.args3, nu, got))
 		})
 	}
 
@@ -125,6 +127,13 @@ func TestDateStringSub(t *testing.T) {
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
 			want:    &types.Bytes{Data: []byte("2018-01-01 00:00:012018-01-01"), Offsets: []uint32{0, 0, 19}, Lengths: []uint32{0, 19, 10}},
+			contain: true,
+		},
+		{
+			args1:   &types.Bytes{Data: []byte("0001-01-01"), Offsets: []uint32{0}, Lengths: []uint32{4}},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.Year)},
+			want:    &types.Bytes{Data: []byte(""), Offsets: []uint32{0}, Lengths: []uint32{0}},
 			contain: true,
 		},
 	}

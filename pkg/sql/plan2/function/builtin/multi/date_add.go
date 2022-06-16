@@ -37,7 +37,7 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]types.Date, 1)
-		vector.SetCol(resultVector, date_add.DateAdd(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_add.DateAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
@@ -47,7 +47,7 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		resultValues := encoding.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(firstValues)]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		vector.SetCol(resultVector, date_add.DateAdd(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_add.DateAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
@@ -66,7 +66,7 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]types.Datetime, 1)
-		vector.SetCol(resultVector, date_add.DatetimeAdd(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_add.DatetimeAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
@@ -76,7 +76,7 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:len(firstValues)]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		vector.SetCol(resultVector, date_add.DatetimeAdd(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_add.DatetimeAdd(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
