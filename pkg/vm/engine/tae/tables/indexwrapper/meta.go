@@ -3,7 +3,7 @@ package indexwrapper
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type IndexType uint8
@@ -37,10 +37,8 @@ type IndexMeta struct {
 	CompType    CompressType
 	ColIdx      uint16
 	InternalIdx uint16
-	//PartOffset uint32
-	//StartOffset uint32
-	Size    uint32
-	RawSize uint32
+	Size        uint32
+	RawSize     uint32
 }
 
 func NewEmptyIndexMeta() *IndexMeta {
@@ -81,33 +79,27 @@ func (meta *IndexMeta) SetSize(raw, exact uint32) {
 
 func (meta *IndexMeta) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
-	buf.Write(encoding.EncodeUint8(uint8(meta.IdxType)))
-	buf.Write(encoding.EncodeUint8(uint8(meta.CompType)))
-	buf.Write(encoding.EncodeUint16(meta.ColIdx))
-	//buf.Write(encoding.EncodeUint32(meta.PartOffset))
-	//buf.Write(encoding.EncodeUint32(meta.StartOffset))
-	buf.Write(encoding.EncodeUint16(meta.InternalIdx))
-	buf.Write(encoding.EncodeUint32(meta.Size))
-	buf.Write(encoding.EncodeUint32(meta.RawSize))
+	buf.Write(types.EncodeFixed(uint8(meta.IdxType)))
+	buf.Write(types.EncodeFixed(uint8(meta.CompType)))
+	buf.Write(types.EncodeFixed(meta.ColIdx))
+	buf.Write(types.EncodeFixed(meta.InternalIdx))
+	buf.Write(types.EncodeFixed(meta.Size))
+	buf.Write(types.EncodeFixed(meta.RawSize))
 	return buf.Bytes(), nil
 }
 
 func (meta *IndexMeta) Unmarshal(buf []byte) error {
-	meta.IdxType = IndexType(encoding.DecodeUint8(buf[:1]))
+	meta.IdxType = IndexType(types.DecodeFixed[uint8](buf[:1]))
 	buf = buf[1:]
-	meta.CompType = CompressType(encoding.DecodeUint8(buf[1:]))
+	meta.CompType = CompressType(types.DecodeFixed[uint8](buf[1:]))
 	buf = buf[1:]
-	meta.ColIdx = encoding.DecodeUint16(buf[:2])
+	meta.ColIdx = types.DecodeFixed[uint16](buf[:2])
 	buf = buf[2:]
-	//meta.PartOffset = encoding.DecodeUint32(buf[:4])
-	//buf = buf[4:]
-	//meta.StartOffset = encoding.DecodeUint32(buf[:4])
-	//buf = buf[4:]
-	meta.InternalIdx = encoding.DecodeUint16(buf[:2])
+	meta.InternalIdx = types.DecodeFixed[uint16](buf[:2])
 	buf = buf[2:]
-	meta.Size = encoding.DecodeUint32(buf[:4])
+	meta.Size = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	meta.RawSize = encoding.DecodeUint32(buf[:4])
+	meta.RawSize = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
 	return nil
 }
@@ -128,24 +120,24 @@ func (metas *IndicesMeta) AddIndex(meta IndexMeta) {
 
 func (metas *IndicesMeta) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
-	buf.Write(encoding.EncodeUint8(uint8(len(metas.Metas))))
+	buf.Write(types.EncodeFixed(uint8(len(metas.Metas))))
 	for _, meta := range metas.Metas {
 		v, err := meta.Marshal()
 		if err != nil {
 			return nil, err
 		}
-		buf.Write(encoding.EncodeUint32(uint32(len(v))))
+		buf.Write(types.EncodeFixed(uint32(len(v))))
 		buf.Write(v)
 	}
 	return buf.Bytes(), nil
 }
 
 func (metas *IndicesMeta) Unmarshal(buf []byte) error {
-	count := encoding.DecodeUint8(buf[:1])
+	count := types.DecodeFixed[uint8](buf[:1])
 	buf = buf[1:]
 	metas.Metas = make([]IndexMeta, 0)
 	for i := uint8(0); i < count; i++ {
-		size := encoding.DecodeUint32(buf[:4])
+		size := types.DecodeFixed[uint32](buf[:4])
 		buf = buf[4:]
 		metaBuf := buf[:size]
 		buf = buf[size:]

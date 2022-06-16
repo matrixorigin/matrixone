@@ -16,87 +16,86 @@ package compute
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func AppendValue(vec *gvec.Vector, v any) {
 	switch vec.Typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		vvals := vec.Col.([]bool)
 		vec.Col = append(vvals, v.(bool))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]bool), 1)
-	case types.T_int8:
+		vec.Data = types.EncodeFixedSlice(vvals, 1)
+	case types.Type_INT8:
 		vvals := vec.Col.([]int8)
 		vec.Col = append(vvals, v.(int8))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int8), 1)
-	case types.T_int16:
+		vec.Data = types.EncodeFixedSlice(vvals, 1)
+	case types.Type_INT16:
 		vvals := vec.Col.([]int16)
 		vec.Col = append(vvals, v.(int16))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int16), 2)
-	case types.T_int32:
+		vec.Data = types.EncodeFixedSlice(vvals, 2)
+	case types.Type_INT32:
 		vvals := vec.Col.([]int32)
 		vec.Col = append(vvals, v.(int32))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int32), 4)
-	case types.T_int64:
+		vec.Data = types.EncodeFixedSlice(vvals, 4)
+	case types.Type_INT64:
 		vvals := vec.Col.([]int64)
 		vec.Col = append(vvals, v.(int64))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int64), 8)
-	case types.T_uint8:
+		vec.Data = types.EncodeFixedSlice(vvals, 8)
+	case types.Type_UINT8:
 		vvals := vec.Col.([]uint8)
 		vec.Col = append(vvals, v.(uint8))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint8), 1)
-	case types.T_uint16:
+		vec.Data = types.EncodeFixedSlice(vvals, 1)
+	case types.Type_UINT16:
 		vvals := vec.Col.([]uint16)
 		vec.Col = append(vvals, v.(uint16))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint16), 2)
-	case types.T_uint32:
+		vec.Data = types.EncodeFixedSlice(vvals, 2)
+	case types.Type_UINT32:
 		vvals := vec.Col.([]uint32)
 		vec.Col = append(vvals, v.(uint32))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint32), 4)
-	case types.T_uint64:
+		vec.Data = types.EncodeFixedSlice(vvals, 4)
+	case types.Type_UINT64:
 		vvals := vec.Col.([]uint64)
 		vec.Col = append(vvals, v.(uint64))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint64), 8)
-	case types.T_decimal64:
+		vec.Data = types.EncodeFixedSlice(vvals, 8)
+	case types.Type_DECIMAL64:
 		vvals := vec.Col.([]types.Decimal64)
 		vec.Col = append(vvals, v.(types.Decimal64))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Decimal64), 8)
-	case types.T_decimal128:
+		vec.Data = types.EncodeFixedSlice(vvals, 8)
+	case types.Type_DECIMAL128:
 		vvals := vec.Col.([]types.Decimal128)
 		vec.Col = append(vvals, v.(types.Decimal128))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Decimal128), 16)
-	case types.T_float32:
+		vec.Data = types.EncodeFixedSlice(vvals, 16)
+	case types.Type_FLOAT32:
 		vvals := vec.Col.([]float32)
 		vec.Col = append(vvals, v.(float32))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]float32), 4)
-	case types.T_float64:
+		vec.Data = types.EncodeFixedSlice(vvals, 4)
+	case types.Type_FLOAT64:
 		vvals := vec.Col.([]float64)
 		vec.Col = append(vvals, v.(float64))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]float64), 8)
-	case types.T_date:
+		vec.Data = types.EncodeFixedSlice(vvals, 8)
+	case types.Type_DATE:
 		vvals := vec.Col.([]types.Date)
 		vec.Col = append(vvals, v.(types.Date))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Date), 4)
-	case types.T_timestamp:
+		vec.Data = types.EncodeFixedSlice(vvals, types.DateSize)
+	case types.Type_TIMESTAMP:
 		vvals := vec.Col.([]types.Timestamp)
 		vec.Col = append(vvals, v.(types.Timestamp))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Timestamp), 8)
-	case types.T_datetime:
+		vec.Data = types.EncodeFixedSlice(vvals, types.TimestampSize)
+	case types.Type_DATETIME:
 		vvals := vec.Col.([]types.Datetime)
 		vec.Col = append(vvals, v.(types.Datetime))
-		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Datetime), 8)
-	case types.T_char, types.T_varchar, types.T_json:
+		vec.Data = types.EncodeFixedSlice(vvals, types.DatetimeSize)
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
 		length := len(v.([]byte))
@@ -115,55 +114,55 @@ func LengthOfBatch(bat *gbat.Batch) int {
 func GetValue(col *gvec.Vector, row uint32) any {
 	vals := col.Col
 	switch col.Typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		data := vals.([]bool)
 		return data[row]
-	case types.T_int8:
+	case types.Type_INT8:
 		data := vals.([]int8)
 		return data[row]
-	case types.T_int16:
+	case types.Type_INT16:
 		data := vals.([]int16)
 		return data[row]
-	case types.T_int32:
+	case types.Type_INT32:
 		data := vals.([]int32)
 		return data[row]
-	case types.T_int64:
+	case types.Type_INT64:
 		data := vals.([]int64)
 		return data[row]
-	case types.T_uint8:
+	case types.Type_UINT8:
 		data := vals.([]uint8)
 		return data[row]
-	case types.T_uint16:
+	case types.Type_UINT16:
 		data := vals.([]uint16)
 		return data[row]
-	case types.T_uint32:
+	case types.Type_UINT32:
 		data := vals.([]uint32)
 		return data[row]
-	case types.T_uint64:
+	case types.Type_UINT64:
 		data := vals.([]uint64)
 		return data[row]
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		data := vals.([]types.Decimal64)
 		return data[row]
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		data := vals.([]types.Decimal128)
 		return data[row]
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		data := vals.([]float32)
 		return data[row]
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		data := vals.([]float64)
 		return data[row]
-	case types.T_date:
+	case types.Type_DATE:
 		data := vals.([]types.Date)
 		return data[row]
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		data := vals.([]types.Datetime)
 		return data[row]
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		data := vals.([]types.Timestamp)
 		return data[row]
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data := vals.(*types.Bytes)
 		s := data.Offsets[row]
 		e := data.Lengths[row]
@@ -177,71 +176,71 @@ func GetValue(col *gvec.Vector, row uint32) any {
 func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 	vals := col.Col
 	switch col.Typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		data := vals.([]bool)
 		data[row] = val.(bool)
 		col.Col = data
-	case types.T_int8:
+	case types.Type_INT8:
 		data := vals.([]int8)
 		data[row] = val.(int8)
 		col.Col = data
-	case types.T_int16:
+	case types.Type_INT16:
 		data := vals.([]int16)
 		data[row] = val.(int16)
 		col.Col = data
-	case types.T_int32:
+	case types.Type_INT32:
 		data := vals.([]int32)
 		data[row] = val.(int32)
 		col.Col = data
-	case types.T_int64:
+	case types.Type_INT64:
 		data := vals.([]int64)
 		data[row] = val.(int64)
 		col.Col = data
-	case types.T_uint8:
+	case types.Type_UINT8:
 		data := vals.([]uint8)
 		data[row] = val.(uint8)
 		col.Col = data
-	case types.T_uint16:
+	case types.Type_UINT16:
 		data := vals.([]uint16)
 		data[row] = val.(uint16)
 		col.Col = data
-	case types.T_uint32:
+	case types.Type_UINT32:
 		data := vals.([]uint32)
 		data[row] = val.(uint32)
 		col.Col = data
-	case types.T_uint64:
+	case types.Type_UINT64:
 		data := vals.([]uint64)
 		data[row] = val.(uint64)
 		col.Col = data
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		data := vals.([]types.Decimal64)
 		data[row] = val.(types.Decimal64)
 		col.Col = data
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		data := vals.([]types.Decimal128)
 		data[row] = val.(types.Decimal128)
 		col.Col = data
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		data := vals.([]float32)
 		data[row] = val.(float32)
 		col.Col = data
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		data := vals.([]float64)
 		data[row] = val.(float64)
 		col.Col = data
-	case types.T_date:
+	case types.Type_DATE:
 		data := vals.([]types.Date)
 		data[row] = val.(types.Date)
 		col.Col = data
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		data := vals.([]types.Datetime)
 		data[row] = val.(types.Datetime)
 		col.Col = data
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		data := vals.([]types.Timestamp)
 		data[row] = val.(types.Timestamp)
 		col.Col = data
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		// data := vals.(*types.Bytes)
 		// s := data.Offsets[row]
 		// e := data.Lengths[row]
@@ -255,71 +254,71 @@ func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
 func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 	vals := col.Col
 	switch col.Typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		data := vals.([]bool)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_int8:
+	case types.Type_INT8:
 		data := vals.([]int8)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_int16:
+	case types.Type_INT16:
 		data := vals.([]int16)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_int32:
+	case types.Type_INT32:
 		data := vals.([]int32)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_int64:
+	case types.Type_INT64:
 		data := vals.([]int64)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_uint8:
+	case types.Type_UINT8:
 		data := vals.([]uint8)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_uint16:
+	case types.Type_UINT16:
 		data := vals.([]uint16)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_uint32:
+	case types.Type_UINT32:
 		data := vals.([]uint32)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_uint64:
+	case types.Type_UINT64:
 		data := vals.([]uint64)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		data := vals.([]types.Decimal64)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		data := vals.([]types.Decimal128)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		data := vals.([]float32)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		data := vals.([]float64)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_date:
+	case types.Type_DATE:
 		data := vals.([]types.Date)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		data := vals.([]types.Datetime)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		data := vals.([]types.Timestamp)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		// data := vals.(*types.Bytes)
 		// s := data.Offsets[row]
 		// e := data.Lengths[row]
@@ -461,10 +460,10 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 	}
 	deleted := 0
 	switch vec.Typ.Oid {
-	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64,
-		types.T_date, types.T_datetime, types.T_timestamp:
+	case types.Type_BOOL, types.Type_INT8, types.Type_INT16, types.Type_INT32, types.Type_INT64,
+		types.Type_UINT8, types.Type_UINT16, types.Type_UINT32, types.Type_UINT64,
+		types.Type_DECIMAL64, types.Type_DECIMAL128, types.Type_FLOAT32, types.Type_FLOAT64,
+		types.Type_DATE, types.Type_DATETIME, types.Type_TIMESTAMP:
 		vec.Col = InplaceDeleteRows(vec.Col, deletesIterator)
 		deletesIterator = deletes.Iterator()
 		for deletesIterator.HasNext() {
@@ -494,7 +493,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 				nsp.Np.Add(n - uint64(deleted))
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data := col.(*types.Bytes)
 		pre := -1
 		for deletesIterator.HasNext() {
@@ -557,20 +556,22 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 	iterator := mask.Iterator()
 	col := vec.Col
 	switch vec.Typ.Oid {
-	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64,
-		types.T_date, types.T_datetime, types.T_timestamp:
+	case types.Type_BOOL, types.Type_INT8, types.Type_INT16, types.Type_INT32, types.Type_INT64,
+		types.Type_UINT8, types.Type_UINT16, types.Type_UINT32, types.Type_UINT64,
+		types.Type_DECIMAL64, types.Type_DECIMAL128, types.Type_FLOAT32, types.Type_FLOAT64,
+		types.Type_DATE, types.Type_DATETIME, types.Type_TIMESTAMP:
 		for iterator.HasNext() {
 			row := iterator.Next()
-			SetFixSizeTypeValue(vec, row, vals[row])
+			if err := SetFixSizeTypeValue(vec, row, vals[row]); err != nil {
+				panic(err)
+			}
 			if vec.Nsp != nil && vec.Nsp.Np != nil {
 				if vec.Nsp.Np.Contains(uint64(row)) {
 					vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
 				}
 			}
 		}
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data := col.(*types.Bytes)
 		pre := -1
 		for iterator.HasNext() {
@@ -764,358 +765,95 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes
 	return destMask, destVals, destDelets
 }
 
-func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset uint32, exist bool) {
+func GetOffsetWithFunc[T any](
+	vals []T,
+	val T,
+	compare func(a, b T) int64,
+	skipmask *roaring.Bitmap,
+) (offset uint32, exist bool) {
+	start, end := 0, len(vals)-1
+	var mid int
+	for start <= end {
+		mid = (start + end) / 2
+		res := compare(vals[mid], val)
+		if res > 0 {
+			end = mid - 1
+		} else if res < 0 {
+			start = mid + 1
+		} else {
+			if skipmask != nil && skipmask.Contains(uint32(mid)) {
+				return
+			}
+			offset = uint32(mid)
+			exist = true
+			return
+		}
+	}
+	return
+}
+
+func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (offset uint32, exist bool) {
+	column := vs.([]T)
+	val := v.(T)
+	start, end := 0, len(column)-1
+	var mid int
+	for start <= end {
+		mid = (start + end) / 2
+		if column[mid] > val {
+			end = mid - 1
+		} else if column[mid] < val {
+			start = mid + 1
+		} else {
+			if skipmask != nil && skipmask.Contains(uint32(mid)) {
+				return
+			}
+			offset = uint32(mid)
+			exist = true
+			return
+		}
+	}
+	return
+}
+
+func GetOffsetByVal(data *gvec.Vector, v any, skipmask *roaring.Bitmap) (offset uint32, exist bool) {
 	switch data.Typ.Oid {
-	case types.T_bool:
-		column := data.Col.([]bool)
-		val := v.(bool)
-		compare := func(left, right bool) int {
-			if left && right {
-				return 0
-			} else if !left && !right {
-				return 0
-			} else if left {
-				return 1
-			} else {
-				return -1
-			}
-		}
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			ret := compare(column[mid], val)
-			if ret == 1 {
-				end = mid - 1
-			} else if ret == -1 {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_int8:
-		column := data.Col.([]int8)
-		val := v.(int8)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_int16:
-		column := data.Col.([]int16)
-		val := v.(int16)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_int32:
-		column := data.Col.([]int32)
-		val := v.(int32)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_int64:
-		column := data.Col.([]int64)
-		val := v.(int64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_uint8:
-		column := data.Col.([]uint8)
-		val := v.(uint8)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_uint16:
-		column := data.Col.([]uint16)
-		val := v.(uint16)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_uint32:
-		column := data.Col.([]uint32)
-		val := v.(uint32)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_uint64:
-		column := data.Col.([]uint64)
-		val := v.(uint64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_float32:
-		column := data.Col.([]float32)
-		val := v.(float32)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_float64:
-		column := data.Col.([]float64)
-		val := v.(float64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_date:
-		column := data.Col.([]types.Date)
-		val := v.(types.Date)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_datetime:
-		column := data.Col.([]types.Datetime)
-		val := v.(types.Datetime)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_timestamp:
-		column := data.Col.([]types.Timestamp)
-		val := v.(types.Timestamp)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_decimal64:
-		column := data.Col.([]types.Decimal64)
-		val := v.(types.Decimal64)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			if column[mid] > val {
-				end = mid - 1
-			} else if column[mid] < val {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_decimal128:
-		column := data.Col.([]types.Decimal128)
-		val := v.(types.Decimal128)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			ret := types.CompareDecimal128Decimal128Aligned(column[mid], val)
-			if ret == 1 {
-				end = mid - 1
-			} else if ret == -1 {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
-	case types.T_char, types.T_varchar:
+	case types.Type_BOOL:
+		return GetOffsetWithFunc[bool](data.Col.([]bool), v.(bool), CompareBool, skipmask)
+	case types.Type_INT8:
+		return GetOffsetOfOrdered[int8](data.Col, v, skipmask)
+	case types.Type_INT16:
+		return GetOffsetOfOrdered[int16](data.Col, v, skipmask)
+	case types.Type_INT32:
+		return GetOffsetOfOrdered[int32](data.Col, v, skipmask)
+	case types.Type_INT64:
+		return GetOffsetOfOrdered[int64](data.Col, v, skipmask)
+	case types.Type_UINT8:
+		return GetOffsetOfOrdered[uint8](data.Col, v, skipmask)
+	case types.Type_UINT16:
+		return GetOffsetOfOrdered[uint16](data.Col, v, skipmask)
+	case types.Type_UINT32:
+		return GetOffsetOfOrdered[uint32](data.Col, v, skipmask)
+	case types.Type_UINT64:
+		return GetOffsetOfOrdered[uint64](data.Col, v, skipmask)
+	case types.Type_FLOAT32:
+		return GetOffsetOfOrdered[float32](data.Col, v, skipmask)
+	case types.Type_FLOAT64:
+		return GetOffsetOfOrdered[float64](data.Col, v, skipmask)
+	case types.Type_DATE:
+		return GetOffsetOfOrdered[types.Date](data.Col, v, skipmask)
+	case types.Type_DATETIME:
+		return GetOffsetOfOrdered[types.Datetime](data.Col, v, skipmask)
+	case types.Type_TIMESTAMP:
+		return GetOffsetOfOrdered[types.Timestamp](data.Col, v, skipmask)
+	case types.Type_DECIMAL64:
+		return GetOffsetOfOrdered[types.Decimal64](data.Col, v, skipmask)
+	case types.Type_DECIMAL128:
+		return GetOffsetWithFunc[types.Decimal128](
+			data.Col.([]types.Decimal128),
+			v.(types.Decimal128),
+			types.CompareDecimal128Decimal128Aligned,
+			skipmask)
+	case types.Type_CHAR, types.Type_VARCHAR:
 		column := data.Col.(*types.Bytes)
 		val := v.([]byte)
 		start, end := 0, len(column.Offsets)-1
@@ -1128,7 +866,7 @@ func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset u
 			} else if res < 0 {
 				start = mid + 1
 			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
+				if skipmask != nil && skipmask.Contains(uint32(mid)) {
 					return
 				}
 				offset = uint32(mid)
