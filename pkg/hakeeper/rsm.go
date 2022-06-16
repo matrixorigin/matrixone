@@ -50,6 +50,7 @@ const (
 	tickTag
 	dnHeartbeatTag
 	logHeartbeatTag
+	checkTag
 )
 
 type logShardIDQuery struct {
@@ -63,6 +64,11 @@ type logShardIDQueryResult struct {
 
 type stateMachine struct {
 	replicaID uint64
+
+	// TODO: add tests to ensure these are not included in snapshots
+	checker Checker
+	// keyed by UUID
+	operators map[string][]Operator
 
 	Tick   uint64
 	NextID uint64
@@ -122,6 +128,10 @@ func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
 
 func isTickCmd(cmd []byte) bool {
 	return len(cmd) == headerSize && binaryEnc.Uint16(cmd) == tickTag
+}
+
+func isCheckCmd(cmd []byte) bool {
+	return len(cmd) == headerSize && binaryEnc.Uint16(cmd) == checkTag
 }
 
 func GetTickCmd() []byte {
@@ -205,6 +215,23 @@ func (s *stateMachine) handleTick(cmd []byte) (sm.Result, error) {
 	return sm.Result{}, nil
 }
 
+func (s *stateMachine) handleCheck(cmd []byte) (sm.Result, error) {
+	// TODO: remove this != nil check
+	if s.checker != nil {
+		ops := s.checker.Check(ClusterInfo{}, s.DNState, s.LogState, s.Tick)
+		// add ops to the s.Operators map, keyed by the UUID of the target
+		for _, op := range ops {
+			l, ok := s.operators[op.UUID]
+			if !ok {
+				l = make([]Operator, 0)
+			}
+			l = append(l, op)
+			s.operators[op.UUID] = l
+		}
+	}
+	return sm.Result{}, nil
+}
+
 func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	if _, ok := isCreateLogShardCmd(cmd); ok {
@@ -215,6 +242,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleLogHeartbeat(cmd)
 	} else if isTickCmd(cmd) {
 		return s.handleTick(cmd)
+	} else if isCheckCmd(cmd) {
+		return s.handleCheck(cmd)
 	}
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }
