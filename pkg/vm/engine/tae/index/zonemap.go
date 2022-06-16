@@ -165,169 +165,25 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		return
 	}
 	switch zm.typ.Oid {
-	case types.Type_BOOL:
-		if _, err = w.Write(encoding.EncodeBool(zm.min.(bool))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeBool(zm.max.(bool))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_INT8:
-		if _, err = w.Write(encoding.EncodeInt8(zm.min.(int8))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeInt8(zm.max.(int8))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_INT16:
-		if _, err = w.Write(encoding.EncodeInt16(zm.min.(int16))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeInt16(zm.max.(int16))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_INT32:
-		if _, err = w.Write(encoding.EncodeInt32(zm.min.(int32))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeInt32(zm.max.(int32))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_INT64:
-		if _, err = w.Write(encoding.EncodeInt64(zm.min.(int64))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeInt64(zm.max.(int64))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_UINT8:
-		if _, err = w.Write(encoding.EncodeUint8(zm.min.(uint8))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeUint8(zm.max.(uint8))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_UINT16:
-		if _, err = w.Write(encoding.EncodeUint16(zm.min.(uint16))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeUint16(zm.max.(uint16))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_UINT32:
-		if _, err = w.Write(encoding.EncodeUint32(zm.min.(uint32))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeUint32(zm.max.(uint32))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_UINT64:
-		if _, err = w.Write(encoding.EncodeUint64(zm.min.(uint64))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeUint64(zm.max.(uint64))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_FLOAT32:
-		if _, err = w.Write(encoding.EncodeFloat32(zm.min.(float32))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeFloat32(zm.max.(float32))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_FLOAT64:
-		if _, err = w.Write(encoding.EncodeFloat64(zm.min.(float64))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeFloat64(zm.max.(float64))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_DATE:
-		if _, err = w.Write(encoding.EncodeDate(zm.min.(types.Date))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeDate(zm.max.(types.Date))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_DATETIME:
-		if _, err = w.Write(encoding.EncodeDatetime(zm.min.(types.Datetime))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeDatetime(zm.max.(types.Datetime))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_TIMESTAMP:
-		if _, err = w.Write(encoding.EncodeTimestamp(zm.min.(types.Timestamp))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeTimestamp(zm.max.(types.Timestamp))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_DECIMAL64:
-		if _, err = w.Write(encoding.EncodeDecimal64(zm.min.(types.Decimal64))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeDecimal64(zm.max.(types.Decimal64))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
-	case types.Type_DECIMAL128:
-		if _, err = w.Write(encoding.EncodeDecimal128(zm.min.(types.Decimal128))); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeDecimal128(zm.max.(types.Decimal128))); err != nil {
-			return
-		}
-		buf = w.Bytes()
-		return
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		minv := zm.min.([]byte)
 		maxv := zm.max.([]byte)
-		if _, err = w.Write(encoding.EncodeInt16(int16(len(minv)))); err != nil {
-			return
-		}
-		if _, err = w.Write(minv); err != nil {
-			return
-		}
-		if _, err = w.Write(encoding.EncodeInt16(int16(len(maxv)))); err != nil {
-			return
-		}
-		if _, err = w.Write(maxv); err != nil {
+		if _, err = types.WriteValues(
+			&w,
+			int16(len(minv)),
+			minv,
+			int16(len(maxv)),
+			maxv); err != nil {
 			return
 		}
 		buf = w.Bytes()
-		return
+	default:
+		if _, err = types.WriteValues(&w, zm.min, zm.max); err != nil {
+			return
+		}
+		buf = w.Bytes()
 	}
-	panic("unsupported")
+	return
 }
 
 func (zm *ZoneMap) Unmarshal(buf []byte) error {

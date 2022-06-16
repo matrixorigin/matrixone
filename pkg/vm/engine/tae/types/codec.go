@@ -1,9 +1,12 @@
 package types
 
 import (
+	"fmt"
+	"io"
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
@@ -159,4 +162,105 @@ func EncodeValue(val any, typ Type) []byte {
 	default:
 		panic("unsupported type")
 	}
+}
+
+func WriteFixedValue[T any](w io.Writer, v T) (err error) {
+	_, err = w.Write(EncodeFixed(v))
+	return
+}
+
+func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
+	var nr int
+	for _, val := range vals {
+		switch v := val.(type) {
+		case []byte:
+			if nr, err = w.Write(v); err != nil {
+				return
+			}
+			n += int64(nr)
+		case bool:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int8:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int16:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int32:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case int64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint8:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint16:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint32:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case uint64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case float32:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case float64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case types.Date:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case types.Datetime:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case types.Timestamp:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case types.Decimal64:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case types.Decimal128:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		default:
+			panic(fmt.Errorf("%T:%v not supported", v, v))
+		}
+	}
+	return
 }

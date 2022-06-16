@@ -3,6 +3,7 @@ package model
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -68,8 +69,40 @@ func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
 		switch v := val.(type) {
 		case []byte:
 			_, _ = w.Write(v)
-		default:
+		case bool:
 			_, _ = w.Write(types.EncodeFixed(v))
+		case int8:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case int16:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case int32:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case int64:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case uint8:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case uint16:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case uint32:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case uint64:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case float32:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case float64:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case types.Date:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case types.Datetime:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case types.Timestamp:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case types.Decimal64:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case types.Decimal128:
+			_, _ = w.Write(types.EncodeFixed(v))
+		default:
+			panic(fmt.Errorf("%T:%v not supported", v, v))
 		}
 	}
 	return w.Bytes()
