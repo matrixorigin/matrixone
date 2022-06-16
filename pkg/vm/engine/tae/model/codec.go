@@ -10,13 +10,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-var CompoundKeyType types.Type
-
-func init() {
-	CompoundKeyType = types.Type_VARCHAR.ToType()
-	CompoundKeyType.Width = 100
-}
-
 type CompoundKeyEncoder = func(*bytes.Buffer, ...any) []byte
 
 // [48 Bit (BlockID) + 48 Bit (SegmentID)]
@@ -123,7 +116,7 @@ func EncodeCompoundColumn(cols ...*movec.Vector) (cc *movec.Vector) {
 		cc = cols[0]
 		return
 	}
-	cc = movec.New(CompoundKeyType)
+	cc = movec.New(types.CompoundKeyType)
 	var buf bytes.Buffer
 	vs := make([]any, len(cols))
 	for row := 0; row < movec.Length(cols[0]); row++ {

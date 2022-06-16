@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -138,7 +137,9 @@ func (s *Schema) GetSortKeyType() types.Type {
 	if s.IsSinglePK() {
 		return s.GetSingleSortKey().Type
 	}
-	return model.CompoundKeyType
+	t := types.CompoundKeyType
+	// TODO: set correct width
+	return t
 }
 func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
 func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
