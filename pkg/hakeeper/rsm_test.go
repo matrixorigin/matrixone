@@ -253,6 +253,14 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 			},
 		},
 	}
+	sc4 := hapb.ScheduleCommand{
+		UUID: "uuid3",
+		ConfigChange: hapb.ConfigChange{
+			Replica: hapb.Replica{
+				ShardID: 4,
+			},
+		},
+	}
 
 	b := hapb.CommandBatch{
 		Term:     101,
@@ -268,6 +276,20 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, []hapb.ScheduleCommand{sc1, sc3}, l1)
 	l2, ok := tsm1.scheduleCommands["uuid2"]
+	assert.True(t, ok)
+	assert.Equal(t, []hapb.ScheduleCommand{sc2}, l2)
+
+	cmd2 := GetUpdateCommandsCmd(b.Term-1,
+		[]hapb.ScheduleCommand{sc1, sc2, sc3, sc4})
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd2})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, b.Term, tsm1.term)
+	require.Equal(t, 2, len(tsm1.scheduleCommands))
+	l1, ok = tsm1.scheduleCommands["uuid1"]
+	assert.True(t, ok)
+	assert.Equal(t, []hapb.ScheduleCommand{sc1, sc3}, l1)
+	l2, ok = tsm1.scheduleCommands["uuid2"]
 	assert.True(t, ok)
 	assert.Equal(t, []hapb.ScheduleCommand{sc2}, l2)
 }
