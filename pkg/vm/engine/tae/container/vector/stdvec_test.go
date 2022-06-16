@@ -25,13 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestStdVector(t *testing.T) {
-	colTypes := mock.MockColTypes(12)
+	colTypes := types.MockColTypes(12)
 	capacity := uint64(10000)
 	vecs := make([]*StdVector, 0)
 	for _, colType := range colTypes {
