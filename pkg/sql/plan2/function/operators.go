@@ -3886,6 +3886,7 @@ var operators = map[int][]Function{
 	CASE: {
 		{
 			Index:       0,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int8,
@@ -3894,6 +3895,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       1,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int16,
@@ -3902,6 +3904,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       2,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int32,
@@ -3910,6 +3913,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       3,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int64,
@@ -3918,6 +3922,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       4,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint8,
@@ -3926,6 +3931,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       5,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint16,
@@ -3934,6 +3940,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       6,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint32,
@@ -3942,6 +3949,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       7,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint64,
@@ -3950,6 +3958,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       8,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_float32,
@@ -3958,6 +3967,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       9,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_float64,
@@ -3966,6 +3976,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       10,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_bool,
@@ -3974,6 +3985,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       11,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_date,
@@ -3982,6 +3994,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       12,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_datetime,
@@ -3990,6 +4003,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       13,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_varchar,
@@ -3998,6 +4012,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       14,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_char,
@@ -4006,6 +4021,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       15,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_decimal64,
@@ -4014,6 +4030,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       16,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_decimal128,
@@ -4024,6 +4041,7 @@ var operators = map[int][]Function{
 	IFF: {
 		{
 			Index:       0,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int8,
@@ -4032,6 +4050,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       1,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int16,
@@ -4040,6 +4059,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       2,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int32,
@@ -4048,6 +4068,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       3,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int64,
@@ -4056,6 +4077,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       4,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint8,
@@ -4064,6 +4086,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       5,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint16,
@@ -4072,6 +4095,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       6,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint32,
@@ -4080,6 +4104,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       7,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint64,
@@ -4088,6 +4113,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       8,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_float32,
@@ -4096,6 +4122,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       9,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_float64,
@@ -4104,6 +4131,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       10,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_bool,
@@ -4112,6 +4140,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       11,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_date,
@@ -4120,6 +4149,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       12,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_datetime,
@@ -4128,6 +4158,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       13,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_varchar,
@@ -4136,6 +4167,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       14,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_char,
@@ -4144,6 +4176,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       15,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_decimal64,
@@ -4152,6 +4185,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       16,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_decimal128,
