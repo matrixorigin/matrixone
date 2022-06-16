@@ -21,6 +21,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
+	github.com/google/uuid v1.3.0
 	github.com/lni/dragonboat/v4 v4.0.0-20220612172217-6ae1d0b2e535
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
@@ -53,7 +54,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.13.6 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
-	github.com/google/uuid v1.3.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.0.0 // indirect
 	github.com/hashicorp/go-msgpack v0.5.3 // indirect

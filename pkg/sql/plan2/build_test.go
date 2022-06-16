@@ -723,12 +723,12 @@ func TestResultColumns(t *testing.T) {
 	returnColumnsSql := map[string]string{
 		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC":            "N_NAME,a",
 		"select n_nationkey, sum(n_regionkey) from (select * from nation) sub group by n_nationkey": "n_nationkey,sum(n_regionkey)",
-		"show variables":            "Variable_name,Value",
-		"show create database tpch": "Database,Create Database",
-		"show create table nation":  "Table,Create Table",
-		"show databases":            "Database",
-		"show tables":               "Tables_in_tpch",
-		"show columns from nation":  "Field,Type,Null,Key,Default,Comment",
+		"show variables": "Variable_name,Value",
+		// "show create database tpch": "Database,Create Database",
+		// "show create table nation":  "Table,Create Table",
+		"show databases":           "Database",
+		"show tables":              "Tables_in_tpch",
+		"show columns from nation": "Field,Type,Null,Key,Default,Comment",
 	}
 	for sql, colsStr := range returnColumnsSql {
 		cols := strings.Split(colsStr, ",")

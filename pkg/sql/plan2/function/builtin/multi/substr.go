@@ -54,12 +54,9 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 
 	// request new memory space for result column
 	rows := calcResultVectorRows(inputVecs)
-	resultVec, err := proc.AllocVector(srcVector.Typ, int64(len(columnSrcCol.Data)*rows))
-	if err != nil {
-		return nil, err
-	}
+	resultVec := proc.AllocScalarVector(srcVector.Typ)
 	results := &types.Bytes{
-		Data:    resultVec.Data,
+		Data:    make([]byte, int64(len(columnSrcCol.Data)*rows)),
 		Offsets: make([]uint32, rows),
 		Lengths: make([]uint32, rows),
 	}
