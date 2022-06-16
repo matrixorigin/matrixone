@@ -199,6 +199,30 @@ func IntToBytes[T constraints.Integer](xs []T, rs *types.Bytes) (*types.Bytes, e
 	return rs, nil
 }
 
+func Decimal64ToBytes(xs []types.Decimal64, rs *types.Bytes, scale int32) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, x.Decimal64ToString(scale)...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func Decimal128ToBytes(xs []types.Decimal128, rs *types.Bytes, scale int32) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, x.Decimal128ToString(scale)...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
 func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 
@@ -241,9 +265,9 @@ func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]ty
 	return rs, nil
 }
 
-func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64) ([]types.Decimal64, error) {
+func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, scale int64) ([]types.Decimal64, error) {
 	for i, x := range xs {
-		rs[i] = types.InitDecimal64(int64(x))
+		rs[i] = types.InitDecimal64(int64(x), scale)
 	}
 	return rs, nil
 }
