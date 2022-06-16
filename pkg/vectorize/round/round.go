@@ -76,16 +76,13 @@ func roundUint8(xs []uint8, rs []uint8, digits int64) []uint8 {
 	case digits >= 0:
 		return xs
 	case digits == -1 || digits == -2:
-		scale := uint8(scaleTable[-digits])
+		scale := float64(scaleTable[-digits])
+		/////
+
+		/////
 		for i := range xs {
-			quotient := (xs[i] + scale/2) / scale
-			if quotient*scale == xs[i]+scale/2 {
-				// round half(.5) to the nearest even number
-				rs[i] = (quotient & 0xFE) * scale
-			} else {
-				// round others
-				rs[i] = quotient * scale
-			}
+			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+			rs[i] = uint8(value)
 		}
 	case digits <= -maxUint8digits:
 		for i := range xs {
@@ -100,16 +97,10 @@ func roundUint16(xs []uint16, rs []uint16, digits int64) []uint16 {
 	case digits >= 0:
 		return xs
 	case digits > -maxUint16digits:
-		scale := uint16(scaleTable[-digits])
+		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			quotient := (xs[i] + scale/2) / scale
-			if quotient*scale == xs[i]+scale/2 {
-				// round .5 to the nearest even number
-				rs[i] = (quotient & 0xFFFE) * scale
-			} else {
-				// round others
-				rs[i] = quotient * scale
-			}
+			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+			rs[i] = uint16(value)
 		}
 	case digits <= -maxUint16digits:
 		for i := range xs {
@@ -124,16 +115,10 @@ func roundUint32(xs []uint32, rs []uint32, digits int64) []uint32 {
 	case digits >= 0:
 		return xs
 	case digits > -maxUint32digits:
-		scale := uint32(scaleTable[-digits])
+		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			quotient := (xs[i] + scale/2) / scale
-			if quotient*scale == xs[i]+scale/2 {
-				// round .5 to the nearest even number
-				rs[i] = (quotient & 0xFFFFFFFE) * scale
-			} else {
-				// round others
-				rs[i] = quotient * scale
-			}
+			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+			rs[i] = uint32(value)
 		}
 	case digits <= maxUint32digits:
 		for i := range xs {
@@ -148,16 +133,10 @@ func roundUint64(xs []uint64, rs []uint64, digits int64) []uint64 {
 	case digits >= 0:
 		return xs
 	case digits > -maxUint64digits:
-		scale := scaleTable[-digits]
+		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			quotient := (xs[i] + scale/2) / scale
-			if quotient*scale == xs[i]+scale/2 {
-				// round .5 to the nearest even number
-				rs[i] = (quotient & 0xFFFFFFFFFFFFFFFE) * scale
-			} else {
-				// round others
-				rs[i] = quotient * scale
-			}
+			value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+			rs[i] = uint64(value)
 		}
 	case digits <= -maxUint64digits:
 		for i := range xs {
@@ -172,21 +151,16 @@ func roundInt8(xs []int8, rs []int8, digits int64) []int8 {
 	case digits >= 0:
 		return xs
 	case digits == -1 || digits == -2:
-		scale := int8(scaleTable[-digits])
+		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			value := xs[i]
-			flag := int8(0)
-			if value < 0 {
-				value -= scale
-				flag = 1
-			}
-			quotient := (value + scale/2) / scale
-			if quotient*scale == value+scale/2 {
-				// round half(.5) to the nearest even number
-				rs[i] = ((quotient + flag) & (^1)) * scale
+			if xs[i] > 0 {
+				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int8(value)
+			} else if xs[i] < 0 {
+				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int8(value)
 			} else {
-				// round others
-				rs[i] = quotient * scale
+				rs[i] = 0
 			}
 		}
 	case digits <= -maxInt8digits:
@@ -202,21 +176,16 @@ func roundInt16(xs []int16, rs []int16, digits int64) []int16 {
 	case digits >= 0:
 		return xs
 	case digits > -maxInt16digits:
-		scale := int16(scaleTable[-digits])
+		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			value := xs[i]
-			flag := int16(0)
-			if value < 0 {
-				value -= scale
-				flag = 1
-			}
-			quotient := (value + scale/2) / scale
-			if quotient*scale == value+scale/2 {
-				// round .5 to the nearest even number
-				rs[i] = ((quotient + flag) & (^1)) * scale
+			if xs[i] > 0 {
+				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int16(value)
+			} else if xs[i] < 0 {
+				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int16(value)
 			} else {
-				// round others
-				rs[i] = quotient * scale
+				rs[i] = 0
 			}
 		}
 	case digits <= -maxInt16digits:
@@ -232,21 +201,16 @@ func roundInt32(xs []int32, rs []int32, digits int64) []int32 {
 	case digits >= 0:
 		return xs
 	case digits > -maxInt32digits:
-		scale := int32(scaleTable[-digits])
+		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			value := xs[i]
-			flag := int32(0)
-			if value < 0 {
-				value -= scale
-				flag = 1
-			}
-			quotient := (value + scale/2) / scale
-			if quotient*scale == value+scale/2 {
-				// round .5 to the nearest even number
-				rs[i] = ((quotient + flag) & (^1)) * scale
+			if xs[i] > 0 {
+				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int32(value)
+			} else if xs[i] < 0 {
+				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int32(value)
 			} else {
-				// round others
-				rs[i] = quotient * scale
+				rs[i] = 0
 			}
 		}
 	case digits <= maxInt32digits:
@@ -262,21 +226,16 @@ func roundInt64(xs []int64, rs []int64, digits int64) []int64 {
 	case digits >= 0:
 		return xs
 	case digits > -maxInt64digits:
-		scale := int64(scaleTable[-digits])
+		scale := float64(scaleTable[-digits])
 		for i := range xs {
-			value := xs[i]
-			flag := int64(0)
-			if value < 0 {
-				value -= scale
-				flag = 1
-			}
-			quotient := (value + scale/2) / scale
-			if quotient*scale == value+scale/2 {
-				// round .5 to the nearest even number
-				rs[i] = ((quotient + flag) & (^1)) * scale
+			if xs[i] > 0 {
+				value := int((float64(xs[i])+0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int64(value)
+			} else if xs[i] < 0 {
+				value := int((float64(xs[i])-0.5*scale)/scale) * int(scale) //todo(broccoli): please find a better way to round away from zero
+				rs[i] = int64(value)
 			} else {
-				// round others
-				rs[i] = quotient * scale
+				rs[i] = 0
 			}
 		}
 	case digits <= maxInt64digits:

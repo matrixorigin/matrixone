@@ -22,6 +22,15 @@ type Operator struct {
 	// feel free to add whatever you need
 }
 
+type IDAllocator interface {
+	// Next returns a new ID that can be used as the replica ID of a DN shard or
+	// Log shard. When the return boolean value is false, it means no more ID
+	// can be allocated at this time.
+	Next() (uint64, bool)
+	Set(first uint64, last uint64)
+	Capacity() uint64
+}
+
 // Checker is the interface suppose to be implemented by HAKeeper's
 // coordinator. Checker is suppose to be stateless - Checker is free to
 // maintain whatever internal states, but those states should never be
@@ -30,6 +39,6 @@ type Checker interface {
 	// Check is periodically called by the HAKeeper for checking the cluster
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
-	Check(cluster ClusterInfo,
+	Check(alloc IDAllocator, cluster ClusterInfo,
 		dn DNState, log LogState, currentTick uint64) []Operator
 }

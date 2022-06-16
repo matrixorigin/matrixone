@@ -351,6 +351,15 @@ var builtins = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          binary.ExtractFromDate,
 		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_varchar, types.T_datetime},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          binary.ExtractFromDatetime,
+		},
 	},
 	LENGTH: {
 		{
