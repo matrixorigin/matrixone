@@ -19,7 +19,7 @@ import (
 	"sync"
 )
 
-const UPGRADE_FILE_NUM = 10
+const UPGRADE_FILE_NUM = 2
 
 type dataFile struct {
 	mutex  sync.RWMutex
@@ -79,7 +79,9 @@ func newDeletes(block *blockFile) *deletesFile {
 }
 
 func (df *dataFile) Write(buf []byte) (n int, err error) {
+	df.mutex.RLock()
 	if df.file == nil {
+		df.mutex.RUnlock()
 		n = len(buf)
 		df.buf = make([]byte, len(buf))
 		copy(df.buf, buf)
@@ -88,7 +90,6 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 		df.stat.originSize = int64(len(df.buf))
 		return
 	}
-	df.mutex.RLock()
 	file := df.file[len(df.file)-1]
 	df.mutex.RUnlock()
 	if df.colBlk != nil && df.colBlk.block.rows > 0 {
@@ -104,16 +105,17 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 }
 
 func (df *dataFile) Read(buf []byte) (n int, err error) {
-	if df.file == nil {
-		n = len(buf)
-		copy(buf, df.buf)
-		return
-	}
 	bufLen := len(buf)
 	if bufLen == 0 {
 		return 0, nil
 	}
 	df.mutex.RLock()
+	if df.file == nil {
+		df.mutex.RUnlock()
+		n = len(buf)
+		copy(buf, df.buf)
+		return
+	}
 	file := df.file[len(df.file)-1]
 	df.mutex.RUnlock()
 	n, err = file.Read(buf)
