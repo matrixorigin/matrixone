@@ -257,21 +257,6 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		if err != nil {
 			return nil, err
 		}
-		if rel.Rows() == 0 { // process a query like `select count(*) from t`, t is an empty table
-			bat := batch.NewWithSize(len(n.TableDef.Cols))
-			for i, col := range n.TableDef.Cols {
-				bat.Vecs[i] = vector.New(types.Type{
-					Oid:   types.T(col.Typ.Id),
-					Width: col.Typ.Width,
-					Size:  col.Typ.Size,
-					Scale: col.Typ.Scale,
-				})
-			}
-			ds := &Scope{Magic: Normal}
-			ds.Proc = process.NewFromProc(mheap.New(c.proc.Mp.Gm), c.proc, 0)
-			ds.DataSource = &Source{Bat: bat}
-			return c.compileSort(n, c.compileProjection(n, []*Scope{ds})), nil
-		}
 		src := &Source{
 			RelationName: n.TableDef.Name,
 			SchemaName:   n.ObjRef.SchemaName,
@@ -281,6 +266,9 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			src.Attributes[i] = col.Name
 		}
 		nodes := rel.Nodes(snap)
+		if len(nodes) == 0 {
+			nodes = make([]engine.Node, 1)
+		}
 		ss := make([]*Scope, len(nodes))
 		for i := range nodes {
 			ss[i] = &Scope{
@@ -308,7 +296,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		if err != nil {
 			return nil, err
 		}
-		ss = c.compileGroup(n, ss)
+		ss = c.compileGroup(n, ss, ns)
 		rewriteExprListForAggNode(n.FilterList, int32(len(n.GroupBy)))
 		rewriteExprListForAggNode(n.ProjectList, int32(len(n.GroupBy)))
 		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
@@ -586,11 +574,11 @@ func (c *Compile) compileLimit(n *plan.Node, ss []*Scope) []*Scope {
 	return []*Scope{rs}
 }
 
-func (c *Compile) compileGroup(n *plan.Node, ss []*Scope) []*Scope {
+func (c *Compile) compileGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	for i := range ss {
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op:  overload.Group,
-			Arg: constructGroup(n),
+			Arg: constructGroup(n, ns[n.Children[0]]),
 		})
 	}
 	rs := &Scope{

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
@@ -303,7 +304,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n *plan.Node) *group.Argument {
+func constructGroup(n, cn *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
@@ -320,9 +321,16 @@ func constructGroup(n *plan.Node) *group.Argument {
 			}
 		}
 	}
-
+	typs := make([]types.Type, len(cn.ProjectList))
+	for i, e := range cn.ProjectList {
+		typs[i].Oid = types.T(e.Typ.Id)
+		typs[i].Width = e.Typ.Width
+		typs[i].Size = e.Typ.Size
+		typs[i].Scale = e.Typ.Scale
+	}
 	return &group.Argument{
 		Aggs:  aggs,
+		Types: typs,
 		Exprs: n.GroupBy,
 	}
 }
