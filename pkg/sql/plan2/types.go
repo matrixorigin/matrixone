@@ -33,6 +33,7 @@ type RowsetData = plan.RowsetData
 type Query = plan.Query
 type Plan = plan.Plan
 type Type = plan.Type
+type Plan_Query = plan.Plan_Query
 
 type CompilerContext interface {
 	// Default database/schema in context
@@ -111,6 +112,7 @@ type BindContext struct {
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
+	distinctTag  int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
@@ -192,8 +194,12 @@ type ProjectionBinder struct {
 }
 
 type OrderBinder struct {
-	*ProjectionBinder
+	*DistinctBinder
 	selectList tree.SelectExprs
+}
+
+type DistinctBinder struct {
+	*ProjectionBinder
 }
 
 type LimitBinder struct {

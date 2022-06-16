@@ -1,8 +1,7 @@
 package index
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
 
@@ -65,7 +64,7 @@ func NewMultiplRowsART(typ types.Type) *mvART {
 }
 
 func (art *mvART) Insert(key any, row uint32) (err error) {
-	bufk := compute.EncodeKey(key, art.typ)
+	bufk := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(bufk)
 	if !found {
 		n := NewRowsNode()
@@ -83,7 +82,7 @@ func (art *mvART) Insert(key any, row uint32) (err error) {
 }
 
 func (art *mvART) DeleteOne(key any, row uint32) (pos int, err error) {
-	bufk := compute.EncodeKey(key, art.typ)
+	bufk := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(bufk)
 	if !found {
 		err = ErrNotFound
@@ -99,7 +98,7 @@ func (art *mvART) DeleteOne(key any, row uint32) (pos int, err error) {
 }
 
 func (art *mvART) DeleteAll(key any) (err error) {
-	bufk := compute.EncodeKey(key, art.typ)
+	bufk := types.EncodeValue(key, art.typ)
 	_, found := art.tree.Delete(bufk)
 	if !found {
 		err = ErrNotFound
@@ -108,7 +107,7 @@ func (art *mvART) DeleteAll(key any) (err error) {
 }
 
 func (art *mvART) GetRowsNode(key any) (n *RowsNode, found bool) {
-	bufk := compute.EncodeKey(key, art.typ)
+	bufk := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(bufk)
 	if !found {
 		return
@@ -119,13 +118,13 @@ func (art *mvART) GetRowsNode(key any) (n *RowsNode, found bool) {
 }
 
 func (art *mvART) Contains(key any) (found bool) {
-	bufk := compute.EncodeKey(key, art.typ)
+	bufk := types.EncodeValue(key, art.typ)
 	_, found = art.tree.Search(bufk)
 	return
 }
 
 func (art *mvART) ContainsRow(key any, row uint32) (found bool) {
-	bufk := compute.EncodeKey(key, art.typ)
+	bufk := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(bufk)
 	if !found {
 		return found
@@ -140,7 +139,7 @@ func (art *mvART) Size() int {
 }
 
 func (art *mvART) RowCount(key any) (cnt int) {
-	bufk := compute.EncodeKey(key, art.typ)
+	bufk := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(bufk)
 	if !found {
 		cnt = 0

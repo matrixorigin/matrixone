@@ -1382,11 +1382,11 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 					case defines.MYSQL_TYPE_FLOAT:
 						value, err := mrs.GetFloat64(rowIdx, i)
 						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', 4, 32)
+						data = strconv.AppendFloat(data, value, 'f', -1, 32)
 					case defines.MYSQL_TYPE_DOUBLE:
 						value, err := mrs.GetFloat64(rowIdx, i)
 						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', 4, 64)
+						data = strconv.AppendFloat(data, value, 'f', -1, 64)
 					case defines.MYSQL_TYPE_DATE:
 						value, err := mrs.GetValue(rowIdx, i)
 						require.NoError(t, err)

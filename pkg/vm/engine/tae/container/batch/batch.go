@@ -19,9 +19,9 @@ import (
 	"fmt"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 var (
@@ -133,21 +133,21 @@ func (bat *Batch) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	attrs := bat.GetAttrs()
 	length := len(attrs)
-	buf.Write(encoding.EncodeUint16(uint16(length)))
+	buf.Write(types.EncodeFixed(uint16(length)))
 	for _, attr := range attrs {
-		buf.Write(encoding.EncodeUint64(uint64(attr)))
+		buf.Write(types.EncodeFixed(uint64(attr)))
 		vec, err := bat.GetVectorByAttr(attr)
 		if err != nil {
 			return nil, err
 		}
 		vecType := vec.GetType()
-		buf.Write(encoding.EncodeUint8(uint8(vecType)))
+		buf.Write(types.EncodeFixed(uint8(vecType)))
 		vecBuf, err := vec.Marshal()
 		if err != nil {
 			return nil, err
 		}
 		vecLength := len(vecBuf)
-		buf.Write(encoding.EncodeUint64(uint64(vecLength)))
+		buf.Write(types.EncodeFixed(uint64(vecLength)))
 		buf.Write(vecBuf)
 	}
 	return buf.Bytes(), nil
@@ -155,16 +155,16 @@ func (bat *Batch) Marshal() ([]byte, error) {
 
 func (bat *Batch) Unmarshal(buf []byte) error {
 	pos := 0
-	attrLength := encoding.DecodeUint16(buf[pos : pos+2])
+	attrLength := types.DecodeFixed[uint16](buf[pos : pos+2])
 	pos += 2
 	bat.Attrs = make([]int, attrLength)
 	bat.Vecs = make([]vector.IVector, attrLength)
 	for i := 0; i < int(attrLength); i++ {
-		bat.Attrs[i] = int(encoding.DecodeUint64(buf[pos : pos+8]))
+		bat.Attrs[i] = int(types.DecodeFixed[uint64](buf[pos : pos+8]))
 		pos += 8
-		vecType := encoding.DecodeUint8(buf[pos : pos+1])
+		vecType := types.DecodeFixed[uint8](buf[pos : pos+1])
 		pos += 1
-		vecLength := encoding.DecodeUint64(buf[pos : pos+8])
+		vecLength := types.DecodeFixed[uint64](buf[pos : pos+8])
 		pos += 8
 		switch vecType {
 		case uint8(container.StdVec):
