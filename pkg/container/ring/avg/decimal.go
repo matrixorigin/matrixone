@@ -111,7 +111,7 @@ func (r *DecimalRing) Grow(m *mheap.Mheap) error {
 func (r *DecimalRing) Grows(size int, m *mheap.Mheap) error {
 	n := len(r.Vs)
 	if n == 0 {
-		data, err := mheap.Alloc(m, int64(size*8))
+		data, err := mheap.Alloc(m, int64(size*Decimal128Size))
 		if err != nil {
 			return err
 		}
