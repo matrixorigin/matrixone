@@ -212,7 +212,7 @@ func TestHandleDNHeartbeat(t *testing.T) {
 
 func TestGetIDCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	cmd := getGetIDCmd(100)
+	cmd := GetGetIDCmd(100)
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 1}, result)

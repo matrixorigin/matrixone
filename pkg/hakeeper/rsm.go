@@ -38,6 +38,8 @@ var (
 const (
 	// TickDuration defines the frequency of ticks.
 	TickDuration = time.Second
+	// CheckDuration defines how often HAKeeper checks the health state of the cluster
+	CheckDuration = 2 * time.Second
 	// DefaultHAKeeperShardID is the shard ID assigned to the special HAKeeper
 	// shard.
 	DefaultHAKeeperShardID uint64 = 0
@@ -50,7 +52,6 @@ const (
 	tickTag
 	dnHeartbeatTag
 	logHeartbeatTag
-	checkTag
 	getIDTag
 )
 
@@ -66,20 +67,13 @@ type logShardIDQueryResult struct {
 }
 
 type stateMachine struct {
-	replicaID uint64
-
-	// TODO: add tests to ensure these are not included in snapshots
-	checker Checker
-	// keyed by UUID
-	operators map[string][]Operator
-
-	Tick   uint64
-	NextID uint64
-
-	LogShards map[string]uint64
-	DNState   DNState
-	LogState  LogState
-
+	replicaID   uint64
+	operators   map[string][]Operator // keyed by UUID
+	Tick        uint64
+	NextID      uint64
+	LogShards   map[string]uint64 // keyed by Log Shard name
+	DNState     DNState
+	LogState    LogState
 	ClusterInfo ClusterInfo
 }
 
@@ -140,10 +134,6 @@ func isLogShardCmd(cmd []byte, tag uint16) (string, bool) {
 
 func isTickCmd(cmd []byte) bool {
 	return len(cmd) == headerSize && binaryEnc.Uint16(cmd) == tickTag
-}
-
-func isCheckCmd(cmd []byte) bool {
-	return len(cmd) == headerSize && binaryEnc.Uint16(cmd) == checkTag
 }
 
 func isGetIDCmd(cmd []byte) bool {
@@ -235,23 +225,6 @@ func (s *stateMachine) handleTick(cmd []byte) (sm.Result, error) {
 	return sm.Result{}, nil
 }
 
-func (s *stateMachine) handleCheck(cmd []byte) (sm.Result, error) {
-	// TODO: remove this != nil check
-	if s.checker != nil {
-		ops := s.checker.Check(ClusterInfo{}, s.DNState, s.LogState, s.Tick)
-		// add ops to the s.Operators map, keyed by the UUID of the target
-		for _, op := range ops {
-			l, ok := s.operators[op.UUID]
-			if !ok {
-				l = make([]Operator, 0)
-			}
-			l = append(l, op)
-			s.operators[op.UUID] = l
-		}
-	}
-	return sm.Result{}, nil
-}
-
 func (s *stateMachine) handleGetIDCmd(cmd []byte) (sm.Result, error) {
 	count := parseGetIDCmd(cmd)
 	s.NextID++
@@ -271,8 +244,6 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleLogHeartbeat(cmd)
 	} else if isTickCmd(cmd) {
 		return s.handleTick(cmd)
-	} else if isCheckCmd(cmd) {
-		return s.handleCheck(cmd)
 	} else if isGetIDCmd(cmd) {
 		return s.handleGetIDCmd(cmd)
 	}
@@ -283,9 +254,9 @@ func (s *stateMachine) handleStateQuery() (interface{}, error) {
 	// FIXME: pretty sure we need to deepcopy here
 	return &HAKeeperState{
 		Tick:        s.Tick,
-		ClusterInfo: ClusterInfo,
-		DNState:     DNState,
-		LogState:    LogState,
+		ClusterInfo: s.ClusterInfo,
+		DNState:     s.DNState,
+		LogState:    s.LogState,
 	}, nil
 }
 

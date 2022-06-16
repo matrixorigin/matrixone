@@ -15,12 +15,17 @@
 package logservice
 
 import (
+	"context"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 )
 
 const (
 	minIDAllocCapacity uint64 = 1024
 	defaultIDBatchSize uint64 = 1024 * 10
+
+	hakeeperDefaultTimeout = time.Second
 )
 
 type idAllocator struct {
@@ -30,20 +35,13 @@ type idAllocator struct {
 	lastID uint64
 }
 
+var _ hakeeper.IDAllocator = (*idAllocator)(nil)
+
 func newIDAllocator() hakeeper.IDAllocator {
 	return &idAllocator{nextID: 1, lastID: 0}
 }
 
 func (a *idAllocator) Next() (uint64, bool) {
-	return a.next()
-}
-
-func (a *idAllocator) set(next uint64, last uint64) {
-	a.nextID = next
-	a.lastID = last
-}
-
-func (a *idAllocator) next() (uint64, bool) {
 	if a.nextID <= a.lastID {
 		v := a.nextID
 		a.nextID++
@@ -52,7 +50,12 @@ func (a *idAllocator) next() (uint64, bool) {
 	return 0, false
 }
 
-func (a *idAllocator) capacity() uint64 {
+func (a *idAllocator) Set(next uint64, last uint64) {
+	a.nextID = next
+	a.lastID = last
+}
+
+func (a *idAllocator) Capacity() uint64 {
 	if a.nextID <= a.lastID {
 		return (a.lastID - a.nextID) + 1
 	}
@@ -61,38 +64,42 @@ func (a *idAllocator) capacity() uint64 {
 
 func (l *logStore) updateIDAlloc(count uint64) error {
 	cmd := hakeeper.GetGetIDCmd(count)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
 		plog.Errorf("propose get id failed, %v", err)
 		return err
 	}
-	l.alloc.set(result.Value, result.Value+count-1)
+	// TODO: add a test for this
+	l.alloc.Set(result.Value, result.Value+count-1)
 	return nil
 }
 
 func (l *logStore) healthCheck() {
-	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	if err != nil {
 		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
 		return
 	}
 	if ok && leaderID == l.haKeeperReplicaID {
-		if l.alloc.capacity() < minIDAllocCapacity {
+		if l.alloc.Capacity() < minIDAllocCapacity {
 			if err := l.updateIDAlloc(defaultIDBatchSize); err != nil {
 				// TODO: check whether this is temp error
 				plog.Errorf("failed to update ID alloc, %v", err)
 				return
 			}
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
+		defer cancel()
 		s, err := l.read(ctx, hakeeper.DefaultHAKeeperShardID, &hakeeper.StateQuery{})
 		if err != nil {
 			// TODO: check whether this is temp error
 			return
 		}
 		state := s.(*hakeeper.HAKeeperState)
-		opts := l.checker.Check(l.alloc,
+		l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
 	}
 }

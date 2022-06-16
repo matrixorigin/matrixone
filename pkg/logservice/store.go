@@ -95,6 +95,8 @@ type logStore struct {
 	cfg               Config
 	nh                *dragonboat.NodeHost
 	haKeeperReplicaID uint64
+	checker           hakeeper.Checker
+	alloc             hakeeper.IDAllocator
 	stopper           *syncutil.Stopper
 
 	mu struct {
@@ -436,7 +438,7 @@ func (l *logStore) hakeeperTick() {
 	}
 	if ok && leaderID == l.haKeeperReplicaID {
 		cmd := hakeeper.GetTickCmd()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 		if _, err := l.propose(ctx, session, cmd); err != nil {

@@ -27,6 +27,8 @@ type IDAllocator interface {
 	// Log shard. When the return boolean value is false, it means no more ID
 	// can be allocated at this time.
 	Next() (uint64, bool)
+	Set(first uint64, last uint64)
+	Capacity() uint64
 }
 
 // Checker is the interface suppose to be implemented by HAKeeper's
