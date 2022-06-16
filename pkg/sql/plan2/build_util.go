@@ -512,7 +512,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
-			return &plan.Type{Id: plan.Type_DATETIME, Size: 8}, nil
+			return &plan.Type{Id: plan.Type_DATETIME, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return &plan.Type{Id: plan.Type_TIMESTAMP, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:

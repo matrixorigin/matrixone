@@ -17,6 +17,7 @@ package anyvalue
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -459,7 +460,7 @@ func (r *AnyVRing2) BatchFill(start int64, os []uint8, vps []uint64, zs []int64,
 				r.Ns[vps[i]-1] += zs[int64(i)+start]
 			} else {
 				j := vps[i] - 1
-				if v := vs.Get(int64(i) + start); shouldSet(r.Set[i]) {
+				if v := vs.Get(int64(i) + start); shouldSet(r.Set[j]) {
 					r.Vs[j] = append(r.Vs[j][:0], v...)
 					r.Set[j] = true
 				}
@@ -468,7 +469,7 @@ func (r *AnyVRing2) BatchFill(start int64, os []uint8, vps []uint64, zs []int64,
 	} else {
 		for i := range os {
 			j := vps[i] - 1
-			if v := vs.Get(int64(i) + start); shouldSet(r.Set[i]) {
+			if v := vs.Get(int64(i) + start); shouldSet(r.Set[j]) {
 				r.Vs[j] = append(r.Vs[j][:0], v...)
 				r.Set[j] = true
 			}
