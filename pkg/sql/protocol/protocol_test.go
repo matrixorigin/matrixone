@@ -79,85 +79,85 @@ func TestTransform(t *testing.T) {
 
 func TestInstruction(t *testing.T) {
 	insArray := []vm.Instruction{
-		vm.Instruction{
+		{
 			Op: vm.Top,
 			Arg: &top.Argument{
 				Limit: 123,
-				Fs:    []top.Field{top.Field{Attr: "hello", Type: top.Ascending}},
+				Fs:    []top.Field{{Attr: "hello", Type: top.Ascending}},
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Plus,
 			Arg: &plus.Argument{
 				Typ: 123897,
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Limit,
 			Arg: &limit.Argument{
 				Seen:  12893792345,
 				Limit: 89757435634,
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Join,
 			Arg: &join.Argument{
-				Vars: [][]string{[]string{"x"}, []string{"y"}},
+				Vars: [][]string{{"x"}, {"y"}},
 			},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Merge,
 			Arg: &merge.Argument{},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Dedup,
 			Arg: &dedup.Argument{},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Order,
 			Arg: &order.Argument{
 				Fs: []order.Field{
-					order.Field{
+					{
 						Attr: "order field attr",
 						Type: 1,
 					},
 				},
 			},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Oplus,
 			Arg: &oplus.Argument{Typ: 12312423},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Output,
 			Arg: &output.Argument{Attrs: []string{"the", "first", "loop"}},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Offset,
 			Arg: &offset.Argument{
 				Seen:   1231245,
 				Offset: 65784654,
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Restrict,
 			Arg: &restrict.Argument{
 				Attrs: []string{"the", "first", "loop"},
 				E:     &extend.StarExtend{},
 			},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Connector,
 			Arg: &connector.Argument{},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Connector,
 			Arg: &transform.Argument{
 				Typ:      12312312,
 				IsMerge:  false,
 				FreeVars: []string{"vm", "times", "test"},
 				BoundVars: []transformer.Transformer{
-					transformer.Transformer{
+					{
 						Op:    1231,
 						Ref:   897897,
 						Name:  "happening",
@@ -166,7 +166,7 @@ func TestInstruction(t *testing.T) {
 				},
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Projection,
 			Arg: &projection.Argument{
 				Rs: []uint64{123, 98789, 3456456},
@@ -176,7 +176,7 @@ func TestInstruction(t *testing.T) {
 				},
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.UnTransform,
 			Arg: &untransform.Argument{
 				FreeVars: []string{"the", "first", "loop"},
@@ -476,19 +476,25 @@ func TestExtend(t *testing.T) {
 
 func NewStrVector(v []byte) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24})
-	vector.Append(vec, [][]byte{v, v, v})
+	if err := vector.Append(vec, [][]byte{v, v, v}); err != nil {
+		panic(err)
+	}
 	return vec
 }
 
 func NewFloatVector(v float64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_float64), Size: 8})
-	vector.Append(vec, []float64{v, v, v})
+	if err := vector.Append(vec, []float64{v, v, v}); err != nil {
+		panic(err)
+	}
 	return vec
 }
 
 func NewInt8Vector(v int8) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int8), Size: 8})
-	vector.Append(vec, []int8{v, v, v})
+	if err := vector.Append(vec, []int8{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -497,7 +503,9 @@ func NewInt8Vector(v int8) *vector.Vector {
 
 func NewInt16Vector(v int16) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int16), Size: 8})
-	vector.Append(vec, []int16{v, v, v})
+	if err := vector.Append(vec, []int16{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -506,7 +514,9 @@ func NewInt16Vector(v int16) *vector.Vector {
 
 func NewInt32Vector(v int32) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int32), Size: 8})
-	vector.Append(vec, []int32{v, v, v})
+	if err := vector.Append(vec, []int32{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -515,7 +525,9 @@ func NewInt32Vector(v int32) *vector.Vector {
 
 func NewInt64Vector(v int64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_int64), Size: 8})
-	vector.Append(vec, []int64{v, v, v})
+	if err := vector.Append(vec, []int64{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -524,7 +536,9 @@ func NewInt64Vector(v int64) *vector.Vector {
 
 func NewUInt8Vector(v uint8) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint8), Size: 8})
-	vector.Append(vec, []uint8{v, v, v})
+	if err := vector.Append(vec, []uint8{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -533,7 +547,9 @@ func NewUInt8Vector(v uint8) *vector.Vector {
 
 func NewUInt16Vector(v uint16) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint16), Size: 8})
-	vector.Append(vec, []uint16{v, v, v})
+	if err := vector.Append(vec, []uint16{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -542,7 +558,9 @@ func NewUInt16Vector(v uint16) *vector.Vector {
 
 func NewUInt32Vector(v uint32) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint32), Size: 8})
-	vector.Append(vec, []uint32{v, v, v})
+	if err := vector.Append(vec, []uint32{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -551,7 +569,9 @@ func NewUInt32Vector(v uint32) *vector.Vector {
 
 func NewUInt64Vector(v uint64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_uint64), Size: 8})
-	vector.Append(vec, []uint64{v, v, v})
+	if err := vector.Append(vec, []uint64{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -560,7 +580,9 @@ func NewUInt64Vector(v uint64) *vector.Vector {
 
 func NewFloat32Vector(v float32) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_float32), Size: 8})
-	vector.Append(vec, []float32{v, v, v})
+	if err := vector.Append(vec, []float32{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -569,7 +591,9 @@ func NewFloat32Vector(v float32) *vector.Vector {
 
 func NewFloat64Vector(v float64) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_float64), Size: 8})
-	vector.Append(vec, []float64{v, v, v})
+	if err := vector.Append(vec, []float64{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")
@@ -578,7 +602,9 @@ func NewFloat64Vector(v float64) *vector.Vector {
 
 func NewCharVector(v []byte) *vector.Vector {
 	vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24})
-	vector.Append(vec, [][]byte{v, v, v})
+	if err := vector.Append(vec, [][]byte{v, v, v}); err != nil {
+		panic(err)
+	}
 	vec.Ref = 12839791322
 	vec.Link = 123908123
 	vec.Data = []byte("Unless required by applicable law or agreed to in writing")

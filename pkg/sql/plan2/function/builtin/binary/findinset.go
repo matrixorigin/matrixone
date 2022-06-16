@@ -1,0 +1,79 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package binary
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/findinset"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	left, right := vectors[0], vectors[1]
+	resultType := types.Type{Oid: types.T_uint64, Size: 8}
+	resultElementSize := int(resultType.Size)
+	switch {
+	case left.IsScalar() && right.IsScalar():
+		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]uint64, 1)
+		vector.SetCol(resultVector, findinset.FindInSetWithAllConst(leftValues, rightValues, resultValues))
+		return resultVector, nil
+	case left.IsScalar() && !right.IsScalar():
+		if left.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
+		resultValues = resultValues[:len(rightValues.Lengths)]
+		nulls.Set(resultVector.Nsp, right.Nsp)
+		vector.SetCol(resultVector, findinset.FindInSetWithLeftConst(leftValues, rightValues, resultValues))
+		return resultVector, nil
+	case !left.IsScalar() && right.IsScalar():
+		if right.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues.Lengths)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := encoding.DecodeUint64Slice(resultVector.Data)
+		resultValues = resultValues[:len(leftValues.Lengths)]
+		nulls.Set(resultVector.Nsp, left.Nsp)
+		vector.SetCol(resultVector, findinset.FindInSetWithRightConst(leftValues, rightValues, resultValues))
+		return resultVector, nil
+	}
+	leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
+	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
+	if err != nil {
+		return nil, err
+	}
+	resultValues := encoding.DecodeUint64Slice(resultVector.Data)
+	resultValues = resultValues[:len(rightValues.Lengths)]
+	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
+	vector.SetCol(resultVector, findinset.FindInSet(leftValues, rightValues, resultValues))
+	return resultVector, nil
+}

@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
@@ -160,7 +159,7 @@ func (d *DB) MakeMutationHandle(meta *metadata.Table) (iface.MutationHandle, err
 	return handle, nil
 }
 
-func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
+func (d *DB) GetTableData(meta *metadata.Table) (iface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
 	if err != nil {
 		_, err := d.Store.DataTables.RegisterTable(meta)

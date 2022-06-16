@@ -130,6 +130,12 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 			return nil, err
 		}
 		return plan, nil
+	case *tree.BeginTransaction:
+		return &BeginTxn{}, nil
+	case *tree.CommitTransaction:
+		return &CommitTxn{}, nil
+	case *tree.RollbackTransaction:
+		return &RollbackTxn{}, nil
 	}
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }

@@ -28,6 +28,7 @@ import (
 var TypeSize int
 var DateSize int
 var DatetimeSize int
+var TimestampSize int
 var Decimal64Size int
 var Decimal128Size int
 
@@ -35,6 +36,7 @@ func init() {
 	TypeSize = int(unsafe.Sizeof(types.Type{}))
 	DateSize = int(unsafe.Sizeof(types.Date(0)))
 	DatetimeSize = int(unsafe.Sizeof(types.Datetime(0)))
+	TimestampSize = int(unsafe.Sizeof(types.Timestamp(0)))
 	Decimal64Size = int(unsafe.Sizeof(types.Decimal64(0)))
 	Decimal128Size = int(unsafe.Sizeof(types.Decimal128{}))
 }
@@ -66,6 +68,14 @@ func EncodeFixed[T any](v T) []byte {
 }
 func DecodeFixed[T any](v []byte) T {
 	return *(*T)(unsafe.Pointer(&v[0]))
+}
+
+func DecodeBool(v []byte) bool {
+	return *(*bool)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeBool(v bool) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
 }
 
 func EncodeInt8(v int8) []byte {
@@ -164,6 +174,14 @@ func DecodeDatetime(v []byte) types.Datetime {
 	return *(*types.Datetime)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeTimestamp(v types.Timestamp) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
+}
+
+func DecodeTimestamp(v []byte) types.Timestamp {
+	return *(*types.Timestamp)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeDecimal64(v types.Decimal64) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), Decimal64Size)
 }
@@ -194,8 +212,16 @@ func DecodeFixedSlice[T any](v []byte, sz int) (ret []T) {
 	return
 }
 
+func EncodeBoolSlice(v []bool) []byte {
+	return *(*[]byte)(unsafe.Pointer(&v))
+}
+
 func EncodeInt8Slice(v []int8) []byte {
 	return *(*[]byte)(unsafe.Pointer(&v))
+}
+
+func DecodeBoolSlice(v []byte) []bool {
+	return *(*[]bool)(unsafe.Pointer(&v))
 }
 
 func DecodeInt8Slice(v []byte) []int8 {
@@ -302,6 +328,14 @@ func EncodeDatetimeSlice(v []types.Datetime) []byte {
 
 func DecodeDatetimeSlice(v []byte) (ret []types.Datetime) {
 	return DecodeFixedSlice[types.Datetime](v, DatetimeSize)
+}
+
+func EncodeTimestampSlice(v []types.Timestamp) []byte {
+	return EncodeFixedSlice(v, TimestampSize)
+}
+
+func DecodeTimestampSlice(v []byte) (ret []types.Timestamp) {
+	return DecodeFixedSlice[types.Timestamp](v, TimestampSize)
 }
 
 func EncodeDecimal64Slice(v []types.Decimal64) []byte {

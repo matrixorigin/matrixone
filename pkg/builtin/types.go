@@ -23,6 +23,7 @@ const (
 	Substring
 	Ltrim
 	Rtrim
+	Oct
 	StartsWith
 	Lpad
 	Rpad
@@ -52,4 +53,9 @@ const (
 	Weekday
 	EndsWith
 	Date
+	BitLength
+	Bin
+	FindInSet
+	FromUnixTime
+	UnixTimestamp
 )

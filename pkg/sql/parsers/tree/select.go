@@ -29,8 +29,8 @@ type Select struct {
 	Select  SelectStatement
 	OrderBy OrderBy
 	Limit   *Limit
-	With	*With
-	Ep *ExportParam
+	With    *With
+	Ep      *ExportParam
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
@@ -169,12 +169,17 @@ type SelectClause struct {
 	Where    *Where
 	GroupBy  GroupBy
 	Having   *Where
+	Option   string
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
 	ctx.WriteString("select ")
 	if node.Distinct {
 		ctx.WriteString("distinct ")
+	}
+	if node.Option != "" {
+		ctx.WriteString(node.Option)
+		ctx.WriteByte(' ')
 	}
 	node.Exprs.Format(ctx)
 	if len(node.From.Tables) > 0 {
@@ -400,8 +405,8 @@ func (node *AliasClause) Format(ctx *FmtCtx) {
 //the table expression coupled with an optional alias.
 type AliasedTableExpr struct {
 	TableExpr
-	Expr 	TableExpr
-	As   	AliasClause
+	Expr TableExpr
+	As   AliasClause
 }
 
 func (node *AliasedTableExpr) Format(ctx *FmtCtx) {

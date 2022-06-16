@@ -16,7 +16,6 @@ package mysql
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"strconv"
 
@@ -88,8 +87,9 @@ func (l *Lexer) toInt(lval *yySymType, str string) int {
 	ival, err := strconv.ParseUint(str, 10, 64)
 	if err != nil {
 		// TODO: toDecimal()
-		l.scanner.LastError = err
-		return LEX_ERROR
+		// l.scanner.LastError = err
+		lval.str = str
+		return DECIMAL_VALUE
 	}
 	switch {
 	case ival <= math.MaxInt64:
@@ -119,8 +119,9 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 	ival, err := strconv.ParseUint(str[2:], 16, 64)
 	if err != nil {
 		// TODO: toDecimal()
-		l.scanner.LastError = err
-		return LEX_ERROR
+		//l.scanner.LastError = err
+		lval.str = str
+		return HEXNUM
 	}
 	switch {
 	case ival <= math.MaxInt64:
@@ -134,22 +135,4 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 
 func (l *Lexer) toBit(lval *yySymType, str string) int {
 	return BIT_LITERAL
-}
-
-func getUint64(num interface{}) uint64 {
-	switch v := num.(type) {
-	case int64:
-		return uint64(v)
-	case uint64:
-		return v
-	}
-	return 0
-}
-
-func getInt64(num interface{}) (int64, string) {
-	switch v := num.(type) {
-	case int64:
-		return v, ""
-	}
-	return -1, fmt.Sprintf("%d is out of range int64", num)
 }

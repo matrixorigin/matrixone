@@ -62,7 +62,7 @@ func TestDecimalComparison(t *testing.T) {
 		}},
 		{sql: "select * from decimal_table1 where d1 < 1;", res: executeResult{
 			attr: []string{"d1"},
-			data: [][]string{[]string{"{-123450000 -1}"}, []string{"{-500000 -1}"}},
+			data: [][]string{{"{-123450000 -1}"}, {"{-500000 -1}"}},
 		}},
 		{sql: "select * from decimal_table where d1 <= 1;", res: executeResult{
 			attr: []string{"d1"},

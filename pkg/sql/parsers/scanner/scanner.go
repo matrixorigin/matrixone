@@ -308,15 +308,15 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 }
 
 var encodeRef = map[byte]byte{
-	'0':    '\x00',
-	'\'':   '\'',
-	'"':    '"',
-	'b':    '\b',
-	'n':    '\n',
-	'r':    '\r',
-	't':    '\t',
-	'Z':     26, // ctl-Z
-	'\\':   '\\',
+	'0':  '\x00',
+	'\'': '\'',
+	'"':  '"',
+	'b':  '\b',
+	'n':  '\n',
+	'r':  '\r',
+	't':  '\t',
+	'Z':  26, // ctl-Z
+	'\\': '\\',
 }
 
 // scanLiteralIdentifier scans an identifier enclosed by backticks. If the identifier
@@ -524,6 +524,9 @@ exponent:
 		if s.peek(1) == '+' || s.peek(1) == '-' {
 			token = FLOAT
 			s.skip(2)
+		} else if digitVal(s.peek(1)) < 10 {
+			token = FLOAT
+			s.skip(1)
 		} else {
 			goto exit
 		}
@@ -537,7 +540,7 @@ exit:
 		s.scanIdentifier(false)
 	}
 
-	return token, s.buf[start:s.Pos]
+	return token, strings.ToLower(s.buf[start:s.Pos])
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
@@ -546,7 +549,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 
 	for {
 		ch := s.cur()
-		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)){
+		if !isLetter(ch) && !isDigit(ch) && ch != '@' && !(isVariable && isCarat(ch)) {
 			break
 		}
 		if ch == '@' {
@@ -557,13 +560,13 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
-		return keywordID, keywordName
+		return keywordID, lower
 	}
 	// dual must always be case-insensitive
 	if lower == "dual" {
 		return ID, lower
 	}
-	return ID, keywordName
+	return ID, lower
 }
 
 func (s *Scanner) scanBitLiteral() (int, string) {

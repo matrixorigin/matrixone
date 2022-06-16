@@ -16,6 +16,7 @@ package logutil
 
 import (
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func Debug(msg string, fields ...zap.Field) {
@@ -82,7 +83,6 @@ func Fatalf(msg string, fields ...interface{}) {
 //	}()
 //}
 
-
 type GoettyLogger struct{}
 
 func (l *GoettyLogger) Infof(msg string, fields ...interface{}) {
@@ -99,4 +99,42 @@ func (l *GoettyLogger) Errorf(msg string, fields ...interface{}) {
 
 func (l *GoettyLogger) Fatalf(msg string, fields ...interface{}) {
 	Fatalf(msg, fields...)
+}
+
+// Adjust returns default logger if logger is nil
+func Adjust(logger *zap.Logger, options ...zap.Option) *zap.Logger {
+	if logger != nil {
+		return logger
+	}
+	return GetLogger(options...)
+}
+
+// GetLoggerWithOptions get default zap logger
+func GetLoggerWithOptions(level zapcore.LevelEnabler, encoder zapcore.Encoder, syncer zapcore.WriteSyncer, options ...zap.Option) *zap.Logger {
+	options = append(options, zap.AddStacktrace(zapcore.FatalLevel), zap.AddCaller())
+	if syncer == nil {
+		syncer = getConsoleSyncer()
+	}
+	if encoder == nil {
+		encoder = getLoggerEncoder("")
+	}
+	return zap.New(zapcore.NewCore(encoder, syncer, level), options...)
+}
+
+// GetLogger get default zap logger
+func GetLogger(options ...zap.Option) *zap.Logger {
+	return GetLoggerWithOptions(zapcore.InfoLevel, nil, nil, options...)
+}
+
+// GetPanicLogger returns a zap logger which will panic on Fatal(). The
+// returned zap logger should only be used in tests.
+func GetPanicLogger(options ...zap.Option) *zap.Logger {
+	return GetPanicLoggerWithLevel(zapcore.InfoLevel, options...)
+}
+
+// GetPanicLoggerWithLevel returns a zap logger which will panic on Fatal(). The
+// returned zap logger should only be used in tests.
+func GetPanicLoggerWithLevel(level zapcore.Level, options ...zap.Option) *zap.Logger {
+	return GetLoggerWithOptions(level, nil, nil,
+		zap.OnFatal(zapcore.WriteThenPanic))
 }

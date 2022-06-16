@@ -340,7 +340,7 @@ func (td *tableData) RegisterBlock(meta *metadata.Block) (blk iface.IBlock, err 
 	defer td.tree.RUnlock()
 	idx, ok := td.tree.helper[meta.Segment.Id]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("seg %d not found", meta.Segment.Id))
+		return nil, fmt.Errorf("seg %d not found", meta.Segment.Id)
 	}
 	seg := td.tree.segments[idx]
 	blk, err = seg.RegisterBlock(meta)
@@ -492,7 +492,7 @@ func (ts *Tables) DropTableNoLock(tid uint64) (tbl iface.ITableData, err error) 
 func (ts *Tables) GetTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 	tbl, ok := ts.Data[tid]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("Specified table %d not found", tid))
+		return nil, fmt.Errorf("Specified table %d not found", tid)
 	}
 	return tbl, err
 }

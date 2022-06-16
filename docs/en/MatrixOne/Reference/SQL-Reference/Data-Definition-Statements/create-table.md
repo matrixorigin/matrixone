@@ -1,6 +1,7 @@
 # **CREATE TABLE**
 
 ## **Description**
+
 Create a new table.
 
 ## **Syntax**
@@ -14,11 +15,12 @@ Create a new table.
 )
 ```
 
-#### create_table_statement:
+#### create_table_statement
 
 ![Create Table Diagram](https://github.com/matrixorigin/artwork/blob/main/docs/reference/create_table_statement.png?raw=true)
 
 ## **Examples**
+
 ```
 > CREATE TABLE test(a int, b varchar(10));
 

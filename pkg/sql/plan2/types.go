@@ -15,37 +15,215 @@
 package plan2
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-type TableDef plan.TableDef
-type ObjectRef plan.ObjectRef
-type Cost plan.Cost
-type Const plan.Const
-type Expr plan.Expr
-type Node plan.Node
-type RowsetData plan.RowsetData
-type Query plan.Query
+type TableDef = plan.TableDef
+type ColDef = plan.ColDef
+type ObjectRef = plan.ObjectRef
+type ColRef = plan.ColRef
+type Cost = plan.Cost
+type Const = plan.Const
+type Expr = plan.Expr
+type Node = plan.Node
+type RowsetData = plan.RowsetData
+type Query = plan.Query
+type Plan = plan.Plan
+type Type = plan.Type
+type Plan_Query = plan.Plan_Query
 
 type CompilerContext interface {
-	Resolve(name string) (*plan.ObjectRef, *plan.TableDef)
-	Cost(obj *ObjectRef, e *Expr) *Cost //change Cost to *Cost to fixed "return copies lock value" warning in new proto code generated
+	// Default database/schema in context
+	DefaultDatabase() string
+	// check if database exist
+	DatabaseExists(name string) bool
+	// get table definition by database/schema
+	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	// get the value of variable
+	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
+	// get the definition of primary key
+	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
+	// get the definition of hide key
+	GetHideKeyDef(dbName string, tableName string) *ColDef
+	// get estimated cost by table & expr
+	Cost(obj *ObjectRef, e *Expr) *Cost
 }
 
 type Optimizer interface {
-	Optimize(stmt tree.Statement) (*Query, error) //todo confirm interface change
+	Optimize(stmt tree.Statement) (*Query, error)
 	CurrentContext() CompilerContext
 }
 
-//use for build select
-type SelectContext struct {
-	//when build_from we may set tableAlias and then use in build_where
-	//when build_projection we may set columnAlias and then use in build_orderby
-	tableAlias  map[string]string
-	columnAlias map[string]*plan.Expr
+type Rule interface {
+	Match(*Node) bool    // rule match?
+	Apply(*Node, *Query) // apply the rule
+}
 
-	//use for build subquery
-	subQueryIsCorrelated bool
-	subQueryParentId     int32
+// BaseOptimizer is base optimizer, capable of handling only a few simple rules
+type BaseOptimizer struct {
+	qry   *Query
+	rules []Rule
+	ctx   CompilerContext
+}
+
+//use for build select
+type BinderContext struct {
+	// when build_projection we may set columnAlias and then use in build_orderby
+	columnAlias map[string]*Expr
+	// when build_cte will set cteTables and use in build_from
+	cteTables map[string]*TableDef
+
+	// use for build subquery
+	subqueryIsCorrelated bool
+	// unused, commented out for now.
+	// subqueryIsScalar     bool
+
+	subqueryParentIds []int32
+
+	// use to storage the using columns.
+	// select R.*, S.* from R, S using(a) where S.a > 10
+	// then we store {'a':'S'},
+	// when we use buildUnresolvedName(), and the colName = 'a' and tableName = 'S', we reset tableName=''
+	// because the ProjectNode(after JoinNode) had coalesced the using cols
+	usingCols map[string]string
+}
+
+///////////////////////////////
+// Data structures for refactor
+///////////////////////////////
+
+type QueryBuilder struct {
+	qry     *plan.Query
+	compCtx CompilerContext
+
+	ctxByNode  []*BindContext
+	tagsByNode [][]int32
+	nextTag    int32
+}
+
+type BindContext struct {
+	binder Binder
+
+	cteTables map[string]*plan.TableDef
+
+	groupTag     int32
+	aggregateTag int32
+	projectTag   int32
+	distinctTag  int32
+
+	groups     []*plan.Expr
+	aggregates []*plan.Expr
+	projects   []*plan.Expr
+	results    []*plan.Expr
+
+	headings []string
+
+	groupByAst     map[string]int32
+	aggregateByAst map[string]int32
+	projectByExpr  map[string]int32
+
+	aliasMap map[string]int32
+
+	bindings       []*Binding
+	bindingByTag   map[int32]*Binding //rel_pos
+	bindingByTable map[string]*Binding
+	bindingByCol   map[string]*Binding
+
+	// for join tables
+	bindingTree *BindingTreeNode
+
+	corrCols []*plan.CorrColRef
+
+	parent     *BindContext
+	leftChild  *BindContext
+	rightChild *BindContext
+}
+
+type NameTuple struct {
+	table string
+	col   string
+}
+
+type BindingTreeNode struct {
+	using []NameTuple
+
+	binding *Binding
+
+	left  *BindingTreeNode
+	right *BindingTreeNode
+}
+
+type Binder interface {
+	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
+	BindColRef(*tree.UnresolvedName, int32) (*plan.Expr, error)
+	BindAggFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
+	BindWinFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
+	BindSubquery(*tree.Subquery) (*plan.Expr, error)
+}
+
+type baseBinder struct {
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []string
+}
+
+type TableBinder struct {
+	baseBinder
+}
+
+type WhereBinder struct {
+	baseBinder
+}
+
+type GroupBinder struct {
+	baseBinder
+}
+
+type HavingBinder struct {
+	baseBinder
+	insideAgg bool
+}
+
+type ProjectionBinder struct {
+	baseBinder
+	havingBinder *HavingBinder
+}
+
+type OrderBinder struct {
+	*DistinctBinder
+	selectList tree.SelectExprs
+}
+
+type DistinctBinder struct {
+	*ProjectionBinder
+}
+
+type LimitBinder struct {
+	baseBinder
+}
+
+var _ Binder = (*TableBinder)(nil)
+var _ Binder = (*WhereBinder)(nil)
+var _ Binder = (*GroupBinder)(nil)
+var _ Binder = (*HavingBinder)(nil)
+var _ Binder = (*ProjectionBinder)(nil)
+var _ Binder = (*LimitBinder)(nil)
+
+const (
+	NotFound      int32 = math.MaxInt32
+	AmbiguousName int32 = math.MinInt32
+)
+
+type Binding struct {
+	tag         int32
+	nodeId      int32
+	table       string
+	cols        []string
+	types       []*plan.Type
+	refCnts     []uint
+	colIdByName map[string]int32
 }

@@ -43,7 +43,7 @@ func New(c *catalog.Catalog, cfg *EngineConfig) *aoeEngine {
 }
 
 //Node returns the number of cores of the CPU
-func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
+func (e *aoeEngine) Node(ip string, _ engine.Snapshot) *engine.NodeInfo {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -65,7 +65,7 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 }
 
 //Delete drops the database with the name.
-func (e *aoeEngine) Delete(epoch uint64, name string) error {
+func (e *aoeEngine) Delete(epoch uint64, name string, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -75,7 +75,7 @@ func (e *aoeEngine) Delete(epoch uint64, name string) error {
 }
 
 //Create creates a database with the name and the type.
-func (e *aoeEngine) Create(epoch uint64, name string, typ int) error {
+func (e *aoeEngine) Create(epoch uint64, name string, typ int, _ engine.Snapshot) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -85,7 +85,7 @@ func (e *aoeEngine) Create(epoch uint64, name string, typ int) error {
 }
 
 //Databases returns all the databases in the catalog.
-func (e *aoeEngine) Databases() []string {
+func (e *aoeEngine) Databases(_ engine.Snapshot) []string {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
@@ -101,7 +101,7 @@ func (e *aoeEngine) Databases() []string {
 
 //Database returns the database.
 //the field catalog of the returned database is the catalog of the aoeEngine.
-func (e *aoeEngine) Database(name string) (engine.Database, error) {
+func (e *aoeEngine) Database(name string, _ engine.Snapshot) (engine.Database, error) {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())

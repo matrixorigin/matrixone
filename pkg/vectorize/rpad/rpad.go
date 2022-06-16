@@ -24,6 +24,8 @@ var (
 	Rpad func(*types.Bytes, interface{}, interface{}, []bool, []*nulls.Nulls) (*types.Bytes, *nulls.Nulls, error)
 )
 
+const UINT16_MAX = ^uint16(0)
+
 func init() {
 	Rpad = rpad
 }
@@ -139,7 +141,7 @@ func rpadInt64(strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst [
 			newSize = sizes[i]
 		}
 		// gets NULL if any arg is NULL or the newSize < 0
-		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize < 0 {
+		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize < 0 || newSize > int64(UINT16_MAX) {
 			nulls.Add(resultNsp, row)
 			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 			results.Lengths = append(results.Lengths, 0)
@@ -207,7 +209,7 @@ func rpadUint64(strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst
 			newSize = sizes[i]
 		}
 		// gets NULL if any arg is NULL or the newSize < 0
-		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) {
+		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize > uint64(UINT16_MAX) {
 			nulls.Add(resultNsp, row)
 			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 			results.Lengths = append(results.Lengths, 0)

@@ -16,17 +16,16 @@ package plan2
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 func Test_TPCH_Plan2(t *testing.T) {
-	// Mock is broken
-	// mock := newMockOptimizer()
 	_, fn, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(fn)
 
@@ -40,37 +39,32 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
 
-	/*
-		BROKEN: Will crash.
-		for _, ast := range ddls {
-			_, err := mock.Optimize(ast)
-			if err == nil {
-				t.Logf("Optimizer failed, NYI")
-			}
+	mock := NewEmptyMockOptimizer()
+	for _, ast := range ddls {
+		_, err := mock.Optimize(ast)
+		if err != nil {
+			t.Errorf("Optimizer failed, %v", err)
 		}
-	*/
+	}
 
+	mock = NewMockOptimizer()
+	// test simple sql
 	qf, err := os.ReadFile(dir + "/tpch/simple.sql")
 	if err != nil {
 		t.Errorf("Cannot open queries file, error %v", err)
 	}
-
 	qs, err := parsers.Parse(dialect.MYSQL, string(qf))
 	if qs == nil || err != nil {
-		t.Errorf("DDL Parser failed, error %v", err)
+		t.Errorf("Query Parser failed, error %v", err)
+	}
+	for _, ast := range qs {
+		_, err := mock.Optimize(ast)
+		if err != nil {
+			t.Errorf("Optimizer failed, NYI")
+		}
 	}
 
-	/*
-		BROKEN:
-		for _, ast := range qs {
-			_, err := mock.Optimize(ast)
-			if err == nil {
-				t.Logf("Optimizer failed, NYI")
-			}
-		}
-	*/
-
-	// Parse failed for query 1, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 20, 22
+	// test tpch query
 	for qn := 1; qn <= 22; qn += 1 {
 		qnf, err := os.ReadFile(fmt.Sprintf("%s/tpch/q%d.sql", dir, qn))
 		if err != nil {
@@ -78,16 +72,13 @@ func Test_TPCH_Plan2(t *testing.T) {
 		}
 		qns, err := parsers.Parse(dialect.MYSQL, string(qnf))
 		if qns == nil || err != nil {
-			t.Logf("Query %d Parser failed, error %v", qn, err)
+			t.Errorf("Query %d Parser failed, error %v", qn, err)
 		}
-		/*
-			BROKEN: Will Crash
-			for _, ast := range qns {
-				_, err := mock.Optimize(ast)
-				if err == nil {
-					t.Logf("Optimizer failed, NYI")
-				}
+		for _, ast := range qns {
+			_, err := mock.Optimize(ast)
+			if err != nil {
+				t.Errorf("Optimizer %d failed, error %v", qn, err)
 			}
-		*/
+		}
 	}
 }

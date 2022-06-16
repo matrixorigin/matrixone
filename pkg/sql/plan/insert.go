@@ -16,6 +16,9 @@ package plan
 
 import (
 	"fmt"
+	"go/constant"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go/constant"
-	"strconv"
 )
 
 func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
@@ -60,7 +61,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	orderAttr := make([]string, 0, 32)        // order relation's attribute names
 	{
 		count := 0
-		for _, def := range r.TableDefs() {
+		for _, def := range r.TableDefs(nil) {
 			if v, ok := def.(*engine.AttributeDef); ok {
 				attrType[v.Attr.Name] = v.Attr.Type
 				orderAttr = append(orderAttr, v.Attr.Name)
@@ -112,6 +113,28 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	// insert values for columns
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vs := make([]bool, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(bool), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(bool)
+						}
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		case types.T_int8:
 			vs := make([]int8, len(rows.Rows))
 			{
@@ -398,6 +421,28 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 			if err := vector.Append(vec, vs); err != nil {
 				return err
 			}
+		case types.T_timestamp:
+			vs := make([]types.Timestamp, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(types.Timestamp), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(types.Timestamp)
+						}
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		case types.T_decimal64:
 			vs := make([]types.Decimal64, len(rows.Rows))
 			{
@@ -525,7 +570,7 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		res := value.(types.Date).String()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_datetime:
-		res := value.(types.Datetime).String()
+		res := value.(types.Datetime).String2(typ.Precision)
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)

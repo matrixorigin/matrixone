@@ -29,10 +29,24 @@ const (
 	ERROR_START = 1000 + iota
 	INTERNAL_ERROR
 	NYI
+	ERROR_FUNCTION_PARAMETER
 
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000 + iota
 	OUT_OF_RANGE
+
+	// Group 3: invalid input
+	BAD_CONFIGURATION = 3000 + iota
+	INVALID_INPUT
+
+	// Group 4: unexpected state
+	INVALID_STATE = 4000 + iota
+
+	// Group 10: txn
+	// ErrTxnAborted read and write a transaction that has been rolled back.
+	ErrTxnAborted = 10000 + iota
+	// ErrTxnClosed read and write a transaction after Commit or Rollback method called.
+	ErrTxnClosed
 )
 
 type Error struct {

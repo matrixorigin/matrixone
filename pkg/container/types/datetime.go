@@ -16,8 +16,7 @@ package types
 
 import (
 	"fmt"
-	"strconv"
-	"time"
+	gotime "time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -29,16 +28,13 @@ const (
 	secsPerHour   = 60 * secsPerMinute
 	secsPerDay    = 24 * secsPerHour
 	//secsPerWeek   = 7 * secsPerDay
+	microSecondBitMask = 0xfffff
+	MaxDatetimeYear    = 9999
+	MinDatetimeYear    = 1
 )
 
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
 // calendar, and lower 20 bits holds number of microseconds
-
-func (dt Datetime) String() string {
-	y, m, d, _ := dt.ToDate().Calendar(true)
-	hour, minute, sec := dt.Clock()
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
-}
 
 const (
 	//tsMask         = ^uint64(0) >> 1
@@ -55,12 +51,37 @@ var (
 	errIncorrectDatetimeValue = errors.New(errno.DataException, "Incorrect datetime value")
 )
 
+func (dt Datetime) String() string {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	hour, minute, sec := dt.Clock()
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+}
+
+func (dt Datetime) String2(precision int32) string {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	hour, minute, sec := dt.Clock()
+	if precision > 0 {
+		msec := int64(dt) & 0xfffff
+		msecInstr := fmt.Sprintf("%06d\n", msec)
+		msecInstr = msecInstr[:precision]
+
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d"+"."+msecInstr, y, m, d, hour, minute, sec)
+	}
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+}
+
 // ParseDatetime will parse a string to be a Datetime
 // Support Format:
 // 1. all the Date value
 // 2. yyyy-mm-dd hh:mm:ss(.msec)
 // 3. yyyymmddhhmmss(.msec)
-func ParseDatetime(s string) (Datetime, error) {
+// during parsing, the Datetime value will be rounded(away from zero) to the predefined precision, for example:
+// Datetime(3) input string   					parsing result
+// 				"1999-09-09 11:11:11.1234"		"1999-09-09 11:11:11.123"
+//				"1999-09-09 11:11:11.1235"		"1999-09-09 11:11:11.124"
+// 				"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
+// 				"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
+func ParseDatetime(s string, precision int32) (Datetime, error) {
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
 			return d.ToTime(), nil
@@ -70,6 +91,8 @@ func ParseDatetime(s string) (Datetime, error) {
 	var year int32
 	var month, day, hour, minute, second uint8
 	var msec uint32 = 0
+	var carry uint32 = 0
+	var err error
 
 	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
@@ -101,11 +124,11 @@ func ParseDatetime(s string) (Datetime, error) {
 		}
 		if len(s) > 19 {
 			if len(s) > 20 && s[19] == '.' {
-				m, err := strconv.ParseUint(s[20:], 10, 32)
+				msecStr := s[20:]
+				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
 					return -1, errIncorrectDatetimeValue
 				}
-				msec = uint32(m)
 			} else {
 				return -1, errIncorrectDatetimeValue
 			}
@@ -118,17 +141,18 @@ func ParseDatetime(s string) (Datetime, error) {
 		second = (s[12]-'0')*10 + (s[13] - '0')
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
-				m, err := strconv.ParseUint(s[15:], 10, 32)
+				msecStr := s[15:]
+				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
 					return -1, errIncorrectDatetimeValue
 				}
-				msec = uint32(m)
 			} else {
 				return -1, errIncorrectDatetimeValue
 			}
 		}
 	}
-	return FromClock(year, month, day, hour, minute, second, msec), nil
+	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
+	return result, nil
 }
 
 // validTimeInDay return true if hour, minute and second can be a time during a day
@@ -150,8 +174,16 @@ func (dt Datetime) UTC() Datetime {
 	return Datetime((dt.sec() - localTZ) << 20)
 }
 
+func (dt Datetime) UnixTimestamp() int64 {
+	return dt.sec() - unixEpoch
+}
+
+func FromUnix(time int64) Datetime {
+	return Datetime((time + unixEpoch) << 20)
+}
+
 func Now() Datetime {
-	t := time.Now()
+	t := gotime.Now()
 	wall := *(*uint64)(unsafe.Pointer(&t))
 	ext := *(*int64)(unsafe.Pointer(uintptr(unsafe.Pointer(&t)) + unsafe.Sizeof(wall)))
 	var sec, nsec int64
@@ -166,7 +198,7 @@ func Now() Datetime {
 }
 
 func (dt Datetime) ToDate() Date {
-	return Date((dt.sec() + localTZ) / secsPerDay)
+	return Date((dt.sec()) / secsPerDay)
 }
 
 func (dt Datetime) Clock() (hour, min, sec int8) {
@@ -177,10 +209,106 @@ func (dt Datetime) Clock() (hour, min, sec int8) {
 	return
 }
 
+func (dt Datetime) Sec() int8 {
+	_, _, sec := dt.Clock()
+	return sec
+}
+
+func (dt Datetime) Minute() int8 {
+	_, minute, _ := dt.Clock()
+	return minute
+}
+
+func (dt Datetime) Hour() int8 {
+	hour, _, _ := dt.Clock()
+	return hour
+}
+
 func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Datetime {
 	days := FromCalendar(year, month, day)
 	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec)
 	return Datetime((secs << 20) + int64(msec))
+}
+
+func (dt Datetime) ConvertToGoTime() gotime.Time {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	msec := dt.MicroSec()
+	hour, min, sec := dt.Clock()
+	return gotime.Date(int(y), gotime.Month(m), int(d), int(hour), int(min), int(sec), int(msec*1000), startupTime.Location())
+}
+
+func DatetimeToTimestamp(xs []Datetime, rs []Timestamp) ([]Timestamp, error) {
+	localTZAligned := localTZ << 20
+	xsInInt64 := *(*[]int64)(unsafe.Pointer(&xs))
+	rsInInt64 := *(*[]int64)(unsafe.Pointer(&rs))
+	for i, x := range xsInInt64 {
+		rsInInt64[i] = x - localTZAligned
+	}
+	return rs, nil
+}
+
+func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64, isDate bool) (Datetime, bool) {
+	date = date.Add(gotime.Duration(addMsec) * gotime.Microsecond)
+	date = date.Add(gotime.Duration(addSec) * gotime.Second)
+	date = date.Add(gotime.Duration(addMin) * gotime.Minute)
+	date = date.Add(gotime.Duration(addHour) * gotime.Hour)
+	// corner case: mysql: date_add('2022-01-31',interval 1 month) -> 2022-02-28
+	// only in the month year year-month
+	if addMonth != 0 || addYear != 0 {
+		originDay := date.Day()
+		newDate := date.AddDate(int(addYear), int(addMonth), int(addDay))
+		newDay := newDate.Day()
+		if originDay != newDay {
+			maxDay := LastDay(uint16(newDate.Year()), uint8(newDate.Month()-1))
+			addDay = int64(maxDay) - int64(originDay)
+		}
+	}
+	date = date.AddDate(int(addYear), int(addMonth), int(addDay))
+
+	if isDate {
+		if !validDate(int32(date.Year()), uint8(date.Month()), uint8(date.Day())) {
+			return 0, false
+		}
+	} else {
+		if !validDatetime(int32(date.Year()), uint8(date.Month()), uint8(date.Day())) {
+			return 0, false
+		}
+	}
+	return FromClock(int32(date.Year()), uint8(date.Month()), uint8(date.Day()), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Second()), uint32(date.Nanosecond()/1000)), true
+}
+
+// AddInterval
+// now date or datetime use the function to add/sub date, we need a bool arg to tell isDate/isDatetime
+// date/datetime have different regions, so we don't use same valid function
+// return type bool means the if the date/datetime is valid
+func (dt Datetime) AddInterval(nums int64, its IntervalType, isDate bool) (Datetime, bool) {
+	goTime := dt.ConvertToGoTime()
+	var addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64
+	switch its {
+	case MicroSecond:
+		addMsec += nums
+	case Second:
+		addSec += nums
+	case Minute:
+		addMin += nums
+	case Hour:
+		addHour += nums
+	case Day:
+		addDay += nums
+	case Week:
+		addDay += 7 * nums
+	case Month:
+		addMonth += nums
+	case Quarter:
+		addMonth += 3 * nums
+	case Year:
+		addYear += nums
+	}
+	return dt.AddDateTime(goTime, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear, isDate)
+}
+
+func (dt Datetime) MicroSec() int64 {
+	return int64(dt) << 44 >> 44
 }
 
 func (dt Datetime) sec() int64 {
@@ -193,4 +321,83 @@ func (dt Datetime) Year() uint16 {
 
 func (dt Datetime) Month() uint8 {
 	return dt.ToDate().Month()
+}
+
+func (dt Datetime) Day() uint8 {
+	return dt.ToDate().Day()
+}
+
+func (dt Datetime) WeekOfYear() (int32, uint8) {
+	return dt.ToDate().WeekOfYear()
+}
+
+func (dt Datetime) SecondMicrosecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Sec()) + "." + fmt.Sprintf("%06d", dt.MicroSec())
+	return result
+}
+
+func (dt Datetime) MinuteMicrosecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec()) + "." + fmt.Sprintf("%06d", dt.MicroSec())
+	return result
+}
+
+func (dt Datetime) MinuteSecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec())
+	return result
+}
+
+func (dt Datetime) HourMicrosecondStr() string {
+	result := fmt.Sprintf("%2d", dt.Hour()) + ":" + fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec()) + "." + fmt.Sprintf("%06d", dt.MicroSec())
+	return result
+}
+
+func (dt Datetime) HourSecondStr() string {
+	result := fmt.Sprintf("%2d", dt.Hour()) + ":" + fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec())
+	return result
+}
+
+func (dt Datetime) HourMinuteStr() string {
+	result := fmt.Sprintf("%2d", dt.Hour()) + ":" + fmt.Sprintf("%02d", dt.Minute())
+	return result
+}
+
+func (dt Datetime) DayMicrosecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + dt.HourMicrosecondStr()
+	return result
+}
+
+func (dt Datetime) DaySecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + dt.HourSecondStr()
+	return result
+}
+
+func (dt Datetime) DayMinuteStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + dt.HourMinuteStr()
+	return result
+}
+
+func (dt Datetime) DayHourStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + fmt.Sprintf("%02d", dt.Hour())
+	return result
+}
+
+func (dt Datetime) YearMonthStr() string {
+	result := fmt.Sprintf("%04d", dt.Year()) + " " + fmt.Sprintf("%02d", dt.Month())
+	return result
+}
+
+// date[0001-01-01 00:00:00 to 9999-12-31 23:59:59]
+func validDatetime(year int32, month, day uint8) bool {
+	if year >= MinDatetimeYear && year <= MaxDatetimeYear {
+		if MinMonthInYear <= month && month <= MaxMonthInYear {
+			if day > 0 {
+				if isLeap(year) {
+					return day <= leapYearMonthDays[month-1]
+				} else {
+					return day <= flatYearMonthDays[month-1]
+				}
+			}
+		}
+	}
+	return false
 }

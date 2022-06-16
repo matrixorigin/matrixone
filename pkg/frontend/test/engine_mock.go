@@ -10,7 +10,8 @@ import (
 	roaring64 "github.com/RoaringBitmap/roaring/roaring64"
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	extend "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -118,123 +119,148 @@ func NewMockRelation(ctrl *gomock.Controller) *MockRelation {
 	return mock
 }
 
-func (m *MockRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
-	return nil, false
-}
-
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockRelation) EXPECT() *MockRelationMockRecorder {
 	return m.recorder
 }
 
 // AddTableDef mocks base method.
-func (m *MockRelation) AddTableDef(arg0 uint64, arg1 engine.TableDef) error {
+func (m *MockRelation) AddTableDef(arg0 uint64, arg1 engine.TableDef, arg2 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AddTableDef", arg0, arg1)
+	ret := m.ctrl.Call(m, "AddTableDef", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // AddTableDef indicates an expected call of AddTableDef.
-func (mr *MockRelationMockRecorder) AddTableDef(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) AddTableDef(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddTableDef", reflect.TypeOf((*MockRelation)(nil).AddTableDef), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddTableDef", reflect.TypeOf((*MockRelation)(nil).AddTableDef), arg0, arg1, arg2)
 }
 
 // Close mocks base method.
-func (m *MockRelation) Close() {
+func (m *MockRelation) Close(arg0 engine.Snapshot) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Close")
+	m.ctrl.Call(m, "Close", arg0)
 }
 
 // Close indicates an expected call of Close.
-func (mr *MockRelationMockRecorder) Close() *gomock.Call {
+func (mr *MockRelationMockRecorder) Close(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockRelation)(nil).Close))
-}
-
-// CreateIndex mocks base method.
-func (m *MockRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateIndex", epoch, defs)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// CreateIndex indicates an expected call of CreateIndex.
-func (mr *MockRelationMockRecorder) CreateIndex(epoch, defs interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateIndex", reflect.TypeOf((*MockRelation)(nil).CreateIndex), epoch, defs)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockRelation)(nil).Close), arg0)
 }
 
 // DelTableDef mocks base method.
-func (m *MockRelation) DelTableDef(arg0 uint64, arg1 engine.TableDef) error {
+func (m *MockRelation) DelTableDef(arg0 uint64, arg1 engine.TableDef, arg2 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DelTableDef", arg0, arg1)
+	ret := m.ctrl.Call(m, "DelTableDef", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DelTableDef indicates an expected call of DelTableDef.
-func (mr *MockRelationMockRecorder) DelTableDef(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) DelTableDef(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DelTableDef", reflect.TypeOf((*MockRelation)(nil).DelTableDef), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DelTableDef", reflect.TypeOf((*MockRelation)(nil).DelTableDef), arg0, arg1, arg2)
 }
 
-// DropIndex mocks base method.
-func (m *MockRelation) DropIndex(epoch uint64, name string) error {
+// Delete mocks base method.
+func (m *MockRelation) Delete(arg0 uint64, arg1 *vector.Vector, arg2 string, arg3 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DropIndex", epoch, name)
+	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// DropIndex indicates an expected call of DropIndex.
-func (mr *MockRelationMockRecorder) DropIndex(epoch, name interface{}) *gomock.Call {
+// Delete indicates an expected call of Delete.
+func (mr *MockRelationMockRecorder) Delete(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DropIndex", reflect.TypeOf((*MockRelation)(nil).DropIndex), epoch, name)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockRelation)(nil).Delete), arg0, arg1, arg2, arg3)
+}
+
+// GetHideKey mocks base method.
+func (m *MockRelation) GetHideKey(arg0 engine.Snapshot) *engine.Attribute {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetHideKey", arg0)
+	ret0, _ := ret[0].(*engine.Attribute)
+	return ret0
+}
+
+// GetHideKey indicates an expected call of GetHideKey.
+func (mr *MockRelationMockRecorder) GetHideKey(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHideKey", reflect.TypeOf((*MockRelation)(nil).GetHideKey), arg0)
+}
+
+// GetPriKeyOrHideKey mocks base method.
+func (m *MockRelation) GetPriKeyOrHideKey(arg0 engine.Snapshot) ([]engine.Attribute, bool) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPriKeyOrHideKey", arg0)
+	ret0, _ := ret[0].([]engine.Attribute)
+	ret1, _ := ret[1].(bool)
+	return ret0, ret1
+}
+
+// GetPriKeyOrHideKey indicates an expected call of GetPriKeyOrHideKey.
+func (mr *MockRelationMockRecorder) GetPriKeyOrHideKey(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPriKeyOrHideKey", reflect.TypeOf((*MockRelation)(nil).GetPriKeyOrHideKey), arg0)
+}
+
+// GetPrimaryKeys mocks base method.
+func (m *MockRelation) GetPrimaryKeys(arg0 engine.Snapshot) []*engine.Attribute {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPrimaryKeys", arg0)
+	ret0, _ := ret[0].([]*engine.Attribute)
+	return ret0
+}
+
+// GetPrimaryKeys indicates an expected call of GetPrimaryKeys.
+func (mr *MockRelationMockRecorder) GetPrimaryKeys(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPrimaryKeys", reflect.TypeOf((*MockRelation)(nil).GetPrimaryKeys), arg0)
 }
 
 // ID mocks base method.
-func (m *MockRelation) ID() string {
+func (m *MockRelation) ID(arg0 engine.Snapshot) string {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ID")
+	ret := m.ctrl.Call(m, "ID", arg0)
 	ret0, _ := ret[0].(string)
 	return ret0
 }
 
 // ID indicates an expected call of ID.
-func (mr *MockRelationMockRecorder) ID() *gomock.Call {
+func (mr *MockRelationMockRecorder) ID(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ID", reflect.TypeOf((*MockRelation)(nil).ID))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ID", reflect.TypeOf((*MockRelation)(nil).ID), arg0)
 }
 
 // NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 int, _ extend.Extend, _ []byte) []engine.Reader {
+func (m *MockRelation) NewReader(arg0 int, arg1 extend.Extend, arg2 []byte, arg3 engine.Snapshot) []engine.Reader {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewReader", arg0)
+	ret := m.ctrl.Call(m, "NewReader", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].([]engine.Reader)
 	return ret0
 }
 
 // NewReader indicates an expected call of NewReader.
-func (mr *MockRelationMockRecorder) NewReader(arg0 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) NewReader(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewReader", reflect.TypeOf((*MockRelation)(nil).NewReader), arg0, arg1, arg2, arg3)
 }
 
 // Nodes mocks base method.
-func (m *MockRelation) Nodes() engine.Nodes {
+func (m *MockRelation) Nodes(arg0 engine.Snapshot) engine.Nodes {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Nodes")
+	ret := m.ctrl.Call(m, "Nodes", arg0)
 	ret0, _ := ret[0].(engine.Nodes)
 	return ret0
 }
 
 // Nodes indicates an expected call of Nodes.
-func (mr *MockRelationMockRecorder) Nodes() *gomock.Call {
+func (mr *MockRelationMockRecorder) Nodes(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockRelation)(nil).Nodes))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockRelation)(nil).Nodes), arg0)
 }
 
 // Rows mocks base method.
@@ -266,31 +292,45 @@ func (mr *MockRelationMockRecorder) Size(arg0 interface{}) *gomock.Call {
 }
 
 // TableDefs mocks base method.
-func (m *MockRelation) TableDefs() []engine.TableDef {
+func (m *MockRelation) TableDefs(arg0 engine.Snapshot) []engine.TableDef {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TableDefs")
+	ret := m.ctrl.Call(m, "TableDefs", arg0)
 	ret0, _ := ret[0].([]engine.TableDef)
 	return ret0
 }
 
 // TableDefs indicates an expected call of TableDefs.
-func (mr *MockRelationMockRecorder) TableDefs() *gomock.Call {
+func (mr *MockRelationMockRecorder) TableDefs(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableDefs", reflect.TypeOf((*MockRelation)(nil).TableDefs))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableDefs", reflect.TypeOf((*MockRelation)(nil).TableDefs), arg0)
+}
+
+// Update mocks base method.
+func (m *MockRelation) Update(arg0 uint64, arg1 *batch.Batch, arg2 engine.Snapshot) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Update", arg0, arg1, arg2)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Update indicates an expected call of Update.
+func (mr *MockRelationMockRecorder) Update(arg0, arg1, arg2 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockRelation)(nil).Update), arg0, arg1, arg2)
 }
 
 // Write mocks base method.
-func (m *MockRelation) Write(arg0 uint64, arg1 *batch.Batch) error {
+func (m *MockRelation) Write(arg0 uint64, arg1 *batch.Batch, arg2 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Write", arg0, arg1)
+	ret := m.ctrl.Call(m, "Write", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Write indicates an expected call of Write.
-func (mr *MockRelationMockRecorder) Write(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockRelationMockRecorder) Write(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockRelation)(nil).Write), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Write", reflect.TypeOf((*MockRelation)(nil).Write), arg0, arg1, arg2)
 }
 
 // MockReader is a mock of Reader interface.
@@ -314,48 +354,6 @@ func NewMockReader(ctrl *gomock.Controller) *MockReader {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockReader) EXPECT() *MockReaderMockRecorder {
 	return m.recorder
-}
-
-// NewFilter mocks base method.
-func (m *MockReader) NewFilter() engine.Filter {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewFilter")
-	ret0, _ := ret[0].(engine.Filter)
-	return ret0
-}
-
-// NewFilter indicates an expected call of NewFilter.
-func (mr *MockReaderMockRecorder) NewFilter() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewFilter", reflect.TypeOf((*MockReader)(nil).NewFilter))
-}
-
-// NewSparseFilter mocks base method.
-func (m *MockReader) NewSparseFilter() engine.SparseFilter {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewSparseFilter")
-	ret0, _ := ret[0].(engine.SparseFilter)
-	return ret0
-}
-
-// NewSparseFilter indicates an expected call of NewSparseFilter.
-func (mr *MockReaderMockRecorder) NewSparseFilter() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewSparseFilter", reflect.TypeOf((*MockReader)(nil).NewSparseFilter))
-}
-
-// NewSummarizer mocks base method.
-func (m *MockReader) NewSummarizer() engine.Summarizer {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "NewSummarizer")
-	ret0, _ := ret[0].(engine.Summarizer)
-	return ret0
-}
-
-// NewSummarizer indicates an expected call of NewSummarizer.
-func (mr *MockReaderMockRecorder) NewSummarizer() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NewSummarizer", reflect.TypeOf((*MockReader)(nil).NewSummarizer))
 }
 
 // Read mocks base method.
@@ -752,60 +750,60 @@ func (m *MockDatabase) EXPECT() *MockDatabaseMockRecorder {
 }
 
 // Create mocks base method.
-func (m *MockDatabase) Create(arg0 uint64, arg1 string, arg2 []engine.TableDef) error {
+func (m *MockDatabase) Create(arg0 uint64, arg1 string, arg2 []engine.TableDef, arg3 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Create", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Create", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Create indicates an expected call of Create.
-func (mr *MockDatabaseMockRecorder) Create(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockDatabaseMockRecorder) Create(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockDatabase)(nil).Create), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockDatabase)(nil).Create), arg0, arg1, arg2, arg3)
 }
 
 // Delete mocks base method.
-func (m *MockDatabase) Delete(arg0 uint64, arg1 string) error {
+func (m *MockDatabase) Delete(arg0 uint64, arg1 string, arg2 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", arg0, arg1)
+	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockDatabaseMockRecorder) Delete(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockDatabaseMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockDatabase)(nil).Delete), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockDatabase)(nil).Delete), arg0, arg1, arg2)
 }
 
 // Relation mocks base method.
-func (m *MockDatabase) Relation(arg0 string) (engine.Relation, error) {
+func (m *MockDatabase) Relation(arg0 string, arg1 engine.Snapshot) (engine.Relation, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Relation", arg0)
+	ret := m.ctrl.Call(m, "Relation", arg0, arg1)
 	ret0, _ := ret[0].(engine.Relation)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Relation indicates an expected call of Relation.
-func (mr *MockDatabaseMockRecorder) Relation(arg0 interface{}) *gomock.Call {
+func (mr *MockDatabaseMockRecorder) Relation(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Relation", reflect.TypeOf((*MockDatabase)(nil).Relation), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Relation", reflect.TypeOf((*MockDatabase)(nil).Relation), arg0, arg1)
 }
 
 // Relations mocks base method.
-func (m *MockDatabase) Relations() []string {
+func (m *MockDatabase) Relations(arg0 engine.Snapshot) []string {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Relations")
+	ret := m.ctrl.Call(m, "Relations", arg0)
 	ret0, _ := ret[0].([]string)
 	return ret0
 }
 
 // Relations indicates an expected call of Relations.
-func (mr *MockDatabaseMockRecorder) Relations() *gomock.Call {
+func (mr *MockDatabaseMockRecorder) Relations(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Relations", reflect.TypeOf((*MockDatabase)(nil).Relations))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Relations", reflect.TypeOf((*MockDatabase)(nil).Relations), arg0)
 }
 
 // MockEngine is a mock of Engine interface.
@@ -832,72 +830,72 @@ func (m *MockEngine) EXPECT() *MockEngineMockRecorder {
 }
 
 // Create mocks base method.
-func (m *MockEngine) Create(arg0 uint64, arg1 string, arg2 int) error {
+func (m *MockEngine) Create(arg0 uint64, arg1 string, arg2 int, arg3 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Create", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Create", arg0, arg1, arg2, arg3)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Create indicates an expected call of Create.
-func (mr *MockEngineMockRecorder) Create(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Create(arg0, arg1, arg2, arg3 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockEngine)(nil).Create), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockEngine)(nil).Create), arg0, arg1, arg2, arg3)
 }
 
 // Database mocks base method.
-func (m *MockEngine) Database(arg0 string) (engine.Database, error) {
+func (m *MockEngine) Database(arg0 string, arg1 engine.Snapshot) (engine.Database, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Database", arg0)
+	ret := m.ctrl.Call(m, "Database", arg0, arg1)
 	ret0, _ := ret[0].(engine.Database)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Database indicates an expected call of Database.
-func (mr *MockEngineMockRecorder) Database(arg0 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Database(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Database", reflect.TypeOf((*MockEngine)(nil).Database), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Database", reflect.TypeOf((*MockEngine)(nil).Database), arg0, arg1)
 }
 
 // Databases mocks base method.
-func (m *MockEngine) Databases() []string {
+func (m *MockEngine) Databases(arg0 engine.Snapshot) []string {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Databases")
+	ret := m.ctrl.Call(m, "Databases", arg0)
 	ret0, _ := ret[0].([]string)
 	return ret0
 }
 
 // Databases indicates an expected call of Databases.
-func (mr *MockEngineMockRecorder) Databases() *gomock.Call {
+func (mr *MockEngineMockRecorder) Databases(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Databases", reflect.TypeOf((*MockEngine)(nil).Databases))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Databases", reflect.TypeOf((*MockEngine)(nil).Databases), arg0)
 }
 
 // Delete mocks base method.
-func (m *MockEngine) Delete(arg0 uint64, arg1 string) error {
+func (m *MockEngine) Delete(arg0 uint64, arg1 string, arg2 engine.Snapshot) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", arg0, arg1)
+	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockEngineMockRecorder) Delete(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockEngine)(nil).Delete), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockEngine)(nil).Delete), arg0, arg1, arg2)
 }
 
 // Node mocks base method.
-func (m *MockEngine) Node(arg0 string) *engine.NodeInfo {
+func (m *MockEngine) Node(arg0 string, arg1 engine.Snapshot) *engine.NodeInfo {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Node", arg0)
+	ret := m.ctrl.Call(m, "Node", arg0, arg1)
 	ret0, _ := ret[0].(*engine.NodeInfo)
 	return ret0
 }
 
 // Node indicates an expected call of Node.
-func (mr *MockEngineMockRecorder) Node(arg0 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Node(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Node", reflect.TypeOf((*MockEngine)(nil).Node), arg0)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Node", reflect.TypeOf((*MockEngine)(nil).Node), arg0, arg1)
 }

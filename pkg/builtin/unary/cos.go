@@ -28,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-
-
 func init() {
 	extend.FunctionRegistry["cos"] = builtin.Cos
 	extend.UnaryReturnTypes[builtin.Cos] = func(extend extend.Extend) types.T {

@@ -41,7 +41,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	for i := range bat.Zs {
 		bat.Zs[i] = -1
 	}
-	if err := p.Relation.Write(p.Ts, bat); err != nil {
+	if err := p.Relation.Write(p.Ts, bat, nil); err != nil {
 		return false, err
 	}
 

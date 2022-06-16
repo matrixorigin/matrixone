@@ -18,10 +18,8 @@ $ makepkg -rsi
 
 #### 1. Install Go as necessary
 
-
 Go version 1.18 is required.
   
-
 #### 2. Get the MatrixOne code
 
 ```
@@ -51,12 +49,14 @@ Starting with 0.3.0, you can download binary packages directly to run MatrixOne 
 #### 1. Download binary packages and decompress
 
 Linux Environment
+
 ```bash
 $ wget https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-linux-amd64.zip
 $ unzip mo-server-v0.4.0-linux-amd64.zip
 ```
 
 MacOS Environment
+
 ```bash
 $ https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-darwin-x86_64.zip
 $ unzip mo-server-v0.4.0-darwin-x86_64.zip
@@ -68,16 +68,18 @@ $ unzip mo-server-v0.4.0-darwin-x86_64.zip
 $./mo-server system_vars_config.toml
 ```
 
-
 ## **Using docker**
 
 #### 1. Install Docker
+
 Please verify that Docker daemon is running in the background:
 
 ```
 $ docker --version
 ```
+
 #### 2. Create and run the container for the latest release of MatrixOne
+
 It will pull the image from Docker Hub if not exists.
 
 ```

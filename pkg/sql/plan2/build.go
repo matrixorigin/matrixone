@@ -24,38 +24,162 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildPlan(ctx CompilerContext, stmt tree.Statement) (*Query, error) {
-	query := &Query{
-		Steps: []int32{0},
-	}
-	err := buildStatement(stmt, ctx, query)
+func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select) (*Plan, error) {
+	// query, binderCtx := newQueryAndSelectCtx(stmtType)
+	// nodeId, err := buildSelect(stmt, ctx, query, binderCtx)
+	// query.Steps = append(query.Steps, nodeId)
+	// return &Plan{
+	// 	Plan: &plan.Plan_Query{
+	// 		Query: query,
+	// 	},
+	// }, err
+
+	builder := NewQueryBuilder(stmtType, ctx)
+	bindCtx := NewBindContext(builder, nil)
+	rootId, err := builder.buildSelect(stmt, bindCtx, true)
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if err != nil {
 		return nil, err
 	}
-	return query, nil
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, err
 }
 
-func buildStatement(stmt tree.Statement, ctx CompilerContext, query *Query) error {
-	selectCtx := &SelectContext{
-		tableAlias:  make(map[string]string),
-		columnAlias: make(map[string]*plan.Expr),
-	}
+func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		query.StmtType = plan.Query_SELECT
-		return buildSelect(stmt, ctx, query, selectCtx)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	case *tree.ParenSelect:
-		query.StmtType = plan.Query_SELECT
-		return buildSelect(stmt.Select, ctx, query, selectCtx)
+		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select)
 	case *tree.Insert:
-		query.StmtType = plan.Query_INSERT
-		return buildInsert(stmt, ctx, query)
+		return buildInsert(stmt, ctx)
 	case *tree.Update:
-		query.StmtType = plan.Query_UPDATE
-		return buildUpdate(stmt, ctx, query)
+		return buildUpdate(stmt, ctx)
 	case *tree.Delete:
-		query.StmtType = plan.Query_DELETE
-		return buildDelete(stmt, ctx, query)
+		return buildDelete(stmt, ctx)
+	case *tree.BeginTransaction:
+		return buildBeginTransaction(stmt, ctx)
+	case *tree.CommitTransaction:
+		return buildCommitTransaction(stmt, ctx)
+	case *tree.RollbackTransaction:
+		return buildRollbackTransaction(stmt, ctx)
+	case *tree.CreateDatabase:
+		return buildCreateDatabase(stmt, ctx)
+	case *tree.DropDatabase:
+		return buildDropDatabase(stmt, ctx)
+	case *tree.CreateTable:
+		return buildCreateTable(stmt, ctx)
+	case *tree.DropTable:
+		return buildDropTable(stmt, ctx)
+	case *tree.CreateIndex:
+		return buildCreateIndex(stmt, ctx)
+	case *tree.DropIndex:
+		return buildDropIndex(stmt, ctx)
+	case *tree.ShowCreateDatabase:
+		return buildShowCreateDatabase(stmt, ctx)
+	case *tree.ShowCreateTable:
+		return buildShowCreateTable(stmt, ctx)
+	case *tree.ShowDatabases:
+		return buildShowDatabases(stmt, ctx)
+	case *tree.ShowTables:
+		return buildShowTables(stmt, ctx)
+	case *tree.ShowColumns:
+		return buildShowColumns(stmt, ctx)
+	case *tree.ShowIndex:
+		return buildShowIndex(stmt, ctx)
+	case *tree.ShowVariables:
+		return buildShowVariables(stmt, ctx)
+	case *tree.ShowWarnings:
+		return buildShowWarnings(stmt, ctx)
+	case *tree.ShowErrors:
+		return buildShowErrors(stmt, ctx)
+	case *tree.ShowStatus:
+		return buildShowStatus(stmt, ctx)
+	case *tree.ShowProcessList:
+		return buildShowProcessList(stmt, ctx)
+	default:
+		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
-	return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+}
+
+//GetResultColumnsFromPlan
+func GetResultColumnsFromPlan(p *Plan) []*ColDef {
+	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
+		lastNode := query.Nodes[len(query.Nodes)-1]
+		columns := make([]*ColDef, len(lastNode.ProjectList))
+		if len(query.Headings) > 0 { // use refactor plan2
+			for idx, expr := range lastNode.ProjectList {
+				columns[idx] = &ColDef{
+					Name: query.Headings[idx],
+					Typ:  expr.Typ,
+				}
+			}
+		} else {
+			for idx, expr := range lastNode.ProjectList {
+				columns[idx] = &ColDef{
+					Name: expr.ColName,
+					Typ:  expr.Typ,
+				}
+			}
+		}
+		return columns
+	}
+
+	switch logicPlan := p.Plan.(type) {
+	case *plan.Plan_Query:
+		switch logicPlan.Query.StmtType {
+		case plan.Query_SELECT:
+			return getResultColumnsByProjectionlist(logicPlan.Query)
+		default:
+			// insert/update/delete statement will return nil
+			return nil
+		}
+	case *plan.Plan_Tcl:
+		// begin/commmit/rollback statement will return nil
+		return nil
+	case *plan.Plan_Ddl:
+		switch logicPlan.Ddl.DdlType {
+		case plan.DataDefinition_SHOW_VARIABLES:
+			typ := &plan.Type{
+				Id:    plan.Type_VARCHAR,
+				Width: 1024,
+			}
+			return []*ColDef{
+				{Typ: typ, Name: "Variable_name"},
+				{Typ: typ, Name: "Value"},
+			}
+		case plan.DataDefinition_SHOW_CREATEDATABASE:
+			typ := &plan.Type{
+				Id:    plan.Type_VARCHAR,
+				Width: 1024,
+			}
+			return []*ColDef{
+				{Typ: typ, Name: "Database"},
+				{Typ: typ, Name: "Create Database"},
+			}
+		case plan.DataDefinition_SHOW_CREATETABLE:
+			typ := &plan.Type{
+				Id:    plan.Type_VARCHAR,
+				Width: 1024,
+			}
+			return []*ColDef{
+				{Typ: typ, Name: "Table"},
+				{Typ: typ, Name: "Create Table"},
+			}
+		default:
+			// show statement(except show variables) will return a query
+			if logicPlan.Ddl.Query != nil {
+				return getResultColumnsByProjectionlist(logicPlan.Ddl.Query)
+			}
+			return nil
+		}
+	}
+	return nil
 }

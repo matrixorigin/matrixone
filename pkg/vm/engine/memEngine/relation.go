@@ -2,19 +2,20 @@ package memEngine
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/pierrec/lz4"
 )
 
-func (r *relation) Close() {}
+func (r *relation) Close(_ engine.Snapshot) {}
 
-func (r *relation) ID() string {
+func (r *relation) ID(_ engine.Snapshot) string {
 	return r.id
 }
 
@@ -30,28 +31,38 @@ func (_ *relation) Cardinality(_ string) int64 {
 	return 0
 }
 
-func (r *relation) Nodes() engine.Nodes {
+func (r *relation) Nodes(_ engine.Snapshot) engine.Nodes {
 	return engine.Nodes{r.n}
 }
 
-func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+func (r *relation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute {
+	panic(any("implement me"))
+}
+
+func (r *relation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
+	panic(any("implement me"))
+}
+
+func (r *relation) GetPriKeyOrHideKey(_ engine.Snapshot) ([]engine.Attribute, bool) {
 	return nil, false
 }
 
-func (r *relation) TableDefs() []engine.TableDef {
+func (r *relation) TableDefs(_ engine.Snapshot) []engine.TableDef {
 	defs := make([]engine.TableDef, len(r.md.Attrs)+len(r.md.Index))
 	for i, attr := range r.md.Attrs {
 		defs[i] = &engine.AttributeDef{Attr: attr}
 	}
 	j := len(r.md.Attrs)
 	for _, index := range r.md.Index {
-		defs[j] = &index
+		// Don't refer to enclosing loop variables directly.
+		localIndex := index
+		defs[j] = &localIndex
 		j++
 	}
 	return defs
 }
 
-func (r *relation) NewReader(n int, _ extend.Extend, _ []byte) []engine.Reader {
+func (r *relation) NewReader(n int, _ extend.Extend, _ []byte, _ engine.Snapshot) []engine.Reader {
 	segs := make([]string, r.md.Segs)
 	for i := range segs {
 		segs[i] = sKey(i, r.id)
@@ -95,7 +106,7 @@ func (r *relation) NewReader(n int, _ extend.Extend, _ []byte) []engine.Reader {
 	return rs
 }
 
-func (r *relation) Write(_ uint64, bat *batch.Batch) error {
+func (r *relation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
 	key := sKey(int(r.md.Segs), r.id)
 	for i, attr := range bat.Attrs {
 		v, err := bat.Vecs[i].Show()
@@ -127,6 +138,14 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	return nil
 }
 
+func (r *relation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+	panic(any("implement me"))
+}
+
+func (r *relation) Update(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
+	panic(any("implement me"))
+}
+
 func (r *relation) CreateIndex(_ uint64, _ []engine.TableDef) error {
 	return nil
 }
@@ -135,11 +154,11 @@ func (r *relation) DropIndex(epoch uint64, name string) error {
 	return nil
 }
 
-func (r *relation) AddTableDef(_ uint64, _ engine.TableDef) error {
+func (r *relation) AddTableDef(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 
-func (r *relation) DelTableDef(_ uint64, _ engine.TableDef) error {
+func (r *relation) DelTableDef(_ uint64, _ engine.TableDef, _ engine.Snapshot) error {
 	return nil
 }
 

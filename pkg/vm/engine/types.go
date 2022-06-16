@@ -15,14 +15,15 @@
 package engine
 
 import (
-	"fmt"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
+
+type Snapshot []byte
 
 type Nodes []Node
 
@@ -30,10 +31,6 @@ type Node struct {
 	Id   string `json:"id"`
 	Addr string `json:"address"`
 	Data []byte `json:"payload"`
-}
-
-func (n Node) String() string {
-	return fmt.Sprintf("Id %v \n Addr %v \n Data len %d\n",n.Id,n.Addr,len(n.Data))
 }
 
 type Attribute struct {
@@ -139,23 +136,31 @@ func (*PropertiesDef) tableDef()  {}
 type Relation interface {
 	Statistics
 
-	Close()
+	Close(Snapshot)
 
-	ID() string
+	ID(Snapshot) string
 
-	Nodes() Nodes
+	Nodes(Snapshot) Nodes
 
-	TableDefs() []TableDef
+	TableDefs(Snapshot) []TableDef
+
+	GetPrimaryKeys(Snapshot) []*Attribute
+
+	GetHideKey(Snapshot) *Attribute
 	// true: primary key, false: hide key
-	GetPriKeyOrHideKey() ([]Attribute, bool)
+	GetPriKeyOrHideKey(Snapshot) ([]Attribute, bool)
 
-	Write(uint64, *batch.Batch) error
+	Write(uint64, *batch.Batch, Snapshot) error
 
-	AddTableDef(uint64, TableDef) error
-	DelTableDef(uint64, TableDef) error
+	Update(uint64, *batch.Batch, Snapshot) error
+
+	Delete(uint64, *vector.Vector, string, Snapshot) error
+
+	AddTableDef(uint64, TableDef, Snapshot) error
+	DelTableDef(uint64, TableDef, Snapshot) error
 
 	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
-	NewReader(int, extend.Extend, []byte) []Reader
+	NewReader(int, extend.Extend, []byte, Snapshot) []Reader
 }
 
 type Reader interface {
@@ -191,21 +196,21 @@ type SparseFilter interface {
 }
 
 type Database interface {
-	Relations() []string
-	Relation(string) (Relation, error)
+	Relations(Snapshot) []string
+	Relation(string, Snapshot) (Relation, error)
 
-	Delete(uint64, string) error
-	Create(uint64, string, []TableDef) error // Create Table - (name, table define)
+	Delete(uint64, string, Snapshot) error
+	Create(uint64, string, []TableDef, Snapshot) error // Create Table - (name, table define)
 }
 
 type Engine interface {
-	Delete(uint64, string) error
-	Create(uint64, string, int) error // Create Database - (name, engine type)
+	Delete(uint64, string, Snapshot) error
+	Create(uint64, string, int, Snapshot) error // Create Database - (name, engine type)
 
-	Databases() []string
-	Database(string) (Database, error)
+	Databases(Snapshot) []string
+	Database(string, Snapshot) (Database, error)
 
-	Node(string) *NodeInfo
+	Node(string, Snapshot) *NodeInfo
 }
 
 // MakeDefaultExpr returns a new DefaultExpr

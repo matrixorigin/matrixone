@@ -15,7 +15,6 @@
 package transformer
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
@@ -43,21 +42,26 @@ func init() {
 }
 
 var sumReturnTypes = map[types.T]types.T{
-	types.T_int8:    types.T_int64,
-	types.T_int16:   types.T_int64,
-	types.T_int32:   types.T_int64,
-	types.T_int64:   types.T_int64,
-	types.T_uint8:   types.T_uint64,
-	types.T_uint16:  types.T_uint64,
-	types.T_uint32:  types.T_uint64,
-	types.T_uint64:  types.T_uint64,
-	types.T_float32: types.T_float64,
-	types.T_float64: types.T_float64,
+	types.T_int8:       types.T_int64,
+	types.T_int16:      types.T_int64,
+	types.T_int32:      types.T_int64,
+	types.T_int64:      types.T_int64,
+	types.T_uint8:      types.T_uint64,
+	types.T_uint16:     types.T_uint64,
+	types.T_uint32:     types.T_uint64,
+	types.T_uint64:     types.T_uint64,
+	types.T_float32:    types.T_float64,
+	types.T_float64:    types.T_float64,
+	types.T_decimal64:  types.T_decimal64,
+	types.T_decimal128: types.T_decimal128,
 }
 
 func ReturnType(op int, typ types.T) types.T {
 	switch op {
 	case Avg:
+		if typ == types.T_decimal64 || typ == types.T_decimal128 {
+			return types.T_decimal128
+		}
 		return types.T_float64
 	case Max:
 		return typ
@@ -88,6 +92,9 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case Sum:
 		return NewSum(typ)
 	case Avg:
+		if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+			return avg.NewDecimalRing(typ), nil
+		}
 		return avg.NewAvg(typ), nil
 	case Max:
 		return NewMax(typ)
@@ -118,7 +125,7 @@ func NewBitAnd(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
 		return bitand.NewNumeric(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support BitAnd", typ))
+	return nil, fmt.Errorf("'%v' not support BitAnd", typ)
 }
 
 func NewBitOr(typ types.Type) (ring.Ring, error) {
@@ -126,7 +133,7 @@ func NewBitOr(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
 		return bitor.NewBitOr(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support BitOr", typ))
+	return nil, fmt.Errorf("'%v' not support BitOr", typ)
 }
 
 func NewBitXor(typ types.Type) (ring.Ring, error) {
@@ -134,7 +141,7 @@ func NewBitXor(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
 		return bitxor.NewBitXor(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support BitXor", typ))
+	return nil, fmt.Errorf("'%v' not support BitXor", typ)
 }
 
 func NewSum(typ types.Type) (ring.Ring, error) {
@@ -145,12 +152,18 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 		return sum.NewInt(typ), nil
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return sum.NewUint(typ), nil
+	case types.T_decimal64:
+		return sum.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return sum.NewDecimal128(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Sum", typ))
+	return nil, fmt.Errorf("'%v' not support Sum", typ)
 }
 
 func NewMax(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return max.NewBool(typ), nil
 	case types.T_int8:
 		return max.NewInt8(typ), nil
 	case types.T_int16:
@@ -177,12 +190,18 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 		return max.NewDate(typ), nil
 	case types.T_datetime:
 		return max.NewDatetime(typ), nil
+	case types.T_decimal64:
+		return max.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return max.NewDecimal128(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Max", typ))
+	return nil, fmt.Errorf("'%v' not support Max", typ)
 }
 
 func NewMin(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return min.NewBool(typ), nil
 	case types.T_int8:
 		return min.NewInt8(typ), nil
 	case types.T_int16:
@@ -209,6 +228,10 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 		return min.NewDate(typ), nil
 	case types.T_datetime:
 		return min.NewDatetime(typ), nil
+	case types.T_decimal64:
+		return min.NewDecimal64(typ), nil
+	case types.T_decimal128:
+		return min.NewDecimal128(typ), nil
 	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Min", typ))
+	return nil, fmt.Errorf("'%v' not support Min", typ)
 }

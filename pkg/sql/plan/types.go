@@ -20,7 +20,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -273,6 +276,13 @@ type ShowCreateDatabase struct {
 	E              engine.Engine
 }
 
+type ExplainQuery struct {
+	Context *plan2.CompilerContext
+	Query   *plan.Query
+	Options *explain.ExplainOptions
+	Buffer  *explain.ExplainDataBuffer
+}
+
 type Insert struct {
 	Id       string
 	Db       string
@@ -345,7 +355,7 @@ func (c CreateDatabase) String() string {
 	if c.IfNotExistFlag {
 		buf.WriteString("if not exists ")
 	}
-	buf.WriteString(fmt.Sprintf("%s", c.Id))
+	buf.WriteString(c.Id)
 	return buf.String()
 }
 
@@ -388,7 +398,7 @@ func (c CreateIndex) String() string {
 		buf.WriteString("if not exists ")
 	}
 	for _, def := range c.Defs {
-		buf.WriteString(fmt.Sprintf("%s", def.(*engine.AttributeDef).Attr.Name))
+		buf.WriteString(def.(*engine.AttributeDef).Attr.Name)
 	}
 	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
 	return buf.String()
@@ -453,7 +463,7 @@ func (s ShowDatabases) String() string {
 
 func (s ShowDatabases) ResultColumns() []*Attribute {
 	return []*Attribute{
-		&Attribute{
+		{
 			Ref:  1,
 			Name: "Databases",
 			Type: types.Type{
@@ -475,9 +485,9 @@ func (s ShowTables) String() string {
 
 func (s ShowTables) ResultColumns() []*Attribute {
 	return []*Attribute{
-		&Attribute{
+		{
 			Ref:  1,
-			Name: fmt.Sprintf("Tables"),
+			Name: "Tables",
 			Type: types.Type{
 				Oid:  types.T_varchar,
 				Size: 24,
@@ -494,12 +504,12 @@ func (s ShowColumns) String() string {
 
 func (s ShowColumns) ResultColumns() []*Attribute {
 	attrs := []*Attribute{
-		&Attribute{Ref: 1, Name: "Field", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Type", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Null", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Key", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Default", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Extra", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Field", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Type", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Null", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Key", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Default", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Extra", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 	}
 	return attrs
 }
@@ -512,8 +522,8 @@ func (s ShowCreateTable) String() string {
 
 func (s ShowCreateTable) ResultColumns() []*Attribute {
 	attrs := []*Attribute{
-		&Attribute{Ref: 1, Name: "Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Create Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Create Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 	}
 	return attrs
 }
@@ -530,10 +540,29 @@ func (d ShowCreateDatabase) String() string {
 
 func (d ShowCreateDatabase) ResultColumns() []*Attribute {
 	attrs := []*Attribute{
-		&Attribute{Ref: 1, Name: "Database", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Show Database", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Database", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		{Ref: 1, Name: "Show Database", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 	}
 	return attrs
+}
+
+func (e ExplainQuery) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("explain Query")
+	return buf.String()
+}
+
+func (e ExplainQuery) ResultColumns() []*Attribute {
+	return []*Attribute{
+		{
+			Ref:  1,
+			Name: "QUERY PLAN",
+			Type: types.Type{
+				Oid:  types.T_varchar,
+				Size: 24,
+			},
+		},
+	}
 }
 
 func (i Insert) String() string {
@@ -567,5 +596,38 @@ func (p Update) String() string {
 }
 
 func (p Update) ResultColumns() []*Attribute {
+	return nil
+}
+
+type BeginTxn struct {
+}
+
+func (b BeginTxn) String() string {
+	return "begin transaction"
+}
+
+func (b BeginTxn) ResultColumns() []*Attribute {
+	return nil
+}
+
+type CommitTxn struct {
+}
+
+func (c CommitTxn) String() string {
+	return "commit transaction"
+}
+
+func (c CommitTxn) ResultColumns() []*Attribute {
+	return nil
+}
+
+type RollbackTxn struct {
+}
+
+func (r RollbackTxn) String() string {
+	return "rollback transaction"
+}
+
+func (r RollbackTxn) ResultColumns() []*Attribute {
 	return nil
 }

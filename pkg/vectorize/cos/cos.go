@@ -16,6 +16,8 @@ package cos
 
 import (
 	"math"
+
+	"golang.org/x/exp/constraints"
 )
 
 var (
@@ -112,4 +114,11 @@ func cosFloat64(xs []float64, rs []float64) []float64 {
 		rs[i] = math.Cos(n)
 	}
 	return rs
+}
+
+func Cos[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) []float64 {
+	for i, n := range inputValues {
+		resultValues[i] = math.Cos(float64(n))
+	}
+	return resultValues
 }

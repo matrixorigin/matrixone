@@ -23,21 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getLastTableDef(query *Query, node *plan.Node) *plan.TableDef {
-	if node.TableDef != nil {
-		return node.TableDef
-	}
-	for _, id := range node.Children {
-		val := getLastTableDef(query, query.Nodes[id])
-		if val != nil {
-			return val
-		}
-	}
-	return nil
-}
+func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
+	query, _ := newQueryAndSelectCtx(plan.Query_UPDATE)
 
-func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
-	//build select
+	// build select
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
 			Exprs: tree.SelectExprs{
@@ -51,28 +40,30 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	selectCtx := &SelectContext{
-		tableAlias:  make(map[string]string),
-		columnAlias: make(map[string]*plan.Expr),
+	binderCtx := &BinderContext{
+		columnAlias: make(map[string]*Expr),
 	}
-	err := buildSelect(selectStmt, ctx, query, selectCtx)
+	nodeId, err := buildSelect(selectStmt, ctx, query, binderCtx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	//get table def
-	tableDef := getLastTableDef(query, query.Nodes[len(query.Nodes)-1])
+	query.Steps = append(query.Steps, nodeId)
+
+	// get table def
+	objRef, tableDef := getLastTableDef(query)
 	if tableDef == nil {
-		return errors.New(errno.CaseNotFound, "can not find table in sql")
+		return nil, errors.New(errno.CaseNotFound, "can not find table in sql")
 	}
 
-	getColumnName := func(name string) *plan.Expr {
+	getColumnName := func(name string) *Expr {
 		for idx, col := range tableDef.Cols {
 			if col.Name == name {
-				return &plan.Expr{
+				return &Expr{
+					TableName: tableDef.Name,
+					ColName:   col.Name,
 					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							Name:   col.Name,
+						Col: &ColRef{
 							RelPos: 0,
 							ColPos: int32(idx),
 						},
@@ -84,54 +75,63 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		return nil
 	}
 
-	var columns []*plan.Expr
-	var values []*plan.Expr
+	columnLength := len(stmt.Exprs)
+	if columnLength == 0 {
+		return nil, errors.New(errno.CaseNotFound, "no column will be update")
+	}
+
+	node := &Node{
+		NodeType: plan.Node_UPDATE,
+		ObjRef:   objRef,
+		TableDef: tableDef,
+		Children: []int32{nodeId},
+	}
+
+	columns := make([]*Expr, 0, columnLength)
+	values := make([]*Expr, 0, columnLength)
 	for _, expr := range stmt.Exprs {
 		if len(expr.Names) != 1 {
-			return errors.New(errno.CaseNotFound, "the set list of update must be one")
+			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")
 		}
 		if expr.Names[0].NumParts != 1 {
-			return errors.New(errno.CaseNotFound, "the set list of update must be one")
+			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")
 		}
+
 		column := getColumnName(expr.Names[0].Parts[0])
 		if column == nil {
-			return errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", expr.Names[0].Parts[0]))
+			return nil, errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", expr.Names[0].Parts[0]))
 		}
-		columns = append(columns, column)
 
-		value, err := buildExpr(expr.Expr, ctx, query, nil)
+		value, _, err := buildExpr(expr.Expr, ctx, query, node, binderCtx, false)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		//check value type
-		matchType(column.Typ, value.Typ)
+		// cast value type
+		if column.Typ.Id != value.Typ.Id {
+			tmp, err := appendCastExpr(value, column.Typ)
+			if err != nil {
+				return nil, err
+			}
+			value = tmp
+		}
 
+		columns = append(columns, column)
 		values = append(values, value)
 	}
 
-	if len(columns) == 0 {
-		return errors.New(errno.CaseNotFound, "no column will be update")
+	node.UpdateList = &plan.UpdateList{
+		Columns: columns,
+		Values:  values,
 	}
+	appendQueryNode(query, node)
 
-	node := &plan.Node{
-		NodeType: plan.Node_UPDATE,
-		UpdateList: &plan.UpdateList{
-			Columns: columns,
-			Values:  values,
+	preNode := query.Nodes[len(query.Nodes)-1]
+	query.Steps[len(query.Steps)-1] = preNode.NodeId
+
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
 		},
-		Children: []int32{int32(len(query.Nodes) - 1)},
-	}
-	appendQueryNode(query, node, true)
-
-	return nil
-}
-
-func matchType(left *plan.Type, right *plan.Type) error {
-	if left.Id == right.Id {
-		return nil
-	}
-	//todo check update type
-	// return errors.New(errno.CaseNotFound, "type not match")
-	return nil
+	}, nil
 }

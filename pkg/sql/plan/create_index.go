@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -24,7 +25,7 @@ import (
 )
 
 var (
-	errIndexExists = errors.New(errno.InvalidName, "index already existed")
+	errIndexExists           = errors.New(errno.InvalidName, "index already existed")
 	errIndexTypeNotSupported = errors.New(errno.FeatureNotSupported, "unsupported index type")
 
 	// err for index support
@@ -43,7 +44,7 @@ func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) erro
 	if err != nil {
 		return nil
 	}
-	for _, def := range r.TableDefs() {
+	for _, def := range r.TableDefs(nil) {
 		switch t := def.(type) {
 		case *engine.AttributeDef:
 			mpColName[t.Attr.Name] = t.Attr.Type
@@ -63,7 +64,7 @@ func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) erro
 	}
 
 	if stmt.IndexOption != nil {
-		switch stmt.IndexOption.IType{
+		switch stmt.IndexOption.IType {
 		case tree.INDEX_TYPE_BSI:
 			engineIndexType = engine.BsiIndex
 		default:
@@ -74,8 +75,8 @@ func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) erro
 	}
 
 	def := &engine.IndexTableDef{
-		Typ:      engineIndexType,
-		Name:     indexName,
+		Typ:  engineIndexType,
+		Name: indexName,
 	}
 
 	// return error for unsupported type of index
@@ -124,11 +125,11 @@ func (b *build) tableName(tbl *tree.TableName) (string, string, engine.Relation,
 		tbl.SchemaName = tree.Identifier(b.db)
 	}
 
-	db, err := b.e.Database(string(tbl.SchemaName))
+	db, err := b.e.Database(string(tbl.SchemaName), nil)
 	if err != nil {
 		return "", "", nil, errors.New(errno.InvalidSchemaName, err.Error())
 	}
-	r, err := db.Relation(string(tbl.ObjectName))
+	r, err := db.Relation(string(tbl.ObjectName), nil)
 	if err != nil {
 		return "", "", nil, errors.New(errno.UndefinedTable, err.Error())
 	}

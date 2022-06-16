@@ -17,7 +17,6 @@ package plan2
 import (
 	"fmt"
 	"go/constant"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -25,15 +24,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
-	//get table
+func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
+	query, _ := newQueryAndSelectCtx(plan.Query_INSERT)
+
+	// get table
 	objRef, tableDef, err := getInsertTable(stmt.Table, ctx, query)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	//get columns
-	getColDef := func(name string) (*plan.ColDef, error) {
+	// get columns
+	getColDef := func(name string) (*ColDef, error) {
 		for _, col := range tableDef.Cols {
 			if col.Name == name {
 				return col, nil
@@ -41,7 +42,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 		}
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("column %T not exist", name))
 	}
-	var columns []*plan.ColDef
+	var columns []*ColDef
 	if stmt.Columns == nil {
 		columns = tableDef.Cols
 	} else {
@@ -49,32 +50,37 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 			columnName := string(identifier)
 			col, err := getColDef(columnName)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			columns = append(columns, col)
 		}
 	}
-	rowset := &plan.RowsetData{
-		Schema: &plan.TableDef{
+	columnCount := len(columns)
+	rowset := &RowsetData{
+		Schema: &TableDef{
 			Name: tableDef.Name,
 			Cols: columns,
 		},
-		Cols: make([]*plan.ColData, len(columns)),
+		Cols: make([]*plan.ColData, columnCount),
 	}
 
-	//get rows
-	columnCount := len(columns)
+	var nodeId int32
+	// get rows
 	switch rows := stmt.Rows.Select.(type) {
 	case *tree.Select:
-		selectCtx := &SelectContext{
-			tableAlias:  make(map[string]string),
-			columnAlias: make(map[string]*plan.Expr),
+		binderCtx := &BinderContext{
+			columnAlias: make(map[string]*Expr),
 		}
-		err := buildSelect(rows, ctx, query, selectCtx)
+		nodeId, err = buildSelect(rows, ctx, query, binderCtx)
 		if err != nil {
-			return err
+			return
 		}
-		//fixme need check preNode's projectionList match rowset.Schema
+		// check selectNode's projectionList match rowset.Schema
+		selectNode := query.Nodes[nodeId]
+		if len(selectNode.ProjectList) != columnCount {
+			return nil, errors.New(errno.InvalidColumnDefinition, "insert column length does not match value length")
+		}
+		// TODO: Now MO don't check projectionList type match rowset type just like MySQL。
 	case *tree.ValuesClause:
 		rowCount := len(rows.Rows)
 		for idx := range rowset.Cols {
@@ -82,31 +88,42 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 				RowCount: int32(rowCount),
 			}
 		}
-		err := getValues(rowset, rows, columnCount)
+		err = getValues(rowset, rows, columnCount)
 		if err != nil {
-			return err
+			return
 		}
-		node := &plan.Node{
+		node := &Node{
 			NodeType:   plan.Node_VALUE_SCAN,
 			RowsetData: rowset,
 		}
-		appendQueryNode(query, node, true)
+		nodeId = appendQueryNode(query, node)
 	default:
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport rows expr: %T", stmt))
+		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport rows expr: %T", stmt))
 	}
 
-	node := &plan.Node{
+	node := &Node{
 		NodeType: plan.Node_INSERT,
 		ObjRef:   objRef,
 		TableDef: tableDef,
-		Children: []int32{int32(len(query.Nodes) - 1)},
+		Children: []int32{nodeId},
 	}
-	appendQueryNode(query, node, true)
+	appendQueryNode(query, node)
 
-	return nil
+	preNode := query.Nodes[len(query.Nodes)-1]
+	if len(query.Steps) > 0 {
+		query.Steps[len(query.Steps)-1] = preNode.NodeId
+	} else {
+		query.Steps = append(query.Steps, preNode.NodeId)
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: query,
+		},
+	}, nil
 }
 
-func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int) error {
+func getValues(rowset *RowsetData, rows *tree.ValuesClause, columnCount int) error {
 	setColData := func(col *plan.ColData, typ *plan.Type, val constant.Value) error {
 		switch val.Kind() {
 		case constant.Int:
@@ -135,7 +152,7 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 				if !ok {
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  f32", val))
 				}
-				col.F32 = append(col.F32, float32(colVal))
+				col.F32 = append(col.F32, colVal)
 				return nil
 			case plan.Type_FLOAT64, plan.Type_DECIMAL, plan.Type_DECIMAL64, plan.Type_DECIMAL128:
 				colVal, ok := constant.Float64Val(val)
@@ -169,7 +186,7 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 					return err
 				}
 			default:
-				return errors.New(errno.InvalidSchemaName, fmt.Sprintf("insert value must be constant"))
+				return errors.New(errno.InvalidSchemaName, "insert value must be constant")
 			}
 		}
 	}
@@ -177,16 +194,14 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 	return nil
 }
 
-func getInsertTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) (*plan.ObjectRef, *plan.TableDef, error) {
+func getInsertTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) (*ObjectRef, *TableDef, error) {
 	switch tbl := stmt.(type) {
 	case *tree.TableName:
-		name := string(tbl.ObjectName)
-		if len(tbl.SchemaName) > 0 {
-			name = strings.Join([]string{string(tbl.SchemaName), name}, ".")
-		}
-		objRef, tableDef := ctx.Resolve(name)
+		tblName := string(tbl.ObjectName)
+		dbName := string(tbl.SchemaName)
+		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
-			return nil, nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", name))
+			return nil, nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", tblName))
 		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:

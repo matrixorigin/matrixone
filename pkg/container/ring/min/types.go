@@ -19,6 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+type BoolRing struct {
+	Da  []byte
+	Vs  []bool
+	Ns  []int64
+	Typ types.Type
+}
+
 type Int8Ring struct {
 	Da  []byte
 	Vs  []int8
@@ -107,5 +114,21 @@ type DatetimeRing struct {
 	Da  []byte
 	Vs  []types.Datetime
 	Ns  []int64
+	Typ types.Type
+}
+
+type Decimal64Ring struct {
+	Es  []bool
+	Da  []byte
+	Vs  []types.Decimal64
+	Ns  []int64
+	Typ types.Type
+}
+
+type Decimal128Ring struct {
+	Es  []bool // isempty
+	Da  []byte
+	Ns  []int64
+	Vs  []types.Decimal128
 	Typ types.Type
 }

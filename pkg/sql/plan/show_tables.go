@@ -24,7 +24,7 @@ func (b *build) BuildShowTables(stmt *tree.ShowTables, plan *ShowTables) error {
 	if len(stmt.DBName) == 0 {
 		stmt.DBName = b.db
 	}
-	db, err := b.e.Database(stmt.DBName)
+	db, err := b.e.Database(stmt.DBName, nil)
 	if err != nil {
 		return errors.New(errno.InvalidSchemaName, err.Error())
 	}

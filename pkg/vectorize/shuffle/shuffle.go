@@ -20,6 +20,7 @@ import (
 )
 
 var (
+	BoolShuffle  = fixedLengthShuffle[bool]
 	Int8Shuffle  = fixedLengthShuffle[int8]
 	Int16Shuffle = fixedLengthShuffle[int16]
 	Int32Shuffle = fixedLengthShuffle[int32]
@@ -36,8 +37,9 @@ var (
 	Decimal64Shuffle  = fixedLengthShuffle[types.Decimal64]
 	Decimal128Shuffle = fixedLengthShuffle[types.Decimal128]
 
-	DateShuffle     = fixedLengthShuffle[types.Date]
-	DatetimeShuffle = fixedLengthShuffle[types.Datetime]
+	DateShuffle      = fixedLengthShuffle[types.Date]
+	DatetimeShuffle  = fixedLengthShuffle[types.Datetime]
+	TimestampShuffle = fixedLengthShuffle[types.Timestamp]
 
 	TupleShuffle = tupleShuffle
 
@@ -45,7 +47,7 @@ var (
 )
 
 type fixedLength interface {
-	constraints.Integer | constraints.Float | types.Decimal128
+	constraints.Integer | constraints.Float | types.Decimal128 | bool
 }
 
 func fixedLengthShuffle[T fixedLength](vs, ws []T, sels []int64) []T {

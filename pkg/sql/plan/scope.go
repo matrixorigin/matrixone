@@ -39,7 +39,7 @@ func (s *Scope) Rows() int64 {
 func (s *Scope) Prune(attrsMap map[string]uint64, fvars []string) {
 	switch op := s.Op.(type) {
 	case *Join:
-		for k, _ := range attrsMap {
+		for k := range attrsMap {
 			op.Result = append(op.Result, k)
 		}
 		for name, ref := range attrsMap {
@@ -131,7 +131,7 @@ func (s *Scope) Prune(attrsMap map[string]uint64, fvars []string) {
 				for _, bvar := range op.BoundVars {
 					delete(mp, bvar.Alias)
 				}
-				for k, _ := range mp {
+				for k := range mp {
 					op.BoundVars = append(op.BoundVars, &Aggregation{
 						Ref:   1,
 						Op:    transformer.Min,
@@ -203,7 +203,7 @@ func (s *Scope) Prune(attrsMap map[string]uint64, fvars []string) {
 				for _, bvar := range op.BoundVars {
 					delete(mp, bvar.Alias)
 				}
-				for k, _ := range mp {
+				for k := range mp {
 					op.BoundVars = append(op.BoundVars, &Aggregation{
 						Ref:   1,
 						Op:    transformer.Min,
@@ -514,7 +514,7 @@ func printJoin(op *Join, s *Scope) string {
 }
 
 func printDedup(op *Dedup) string {
-	return fmt.Sprintf("δ()")
+	return "δ()"
 }
 
 func printOrder(op *Order) string {
@@ -527,7 +527,7 @@ func printOrder(op *Order) string {
 		}
 		buf.WriteString(f.String())
 	}
-	buf.WriteString(fmt.Sprintf("])"))
+	buf.WriteString("])")
 	return buf.String()
 }
 
