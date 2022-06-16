@@ -1573,7 +1573,10 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 
 func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	switch stmt := stmt.(type) {
-	case *tree.Select, *tree.ParenSelect, *tree.Update, *tree.Delete, *tree.Insert:
+	case *tree.Select, *tree.ParenSelect,
+		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
