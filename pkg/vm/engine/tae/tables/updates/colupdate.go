@@ -293,7 +293,15 @@ func (node *ColumnNode) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap)
 }
 
 func (node *ColumnNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d,Cnt=%d", node.commitTs, len(node.txnVals))
+	return fmt.Sprintf("[TS=%d]%vCnt=%d", node.commitTs, node.logIndex, len(node.txnVals))
+}
+
+func (node *ColumnNode) GeneralString() string {
+	return fmt.Sprintf("TS=%d,Cnt=%d,LogIndex%v", node.commitTs, len(node.txnVals), node.logIndex)
+}
+
+func (node *ColumnNode) GeneralVerboseString() string {
+	return fmt.Sprintf("TS=%d,Cnt=%d,LogIndex%v\nVals are %v", node.commitTs, len(node.txnVals), node.logIndex, node.txnVals)
 }
 
 func (node *ColumnNode) String() string {

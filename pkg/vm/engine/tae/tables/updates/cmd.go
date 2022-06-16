@@ -112,14 +112,35 @@ func (c *UpdateCmd) GetDest() *common.ID {
 	return c.dest
 }
 
-// TODO
+func (c *UpdateCmd) Desc() string {
+	if c.cmdType == txnbase.CmdAppend {
+		return fmt.Sprintf("[A][%s]%s", c.dest.BlockString(), c.append.GeneralDesc())
+	} else if c.cmdType == txnbase.CmdUpdate {
+		return fmt.Sprintf("[U][%s]%s", c.dest.BlockString(), c.update.GeneralDesc())
+	} else if c.cmdType == txnbase.CmdDelete {
+		return fmt.Sprintf("[D][%s]%s", c.dest.BlockString(), c.delete.GeneralDesc())
+	}
+	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
+}
+
 func (c *UpdateCmd) String() string {
 	if c.cmdType == txnbase.CmdAppend {
-		return fmt.Sprintf("[CmdAppend]: Dest=%s,Payload=%s", c.dest.BlockString(), c.append.GeneralDesc())
+		return fmt.Sprintf("[CmdAppend]: Dest=%s,Payload=%s", c.dest.BlockString(), c.append.GeneralString())
 	} else if c.cmdType == txnbase.CmdUpdate {
-		return fmt.Sprintf("[CmdUpdate]: Dest=%s,Payload=%s", c.dest.BlockString(), c.update.GeneralDesc())
+		return fmt.Sprintf("[CmdUpdate]: Dest=%s,Payload=%s", c.dest.BlockString(), c.update.GeneralString())
 	} else if c.cmdType == txnbase.CmdDelete {
-		return fmt.Sprintf("[CmdDelete]: Dest=%s,Payload=%s", c.dest.BlockString(), c.delete.GeneralDesc())
+		return fmt.Sprintf("[CmdDelete]: Dest=%s,Payload=%s", c.dest.BlockString(), c.delete.GeneralString())
+	}
+	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
+}
+
+func (c *UpdateCmd) VerboseString() string {
+	if c.cmdType == txnbase.CmdAppend {
+		return fmt.Sprintf("[CmdAppend]: Dest=%s,Payload=%s", c.dest.BlockString(), c.append.GeneralVerboseString())
+	} else if c.cmdType == txnbase.CmdUpdate {
+		return fmt.Sprintf("[CmdUpdate]: Dest=%s,Payload=%s", c.dest.BlockString(), c.update.GeneralVerboseString())
+	} else if c.cmdType == txnbase.CmdDelete {
+		return fmt.Sprintf("[CmdDelete]: Dest=%s,Payload=%s", c.dest.BlockString(), c.delete.GeneralVerboseString())
 	}
 	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
 }

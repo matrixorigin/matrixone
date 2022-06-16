@@ -17,9 +17,11 @@ package txnentries
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type mergeBlocksCmd struct {
@@ -31,9 +33,10 @@ type mergeBlocksCmd struct {
 	mapping     []uint32
 	fromAddr    []uint32
 	toAddr      []uint32
+	txn         txnif.AsyncTxn
 }
 
-func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32) *mergeBlocksCmd {
+func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32, txn txnif.AsyncTxn) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
 		tid:         tid,
 		droppedSegs: droppedSegs,
@@ -43,6 +46,7 @@ func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, create
 		mapping:     mapping,
 		fromAddr:    fromAddr,
 		toAddr:      toAddr,
+		txn:         txn,
 	}
 }
 
@@ -284,4 +288,39 @@ func (cmd *mergeBlocksCmd) Unmarshal(buf []byte) (err error) {
 	_, err = cmd.ReadFrom(bbuf)
 	return
 }
-func (cmd *mergeBlocksCmd) String() string { return "" }
+
+func (cmd *mergeBlocksCmd) Desc() string {
+	s := "[MERGE] From"
+	for _, blk := range cmd.droppedBlks {
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+	}
+	s = fmt.Sprintf("%s To", s)
+	for _, blk := range cmd.createdBlks {
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+	}
+	return s
+}
+
+func (cmd *mergeBlocksCmd) String() string {
+	s := "[MERGE] From"
+	for _, blk := range cmd.droppedBlks {
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+	}
+	s = fmt.Sprintf("%s To", s)
+	for _, blk := range cmd.createdBlks {
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+	}
+	return s
+}
+func (cmd *mergeBlocksCmd) VerboseString() string {
+	s := "[MERGE]\n\tFrom\n"
+	for _, blk := range cmd.droppedBlks {
+		s = fmt.Sprintf("%s\t%s\n", s, blk.BlockString())
+	}
+	s = fmt.Sprintf("%s\tTo\n", s)
+	for _, blk := range cmd.createdBlks {
+		s = fmt.Sprintf("%s\t%s\n", s, blk.BlockString())
+	}
+	s = fmt.Sprintf("%s\tFrom format %v\n\tTo format %v\n\tMapping %v", s, cmd.fromAddr, cmd.toAddr, cmd.mapping)
+	return s
+}

@@ -17,18 +17,22 @@ package txnentries
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type compactBlockCmd struct {
 	from *common.ID
 	to   *common.ID
+	txn  txnif.AsyncTxn
 }
 
-func newCompactBlockCmd(from, to *common.ID) *compactBlockCmd {
+func newCompactBlockCmd(from, to *common.ID, txn txnif.AsyncTxn) *compactBlockCmd {
 	return &compactBlockCmd{
+		txn:  txn,
 		from: from,
 		to:   to,
 	}
@@ -97,4 +101,12 @@ func (cmd *compactBlockCmd) Unmarshal(buf []byte) (err error) {
 	_, err = cmd.ReadFrom(bbuf)
 	return
 }
-func (cmd *compactBlockCmd) String() string { return "" }
+func (cmd *compactBlockCmd) Desc() string {
+	return fmt.Sprintf("[CPCT]From%sTo%s", cmd.from.BlockString(), cmd.to.BlockString())
+}
+func (cmd *compactBlockCmd) String() string {
+	return fmt.Sprintf("[CPCT]From%sTo%s", cmd.from.BlockString(), cmd.to.BlockString())
+}
+func (cmd *compactBlockCmd) VerboseString() string {
+	return fmt.Sprintf("[CPCT]From%sTo%s", cmd.from.BlockString(), cmd.to.BlockString())
+}
