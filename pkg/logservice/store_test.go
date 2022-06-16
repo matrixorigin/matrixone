@@ -244,8 +244,7 @@ func TestHAKeeperTick(t *testing.T) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.ID()
 		assert.NoError(t, store.StartHAKeeperReplica(1, peers))
-
-		assert.NoError(t, store.hakeeperTick())
+		store.hakeeperTick()
 	}
 	runStoreTest(t, fn)
 }

@@ -16,9 +16,10 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 	"math"
 	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"

@@ -15,14 +15,14 @@
 package logutil
 
 import (
-	"errors"
+	"os"
+	"sync/atomic"
+	"time"
+
 	"github.com/BurntSushi/toml"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
-	"os"
-	"sync/atomic"
-	"time"
 )
 
 // SetupMOLogger sets up the global logger for MO Server.
@@ -41,76 +41,7 @@ func SetupMOLogger(path string) {
 
 // initMOLogger initializes a zap Logger.
 func initMOLogger(cfg *loggerConfig) (*zap.Logger, error) {
-	var syncer zapcore.WriteSyncer
-
-	// add output for zap logger.
-	if len(cfg.Filename) > 0 {
-		// has log file
-		if stat, err := os.Stat(cfg.Filename); err == nil {
-			if stat.IsDir() {
-				return nil, errors.New("log file can't be a directory")
-			}
-		}
-		if cfg.MaxSize == 0 {
-			cfg.MaxSize = 512
-		}
-		// add lumberjack logger
-		syncer = zapcore.AddSync(&lumberjack.Logger{
-			Filename:   cfg.Filename,
-			MaxSize:    cfg.MaxSize,
-			MaxAge:     cfg.MaxDays,
-			MaxBackups: cfg.MaxBackups,
-			LocalTime:  true,
-			Compress:   false,
-		})
-	} else {
-		// output to stdout directly
-		var err error
-		syncer, _, err = zap.Open([]string{"stdout"}...)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	level := zap.NewAtomicLevel()
-	// don't handle change level request currently, cause tests would not
-	// pass if running together (panic: listen tcp :9090: bind: address already in use)
-	//
-	// handleLevelChange(port, pattern, level)
-	err := level.UnmarshalText([]byte(cfg.Level))
-	if err != nil {
-		return nil, err
-	}
-
-	var encoder zapcore.Encoder
-	encoderConfig := zapcore.EncoderConfig{
-		MessageKey:    "msg",
-		LevelKey:      "level",
-		TimeKey:       "time",
-		NameKey:       "name",
-		CallerKey:     "caller",
-		StacktraceKey: "stacktrace",
-		LineEnding:    zapcore.DefaultLineEnding,
-		EncodeLevel:   zapcore.CapitalLevelEncoder,
-		EncodeTime: zapcore.TimeEncoder(func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(t.Format("2006/01/02 15:04:05.000000 -0700"))
-		}),
-		EncodeDuration:   zapcore.StringDurationEncoder,
-		EncodeCaller:     zapcore.ShortCallerEncoder,
-		ConsoleSeparator: " ",
-	}
-
-	switch cfg.Format {
-	case "json", "":
-		// default format is json
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
-	case "console":
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
-	default:
-		return nil, errors.New("unsupported log format")
-	}
-
-	return zap.New(zapcore.NewCore(encoder, syncer, level), zap.AddCaller()), nil
+	return GetLoggerWithOptions(cfg.getLevel(), cfg.getEncoder(), cfg.getSyncer()), nil
 }
 
 // global zap logger for MO server.
@@ -140,4 +71,78 @@ type loggerConfig struct {
 	MaxSize    int    `toml:"max-size"`
 	MaxDays    int    `toml:"max-days"`
 	MaxBackups int    `toml:"max-backups"`
+}
+
+func (cfg *loggerConfig) getSyncer() zapcore.WriteSyncer {
+	if cfg.Filename == "" || cfg.Filename == "console" {
+		return getConsoleSyncer()
+	}
+
+	if stat, err := os.Stat(cfg.Filename); err == nil {
+		if stat.IsDir() {
+			panic("log file can't be a directory")
+		}
+	}
+
+	if cfg.MaxSize == 0 {
+		cfg.MaxSize = 512
+	}
+	// add lumberjack logger
+	return zapcore.AddSync(&lumberjack.Logger{
+		Filename:   cfg.Filename,
+		MaxSize:    cfg.MaxSize,
+		MaxAge:     cfg.MaxDays,
+		MaxBackups: cfg.MaxBackups,
+		LocalTime:  true,
+		Compress:   false,
+	})
+}
+
+func (cfg *loggerConfig) getEncoder() zapcore.Encoder {
+	return getLoggerEncoder(cfg.Format)
+}
+
+func (cfg *loggerConfig) getLevel() zap.AtomicLevel {
+	level := zap.NewAtomicLevel()
+	err := level.UnmarshalText([]byte(cfg.Level))
+	if err != nil {
+		panic(err)
+	}
+	return level
+}
+
+func getLoggerEncoder(format string) zapcore.Encoder {
+	encoderConfig := zapcore.EncoderConfig{
+		MessageKey:    "msg",
+		LevelKey:      "level",
+		TimeKey:       "time",
+		NameKey:       "name",
+		CallerKey:     "caller",
+		StacktraceKey: "stacktrace",
+		LineEnding:    zapcore.DefaultLineEnding,
+		EncodeLevel:   zapcore.CapitalLevelEncoder,
+		EncodeTime: zapcore.TimeEncoder(func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+			enc.AppendString(t.Format("2006/01/02 15:04:05.000000 -0700"))
+		}),
+		EncodeDuration:   zapcore.StringDurationEncoder,
+		EncodeCaller:     zapcore.ShortCallerEncoder,
+		ConsoleSeparator: " ",
+	}
+
+	switch format {
+	case "json", "":
+		return zapcore.NewJSONEncoder(encoderConfig)
+	case "console":
+		return zapcore.NewConsoleEncoder(encoderConfig)
+	default:
+		panic("unsupported log format")
+	}
+}
+
+func getConsoleSyncer() zapcore.WriteSyncer {
+	syncer, _, err := zap.Open([]string{"stdout"}...)
+	if err != nil {
+		panic(err)
+	}
+	return syncer
 }

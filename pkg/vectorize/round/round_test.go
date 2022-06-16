@@ -15,6 +15,7 @@
 package round
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -26,12 +27,14 @@ func TestRoundUint8(t *testing.T) {
 	nums := []uint8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
 	res := make([]uint8, len(nums))
 	res0 := roundUint8(nums, res, 0)
+	fmt.Println(res0)
 	correctRes0 := []uint8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
 	for i := range res0 {
 		require.Equal(t, res0[i], correctRes0[i])
 	}
 	resMinus1 := roundUint8(nums, res, -1)
-	correctResMinus1 := []uint8{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230}
+	fmt.Println(resMinus1)
+	correctResMinus1 := []uint8{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230}
 	for i := range resMinus1 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
@@ -51,7 +54,7 @@ func TestRoundUint16(t *testing.T) {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := roundUint16(nums, res, -1)
-	correctResMinus1 := []uint16{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6760, 10950, 17710, 28660, 46370}
+	correctResMinus1 := []uint16{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6770, 10950, 17710, 28660, 46370}
 	for i := range resMinus1 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
@@ -71,7 +74,7 @@ func TestRoundUint32(t *testing.T) {
 		require.Equal(t, res0[i], correctRes0[i])
 	}
 	resMinus1 := roundUint32(nums, res, -1)
-	correctResMinus1 := []uint32{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6760, 10950, 17710, 28660, 46370, 75020, 121390, 196420, 317810}
+	correctResMinus1 := []uint32{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6770, 10950, 17710, 28660, 46370, 75030, 121390, 196420, 317810}
 	for i := range res0 {
 		require.Equal(t, resMinus1[i], correctResMinus1[i])
 	}
@@ -91,7 +94,7 @@ func TestRoundUint64(t *testing.T) {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := roundUint64(nums, res, -1)
-	correctResMinus1 := []uint64{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6760, 10950, 17710, 28660, 46370, 75020, 121390, 196420, 317810}
+	correctResMinus1 := []uint64{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6770, 10950, 17710, 28660, 46370, 75030, 121390, 196420, 317810}
 	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
@@ -111,7 +114,7 @@ func TestRoundInt8(t *testing.T) {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := roundInt8(nums, res, -1)
-	correctResMinus1 := []int8{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90}
+	correctResMinus1 := []int8{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 0, 0, 0, -10, -10, -10, -20, -30, -60, -90}
 	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
@@ -126,7 +129,7 @@ func TestRoundInt16(t *testing.T) {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := roundInt16(nums, res, -1)
-	correctResMinus1 := []int16{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180}
+	correctResMinus1 := []int16{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, -10, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180}
 	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
@@ -141,7 +144,7 @@ func TestRoundInt32(t *testing.T) {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := roundInt32(nums, res, -1)
-	correctResMinus1 := []int32{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180, 32770}
+	correctResMinus1 := []int32{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, -10, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180, 32770}
 	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
@@ -156,7 +159,7 @@ func TestRoundInt64(t *testing.T) {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := roundInt32(nums, res, -1)
-	correctResMinus1 := []int32{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180, 32770, 1234570}
+	correctResMinus1 := []int32{0, 0, 0, 10, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, -10, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180, 32770, 1234570}
 	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}

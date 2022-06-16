@@ -41,6 +41,12 @@ const (
 
 	// Group 4: unexpected state
 	INVALID_STATE = 4000 + iota
+
+	// Group 10: txn
+	// ErrTxnAborted read and write a transaction that has been rolled back.
+	ErrTxnAborted = 10000 + iota
+	// ErrTxnClosed read and write a transaction after Commit or Rollback method called.
+	ErrTxnClosed
 )
 
 type Error struct {
