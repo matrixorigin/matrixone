@@ -20,12 +20,11 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/pierrec/lz4"
 )
@@ -136,38 +135,38 @@ func (v *VectorWrapper) GetValue(idx int) (any, error) {
 		return nil, ErrVecInvalidOffset
 	}
 	switch v.Typ.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		val := v.Col.(*types.Bytes)
 		return val.Data[val.Offsets[idx] : val.Offsets[idx]+val.Lengths[idx]], nil
-	case types.T_int8:
+	case types.Type_INT8:
 		return v.Col.([]int8)[idx], nil
-	case types.T_int16:
+	case types.Type_INT16:
 		return v.Col.([]int16)[idx], nil
-	case types.T_int32:
+	case types.Type_INT32:
 		return v.Col.([]int32)[idx], nil
-	case types.T_int64:
+	case types.Type_INT64:
 		return v.Col.([]int64)[idx], nil
-	case types.T_uint8:
+	case types.Type_UINT8:
 		return v.Col.([]uint8)[idx], nil
-	case types.T_uint16:
+	case types.Type_UINT16:
 		return v.Col.([]uint16)[idx], nil
-	case types.T_uint32:
+	case types.Type_UINT32:
 		return v.Col.([]uint32)[idx], nil
-	case types.T_uint64:
+	case types.Type_UINT64:
 		return v.Col.([]uint64)[idx], nil
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		return v.Col.([]types.Decimal64)[idx], nil
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		return v.Col.([]float32)[idx], nil
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		return v.Col.([]float64)[idx], nil
-	case types.T_date:
+	case types.Type_DATE:
 		return v.Col.([]types.Date)[idx], nil
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		return v.Col.([]types.Datetime)[idx], nil
-	case types.T_sel:
+	case types.Type_SEL:
 		return v.Col.([]int64)[idx], nil
-	case types.T_tuple:
+	case types.Type_TUPLE:
 		return v.Col.([][]any)[idx], nil
 	default:
 		return nil, ErrVecTypeNotSupport
@@ -259,7 +258,7 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 			common.GPool.Free(vec.MNode)
 			return n, err
 		}
-		t := encoding.DecodeType(data[:encoding.TypeSize])
+		t := types.DecodeType(data[:types.TypeSize])
 		v := gvec.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(data)
@@ -280,7 +279,7 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 			return n, err
 		}
 		data := vec.MNode.Buf[:originSize]
-		t := encoding.DecodeType(data[:encoding.TypeSize])
+		t := types.DecodeType(data[:types.TypeSize])
 		v := gvec.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(data)
@@ -348,7 +347,7 @@ func (vec *VectorWrapper) ReadWithBuffer(r io.Reader, compressed *bytes.Buffer, 
 		if len(buf) != int(originSize) {
 			panic(fmt.Sprintf("invalid decompressed size: %d, %d is expected", len(buf), originSize))
 		}
-		t := encoding.DecodeType(buf[:encoding.TypeSize])
+		t := types.DecodeType(buf[:types.TypeSize])
 		v := gvec.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(buf)
