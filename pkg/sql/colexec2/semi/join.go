@@ -102,6 +102,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			if err := ctr.probe(bat, ap, proc); err != nil {
 				ctr.state = End
+				if ctr.bat != nil {
+					ctr.bat.Clean(proc.Mp)
+				}
+				bat.Clean(proc.Mp)
 				proc.Reg.InputBatch = nil
 				return true, err
 			}
@@ -343,7 +347,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					return err
 				}
 			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[i+k])
+			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 		}
 	}
 	proc.Reg.InputBatch = rbat
