@@ -35,7 +35,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "the target type of cast function cannot be null")
 	}
 	if lv.IsScalarNull() {
-		return proc.AllocScalarNullVector(lv.Typ), nil
+		return proc.AllocScalarNullVector(rv.Typ), nil
 	}
 
 	if lv.Typ.Oid == rv.Typ.Oid && isNumeric(lv.Typ.Oid) {
