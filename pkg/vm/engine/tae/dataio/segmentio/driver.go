@@ -104,6 +104,7 @@ func (s *Driver) Init(name string) (err error) {
 	}
 
 	_, err = s.segFile.Write(sbuffer.Bytes())
+	logutil.Infof(" %s | SegmentFile | Init", s.name)
 	return
 }
 
@@ -128,6 +129,7 @@ func (s *Driver) Open(name string) (err error) {
 		state: RESIDENT,
 	}
 	s.super.lognode = log
+	logutil.Infof(" %s | SegmentFile | Opened", s.name)
 	return
 }
 
