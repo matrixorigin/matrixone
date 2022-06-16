@@ -3855,6 +3855,33 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.Cast,
 		},
+		{
+			Index:       182,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal64, types.T_varchar},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       183,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal128, types.T_varchar},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       184,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_timestamp, types.T_date},
+			ReturnTyp:   types.T_date,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
 	},
 	CASE: {
 		{
