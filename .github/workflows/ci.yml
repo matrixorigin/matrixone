@@ -58,15 +58,6 @@ jobs:
         run: |
           make ut
 
-      - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
-        continue-on-error: true
-        with:
-          name: test_reports
-          path: |
-            ${{ github.workspace }}
-          retention-days: 7
-
   tae-bvt:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
@@ -200,10 +191,12 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/store/"  ]; then rm -rf ./head/store/; fi
-          if  [ -d  "./base/store/"  ]; then rm -rf ./base/store/; fi
-          rm -rf ./head/mo-server
-          rm -rf ./base/mo-server
+          mv ./head/mo-server.log ./head-mo-server.log
+          mv ./base/mo-server.log ./base-mo-server.log
+          rm -rf ./head/;
+          rm -rf ./base/;
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
