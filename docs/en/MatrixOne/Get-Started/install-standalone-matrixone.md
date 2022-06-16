@@ -72,6 +72,8 @@ $./mo-server system_vars_config.toml
 
 #### 1. Install Docker
 
+https://docs.docker.com/get-docker/
+
 Please verify that Docker daemon is running in the background:
 
 ```
