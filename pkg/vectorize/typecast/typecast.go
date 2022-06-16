@@ -15,6 +15,8 @@
 package typecast
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
+	"math"
 	"strconv"
 	"unsafe"
 
@@ -326,6 +328,31 @@ func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error)
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
 		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]types.Timestamp, error) {
+	for i, x := range xs {
+		rs[i] = types.Timestamp(x)
+	}
+	return rs, nil
+}
+
+func Decimal64ToTimestamp(xs []types.Decimal64, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+	for i, x := range xs {
+		ts := int64(x) / int64(math.Pow10(int(scale)))
+		rs[i] = types.Timestamp(ts)
+	}
+	return rs, nil
+}
+
+func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+	bydel128 := types.InitDecimal128UsingUint(uint64(math.Pow10(int(scale))))
+	tempdel128 := make([]types.Decimal128, len(xs))
+	div.Decimal128DivByScalar(bydel128, xs, 0, scale, tempdel128)
+	for i, x := range tempdel128 {
+		rs[i] = types.Timestamp(x.Lo)
 	}
 	return rs, nil
 }

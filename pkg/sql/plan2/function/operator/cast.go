@@ -487,6 +487,36 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return CastDatetimeAsString(lv, rv, proc)
 	}
 
+	if isInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
+		switch lv.Typ.Oid {
+		case types.T_int8:
+			return CastIntegerAsTimestamp[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastIntegerAsTimestamp[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastIntegerAsTimestamp[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastIntegerAsTimestamp[int64](lv, rv, proc)
+		case types.T_uint8:
+			return CastIntegerAsTimestamp[uint8](lv, rv, proc)
+		case types.T_uint16:
+			return CastIntegerAsTimestamp[uint16](lv, rv, proc)
+		case types.T_uint32:
+			return CastIntegerAsTimestamp[uint32](lv, rv, proc)
+		case types.T_uint64:
+			return CastIntegerAsTimestamp[uint64](lv, rv, proc)
+		}
+	}
+
+	if isDecimal(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
+		switch lv.Typ.Oid {
+		case types.T_decimal64:
+			return CastDecimal64AsTimestamp(lv, rv, proc)
+		case types.T_decimal128:
+			return CastDecimal128AsTimestamp(lv, rv, proc)
+		}
+	}
+
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "parameter types of cast function do not match")
 }
 
@@ -1438,6 +1468,87 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	rs := encoding.DecodeDateSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := typecast.DateTimeToDate(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastIntegerAsTimestamp[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := lv.Col.([]T)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Timestamp, 1)
+		if _, err := typecast.NumericToTimestamp(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.NumericToTimestamp(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal64AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := lv.Col.([]types.Decimal64)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Timestamp, 1)
+		if _, err := typecast.Decimal64ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal64ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal128AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := lv.Col.([]types.Decimal128)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Timestamp, 1)
+		if _, err := typecast.Decimal128ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal128ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
