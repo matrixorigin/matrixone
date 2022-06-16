@@ -22,7 +22,7 @@ import (
 func ForeachApply[T types.FixedSizeT](vs any, offset, length uint32, sels []uint32, op func(any, uint32) error) (err error) {
 	vals := vs.([]T)
 	vals = vals[offset : offset+length]
-	if sels == nil || len(sels) == 0 {
+	if len(sels) == 0 {
 		for i, v := range vals {
 			if err = op(v, uint32(i)); err != nil {
 				return
