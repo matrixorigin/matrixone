@@ -16,11 +16,10 @@ package types
 
 import (
 	"fmt"
-	"strconv"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"strconv"
+	"time"
 )
 
 const (
@@ -63,7 +62,7 @@ var (
 
 const (
 	MaxDateYear    = 9999
-	MinDateYear    = 0
+	MinDateYear    = 1
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 )
@@ -101,6 +100,7 @@ func ParseDate(s string) (Date, error) {
 	return -1, errIncorrectDateValue
 }
 
+// date[0001-01-01 to 9999-12-31]
 func validDate(year int32, month, day uint8) bool {
 	if year >= MinDateYear && year <= MaxDateYear {
 		if MinMonthInYear <= month && month <= MaxMonthInYear {
@@ -398,6 +398,13 @@ func isLeap(year int32) bool {
 
 func (d Date) ToTime() Datetime {
 	return Datetime(int64(d)*secsPerDay) << 20
+}
+
+func DateToTimestamp(xs []Date, rs []Timestamp) ([]Timestamp, error) {
+	for i, x := range xs {
+		rs[i] = x.ToTimeUTC()
+	}
+	return rs, nil
 }
 
 func (d Date) Month() uint8 {
