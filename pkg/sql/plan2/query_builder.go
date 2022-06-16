@@ -175,49 +175,74 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			return nil, err
 		}
 
-		node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
-		colIdx := 0
-		groupTag := builder.tagsByNode[nodeId][0]
-		aggregateTag := builder.tagsByNode[nodeId][1]
+		if len(node.ProjectList) > 0 { //it's a distinct aggNnode
+			node.GroupBy = node.ProjectList
+			node.ProjectList = make([]*Expr, len(node.GroupBy))
+			distinctTag := builder.tagsByNode[nodeId][0]
 
-		for idx, expr := range node.GroupBy {
-			err := builder.remapExpr(expr, childMap)
-			if err != nil {
-				return nil, err
-			}
+			for idx, expr := range node.GroupBy {
+				err := builder.remapExpr(expr, childMap)
+				if err != nil {
+					return nil, err
+				}
 
-			node.ProjectList[colIdx] = &plan.Expr{
-				Typ: expr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -1,
-						ColPos: int32(idx),
+				node.ProjectList[idx] = &plan.Expr{
+					Typ: expr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: -1,
+							ColPos: int32(idx),
+						},
 					},
-				},
+				}
+
+				returnMap[getColMapKey(distinctTag, int32(idx))] = [2]int32{0, int32(idx)}
 			}
+		} else {
+			node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
+			colIdx := 0
+			groupTag := builder.tagsByNode[nodeId][0]
+			aggregateTag := builder.tagsByNode[nodeId][1]
 
-			returnMap[getColMapKey(groupTag, int32(idx))] = [2]int32{0, int32(colIdx)}
-			colIdx++
-		}
+			for idx, expr := range node.GroupBy {
+				err := builder.remapExpr(expr, childMap)
+				if err != nil {
+					return nil, err
+				}
 
-		for idx, expr := range node.AggList {
-			err := builder.remapExpr(expr, childMap)
-			if err != nil {
-				return nil, err
-			}
-
-			node.ProjectList[colIdx] = &plan.Expr{
-				Typ: expr.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: -2,
-						ColPos: int32(idx),
+				node.ProjectList[colIdx] = &Expr{
+					Typ: expr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: -1,
+							ColPos: int32(idx),
+						},
 					},
-				},
+				}
+
+				returnMap[getColMapKey(groupTag, int32(idx))] = [2]int32{0, int32(colIdx)}
+				colIdx++
 			}
 
-			returnMap[getColMapKey(aggregateTag, int32(idx))] = [2]int32{0, int32(colIdx)}
-			colIdx++
+			for idx, expr := range node.AggList {
+				err := builder.remapExpr(expr, childMap)
+				if err != nil {
+					return nil, err
+				}
+
+				node.ProjectList[colIdx] = &Expr{
+					Typ: expr.Typ,
+					Expr: &plan.Expr_Col{
+						Col: &ColRef{
+							RelPos: -2,
+							ColPos: int32(idx),
+						},
+					},
+				}
+
+				returnMap[getColMapKey(aggregateTag, int32(idx))] = [2]int32{0, int32(colIdx)}
+				colIdx++
+			}
 		}
 
 	case plan.Node_SORT:
@@ -409,17 +434,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		return 0, errors.New(errno.SyntaxErrororAccessRuleViolation, "No tables used")
 	}
 
-	// bind WHERE clause && append node to query
-	if clause.Distinct {
-		// rewrite distinct to group by
-		if clause.GroupBy != nil {
-			return 0, errors.New(errno.SyntaxErrororAccessRuleViolation, "distinct with group by is unsupported")
-		}
-		for _, selectExpr := range selectList {
-			clause.GroupBy = append(clause.GroupBy, selectExpr.Expr)
-		}
-	}
-
 	if clause.Where != nil {
 		whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 		if err != nil {
@@ -450,6 +464,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	ctx.groupTag = builder.genNewTag()
 	ctx.aggregateTag = builder.genNewTag()
 	ctx.projectTag = builder.genNewTag()
+	if clause.Distinct {
+		ctx.distinctTag = builder.genNewTag()
+	} else {
+		ctx.distinctTag = ctx.projectTag
+	}
 
 	// bind GROUP BY clause
 	if clause.GroupBy != nil {
@@ -502,10 +521,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 	}
 
+	// bind distinct
+	distinctBinder := NewDistinctBinder(projectionBinder)
+
 	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
 	if stmt.OrderBy != nil {
-		orderBinder := NewOrderBinder(projectionBinder, selectList)
+		orderBinder := NewOrderBinder(distinctBinder, selectList)
 		orderBys = make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
 
 		for _, order := range stmt.OrderBy {
@@ -599,6 +621,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		ProjectList: ctx.projects,
 		Children:    []int32{nodeId},
 	}, ctx, ctx.projectTag)
+
+	// append Agg node if distinct
+	if clause.Distinct {
+		// we use projectionList for distinct's aggNode
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_AGG,
+			ProjectList: distinctBinder.GetProjectionList(),
+			Children:    []int32{nodeId},
+		}, ctx, ctx.projectTag)
+	}
 
 	// append SORT node (include limit, offset)
 	if len(orderBys) > 0 || limitExpr != nil || offsetExpr != nil {

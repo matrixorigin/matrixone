@@ -22,18 +22,17 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	v "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestStrVector(t *testing.T) {
-	colTypes := mock.MockColTypes(14)
+	colTypes := types.MockColTypes(14)
 	capacity := uint64(10000)
 	vecs := make([]*StrVector, 0)
 	for i, colType := range colTypes {
@@ -260,7 +259,7 @@ func TestStrVector(t *testing.T) {
 	assert.True(t, tmpv.Type.Eq(colTypes[13]))
 
 	size := uint64(100)
-	vecm := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	vecm := NewStrVector(types.Type{Oid: types.Type_VARCHAR, Size: 24}, size)
 	assert.Equal(t, int(size), vecm.Capacity())
 	assert.Equal(t, 0, vecm.Length())
 
@@ -274,7 +273,7 @@ func TestStrVector(t *testing.T) {
 	buf, err = vecm.Marshal()
 	assert.Nil(t, err)
 
-	vecum := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	vecum := NewStrVector(types.Type{Oid: types.Type_VARCHAR, Size: 24}, size)
 	err = vecum.Unmarshal(buf)
 	assert.Nil(t, err)
 
