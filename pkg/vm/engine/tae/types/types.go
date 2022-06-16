@@ -36,6 +36,9 @@ const (
 
 	Type_DECIMAL64  = types.T_decimal64
 	Type_DECIMAL128 = types.T_decimal128
+
+	Type_SEL   = types.T_sel
+	Type_TUPLE = types.T_tuple
 )
 
 type Type = types.Type

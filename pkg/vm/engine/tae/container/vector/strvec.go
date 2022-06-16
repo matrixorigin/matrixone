@@ -24,12 +24,12 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func StrVectorConstructor(vf common.IVFile, useCompress bool, freeFunc base.MemoryFreeFunc) base.IMemoryNode {
@@ -182,7 +182,7 @@ func (v *StrVector) Append(n int, vals any) error {
 func (v *StrVector) appendWithOffset(offset, n int, vals any) error {
 	var data [][]byte
 	switch v.Type.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data = vals.([][]byte)[offset : offset+n]
 	default:
 		return ErrVecTypeNotSupport
@@ -387,7 +387,7 @@ func (v *StrVector) CopyToVector() (*gvec.Vector, error) {
 	vec := gvec.New(v.Type)
 	vec.Data = v.Data.Data
 	switch v.Type.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		col := vec.Col.(*types.Bytes)
 		col.Data = make([]byte, len(v.Data.Data))
 		col.Lengths = make([]uint32, len(v.Data.Lengths))

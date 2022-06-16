@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func (v *BaseVector) HasNull() bool {
@@ -69,77 +69,77 @@ func (v *BaseVector) IsNull(idx int) (bool, error) {
 func MockVector(t types.Type, rows uint64) IVector {
 	var vec IVector
 	switch t.Oid {
-	case types.T_int8:
+	case types.Type_INT8:
 		vec = NewStdVector(t, rows)
 		var vals []int8
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int8(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_int16:
+	case types.Type_INT16:
 		vec = NewStdVector(t, rows)
 		var vals []int16
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int16(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_int32:
+	case types.Type_INT32:
 		vec = NewStdVector(t, rows)
 		var vals []int32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int32(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_int64:
+	case types.Type_INT64:
 		vec = NewStdVector(t, rows)
 		var vals []int64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int64(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_uint8:
+	case types.Type_UINT8:
 		vec = NewStdVector(t, rows)
 		var vals []uint8
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint8(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_uint16:
+	case types.Type_UINT16:
 		vec = NewStdVector(t, rows)
 		var vals []uint16
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint16(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_uint32:
+	case types.Type_UINT32:
 		vec = NewStdVector(t, rows)
 		var vals []uint32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint32(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_uint64:
+	case types.Type_UINT64:
 		vec = NewStdVector(t, rows)
 		var vals []uint64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint64(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		vec = NewStdVector(t, rows)
 		var vals []float32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, float32(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		vec = NewStdVector(t, rows)
 		var vals []float64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, float64(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_varchar, types.T_char:
+	case types.Type_VARCHAR, types.Type_CHAR:
 		vec = NewStrVector(t, rows)
 		vals := make([][]byte, 0, rows)
 		prefix := "str"
@@ -148,14 +148,14 @@ func MockVector(t types.Type, rows uint64) IVector {
 			vals = append(vals, []byte(s))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		vec = NewStdVector(t, rows)
 		vals := make([]types.Datetime, 0, rows)
 		for i := uint64(1); i <= rows; i++ {
 			vals = append(vals, types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_date:
+	case types.Type_DATE:
 		vec = NewStdVector(t, rows)
 		vals := make([]types.Date, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
