@@ -546,6 +546,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New(errno.InternalError, "IN subquery as non-root expression not yet supported")
 				}
 
+				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					return nil, errors.New(errno.InternalError, "row constructor in IN subquery not yet supported")
+				}
+
 				subquery.Sub.Typ = plan.SubqueryRef_IN
 				subquery.Sub.Child = leftArg
 				return rightArg, nil
@@ -585,6 +589,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New(errno.InternalError, "IN subquery as non-root expression not yet supported")
 				}
 
+				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					return nil, errors.New(errno.InternalError, "row constructor in IN subquery not yet supported")
+				}
+
 				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
 				subquery.Sub.Child = leftArg
 				return rightArg, nil
@@ -619,6 +627,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		child, err := b.impl.BindExpr(astExpr.Left, depth, false)
 		if err != nil {
 			return nil, err
+		}
+
+		if _, ok := child.Expr.(*plan.Expr_List); ok {
+			return nil, errors.New(errno.InternalError, "row constructor in ANY subquery not yet supported")
 		}
 
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {

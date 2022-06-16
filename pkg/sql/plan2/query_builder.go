@@ -1000,32 +1000,49 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 		// FIXME: put all conditions in FILTER node and later use optimizer to push down
 
-		var equiConds, nonEquiConds, leftConds, rightConds []*plan.Expr
+		var joinConds, filterConds, leftConds, rightConds []*plan.Expr
 		for _, cond := range conds {
-			switch getJoinSide(cond, leftCtx, rightCtx) {
+			side := getJoinSide(cond, leftCtx, rightCtx)
+			var isEqui bool
+			if f, ok := cond.Expr.(*plan.Expr_F); ok {
+				if f.F.Func.ObjName == "=" {
+					isEqui = true
+				}
+			}
+
+			switch side {
 			case 0b01:
-				leftConds = append(leftConds, cond)
-
-			case 0b10:
-				rightConds = append(rightConds, cond)
-
-			case 0b11:
-				if f, ok := cond.Expr.(*plan.Expr_F); ok {
-					if f.F.Func.ObjName == "=" {
-						equiConds = append(equiConds, cond)
-						break
-					}
+				if joinType == plan.Node_INNER || joinType == plan.Node_RIGHT {
+					leftConds = append(leftConds, cond)
+				} else {
+					joinConds = append(joinConds, cond)
 				}
 
-				nonEquiConds = append(nonEquiConds, cond)
+			case 0b10:
+				if joinType == plan.Node_INNER || joinType == plan.Node_LEFT {
+					rightConds = append(rightConds, cond)
+				} else {
+					joinConds = append(joinConds, cond)
+				}
+
+			case 0b11:
+				if joinType != plan.Node_INNER || isEqui {
+					joinConds = append(joinConds, cond)
+				} else {
+					filterConds = append(filterConds, cond)
+				}
 
 			default:
 				// has correlated columns
-				nonEquiConds = append(nonEquiConds, cond)
+				if joinType == plan.Node_INNER {
+					filterConds = append(filterConds, cond)
+				} else {
+					return 0, errors.New(errno.InternalError, "correlated columns in join condition not yet supported")
+				}
 			}
 		}
 
-		node.OnList = equiConds
+		node.OnList = joinConds
 
 		if len(leftConds) > 0 {
 			leftChild := builder.qry.Nodes[leftChildId]
@@ -1053,11 +1070,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 		}
 
-		if len(nonEquiConds) > 0 {
+		if len(filterConds) > 0 {
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
 				Children:   []int32{nodeId},
-				FilterList: nonEquiConds,
+				FilterList: filterConds,
 			}, ctx)
 		}
 

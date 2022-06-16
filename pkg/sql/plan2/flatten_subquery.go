@@ -47,15 +47,15 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 	subId := subquery.NodeId
 	subCtx := builder.ctxByNode[subId]
 
-	subId, joinPreds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
+	subId, preds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	filterPreds, joinPreds := decreaseDepthAndDispatch(joinPreds)
+	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("correlated column in %s subquery in non-equi condition or deeper than 1 level not yet supported", subquery.Typ.String()))
+		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("correlated columns in %s subquery in non-equi condition or deeper than 1 level not yet supported", subquery.Typ.String()))
 	}
 
 	alwaysTrue := &plan.Expr{
@@ -82,7 +82,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 					continue
 				}
 			}
-			return 0, nil, errors.New(errno.InternalError, "correlated column in non-equi condition not yet supported in SCALAR subquery")
+			return 0, nil, errors.New(errno.InternalError, "correlated columns in non-equi condition not yet supported in SCALAR subquery")
 		}
 
 		// Uncorrelated subquery
@@ -202,7 +202,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_ANY:
-		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
+		expr, err := bindFuncExprImplByPlanExpr("=" /*subquery.Op*/, []*plan.Expr{
 			subquery.Child,
 			{
 				Typ: subCtx.projects[0].Typ,
@@ -230,7 +230,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_ALL:
-		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
+		expr, err := bindFuncExprImplByPlanExpr("=" /*subquery.Op*/, []*plan.Expr{
 			subquery.Child,
 			{
 				Typ: subCtx.projects[0].Typ,
@@ -246,10 +246,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
-		if err != nil {
-			return 0, nil, err
-		}
+		//expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
+		//if err != nil {
+		//	return 0, nil, err
+		//}
 
 		joinPreds = append(joinPreds, expr)
 
