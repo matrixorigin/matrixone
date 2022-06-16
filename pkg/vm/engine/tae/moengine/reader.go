@@ -18,10 +18,8 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"time"
 )
 
 var (
@@ -39,8 +37,6 @@ func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 	r.it.Lock()
 	if !r.it.Valid() {
 		r.it.Unlock()
-		logutil.Infof("reader: %p, read latency: %d ms",
-			r, r.latency)
 		return nil, nil
 	}
 	if r.compressed == nil {
@@ -57,9 +53,7 @@ func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 	r.it.Next()
 	r.it.Unlock()
 	block := newBlock(h)
-	latency := time.Now()
 	bat, err := block.Read(refCount, attrs, r.compressed, r.decompressed)
-	r.latency += time.Since(latency).Milliseconds()
 	if err != nil {
 		return nil, err
 	}
