@@ -546,7 +546,9 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 		types.Type_DATE, types.Type_DATETIME, types.Type_TIMESTAMP:
 		for iterator.HasNext() {
 			row := iterator.Next()
-			SetFixSizeTypeValue(vec, row, vals[row])
+			if err := SetFixSizeTypeValue(vec, row, vals[row]); err != nil {
+				panic(err)
+			}
 			if vec.Nsp != nil && vec.Nsp.Np != nil {
 				if vec.Nsp.Np.Contains(uint64(row)) {
 					vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
