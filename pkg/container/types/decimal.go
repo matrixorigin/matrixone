@@ -287,8 +287,8 @@ func InitDecimal128(value int64) (result Decimal128) {
 	return result
 }
 
-func InitDecimal64(value int64) (result Decimal64) {
-	return Decimal64(value)
+func InitDecimal64(value int64, scale int64) (result Decimal64) {
+	return Decimal64(int64(math.Pow10(int(scale))) * value)
 }
 
 func InitDecimal128UsingUint(value uint64) (result Decimal128) {

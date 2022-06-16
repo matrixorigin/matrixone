@@ -20,13 +20,13 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestEval(t *testing.T) {
 	view := NewBlockView(123455)
-	colTypes := mock.MockColTypes(14)
+	colTypes := types.MockColTypes(14)
 	rows := uint64(64)
 	attrs1 := make([]int, 0)
 	vecs1 := make([]vector.IVector, 0)
@@ -73,7 +73,7 @@ func TestEval(t *testing.T) {
 func TestMarshal(t *testing.T) {
 	view := NewBlockView(123455)
 
-	colTypes := mock.MockColTypes(14)
+	colTypes := types.MockColTypes(14)
 	rows := uint64(64)
 	attrs1 := make([]int, 0)
 	vecs1 := make([]vector.IVector, 0)
@@ -141,7 +141,7 @@ func TestMarshal2(t *testing.T) {
 func TestMarshal3(t *testing.T) {
 	view := NewBlockView(123455)
 
-	colTypes := mock.MockColTypes(14)
+	colTypes := types.MockColTypes(14)
 	rows := uint64(64)
 	attrs1 := make([]int, 0)
 	vecs1 := make([]vector.IVector, 0)

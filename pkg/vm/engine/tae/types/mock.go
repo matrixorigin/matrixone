@@ -12,109 +12,107 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package mock
+package types
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
-
-func MockColTypes(colCnt int) (ct []types.Type) {
+func MockColTypes(colCnt int) (ct []Type) {
 	for i := 0; i < colCnt; i++ {
-		var typ types.Type
+		var typ Type
 		switch i {
 		case 0:
-			typ = types.Type{
-				Oid:   types.T_int8,
+			typ = Type{
+				Oid:   Type_INT8,
 				Size:  1,
 				Width: 8,
 			}
 		case 1:
-			typ = types.Type{
-				Oid:   types.T_int16,
+			typ = Type{
+				Oid:   Type_INT16,
 				Size:  2,
 				Width: 16,
 			}
 		case 2:
-			typ = types.Type{
-				Oid:   types.T_int32,
+			typ = Type{
+				Oid:   Type_INT32,
 				Size:  4,
 				Width: 32,
 			}
 		case 3:
-			typ = types.Type{
-				Oid:   types.T_int64,
+			typ = Type{
+				Oid:   Type_INT64,
 				Size:  8,
 				Width: 64,
 			}
 		case 4:
-			typ = types.Type{
-				Oid:   types.T_uint8,
+			typ = Type{
+				Oid:   Type_UINT8,
 				Size:  1,
 				Width: 8,
 			}
 		case 5:
-			typ = types.Type{
-				Oid:   types.T_uint16,
+			typ = Type{
+				Oid:   Type_UINT16,
 				Size:  2,
 				Width: 16,
 			}
 		case 6:
-			typ = types.Type{
-				Oid:   types.T_uint32,
+			typ = Type{
+				Oid:   Type_UINT32,
 				Size:  4,
 				Width: 32,
 			}
 		case 7:
-			typ = types.Type{
-				Oid:   types.T_uint64,
+			typ = Type{
+				Oid:   Type_UINT64,
 				Size:  8,
 				Width: 64,
 			}
 		case 8:
-			typ = types.Type{
-				Oid:   types.T_float32,
+			typ = Type{
+				Oid:   Type_FLOAT32,
 				Size:  4,
 				Width: 32,
 			}
 		case 9:
-			typ = types.Type{
-				Oid:   types.T_float64,
+			typ = Type{
+				Oid:   Type_FLOAT64,
 				Size:  8,
 				Width: 64,
 			}
 		case 10:
-			typ = types.Type{
-				Oid:   types.T_date,
+			typ = Type{
+				Oid:   Type_DATE,
 				Size:  4,
 				Width: 32,
 			}
 		case 11:
-			typ = types.Type{
-				Oid:   types.T_datetime,
+			typ = Type{
+				Oid:   Type_DATETIME,
 				Size:  8,
 				Width: 64,
 			}
 		case 12:
-			typ = types.Type{
-				Oid:   types.T_varchar,
+			typ = Type{
+				Oid:   Type_VARCHAR,
 				Size:  24,
 				Width: 100,
 			}
 		case 13:
-			typ = types.Type{
-				Oid:   types.T_char,
+			typ = Type{
+				Oid:   Type_CHAR,
 				Size:  24,
 				Width: 100,
 			}
 		case 14:
-			typ = types.T_bool.ToType()
+			typ = Type_BOOL.ToType()
 			typ.Width = 8
 		case 15:
-			typ = types.T_timestamp.ToType()
+			typ = Type_TIMESTAMP.ToType()
 			typ.Width = 64
 		case 16:
-			typ = types.T_decimal64.ToType()
+			typ = Type_DECIMAL64.ToType()
 			typ.Width = 64
 		case 17:
-			typ = types.T_decimal128.ToType()
+			typ = Type_DECIMAL128.ToType()
 			typ.Width = 128
 		}
 		ct = append(ct, typ)

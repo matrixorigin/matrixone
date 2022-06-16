@@ -17,138 +17,77 @@ package compute
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-func CompareGeneric(a, b any, t types.Type) int {
+func CompareOrdered[T types.OrderedT](v1, v2 any) int64 {
+	a, b := v1.(T), v2.(T)
+	if a > b {
+		return 1
+	} else if a < b {
+		return -1
+	}
+	return 0
+}
+
+func CompareBool(a, b bool) int64 {
+	if a && b {
+		return 0
+	} else if !a && !b {
+		return 0
+	} else if a {
+		return 1
+	}
+	return 0
+}
+
+func CompareBytes(a, b any) int64 {
+	res := bytes.Compare(a.([]byte), b.([]byte))
+	if res > 0 {
+		return 1
+	} else if res < 0 {
+		return -1
+	} else {
+		return 0
+	}
+}
+
+func CompareGeneric(a, b any, t types.Type) int64 {
 	switch t.Oid {
-	case types.T_bool:
-		if a.(bool) && b.(bool) {
-			return 0
-		} else if !a.(bool) && !b.(bool) {
-			return 0
-		} else if a.(bool) {
-			return 1
-		} else {
-			return 0
-		}
-	case types.T_int8:
-		if a.(int8) > b.(int8) {
-			return 1
-		} else if a.(int8) < b.(int8) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_int16:
-		if a.(int16) > b.(int16) {
-			return 1
-		} else if a.(int16) < b.(int16) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_int32:
-		if a.(int32) > b.(int32) {
-			return 1
-		} else if a.(int32) < b.(int32) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_int64:
-		if a.(int64) > b.(int64) {
-			return 1
-		} else if a.(int64) < b.(int64) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_uint8:
-		if a.(uint8) > b.(uint8) {
-			return 1
-		} else if a.(uint8) < b.(uint8) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_uint16:
-		if a.(uint16) > b.(uint16) {
-			return 1
-		} else if a.(uint16) < b.(uint16) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_uint32:
-		if a.(uint32) > b.(uint32) {
-			return 1
-		} else if a.(uint32) < b.(uint32) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_uint64:
-		if a.(uint64) > b.(uint64) {
-			return 1
-		} else if a.(uint64) < b.(uint64) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_decimal64:
-		return int(types.CompareDecimal64Decimal64Aligned(a.(types.Decimal64), b.(types.Decimal64)))
-	case types.T_decimal128:
-		return int(types.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128)))
-	case types.T_float32:
-		if a.(float32) > b.(float32) {
-			return 1
-		} else if a.(float32) < b.(float32) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_float64:
-		if a.(float64) > b.(float64) {
-			return 1
-		} else if a.(float64) < b.(float64) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_timestamp:
-		if a.(types.Timestamp) > b.(types.Timestamp) {
-			return 1
-		} else if a.(types.Timestamp) < b.(types.Timestamp) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_date:
-		if a.(types.Date) > b.(types.Date) {
-			return 1
-		} else if a.(types.Date) < b.(types.Date) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_datetime:
-		if a.(types.Datetime) > b.(types.Datetime) {
-			return 1
-		} else if a.(types.Datetime) < b.(types.Datetime) {
-			return -1
-		} else {
-			return 0
-		}
-	case types.T_char, types.T_varchar:
-		res := bytes.Compare(a.([]byte), b.([]byte))
-		if res > 0 {
-			return 1
-		} else if res < 0 {
-			return -1
-		} else {
-			return 0
-		}
+	case types.Type_BOOL:
+		return CompareBool(a.(bool), b.(bool))
+	case types.Type_INT8:
+		return CompareOrdered[int8](a, b)
+	case types.Type_INT16:
+		return CompareOrdered[int16](a, b)
+	case types.Type_INT32:
+		return CompareOrdered[int32](a, b)
+	case types.Type_INT64:
+		return CompareOrdered[int64](a, b)
+	case types.Type_UINT8:
+		return CompareOrdered[uint8](a, b)
+	case types.Type_UINT16:
+		return CompareOrdered[uint16](a, b)
+	case types.Type_UINT32:
+		return CompareOrdered[uint32](a, b)
+	case types.Type_UINT64:
+		return CompareOrdered[uint64](a, b)
+	case types.Type_DECIMAL64:
+		return CompareOrdered[types.Decimal64](a, b)
+	case types.Type_DECIMAL128:
+		return types.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128))
+	case types.Type_FLOAT32:
+		return CompareOrdered[float32](a, b)
+	case types.Type_FLOAT64:
+		return CompareOrdered[float64](a, b)
+	case types.Type_TIMESTAMP:
+		return CompareOrdered[types.Timestamp](a, b)
+	case types.Type_DATE:
+		return CompareOrdered[types.Date](a, b)
+	case types.Type_DATETIME:
+		return CompareOrdered[types.Datetime](a, b)
+	case types.Type_CHAR, types.Type_VARCHAR:
+		return CompareBytes(a, b)
 	default:
 		panic("unsupported type")
 	}

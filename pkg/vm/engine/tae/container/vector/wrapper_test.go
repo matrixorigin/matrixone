@@ -22,14 +22,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/pierrec/lz4"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestWrapper(t *testing.T) {
-	colTypes := mock.MockColTypes(14)
+	colTypes := types.MockColTypes(14)
 	capacity := uint64(10000)
 	// wrappers := make([]*VectorWrapper, 0)
 	for i, colType := range colTypes {

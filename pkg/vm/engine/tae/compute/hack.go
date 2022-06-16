@@ -15,194 +15,67 @@
 package compute
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
+
+func InplaceDeleteRowsFromSlice[T types.FixedSizeT](v any, rowGen common.RowGen) any {
+	if !rowGen.HasNext() {
+		return v
+	}
+	slice := v.([]T)
+	prevRow := -1
+	currPos := 0
+	for rowGen.HasNext() {
+		currRow := int(rowGen.Next())
+		copy(slice[currPos:], slice[prevRow+1:currRow])
+		currPos += currRow - prevRow - 1
+		prevRow = currRow
+	}
+	left := len(slice[prevRow+1:])
+	copy(slice[currPos:], slice[prevRow+1:])
+	currPos += left
+	return slice[:currPos]
+}
 
 func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 	if !rowGen.HasNext() {
 		return orig
 	}
-	prevRow := -1
-	currPos := 0
 
 	switch arr := orig.(type) {
 	case []bool:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[bool](arr, rowGen)
 	case []int8:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[int8](arr, rowGen)
 	case []int16:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[int16](arr, rowGen)
 	case []int32:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[int32](arr, rowGen)
 	case []int64:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[int64](arr, rowGen)
 	case []uint8:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[uint8](arr, rowGen)
 	case []uint16:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[uint16](arr, rowGen)
 	case []uint32:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[uint32](arr, rowGen)
 	case []uint64:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[uint64](arr, rowGen)
 	case []types.Timestamp:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[types.Timestamp](arr, rowGen)
 	case []types.Decimal64:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[types.Decimal64](arr, rowGen)
 	case []types.Decimal128:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[types.Decimal128](arr, rowGen)
 	case []float32:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[float32](arr, rowGen)
 	case []float64:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[float64](arr, rowGen)
 	case []types.Date:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[types.Date](arr, rowGen)
 	case []types.Datetime:
-		for rowGen.HasNext() {
-			currRow := int(rowGen.Next())
-			copy(arr[currPos:], arr[prevRow+1:currRow])
-			currPos += currRow - prevRow - 1
-			prevRow = currRow
-		}
-		left := len(arr[prevRow+1:])
-		copy(arr[currPos:], arr[prevRow+1:])
-		currPos += left
-		return arr[:currPos]
+		return InplaceDeleteRowsFromSlice[types.Datetime](arr, rowGen)
 	}
 	panic("not support")
 }

@@ -19,13 +19,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBatch(t *testing.T) {
-	colTypes := mock.MockColTypes(14)
+	colTypes := types.MockColTypes(14)
 	rows := uint64(64)
 	attrs1 := make([]int, 0)
 	vecs1 := make([]vector.IVector, 0)
@@ -72,7 +72,7 @@ func TestBatch(t *testing.T) {
 }
 
 func TestMarshal(t *testing.T) {
-	colTypes := mock.MockColTypes(14)
+	colTypes := types.MockColTypes(14)
 	rows := uint64(64)
 	attrs1 := make([]int, 0)
 	vecs1 := make([]vector.IVector, 0)
