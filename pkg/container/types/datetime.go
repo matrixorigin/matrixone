@@ -220,6 +220,16 @@ func (dt Datetime) ConvertToGoTime() gotime.Time {
 	return gotime.Date(int(y), gotime.Month(m), int(d), int(hour), int(min), int(sec), int(msec*1000), startupTime.Location())
 }
 
+func DatetimeToTimestamp(xs []Datetime, rs []Timestamp) ([]Timestamp, error) {
+	localTZAligned := localTZ << 20
+	xsInInt64 := *(*[]int64)(unsafe.Pointer(&xs))
+	rsInInt64 := *(*[]int64)(unsafe.Pointer(&rs))
+	for i, x := range xsInInt64 {
+		rsInInt64[i] = x - localTZAligned
+	}
+	return rs, nil
+}
+
 func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64) Datetime {
 	date = date.Add(gotime.Duration(addMsec) * gotime.Microsecond)
 	date = date.Add(gotime.Duration(addSec) * gotime.Second)
