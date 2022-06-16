@@ -23,7 +23,7 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
-// ConfigChangeType change replica type
+// ConfigChangeType indicates config change command type.
 type ConfigChangeType int32
 
 const (
@@ -83,9 +83,9 @@ func (ServiceType) EnumDescriptor() ([]byte, []int) {
 
 // Replica of the shard
 type Replica struct {
-	ID                   uint64   `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Uuid                 string   `protobuf:"bytes,2,opt,name=uuid,proto3" json:"uuid,omitempty"`
-	InitialMember        bool     `protobuf:"varint,4,opt,name=initialMember,proto3" json:"initialMember,omitempty"`
+	ShardID              uint64   `protobuf:"varint,1,opt,name=ShardID,proto3" json:"ShardID,omitempty"`
+	ReplicaID            uint64   `protobuf:"varint,2,opt,name=ReplicaID,proto3" json:"ReplicaID,omitempty"`
+	Epoch                uint64   `protobuf:"varint,3,opt,name=Epoch,proto3" json:"Epoch,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -124,31 +124,31 @@ func (m *Replica) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Replica proto.InternalMessageInfo
 
-func (m *Replica) GetID() uint64 {
+func (m *Replica) GetShardID() uint64 {
 	if m != nil {
-		return m.ID
+		return m.ShardID
 	}
 	return 0
 }
 
-func (m *Replica) GetUuid() string {
+func (m *Replica) GetReplicaID() uint64 {
 	if m != nil {
-		return m.Uuid
+		return m.ReplicaID
 	}
-	return ""
+	return 0
 }
 
-func (m *Replica) GetInitialMember() bool {
+func (m *Replica) GetEpoch() uint64 {
 	if m != nil {
-		return m.InitialMember
+		return m.Epoch
 	}
-	return false
+	return 0
 }
 
-// ChangePeer change peer
+// ConfigChange is the detail of a config change.
 type ConfigChange struct {
-	Replica              Replica          `protobuf:"bytes,1,opt,name=replica,proto3" json:"replica"`
-	ChangeType           ConfigChangeType `protobuf:"varint,2,opt,name=changeType,proto3,enum=pb.ConfigChangeType" json:"changeType,omitempty"`
+	Replica              Replica          `protobuf:"bytes,1,opt,name=Replica,proto3" json:"Replica"`
+	ChangeType           ConfigChangeType `protobuf:"varint,2,opt,name=ChangeType,proto3,enum=pb.ConfigChangeType" json:"ChangeType,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
 	XXX_unrecognized     []byte           `json:"-"`
 	XXX_sizecache        int32            `json:"-"`
@@ -201,16 +201,14 @@ func (m *ConfigChange) GetChangeType() ConfigChangeType {
 	return AddNode
 }
 
-// ScheduleCommand shard heartbeat response.
+// ScheduleCommand contains a shard schedule command.
 type ScheduleCommand struct {
-	ShardID      uint64        `protobuf:"varint,1,opt,name=shardID,proto3" json:"shardID,omitempty"`
-	ShardEpoch   uint64        `protobuf:"varint,2,opt,name=shardEpoch,proto3" json:"shardEpoch,omitempty"`
-	ConfigChange *ConfigChange `protobuf:"bytes,4,opt,name=configChange,proto3" json:"configChange,omitempty"`
-	// Which service does this command schedule for
-	ServiceType          ServiceType `protobuf:"varint,11,opt,name=serviceType,proto3,enum=pb.ServiceType" json:"serviceType,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
-	XXX_unrecognized     []byte      `json:"-"`
-	XXX_sizecache        int32       `json:"-"`
+	UUID                 string        `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
+	ConfigChange         *ConfigChange `protobuf:"bytes,2,opt,name=ConfigChange,proto3" json:"ConfigChange,omitempty"`
+	ServiceType          ServiceType   `protobuf:"varint,3,opt,name=ServiceType,proto3,enum=pb.ServiceType" json:"ServiceType,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
+	XXX_unrecognized     []byte        `json:"-"`
+	XXX_sizecache        int32         `json:"-"`
 }
 
 func (m *ScheduleCommand) Reset()         { *m = ScheduleCommand{} }
@@ -246,18 +244,11 @@ func (m *ScheduleCommand) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_ScheduleCommand proto.InternalMessageInfo
 
-func (m *ScheduleCommand) GetShardID() uint64 {
+func (m *ScheduleCommand) GetUUID() string {
 	if m != nil {
-		return m.ShardID
+		return m.UUID
 	}
-	return 0
-}
-
-func (m *ScheduleCommand) GetShardEpoch() uint64 {
-	if m != nil {
-		return m.ShardEpoch
-	}
-	return 0
+	return ""
 }
 
 func (m *ScheduleCommand) GetConfigChange() *ConfigChange {
@@ -285,32 +276,29 @@ func init() {
 func init() { proto.RegisterFile("hakeeper.proto", fileDescriptor_5e1506f3aa5330eb) }
 
 var fileDescriptor_5e1506f3aa5330eb = []byte{
-	// 392 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x5c, 0x92, 0xd1, 0x8e, 0x93, 0x40,
-	0x14, 0x86, 0x19, 0x24, 0xcb, 0xee, 0xa1, 0xdb, 0x25, 0x13, 0x63, 0x88, 0x17, 0x6c, 0xd3, 0x78,
-	0xd1, 0xac, 0xca, 0xc6, 0xba, 0x2f, 0x60, 0x5b, 0x2f, 0x36, 0xa9, 0x5e, 0x0c, 0xde, 0x79, 0x05,
-	0xcc, 0x14, 0x26, 0x16, 0x66, 0xa4, 0xd0, 0xc4, 0xf7, 0xf2, 0x21, 0x7a, 0xd9, 0x27, 0x68, 0x94,
-	0x27, 0x31, 0x1c, 0xda, 0x48, 0x7b, 0x77, 0xfe, 0x7f, 0xfe, 0x9f, 0xef, 0x9c, 0x04, 0x18, 0x66,
-	0xd1, 0x0f, 0x21, 0xb4, 0x28, 0x03, 0x5d, 0xaa, 0x4a, 0x51, 0x53, 0xc7, 0xaf, 0xdf, 0xa7, 0xb2,
-	0xca, 0xea, 0x38, 0x48, 0x54, 0xfe, 0x98, 0xaa, 0x54, 0x3d, 0xe2, 0x53, 0x5c, 0xaf, 0x50, 0xa1,
-	0xc0, 0xa9, 0xab, 0x8c, 0xbf, 0x83, 0xcd, 0x84, 0x5e, 0xcb, 0x24, 0xa2, 0xaf, 0xc0, 0x94, 0xdc,
-	0x23, 0x23, 0x32, 0xb1, 0x66, 0x57, 0xcd, 0xe1, 0xde, 0x7c, 0x5e, 0x30, 0x53, 0x72, 0x4a, 0xc1,
-	0xaa, 0x6b, 0xc9, 0x3d, 0x73, 0x44, 0x26, 0x37, 0x0c, 0x67, 0xfa, 0x06, 0x6e, 0x65, 0x21, 0x2b,
-	0x19, 0xad, 0xbf, 0x88, 0x3c, 0x16, 0xa5, 0x67, 0x8d, 0xc8, 0xe4, 0x9a, 0x9d, 0x9b, 0xe3, 0x9f,
-	0x30, 0x98, 0xab, 0x62, 0x25, 0xd3, 0x79, 0x16, 0x15, 0xa9, 0xa0, 0x6f, 0xc1, 0x2e, 0x3b, 0x18,
-	0x62, 0x9c, 0xa9, 0x13, 0xe8, 0x38, 0x38, 0xf2, 0x67, 0xd6, 0xee, 0x70, 0x6f, 0xb0, 0x53, 0x82,
-	0x3e, 0x01, 0x24, 0x58, 0xfb, 0xf6, 0x4b, 0x0b, 0x84, 0x0f, 0xa7, 0x2f, 0xdb, 0x7c, 0xff, 0x93,
-	0xed, 0x1b, 0xeb, 0xe5, 0xc6, 0xbf, 0x09, 0xdc, 0x85, 0x49, 0x26, 0x78, 0xbd, 0x16, 0x73, 0x95,
-	0xe7, 0x51, 0xc1, 0xa9, 0x07, 0xf6, 0x26, 0x8b, 0x4a, 0xfe, 0xbc, 0xe8, 0xae, 0x63, 0x27, 0x49,
-	0x7d, 0x00, 0x1c, 0x3f, 0x6b, 0x95, 0x64, 0xc8, 0xb0, 0x58, 0xcf, 0xa1, 0x4f, 0x30, 0x48, 0x7a,
-	0x34, 0xbc, 0xd2, 0x99, 0xba, 0x97, 0x5b, 0xb0, 0xb3, 0x14, 0xfd, 0x00, 0xce, 0x46, 0x94, 0x5b,
-	0x99, 0x74, 0xab, 0x3b, 0xb8, 0xfa, 0x5d, 0x5b, 0x0a, 0xff, 0xdb, 0xac, 0x9f, 0x79, 0x58, 0x82,
-	0x7b, 0x79, 0x16, 0x75, 0xc0, 0xfe, 0xc4, 0xf9, 0x57, 0xc5, 0x85, 0x6b, 0xd0, 0x21, 0x00, 0x13,
-	0xb9, 0xda, 0x0a, 0xd4, 0x84, 0xde, 0xc2, 0x4d, 0x58, 0x45, 0x65, 0x85, 0xd2, 0xa4, 0x03, 0xb8,
-	0x0e, 0x2b, 0xa5, 0x51, 0xbd, 0x78, 0x78, 0x07, 0x4e, 0x8f, 0xd4, 0x76, 0x97, 0x2a, 0x3d, 0x3a,
-	0xae, 0xd1, 0x76, 0x17, 0xc5, 0x49, 0x92, 0x99, 0xbb, 0xff, 0xeb, 0x1b, 0xbb, 0xc6, 0x27, 0xfb,
-	0xc6, 0x27, 0x7f, 0x1a, 0x9f, 0xc4, 0x57, 0xf8, 0x6f, 0x7c, 0xfc, 0x17, 0x00, 0x00, 0xff, 0xff,
-	0xb5, 0x33, 0xb3, 0x0b, 0x60, 0x02, 0x00, 0x00,
+	// 352 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x5c, 0x91, 0xcf, 0x4e, 0xea, 0x40,
+	0x14, 0xc6, 0x3b, 0xc0, 0xbd, 0x5c, 0x4e, 0xb9, 0xd0, 0x4c, 0x58, 0x34, 0xc6, 0x54, 0xc3, 0xca,
+	0xa0, 0x96, 0x88, 0xbc, 0x80, 0x80, 0x0b, 0x12, 0xe2, 0x62, 0x2a, 0x71, 0xdd, 0x3f, 0x43, 0xdb,
+	0x48, 0x3b, 0x63, 0x53, 0x48, 0x7c, 0x09, 0x9f, 0x8b, 0x25, 0x4f, 0x60, 0x94, 0x27, 0x31, 0x3d,
+	0x2d, 0x58, 0xd8, 0xcd, 0xef, 0x9c, 0xef, 0xfb, 0xe6, 0x9b, 0x0c, 0xb4, 0x02, 0xfb, 0x95, 0x73,
+	0xc9, 0x13, 0x53, 0x26, 0x22, 0x15, 0xb4, 0x22, 0x9d, 0xb3, 0x5b, 0x3f, 0x4c, 0x83, 0x95, 0x63,
+	0xba, 0x22, 0xea, 0xfb, 0xc2, 0x17, 0x7d, 0x5c, 0x39, 0xab, 0x05, 0x12, 0x02, 0x9e, 0x72, 0x4b,
+	0xf7, 0x05, 0xea, 0x8c, 0xcb, 0x65, 0xe8, 0xda, 0x54, 0x87, 0xba, 0x15, 0xd8, 0x89, 0x37, 0x9d,
+	0xe8, 0xe4, 0x92, 0x5c, 0xd5, 0xd8, 0x1e, 0xe9, 0x39, 0x34, 0x0a, 0xd1, 0x74, 0xa2, 0x57, 0x70,
+	0xf7, 0x3b, 0xa0, 0x1d, 0xf8, 0xf3, 0x28, 0x85, 0x1b, 0xe8, 0x55, 0xdc, 0xe4, 0xd0, 0x7d, 0x83,
+	0xe6, 0x58, 0xc4, 0x8b, 0xd0, 0x1f, 0x07, 0x76, 0xec, 0x73, 0x7a, 0x7d, 0xb8, 0x08, 0xd3, 0xd5,
+	0x81, 0x6a, 0x4a, 0xc7, 0x2c, 0x46, 0xa3, 0xda, 0xe6, 0xf3, 0x42, 0x61, 0x87, 0x2a, 0x43, 0x80,
+	0xdc, 0xf6, 0xfc, 0x2e, 0x39, 0xde, 0xd8, 0x1a, 0x74, 0x32, 0x7d, 0x39, 0x32, 0xdb, 0xb1, 0x92,
+	0xae, 0xfb, 0x41, 0xa0, 0x6d, 0xb9, 0x01, 0xf7, 0x56, 0x4b, 0x3e, 0x16, 0x51, 0x64, 0xc7, 0x1e,
+	0xa5, 0x50, 0x9b, 0xcf, 0x8b, 0x17, 0x35, 0x18, 0x9e, 0xe9, 0xf0, 0xb8, 0x1a, 0xe6, 0xab, 0x03,
+	0xed, 0x34, 0x9f, 0x1d, 0x3f, 0xe0, 0x0e, 0x54, 0x8b, 0x27, 0xeb, 0xd0, 0xcd, 0x4b, 0x55, 0xb1,
+	0x54, 0x3b, 0x33, 0x95, 0xc6, 0xac, 0xac, 0xe9, 0xcd, 0x40, 0x3b, 0x2d, 0x4c, 0x55, 0xa8, 0x3f,
+	0x78, 0xde, 0x93, 0xf0, 0xb8, 0xa6, 0xd0, 0x16, 0x00, 0xe3, 0x91, 0x58, 0x73, 0x64, 0x42, 0xff,
+	0x43, 0xc3, 0x4a, 0xed, 0x24, 0x45, 0xac, 0xd0, 0x26, 0xfc, 0xb3, 0x52, 0x21, 0x91, 0xaa, 0xbd,
+	0x9b, 0xa3, 0x02, 0x99, 0x77, 0x26, 0xfc, 0x62, 0xa2, 0x29, 0x99, 0x77, 0x12, 0xef, 0x91, 0x8c,
+	0xb4, 0xed, 0xb7, 0xa1, 0x6c, 0x76, 0x06, 0xd9, 0xee, 0x0c, 0xf2, 0xb5, 0x33, 0x88, 0xf3, 0x17,
+	0x7f, 0xfc, 0xfe, 0x27, 0x00, 0x00, 0xff, 0xff, 0xbe, 0xfd, 0xc8, 0x40, 0x36, 0x02, 0x00, 0x00,
 }
 
 func (m *Replica) Marshal() (dAtA []byte, err error) {
@@ -337,25 +325,18 @@ func (m *Replica) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.InitialMember {
+	if m.Epoch != 0 {
+		i = encodeVarintHakeeper(dAtA, i, uint64(m.Epoch))
 		i--
-		if m.InitialMember {
-			dAtA[i] = 1
-		} else {
-			dAtA[i] = 0
-		}
-		i--
-		dAtA[i] = 0x20
+		dAtA[i] = 0x18
 	}
-	if len(m.Uuid) > 0 {
-		i -= len(m.Uuid)
-		copy(dAtA[i:], m.Uuid)
-		i = encodeVarintHakeeper(dAtA, i, uint64(len(m.Uuid)))
+	if m.ReplicaID != 0 {
+		i = encodeVarintHakeeper(dAtA, i, uint64(m.ReplicaID))
 		i--
-		dAtA[i] = 0x12
+		dAtA[i] = 0x10
 	}
-	if m.ID != 0 {
-		i = encodeVarintHakeeper(dAtA, i, uint64(m.ID))
+	if m.ShardID != 0 {
+		i = encodeVarintHakeeper(dAtA, i, uint64(m.ShardID))
 		i--
 		dAtA[i] = 0x8
 	}
@@ -431,7 +412,7 @@ func (m *ScheduleCommand) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.ServiceType != 0 {
 		i = encodeVarintHakeeper(dAtA, i, uint64(m.ServiceType))
 		i--
-		dAtA[i] = 0x58
+		dAtA[i] = 0x18
 	}
 	if m.ConfigChange != nil {
 		{
@@ -443,17 +424,14 @@ func (m *ScheduleCommand) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintHakeeper(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0x22
+		dAtA[i] = 0x12
 	}
-	if m.ShardEpoch != 0 {
-		i = encodeVarintHakeeper(dAtA, i, uint64(m.ShardEpoch))
+	if len(m.UUID) > 0 {
+		i -= len(m.UUID)
+		copy(dAtA[i:], m.UUID)
+		i = encodeVarintHakeeper(dAtA, i, uint64(len(m.UUID)))
 		i--
-		dAtA[i] = 0x10
-	}
-	if m.ShardID != 0 {
-		i = encodeVarintHakeeper(dAtA, i, uint64(m.ShardID))
-		i--
-		dAtA[i] = 0x8
+		dAtA[i] = 0xa
 	}
 	return len(dAtA) - i, nil
 }
@@ -475,15 +453,14 @@ func (m *Replica) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if m.ID != 0 {
-		n += 1 + sovHakeeper(uint64(m.ID))
+	if m.ShardID != 0 {
+		n += 1 + sovHakeeper(uint64(m.ShardID))
 	}
-	l = len(m.Uuid)
-	if l > 0 {
-		n += 1 + l + sovHakeeper(uint64(l))
+	if m.ReplicaID != 0 {
+		n += 1 + sovHakeeper(uint64(m.ReplicaID))
 	}
-	if m.InitialMember {
-		n += 2
+	if m.Epoch != 0 {
+		n += 1 + sovHakeeper(uint64(m.Epoch))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -514,11 +491,9 @@ func (m *ScheduleCommand) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if m.ShardID != 0 {
-		n += 1 + sovHakeeper(uint64(m.ShardID))
-	}
-	if m.ShardEpoch != 0 {
-		n += 1 + sovHakeeper(uint64(m.ShardEpoch))
+	l = len(m.UUID)
+	if l > 0 {
+		n += 1 + l + sovHakeeper(uint64(l))
 	}
 	if m.ConfigChange != nil {
 		l = m.ConfigChange.Size()
@@ -570,9 +545,9 @@ func (m *Replica) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field ShardID", wireType)
 			}
-			m.ID = 0
+			m.ShardID = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowHakeeper
@@ -582,48 +557,16 @@ func (m *Replica) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.ID |= uint64(b&0x7F) << shift
+				m.ShardID |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
 		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Uuid", wireType)
-			}
-			var stringLen uint64
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowHakeeper
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
-				return ErrInvalidLengthHakeeper
-			}
-			postIndex := iNdEx + intStringLen
-			if postIndex < 0 {
-				return ErrInvalidLengthHakeeper
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Uuid = string(dAtA[iNdEx:postIndex])
-			iNdEx = postIndex
-		case 4:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field InitialMember", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field ReplicaID", wireType)
 			}
-			var v int
+			m.ReplicaID = 0
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowHakeeper
@@ -633,12 +576,30 @@ func (m *Replica) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				v |= int(b&0x7F) << shift
+				m.ReplicaID |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			m.InitialMember = bool(v != 0)
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Epoch", wireType)
+			}
+			m.Epoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHakeeper
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Epoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHakeeper(dAtA[iNdEx:])
@@ -794,10 +755,10 @@ func (m *ScheduleCommand) Unmarshal(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ShardID", wireType)
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UUID", wireType)
 			}
-			m.ShardID = 0
+			var stringLen uint64
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowHakeeper
@@ -807,31 +768,25 @@ func (m *ScheduleCommand) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.ShardID |= uint64(b&0x7F) << shift
+				stringLen |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthHakeeper
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthHakeeper
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.UUID = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		case 2:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ShardEpoch", wireType)
-			}
-			m.ShardEpoch = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowHakeeper
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.ShardEpoch |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ConfigChange", wireType)
 			}
@@ -867,7 +822,7 @@ func (m *ScheduleCommand) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 11:
+		case 3:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ServiceType", wireType)
 			}
