@@ -54,6 +54,8 @@ const (
 	getIDTag
 )
 
+type StateQuery struct{}
+
 type logShardIDQuery struct {
 	name string
 }
@@ -77,13 +79,15 @@ type stateMachine struct {
 	LogShards map[string]uint64
 	DNState   DNState
 	LogState  LogState
+
+	ClusterInfo ClusterInfo
 }
 
 func parseCmdTag(cmd []byte) uint16 {
 	return binaryEnc.Uint16(cmd)
 }
 
-func getGetIDCmd(count uint64) []byte {
+func GetGetIDCmd(count uint64) []byte {
 	cmd := make([]byte, headerSize+8)
 	binaryEnc.PutUint16(cmd, getIDTag)
 	binaryEnc.PutUint64(cmd[headerSize:], count)
@@ -275,6 +279,16 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }
 
+func (s *stateMachine) handleStateQuery() (interface{}, error) {
+	// FIXME: pretty sure we need to deepcopy here
+	return &HAKeeperState{
+		Tick:        s.Tick,
+		ClusterInfo: ClusterInfo,
+		DNState:     DNState,
+		LogState:    LogState,
+	}, nil
+}
+
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if q, ok := query.(*logShardIDQuery); ok {
 		id, ok := s.LogShards[q.name]
@@ -282,6 +296,9 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			return &logShardIDQueryResult{found: true, id: id}, nil
 		}
 		return &logShardIDQueryResult{found: false}, nil
+	}
+	if _, ok := query.(*StateQuery); ok {
+		return s.handleStateQuery()
 	}
 	panic("unknown query type")
 }
