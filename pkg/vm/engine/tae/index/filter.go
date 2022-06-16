@@ -20,10 +20,9 @@ import (
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type StaticFilter interface {
@@ -44,7 +43,7 @@ func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{typ: data.Typ}
 	hashes := make([]uint64, 0)
 	collector := func(v any, _ uint32) error {
-		hash, err := compute.Hash(v, sf.typ)
+		hash, err := types.Hash(v, sf.typ)
 		if err != nil {
 			return err
 		}
@@ -52,7 +51,7 @@ func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	if err = compute.ProcessVector(data, 0, uint32(vector.Length(data)), collector, nil); err != nil {
+	if err = compute.ApplyOpToColumn(data, collector, nil); err != nil {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -70,7 +69,7 @@ func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
 }
 
 func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
-	hash, err := compute.Hash(key, filter.typ)
+	hash, err := types.Hash(key, filter.typ)
 	if err != nil {
 		return false, err
 	}
@@ -86,7 +85,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 	exist := false
 
 	collector := func(v any, _ uint32) error {
-		hash, err := compute.Hash(v, filter.typ)
+		hash, err := types.Hash(v, filter.typ)
 		if err != nil {
 			return err
 		}
@@ -97,7 +96,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 		return nil
 	}
 
-	if err := compute.ProcessVector(keys, 0, uint32(vector.Length(keys)), collector, visibility); err != nil {
+	if err := compute.ApplyOpToColumn(keys, collector, visibility); err != nil {
 		return false, nil, err
 	}
 	if positive.GetCardinality() != 0 {
@@ -106,33 +105,42 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 	return exist, positive, nil
 }
 
-func (filter *binaryFuseFilter) Marshal() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.Write(encoding.EncodeType(filter.typ))
-	buf.Write(encoding.EncodeUint64(filter.inner.Seed))
-	buf.Write(encoding.EncodeUint32(filter.inner.SegmentLength))
-	buf.Write(encoding.EncodeUint32(filter.inner.SegmentLengthMask))
-	buf.Write(encoding.EncodeUint32(filter.inner.SegmentCount))
-	buf.Write(encoding.EncodeUint32(filter.inner.SegmentCountLength))
-	buf.Write(encoding.EncodeUint8Slice(filter.inner.Fingerprints))
-	return buf.Bytes(), nil
+func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
+	var w bytes.Buffer
+	if _, err = w.Write(types.EncodeType(filter.typ)); err != nil {
+		return
+	}
+	if _, err = types.WriteValues(
+		&w,
+		filter.inner.Seed,
+		filter.inner.SegmentLength,
+		filter.inner.SegmentLengthMask,
+		filter.inner.SegmentCount,
+		filter.inner.SegmentCountLength); err != nil {
+		return
+	}
+	if _, err = w.Write(types.EncodeUint8Slice(filter.inner.Fingerprints)); err != nil {
+		return
+	}
+	buf = w.Bytes()
+	return
 }
 
 func (filter *binaryFuseFilter) Unmarshal(buf []byte) error {
-	filter.typ = encoding.DecodeType(buf[:encoding.TypeSize])
-	buf = buf[encoding.TypeSize:]
+	filter.typ = types.DecodeType(buf[:types.TypeSize])
+	buf = buf[types.TypeSize:]
 	filter.inner = &xorfilter.BinaryFuse8{}
-	filter.inner.Seed = encoding.DecodeUint64(buf[:8])
+	filter.inner.Seed = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
-	filter.inner.SegmentLength = encoding.DecodeUint32(buf[:4])
+	filter.inner.SegmentLength = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.SegmentLengthMask = encoding.DecodeUint32(buf[:4])
+	filter.inner.SegmentLengthMask = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.SegmentCount = encoding.DecodeUint32(buf[:4])
+	filter.inner.SegmentCount = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.SegmentCountLength = encoding.DecodeUint32(buf[:4])
+	filter.inner.SegmentCountLength = types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
-	filter.inner.Fingerprints = encoding.DecodeUint8Slice(buf)
+	filter.inner.Fingerprints = types.DecodeUint8Slice(buf)
 	return nil
 }
 
