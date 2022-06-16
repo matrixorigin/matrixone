@@ -16,6 +16,7 @@ package update
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,8 +39,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 
 	affectedRows := uint64(batch.Length(bat))
 	// Fill vector for constant value
+	// -------- need to remove ----------
+	allAttrs := append(p.UpdateAttrs, p.OtherAttrs...)
+	// ----------------------------------
 	for i := range bat.Vecs {
-		if uint64(vector.ColumnLength(bat.Vecs[i])) != affectedRows {
+		if i == 0 {
+			continue
+		}
+		if bat.Vecs[i].Nsp.Np != nil {
+			return false, fmt.Errorf("%s can't be updated as NULL value now, which will be fixed in 0.5", allAttrs[i-1])
+		}
+		if bat.Vecs[i].IsScalar() {
 			if err := vector.ConstantPadding(bat.Vecs[i], affectedRows); err != nil {
 				bat.Clean(proc.Mp)
 				return false, err

@@ -523,15 +523,6 @@ func Length(v *Vector) int {
 	}
 }
 
-func ColumnLength(v *Vector) int {
-	switch v.Typ.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
-		return len(v.Col.(*types.Bytes).Offsets)
-	default:
-		return reflect.ValueOf(v.Col).Len()
-	}
-}
-
 func setLengthFixed[T any](v *Vector, n int) {
 	vs := v.Col.([]T)
 	m := len(vs)
@@ -540,6 +531,10 @@ func setLengthFixed[T any](v *Vector, n int) {
 }
 
 func SetLength(v *Vector, n int) {
+	if v.IsScalar() {
+		v.Length = n
+		return
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		setLengthFixed[bool](v, n)
@@ -1030,6 +1025,10 @@ func Append(v *Vector, arg interface{}) error {
 }
 
 func Shrink(v *Vector, sels []int64) {
+	if v.IsScalar() {
+		v.Length = len(sels)
+		return
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		vs := v.Col.([]bool)
@@ -1186,6 +1185,10 @@ func Shrink(v *Vector, sels []int64) {
 }
 
 func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
+	if v.IsScalar() {
+		v.Length = len(sels)
+		return nil
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		vs := v.Col.([]bool)

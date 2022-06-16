@@ -30,7 +30,11 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		return nil, errors.New(errno.CaseNotFound, "no column will be update")
 	}
 	// Check database's name and table's name
-	tbl, ok := stmt.Table.(*tree.AliasedTableExpr).Expr.(*tree.TableName)
+	alsTbl, ok := stmt.Table.(*tree.AliasedTableExpr)
+	if !ok {
+		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
+	}
+	tbl, ok := alsTbl.Expr.(*tree.TableName)
 	if !ok {
 		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
 	}
@@ -149,19 +153,22 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	query, binderCtx := newQueryAndSelectCtx(plan.Query_UPDATE)
-	nodeId, err := buildSelect(selectStmt, ctx, query, binderCtx)
+	//query, binderCtx := newQueryAndSelectCtx(plan.Query_UPDATE)
+	//nodeId, err := buildSelect(selectStmt, ctx, query, binderCtx)
+	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
 		return nil, err
 	}
-	query.Steps = append(query.Steps, nodeId)
+	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_UPDATE
+	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
 	// build update node
 	node := &Node{
 		NodeType: plan.Node_UPDATE,
 		ObjRef:   objRef,
 		TableDef: tableDef,
-		Children: []int32{nodeId},
+		Children: []int32{qry.Steps[len(qry.Steps)-1]},
+		NodeId:   int32(len(qry.Nodes)),
 		UpdateInfo: &plan.UpdateInfo{
 			PriKey:      priKey,
 			PriKeyIdx:   priKeyIdx,
@@ -171,17 +178,10 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 			AttrOrders:  attrOrders,
 		},
 	}
-	appendQueryNode(query, node)
+	qry.Nodes = append(qry.Nodes, node)
+	qry.Steps[len(qry.Steps)-1] = node.NodeId
 
-	// reset root node
-	preNode := query.Nodes[len(query.Nodes)-1]
-	query.Steps[len(query.Steps)-1] = preNode.NodeId
-
-	return &Plan{
-		Plan: &plan.Plan_Query{
-			Query: query,
-		},
-	}, nil
+	return usePlan, nil
 }
 
 func wrapCastForExpr(expr tree.Expr, typ *plan.Type) (tree.Expr, error) {
