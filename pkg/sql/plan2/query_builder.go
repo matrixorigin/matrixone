@@ -629,7 +629,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			NodeType:    plan.Node_AGG,
 			ProjectList: distinctBinder.GetProjectionList(),
 			Children:    []int32{nodeId},
-		}, ctx, ctx.projectTag)
+		}, ctx, ctx.distinctTag)
 	}
 
 	// append SORT node (include limit, offset)
@@ -650,7 +650,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Typ: ctx.projects[i].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: ctx.projectTag,
+						RelPos: ctx.distinctTag,
 						ColPos: int32(i),
 					},
 				},
