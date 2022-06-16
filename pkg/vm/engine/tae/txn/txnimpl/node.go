@@ -114,8 +114,7 @@ func (info *appendInfo) GetDestLen() uint32 {
 	return info.destLen
 }
 func (info *appendInfo) Desc() string {
-	s := fmt.Sprintf("%s", info.dest.BlockString())
-	return s
+	return info.dest.BlockString()
 }
 func (info *appendInfo) String() string {
 	s := fmt.Sprintf("From[%d:%d]To%s[%d:%d]",
