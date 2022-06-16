@@ -128,6 +128,10 @@ func (df *dataFile) upgradeFile() {
 	}
 	go func() {
 		df.mutex.Lock()
+		if len(df.file) < UPGRADE_FILE_NUM {
+			df.mutex.Unlock()
+			return
+		}
 		releaseFile := df.file[:len(df.file)-1]
 		df.file = df.file[len(df.file)-1 : len(df.file)]
 		df.mutex.Unlock()
