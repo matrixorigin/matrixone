@@ -191,10 +191,8 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          mv ./head/mo-server.log ./head-mo-server.log
-          mv ./base/mo-server.log ./base-mo-server.log
-          rm -rf ./head/;
-          rm -rf ./base/;
+          if  [ -d  "./head/"  ]; then mv ./head/mo-server.log ./head-mo-server.log; rm -rf ./head/; fi
+          if  [ -d  "./base/"  ]; then mv ./base/mo-server.log ./base-mo-server.log; rm -rf ./base/; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
 
