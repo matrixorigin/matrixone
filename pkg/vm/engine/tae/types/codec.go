@@ -128,37 +128,37 @@ func DecodeValue(val []byte, typ Type) any {
 func EncodeValue(val any, typ Type) []byte {
 	switch typ.Oid {
 	case Type_BOOL:
-		return EncodeFixed[bool](val.(bool))
+		return EncodeFixed(val.(bool))
 	case Type_INT8:
-		return EncodeFixed[int8](val.(int8))
+		return EncodeFixed(val.(int8))
 	case Type_INT16:
-		return EncodeFixed[int16](val.(int16))
+		return EncodeFixed(val.(int16))
 	case Type_INT32:
-		return EncodeFixed[int32](val.(int32))
+		return EncodeFixed(val.(int32))
 	case Type_INT64:
-		return EncodeFixed[int64](val.(int64))
+		return EncodeFixed(val.(int64))
 	case Type_UINT8:
-		return EncodeFixed[uint8](val.(uint8))
+		return EncodeFixed(val.(uint8))
 	case Type_UINT16:
-		return EncodeFixed[uint16](val.(uint16))
+		return EncodeFixed(val.(uint16))
 	case Type_UINT32:
-		return EncodeFixed[uint32](val.(uint32))
+		return EncodeFixed(val.(uint32))
 	case Type_UINT64:
-		return EncodeFixed[uint64](val.(uint64))
+		return EncodeFixed(val.(uint64))
 	case Type_DECIMAL64:
-		return EncodeFixed[Decimal64](val.(Decimal64))
+		return EncodeFixed(val.(Decimal64))
 	case Type_DECIMAL128:
-		return EncodeFixed[Decimal128](val.(Decimal128))
+		return EncodeFixed(val.(Decimal128))
 	case Type_FLOAT32:
-		return EncodeFixed[float32](val.(float32))
+		return EncodeFixed(val.(float32))
 	case Type_FLOAT64:
-		return EncodeFixed[float64](val.(float64))
+		return EncodeFixed(val.(float64))
 	case Type_DATE:
-		return EncodeFixed[Date](val.(Date))
+		return EncodeFixed(val.(Date))
 	case Type_TIMESTAMP:
-		return EncodeFixed[Timestamp](val.(Timestamp))
+		return EncodeFixed(val.(Timestamp))
 	case Type_DATETIME:
-		return EncodeFixed[Datetime](val.(Datetime))
+		return EncodeFixed(val.(Datetime))
 	case Type_CHAR, Type_VARCHAR:
 		return val.([]byte)
 	default:

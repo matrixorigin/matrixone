@@ -95,31 +95,31 @@ func UpdateOffsets(data *types.Bytes, start, end int) {
 func (view *BlockView) Marshal() (buf []byte, err error) {
 	var byteBuf bytes.Buffer
 	// Ts
-	byteBuf.Write(types.EncodeFixed[uint64](view.Ts))
+	byteBuf.Write(types.EncodeFixed(view.Ts))
 	// DeleteMask
 	if view.DeleteMask == nil {
 		cardinality := uint64(0)
-		byteBuf.Write(types.EncodeFixed[uint64](cardinality))
+		byteBuf.Write(types.EncodeFixed(cardinality))
 	} else {
 		cardinality := view.DeleteMask.GetCardinality()
-		byteBuf.Write(types.EncodeFixed[uint64](cardinality))
+		byteBuf.Write(types.EncodeFixed(cardinality))
 		iterator := view.DeleteMask.Iterator()
 		for iterator.HasNext() {
 			idx := iterator.Next()
-			byteBuf.Write(types.EncodeFixed[uint32](idx))
+			byteBuf.Write(types.EncodeFixed(idx))
 		}
 	}
 	// AppliedIBatch
 	if view.AppliedIBatch == nil {
 		batLength := 0
-		byteBuf.Write(types.EncodeFixed[uint64](uint64(batLength)))
+		byteBuf.Write(types.EncodeFixed(uint64(batLength)))
 	} else {
 		batBuf, err := view.AppliedIBatch.Marshal()
 		if err != nil {
 			return nil, err
 		}
 		batLength := len(batBuf)
-		byteBuf.Write(types.EncodeFixed[uint64](uint64(batLength)))
+		byteBuf.Write(types.EncodeFixed(uint64(batLength)))
 		byteBuf.Write(batBuf)
 	}
 	buf = byteBuf.Bytes()

@@ -79,12 +79,12 @@ func (meta *IndexMeta) SetSize(raw, exact uint32) {
 
 func (meta *IndexMeta) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
-	buf.Write(types.EncodeFixed[uint8](uint8(meta.IdxType)))
-	buf.Write(types.EncodeFixed[uint8](uint8(meta.CompType)))
-	buf.Write(types.EncodeFixed[uint16](meta.ColIdx))
-	buf.Write(types.EncodeFixed[uint16](meta.InternalIdx))
-	buf.Write(types.EncodeFixed[uint32](meta.Size))
-	buf.Write(types.EncodeFixed[uint32](meta.RawSize))
+	buf.Write(types.EncodeFixed(uint8(meta.IdxType)))
+	buf.Write(types.EncodeFixed(uint8(meta.CompType)))
+	buf.Write(types.EncodeFixed(meta.ColIdx))
+	buf.Write(types.EncodeFixed(meta.InternalIdx))
+	buf.Write(types.EncodeFixed(meta.Size))
+	buf.Write(types.EncodeFixed(meta.RawSize))
 	return buf.Bytes(), nil
 }
 
@@ -120,13 +120,13 @@ func (metas *IndicesMeta) AddIndex(meta IndexMeta) {
 
 func (metas *IndicesMeta) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
-	buf.Write(types.EncodeFixed[uint8](uint8(len(metas.Metas))))
+	buf.Write(types.EncodeFixed(uint8(len(metas.Metas))))
 	for _, meta := range metas.Metas {
 		v, err := meta.Marshal()
 		if err != nil {
 			return nil, err
 		}
-		buf.Write(types.EncodeFixed[uint32](uint32(len(v))))
+		buf.Write(types.EncodeFixed(uint32(len(v))))
 		buf.Write(v)
 	}
 	return buf.Bytes(), nil
