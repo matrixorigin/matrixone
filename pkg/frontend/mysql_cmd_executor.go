@@ -983,7 +983,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	buildPlan, err := plan2.BuildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	buildPlan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1551,7 +1551,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
-	cwft.plan, err = plan2.BuildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
+	cwft.plan, err = buildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1569,6 +1569,27 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 	return nil
+}
+
+func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	switch stmt := stmt.(type) {
+	case *tree.Select, *tree.ParenSelect,
+		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
+		opt := plan2.NewBaseOptimizer(ctx)
+		optimized, err := opt.Optimize(stmt)
+		if err != nil {
+			return nil, err
+		}
+		return &plan2.Plan{
+			Plan: &plan2.Plan_Query{
+				Query: optimized,
+			},
+		}, nil
+	default:
+		return plan2.BuildPlan(ctx, stmt)
+	}
 }
 
 /*
