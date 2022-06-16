@@ -205,6 +205,8 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 
 func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
 	switch v := value.GetConstantValue().(type) {
+	case *plan.ConstantValue_BoolV:
+		return v.BoolV
 	case *plan.ConstantValue_Int64V:
 		switch typ {
 		case plan.Type_INT8:
