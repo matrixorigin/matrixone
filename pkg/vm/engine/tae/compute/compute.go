@@ -16,6 +16,7 @@ package compute
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
@@ -34,51 +35,67 @@ func AppendValue(vec *gvec.Vector, v any) {
 	case types.T_bool:
 		vvals := vec.Col.([]bool)
 		vec.Col = append(vvals, v.(bool))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]bool), 1)
 	case types.T_int8:
 		vvals := vec.Col.([]int8)
 		vec.Col = append(vvals, v.(int8))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int8), 1)
 	case types.T_int16:
 		vvals := vec.Col.([]int16)
 		vec.Col = append(vvals, v.(int16))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int16), 2)
 	case types.T_int32:
 		vvals := vec.Col.([]int32)
 		vec.Col = append(vvals, v.(int32))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int32), 4)
 	case types.T_int64:
 		vvals := vec.Col.([]int64)
 		vec.Col = append(vvals, v.(int64))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]int64), 8)
 	case types.T_uint8:
 		vvals := vec.Col.([]uint8)
 		vec.Col = append(vvals, v.(uint8))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint8), 1)
 	case types.T_uint16:
 		vvals := vec.Col.([]uint16)
 		vec.Col = append(vvals, v.(uint16))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint16), 2)
 	case types.T_uint32:
 		vvals := vec.Col.([]uint32)
 		vec.Col = append(vvals, v.(uint32))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint32), 4)
 	case types.T_uint64:
 		vvals := vec.Col.([]uint64)
 		vec.Col = append(vvals, v.(uint64))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]uint64), 8)
 	case types.T_decimal64:
 		vvals := vec.Col.([]types.Decimal64)
 		vec.Col = append(vvals, v.(types.Decimal64))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Decimal64), 8)
 	case types.T_decimal128:
 		vvals := vec.Col.([]types.Decimal128)
 		vec.Col = append(vvals, v.(types.Decimal128))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Decimal128), 16)
 	case types.T_float32:
 		vvals := vec.Col.([]float32)
 		vec.Col = append(vvals, v.(float32))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]float32), 4)
 	case types.T_float64:
 		vvals := vec.Col.([]float64)
 		vec.Col = append(vvals, v.(float64))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]float64), 8)
 	case types.T_date:
 		vvals := vec.Col.([]types.Date)
 		vec.Col = append(vvals, v.(types.Date))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Date), 4)
 	case types.T_timestamp:
 		vvals := vec.Col.([]types.Timestamp)
 		vec.Col = append(vvals, v.(types.Timestamp))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Timestamp), 8)
 	case types.T_datetime:
 		vvals := vec.Col.([]types.Datetime)
 		vec.Col = append(vvals, v.(types.Datetime))
+		vec.Data = encoding.EncodeFixedSlice(vec.Col.([]types.Datetime), 8)
 	case types.T_char, types.T_varchar, types.T_json:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
@@ -87,7 +104,7 @@ func AppendValue(vec *gvec.Vector, v any) {
 		vvals.Offsets = append(vvals.Offsets, uint32(offset))
 		vvals.Lengths = append(vvals.Lengths, uint32(length))
 	default:
-		panic("not expected")
+		panic(any("not expected"))
 	}
 }
 

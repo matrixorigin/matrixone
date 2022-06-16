@@ -18,8 +18,6 @@ If the scale is 0, DECIMAL values contain no decimal point or fractional part.
 
 In MatrixOne, the maximum number of digits for DECIMAL is 38, but the actual range for a given DECIMAL column can be constrained by the precision or scale for a given column. When such a column is assigned a value with more digits following the decimal point than are permitted by the specified scale, the value is converted to that scale.
 
-
-
 ## DECIMAL Data Type Characteristics
 
 This section discusses the characteristics of the DECIMAL data type (and its synonyms), with particular regard to the following topics:
@@ -46,4 +44,3 @@ Values for DECIMAL columns are stored using a binary format that packs decimal d
 |  19-38  | 16 bytes  |
 
 For a full explanation of the internal implementation of DECIMAL values, see the [Feature Design](https://github.com/matrixorigin/matrixone/issues/1867).
-

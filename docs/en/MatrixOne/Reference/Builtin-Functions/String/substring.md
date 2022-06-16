@@ -11,16 +11,16 @@ The forms without a len argument return a substring from string str starting at 
 > SUBSTRING(str,pos) 
 > SUBSTR(str,pos,len) 
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required. CHAR and VARCHAR are both supported |
 | pos | Required. |
 | len | Optional. |
 
-
 ## **Examples**
-
 
 ```SQL
 > CREATE TABLE IF NOT EXISTS t1 (
@@ -65,5 +65,6 @@ estd date NOT NULL DEFAULT '2000-01-01'
 ```
 
 ## Constraints
+
 * Currently, MatrixOne doesn't support select function() without from tables.
 * Currently, Substring() doesn't support FROM and FOR clauses.

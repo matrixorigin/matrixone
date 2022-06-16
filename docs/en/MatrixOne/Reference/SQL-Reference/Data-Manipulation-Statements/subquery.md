@@ -3,6 +3,7 @@
 A subquery is a SQL query nested inside a larger query.
 
 A subquery may occur in:
+
 - A SELECT clause
 - A FROM clause
 - A WHERE clause
@@ -22,6 +23,7 @@ Every table in a FROM clause must have a name, therefore the [AS] name clause is
 ```
 
 ### **Examples**
+
 ```sql
 > CREATE TABLE tb1 (c1 INT, c2 CHAR(5), c3 FLOAT);
 > INSERT INTO tb1 VALUES (1, '1', 1.0);
@@ -48,4 +50,5 @@ Every table in a FROM clause must have a name, therefore the [AS] name clause is
 ```
 
 ## Constraints
+
 MatrixOne only support subquery from FROM clause for now.

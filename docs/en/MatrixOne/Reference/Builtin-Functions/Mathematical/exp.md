@@ -9,13 +9,12 @@ The EXP() function returns the value of e (the base of natural logarithms) raise
 ```
 > EXP(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
-
-
-
 
 ## **Examples**
 
@@ -35,4 +34,5 @@ The EXP() function returns the value of e (the base of natural logarithms) raise
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

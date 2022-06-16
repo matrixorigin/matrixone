@@ -4,21 +4,19 @@
 
 This function returns the weekday index for date (0 = Monday, 1 = Tuesday, … 6 = Sunday).
 
-
 ## **Syntax**
 
 ```
 > WEEKDAY(date)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | date  | Required.  |
 
-
-
 ## **Examples**
-
 
 ```sql
 > drop table if exists t1;

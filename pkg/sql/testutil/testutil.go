@@ -45,6 +45,7 @@ var (
 	d128 = types.T_decimal128.ToType()
 	dt   = types.T_date.ToType()
 	dti  = types.T_datetime.ToType()
+	ts   = types.T_timestamp.ToType()
 )
 
 type vecType interface {
@@ -317,7 +318,7 @@ func MakeDateTimeVector(values []string, nsp []uint64) *vector.Vector {
 		if nulls.Contains(vec.Nsp, uint64(i)) {
 			continue
 		}
-		d, err := types.ParseDatetime(s)
+		d, err := types.ParseDatetime(s, 6)
 		if err != nil {
 			panic(err)
 		}
@@ -330,11 +331,42 @@ func MakeDateTimeVector(values []string, nsp []uint64) *vector.Vector {
 func MakeScalarDateTime(value string, length int) *vector.Vector {
 	vec := NewProc().AllocScalarVector(dti)
 	vec.Length = length
-	d, err := types.ParseDatetime(value)
+	d, err := types.ParseDatetime(value, 6)
 	if err != nil {
 		panic(err)
 	}
 	vec.Col = []types.Datetime{d}
+	return vec
+}
+
+func MakeTimeStampVector(values []string, nsp []uint64) *vector.Vector {
+	vec := vector.New(ts)
+	ds := make([]types.Timestamp, len(values))
+	for _, n := range nsp {
+		nulls.Add(vec.Nsp, n)
+	}
+	for i, s := range values {
+		if nulls.Contains(vec.Nsp, uint64(i)) {
+			continue
+		}
+		d, err := types.ParseTimestamp(s, 6)
+		if err != nil {
+			panic(err)
+		}
+		ds[i] = d
+	}
+	vec.Col = ds
+	return vec
+}
+
+func MakeScalarTimeStamp(value string, length int) *vector.Vector {
+	vec := NewProc().AllocScalarVector(ts)
+	vec.Length = length
+	d, err := types.ParseTimestamp(value, 6)
+	if err != nil {
+		panic(err)
+	}
+	vec.Col = []types.Timestamp{d}
 	return vec
 }
 
@@ -369,7 +401,7 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 			return false
 		}
 		if nulls.Any(expected.Nsp) {
-			var k uint64 = 0
+			k := uint64(0)
 			if !nulls.Any(got.Nsp) {
 				return false
 			}

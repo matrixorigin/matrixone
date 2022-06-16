@@ -116,7 +116,7 @@ func TestDate(t *testing.T) {
 		convey.So(compare, convey.ShouldBeTrue)
 	})
 
-	convey.Convey("ScalarWeekDayDateTimeCase", t, func() {
+	convey.Convey("ScalarDateTimeCase", t, func() {
 		type kase struct {
 			s    string
 			want string
@@ -136,7 +136,7 @@ func TestDate(t *testing.T) {
 		convey.So(compare, convey.ShouldBeTrue)
 	})
 
-	convey.Convey("TestDateToDateNull", t, func() {
+	convey.Convey("TestDateScalarNull", t, func() {
 		vecs := []*vector.Vector{testutil.MakeScalarNull(10)}
 		proc := testutil.NewProc()
 		wantVector := testutil.MakeScalarNull(10)
@@ -146,7 +146,7 @@ func TestDate(t *testing.T) {
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 
-	convey.Convey("TestDatetimeToDateNull", t, func() {
+	convey.Convey("TestDatetimeScalarNull", t, func() {
 		vecs := []*vector.Vector{testutil.MakeScalarNull(10)}
 		proc := testutil.NewProc()
 		wantVector := testutil.MakeScalarNull(10)

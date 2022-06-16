@@ -9,12 +9,12 @@ This function RTRIM() returns the string with trailing space characters removed.
 ```
 > RTRIM(str)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required.  CHAR and VARCHAR both are supported.|
-
-
 
 ## **Examples**
 
@@ -32,4 +32,5 @@ This function RTRIM() returns the string with trailing space characters removed.
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"os"
 	"strings"
 	"sync"
@@ -137,10 +136,6 @@ func (bs *baseStore) flushLoop() {
 		case e := <-bs.flushQueue:
 			entries = append(entries, e)
 			bs.flushQueueDuration += time.Since(t1)
-			a := rand.Intn(100)
-			if a == 33 {
-				fmt.Printf("receive takes %v(%d entries appended)\n", time.Since(t1), atomic.LoadInt32(&bs.enqueueEntries))
-			}
 			atomic.StoreInt32(&bs.enqueueEntries, 0)
 			t1 = time.Now()
 		Left:
@@ -210,12 +205,6 @@ func (bs *baseStore) syncLoop() {
 			bs.syncQueueDuration += time.Since(t0)
 			t0 = time.Now()
 			batches = append(batches, e...)
-			a := rand.Intn(100)
-			if a == 33 {
-				if len(batches) != 0 && len(batches[0].entrys) != 0 {
-					fmt.Printf("sync queue takes %v\n", batches[0].entrys[0].Duration())
-				}
-			}
 		Left:
 			for i := 0; i < DefaultMaxBatchSize-1; i++ {
 				select {
@@ -223,11 +212,6 @@ func (bs *baseStore) syncLoop() {
 					batches = append(batches, e...)
 				default:
 					break Left
-				}
-			}
-			if a == 33 {
-				if len(batches) != 0 && len(batches[0].entrys) != 0 {
-					fmt.Printf("sync queue takes %v(including wait)\n", batches[0].entrys[0].Duration())
 				}
 			}
 			bs.syncLoopDuration += time.Since(t0)
