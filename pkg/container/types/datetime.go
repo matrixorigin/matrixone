@@ -94,32 +94,23 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 
 	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
-		if len(s) < 19 {
+		// yyyy-mm-dd hh:mm:ss(.msec)
+		if len(s) < 19 || s[7] != '-' || s[10] != ' ' || s[13] != ':' || s[16] != ':' {
 			return -1, errIncorrectDatetimeValue
 		}
 		month = (s[5]-'0')*10 + (s[6] - '0')
-		if s[7] != '-' {
-			return -1, errIncorrectDatetimeValue
-		}
 		day = (s[8]-'0')*10 + (s[9] - '0')
-		if s[10] != ' ' {
-			return -1, errIncorrectDatetimeValue
-		}
 		if !validDate(year, month, day) {
 			return -1, errIncorrectDatetimeValue
 		}
+
 		hour = (s[11]-'0')*10 + (s[12] - '0')
-		if s[13] != ':' {
-			return -1, errIncorrectDatetimeValue
-		}
 		minute = (s[14]-'0')*10 + (s[15] - '0')
-		if s[16] != ':' {
-			return -1, errIncorrectDatetimeValue
-		}
 		second = (s[17]-'0')*10 + (s[18] - '0')
 		if !validTimeInDay(hour, minute, second) {
 			return -1, errIncorrectDatetimeValue
 		}
+
 		if len(s) > 19 {
 			if len(s) > 20 && s[19] == '.' {
 				msecStr := s[20:]

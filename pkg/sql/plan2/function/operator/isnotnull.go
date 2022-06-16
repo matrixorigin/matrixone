@@ -18,33 +18,35 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func IsNotNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	input := vectors[0]
-	l := int64(1)
-	inputIsNull := input.IsScalarNull()
-
-	cols, ok := input.Col.([]T)
-	if !ok && !inputIsNull {
-		return nil, errors.New("IsNotNull: the input vec col is un-declare type")
-	}
-
-	if !inputIsNull {
-		l = int64(len(cols))
-	}
-	vec, err := proc.AllocVector(input.Typ, l*1)
-	if err != nil {
-		return nil, err
-	}
-	vec.IsConst = input.IsScalar()
-
-	col := make([]bool, l)
-	if inputIsNull {
-		col[0] = false
+	retType := types.T_bool.ToType()
+	if input.IsScalarNull() {
+		vec, err := proc.AllocVector(retType, 1)
+		vec.IsConst = input.IsScalar()
+		if err != nil {
+			return nil, err
+		}
+		vector.SetCol(vec, []bool{false})
+		return vec, nil
 	} else {
+		cols, ok := input.Col.([]T)
+		if !ok {
+			return nil, errors.New("IsNotNull: the input vec col is un-declare type")
+		}
+		l := int64(len(cols))
+		vec, err := proc.AllocVector(retType, l*1)
+		if err != nil {
+			return nil, err
+		}
+		vec.IsConst = input.IsScalar()
+
+		col := make([]bool, l)
 		for i := range cols {
 			if nulls.Contains(input.Nsp, uint64(i)) {
 				col[i] = false
@@ -52,8 +54,8 @@ func IsNotNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*v
 				col[i] = true
 			}
 		}
-	}
 
-	vector.SetCol(vec, col)
-	return vec, nil
+		vector.SetCol(vec, col)
+		return vec, nil
+	}
 }
