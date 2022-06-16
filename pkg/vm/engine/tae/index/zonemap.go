@@ -67,7 +67,7 @@ func (zm *ZoneMap) BatchUpdate(KeysCtx *KeysCtx) error {
 	update := func(v any, _ uint32) error {
 		return zm.Update(v)
 	}
-	if err := compute.ProcessVector(KeysCtx.Keys, KeysCtx.Start, KeysCtx.Count, update, nil); err != nil {
+	if err := compute.ApplyOpToColumnWithOffset(KeysCtx.Keys, KeysCtx.Start, KeysCtx.Count, update, nil); err != nil {
 		return err
 	}
 	return nil
@@ -97,7 +97,7 @@ func (zm *ZoneMap) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap,
 		row++
 		return
 	}
-	if err := compute.ProcessVector(keys, 0, uint32(vector.Length(keys)), process, nil); err != nil {
+	if err := compute.ApplyOpToColumn(keys, process, nil); err != nil {
 		panic(err)
 	}
 	if visibility.GetCardinality() != 0 {

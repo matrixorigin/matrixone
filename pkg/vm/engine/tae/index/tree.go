@@ -79,7 +79,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 		return nil
 	}
 
-	err = compute.ProcessVector(keys.Keys, keys.Start, keys.Count, processor, nil)
+	err = compute.ApplyOpToColumnWithOffset(keys.Keys, keys.Start, keys.Count, processor, nil)
 	return
 }
 
@@ -107,7 +107,7 @@ func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, star
 		return nil
 	}
 
-	err = compute.ProcessVector(keys, 0, uint32(vector.Length(keys)), processor, nil)
+	err = compute.ApplyOpToColumn(keys, processor, nil)
 	return
 }
 
@@ -161,7 +161,7 @@ func (art *simpleARTMap) ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) 
 		}
 		return nil
 	}
-	if err := compute.ProcessVector(keysCtx.Keys, keysCtx.Start, keysCtx.Count, processor, keysCtx.Selects); err != nil {
+	if err := compute.ApplyOpToColumnWithOffset(keysCtx.Keys, keysCtx.Start, keysCtx.Count, processor, keysCtx.Selects); err != nil {
 		if err == ErrDuplicate {
 			return true
 		} else {

@@ -991,7 +991,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 		}
 		return nil
 	}
-	if err = compute.ProcessVector(pks, 0, uint32(movec.Length(pks)), deduplicate, keyselects); err != nil {
+	if err = compute.ApplyOpToColumn(pks, deduplicate, keyselects); err != nil {
 		return err
 	}
 	return

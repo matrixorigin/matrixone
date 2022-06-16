@@ -130,10 +130,14 @@ func ForeachApply[T types.FixedSizeT](vs any, offset, length uint32, sels []uint
 	return
 }
 
-func ProcessVector(vec *vector.Vector, offset, length uint32, op func(v any, pos uint32) error, keyselects *roaring.Bitmap) error {
+func ApplyOpToColumn(vec *vector.Vector, op func(v any, pos uint32) error, selmask *roaring.Bitmap) error {
+	return ApplyOpToColumnWithOffset(vec, 0, uint32(vector.Length(vec)), op, selmask)
+}
+
+func ApplyOpToColumnWithOffset(vec *vector.Vector, offset, length uint32, op func(v any, pos uint32) error, selmask *roaring.Bitmap) error {
 	var sels []uint32
-	if keyselects != nil {
-		sels = keyselects.ToArray()
+	if selmask != nil {
+		sels = selmask.ToArray()
 	}
 	switch vec.Typ.Oid {
 	case types.Type_BOOL:
@@ -170,7 +174,7 @@ func ProcessVector(vec *vector.Vector, offset, length uint32, op func(v any, pos
 		return ForeachApply[types.Datetime](vec.Col, offset, length, sels, op)
 	case types.Type_CHAR, types.Type_VARCHAR:
 		vs := vec.Col.(*types.Bytes)
-		if keyselects == nil {
+		if selmask == nil {
 			for i := range vs.Offsets[offset:] {
 				v := vs.Get(int64(i))
 				if err := op(v, uint32(i)); err != nil {
