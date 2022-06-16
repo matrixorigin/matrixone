@@ -19,7 +19,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -151,17 +150,17 @@ func (zm *ZoneMap) GetMin() any {
 
 func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
-	if _, err = w.Write(encoding.EncodeType(zm.typ)); err != nil {
+	if _, err = w.Write(types.EncodeType(zm.typ)); err != nil {
 		return
 	}
 	if !zm.inited {
-		if _, err = w.Write(encoding.EncodeInt8(0)); err != nil {
+		if err = types.WriteFixedValue(&w, int8(0)); err != nil {
 			return
 		}
 		buf = w.Bytes()
 		return
 	}
-	if _, err = w.Write(encoding.EncodeInt8(1)); err != nil {
+	if err = types.WriteFixedValue(&w, int8(1)); err != nil {
 		return
 	}
 	switch zm.typ.Oid {
@@ -187,9 +186,9 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 }
 
 func (zm *ZoneMap) Unmarshal(buf []byte) error {
-	zm.typ = encoding.DecodeType(buf[:encoding.TypeSize])
-	buf = buf[encoding.TypeSize:]
-	init := encoding.DecodeInt8(buf[:1])
+	zm.typ = types.DecodeType(buf[:types.TypeSize])
+	buf = buf[types.TypeSize:]
+	init := types.DecodeFixed[int8](buf[:1])
 	buf = buf[1:]
 	if init == 0 {
 		zm.inited = false
@@ -198,98 +197,98 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 	zm.inited = true
 	switch zm.typ.Oid {
 	case types.Type_BOOL:
-		zm.min = encoding.DecodeBool(buf[:1])
+		zm.min = types.DecodeFixed[bool](buf[:1])
 		buf = buf[1:]
-		zm.max = encoding.DecodeBool(buf[:1])
+		zm.max = types.DecodeFixed[bool](buf[:1])
 		return nil
 	case types.Type_INT8:
-		zm.min = encoding.DecodeInt8(buf[:1])
+		zm.min = types.DecodeFixed[int8](buf[:1])
 		buf = buf[1:]
-		zm.max = encoding.DecodeInt8(buf[:1])
+		zm.max = types.DecodeFixed[int8](buf[:1])
 		return nil
 	case types.Type_INT16:
-		zm.min = encoding.DecodeInt16(buf[:2])
+		zm.min = types.DecodeFixed[int16](buf[:2])
 		buf = buf[2:]
-		zm.max = encoding.DecodeInt16(buf[:2])
+		zm.max = types.DecodeFixed[int16](buf[:2])
 		return nil
 	case types.Type_INT32:
-		zm.min = encoding.DecodeInt32(buf[:4])
+		zm.min = types.DecodeFixed[int32](buf[:4])
 		buf = buf[4:]
-		zm.max = encoding.DecodeInt32(buf[:4])
+		zm.max = types.DecodeFixed[int32](buf[:4])
 		return nil
 	case types.Type_INT64:
-		zm.min = encoding.DecodeInt64(buf[:8])
+		zm.min = types.DecodeFixed[int64](buf[:8])
 		buf = buf[8:]
-		zm.max = encoding.DecodeInt64(buf[:8])
+		zm.max = types.DecodeFixed[int64](buf[:8])
 		return nil
 	case types.Type_UINT8:
-		zm.min = encoding.DecodeUint8(buf[:1])
+		zm.min = types.DecodeFixed[uint8](buf[:1])
 		buf = buf[1:]
-		zm.max = encoding.DecodeUint8(buf[:1])
+		zm.max = types.DecodeFixed[uint8](buf[:1])
 		return nil
 	case types.Type_UINT16:
-		zm.min = encoding.DecodeUint16(buf[:2])
+		zm.min = types.DecodeFixed[uint16](buf[:2])
 		buf = buf[2:]
-		zm.max = encoding.DecodeUint16(buf[:2])
+		zm.max = types.DecodeFixed[uint16](buf[:2])
 		return nil
 	case types.Type_UINT32:
-		zm.min = encoding.DecodeUint32(buf[:4])
+		zm.min = types.DecodeFixed[uint32](buf[:4])
 		buf = buf[4:]
-		zm.max = encoding.DecodeUint32(buf[:4])
+		zm.max = types.DecodeFixed[uint32](buf[:4])
 		return nil
 	case types.Type_UINT64:
-		zm.min = encoding.DecodeUint64(buf[:8])
+		zm.min = types.DecodeFixed[uint64](buf[:8])
 		buf = buf[8:]
-		zm.max = encoding.DecodeUint64(buf[:8])
+		zm.max = types.DecodeFixed[uint64](buf[:8])
 		return nil
 	case types.Type_FLOAT32:
-		zm.min = encoding.DecodeFloat32(buf[:4])
+		zm.min = types.DecodeFixed[float32](buf[:4])
 		buf = buf[4:]
-		zm.max = encoding.DecodeFloat32(buf[:4])
+		zm.max = types.DecodeFixed[float32](buf[:4])
 		return nil
 	case types.Type_FLOAT64:
-		zm.min = encoding.DecodeFloat64(buf[:8])
+		zm.min = types.DecodeFixed[uint64](buf[:8])
 		buf = buf[8:]
-		zm.max = encoding.DecodeFloat64(buf[:8])
+		zm.max = types.DecodeFixed[uint64](buf[:8])
 		return nil
 	case types.Type_DATE:
-		zm.min = encoding.DecodeDate(buf[:4])
+		zm.min = types.DecodeFixed[types.Date](buf[:4])
 		buf = buf[4:]
-		zm.max = encoding.DecodeDate(buf[:4])
+		zm.max = types.DecodeFixed[types.Date](buf[:4])
 		buf = buf[4:]
 		return nil
 	case types.Type_DATETIME:
-		zm.min = encoding.DecodeDatetime(buf[:8])
+		zm.min = types.DecodeFixed[types.Datetime](buf[:8])
 		buf = buf[8:]
-		zm.max = encoding.DecodeDatetime(buf[:8])
+		zm.max = types.DecodeFixed[types.Datetime](buf[:8])
 		buf = buf[8:]
 		return nil
 	case types.Type_TIMESTAMP:
-		zm.min = encoding.DecodeTimestamp(buf[:8])
+		zm.min = types.DecodeFixed[types.Timestamp](buf[:8])
 		buf = buf[8:]
-		zm.max = encoding.DecodeTimestamp(buf[:8])
+		zm.max = types.DecodeFixed[types.Timestamp](buf[:8])
 		buf = buf[8:]
 		return nil
 	case types.Type_DECIMAL64:
-		zm.min = encoding.DecodeDecimal64(buf[:8])
+		zm.min = types.DecodeFixed[types.Decimal64](buf[:8])
 		buf = buf[8:]
-		zm.max = encoding.DecodeDecimal64(buf[:8])
+		zm.max = types.DecodeFixed[types.Decimal64](buf[:8])
 		buf = buf[8:]
 		return nil
 	case types.Type_DECIMAL128:
-		zm.min = encoding.DecodeDecimal128(buf[:16])
+		zm.min = types.DecodeFixed[types.Decimal128](buf[:16])
 		buf = buf[16:]
-		zm.max = encoding.DecodeDecimal128(buf[:16])
+		zm.max = types.DecodeFixed[types.Decimal128](buf[:16])
 		buf = buf[16:]
 		return nil
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
-		lenminv := encoding.DecodeInt16(buf[:2])
+		lenminv := types.DecodeFixed[int16](buf[:2])
 		buf = buf[2:]
 		minBuf := make([]byte, int(lenminv))
 		copy(minBuf, buf[:int(lenminv)])
 		buf = buf[int(lenminv):]
 
-		lenmaxv := encoding.DecodeInt16(buf[:2])
+		lenmaxv := types.DecodeFixed[int16](buf[:2])
 		buf = buf[2:]
 		maxBuf := make([]byte, int(lenmaxv))
 		copy(maxBuf, buf[:int(lenmaxv)])
