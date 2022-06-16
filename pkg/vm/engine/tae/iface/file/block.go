@@ -19,10 +19,10 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type Block interface {

@@ -23,10 +23,10 @@ import (
 
 	"github.com/bxcodec/faker/v3"
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector) vector.IVector {
@@ -39,7 +39,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 	}
 	var vec vector.IVector
 	switch t.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]bool, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
@@ -50,7 +50,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_int8:
+	case types.Type_INT8:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int8
 		if unique {
@@ -67,7 +67,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_int16:
+	case types.Type_INT16:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int16
 		if unique {
@@ -81,7 +81,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_int32:
+	case types.Type_INT32:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int32
 		if unique {
@@ -95,7 +95,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_int64:
+	case types.Type_INT64:
 		vec = vector.NewStdVector(t, rows)
 		var vals []int64
 		if unique {
@@ -109,7 +109,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_uint8:
+	case types.Type_UINT8:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint8
 		if unique {
@@ -126,7 +126,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_uint16:
+	case types.Type_UINT16:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint16
 		if unique {
@@ -140,7 +140,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_uint32:
+	case types.Type_UINT32:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint32
 		if unique {
@@ -154,7 +154,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_uint64:
+	case types.Type_UINT64:
 		vec = vector.NewStdVector(t, rows)
 		var vals []uint64
 		if unique {
@@ -168,7 +168,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		vec = vector.NewStdVector(t, rows)
 		var vals []float32
 		for i := uint64(0); i < rows; i++ {
@@ -177,7 +177,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			vals = append(vals, float32(val1)/float32(val2))
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		vec = vector.NewStdVector(t, rows)
 		var vals []float64
 		for i := uint64(0); i < rows; i++ {
@@ -186,7 +186,7 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			vals = append(vals, float64(val1)/float64(val2))
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_varchar, types.T_char:
+	case types.Type_VARCHAR, types.Type_CHAR:
 		vec = vector.NewStrVector(t, rows)
 		vals := make([][]byte, 0, rows)
 		if unique {
@@ -204,35 +204,35 @@ func MockIVector(t types.Type, rows uint64, unique bool, provider *movec.Vector)
 			}
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Datetime, 0, rows)
 		for i := uint64(1); i <= rows; i++ {
 			vals = append(vals, types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_date:
+	case types.Type_DATE:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Date, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.FromCalendar(i*100, 1, 1))
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Timestamp, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.Timestamp(common.NextGlobalSeqNum()))
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Decimal64, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.Decimal64(common.NextGlobalSeqNum()))
 		}
 		_ = vec.Append(len(vals), vals)
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		vec = vector.NewStdVector(t, rows)
 		vals := make([]types.Decimal128, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
@@ -303,7 +303,7 @@ func MockBatch(types []types.Type, rows uint64, uniqueIdx int, provider *MockDat
 func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 	vec := movec.New(typ)
 	switch typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		data := make([]bool, 0)
 		for i := 0; i < rows; i++ {
 			if i%2 == 0 {
@@ -313,97 +313,97 @@ func MockVec(typ types.Type, rows int, offset int) *movec.Vector {
 			}
 		}
 		_ = movec.Append(vec, data)
-	case types.T_int8:
+	case types.Type_INT8:
 		data := make([]int8, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int8(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_int16:
+	case types.Type_INT16:
 		data := make([]int16, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int16(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_int32:
+	case types.Type_INT32:
 		data := make([]int32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int32(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_int64:
+	case types.Type_INT64:
 		data := make([]int64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, int64(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_uint8:
+	case types.Type_UINT8:
 		data := make([]uint8, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint8(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_uint16:
+	case types.Type_UINT16:
 		data := make([]uint16, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint16(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_uint32:
+	case types.Type_UINT32:
 		data := make([]uint32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint32(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_uint64:
+	case types.Type_UINT64:
 		data := make([]uint64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, uint64(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		data := make([]float32, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, float32(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		data := make([]float64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, float64(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		data := make([]types.Decimal64, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Decimal64(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		data := make([]types.Decimal128, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Decimal128{Lo: int64(i + offset)})
 		}
 		_ = movec.Append(vec, data)
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		data := make([]types.Timestamp, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Timestamp(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_date:
+	case types.Type_DATE:
 		data := make([]types.Date, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Date(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		data := make([]types.Datetime, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, types.Datetime(i+offset))
 		}
 		_ = movec.Append(vec, data)
-	case types.T_char, types.T_varchar:
+	case types.Type_CHAR, types.Type_VARCHAR:
 		data := make([][]byte, 0)
 		for i := 0; i < rows; i++ {
 			data = append(data, []byte(strconv.Itoa(i+offset)))
