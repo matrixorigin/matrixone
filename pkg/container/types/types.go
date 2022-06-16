@@ -50,6 +50,7 @@ const (
 	T_datetime  T = T(plan.Type_DATETIME)
 	T_timestamp T = T(plan.Type_TIMESTAMP)
 	T_interval  T = T(plan.Type_INTERVAL)
+	T_time      T = T(plan.Type_TIME)
 
 	// string family
 	T_char    T = T(plan.Type_CHAR)
