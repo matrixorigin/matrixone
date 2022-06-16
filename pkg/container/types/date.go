@@ -62,7 +62,7 @@ var (
 
 const (
 	MaxDateYear    = 9999
-	MinDateYear    = 0
+	MinDateYear    = 1
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 )
@@ -100,6 +100,7 @@ func ParseDate(s string) (Date, error) {
 	return -1, errIncorrectDateValue
 }
 
+// date[0001-01-01 to 9999-12-31]
 func validDate(year int32, month, day uint8) bool {
 	if year >= MinDateYear && year <= MaxDateYear {
 		if MinMonthInYear <= month && month <= MaxMonthInYear {

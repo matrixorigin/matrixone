@@ -27,6 +27,13 @@ const (
 	NoLeader uint64 = 0
 )
 
+type HAKeeperState struct {
+	Tick        uint64
+	ClusterInfo ClusterInfo
+	DNState     DNState
+	LogState    LogState
+}
+
 // ClusterInfo provides a global view of all shards in the cluster. It
 // describes the logical sharding of the system, rather than physical
 // distribution of all replicas that belong to those shards.
