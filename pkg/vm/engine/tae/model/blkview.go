@@ -19,11 +19,10 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -96,31 +95,31 @@ func UpdateOffsets(data *types.Bytes, start, end int) {
 func (view *BlockView) Marshal() (buf []byte, err error) {
 	var byteBuf bytes.Buffer
 	// Ts
-	byteBuf.Write(encoding.EncodeUint64(view.Ts))
+	byteBuf.Write(types.EncodeFixed(view.Ts))
 	// DeleteMask
 	if view.DeleteMask == nil {
 		cardinality := uint64(0)
-		byteBuf.Write(encoding.EncodeUint64(cardinality))
+		byteBuf.Write(types.EncodeFixed(cardinality))
 	} else {
 		cardinality := view.DeleteMask.GetCardinality()
-		byteBuf.Write(encoding.EncodeUint64(cardinality))
+		byteBuf.Write(types.EncodeFixed(cardinality))
 		iterator := view.DeleteMask.Iterator()
 		for iterator.HasNext() {
 			idx := iterator.Next()
-			byteBuf.Write(encoding.EncodeUint32(idx))
+			byteBuf.Write(types.EncodeFixed(idx))
 		}
 	}
 	// AppliedIBatch
 	if view.AppliedIBatch == nil {
 		batLength := 0
-		byteBuf.Write(encoding.EncodeUint64(uint64(batLength)))
+		byteBuf.Write(types.EncodeFixed(uint64(batLength)))
 	} else {
 		batBuf, err := view.AppliedIBatch.Marshal()
 		if err != nil {
 			return nil, err
 		}
 		batLength := len(batBuf)
-		byteBuf.Write(encoding.EncodeUint64(uint64(batLength)))
+		byteBuf.Write(types.EncodeFixed(uint64(batLength)))
 		byteBuf.Write(batBuf)
 	}
 	buf = byteBuf.Bytes()
@@ -130,19 +129,19 @@ func (view *BlockView) Marshal() (buf []byte, err error) {
 func (view *BlockView) Unmarshal(buf []byte) (err error) {
 	pos := 0
 	// Ts
-	view.Ts = encoding.DecodeUint64(buf[pos : pos+8])
+	view.Ts = types.DecodeFixed[uint64](buf[pos : pos+8])
 	pos += 8
 	// DeleteMask
-	cardinality := encoding.DecodeUint64(buf[pos : pos+8])
+	cardinality := types.DecodeFixed[uint64](buf[pos : pos+8])
 	pos += 8
 	view.DeleteMask = roaring.NewBitmap()
 	for i := 0; i < int(cardinality); i++ {
-		idx := encoding.DecodeUint32(buf[pos : pos+4])
+		idx := types.DecodeFixed[uint32](buf[pos : pos+4])
 		pos += 4
 		view.DeleteMask.Add(idx)
 	}
 	// AppliedIBatch
-	batLength := encoding.DecodeUint64(buf[pos : pos+8])
+	batLength := types.DecodeFixed[uint64](buf[pos : pos+8])
 	pos += 8
 	if batLength == uint64(0) {
 		return

@@ -112,6 +112,7 @@ type BindContext struct {
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
+	distinctTag  int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
@@ -193,8 +194,12 @@ type ProjectionBinder struct {
 }
 
 type OrderBinder struct {
-	*ProjectionBinder
+	*DistinctBinder
 	selectList tree.SelectExprs
+}
+
+type DistinctBinder struct {
+	*ProjectionBinder
 }
 
 type LimitBinder struct {

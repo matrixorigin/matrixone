@@ -23,6 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -34,13 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-
-	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -394,7 +393,7 @@ func TestApplyToColumn1(t *testing.T) {
 	deletes.AddRange(3, 4)
 
 	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_varchar
+	vec.Typ.Oid = types.Type_VARCHAR
 	col := &types.Bytes{
 		Data:    make([]byte, 0),
 		Offsets: make([]uint32, 0),
@@ -433,7 +432,7 @@ func TestApplyToColumn2(t *testing.T) {
 	deletes.AddRange(2, 4)
 
 	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_int32
+	vec.Typ.Oid = types.Type_INT32
 	vec.Col = []int32{1, 2, 3, 4}
 
 	vec.Nsp = &nulls.Nulls{}
@@ -457,7 +456,7 @@ func TestApplyToColumn3(t *testing.T) {
 	assert.Nil(t, err)
 
 	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_varchar
+	vec.Typ.Oid = types.Type_VARCHAR
 	col := &types.Bytes{
 		Data:    make([]byte, 0),
 		Offsets: make([]uint32, 0),
@@ -487,7 +486,7 @@ func TestApplyToColumn4(t *testing.T) {
 	assert.Nil(t, err)
 
 	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_int32
+	vec.Typ.Oid = types.Type_INT32
 	vec.Col = []int32{1, 2, 3, 4}
 
 	fmt.Printf("%v\n->\n", vec.Col)
