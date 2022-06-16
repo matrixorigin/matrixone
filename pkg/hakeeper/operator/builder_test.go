@@ -38,13 +38,13 @@ func TestRemoveReplica(t *testing.T) {
 func TestAddBuild(t *testing.T) {
 	logShard := logservice.LogShardInfo{ShardID: 1, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"}, Epoch: 1}
 
-	build, err := NewBuilder("", logShard).Build()
+	_, err := NewBuilder("", logShard).Build()
 	assert.Error(t, err)
 
-	build, err = NewBuilder("", logShard).AddPeer("", 4).Build()
+	_, err = NewBuilder("", logShard).AddPeer("", 4).Build()
 	assert.Error(t, err)
 
-	build, err = NewBuilder("", logShard).AddPeer("d", 4).Build()
+	build, err := NewBuilder("", logShard).AddPeer("d", 4).Build()
 	assert.NoError(t, err)
 	assert.Equal(t, "add peer: store [d]", build.brief)
 	assert.Equal(t, uint64(1), build.shardID)
@@ -60,16 +60,16 @@ func TestAddBuild(t *testing.T) {
 func TestRemoveBuild(t *testing.T) {
 	logShard := logservice.LogShardInfo{ShardID: 1, Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"}, Epoch: 1}
 
-	build, err := NewBuilder("", logShard).Build()
+	_, err := NewBuilder("", logShard).Build()
 	assert.Error(t, err)
 
-	build, err = NewBuilder("", logShard).RemovePeer("").Build()
+	_, err = NewBuilder("", logShard).RemovePeer("").Build()
 	assert.Error(t, err)
 
-	build, err = NewBuilder("", logShard).RemovePeer("d").Build()
+	_, err = NewBuilder("", logShard).RemovePeer("d").Build()
 	assert.Error(t, err)
 
-	build, err = NewBuilder("", logShard).RemovePeer("c").Build()
+	build, err := NewBuilder("", logShard).RemovePeer("c").Build()
 	assert.NoError(t, err)
 	assert.Equal(t, "rm peer: store [c]", build.brief)
 	assert.Equal(t, uint64(1), build.shardID)

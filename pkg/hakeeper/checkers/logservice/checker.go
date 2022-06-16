@@ -66,7 +66,7 @@ func collectStats(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, tick ui
 					started = true
 				}
 			}
-			if started == false {
+			if !started {
 				s.toStart = append(s.toStart, replica{uuid: uuid,
 					shardID: shardInfo.ShardID, replicaID: replicaID})
 			}
@@ -120,7 +120,7 @@ func Check(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, removing map[u
 					break
 				}
 			}
-			if skip == true {
+			if skip {
 				continue
 			}
 			op, err := operator.NewBuilder("", infos.Shards[toRemoveReplica.shardID]).
