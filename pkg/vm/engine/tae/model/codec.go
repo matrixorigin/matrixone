@@ -4,16 +4,16 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 var CompoundKeyType types.Type
 
 func init() {
-	CompoundKeyType = types.T_varchar.ToType()
+	CompoundKeyType = types.Type_VARCHAR.ToType()
 	CompoundKeyType.Width = 100
 }
 
