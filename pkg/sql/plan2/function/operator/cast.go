@@ -371,21 +371,21 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return CastSpecials3(lv, rv, proc)
 	}
 
-	// if isSignedInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal128 {
-	// 	switch lv.Typ.Oid {
-	// 	case types.T_int8:
-	// 		return CastSpecials4[int8](lv, rv, proc)
-	// 	case types.T_int16:
-	// 		return CastSpecials4[int16](lv, rv, proc)
-	// 	case types.T_int32:
-	// 		return CastSpecials4[int32](lv, rv, proc)
-	// 	case types.T_int64:
-	// 		return CastSpecials4[int64](lv, rv, proc)
-	// 	}
-	// }
+	if isSignedInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_decimal128 {
+		switch lv.Typ.Oid {
+		case types.T_int8:
+			return CastSpecials4[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastSpecials4[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastSpecials4[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastSpecials4[int64](lv, rv, proc)
+		}
+	}
 
 	//The Big Number will be processed by string, it's ok
-	if isSignedInteger(lv.Typ.Oid) && (rv.Typ.Oid == types.T_decimal64 || rv.Typ.Oid == types.T_decimal128) {
+	if isSignedInteger(lv.Typ.Oid) && (rv.Typ.Oid == types.T_decimal64) {
 		switch lv.Typ.Oid {
 		case types.T_int8:
 			return CastSpecials4_64[int8](lv, rv, proc)
