@@ -14,13 +14,9 @@
 
 package hakeeper
 
-// FIXME: placeholder, please feel free to change/remove.
-type Operator struct {
-	// UUID of the store that suppose to consume this Operator
-	UUID string
-	// other fields might be opCode, payload etc.
-	// feel free to add whatever you need
-}
+import (
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+)
 
 type IDAllocator interface {
 	// Next returns a new ID that can be used as the replica ID of a DN shard or
@@ -40,5 +36,5 @@ type Checker interface {
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
 	Check(alloc IDAllocator, cluster ClusterInfo,
-		dn DNState, log LogState, currentTick uint64) []Operator
+		dn DNState, log LogState, currentTick uint64) []hapb.ScheduleCommand
 }
