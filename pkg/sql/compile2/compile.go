@@ -17,10 +17,10 @@ package compile2
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -60,7 +60,6 @@ func (c *Compile) Compile(pn *plan.Plan, u interface{}, fill func(interface{}, *
 			err = moerr.NewPanicError(e)
 		}
 	}()
-
 	c.u = u
 	c.fill = fill
 	// build scope for a single sql
@@ -82,12 +81,6 @@ func (c *Compile) GetAffectedRows() uint64 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(ts uint64) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
-		}
-	}()
-
 	if c.scope == nil {
 		return nil
 	}
