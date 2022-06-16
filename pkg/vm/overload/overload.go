@@ -17,6 +17,7 @@ package overload
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/queryinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
@@ -66,6 +67,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	MergeGroup:  mergegroup.String,
 	MergeOffset: mergeoffset.String,
 	Deletion:    deletion.String,
+	QueryInsert: queryinsert.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
@@ -92,7 +94,8 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	MergeGroup:  mergegroup.Prepare,
 	MergeOffset: mergeoffset.Prepare,
 
-	Deletion: deletion.Prepare,
+	Deletion:    deletion.Prepare,
+	QueryInsert: queryinsert.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -119,5 +122,6 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	MergeGroup:  mergegroup.Call,
 	MergeOffset: mergeoffset.Call,
 
-	Deletion: deletion.Call,
+	Deletion:    deletion.Call,
+	QueryInsert: queryinsert.Call,
 }

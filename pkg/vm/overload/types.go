@@ -39,4 +39,5 @@ const (
 	MergeOffset
 
 	Deletion
+	QueryInsert
 )

@@ -1995,7 +1995,7 @@ insert_data:
 |   select_stmt
     {
         $$ = &tree.Insert{
-            Rows: tree.NewSelect($1, nil, nil),
+            Rows: $1,
         }
     }
 |   '(' insert_column_list ')' VALUES values_list
@@ -2017,7 +2017,7 @@ insert_data:
     {
         $$ = &tree.Insert{
             Columns: $2,
-            Rows: tree.NewSelect($4, nil, nil),
+            Rows: $4,
         }
     }
 |	SET set_value_list

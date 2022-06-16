@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/queryinsert"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -138,6 +139,17 @@ func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 		return 0, err
 	}
 	return arg.AffectedRows, nil
+}
+
+func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+	s.Magic = Merge
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*queryinsert.Argument)
+	arg.Ts = ts
+	defer arg.TargetTable.Close(snapshot)
+	if err := s.MergeRun(engine); err != nil {
+		return 0, err
+	}
+	return arg.Affected, nil
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {

@@ -120,6 +120,13 @@ func (c *Compile) Run(ts uint64) (err error) {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
+	case QueryInsert:
+		affectedRows, err := c.scope.Insert(ts, c.proc.Snapshot, c.e)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
 	}
 	return nil
 }
@@ -187,6 +194,12 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 			PreScopes: ss,
 			Magic:     Deletion,
 		}
+	case plan.Query_INSERT:
+		// needn't do merge work
+		rs = &Scope{
+			PreScopes: ss,
+			Magic:     QueryInsert,
+		}
 	default:
 		rs = &Scope{
 			PreScopes: ss,
@@ -208,6 +221,15 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  overload.Deletion,
 			Arg: scp,
+		})
+	case plan.Query_INSERT:
+		arg, err := constructQueryInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  overload.QueryInsert,
+			Arg: arg,
 		})
 	default:
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -333,6 +355,13 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		return ss, nil
+	case plan.Node_INSERT:
+		// todo(cms): 需要套上一层projection
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}

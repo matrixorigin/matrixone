@@ -25,102 +25,83 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
-	query, _ := newQueryAndSelectCtx(plan.Query_INSERT)
+	var exprs []*Expr
 
-	// get table
-	objRef, tableDef, err := getInsertTable(stmt.Table, ctx, query)
+	pn, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Rows)
 	if err != nil {
 		return nil, err
 	}
-
-	// get columns
-	getColDef := func(name string) (*ColDef, error) {
-		for _, col := range tableDef.Cols {
-			if col.Name == name {
-				return col, nil
+	cols := GetResultColumnsFromPlan(pn)
+	pn.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
+	if len(stmt.Columns) != 0 && len(stmt.Columns) < len(cols) {
+		return nil, errors.New(errno.InvalidColumnReference, "INSERT has more expressions than target columns")
+	}
+	objRef, tableDef, err := getInsertTable(stmt.Table, ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(stmt.Columns) == 0 {
+		exprs = make([]*Expr, len(cols))
+		for i := range exprs {
+			exprs[i] = &plan.Expr{
+				Typ: cols[i].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(i),
+					},
+				},
 			}
 		}
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("column %T not exist", name))
-	}
-	var columns []*ColDef
-	if stmt.Columns == nil {
-		columns = tableDef.Cols
 	} else {
-		for _, identifier := range stmt.Columns {
-			columnName := string(identifier)
-			col, err := getColDef(columnName)
-			if err != nil {
-				return nil, err
-			}
-			columns = append(columns, col)
+		exprs = make([]*Expr, len(tableDef.Cols))
+		tableColMap := make(map[string]int)
+		targetMap := make(map[string]int)
+		for i, col := range stmt.Columns {
+			targetMap[string(col)] = i
 		}
-	}
-	columnCount := len(columns)
-	rowset := &RowsetData{
-		Schema: &TableDef{
-			Name: tableDef.Name,
-			Cols: columns,
-		},
-		Cols: make([]*plan.ColData, columnCount),
-	}
-
-	var nodeId int32
-	// get rows
-	switch rows := stmt.Rows.Select.(type) {
-	case *tree.Select:
-		binderCtx := &BinderContext{
-			columnAlias: make(map[string]*Expr),
+		for i, col := range tableDef.Cols {
+			tableColMap[col.GetName()] = i
 		}
-		nodeId, err = buildSelect(rows, ctx, query, binderCtx)
-		if err != nil {
-			return
-		}
-		// check selectNode's projectionList match rowset.Schema
-		selectNode := query.Nodes[nodeId]
-		if len(selectNode.ProjectList) != columnCount {
-			return nil, errors.New(errno.InvalidColumnDefinition, "insert column length does not match value length")
-		}
-		// TODO: Now MO don't check projectionList type match rowset type just like MySQL。
-	case *tree.ValuesClause:
-		rowCount := len(rows.Rows)
-		for idx := range rowset.Cols {
-			rowset.Cols[idx] = &plan.ColData{
-				RowCount: int32(rowCount),
+		for i := range exprs {
+			if ref, ok := targetMap[tableDef.Cols[i].GetName()]; ok {
+				exprs[i] = &plan.Expr{
+					Typ: cols[ref].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							ColPos: int32(ref),
+						},
+					},
+				}
+			} else {
+				// get default value, and init constant expr.
+				exprs[i] = getDefaultExpr(tableDef.Cols[i].Default)
 			}
 		}
-		err = getValues(rowset, rows, columnCount)
-		if err != nil {
-			return
+	}
+	qry := pn.Plan.(*plan.Plan_Query).Query
+	n := &Node{
+		ObjRef:      objRef,
+		TableDef:    tableDef,
+		NodeType:    plan.Node_INSERT,
+		NodeId:      int32(len(qry.Nodes)),
+		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
+		ProjectList: exprs,
+	}
+	qry.Nodes = append(qry.Nodes, n)
+	qry.Steps[len(qry.Steps)-1] = n.NodeId
+	return pn, nil
+}
+
+func getDefaultExpr(e *plan.DefaultExpr) *Expr {
+	if e.IsNull {
+		return &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{Isnull: true},
+			},
 		}
-		node := &Node{
-			NodeType:   plan.Node_VALUE_SCAN,
-			RowsetData: rowset,
-		}
-		nodeId = appendQueryNode(query, node)
-	default:
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport rows expr: %T", stmt))
 	}
-
-	node := &Node{
-		NodeType: plan.Node_INSERT,
-		ObjRef:   objRef,
-		TableDef: tableDef,
-		Children: []int32{nodeId},
-	}
-	appendQueryNode(query, node)
-
-	preNode := query.Nodes[len(query.Nodes)-1]
-	if len(query.Steps) > 0 {
-		query.Steps[len(query.Steps)-1] = preNode.NodeId
-	} else {
-		query.Steps = append(query.Steps, preNode.NodeId)
-	}
-
-	return &Plan{
-		Plan: &plan.Plan_Query{
-			Query: query,
-		},
-	}, nil
+	// switch case
+	return nil
 }
 
 func getValues(rowset *RowsetData, rows *tree.ValuesClause, columnCount int) error {
@@ -194,7 +175,7 @@ func getValues(rowset *RowsetData, rows *tree.ValuesClause, columnCount int) err
 	return nil
 }
 
-func getInsertTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) (*ObjectRef, *TableDef, error) {
+func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *TableDef, error) {
 	switch tbl := stmt.(type) {
 	case *tree.TableName:
 		tblName := string(tbl.ObjectName)
@@ -205,9 +186,9 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) (*Ob
 		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:
-		return getInsertTable(tbl.Expr, ctx, query)
+		return getInsertTable(tbl.Expr, ctx)
 	case *tree.AliasedTableExpr:
-		return getInsertTable(tbl.Expr, ctx, query)
+		return getInsertTable(tbl.Expr, ctx)
 	case *tree.Select:
 		return nil, nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
 	case *tree.StatementSource:

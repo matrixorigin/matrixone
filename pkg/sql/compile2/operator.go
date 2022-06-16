@@ -16,6 +16,7 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/queryinsert"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -140,6 +141,20 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 	return &deletion.Argument{
 		TableSource:  relation,
 		UseDeleteKey: n.UseDeleteKey,
+	}, nil
+}
+
+func constructQueryInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*queryinsert.Argument, error) {
+	db, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	relation, err := db.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &queryinsert.Argument{
+		TargetTable: relation,
 	}, nil
 }
 
