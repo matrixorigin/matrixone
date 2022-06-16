@@ -18,10 +18,10 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type ZoneMap struct {
@@ -165,7 +165,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		return
 	}
 	switch zm.typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		if _, err = w.Write(encoding.EncodeBool(zm.min.(bool))); err != nil {
 			return
 		}
@@ -174,7 +174,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_int8:
+	case types.Type_INT8:
 		if _, err = w.Write(encoding.EncodeInt8(zm.min.(int8))); err != nil {
 			return
 		}
@@ -183,7 +183,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_int16:
+	case types.Type_INT16:
 		if _, err = w.Write(encoding.EncodeInt16(zm.min.(int16))); err != nil {
 			return
 		}
@@ -192,7 +192,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_int32:
+	case types.Type_INT32:
 		if _, err = w.Write(encoding.EncodeInt32(zm.min.(int32))); err != nil {
 			return
 		}
@@ -201,7 +201,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_int64:
+	case types.Type_INT64:
 		if _, err = w.Write(encoding.EncodeInt64(zm.min.(int64))); err != nil {
 			return
 		}
@@ -210,7 +210,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_uint8:
+	case types.Type_UINT8:
 		if _, err = w.Write(encoding.EncodeUint8(zm.min.(uint8))); err != nil {
 			return
 		}
@@ -219,7 +219,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_uint16:
+	case types.Type_UINT16:
 		if _, err = w.Write(encoding.EncodeUint16(zm.min.(uint16))); err != nil {
 			return
 		}
@@ -228,7 +228,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_uint32:
+	case types.Type_UINT32:
 		if _, err = w.Write(encoding.EncodeUint32(zm.min.(uint32))); err != nil {
 			return
 		}
@@ -237,7 +237,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_uint64:
+	case types.Type_UINT64:
 		if _, err = w.Write(encoding.EncodeUint64(zm.min.(uint64))); err != nil {
 			return
 		}
@@ -246,7 +246,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		if _, err = w.Write(encoding.EncodeFloat32(zm.min.(float32))); err != nil {
 			return
 		}
@@ -255,7 +255,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		if _, err = w.Write(encoding.EncodeFloat64(zm.min.(float64))); err != nil {
 			return
 		}
@@ -264,7 +264,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_date:
+	case types.Type_DATE:
 		if _, err = w.Write(encoding.EncodeDate(zm.min.(types.Date))); err != nil {
 			return
 		}
@@ -273,7 +273,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		if _, err = w.Write(encoding.EncodeDatetime(zm.min.(types.Datetime))); err != nil {
 			return
 		}
@@ -282,7 +282,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		if _, err = w.Write(encoding.EncodeTimestamp(zm.min.(types.Timestamp))); err != nil {
 			return
 		}
@@ -291,7 +291,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		if _, err = w.Write(encoding.EncodeDecimal64(zm.min.(types.Decimal64))); err != nil {
 			return
 		}
@@ -300,7 +300,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		if _, err = w.Write(encoding.EncodeDecimal128(zm.min.(types.Decimal128))); err != nil {
 			return
 		}
@@ -309,7 +309,7 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 		}
 		buf = w.Bytes()
 		return
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		minv := zm.min.([]byte)
 		maxv := zm.max.([]byte)
 		if _, err = w.Write(encoding.EncodeInt16(int16(len(minv)))); err != nil {
@@ -341,92 +341,92 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 	}
 	zm.inited = true
 	switch zm.typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		zm.min = encoding.DecodeBool(buf[:1])
 		buf = buf[1:]
 		zm.max = encoding.DecodeBool(buf[:1])
 		return nil
-	case types.T_int8:
+	case types.Type_INT8:
 		zm.min = encoding.DecodeInt8(buf[:1])
 		buf = buf[1:]
 		zm.max = encoding.DecodeInt8(buf[:1])
 		return nil
-	case types.T_int16:
+	case types.Type_INT16:
 		zm.min = encoding.DecodeInt16(buf[:2])
 		buf = buf[2:]
 		zm.max = encoding.DecodeInt16(buf[:2])
 		return nil
-	case types.T_int32:
+	case types.Type_INT32:
 		zm.min = encoding.DecodeInt32(buf[:4])
 		buf = buf[4:]
 		zm.max = encoding.DecodeInt32(buf[:4])
 		return nil
-	case types.T_int64:
+	case types.Type_INT64:
 		zm.min = encoding.DecodeInt64(buf[:8])
 		buf = buf[8:]
 		zm.max = encoding.DecodeInt64(buf[:8])
 		return nil
-	case types.T_uint8:
+	case types.Type_UINT8:
 		zm.min = encoding.DecodeUint8(buf[:1])
 		buf = buf[1:]
 		zm.max = encoding.DecodeUint8(buf[:1])
 		return nil
-	case types.T_uint16:
+	case types.Type_UINT16:
 		zm.min = encoding.DecodeUint16(buf[:2])
 		buf = buf[2:]
 		zm.max = encoding.DecodeUint16(buf[:2])
 		return nil
-	case types.T_uint32:
+	case types.Type_UINT32:
 		zm.min = encoding.DecodeUint32(buf[:4])
 		buf = buf[4:]
 		zm.max = encoding.DecodeUint32(buf[:4])
 		return nil
-	case types.T_uint64:
+	case types.Type_UINT64:
 		zm.min = encoding.DecodeUint64(buf[:8])
 		buf = buf[8:]
 		zm.max = encoding.DecodeUint64(buf[:8])
 		return nil
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		zm.min = encoding.DecodeFloat32(buf[:4])
 		buf = buf[4:]
 		zm.max = encoding.DecodeFloat32(buf[:4])
 		return nil
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		zm.min = encoding.DecodeFloat64(buf[:8])
 		buf = buf[8:]
 		zm.max = encoding.DecodeFloat64(buf[:8])
 		return nil
-	case types.T_date:
+	case types.Type_DATE:
 		zm.min = encoding.DecodeDate(buf[:4])
 		buf = buf[4:]
 		zm.max = encoding.DecodeDate(buf[:4])
 		buf = buf[4:]
 		return nil
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		zm.min = encoding.DecodeDatetime(buf[:8])
 		buf = buf[8:]
 		zm.max = encoding.DecodeDatetime(buf[:8])
 		buf = buf[8:]
 		return nil
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		zm.min = encoding.DecodeTimestamp(buf[:8])
 		buf = buf[8:]
 		zm.max = encoding.DecodeTimestamp(buf[:8])
 		buf = buf[8:]
 		return nil
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		zm.min = encoding.DecodeDecimal64(buf[:8])
 		buf = buf[8:]
 		zm.max = encoding.DecodeDecimal64(buf[:8])
 		buf = buf[8:]
 		return nil
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		zm.min = encoding.DecodeDecimal128(buf[:16])
 		buf = buf[16:]
 		zm.max = encoding.DecodeDecimal128(buf[:16])
 		buf = buf[16:]
 		return nil
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		lenminv := encoding.DecodeInt16(buf[:2])
 		buf = buf[2:]
 		minBuf := make([]byte, int(lenminv))
