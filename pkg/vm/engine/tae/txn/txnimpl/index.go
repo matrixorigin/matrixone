@@ -18,23 +18,23 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	idata "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type TableIndex interface {
 	io.Closer
-	BatchDedup(*gvec.Vector) error
-	BatchInsert(*gvec.Vector, int, int, uint32, bool) error
+	BatchDedup(*movec.Vector) error
+	BatchInsert(*movec.Vector, int, int, uint32, bool) error
 	Insert(any, uint32) error
 	Delete(any) error
 	Search(any) (uint32, error)
 	Name() string
 	Count() int
-	KeyToVector(types.Type) *gvec.Vector
+	KeyToVector(types.Type) *movec.Vector
 }
 
 type simpleTableIndex struct {
@@ -48,21 +48,31 @@ func NewSimpleTableIndex() *simpleTableIndex {
 	}
 }
 
+func DedupOp[T comparable](vs any, tree map[any]uint32) (err error) {
+	vals := vs.([]T)
+	for _, v := range vals {
+		if _, ok := tree[v]; ok {
+			return data.ErrDuplicate
+		}
+	}
+	return
+}
+
 func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupInput bool, tree map[any]uint32) (err error) {
-	data := input.([]T)
+	vals := input.([]T)
 	if dedupInput {
 		set := make(map[T]bool)
-		for _, v := range data[start : start+count] {
+		for _, v := range vals[start : start+count] {
 			if _, ok := set[v]; ok {
-				return idata.ErrDuplicate
+				return data.ErrDuplicate
 			}
 			set[v] = true
 		}
 		return
 	}
-	for _, v := range data[start : start+count] {
+	for _, v := range vals[start : start+count] {
 		if _, ok := tree[v]; ok {
-			return idata.ErrDuplicate
+			return data.ErrDuplicate
 		}
 		tree[v] = fromRow
 		fromRow++
@@ -70,10 +80,10 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 	return
 }
 
-func (idx *simpleTableIndex) KeyToVector(kType types.Type) *gvec.Vector {
-	vec := gvec.New(kType)
+func (idx *simpleTableIndex) KeyToVector(kType types.Type) *movec.Vector {
+	vec := movec.New(kType)
 	switch kType.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		for k := range idx.tree {
 			compute.AppendValue(vec, []byte(k.(string)))
 		}
@@ -102,7 +112,7 @@ func (idx *simpleTableIndex) Insert(v any, row uint32) error {
 	defer idx.Unlock()
 	_, ok := idx.tree[v]
 	if ok {
-		return idata.ErrDuplicate
+		return data.ErrDuplicate
 	}
 	idx.tree[v] = row
 	return nil
@@ -119,7 +129,7 @@ func (idx *simpleTableIndex) Delete(vv any) error {
 	}
 	_, ok := idx.tree[v]
 	if !ok {
-		return idata.ErrNotFound
+		return data.ErrNotFound
 	}
 	delete(idx.tree, v)
 	return nil
@@ -130,67 +140,67 @@ func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 	defer idx.RUnlock()
 	row, ok := idx.tree[v]
 	if !ok {
-		return 0, idata.ErrNotFound
+		return 0, data.ErrNotFound
 	}
 	return uint32(row), nil
 }
 
-func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row uint32, dedupInput bool) error {
+func (idx *simpleTableIndex) BatchInsert(col *movec.Vector, start, count int, row uint32, dedupInput bool) error {
 	idx.Lock()
 	defer idx.Unlock()
 	vals := col.Col
 	switch col.Typ.Oid {
-	case types.T_bool:
+	case types.Type_BOOL:
 		return InsertOp[bool](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_int8:
+	case types.Type_INT8:
 		return InsertOp[int8](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_int16:
+	case types.Type_INT16:
 		return InsertOp[int16](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_int32:
+	case types.Type_INT32:
 		return InsertOp[int32](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_int64:
+	case types.Type_INT64:
 		return InsertOp[int64](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_uint8:
+	case types.Type_UINT8:
 		return InsertOp[uint8](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_uint16:
+	case types.Type_UINT16:
 		return InsertOp[uint16](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_uint32:
+	case types.Type_UINT32:
 		return InsertOp[uint32](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_uint64:
+	case types.Type_UINT64:
 		return InsertOp[uint64](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_decimal64:
+	case types.Type_DECIMAL64:
 		return InsertOp[types.Decimal64](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_decimal128:
+	case types.Type_DECIMAL128:
 		return InsertOp[types.Decimal128](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_float32:
+	case types.Type_FLOAT32:
 		return InsertOp[float32](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_float64:
+	case types.Type_FLOAT64:
 		return InsertOp[float64](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_date:
+	case types.Type_DATE:
 		return InsertOp[types.Date](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_timestamp:
+	case types.Type_TIMESTAMP:
 		return InsertOp[types.Timestamp](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_datetime:
+	case types.Type_DATETIME:
 		return InsertOp[types.Datetime](col.Col, start, count, row, dedupInput, idx.tree)
-	case types.T_char, types.T_varchar, types.T_json:
-		data := vals.(*types.Bytes)
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+		vs := vals.(*types.Bytes)
 		if dedupInput {
 			set := make(map[string]bool)
-			for i, s := range data.Offsets[start : start+count] {
-				e := s + data.Lengths[i+start]
-				v := string(data.Data[s:e])
+			for i, s := range vs.Offsets[start : start+count] {
+				e := s + vs.Lengths[i+start]
+				v := string(vs.Data[s:e])
 				if _, ok := set[v]; ok {
-					return idata.ErrDuplicate
+					return data.ErrDuplicate
 				}
 				set[v] = true
 			}
 			break
 		}
-		for i, s := range data.Offsets[start : start+count] {
-			e := s + data.Lengths[i+start]
-			v := string(data.Data[s:e])
+		for i, s := range vs.Offsets[start : start+count] {
+			e := s + vs.Lengths[i+start]
+			v := string(vs.Data[s:e])
 			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
+				return data.ErrDuplicate
 			}
 			idx.tree[v] = row
 			row++
@@ -202,132 +212,50 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 }
 
 // TODO: rewrite
-func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
+func (idx *simpleTableIndex) BatchDedup(col *movec.Vector) error {
 	idx.RLock()
 	defer idx.RUnlock()
 	vals := col.Col
 	switch col.Typ.Oid {
-	case types.T_bool:
-		data := vals.([]bool)
-		for _, v := range data {
+	case types.Type_BOOL:
+		return DedupOp[bool](vals, idx.tree)
+	case types.Type_INT8:
+		return DedupOp[int8](vals, idx.tree)
+	case types.Type_INT16:
+		return DedupOp[int16](vals, idx.tree)
+	case types.Type_INT32:
+		return DedupOp[int32](vals, idx.tree)
+	case types.Type_INT64:
+		return DedupOp[int64](vals, idx.tree)
+	case types.Type_UINT8:
+		return DedupOp[uint8](vals, idx.tree)
+	case types.Type_UINT16:
+		return DedupOp[uint16](vals, idx.tree)
+	case types.Type_UINT32:
+		return DedupOp[uint32](vals, idx.tree)
+	case types.Type_UINT64:
+		return DedupOp[uint64](vals, idx.tree)
+	case types.Type_DECIMAL64:
+		return DedupOp[types.Decimal64](vals, idx.tree)
+	case types.Type_DECIMAL128:
+		return DedupOp[types.Decimal128](vals, idx.tree)
+	case types.Type_FLOAT32:
+		return DedupOp[float32](vals, idx.tree)
+	case types.Type_FLOAT64:
+		return DedupOp[float64](vals, idx.tree)
+	case types.Type_DATE:
+		return DedupOp[types.Date](vals, idx.tree)
+	case types.Type_DATETIME:
+		return DedupOp[types.Datetime](vals, idx.tree)
+	case types.Type_TIMESTAMP:
+		return DedupOp[types.Timestamp](vals, idx.tree)
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+		vals := vals.(*types.Bytes)
+		for i, s := range vals.Offsets {
+			e := s + vals.Lengths[i]
+			v := string(vals.Data[s:e])
 			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_int8:
-		data := vals.([]int8)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_int16:
-		data := vals.([]int16)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_int32:
-		data := vals.([]int32)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_int64:
-		data := vals.([]int64)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_uint8:
-		data := vals.([]uint8)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_uint16:
-		data := vals.([]uint16)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_uint32:
-		data := vals.([]uint32)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_uint64:
-		data := vals.([]uint64)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_decimal64:
-		data := vals.([]types.Decimal64)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_decimal128:
-		data := vals.([]types.Decimal128)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_float32:
-		data := vals.([]float32)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_float64:
-		data := vals.([]float64)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_date:
-		data := vals.([]types.Date)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_datetime:
-		data := vals.([]types.Datetime)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_timestamp:
-		data := vals.([]types.Timestamp)
-		for _, v := range data {
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
-			}
-		}
-	case types.T_char, types.T_varchar, types.T_json:
-		data := vals.(*types.Bytes)
-		// bytes := make([]string, 0, len(data.Lengths))
-		for i, s := range data.Offsets {
-			e := s + data.Lengths[i]
-			v := string(data.Data[s:e])
-			// bytes = append(bytes, v)
-			if _, ok := idx.tree[v]; ok {
-				return idata.ErrDuplicate
+				return data.ErrDuplicate
 			}
 		}
 	default:
