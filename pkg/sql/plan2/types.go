@@ -33,6 +33,7 @@ type RowsetData = plan.RowsetData
 type Query = plan.Query
 type Plan = plan.Plan
 type Type = plan.Type
+type Plan_Query = plan.Plan_Query
 
 type CompilerContext interface {
 	// Default database/schema in context

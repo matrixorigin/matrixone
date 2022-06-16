@@ -37,7 +37,7 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]types.Date, 1)
-		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
@@ -47,7 +47,7 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		resultValues := encoding.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(firstValues)]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
@@ -65,7 +65,7 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]types.Datetime, 1)
-		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
@@ -75,7 +75,7 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:len(firstValues)]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
