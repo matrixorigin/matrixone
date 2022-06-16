@@ -1011,10 +1011,34 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 
 			switch side {
+			case 0b00:
+				switch joinType {
+				case plan.Node_INNER:
+					leftConds = append(leftConds, DeepCopyExpr(cond))
+					rightConds = append(rightConds, cond)
+
+				case plan.Node_LEFT:
+					rightConds = append(rightConds, cond)
+
+				case plan.Node_RIGHT:
+					leftConds = append(leftConds, cond)
+
+				case plan.Node_OUTER:
+					if !isEqui {
+						return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
+					}
+
+					joinConds = append(joinConds, cond)
+				}
+
 			case 0b01:
 				if joinType == plan.Node_INNER || joinType == plan.Node_RIGHT {
 					leftConds = append(leftConds, cond)
 				} else {
+					if !isEqui {
+						return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
+					}
+
 					joinConds = append(joinConds, cond)
 				}
 
@@ -1022,11 +1046,21 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 				if joinType == plan.Node_INNER || joinType == plan.Node_LEFT {
 					rightConds = append(rightConds, cond)
 				} else {
+					if !isEqui {
+						return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
+					}
+
 					joinConds = append(joinConds, cond)
 				}
 
 			case 0b11:
-				if joinType != plan.Node_INNER || isEqui {
+				if joinType != plan.Node_INNER {
+					if !isEqui {
+						return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
+					}
+
+					joinConds = append(joinConds, cond)
+				} else if isEqui {
 					joinConds = append(joinConds, cond)
 				} else {
 					filterConds = append(filterConds, cond)
