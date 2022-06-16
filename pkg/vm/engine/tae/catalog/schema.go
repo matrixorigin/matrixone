@@ -24,9 +24,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -172,7 +170,7 @@ func MarshalDefault(w *bytes.Buffer, typ types.Type, data Default) (err error) {
 	if data.Null {
 		return
 	}
-	value := compute.EncodeKey(data.Value, typ)
+	value := types.EncodeValue(data.Value, typ)
 	if err = binary.Write(w, binary.BigEndian, uint16(len(value))); err != nil {
 		return
 	}
@@ -205,7 +203,7 @@ func UnMarshalDefault(r io.Reader, typ types.Type, data *Default) (n int64, err 
 	if _, err = r.Read(buf); err != nil {
 		return
 	}
-	data.Value = compute.DecodeKey(buf, typ)
+	data.Value = types.DecodeValue(buf, typ)
 	n += int64(valueLen)
 	return n, nil
 }
@@ -232,14 +230,14 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 2
-	colBuf := make([]byte, encoding.TypeSize)
+	colBuf := make([]byte, types.TypeSize)
 	for i := uint16(0); i < colCnt; i++ {
 		if _, err = r.Read(colBuf); err != nil {
 			return
 		}
-		n += int64(encoding.TypeSize)
+		n += int64(types.TypeSize)
 		def := new(ColDef)
-		def.Type = encoding.DecodeType(colBuf)
+		def.Type = types.DecodeType(colBuf)
 		if def.Name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
@@ -303,7 +301,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	for _, def := range s.ColDefs {
-		if _, err = w.Write(encoding.EncodeType(def.Type)); err != nil {
+		if _, err = w.Write(types.EncodeType(def.Type)); err != nil {
 			return
 		}
 		if _, err = common.WriteString(def.Name, &w); err != nil {

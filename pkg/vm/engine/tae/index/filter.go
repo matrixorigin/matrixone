@@ -44,7 +44,7 @@ func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 	sf := &binaryFuseFilter{typ: data.Typ}
 	hashes := make([]uint64, 0)
 	collector := func(v any, _ uint32) error {
-		hash, err := compute.Hash(v, sf.typ)
+		hash, err := types.Hash(v, sf.typ)
 		if err != nil {
 			return err
 		}
@@ -70,7 +70,7 @@ func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
 }
 
 func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
-	hash, err := compute.Hash(key, filter.typ)
+	hash, err := types.Hash(key, filter.typ)
 	if err != nil {
 		return false, err
 	}
@@ -86,7 +86,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 	exist := false
 
 	collector := func(v any, _ uint32) error {
-		hash, err := compute.Hash(v, filter.typ)
+		hash, err := types.Hash(v, filter.typ)
 		if err != nil {
 			return err
 		}

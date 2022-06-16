@@ -41,7 +41,7 @@ func NewSimpleARTMap(typ types.Type) *simpleARTMap {
 func (art *simpleARTMap) Size() int { return art.tree.Size() }
 
 func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
-	ikey := compute.EncodeKey(key, art.typ)
+	ikey := types.EncodeValue(key, art.typ)
 	old, _ := art.tree.Insert(ikey, offset)
 	if old != nil {
 		art.tree.Insert(ikey, old)
@@ -54,7 +54,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 	existence := make(map[any]bool)
 
 	op := func(v any, i uint32) error {
-		encoded := compute.EncodeKey(v, art.typ)
+		encoded := types.EncodeValue(v, art.typ)
 		if keys.NeedVerify {
 			if _, found := existence[string(encoded)]; found {
 				return ErrDuplicate
@@ -84,7 +84,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 }
 
 func (art *simpleARTMap) Update(key any, offset uint32) (err error) {
-	ikey := compute.EncodeKey(key, art.typ)
+	ikey := types.EncodeValue(key, art.typ)
 	old, _ := art.tree.Insert(ikey, offset)
 	if old == nil {
 		art.tree.Delete(ikey)
@@ -97,7 +97,7 @@ func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, star
 	idx := 0
 
 	op := func(v any, _ uint32) error {
-		encoded := compute.EncodeKey(v, art.typ)
+		encoded := types.EncodeValue(v, art.typ)
 		old, _ := art.tree.Insert(encoded, offsets[idx])
 		if old == nil {
 			art.tree.Delete(encoded)
@@ -112,7 +112,7 @@ func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, star
 }
 
 func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
-	ikey := compute.EncodeKey(key, art.typ)
+	ikey := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Delete(ikey)
 	if !found {
 		err = ErrNotFound
@@ -123,7 +123,7 @@ func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
 }
 
 func (art *simpleARTMap) Search(key any) (uint32, error) {
-	ikey := compute.EncodeKey(key, art.typ)
+	ikey := types.EncodeValue(key, art.typ)
 	offset, found := art.tree.Search(ikey)
 	if !found {
 		return 0, ErrNotFound
@@ -132,7 +132,7 @@ func (art *simpleARTMap) Search(key any) (uint32, error) {
 }
 
 func (art *simpleARTMap) Contains(key any) bool {
-	ikey := compute.EncodeKey(key, art.typ)
+	ikey := types.EncodeValue(key, art.typ)
 	_, exists := art.tree.Search(ikey)
 	return exists
 }
@@ -145,7 +145,7 @@ func (art *simpleARTMap) Contains(key any) bool {
 // number is included in the rowmask, the error will be ignored
 func (art *simpleARTMap) ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool {
 	op := func(v any, _ uint32) error {
-		encoded := compute.EncodeKey(v, art.typ)
+		encoded := types.EncodeValue(v, art.typ)
 		// 1. If duplication found
 		if v, found := art.tree.Search(encoded); found {
 			// 1.1 If no rowmask, quick return with duplication error
