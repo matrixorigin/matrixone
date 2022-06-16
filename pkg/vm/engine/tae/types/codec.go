@@ -8,9 +8,48 @@ import (
 )
 
 var TypeSize = encoding.TypeSize
+var DateSize = encoding.DateSize
+var DatetimeSize = encoding.DatetimeSize
+var TimestampSize = encoding.TimestampSize
+var Decimal64Size = encoding.Decimal64Size
+var Decimal128Size = encoding.Decimal128Size
 
 var EncodeType = encoding.EncodeType
 var DecodeType = encoding.DecodeType
+
+var EncodeBoolSlice = encoding.EncodeBoolSlice
+var EncodeInt8Slice = encoding.EncodeInt8Slice
+var EncodeInt16Slice = encoding.EncodeInt16Slice
+var EncodeInt32Slice = encoding.EncodeInt32Slice
+var EncodeInt64Slice = encoding.EncodeInt64Slice
+var EncodeUint8Slice = encoding.EncodeUint8Slice
+var EncodeUint16Slice = encoding.EncodeUint16Slice
+var EncodeUint32Slice = encoding.EncodeUint32Slice
+var EncodeUint64Slice = encoding.EncodeUint64Slice
+var EncodeFloat32Slice = encoding.EncodeFloat32Slice
+var EncodeFloat64Slice = encoding.EncodeFloat64Slice
+
+var EncodeDateSlice = encoding.EncodeDateSlice
+var EncodeDatetimeSlice = encoding.EncodeDatetimeSlice
+var EncodeDecimal64Slice = encoding.EncodeDecimal64Slice
+var EncodeDecimal128Slice = encoding.EncodeDecimal128Slice
+
+var DecodeBoolSlice = encoding.DecodeBoolSlice
+var DecodeInt8Slice = encoding.DecodeInt8Slice
+var DecodeInt16Slice = encoding.DecodeInt16Slice
+var DecodeInt32Slice = encoding.DecodeInt32Slice
+var DecodeInt64Slice = encoding.DecodeInt64Slice
+var DecodeUint8Slice = encoding.DecodeUint8Slice
+var DecodeUint16Slice = encoding.DecodeUint16Slice
+var DecodeUint32Slice = encoding.DecodeUint32Slice
+var DecodeUint64Slice = encoding.DecodeUint64Slice
+var DecodeFloat32Slice = encoding.DecodeFloat32Slice
+var DecodeFloat64Slice = encoding.DecodeFloat64Slice
+
+var DecodeDateSlice = encoding.DecodeDateSlice
+var DecodeDatetimeSlice = encoding.DecodeDatetimeSlice
+var DecodeDecimal64Slice = encoding.DecodeDecimal64Slice
+var DecodeDecimal128Slice = encoding.DecodeDecimal128Slice
 
 func EncodeFixed[T any](v T) []byte {
 	sz := unsafe.Sizeof(v)

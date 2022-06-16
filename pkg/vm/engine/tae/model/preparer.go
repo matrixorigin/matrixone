@@ -5,7 +5,6 @@ import (
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -23,7 +22,7 @@ func PrepareHiddenData(typ types.Type, prefix []byte, startRow, length uint32) (
 	}
 
 	col = movec.New(typ)
-	payload := encoding.DecodeDecimal128Slice(n.Buf[:pos])
+	payload := types.DecodeDecimal128Slice(n.Buf[:pos])
 	movec.SetCol(col, payload)
 	closer = func() {
 		common.GPool.Free(n)
