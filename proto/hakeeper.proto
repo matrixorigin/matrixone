@@ -1,0 +1,62 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package pb;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.marshaler_all)           = true;
+option (gogoproto.sizer_all)               = true;
+option (gogoproto.unmarshaler_all)         = true;
+option (gogoproto.goproto_enum_prefix_all) = false;
+
+// Replica of the shard
+message Replica {
+  uint64 id          = 1 [(gogoproto.customname) = "ID"];
+  string uuid        = 2;
+  bool initialMember = 4;
+}
+
+// ConfigChangeType change replica type
+enum ConfigChangeType {
+  AddNode    = 0;
+  RemoveNode = 1;
+  StartNode  = 2;
+  StopNode   = 3;
+}
+
+// ChangePeer change peer
+message ConfigChange {
+  Replica replica             = 1 [(gogoproto.nullable) = false];
+  ConfigChangeType changeType = 2;
+}
+
+// ServiceType specifies type of service
+enum ServiceType {
+  LogService = 0;
+  DnService  = 1;
+}
+
+// ScheduleCommand shard heartbeat response.
+message ScheduleCommand {
+  uint64 shardID    = 1;
+  uint64 shardEpoch = 2;
+
+  ConfigChange configChange = 4;
+
+  // In order to keep back-compatibility, new field starts from 11
+
+  // Which service does this command schedule for
+  ServiceType serviceType = 11;
+}
