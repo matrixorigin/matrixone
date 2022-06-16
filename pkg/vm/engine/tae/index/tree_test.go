@@ -18,14 +18,14 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestARTIndexNumeric(t *testing.T) {
-	typ := types.Type{Oid: types.T_int32}
+	typ := types.Type{Oid: types.Type_INT32}
 	idx := NewSimpleARTMap(typ)
 
 	var res bool
@@ -109,7 +109,7 @@ func TestARTIndexNumeric(t *testing.T) {
 }
 
 func TestArtIndexString(t *testing.T) {
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.Type_VARCHAR}
 	idx := NewSimpleARTMap(typ)
 
 	var res bool
@@ -165,7 +165,7 @@ func TestArtIndexString(t *testing.T) {
 }
 
 func TestMVART(t *testing.T) {
-	typ := types.Type{Oid: types.T_int32}
+	typ := types.Type{Oid: types.Type_INT32}
 	m := NewMultiplRowsART(typ)
 	require.Equal(t, 0, m.Size())
 	keys := []int32{2, 4, 12, 9}

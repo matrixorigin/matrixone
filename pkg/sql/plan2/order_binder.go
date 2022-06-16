@@ -24,10 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectExprs) *OrderBinder {
+func NewOrderBinder(distinctBinder *DistinctBinder, selectList tree.SelectExprs) *OrderBinder {
 	return &OrderBinder{
-		ProjectionBinder: projectionBinder,
-		selectList:       selectList,
+		DistinctBinder: distinctBinder,
+		selectList:     selectList,
 	}
 }
 
@@ -38,7 +38,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				Typ: b.ctx.projects[colPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: b.ctx.projectTag,
+						RelPos: b.ctx.distinctTag,
 						ColPos: colPos,
 					},
 				},
@@ -62,7 +62,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				Typ: b.ctx.projects[colPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: b.ctx.projectTag,
+						RelPos: b.ctx.distinctTag,
 						ColPos: int32(colPos),
 					},
 				},
@@ -97,7 +97,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		Typ: b.ctx.projects[colPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: b.ctx.projectTag,
+				RelPos: b.ctx.distinctTag,
 				ColPos: colPos,
 			},
 		},
