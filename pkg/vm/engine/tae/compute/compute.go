@@ -747,29 +747,23 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes
 	return destMask, destVals, destDelets
 }
 
-func CheckRowExists_B(column []bool, val bool, deletes *roaring.Bitmap) (offset uint32, exist bool) {
-	compare := func(left, right bool) int {
-		if left && right {
-			return 0
-		} else if !left && !right {
-			return 0
-		} else if left {
-			return 1
-		} else {
-			return -1
-		}
-	}
-	start, end := 0, len(column)-1
+func GetOffsetWithFunc[T any](
+	vals []T,
+	val T,
+	compare func(a, b T) int64,
+	skipmask *roaring.Bitmap,
+) (offset uint32, exist bool) {
+	start, end := 0, len(vals)-1
 	var mid int
 	for start <= end {
 		mid = (start + end) / 2
-		ret := compare(column[mid], val)
-		if ret == 1 {
+		res := compare(vals[mid], val)
+		if res > 0 {
 			end = mid - 1
-		} else if ret == -1 {
+		} else if res < 0 {
 			start = mid + 1
 		} else {
-			if deletes != nil && deletes.Contains(uint32(mid)) {
+			if skipmask != nil && skipmask.Contains(uint32(mid)) {
 				return
 			}
 			offset = uint32(mid)
@@ -780,7 +774,7 @@ func CheckRowExists_B(column []bool, val bool, deletes *roaring.Bitmap) (offset 
 	return
 }
 
-func CheckRowExistsOrdered[T types.OrderedT](vs, v any, deletes *roaring.Bitmap) (offset uint32, exist bool) {
+func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (offset uint32, exist bool) {
 	column := vs.([]T)
 	val := v.(T)
 	start, end := 0, len(column)-1
@@ -792,7 +786,7 @@ func CheckRowExistsOrdered[T types.OrderedT](vs, v any, deletes *roaring.Bitmap)
 		} else if column[mid] < val {
 			start = mid + 1
 		} else {
-			if deletes != nil && deletes.Contains(uint32(mid)) {
+			if skipmask != nil && skipmask.Contains(uint32(mid)) {
 				return
 			}
 			offset = uint32(mid)
@@ -803,62 +797,44 @@ func CheckRowExistsOrdered[T types.OrderedT](vs, v any, deletes *roaring.Bitmap)
 	return
 }
 
-func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset uint32, exist bool) {
+func GetOffsetByVal(data *gvec.Vector, v any, skipmask *roaring.Bitmap) (offset uint32, exist bool) {
 	switch data.Typ.Oid {
 	case types.Type_BOOL:
-		column := data.Col.([]bool)
-		val := v.(bool)
-		return CheckRowExists_B(column, val, deletes)
+		return GetOffsetWithFunc[bool](data.Col.([]bool), v.(bool), CompareBool, skipmask)
 	case types.Type_INT8:
-		return CheckRowExistsOrdered[int8](data.Col, v, deletes)
+		return GetOffsetOfOrdered[int8](data.Col, v, skipmask)
 	case types.Type_INT16:
-		return CheckRowExistsOrdered[int16](data.Col, v, deletes)
+		return GetOffsetOfOrdered[int16](data.Col, v, skipmask)
 	case types.Type_INT32:
-		return CheckRowExistsOrdered[int32](data.Col, v, deletes)
+		return GetOffsetOfOrdered[int32](data.Col, v, skipmask)
 	case types.Type_INT64:
-		return CheckRowExistsOrdered[int64](data.Col, v, deletes)
+		return GetOffsetOfOrdered[int64](data.Col, v, skipmask)
 	case types.Type_UINT8:
-		return CheckRowExistsOrdered[uint8](data.Col, v, deletes)
+		return GetOffsetOfOrdered[uint8](data.Col, v, skipmask)
 	case types.Type_UINT16:
-		return CheckRowExistsOrdered[uint16](data.Col, v, deletes)
+		return GetOffsetOfOrdered[uint16](data.Col, v, skipmask)
 	case types.Type_UINT32:
-		return CheckRowExistsOrdered[uint32](data.Col, v, deletes)
+		return GetOffsetOfOrdered[uint32](data.Col, v, skipmask)
 	case types.Type_UINT64:
-		return CheckRowExistsOrdered[uint64](data.Col, v, deletes)
+		return GetOffsetOfOrdered[uint64](data.Col, v, skipmask)
 	case types.Type_FLOAT32:
-		return CheckRowExistsOrdered[float32](data.Col, v, deletes)
+		return GetOffsetOfOrdered[float32](data.Col, v, skipmask)
 	case types.Type_FLOAT64:
-		return CheckRowExistsOrdered[float64](data.Col, v, deletes)
+		return GetOffsetOfOrdered[float64](data.Col, v, skipmask)
 	case types.Type_DATE:
-		return CheckRowExistsOrdered[types.Date](data.Col, v, deletes)
+		return GetOffsetOfOrdered[types.Date](data.Col, v, skipmask)
 	case types.Type_DATETIME:
-		return CheckRowExistsOrdered[types.Datetime](data.Col, v, deletes)
+		return GetOffsetOfOrdered[types.Datetime](data.Col, v, skipmask)
 	case types.Type_TIMESTAMP:
-		return CheckRowExistsOrdered[types.Timestamp](data.Col, v, deletes)
+		return GetOffsetOfOrdered[types.Timestamp](data.Col, v, skipmask)
 	case types.Type_DECIMAL64:
-		return CheckRowExistsOrdered[types.Decimal64](data.Col, v, deletes)
+		return GetOffsetOfOrdered[types.Decimal64](data.Col, v, skipmask)
 	case types.Type_DECIMAL128:
-		column := data.Col.([]types.Decimal128)
-		val := v.(types.Decimal128)
-		start, end := 0, len(column)-1
-		var mid int
-		for start <= end {
-			mid = (start + end) / 2
-			ret := types.CompareDecimal128Decimal128Aligned(column[mid], val)
-			if ret == 1 {
-				end = mid - 1
-			} else if ret == -1 {
-				start = mid + 1
-			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return
-				}
-				offset = uint32(mid)
-				exist = true
-				return
-			}
-		}
-		return
+		return GetOffsetWithFunc[types.Decimal128](
+			data.Col.([]types.Decimal128),
+			v.(types.Decimal128),
+			types.CompareDecimal128Decimal128Aligned,
+			skipmask)
 	case types.Type_CHAR, types.Type_VARCHAR:
 		column := data.Col.(*types.Bytes)
 		val := v.([]byte)
@@ -872,7 +848,7 @@ func CheckRowExists(data *gvec.Vector, v any, deletes *roaring.Bitmap) (offset u
 			} else if res < 0 {
 				start = mid + 1
 			} else {
-				if deletes != nil && deletes.Contains(uint32(mid)) {
+				if skipmask != nil && skipmask.Contains(uint32(mid)) {
 					return
 				}
 				offset = uint32(mid)

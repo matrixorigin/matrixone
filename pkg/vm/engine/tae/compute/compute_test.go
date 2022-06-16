@@ -113,22 +113,22 @@ func TestCheckRowExists(t *testing.T) {
 		Width: 32,
 	}
 	vec := MockVec(typ, 100, 0)
-	_, exist := CheckRowExists(vec, int32(55), nil)
+	_, exist := GetOffsetByVal(vec, int32(55), nil)
 	require.True(t, exist)
-	_, exist = CheckRowExists(vec, int32(0), nil)
+	_, exist = GetOffsetByVal(vec, int32(0), nil)
 	require.True(t, exist)
-	_, exist = CheckRowExists(vec, int32(99), nil)
+	_, exist = GetOffsetByVal(vec, int32(99), nil)
 	require.True(t, exist)
 
-	_, exist = CheckRowExists(vec, int32(-1), nil)
+	_, exist = GetOffsetByVal(vec, int32(-1), nil)
 	require.False(t, exist)
-	_, exist = CheckRowExists(vec, int32(100), nil)
+	_, exist = GetOffsetByVal(vec, int32(100), nil)
 	require.False(t, exist)
-	_, exist = CheckRowExists(vec, int32(114514), nil)
+	_, exist = GetOffsetByVal(vec, int32(114514), nil)
 	require.False(t, exist)
 
 	dels := roaring.NewBitmap()
 	dels.Add(uint32(55))
-	_, exist = CheckRowExists(vec, int32(55), dels)
+	_, exist = GetOffsetByVal(vec, int32(55), dels)
 	require.False(t, exist)
 }

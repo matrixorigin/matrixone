@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-func CompareOrdered[T types.OrderedT](v1, v2 any) int {
+func CompareOrdered[T types.OrderedT](v1, v2 any) int64 {
 	a, b := v1.(T), v2.(T)
 	if a > b {
 		return 1
@@ -30,18 +30,32 @@ func CompareOrdered[T types.OrderedT](v1, v2 any) int {
 	return 0
 }
 
-func CompareGeneric(a, b any, t types.Type) int {
+func CompareBool(a, b bool) int64 {
+	if a && b {
+		return 0
+	} else if !a && !b {
+		return 0
+	} else if a {
+		return 1
+	}
+	return 0
+}
+
+func CompareBytes(a, b any) int64 {
+	res := bytes.Compare(a.([]byte), b.([]byte))
+	if res > 0 {
+		return 1
+	} else if res < 0 {
+		return -1
+	} else {
+		return 0
+	}
+}
+
+func CompareGeneric(a, b any, t types.Type) int64 {
 	switch t.Oid {
 	case types.Type_BOOL:
-		if a.(bool) && b.(bool) {
-			return 0
-		} else if !a.(bool) && !b.(bool) {
-			return 0
-		} else if a.(bool) {
-			return 1
-		} else {
-			return 0
-		}
+		return CompareBool(a.(bool), b.(bool))
 	case types.Type_INT8:
 		return CompareOrdered[int8](a, b)
 	case types.Type_INT16:
@@ -61,7 +75,7 @@ func CompareGeneric(a, b any, t types.Type) int {
 	case types.Type_DECIMAL64:
 		return CompareOrdered[types.Decimal64](a, b)
 	case types.Type_DECIMAL128:
-		return int(types.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128)))
+		return types.CompareDecimal128Decimal128Aligned(a.(types.Decimal128), b.(types.Decimal128))
 	case types.Type_FLOAT32:
 		return CompareOrdered[float32](a, b)
 	case types.Type_FLOAT64:
@@ -73,14 +87,7 @@ func CompareGeneric(a, b any, t types.Type) int {
 	case types.Type_DATETIME:
 		return CompareOrdered[types.Datetime](a, b)
 	case types.Type_CHAR, types.Type_VARCHAR:
-		res := bytes.Compare(a.([]byte), b.([]byte))
-		if res > 0 {
-			return 1
-		} else if res < 0 {
-			return -1
-		} else {
-			return 0
-		}
+		return CompareBytes(a, b)
 	default:
 		panic("unsupported type")
 	}
