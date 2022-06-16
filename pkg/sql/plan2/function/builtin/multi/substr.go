@@ -55,7 +55,6 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	// request new memory space for result column
 	rows := calcResultVectorRows(inputVecs)
 	resultVec, err := proc.AllocVector(srcVector.Typ, int64(len(columnSrcCol.Data)*rows))
-	//resultVec, err := proc.AllocVector(types.Type{Oid: types.T_char, Size: 24}, int64(len(columnSrcCol.Data)*rows))
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +75,8 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue := startVector.Col.([]int64)[0]
+			startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
+
 			resultVec.IsConst = true
 			if startValue > 0 {
 				vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
@@ -92,9 +92,11 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 			if lengthVector.IsScalar() {
 				resultVec.IsConst = true
 				// get start constant value
-				startValue := startVector.Col.([]int64)[0]
+				startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
+
 				// get length constant value
-				lengthValue := lengthVector.Col.([]int64)[0]
+				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
+
 				if startValue > 0 {
 					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 				} else if startValue < 0 {
@@ -142,7 +144,6 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 
 	// request new memory space for result column
 	resultVec, err := proc.AllocVector(srcVector.Typ, int64(len(columnSrcCol.Data)))
-	//resultVec, err := proc.AllocVector(types.Type{Oid: types.T_char, Size: 24}, int64(len(columnSrcCol.Data)))
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +164,7 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue := startVector.Col.([]int64)[0]
+			startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
 			if startValue > 0 {
 				vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
 			} else if startValue < 0 {
@@ -178,9 +179,9 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			// if length parameter is constant
 			if lengthVector.IsScalar() {
 				// get start constant value
-				startValue := startVector.Col.([]int64)[0]
+				startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
 				// get length constant value
-				lengthValue := lengthVector.Col.([]int64)[0]
+				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
 				if startValue > 0 {
 					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 				} else if startValue < 0 {
@@ -235,4 +236,29 @@ func calcResultVectorRows(inputVecs []*vector.Vector) int {
 			return inputVecs[0].Length
 		}
 	}
+}
+
+func castConstAsint64(srcColumn interface{}, columnType types.T, idx int) int64 {
+	var dstValue int64
+	switch columnType {
+	case types.T_uint8:
+		dstValue = int64(srcColumn.([]uint8)[idx])
+	case types.T_uint16:
+		dstValue = int64(srcColumn.([]uint16)[idx])
+	case types.T_uint32:
+		dstValue = int64(srcColumn.([]uint32)[idx])
+	case types.T_uint64:
+		dstValue = int64(srcColumn.([]uint64)[idx])
+	case types.T_int8:
+		dstValue = int64(srcColumn.([]int8)[idx])
+	case types.T_int16:
+		dstValue = int64(srcColumn.([]int16)[idx])
+	case types.T_int32:
+		dstValue = int64(srcColumn.([]int32)[idx])
+	case types.T_int64:
+		dstValue = srcColumn.([]int64)[idx]
+	default:
+		dstValue = int64(0)
+	}
+	return dstValue
 }
