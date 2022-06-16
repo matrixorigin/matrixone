@@ -1,13 +1,14 @@
 # **提出问题**
+
 您在使用或开发MatrixOne过程中遇见的任何问题都能以[issues](https://github.com/matrixorigin/matrixone/issues/new/choose)的形式提出来，我们也鼓励您按照我们设定的模板和标签对issues进行详细描述和分类，以便更高效地解决问题。  
 本节旨在介绍提出问题时需要遵循的模板、标签和注意事项。
-
 
 ## **避免重复问题**
 
 在提出issue之前，尽量先确认其他人是否已经提出过相同或类似的问题，避免重复，您可以使用[search bar 工具](https://docs.github.com/en/issues/tracking-your-work-with-issues/filtering-and-searching-issues-and-pull-requests)帮助您筛选查找。
 
 ## **模板**
+
 针对不同种类的问题，MatrixOne使用了不同的模板对其内容进行刻画，其中大多描述了问题的关键信息，有助于审查者与其他开发者理解并参与其中。  
 
 例如，`bug report`问题模板包含以下信息：
@@ -18,7 +19,6 @@
   List steps to reproduce what you encountered.
 * **Expected & Actual Behavior**  
   Describe what's the observed and your expected behavior respectively.
-
 
 `Enhancement` 问题模板包含以下信息：
 
@@ -70,8 +70,6 @@ A clear and concise description of any alternative solutions or refactoring meth
 * **Additional context**  
 Add any other context or screenshots about the refactoring request here.
 
-
-
 ## **标签**
 
 除了描述问题的详细信息外，您还可以根据问题所属的组件以及问题所属版本为其添加适当的标签。当您的issue提交之后，会自动打上`needs-triage`的标签，之后项目维护者会详细阅读您的issue，然后为之打上合适的标签并分配给合适的开发者。  
@@ -81,4 +79,3 @@ Add any other context or screenshots about the refactoring request here.
 
 当您首次参与贡献时,您可以选择[`good-first-issue`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)标签下的问题着手解决，其下的每个问题都是相对来说容易解决的。  
 详情请阅读[快速上手](../make-your-first-contribution.md)章节。 
-

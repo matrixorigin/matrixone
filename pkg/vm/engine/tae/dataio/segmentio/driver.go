@@ -17,11 +17,12 @@ package segmentio
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/pierrec/lz4"
-	"os"
-	"sync"
 )
 
 const INODE_NUM = 4096
@@ -55,9 +56,8 @@ type Driver struct {
 	name      string
 }
 
-func (s *Driver) Init(name string) error {
+func (s *Driver) Init(name string) (err error) {
 	var (
-		err     error
 		sbuffer bytes.Buffer
 	)
 	s.super = SuperBlock{
@@ -75,26 +75,23 @@ func (s *Driver) Init(name string) error {
 	s.super.lognode = log
 	segmentFile, err := os.Create(name)
 	if err != nil {
-		return err
+		return
 	}
 	s.segFile = segmentFile
-	err = s.segFile.Truncate(DATA_START)
-
-	if err != nil {
-		return err
+	if err = s.segFile.Truncate(DATA_START); err != nil {
+		return
 	}
-	err = binary.Write(&sbuffer, binary.BigEndian, s.super.version)
-	if err != nil {
-		return err
+	if err = binary.Write(&sbuffer, binary.BigEndian, s.super.version); err != nil {
+		return
 	}
 	if err = binary.Write(&sbuffer, binary.BigEndian, uint8(compress.Lz4)); err != nil {
-		return err
+		return
 	}
 	if err = binary.Write(&sbuffer, binary.BigEndian, s.super.blockSize); err != nil {
-		return err
+		return
 	}
 	if err = binary.Write(&sbuffer, binary.BigEndian, s.super.colCnt); err != nil {
-		return err
+		return
 	}
 
 	cbufLen := (s.super.blockSize - (uint32(sbuffer.Len()) % s.super.blockSize)) + uint32(sbuffer.Len())
@@ -102,23 +99,22 @@ func (s *Driver) Init(name string) error {
 	if cbufLen > uint32(sbuffer.Len()) {
 		zero := make([]byte, cbufLen-uint32(sbuffer.Len()))
 		if err = binary.Write(&sbuffer, binary.BigEndian, zero); err != nil {
-			return err
+			return
 		}
 	}
 
-	if _, err := s.segFile.Write(sbuffer.Bytes()); err != nil {
-		return err
-	}
-
-	return nil
+	_, err = s.segFile.Write(sbuffer.Bytes())
+	return
 }
 
 func (s *Driver) Open(name string) (err error) {
 	if _, err = os.Stat(name); os.IsNotExist(err) {
 		err = s.Init(name)
-		return err
+		return
 	}
-	s.segFile, err = os.OpenFile(name, os.O_RDWR, os.ModePerm)
+	if s.segFile, err = os.OpenFile(name, os.O_RDWR, os.ModePerm); err != nil {
+		return
+	}
 	s.name = name
 	s.super = SuperBlock{
 		version:   1,
@@ -132,7 +128,7 @@ func (s *Driver) Open(name string) (err error) {
 		state: RESIDENT,
 	}
 	s.super.lognode = log
-	return nil
+	return
 }
 
 func (s *Driver) Mount() {
@@ -174,11 +170,7 @@ func (s *Driver) Destroy() {
 }
 
 func (s *Driver) Replay(cache *bytes.Buffer) error {
-	err := s.log.Replay(cache)
-	if err != nil {
-		return err
-	}
-	return nil
+	return s.log.Replay(cache)
 }
 
 func (s *Driver) NewBlockFile(fname string) *DriverFile {
@@ -214,7 +206,7 @@ func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
 		colSize := len(pl)
 		buf = make([]byte, lz4.CompressBlockBound(colSize))
 		if buf, err = compress.Compress(pl, buf, compress.Lz4); err != nil {
-			return err
+			return
 		}
 	}
 	offset, allocated := s.allocator.Allocate(uint64(len(buf)))
@@ -224,13 +216,9 @@ func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
 	}
 	err = fd.Append(DATA_START+offset, buf, uint32(len(pl)))
 	if err != nil {
-		return err
+		return
 	}
-	err = s.log.Append(fd)
-	if err != nil {
-		return err
-	}
-	return nil
+	return s.log.Append(fd)
 }
 
 func (s *Driver) Update(fd *DriverFile, pl []byte, fOffset uint64) error {
@@ -242,11 +230,7 @@ func (s *Driver) Update(fd *DriverFile, pl []byte, fOffset uint64) error {
 	for _, ext := range free {
 		s.allocator.Free(ext.offset-DATA_START, ext.length)
 	}
-	err = s.log.Append(fd)
-	if err != nil {
-		return err
-	}
-	return nil
+	return s.log.Append(fd)
 }
 
 func (s *Driver) ReleaseFile(fd *DriverFile) {

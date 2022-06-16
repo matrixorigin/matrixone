@@ -16,10 +16,10 @@ package types
 
 import (
 	"fmt"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"strconv"
+	"time"
 )
 
 const (
@@ -62,7 +62,7 @@ var (
 
 const (
 	MaxDateYear    = 9999
-	MinDateYear    = 0
+	MinDateYear    = 1
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 )
@@ -100,6 +100,7 @@ func ParseDate(s string) (Date, error) {
 	return -1, errIncorrectDateValue
 }
 
+// date[0001-01-01 to 9999-12-31]
 func validDate(year int32, month, day uint8) bool {
 	if year >= MinDateYear && year <= MaxDateYear {
 		if MinMonthInYear <= month && month <= MaxMonthInYear {
@@ -199,6 +200,36 @@ func (d Date) Year() uint16 {
 	year := uint16(y) + 1
 
 	return year
+}
+
+func (d Date) YearMonth() uint32 {
+	year, month, _, _ := d.Calendar(true)
+	yearStr := fmt.Sprintf("%04d", year)
+	monthStr := fmt.Sprintf("%02d", month)
+	// fmt.Println(yearStr, monthStr, "--------")
+	result, _ := strconv.ParseUint(yearStr+monthStr, 10, 32)
+	// fmt.Println(result)
+	return uint32(result)
+}
+
+var monthToQuarter = map[uint8]uint32{
+	1:  1,
+	2:  1,
+	3:  1,
+	4:  2,
+	5:  2,
+	6:  2,
+	7:  3,
+	8:  3,
+	9:  3,
+	10: 4,
+	11: 4,
+	12: 4,
+}
+
+func (d Date) Quarter() uint32 {
+	_, month, _, _ := d.Calendar(true)
+	return monthToQuarter[month]
 }
 
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
@@ -367,6 +398,13 @@ func isLeap(year int32) bool {
 
 func (d Date) ToTime() Datetime {
 	return Datetime(int64(d)*secsPerDay) << 20
+}
+
+func DateToTimestamp(xs []Date, rs []Timestamp) ([]Timestamp, error) {
+	for i, x := range xs {
+		rs[i] = x.ToTimeUTC()
+	}
+	return rs, nil
 }
 
 func (d Date) Month() uint8 {

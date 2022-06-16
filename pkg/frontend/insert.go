@@ -588,6 +588,10 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
 	}
 	switch typ.Oid {
+	case types.T_bool:
+		res := value.(bool)
+		str := strconv.FormatBool(res)
+		return tree.NewNumVal(constant.MakeBool(res), str, false)
 	case types.T_int8:
 		res := int64(value.(int8))
 		str := strconv.FormatInt(res, 10)
@@ -648,6 +652,15 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_datetime:
 		res := value.(types.Datetime).String()
+		return tree.NewNumVal(constant.MakeString(res), res, false)
+	case types.T_timestamp:
+		res := value.(types.Timestamp).String()
+		return tree.NewNumVal(constant.MakeString(res), res, false)
+	case types.T_decimal64:
+		res := string(value.(types.Decimal64).Decimal64ToString(typ.Scale))
+		return tree.NewNumVal(constant.MakeString(res), res, false)
+	case types.T_decimal128:
+		res := string(value.(types.Decimal128).Decimal128ToString(typ.Scale))
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
@@ -994,14 +1007,8 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				return float64(-v), nil
 			}
 			return float64(v), nil
-		case types.T_date:
-			if !num.Negative() {
-				return types.ParseDate(str)
-			}
-		case types.T_datetime:
-			if !num.Negative() {
-				return types.ParseDatetime(str)
-			}
+		case types.T_timestamp:
+			return types.ParseTimestamp(str, typ.Precision)
 		}
 	case constant.Float:
 		switch typ.Oid {
@@ -1059,8 +1066,6 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				return float64(-v), nil
 			}
 			return float64(v), nil
-		case types.T_datetime:
-			return types.ParseDatetime(str)
 		case types.T_decimal64:
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case types.T_decimal128:
@@ -1068,6 +1073,41 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 		}
 	case constant.String:
 		switch typ.Oid {
+		case types.T_bool:
+			switch strings.ToLower(str) {
+			case "false":
+				return false, nil
+			case "true":
+				return true, nil
+			}
+		case types.T_int8:
+			return strconv.ParseInt(str, 10, 8)
+		case types.T_int16:
+			return strconv.ParseInt(str, 10, 16)
+		case types.T_int32:
+			return strconv.ParseInt(str, 10, 32)
+		case types.T_int64:
+			return strconv.ParseInt(str, 10, 64)
+		case types.T_uint8:
+			return strconv.ParseUint(str, 10, 8)
+		case types.T_uint16:
+			return strconv.ParseUint(str, 10, 16)
+		case types.T_uint32:
+			return strconv.ParseUint(str, 10, 32)
+		case types.T_uint64:
+			return strconv.ParseUint(str, 10, 64)
+		case types.T_float32:
+			val, err := strconv.ParseFloat(str, 32)
+			if err != nil {
+				return nil, err
+			}
+			return float32(val), nil
+		case types.T_float64:
+			val, err := strconv.ParseFloat(str, 64)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
 		case types.T_decimal64:
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case types.T_decimal128:
@@ -1080,7 +1120,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			case types.T_date:
 				return types.ParseDate(constant.StringVal(val))
 			case types.T_datetime:
-				return types.ParseDatetime(constant.StringVal(val))
+				return types.ParseDatetime(constant.StringVal(val), typ.Precision)
 			case types.T_timestamp:
 				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
 			}

@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -299,6 +300,8 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 }
 
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
+	logutil.Info("[Catalog]", common.OperationField("remove"),
+		common.OperandField(segment.String()))
 	entry.Lock()
 	defer entry.Unlock()
 	return entry.deleteEntryLocked(segment)

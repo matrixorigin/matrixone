@@ -143,6 +143,9 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		}
 		bat.Clean(proc.Mp)
 	}
+	if ctr.bat == nil || len(ctr.bat.Zs) == 0 {
+		return nil
+	}
 	for i, cond := range ap.Conditions[1] {
 		vec, err := colexec.EvalExpr(ctr.bat, proc, cond.Expr)
 		if err != nil {
@@ -348,7 +351,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 }
 
 func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, start int) {
-	vs := vector.DecodeFixedCol[T](vec, sz)
+	vs := vector.GetFixedVectorValues[T](vec, int(sz))
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {
@@ -366,7 +369,7 @@ func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, star
 }
 
 func fillGroupStrWithDecimal64(ctr *Container, vec *vector.Vector, n int, start int, scale int32) {
-	src := vector.DecodeFixedCol[types.Decimal64](vec, 8)
+	src := vector.GetFixedVectorValues[types.Decimal64](vec, 8)
 	vs := types.AlignDecimal64UsingScaleDiffBatch(src[start:start+n], ctr.decimal64Slice[:n], scale)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 	if !nulls.Any(vec.Nsp) {
@@ -385,7 +388,7 @@ func fillGroupStrWithDecimal64(ctr *Container, vec *vector.Vector, n int, start 
 }
 
 func fillGroupStrWithDecimal128(ctr *Container, vec *vector.Vector, n int, start int, scale int32) {
-	src := vector.DecodeFixedCol[types.Decimal128](vec, 16)
+	src := vector.GetFixedVectorValues[types.Decimal128](vec, 16)
 	vs := ctr.decimal128Slice[:n]
 	types.AlignDecimal128UsingScaleDiffBatch(src[start:start+n], vs, scale)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*16)[:len(vs)*16]

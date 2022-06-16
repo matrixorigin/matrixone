@@ -1,6 +1,7 @@
 # **INSERT**
 
 ## **Description**
+
 Writing data.
 
 ## **Syntax**
