@@ -19,13 +19,15 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
 const (
 	minIDAllocCapacity uint64 = 1024
 	defaultIDBatchSize uint64 = 1024 * 10
 
-	hakeeperDefaultTimeout = time.Second
+	hakeeperDefaultTimeout   = time.Second
+	hakeeperCmdUploadTimeout = 10 * time.Second
 )
 
 type idAllocator struct {
@@ -78,7 +80,7 @@ func (l *logStore) updateIDAlloc(count uint64) error {
 }
 
 func (l *logStore) healthCheck() {
-	leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	if err != nil {
 		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
 		return
@@ -99,7 +101,22 @@ func (l *logStore) healthCheck() {
 			return
 		}
 		state := s.(*hakeeper.HAKeeperState)
-		l.checker.Check(l.alloc,
+		cmds := l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
+		if len(cmds) > 0 {
+			ctx2, cancel2 := context.WithTimeout(context.Background(),
+				hakeeperCmdUploadTimeout)
+			defer cancel2()
+			b := &hapb.CommandBatch{
+				Term:     term,
+				Commands: cmds,
+			}
+			data := MustMarshal(b)
+			session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+			if _, err := l.propose(ctx2, session, data); err != nil {
+				// TODO: check whether this is temp error
+				return
+			}
+		}
 	}
 }

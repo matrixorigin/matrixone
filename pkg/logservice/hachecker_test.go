@@ -20,6 +20,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestIDAllocatorDefaultState(t *testing.T) {
+	alloc := newIDAllocator()
+	assert.Equal(t, uint64(0), alloc.Capacity())
+	v, ok := alloc.Next()
+	assert.False(t, ok)
+	assert.Equal(t, uint64(0), v)
+}
+
 func TestIDAllocatorCapacity(t *testing.T) {
 	tests := []struct {
 		next     uint64
