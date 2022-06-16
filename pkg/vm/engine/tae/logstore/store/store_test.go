@@ -234,7 +234,7 @@ func logSyncbase(t *testing.T, s *baseStore) {
 	t.Log(s.addrs)
 }
 
-func TestMergePartialCKp(t *testing.T) {
+func TestMergePartialCKP(t *testing.T) {
 	s, buf := initEnv(t)
 
 	e1 := appendCommitEntry(t, s, buf, 1)
@@ -254,6 +254,13 @@ func TestMergePartialCKp(t *testing.T) {
 		return s.GetCheckpointed(11) == 1
 	})
 	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+
+	testutils.WaitExpect(4000, func() bool {
+		preversion := atomic.LoadUint64(&s.syncedVersion)
+		return preversion >= 1
+	})
+	preversion := atomic.LoadUint64(&s.syncedVersion)
+	assert.Less(t, uint64(0), preversion)
 
 	assert.Nil(t, s.TryCompact())
 	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))

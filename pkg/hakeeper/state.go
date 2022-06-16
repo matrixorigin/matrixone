@@ -17,7 +17,8 @@ package hakeeper
 import (
 	"reflect"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	metapb "github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 // FIXME: dragonboat should have a public value indicating what is NoLeader node id
@@ -26,10 +27,25 @@ const (
 	NoLeader uint64 = 0
 )
 
+type HAKeeperState struct {
+	Tick        uint64
+	ClusterInfo ClusterInfo
+	DNState     DNState
+	LogState    LogState
+}
+
+// ClusterInfo provides a global view of all shards in the cluster. It
+// describes the logical sharding of the system, rather than physical
+// distribution of all replicas that belong to those shards.
+type ClusterInfo struct {
+	DNShards  []metapb.DNShardRecord
+	LogShards []metapb.LogShardRecord
+}
+
 // DNStoreInfo contins information on a list of shards.
 type DNStoreInfo struct {
 	Tick   uint64
-	Shards []logservice.DNShardInfo
+	Shards []pb.DNShardInfo
 }
 
 // DNState contains all DN details known to the HAKeeper.
@@ -49,7 +65,7 @@ func NewDNState() DNState {
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which can be used as the timestamp of the
 // heartbeat.
-func (s *DNState) Update(hb logservice.DNStoreHeartbeat, tick uint64) {
+func (s *DNState) Update(hb pb.DNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
 		storeInfo = DNStoreInfo{}
@@ -65,15 +81,15 @@ type LogStoreInfo struct {
 	RaftAddress    string
 	ServiceAddress string
 	GossipAddress  string
-	Shards         []logservice.LogShardInfo
+	Shards         []pb.LogShardInfo
 }
 
 type LogState struct {
 	// Shards is keyed by ShardID, it contains details aggregated from all Log
-	// stores. Each logservice.LogShardInfo here contains data aggregated from
+	// stores. Each pb.LogShardInfo here contains data aggregated from
 	// different replicas and thus reflect a more accurate description on each
 	// shard.
-	Shards map[uint64]logservice.LogShardInfo
+	Shards map[uint64]pb.LogShardInfo
 	// Stores is keyed by log store UUID, it contains details found on each store.
 	// Each LogStoreInfo here reflects what was last reported by each Log store.
 	Stores map[string]LogStoreInfo
@@ -82,19 +98,19 @@ type LogState struct {
 // NewLogState creates a new LogState.
 func NewLogState() LogState {
 	return LogState{
-		Shards: make(map[uint64]logservice.LogShardInfo),
+		Shards: make(map[uint64]pb.LogShardInfo),
 		Stores: make(map[string]LogStoreInfo),
 	}
 }
 
 // Update applies the incoming heartbeat message to the LogState with the
 // specified tick used as the timestamp.
-func (s *LogState) Update(hb logservice.LogStoreHeartbeat, tick uint64) {
+func (s *LogState) Update(hb pb.LogStoreHeartbeat, tick uint64) {
 	s.updateStores(hb, tick)
 	s.updateShards(hb)
 }
 
-func (s *LogState) updateStores(hb logservice.LogStoreHeartbeat, tick uint64) {
+func (s *LogState) updateStores(hb pb.LogStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
 		storeInfo = LogStoreInfo{}
@@ -107,11 +123,11 @@ func (s *LogState) updateStores(hb logservice.LogStoreHeartbeat, tick uint64) {
 	s.Stores[hb.UUID] = storeInfo
 }
 
-func (s *LogState) updateShards(hb logservice.LogStoreHeartbeat) {
+func (s *LogState) updateShards(hb pb.LogStoreHeartbeat) {
 	for _, incoming := range hb.Shards {
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
-			recorded = logservice.LogShardInfo{
+			recorded = pb.LogShardInfo{
 				ShardID:  incoming.ShardID,
 				Replicas: make(map[uint64]string),
 			}

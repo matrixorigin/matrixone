@@ -25,9 +25,10 @@ import (
 
 func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues, secondValues, thirdValues := firstVector.Col.([]types.Date), secondVector.Col.([]int64), thirdVector.Col.([]int64)
+	firstValues := vector.MustTCols[types.Date](vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
+
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() {
@@ -36,7 +37,7 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]types.Date, 1)
-		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
@@ -46,16 +47,16 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		resultValues := encoding.DecodeDateSlice(resultVector.Data)
 		resultValues = resultValues[:len(firstValues)]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DateSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
 
 func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues, secondValues, thirdValues := firstVector.Col.([]types.Datetime), secondVector.Col.([]int64), thirdVector.Col.([]int64)
+	firstValues := vector.MustTCols[types.Datetime](vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
 	resultType := types.Type{Oid: types.T_datetime, Size: 8}
 	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() {
@@ -64,7 +65,7 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]types.Datetime, 1)
-		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
@@ -74,16 +75,17 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		resultValues := encoding.DecodeDatetimeSlice(resultVector.Data)
 		resultValues = resultValues[:len(firstValues)]
 		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultValues))
+		vector.SetCol(resultVector, date_sub.DatetimeSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	}
 }
 
 func DateStringSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues, secondValues, thirdValues := firstVector.Col.(*types.Bytes), secondVector.Col.([]int64), thirdVector.Col.([]int64)
+	firstValues := vector.MustBytesCols(vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
+
 	resultType := types.Type{Oid: types.T_varchar, Size: 26}
 	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() {

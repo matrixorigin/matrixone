@@ -133,11 +133,6 @@ func TestExtractFromDateTime(t *testing.T) {
 	require.Equal(t, "0101", string(output.Data))
 	require.Equal(t, []uint32{0, 2}, output.Offsets)
 	require.Equal(t, []uint32{2, 2}, output.Lengths)
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 
 	resultValues = &types.Bytes{
 		Data:    make([]byte, 0),

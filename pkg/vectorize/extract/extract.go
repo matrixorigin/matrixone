@@ -181,7 +181,7 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results *types
 		}
 	case "hour":
 		offsetAll := uint32(0)
-		l := uint32(2)
+		l := hourResultLength
 		for i, d := range datetimes {
 			value := fmt.Sprintf("%02d", int(d.Hour()))
 			results.Data = append(results.Data, []byte(value)...)
@@ -191,7 +191,7 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results *types
 		}
 	case "day":
 		offsetAll := uint32(0)
-		l := uint32(2)
+		l := dayResultLength
 		for i, d := range datetimes {
 			value := fmt.Sprintf("%02d", int(d.ToDate().Day()))
 			results.Data = append(results.Data, []byte(value)...)
@@ -201,7 +201,7 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results *types
 		}
 	case "week":
 		offsetAll := uint32(0)
-		l := uint32(2)
+		l := weekResultLength
 		for i, d := range datetimes {
 			value := fmt.Sprintf("%02d", int(d.ToDate().WeekOfYear2()))
 			results.Data = append(results.Data, []byte(value)...)
@@ -211,7 +211,7 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results *types
 		}
 	case "month":
 		offsetAll := uint32(0)
-		l := uint32(2)
+		l := monthResultLength
 		for i, d := range datetimes {
 			value := fmt.Sprintf("%02d", int(d.ToDate().Month()))
 			results.Data = append(results.Data, []byte(value)...)
@@ -221,7 +221,7 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results *types
 		}
 	case "quarter":
 		offsetAll := uint32(0)
-		l := uint32(1)
+		l := quarterResultLength
 		for i, d := range datetimes {
 			value := fmt.Sprintf("%d", int(d.ToDate().Quarter()))
 			results.Data = append(results.Data, []byte(value)...)
@@ -231,7 +231,7 @@ func ExtractFromDatetime(unit string, datetimes []types.Datetime, results *types
 		}
 	case "year":
 		offsetAll := uint32(0)
-		l := uint32(4)
+		l := yearResultLength
 		for i, dt := range datetimes {
 			value := fmt.Sprintf("%04d", int(dt.ToDate().Year()))
 			results.Data = append(results.Data, []byte(value)...)

@@ -31,6 +31,9 @@ import (
 
 var MaxAllowedValue = int64(8000)
 
+//maximum 512mb
+var TotalMaximumSpaceCount = int64(512 * 1024 * 1024)
+
 func CountSpacesForUnsignedInt(originalVecCol interface{}) int64 {
 	switch col := originalVecCol.(type) {
 	case []uint8:
@@ -79,6 +82,10 @@ func CountSpacesSigned[T constraints.Signed](columnValues []T) int64 {
 			continue
 		} else {
 			result += int64(columnValue)
+			//t will not exceed TotalMaximumSpaceCount
+			if result > TotalMaximumSpaceCount {
+				return -1
+			}
 		}
 	}
 	if result < 0 {
@@ -95,6 +102,10 @@ func CountSpacesUnsigned[T constraints.Unsigned](columnValues []T) int64 {
 			continue
 		} else {
 			result += int64(columnValue)
+			//t will not exceed TotalMaximumSpaceCount
+			if result > TotalMaximumSpaceCount {
+				return -1
+			}
 		}
 	}
 	return result
@@ -108,6 +119,10 @@ func CountSpacesFloat[T constraints.Float](columnValues []T) int64 {
 			continue
 		}
 		result += int64(math.Round(float64(columnValue)))
+		//t will not exceed TotalMaximumSpaceCount
+		if result > TotalMaximumSpaceCount {
+			return -1
+		}
 	}
 	if result < 0 {
 		return 0

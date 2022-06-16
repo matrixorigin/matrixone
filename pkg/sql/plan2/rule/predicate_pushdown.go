@@ -16,6 +16,7 @@ package rule
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
 type PredicatePushdown struct {
@@ -40,7 +41,15 @@ func (r *PredicatePushdown) Apply(n *plan.Node, qry *plan.Query) {
 func (r *PredicatePushdown) pushdown(e *plan.Expr, n *plan.Node, qry *plan.Query) bool {
 	var ne *plan.Expr // new expr
 
-	if n.NodeType == plan.Node_TABLE_SCAN {
+	if _, ok := e.Expr.(*plan.Expr_F); !ok {
+		n.WhereList = append(n.WhereList, e)
+		return false
+	}
+	if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_AGG {
+		n.WhereList = append(n.WhereList, e)
+		return false
+	}
+	if len(n.Children) > 0 && (qry.Nodes[n.Children[0]].NodeType == plan.Node_JOIN || qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG) {
 		n.WhereList = append(n.WhereList, e)
 		return false
 	}
@@ -62,6 +71,14 @@ func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node,
 	case *plan.Expr_C:
 		return relPos, expr
 	case *plan.Expr_F:
+		overloadId := e.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
+		if err != nil {
+			return relPos, nil
+		}
+		if f.Flag == plan.Function_AGG {
+			return relPos, nil
+		}
 		args := make([]*plan.Expr, len(e.F.Args))
 		for i := range e.F.Args {
 			relPos, args[i] = r.newExpr(relPos, e.F.Args[i], n, qry)
