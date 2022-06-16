@@ -35,7 +35,7 @@ const (
 	// and the prepared status means that the transaction on a DN was executed
 	// successfully in the first phase.
 	//
-	// Note that this status needs to be logged to the LogService. Once the first
+	// Note that this status needs to be saved to the LogService. Once the first
 	// phase of a transaction is successful, data cannot be lost.
 	TxnStatus_Prepared TxnStatus = 1
 	// Committing for distributed transactions across DNs, once all DNs have completed
@@ -54,7 +54,7 @@ const (
 	// committed data, the status of the distributed transaction is explicitly recorded
 	// as Committed.
 	//
-	// Note that this status needs to be logged to the LogService
+	// Note that this status needs to be saved to the LogService
 	TxnStatus_Committed TxnStatus = 3
 	// Aborting a client initiating a Rollback call or a distributed transaction that has
 	// any error in the first phase will enter the Aborting state. This state starts an
@@ -66,7 +66,7 @@ const (
 	// Aborted after the Aborting phase, all data involved in the DN is cleaned up and
 	// the transaction status is explicitly recorded as Aborted.
 	//
-	// Note that this status needs to be logged to the LogService
+	// Note that this status needs to be saved to the LogService
 	TxnStatus_Aborted TxnStatus = 5
 )
 
@@ -109,20 +109,20 @@ const (
 	// Rollback rollback transaction
 	TxnMethod_Rollback TxnMethod = 3
 	// Prepare when DN(Coordinator) receives a commit request from CN, it sends a prepare to
-	// each DN(partition)
+	// each DN(DNShard)
 	TxnMethod_Prepare TxnMethod = 4
 	// GetStatus query the status of a transaction on a DN. When a DN encounters a transaction
 	// in the Prepared state, it needs to go to the DN(Coordinator) to query the status of the
 	// current transaction. When a DN encounters a transaction in the Prepared state during the
-	// recover, it needs to query the status of the transaction on each DN(partition) to determine
+	// recover, it needs to query the status of the transaction on each DN(DNShard) to determine
 	// if the transaction is committed.
 	TxnMethod_GetStatus TxnMethod = 5
-	// CommitPartition after the 2pc transaction is committed, the temporary data on each DN needs
+	// CommitDNShard after the 2pc transaction is committed, the temporary data on each DN needs
 	// to be explicitly converted to committed data.
-	TxnMethod_CommitPartition TxnMethod = 6
-	// RollbackPartition after the 2pc transaction is aborted, the temporary data on each DN needs
+	TxnMethod_CommitDNShard TxnMethod = 6
+	// RollbackDNShard after the 2pc transaction is aborted, the temporary data on each DN needs
 	// to cleanup.
-	TxnMethod_RollbackPartition TxnMethod = 7
+	TxnMethod_RollbackDNShard TxnMethod = 7
 )
 
 var TxnMethod_name = map[int32]string{
@@ -132,19 +132,19 @@ var TxnMethod_name = map[int32]string{
 	3: "Rollback",
 	4: "Prepare",
 	5: "GetStatus",
-	6: "CommitPartition",
-	7: "RollbackPartition",
+	6: "CommitDNShard",
+	7: "RollbackDNShard",
 }
 
 var TxnMethod_value = map[string]int32{
-	"Read":              0,
-	"Write":             1,
-	"Commit":            2,
-	"Rollback":          3,
-	"Prepare":           4,
-	"GetStatus":         5,
-	"CommitPartition":   6,
-	"RollbackPartition": 7,
+	"Read":            0,
+	"Write":           1,
+	"Commit":          2,
+	"Rollback":        3,
+	"Prepare":         4,
+	"GetStatus":       5,
+	"CommitDNShard":   6,
+	"RollbackDNShard": 7,
 }
 
 func (x TxnMethod) String() string {
@@ -377,7 +377,7 @@ func (m *CNOpResponse) GetPayload() []byte {
 //
 // Request flow of TxnRequest as below:
 // 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
-// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitPartition, TxnMethod.RollbackPartition)
+// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard)
 type TxnRequest struct {
 	// Txn transaction metadata
 	Txn TxnMeta `protobuf:"bytes,1,opt,name=Txn,proto3" json:"Txn"`
@@ -395,13 +395,13 @@ type TxnRequest struct {
 	PrepareRequest *TxnPrepareRequest `protobuf:"bytes,7,opt,name=PrepareRequest,proto3" json:"PrepareRequest,omitempty"`
 	// TxnGetStatusRequest corresponds to TxnMethod.GetStatus
 	GetStatusRequest *TxnGetStatusRequest `protobuf:"bytes,8,opt,name=GetStatusRequest,proto3" json:"GetStatusRequest,omitempty"`
-	// TxnCommitPartitionRequest corresponds to TxnMethod.CommitPartition
-	CommitPartitionRequest *TxnCommitPartitionRequest `protobuf:"bytes,9,opt,name=CommitPartitionRequest,proto3" json:"CommitPartitionRequest,omitempty"`
-	// TxnRollbackPartitionRequest corresponds to TxnMethod.RollbackPartition
-	RollbackPartitionRequest *TxnRollbackPartitionRequest `protobuf:"bytes,10,opt,name=RollbackPartitionRequest,proto3" json:"RollbackPartitionRequest,omitempty"`
-	XXX_NoUnkeyedLiteral     struct{}                     `json:"-"`
-	XXX_unrecognized         []byte                       `json:"-"`
-	XXX_sizecache            int32                        `json:"-"`
+	// TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
+	CommitDNShardRequest *TxnCommitDNShardRequest `protobuf:"bytes,9,opt,name=CommitDNShardRequest,proto3" json:"CommitDNShardRequest,omitempty"`
+	// TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
+	RollbackDNShardRequest *TxnRollbackDNShardRequest `protobuf:"bytes,10,opt,name=RollbackDNShardRequest,proto3" json:"RollbackDNShardRequest,omitempty"`
+	XXX_NoUnkeyedLiteral   struct{}                   `json:"-"`
+	XXX_unrecognized       []byte                     `json:"-"`
+	XXX_sizecache          int32                      `json:"-"`
 }
 
 func (m *TxnRequest) Reset()         { *m = TxnRequest{} }
@@ -493,16 +493,16 @@ func (m *TxnRequest) GetGetStatusRequest() *TxnGetStatusRequest {
 	return nil
 }
 
-func (m *TxnRequest) GetCommitPartitionRequest() *TxnCommitPartitionRequest {
+func (m *TxnRequest) GetCommitDNShardRequest() *TxnCommitDNShardRequest {
 	if m != nil {
-		return m.CommitPartitionRequest
+		return m.CommitDNShardRequest
 	}
 	return nil
 }
 
-func (m *TxnRequest) GetRollbackPartitionRequest() *TxnRollbackPartitionRequest {
+func (m *TxnRequest) GetRollbackDNShardRequest() *TxnRollbackDNShardRequest {
 	if m != nil {
-		return m.RollbackPartitionRequest
+		return m.RollbackDNShardRequest
 	}
 	return nil
 }
@@ -530,13 +530,13 @@ type TxnResponse struct {
 	PrepareResponse *TxnPrepareResponse `protobuf:"bytes,8,opt,name=PrepareResponse,proto3" json:"PrepareResponse,omitempty"`
 	// TxnGetStatusResponse corresponds to TxnMethod.GetStatus response
 	GetStatusResponse *TxnGetStatusResponse `protobuf:"bytes,9,opt,name=GetStatusResponse,proto3" json:"GetStatusResponse,omitempty"`
-	// TxnCommitPartitionResponse corresponds to TxnMethod.CommitPartition response
-	CommitPartitionResponse *TxnCommitPartitionResponse `protobuf:"bytes,10,opt,name=CommitPartitionResponse,proto3" json:"CommitPartitionResponse,omitempty"`
-	// TxnRollbackPartitionResponse corresponds to TxnMethod.RollbackPartition response
-	RollbackPartitionResponse *TxnRollbackPartitionResponse `protobuf:"bytes,11,opt,name=RollbackPartitionResponse,proto3" json:"RollbackPartitionResponse,omitempty"`
-	XXX_NoUnkeyedLiteral      struct{}                      `json:"-"`
-	XXX_unrecognized          []byte                        `json:"-"`
-	XXX_sizecache             int32                         `json:"-"`
+	// TxnCommitDNShardResponse corresponds to TxnMethod.CommitDNShard response
+	CommitDNShardResponse *TxnCommitDNShardResponse `protobuf:"bytes,10,opt,name=CommitDNShardResponse,proto3" json:"CommitDNShardResponse,omitempty"`
+	// TxnRollbackDNShardResponse corresponds to TxnMethod.RollbackDNShard response
+	RollbackDNShardResponse *TxnRollbackDNShardResponse `protobuf:"bytes,11,opt,name=RollbackDNShardResponse,proto3" json:"RollbackDNShardResponse,omitempty"`
+	XXX_NoUnkeyedLiteral    struct{}                    `json:"-"`
+	XXX_unrecognized        []byte                      `json:"-"`
+	XXX_sizecache           int32                       `json:"-"`
 }
 
 func (m *TxnResponse) Reset()         { *m = TxnResponse{} }
@@ -635,25 +635,25 @@ func (m *TxnResponse) GetGetStatusResponse() *TxnGetStatusResponse {
 	return nil
 }
 
-func (m *TxnResponse) GetCommitPartitionResponse() *TxnCommitPartitionResponse {
+func (m *TxnResponse) GetCommitDNShardResponse() *TxnCommitDNShardResponse {
 	if m != nil {
-		return m.CommitPartitionResponse
+		return m.CommitDNShardResponse
 	}
 	return nil
 }
 
-func (m *TxnResponse) GetRollbackPartitionResponse() *TxnRollbackPartitionResponse {
+func (m *TxnResponse) GetRollbackDNShardResponse() *TxnRollbackDNShardResponse {
 	if m != nil {
-		return m.RollbackPartitionResponse
+		return m.RollbackDNShardResponse
 	}
 	return nil
 }
 
 // TxnCommitRequest CN sent the commit request to coordinator DN.
 type TxnCommitRequest struct {
-	// Partitions DNs for which data has been written in the current transaction.
+	// DNShards DNs for which data has been written in the current transaction.
 	// The first DN is the coordinator of the transaction.
-	Partitions           []metadata.DNShard `protobuf:"bytes,1,rep,name=Partitions,proto3" json:"Partitions"`
+	DNShards             []metadata.DNShard `protobuf:"bytes,1,rep,name=DNShards,proto3" json:"DNShards"`
 	Disable1PCOpt        bool               `protobuf:"varint,2,opt,name=disable1PCOpt,proto3" json:"disable1PCOpt,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
 	XXX_unrecognized     []byte             `json:"-"`
@@ -693,9 +693,9 @@ func (m *TxnCommitRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnCommitRequest proto.InternalMessageInfo
 
-func (m *TxnCommitRequest) GetPartitions() []metadata.DNShard {
+func (m *TxnCommitRequest) GetDNShards() []metadata.DNShard {
 	if m != nil {
-		return m.Partitions
+		return m.DNShards
 	}
 	return nil
 }
@@ -749,8 +749,8 @@ var xxx_messageInfo_TxnCommitResponse proto.InternalMessageInfo
 
 // TxnCommitRequest CN sent the rollback request to coordinator DN.
 type TxnRollbackRequest struct {
-	// Partitions DNs for which data has been written in the current transaction.
-	Partitions           []metadata.DNShard `protobuf:"bytes,1,rep,name=Partitions,proto3" json:"Partitions"`
+	// DNShards DNs for which data has been written in the current transaction.
+	DNShards             []metadata.DNShard `protobuf:"bytes,1,rep,name=DNShards,proto3" json:"DNShards"`
 	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
 	XXX_unrecognized     []byte             `json:"-"`
 	XXX_sizecache        int32              `json:"-"`
@@ -789,9 +789,9 @@ func (m *TxnRollbackRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnRollbackRequest proto.InternalMessageInfo
 
-func (m *TxnRollbackRequest) GetPartitions() []metadata.DNShard {
+func (m *TxnRollbackRequest) GetDNShards() []metadata.DNShard {
 	if m != nil {
-		return m.Partitions
+		return m.DNShards
 	}
 	return nil
 }
@@ -840,14 +840,14 @@ var xxx_messageInfo_TxnRollbackResponse proto.InternalMessageInfo
 // more than one DN is involved, the 2PC commit process is enabled and the first phase
 // is to send prepare requests to all DNs.
 type TxnPrepareRequest struct {
-	// Partition prepare DN
-	Partition *metadata.DNShard `protobuf:"bytes,1,opt,name=Partition,proto3" json:"Partition,omitempty"`
-	// Partitions if the partition is the coordinator DN, partitions is not empty,
-	// otherwise is empty. The coordinator DN needs to write the partitions and prepare
+	// DNShard prepare DN
+	DNShard *metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard,omitempty"`
+	// DNShards if the DNShard is the coordinator DN, DNShards is not empty,
+	// otherwise is empty. The coordinator DN needs to write the DNShards and prepare
 	// data together atomically to the LogService. So during error recovery we can use
 	// the coordinator DN to find all the DNs involved in the transaction to commit or
 	// rollback the transaction.
-	Partitions           []metadata.DNShard `protobuf:"bytes,2,rep,name=Partitions,proto3" json:"Partitions"`
+	DNShards             []metadata.DNShard `protobuf:"bytes,2,rep,name=DNShards,proto3" json:"DNShards"`
 	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
 	XXX_unrecognized     []byte             `json:"-"`
 	XXX_sizecache        int32              `json:"-"`
@@ -886,16 +886,16 @@ func (m *TxnPrepareRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnPrepareRequest proto.InternalMessageInfo
 
-func (m *TxnPrepareRequest) GetPartition() *metadata.DNShard {
+func (m *TxnPrepareRequest) GetDNShard() *metadata.DNShard {
 	if m != nil {
-		return m.Partition
+		return m.DNShard
 	}
 	return nil
 }
 
-func (m *TxnPrepareRequest) GetPartitions() []metadata.DNShard {
+func (m *TxnPrepareRequest) GetDNShards() []metadata.DNShard {
 	if m != nil {
-		return m.Partitions
+		return m.DNShards
 	}
 	return nil
 }
@@ -942,8 +942,8 @@ var xxx_messageInfo_TxnPrepareResponse proto.InternalMessageInfo
 
 // TxnGetStatusRequest query the status of a transaction on DN
 type TxnGetStatusRequest struct {
-	// Partition target DN
-	Partition            *metadata.DNShard `protobuf:"bytes,1,opt,name=Partition,proto3" json:"Partition,omitempty"`
+	// DNShard target DN
+	DNShard              *metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
 	XXX_unrecognized     []byte            `json:"-"`
 	XXX_sizecache        int32             `json:"-"`
@@ -982,9 +982,9 @@ func (m *TxnGetStatusRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnGetStatusRequest proto.InternalMessageInfo
 
-func (m *TxnGetStatusRequest) GetPartition() *metadata.DNShard {
+func (m *TxnGetStatusRequest) GetDNShard() *metadata.DNShard {
 	if m != nil {
-		return m.Partition
+		return m.DNShard
 	}
 	return nil
 }
@@ -1029,28 +1029,28 @@ func (m *TxnGetStatusResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TxnGetStatusResponse proto.InternalMessageInfo
 
-// TxnCommitPartitionRequest commit txn on partition. Data needs to be written to the
+// TxnCommitDNShardRequest commit txn on DNShard. Data needs to be written to the
 // LogService.
-type TxnCommitPartitionRequest struct {
-	// Partition target DN
-	Partition            *metadata.DNShard `protobuf:"bytes,1,opt,name=Partition,proto3" json:"Partition,omitempty"`
+type TxnCommitDNShardRequest struct {
+	// DNShard target DN
+	DNShard              *metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
 	XXX_unrecognized     []byte            `json:"-"`
 	XXX_sizecache        int32             `json:"-"`
 }
 
-func (m *TxnCommitPartitionRequest) Reset()         { *m = TxnCommitPartitionRequest{} }
-func (m *TxnCommitPartitionRequest) String() string { return proto.CompactTextString(m) }
-func (*TxnCommitPartitionRequest) ProtoMessage()    {}
-func (*TxnCommitPartitionRequest) Descriptor() ([]byte, []int) {
+func (m *TxnCommitDNShardRequest) Reset()         { *m = TxnCommitDNShardRequest{} }
+func (m *TxnCommitDNShardRequest) String() string { return proto.CompactTextString(m) }
+func (*TxnCommitDNShardRequest) ProtoMessage()    {}
+func (*TxnCommitDNShardRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{13}
 }
-func (m *TxnCommitPartitionRequest) XXX_Unmarshal(b []byte) error {
+func (m *TxnCommitDNShardRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TxnCommitPartitionRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TxnCommitDNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_TxnCommitPartitionRequest.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TxnCommitDNShardRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalTo(b)
@@ -1060,44 +1060,44 @@ func (m *TxnCommitPartitionRequest) XXX_Marshal(b []byte, deterministic bool) ([
 		return b[:n], nil
 	}
 }
-func (m *TxnCommitPartitionRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_TxnCommitPartitionRequest.Merge(m, src)
+func (m *TxnCommitDNShardRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TxnCommitDNShardRequest.Merge(m, src)
 }
-func (m *TxnCommitPartitionRequest) XXX_Size() int {
+func (m *TxnCommitDNShardRequest) XXX_Size() int {
 	return m.Size()
 }
-func (m *TxnCommitPartitionRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_TxnCommitPartitionRequest.DiscardUnknown(m)
+func (m *TxnCommitDNShardRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TxnCommitDNShardRequest.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_TxnCommitPartitionRequest proto.InternalMessageInfo
+var xxx_messageInfo_TxnCommitDNShardRequest proto.InternalMessageInfo
 
-func (m *TxnCommitPartitionRequest) GetPartition() *metadata.DNShard {
+func (m *TxnCommitDNShardRequest) GetDNShard() *metadata.DNShard {
 	if m != nil {
-		return m.Partition
+		return m.DNShard
 	}
 	return nil
 }
 
-// TxnCommitPartitionResponse response of TxnCommitPartitionRequest
-type TxnCommitPartitionResponse struct {
+// TxnCommitDNShardResponse response of TxnCommitDNShardRequest
+type TxnCommitDNShardResponse struct {
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *TxnCommitPartitionResponse) Reset()         { *m = TxnCommitPartitionResponse{} }
-func (m *TxnCommitPartitionResponse) String() string { return proto.CompactTextString(m) }
-func (*TxnCommitPartitionResponse) ProtoMessage()    {}
-func (*TxnCommitPartitionResponse) Descriptor() ([]byte, []int) {
+func (m *TxnCommitDNShardResponse) Reset()         { *m = TxnCommitDNShardResponse{} }
+func (m *TxnCommitDNShardResponse) String() string { return proto.CompactTextString(m) }
+func (*TxnCommitDNShardResponse) ProtoMessage()    {}
+func (*TxnCommitDNShardResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{14}
 }
-func (m *TxnCommitPartitionResponse) XXX_Unmarshal(b []byte) error {
+func (m *TxnCommitDNShardResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TxnCommitPartitionResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TxnCommitDNShardResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_TxnCommitPartitionResponse.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TxnCommitDNShardResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalTo(b)
@@ -1107,39 +1107,39 @@ func (m *TxnCommitPartitionResponse) XXX_Marshal(b []byte, deterministic bool) (
 		return b[:n], nil
 	}
 }
-func (m *TxnCommitPartitionResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_TxnCommitPartitionResponse.Merge(m, src)
+func (m *TxnCommitDNShardResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TxnCommitDNShardResponse.Merge(m, src)
 }
-func (m *TxnCommitPartitionResponse) XXX_Size() int {
+func (m *TxnCommitDNShardResponse) XXX_Size() int {
 	return m.Size()
 }
-func (m *TxnCommitPartitionResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_TxnCommitPartitionResponse.DiscardUnknown(m)
+func (m *TxnCommitDNShardResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TxnCommitDNShardResponse.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_TxnCommitPartitionResponse proto.InternalMessageInfo
+var xxx_messageInfo_TxnCommitDNShardResponse proto.InternalMessageInfo
 
-// TxnCommitPartitionRequest rollback txn on partition
-type TxnRollbackPartitionRequest struct {
-	// Partition target DN
-	Partition            *metadata.DNShard `protobuf:"bytes,1,opt,name=Partition,proto3" json:"Partition,omitempty"`
+// TxnCommitDNShardRequest rollback txn on DNShard
+type TxnRollbackDNShardRequest struct {
+	// DNShard target DN
+	DNShard              *metadata.DNShard `protobuf:"bytes,1,opt,name=DNShard,proto3" json:"DNShard,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
 	XXX_unrecognized     []byte            `json:"-"`
 	XXX_sizecache        int32             `json:"-"`
 }
 
-func (m *TxnRollbackPartitionRequest) Reset()         { *m = TxnRollbackPartitionRequest{} }
-func (m *TxnRollbackPartitionRequest) String() string { return proto.CompactTextString(m) }
-func (*TxnRollbackPartitionRequest) ProtoMessage()    {}
-func (*TxnRollbackPartitionRequest) Descriptor() ([]byte, []int) {
+func (m *TxnRollbackDNShardRequest) Reset()         { *m = TxnRollbackDNShardRequest{} }
+func (m *TxnRollbackDNShardRequest) String() string { return proto.CompactTextString(m) }
+func (*TxnRollbackDNShardRequest) ProtoMessage()    {}
+func (*TxnRollbackDNShardRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{15}
 }
-func (m *TxnRollbackPartitionRequest) XXX_Unmarshal(b []byte) error {
+func (m *TxnRollbackDNShardRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TxnRollbackPartitionRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TxnRollbackDNShardRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_TxnRollbackPartitionRequest.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TxnRollbackDNShardRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalTo(b)
@@ -1149,44 +1149,44 @@ func (m *TxnRollbackPartitionRequest) XXX_Marshal(b []byte, deterministic bool) 
 		return b[:n], nil
 	}
 }
-func (m *TxnRollbackPartitionRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_TxnRollbackPartitionRequest.Merge(m, src)
+func (m *TxnRollbackDNShardRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TxnRollbackDNShardRequest.Merge(m, src)
 }
-func (m *TxnRollbackPartitionRequest) XXX_Size() int {
+func (m *TxnRollbackDNShardRequest) XXX_Size() int {
 	return m.Size()
 }
-func (m *TxnRollbackPartitionRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_TxnRollbackPartitionRequest.DiscardUnknown(m)
+func (m *TxnRollbackDNShardRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TxnRollbackDNShardRequest.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_TxnRollbackPartitionRequest proto.InternalMessageInfo
+var xxx_messageInfo_TxnRollbackDNShardRequest proto.InternalMessageInfo
 
-func (m *TxnRollbackPartitionRequest) GetPartition() *metadata.DNShard {
+func (m *TxnRollbackDNShardRequest) GetDNShard() *metadata.DNShard {
 	if m != nil {
-		return m.Partition
+		return m.DNShard
 	}
 	return nil
 }
 
-// TxnRollbackPartitionResponse response of TxnRollbackPartitionRequest
-type TxnRollbackPartitionResponse struct {
+// TxnRollbackDNShardResponse response of TxnRollbackDNShardRequest
+type TxnRollbackDNShardResponse struct {
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *TxnRollbackPartitionResponse) Reset()         { *m = TxnRollbackPartitionResponse{} }
-func (m *TxnRollbackPartitionResponse) String() string { return proto.CompactTextString(m) }
-func (*TxnRollbackPartitionResponse) ProtoMessage()    {}
-func (*TxnRollbackPartitionResponse) Descriptor() ([]byte, []int) {
+func (m *TxnRollbackDNShardResponse) Reset()         { *m = TxnRollbackDNShardResponse{} }
+func (m *TxnRollbackDNShardResponse) String() string { return proto.CompactTextString(m) }
+func (*TxnRollbackDNShardResponse) ProtoMessage()    {}
+func (*TxnRollbackDNShardResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4f782e76b37adb9a, []int{16}
 }
-func (m *TxnRollbackPartitionResponse) XXX_Unmarshal(b []byte) error {
+func (m *TxnRollbackDNShardResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TxnRollbackPartitionResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TxnRollbackDNShardResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_TxnRollbackPartitionResponse.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TxnRollbackDNShardResponse.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalTo(b)
@@ -1196,17 +1196,17 @@ func (m *TxnRollbackPartitionResponse) XXX_Marshal(b []byte, deterministic bool)
 		return b[:n], nil
 	}
 }
-func (m *TxnRollbackPartitionResponse) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_TxnRollbackPartitionResponse.Merge(m, src)
+func (m *TxnRollbackDNShardResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TxnRollbackDNShardResponse.Merge(m, src)
 }
-func (m *TxnRollbackPartitionResponse) XXX_Size() int {
+func (m *TxnRollbackDNShardResponse) XXX_Size() int {
 	return m.Size()
 }
-func (m *TxnRollbackPartitionResponse) XXX_DiscardUnknown() {
-	xxx_messageInfo_TxnRollbackPartitionResponse.DiscardUnknown(m)
+func (m *TxnRollbackDNShardResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TxnRollbackDNShardResponse.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_TxnRollbackPartitionResponse proto.InternalMessageInfo
+var xxx_messageInfo_TxnRollbackDNShardResponse proto.InternalMessageInfo
 
 // TxnError all explicit errors in transaction operations.
 type TxnError struct {
@@ -1264,78 +1264,77 @@ func init() {
 	proto.RegisterType((*TxnPrepareResponse)(nil), "txn.TxnPrepareResponse")
 	proto.RegisterType((*TxnGetStatusRequest)(nil), "txn.TxnGetStatusRequest")
 	proto.RegisterType((*TxnGetStatusResponse)(nil), "txn.TxnGetStatusResponse")
-	proto.RegisterType((*TxnCommitPartitionRequest)(nil), "txn.TxnCommitPartitionRequest")
-	proto.RegisterType((*TxnCommitPartitionResponse)(nil), "txn.TxnCommitPartitionResponse")
-	proto.RegisterType((*TxnRollbackPartitionRequest)(nil), "txn.TxnRollbackPartitionRequest")
-	proto.RegisterType((*TxnRollbackPartitionResponse)(nil), "txn.TxnRollbackPartitionResponse")
+	proto.RegisterType((*TxnCommitDNShardRequest)(nil), "txn.TxnCommitDNShardRequest")
+	proto.RegisterType((*TxnCommitDNShardResponse)(nil), "txn.TxnCommitDNShardResponse")
+	proto.RegisterType((*TxnRollbackDNShardRequest)(nil), "txn.TxnRollbackDNShardRequest")
+	proto.RegisterType((*TxnRollbackDNShardResponse)(nil), "txn.TxnRollbackDNShardResponse")
 	proto.RegisterType((*TxnError)(nil), "txn.TxnError")
 }
 
 func init() { proto.RegisterFile("txn.proto", fileDescriptor_4f782e76b37adb9a) }
 
 var fileDescriptor_4f782e76b37adb9a = []byte{
-	// 966 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x56, 0x5b, 0x6f, 0xe3, 0x44,
-	0x14, 0xae, 0x73, 0xcf, 0xc9, 0xa5, 0xce, 0xf4, 0xb2, 0x6e, 0x59, 0x65, 0x83, 0xb5, 0x42, 0x65,
-	0x05, 0x09, 0x74, 0x41, 0x48, 0x20, 0x55, 0xea, 0xa6, 0xec, 0x6a, 0x25, 0x7a, 0xd1, 0xc4, 0x02,
-	0x81, 0x90, 0x56, 0x93, 0x7a, 0x48, 0xad, 0x4d, 0x3c, 0x5e, 0x67, 0x82, 0xcc, 0x03, 0x2f, 0xfc,
-	0x0b, 0xf8, 0x45, 0xfb, 0xd8, 0x67, 0x1e, 0x10, 0xf4, 0x97, 0x20, 0x8f, 0x67, 0x12, 0x5f, 0xe2,
-	0x88, 0xb2, 0x6f, 0x99, 0x39, 0xdf, 0xf7, 0x9d, 0xe3, 0x73, 0x3e, 0x9f, 0x18, 0xea, 0x3c, 0x70,
-	0xfb, 0x9e, 0xcf, 0x38, 0x43, 0x45, 0x1e, 0xb8, 0x87, 0x1f, 0x4f, 0x1c, 0x7e, 0xb3, 0x18, 0xf7,
-	0xaf, 0xd9, 0x6c, 0x30, 0x61, 0x13, 0x36, 0x10, 0xb1, 0xf1, 0xe2, 0x27, 0x71, 0x12, 0x07, 0xf1,
-	0x2b, 0xe2, 0x1c, 0x6e, 0x73, 0x67, 0x46, 0xe7, 0x9c, 0xcc, 0x3c, 0x79, 0xd1, 0x9e, 0x51, 0x4e,
-	0x6c, 0xc2, 0x49, 0x74, 0x36, 0xff, 0x28, 0x40, 0xd5, 0x0a, 0xdc, 0x73, 0xca, 0x09, 0x6a, 0x43,
-	0xe1, 0xe5, 0x99, 0xa1, 0xf5, 0xb4, 0xa3, 0x26, 0x2e, 0xbc, 0x3c, 0x43, 0x1f, 0x40, 0x65, 0xc4,
-	0x09, 0x5f, 0xcc, 0x8d, 0x42, 0x4f, 0x3b, 0x6a, 0x1f, 0xb7, 0xfb, 0x61, 0x31, 0x56, 0xe0, 0x46,
-	0xb7, 0x58, 0x46, 0xd1, 0x97, 0x00, 0x23, 0x97, 0x78, 0xf3, 0x1b, 0xc6, 0xad, 0x91, 0x51, 0xec,
-	0x69, 0x47, 0x8d, 0xe3, 0xdd, 0xfe, 0x2a, 0xb3, 0xa5, 0x7e, 0x3d, 0x2b, 0xbd, 0xfd, 0xeb, 0xd1,
-	0x16, 0x8e, 0xa1, 0xd1, 0x67, 0x00, 0x57, 0x3e, 0xf5, 0x88, 0x4f, 0x6d, 0x6b, 0x64, 0x94, 0xf2,
-	0xb9, 0x38, 0x86, 0x43, 0x9f, 0x40, 0x6d, 0xc8, 0x66, 0x33, 0x27, 0xcc, 0x57, 0xde, 0xc0, 0x59,
-	0xa2, 0xd0, 0x53, 0x68, 0x0c, 0x19, 0xf3, 0x6d, 0xc7, 0x25, 0x9c, 0xf9, 0x46, 0x45, 0x90, 0x3a,
-	0xfd, 0x65, 0x37, 0xce, 0x2e, 0x46, 0x37, 0xc4, 0xb7, 0x71, 0x1c, 0x65, 0x7a, 0xd0, 0x18, 0x5e,
-	0x5c, 0x7a, 0x98, 0xbe, 0x59, 0xd0, 0x39, 0x47, 0xfb, 0x50, 0xb9, 0xf4, 0x86, 0xcc, 0xa6, 0xa2,
-	0x47, 0x2d, 0x2c, 0x4f, 0xc8, 0x80, 0xea, 0x15, 0xf9, 0x65, 0xca, 0x88, 0x2d, 0x1a, 0xd5, 0xc4,
-	0xea, 0x88, 0x06, 0x50, 0xb1, 0x88, 0x3f, 0xa1, 0x5c, 0x76, 0x25, 0x9b, 0x50, 0xb6, 0x44, 0xc2,
-	0xcc, 0x23, 0x68, 0x46, 0x19, 0xe7, 0x1e, 0x73, 0xe7, 0x09, 0x69, 0x2d, 0x21, 0x6d, 0xfe, 0x59,
-	0x02, 0xb0, 0x02, 0x57, 0xd5, 0xf6, 0x18, 0x8a, 0x56, 0xe0, 0x0a, 0x50, 0xe3, 0xb8, 0xa9, 0x06,
-	0x15, 0x8e, 0x55, 0x66, 0x08, 0xc3, 0xe1, 0x44, 0xcf, 0x29, 0xbf, 0x61, 0x76, 0x7a, 0xa2, 0xd1,
-	0x2d, 0x96, 0x51, 0x84, 0xa0, 0xf4, 0x7c, 0x4a, 0x26, 0xa2, 0xea, 0x16, 0x16, 0xbf, 0x51, 0x1f,
-	0xea, 0xc3, 0x0b, 0x99, 0x4e, 0x0e, 0x4a, 0x17, 0xf4, 0x58, 0x8b, 0xf0, 0x0a, 0x82, 0xbe, 0x82,
-	0x56, 0xd4, 0x7d, 0xc5, 0x89, 0x06, 0xb5, 0xa7, 0x52, 0x26, 0x82, 0x38, 0x89, 0x45, 0xa7, 0xb0,
-	0x8d, 0xd9, 0x74, 0x3a, 0x26, 0xd7, 0xaf, 0x15, 0x3d, 0x1a, 0xd9, 0x03, 0x45, 0x4f, 0x85, 0x71,
-	0x1a, 0x8f, 0x4e, 0xa0, 0x2d, 0x1d, 0xa3, 0x14, 0xaa, 0x42, 0x61, 0x5f, 0x29, 0x24, 0xa3, 0x38,
-	0x85, 0x46, 0x67, 0xa0, 0xbf, 0xa0, 0x5c, 0x5a, 0x5d, 0x2a, 0xd4, 0x84, 0x82, 0xa1, 0x14, 0xd2,
-	0x71, 0x9c, 0x61, 0xa0, 0x6f, 0x61, 0x3f, 0x7a, 0xb2, 0x2b, 0xe2, 0x73, 0x87, 0x3b, 0x4c, 0x4d,
-	0xcc, 0xa8, 0x0b, 0xad, 0x6e, 0xb2, 0x1d, 0x69, 0x14, 0xce, 0x61, 0xa3, 0x1f, 0xc1, 0x50, 0x0f,
-	0x9c, 0x51, 0x06, 0xa1, 0xdc, 0x4b, 0x77, 0x2a, 0xa3, 0x9d, 0xab, 0x60, 0xfe, 0x5e, 0x86, 0x86,
-	0x30, 0x97, 0xb4, 0x61, 0x37, 0xd7, 0x5d, 0xef, 0xee, 0xab, 0x0f, 0xa1, 0x66, 0x05, 0xee, 0xd7,
-	0xbe, 0xcf, 0x7c, 0x69, 0xab, 0x96, 0x62, 0x8b, 0x4b, 0xbc, 0x0c, 0xa3, 0xcf, 0x93, 0x6f, 0x87,
-	0x74, 0x54, 0x27, 0xe6, 0xc2, 0x28, 0x80, 0x93, 0x2f, 0xd1, 0x09, 0xb4, 0x95, 0xbb, 0x24, 0xb1,
-	0x92, 0x74, 0x42, 0x32, 0x8a, 0x53, 0xe8, 0xd0, 0x09, 0x2b, 0x73, 0x49, 0x85, 0x6a, 0xd2, 0x09,
-	0xe9, 0x38, 0xce, 0x30, 0x42, 0x4b, 0x2f, 0x1d, 0x26, 0x45, 0x6a, 0x49, 0x4b, 0xa7, 0xc2, 0x38,
-	0x8d, 0x47, 0x2f, 0xa0, 0x13, 0x33, 0x98, 0x14, 0x89, 0x7c, 0x74, 0xb0, 0xc6, 0x93, 0x52, 0x26,
-	0xcb, 0x41, 0xdf, 0xc3, 0x83, 0x8c, 0xaf, 0xa4, 0x5c, 0x64, 0x9e, 0x47, 0xb9, 0xb6, 0x94, 0xa2,
-	0x79, 0x7c, 0xf4, 0x0a, 0x0e, 0xd6, 0xd8, 0x4a, 0x8a, 0x37, 0x84, 0xf8, 0xfb, 0x1b, 0x9c, 0x29,
-	0xe5, 0xf3, 0x35, 0xcc, 0x37, 0xa0, 0xa7, 0xb7, 0x07, 0xfa, 0x02, 0x60, 0x09, 0x9c, 0x1b, 0x5a,
-	0xaf, 0xb8, 0x69, 0xd7, 0xc6, 0xa0, 0xe8, 0x31, 0xb4, 0x6c, 0x67, 0x4e, 0xc6, 0x53, 0xfa, 0xe9,
-	0xd5, 0xf0, 0xd2, 0xe3, 0xc2, 0xbf, 0x35, 0x9c, 0xbc, 0x34, 0x77, 0xa0, 0x93, 0x71, 0x89, 0x79,
-	0x0e, 0x28, 0xbb, 0x86, 0xfe, 0x77, 0x25, 0xe6, 0x1e, 0xec, 0xac, 0xf1, 0x91, 0xf9, 0xab, 0x48,
-	0x9d, 0x5a, 0x4d, 0x03, 0xa8, 0x2f, 0x99, 0xf2, 0xa5, 0x5c, 0xf3, 0x57, 0xb6, 0xc2, 0xa4, 0xaa,
-	0x2a, 0xfc, 0xf7, 0xaa, 0x76, 0xc5, 0x43, 0xa6, 0x7c, 0x68, 0x3e, 0x17, 0xb5, 0x66, 0x76, 0xdd,
-	0x7d, 0xcb, 0x32, 0xf7, 0x61, 0x77, 0x9d, 0x63, 0xcd, 0x6f, 0xe0, 0x20, 0x77, 0x23, 0xde, 0x3f,
-	0xcb, 0x43, 0x38, 0xcc, 0x37, 0xb2, 0x79, 0x01, 0xef, 0x6d, 0xd8, 0x91, 0xf7, 0xcf, 0xd6, 0x85,
-	0x87, 0x9b, 0x9c, 0x6d, 0xc2, 0x6a, 0xdd, 0x3d, 0x79, 0x05, 0xf5, 0xe5, 0xd7, 0x14, 0x02, 0xa8,
-	0x9c, 0x5e, 0x73, 0xe7, 0x67, 0xaa, 0x6f, 0xa1, 0x26, 0xd4, 0xd4, 0xd7, 0x8e, 0xae, 0xa1, 0x36,
-	0x40, 0x54, 0x3d, 0x77, 0xdc, 0x89, 0x5e, 0x40, 0x2d, 0xa8, 0xcb, 0x33, 0xb5, 0xf5, 0x62, 0x08,
-	0x3e, 0x1d, 0x33, 0x5f, 0x04, 0x4b, 0xa8, 0x01, 0x55, 0x71, 0xa2, 0xb6, 0x5e, 0x7e, 0xf2, 0x9b,
-	0x26, 0x32, 0xc8, 0xed, 0x5b, 0x83, 0x12, 0xa6, 0xc4, 0xd6, 0xb7, 0x50, 0x1d, 0xca, 0xdf, 0xf9,
-	0x0e, 0xa7, 0xba, 0x16, 0xa6, 0x8d, 0xc4, 0xf4, 0x42, 0xa8, 0xa4, 0x0a, 0xd7, 0x8b, 0xa1, 0x92,
-	0x2c, 0x42, 0x2f, 0x85, 0x39, 0x97, 0x73, 0xd2, 0xcb, 0x68, 0x07, 0xb6, 0x53, 0x0d, 0xd5, 0x2b,
-	0x68, 0x0f, 0x3a, 0x99, 0xe7, 0xd6, 0xab, 0xcf, 0x4e, 0x6e, 0xff, 0xe9, 0x6a, 0x6f, 0xef, 0xba,
-	0xda, 0xed, 0x5d, 0x57, 0xfb, 0xfb, 0xae, 0xab, 0xfd, 0xf0, 0x51, 0xec, 0x23, 0x76, 0x46, 0xb8,
-	0xef, 0x04, 0xcc, 0x77, 0x26, 0x8e, 0xab, 0x0e, 0x2e, 0x1d, 0x78, 0xaf, 0x27, 0x03, 0x6f, 0x3c,
-	0xe0, 0x81, 0x3b, 0xae, 0x88, 0x2f, 0xd5, 0xa7, 0xff, 0x06, 0x00, 0x00, 0xff, 0xff, 0x2f, 0xa5,
-	0x4a, 0xa3, 0x0b, 0x0b, 0x00, 0x00,
+	// 957 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x56, 0xdd, 0x6e, 0xe3, 0x44,
+	0x14, 0xae, 0xf3, 0x9f, 0x93, 0x9f, 0x75, 0x4e, 0xff, 0xbc, 0xd5, 0x92, 0xad, 0xac, 0x15, 0x2a,
+	0x0b, 0x24, 0xd0, 0xc2, 0x0d, 0x48, 0x95, 0xda, 0x94, 0x5d, 0x7a, 0xb1, 0x6d, 0x35, 0xb1, 0x40,
+	0x70, 0x83, 0x26, 0xf5, 0x90, 0x5a, 0x9b, 0x78, 0x8c, 0x33, 0x41, 0xe6, 0x86, 0x37, 0xe0, 0x05,
+	0x78, 0xa2, 0xbd, 0x42, 0xfb, 0x04, 0x08, 0xfa, 0x24, 0xc8, 0xe3, 0x99, 0x24, 0x76, 0xe2, 0x15,
+	0x85, 0x3b, 0xcf, 0x9c, 0xef, 0xfb, 0xce, 0xf1, 0x9c, 0xcf, 0xc7, 0x03, 0x75, 0x11, 0xf9, 0xbd,
+	0x20, 0xe4, 0x82, 0x63, 0x51, 0x44, 0xfe, 0xc1, 0xc7, 0x63, 0x4f, 0xdc, 0xcd, 0x47, 0xbd, 0x5b,
+	0x3e, 0xed, 0x8f, 0xf9, 0x98, 0xf7, 0x65, 0x6c, 0x34, 0xff, 0x51, 0xae, 0xe4, 0x42, 0x3e, 0x25,
+	0x9c, 0x83, 0x47, 0xc2, 0x9b, 0xb2, 0x99, 0xa0, 0xd3, 0x40, 0x6d, 0xb4, 0xa7, 0x4c, 0x50, 0x97,
+	0x0a, 0x9a, 0xac, 0xed, 0xdf, 0x0b, 0x50, 0x75, 0x22, 0xff, 0x15, 0x13, 0x14, 0xdb, 0x50, 0xb8,
+	0xbc, 0xb0, 0x8c, 0x43, 0xe3, 0xa8, 0x49, 0x0a, 0x97, 0x17, 0xf8, 0x3e, 0x54, 0x86, 0x82, 0x8a,
+	0xf9, 0xcc, 0x2a, 0x1c, 0x1a, 0x47, 0xed, 0xe3, 0x76, 0x2f, 0x2e, 0xc6, 0x89, 0xfc, 0x64, 0x97,
+	0xa8, 0x28, 0x7e, 0x01, 0x30, 0xf4, 0x69, 0x30, 0xbb, 0xe3, 0xc2, 0x19, 0x5a, 0xc5, 0x43, 0xe3,
+	0xa8, 0x71, 0xbc, 0xd3, 0x5b, 0x66, 0x76, 0xf4, 0xd3, 0x79, 0xe9, 0xcd, 0x9f, 0x4f, 0xb7, 0xc8,
+	0x0a, 0x1a, 0x3f, 0x03, 0xb8, 0x09, 0x59, 0x40, 0x43, 0xe6, 0x3a, 0x43, 0xab, 0x94, 0xcf, 0x25,
+	0x2b, 0x38, 0xfc, 0x04, 0x6a, 0x03, 0x3e, 0x9d, 0x7a, 0x71, 0xbe, 0xf2, 0x3b, 0x38, 0x0b, 0x14,
+	0x9e, 0x40, 0x63, 0xc0, 0x79, 0xe8, 0x7a, 0x3e, 0x15, 0x3c, 0xb4, 0x2a, 0x92, 0xd4, 0xe9, 0x2d,
+	0x4e, 0xe3, 0xe2, 0x6a, 0x78, 0x47, 0x43, 0x97, 0xac, 0xa2, 0xec, 0x00, 0x1a, 0x83, 0xab, 0xeb,
+	0x80, 0xb0, 0x9f, 0xe6, 0x6c, 0x26, 0x70, 0x0f, 0x2a, 0xd7, 0xc1, 0x80, 0xbb, 0x4c, 0x9e, 0x51,
+	0x8b, 0xa8, 0x15, 0x5a, 0x50, 0xbd, 0xa1, 0xbf, 0x4c, 0x38, 0x75, 0xe5, 0x41, 0x35, 0x89, 0x5e,
+	0x62, 0x1f, 0x2a, 0x0e, 0x0d, 0xc7, 0x4c, 0xa8, 0x53, 0x59, 0x4f, 0xa8, 0x8e, 0x44, 0xc1, 0xec,
+	0x23, 0x68, 0x26, 0x19, 0x67, 0x01, 0xf7, 0x67, 0x29, 0x69, 0x23, 0x25, 0x6d, 0xff, 0x51, 0x02,
+	0x70, 0x22, 0x5f, 0xd7, 0xf6, 0x0c, 0x8a, 0x4e, 0xe4, 0x4b, 0x50, 0xe3, 0xb8, 0xa9, 0x1b, 0x15,
+	0xb7, 0x55, 0x65, 0x88, 0xc3, 0x71, 0x47, 0x5f, 0x31, 0x71, 0xc7, 0xdd, 0x6c, 0x47, 0x93, 0x5d,
+	0xa2, 0xa2, 0x88, 0x50, 0x7a, 0x31, 0xa1, 0x63, 0x59, 0x75, 0x8b, 0xc8, 0x67, 0xec, 0x41, 0x7d,
+	0x70, 0xa5, 0xd2, 0xa9, 0x46, 0x99, 0x92, 0xbe, 0x72, 0x44, 0x64, 0x09, 0xc1, 0x2f, 0xa1, 0x95,
+	0x9c, 0xbe, 0xe6, 0x24, 0x8d, 0xda, 0xd5, 0x29, 0x53, 0x41, 0x92, 0xc6, 0xe2, 0x19, 0x3c, 0x22,
+	0x7c, 0x32, 0x19, 0xd1, 0xdb, 0xd7, 0x9a, 0x9e, 0xb4, 0x6c, 0x5f, 0xd3, 0x33, 0x61, 0x92, 0xc5,
+	0xe3, 0x29, 0xb4, 0x95, 0x63, 0xb4, 0x42, 0x55, 0x2a, 0xec, 0x69, 0x85, 0x74, 0x94, 0x64, 0xd0,
+	0x78, 0x01, 0xe6, 0x4b, 0x26, 0x94, 0xd5, 0x95, 0x42, 0x4d, 0x2a, 0x58, 0x5a, 0x21, 0x1b, 0x27,
+	0x6b, 0x0c, 0xbc, 0x81, 0x9d, 0xe4, 0xcd, 0xb4, 0xc1, 0x94, 0x52, 0x5d, 0x2a, 0x3d, 0x49, 0x1f,
+	0x46, 0x1a, 0x43, 0x36, 0x32, 0xf1, 0x1b, 0xd8, 0xd3, 0xaf, 0x9a, 0xd1, 0x04, 0xa9, 0xd9, 0xcd,
+	0x9e, 0x50, 0x46, 0x35, 0x87, 0x6d, 0xff, 0x56, 0x86, 0x86, 0x34, 0x94, 0xb2, 0x5e, 0x37, 0xd7,
+	0x51, 0xff, 0xdf, 0x4b, 0x1f, 0x40, 0xcd, 0x89, 0xfc, 0xaf, 0xc2, 0x90, 0x87, 0xca, 0x4a, 0x2d,
+	0xcd, 0x96, 0x9b, 0x64, 0x11, 0xc6, 0xcf, 0xd3, 0x5f, 0x84, 0x72, 0x51, 0x67, 0xc5, 0x79, 0x49,
+	0x80, 0xa4, 0x3f, 0x9c, 0x53, 0x68, 0x6b, 0x47, 0x29, 0x62, 0x25, 0xdd, 0xfd, 0x74, 0x94, 0x64,
+	0xd0, 0x71, 0xf7, 0x97, 0x86, 0x52, 0x0a, 0xd5, 0x74, 0xf7, 0xb3, 0x71, 0xb2, 0xc6, 0x88, 0x6d,
+	0xbc, 0x70, 0x95, 0x12, 0xa9, 0xa5, 0x6d, 0x9c, 0x09, 0x93, 0x2c, 0x1e, 0x5f, 0x42, 0x67, 0xc5,
+	0x54, 0x4a, 0x24, 0x71, 0xcf, 0xe3, 0x0d, 0x3e, 0x54, 0x32, 0xeb, 0x1c, 0x1c, 0xc2, 0x6e, 0xc6,
+	0x4f, 0x4a, 0x2c, 0xb1, 0xcd, 0x7b, 0x39, 0x56, 0x54, 0x82, 0x9b, 0xb9, 0xf8, 0x1d, 0xec, 0xaf,
+	0xd9, 0x49, 0xc9, 0x36, 0xa4, 0xec, 0xd3, 0x5c, 0x37, 0x2a, 0xe1, 0x3c, 0xbe, 0x3d, 0x05, 0x33,
+	0x3b, 0x25, 0xf0, 0x04, 0x6a, 0x0a, 0x36, 0xb3, 0x8c, 0xc3, 0xe2, 0xbb, 0x26, 0xea, 0x02, 0x88,
+	0xcf, 0xa0, 0xe5, 0x7a, 0x33, 0x3a, 0x9a, 0xb0, 0x4f, 0x6f, 0x06, 0xd7, 0x81, 0x90, 0x7e, 0xad,
+	0x91, 0xf4, 0xa6, 0xbd, 0x0d, 0x9d, 0x35, 0x57, 0xd8, 0x97, 0x80, 0xeb, 0xa3, 0xe6, 0x3f, 0x55,
+	0x61, 0xef, 0xc2, 0xf6, 0x06, 0xcf, 0xd8, 0x73, 0x99, 0x36, 0x33, 0x7a, 0x3e, 0x84, 0xaa, 0xe2,
+	0xa9, 0xcf, 0x6f, 0xc3, 0x8f, 0x4a, 0x23, 0x52, 0xd5, 0x14, 0xfe, 0x6d, 0x35, 0x3b, 0xf2, 0xc5,
+	0x32, 0x5e, 0xb3, 0xcf, 0x65, 0x8d, 0x6b, 0x33, 0xec, 0x21, 0xe5, 0xd8, 0x7b, 0xb0, 0xb3, 0xc9,
+	0x91, 0xf6, 0x0b, 0xd8, 0xcf, 0x99, 0x73, 0x0f, 0xd3, 0x3f, 0x00, 0x2b, 0xcf, 0xa4, 0xf6, 0xd7,
+	0xf0, 0x38, 0x77, 0xee, 0x3d, 0x2c, 0xcb, 0x13, 0x38, 0xc8, 0xf7, 0xac, 0x0d, 0xcb, 0xf1, 0xf5,
+	0xfc, 0x07, 0xa8, 0x2f, 0x6e, 0x44, 0x08, 0x50, 0x39, 0xbb, 0x15, 0xde, 0xcf, 0xcc, 0xdc, 0xc2,
+	0x26, 0xd4, 0xf4, 0x8d, 0xc5, 0x34, 0xb0, 0x0d, 0x90, 0xd4, 0x2c, 0x3c, 0x7f, 0x6c, 0x16, 0xb0,
+	0x05, 0x75, 0xb5, 0x66, 0xae, 0x59, 0x8c, 0xc1, 0x67, 0x23, 0x1e, 0xca, 0x60, 0x09, 0x1b, 0x50,
+	0x95, 0x2b, 0xe6, 0x9a, 0xe5, 0xe7, 0xbf, 0xca, 0x04, 0x6a, 0x98, 0xd6, 0xa0, 0x44, 0x18, 0x75,
+	0xcd, 0x2d, 0xac, 0x43, 0xf9, 0xdb, 0xd0, 0x13, 0xcc, 0x34, 0xe2, 0xac, 0x89, 0x96, 0x59, 0x88,
+	0x85, 0x74, 0xd5, 0x66, 0x31, 0x16, 0x52, 0x35, 0x98, 0xa5, 0x38, 0xe5, 0xa2, 0x2d, 0x66, 0x19,
+	0x3b, 0xfa, 0xff, 0xac, 0xde, 0xce, 0xac, 0xe0, 0xf6, 0xf2, 0xaf, 0xab, 0x37, 0xab, 0xe7, 0xa7,
+	0x6f, 0xff, 0xee, 0x1a, 0x6f, 0xee, 0xbb, 0xc6, 0xdb, 0xfb, 0xae, 0xf1, 0xd7, 0x7d, 0xd7, 0xf8,
+	0xfe, 0xa3, 0x95, 0x3b, 0xe8, 0x94, 0x8a, 0xd0, 0x8b, 0x78, 0xe8, 0x8d, 0x3d, 0x5f, 0x2f, 0x7c,
+	0xd6, 0x0f, 0x5e, 0x8f, 0xfb, 0xc1, 0xa8, 0x2f, 0x22, 0x7f, 0x54, 0x91, 0x17, 0xcd, 0x93, 0x7f,
+	0x02, 0x00, 0x00, 0xff, 0xff, 0x76, 0xde, 0x0a, 0x50, 0xca, 0x0a, 0x00, 0x00,
 }
 
 func (m *TxnMeta) Marshal() (dAtA []byte, err error) {
@@ -1558,21 +1557,21 @@ func (m *TxnRequest) MarshalTo(dAtA []byte) (int, error) {
 		}
 		i += n11
 	}
-	if m.CommitPartitionRequest != nil {
+	if m.CommitDNShardRequest != nil {
 		dAtA[i] = 0x4a
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.CommitPartitionRequest.Size()))
-		n12, err := m.CommitPartitionRequest.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.CommitDNShardRequest.Size()))
+		n12, err := m.CommitDNShardRequest.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
 		i += n12
 	}
-	if m.RollbackPartitionRequest != nil {
+	if m.RollbackDNShardRequest != nil {
 		dAtA[i] = 0x52
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.RollbackPartitionRequest.Size()))
-		n13, err := m.RollbackPartitionRequest.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.RollbackDNShardRequest.Size()))
+		n13, err := m.RollbackDNShardRequest.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
@@ -1679,21 +1678,21 @@ func (m *TxnResponse) MarshalTo(dAtA []byte) (int, error) {
 		}
 		i += n20
 	}
-	if m.CommitPartitionResponse != nil {
+	if m.CommitDNShardResponse != nil {
 		dAtA[i] = 0x52
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.CommitPartitionResponse.Size()))
-		n21, err := m.CommitPartitionResponse.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.CommitDNShardResponse.Size()))
+		n21, err := m.CommitDNShardResponse.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
 		i += n21
 	}
-	if m.RollbackPartitionResponse != nil {
+	if m.RollbackDNShardResponse != nil {
 		dAtA[i] = 0x5a
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.RollbackPartitionResponse.Size()))
-		n22, err := m.RollbackPartitionResponse.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.RollbackDNShardResponse.Size()))
+		n22, err := m.RollbackDNShardResponse.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
@@ -1720,8 +1719,8 @@ func (m *TxnCommitRequest) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if len(m.Partitions) > 0 {
-		for _, msg := range m.Partitions {
+	if len(m.DNShards) > 0 {
+		for _, msg := range m.DNShards {
 			dAtA[i] = 0xa
 			i++
 			i = encodeVarintTxn(dAtA, i, uint64(msg.Size()))
@@ -1784,8 +1783,8 @@ func (m *TxnRollbackRequest) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if len(m.Partitions) > 0 {
-		for _, msg := range m.Partitions {
+	if len(m.DNShards) > 0 {
+		for _, msg := range m.DNShards {
 			dAtA[i] = 0xa
 			i++
 			i = encodeVarintTxn(dAtA, i, uint64(msg.Size()))
@@ -1838,18 +1837,18 @@ func (m *TxnPrepareRequest) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.Partition != nil {
+	if m.DNShard != nil {
 		dAtA[i] = 0xa
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.Partition.Size()))
-		n23, err := m.Partition.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.DNShard.Size()))
+		n23, err := m.DNShard.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
 		i += n23
 	}
-	if len(m.Partitions) > 0 {
-		for _, msg := range m.Partitions {
+	if len(m.DNShards) > 0 {
+		for _, msg := range m.DNShards {
 			dAtA[i] = 0x12
 			i++
 			i = encodeVarintTxn(dAtA, i, uint64(msg.Size()))
@@ -1902,11 +1901,11 @@ func (m *TxnGetStatusRequest) MarshalTo(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.Partition != nil {
+	if m.DNShard != nil {
 		dAtA[i] = 0xa
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.Partition.Size()))
-		n24, err := m.Partition.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.DNShard.Size()))
+		n24, err := m.DNShard.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
@@ -1939,7 +1938,7 @@ func (m *TxnGetStatusResponse) MarshalTo(dAtA []byte) (int, error) {
 	return i, nil
 }
 
-func (m *TxnCommitPartitionRequest) Marshal() (dAtA []byte, err error) {
+func (m *TxnCommitDNShardRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalTo(dAtA)
@@ -1949,16 +1948,16 @@ func (m *TxnCommitPartitionRequest) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TxnCommitPartitionRequest) MarshalTo(dAtA []byte) (int, error) {
+func (m *TxnCommitDNShardRequest) MarshalTo(dAtA []byte) (int, error) {
 	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.Partition != nil {
+	if m.DNShard != nil {
 		dAtA[i] = 0xa
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.Partition.Size()))
-		n25, err := m.Partition.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.DNShard.Size()))
+		n25, err := m.DNShard.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
@@ -1970,7 +1969,7 @@ func (m *TxnCommitPartitionRequest) MarshalTo(dAtA []byte) (int, error) {
 	return i, nil
 }
 
-func (m *TxnCommitPartitionResponse) Marshal() (dAtA []byte, err error) {
+func (m *TxnCommitDNShardResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalTo(dAtA)
@@ -1980,7 +1979,7 @@ func (m *TxnCommitPartitionResponse) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TxnCommitPartitionResponse) MarshalTo(dAtA []byte) (int, error) {
+func (m *TxnCommitDNShardResponse) MarshalTo(dAtA []byte) (int, error) {
 	var i int
 	_ = i
 	var l int
@@ -1991,7 +1990,7 @@ func (m *TxnCommitPartitionResponse) MarshalTo(dAtA []byte) (int, error) {
 	return i, nil
 }
 
-func (m *TxnRollbackPartitionRequest) Marshal() (dAtA []byte, err error) {
+func (m *TxnRollbackDNShardRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalTo(dAtA)
@@ -2001,16 +2000,16 @@ func (m *TxnRollbackPartitionRequest) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TxnRollbackPartitionRequest) MarshalTo(dAtA []byte) (int, error) {
+func (m *TxnRollbackDNShardRequest) MarshalTo(dAtA []byte) (int, error) {
 	var i int
 	_ = i
 	var l int
 	_ = l
-	if m.Partition != nil {
+	if m.DNShard != nil {
 		dAtA[i] = 0xa
 		i++
-		i = encodeVarintTxn(dAtA, i, uint64(m.Partition.Size()))
-		n26, err := m.Partition.MarshalTo(dAtA[i:])
+		i = encodeVarintTxn(dAtA, i, uint64(m.DNShard.Size()))
+		n26, err := m.DNShard.MarshalTo(dAtA[i:])
 		if err != nil {
 			return 0, err
 		}
@@ -2022,7 +2021,7 @@ func (m *TxnRollbackPartitionRequest) MarshalTo(dAtA []byte) (int, error) {
 	return i, nil
 }
 
-func (m *TxnRollbackPartitionResponse) Marshal() (dAtA []byte, err error) {
+func (m *TxnRollbackDNShardResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalTo(dAtA)
@@ -2032,7 +2031,7 @@ func (m *TxnRollbackPartitionResponse) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TxnRollbackPartitionResponse) MarshalTo(dAtA []byte) (int, error) {
+func (m *TxnRollbackDNShardResponse) MarshalTo(dAtA []byte) (int, error) {
 	var i int
 	_ = i
 	var l int
@@ -2177,12 +2176,12 @@ func (m *TxnRequest) Size() (n int) {
 		l = m.GetStatusRequest.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
-	if m.CommitPartitionRequest != nil {
-		l = m.CommitPartitionRequest.Size()
+	if m.CommitDNShardRequest != nil {
+		l = m.CommitDNShardRequest.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
-	if m.RollbackPartitionRequest != nil {
-		l = m.RollbackPartitionRequest.Size()
+	if m.RollbackDNShardRequest != nil {
+		l = m.RollbackDNShardRequest.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
@@ -2231,12 +2230,12 @@ func (m *TxnResponse) Size() (n int) {
 		l = m.GetStatusResponse.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
-	if m.CommitPartitionResponse != nil {
-		l = m.CommitPartitionResponse.Size()
+	if m.CommitDNShardResponse != nil {
+		l = m.CommitDNShardResponse.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
-	if m.RollbackPartitionResponse != nil {
-		l = m.RollbackPartitionResponse.Size()
+	if m.RollbackDNShardResponse != nil {
+		l = m.RollbackDNShardResponse.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
@@ -2251,8 +2250,8 @@ func (m *TxnCommitRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if len(m.Partitions) > 0 {
-		for _, e := range m.Partitions {
+	if len(m.DNShards) > 0 {
+		for _, e := range m.DNShards {
 			l = e.Size()
 			n += 1 + l + sovTxn(uint64(l))
 		}
@@ -2284,8 +2283,8 @@ func (m *TxnRollbackRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if len(m.Partitions) > 0 {
-		for _, e := range m.Partitions {
+	if len(m.DNShards) > 0 {
+		for _, e := range m.DNShards {
 			l = e.Size()
 			n += 1 + l + sovTxn(uint64(l))
 		}
@@ -2314,12 +2313,12 @@ func (m *TxnPrepareRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if m.Partition != nil {
-		l = m.Partition.Size()
+	if m.DNShard != nil {
+		l = m.DNShard.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
-	if len(m.Partitions) > 0 {
-		for _, e := range m.Partitions {
+	if len(m.DNShards) > 0 {
+		for _, e := range m.DNShards {
 			l = e.Size()
 			n += 1 + l + sovTxn(uint64(l))
 		}
@@ -2348,8 +2347,8 @@ func (m *TxnGetStatusRequest) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if m.Partition != nil {
-		l = m.Partition.Size()
+	if m.DNShard != nil {
+		l = m.DNShard.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
@@ -2370,14 +2369,14 @@ func (m *TxnGetStatusResponse) Size() (n int) {
 	return n
 }
 
-func (m *TxnCommitPartitionRequest) Size() (n int) {
+func (m *TxnCommitDNShardRequest) Size() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
-	if m.Partition != nil {
-		l = m.Partition.Size()
+	if m.DNShard != nil {
+		l = m.DNShard.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
@@ -2386,7 +2385,7 @@ func (m *TxnCommitPartitionRequest) Size() (n int) {
 	return n
 }
 
-func (m *TxnCommitPartitionResponse) Size() (n int) {
+func (m *TxnCommitDNShardResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -2398,14 +2397,14 @@ func (m *TxnCommitPartitionResponse) Size() (n int) {
 	return n
 }
 
-func (m *TxnRollbackPartitionRequest) Size() (n int) {
+func (m *TxnRollbackDNShardRequest) Size() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
-	if m.Partition != nil {
-		l = m.Partition.Size()
+	if m.DNShard != nil {
+		l = m.DNShard.Size()
 		n += 1 + l + sovTxn(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
@@ -2414,7 +2413,7 @@ func (m *TxnRollbackPartitionRequest) Size() (n int) {
 	return n
 }
 
-func (m *TxnRollbackPartitionResponse) Size() (n int) {
+func (m *TxnRollbackDNShardResponse) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -3209,7 +3208,7 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 9:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field CommitPartitionRequest", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field CommitDNShardRequest", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3236,16 +3235,16 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.CommitPartitionRequest == nil {
-				m.CommitPartitionRequest = &TxnCommitPartitionRequest{}
+			if m.CommitDNShardRequest == nil {
+				m.CommitDNShardRequest = &TxnCommitDNShardRequest{}
 			}
-			if err := m.CommitPartitionRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.CommitDNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
 		case 10:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field RollbackPartitionRequest", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field RollbackDNShardRequest", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3272,10 +3271,10 @@ func (m *TxnRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.RollbackPartitionRequest == nil {
-				m.RollbackPartitionRequest = &TxnRollbackPartitionRequest{}
+			if m.RollbackDNShardRequest == nil {
+				m.RollbackDNShardRequest = &TxnRollbackDNShardRequest{}
 			}
-			if err := m.RollbackPartitionRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.RollbackDNShardRequest.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -3625,7 +3624,7 @@ func (m *TxnResponse) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 10:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field CommitPartitionResponse", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field CommitDNShardResponse", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3652,16 +3651,16 @@ func (m *TxnResponse) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.CommitPartitionResponse == nil {
-				m.CommitPartitionResponse = &TxnCommitPartitionResponse{}
+			if m.CommitDNShardResponse == nil {
+				m.CommitDNShardResponse = &TxnCommitDNShardResponse{}
 			}
-			if err := m.CommitPartitionResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.CommitDNShardResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
 		case 11:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field RollbackPartitionResponse", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field RollbackDNShardResponse", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3688,10 +3687,10 @@ func (m *TxnResponse) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.RollbackPartitionResponse == nil {
-				m.RollbackPartitionResponse = &TxnRollbackPartitionResponse{}
+			if m.RollbackDNShardResponse == nil {
+				m.RollbackDNShardResponse = &TxnRollbackDNShardResponse{}
 			}
-			if err := m.RollbackPartitionResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.RollbackDNShardResponse.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -3751,7 +3750,7 @@ func (m *TxnCommitRequest) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Partitions", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3778,8 +3777,8 @@ func (m *TxnCommitRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Partitions = append(m.Partitions, metadata.DNShard{})
-			if err := m.Partitions[len(m.Partitions)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.DNShards = append(m.DNShards, metadata.DNShard{})
+			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -3913,7 +3912,7 @@ func (m *TxnRollbackRequest) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Partitions", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3940,8 +3939,8 @@ func (m *TxnRollbackRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Partitions = append(m.Partitions, metadata.DNShard{})
-			if err := m.Partitions[len(m.Partitions)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.DNShards = append(m.DNShards, metadata.DNShard{})
+			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4055,7 +4054,7 @@ func (m *TxnPrepareRequest) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Partition", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShard", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4082,16 +4081,16 @@ func (m *TxnPrepareRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Partition == nil {
-				m.Partition = &metadata.DNShard{}
+			if m.DNShard == nil {
+				m.DNShard = &metadata.DNShard{}
 			}
-			if err := m.Partition.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Partitions", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShards", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4118,8 +4117,8 @@ func (m *TxnPrepareRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Partitions = append(m.Partitions, metadata.DNShard{})
-			if err := m.Partitions[len(m.Partitions)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			m.DNShards = append(m.DNShards, metadata.DNShard{})
+			if err := m.DNShards[len(m.DNShards)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4233,7 +4232,7 @@ func (m *TxnGetStatusRequest) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Partition", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShard", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4260,10 +4259,10 @@ func (m *TxnGetStatusRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Partition == nil {
-				m.Partition = &metadata.DNShard{}
+			if m.DNShard == nil {
+				m.DNShard = &metadata.DNShard{}
 			}
-			if err := m.Partition.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4346,7 +4345,7 @@ func (m *TxnGetStatusResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TxnCommitPartitionRequest) Unmarshal(dAtA []byte) error {
+func (m *TxnCommitDNShardRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -4369,15 +4368,15 @@ func (m *TxnCommitPartitionRequest) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: TxnCommitPartitionRequest: wiretype end group for non-group")
+			return fmt.Errorf("proto: TxnCommitDNShardRequest: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: TxnCommitPartitionRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: TxnCommitDNShardRequest: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Partition", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShard", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4404,10 +4403,10 @@ func (m *TxnCommitPartitionRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Partition == nil {
-				m.Partition = &metadata.DNShard{}
+			if m.DNShard == nil {
+				m.DNShard = &metadata.DNShard{}
 			}
-			if err := m.Partition.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4436,7 +4435,7 @@ func (m *TxnCommitPartitionRequest) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TxnCommitPartitionResponse) Unmarshal(dAtA []byte) error {
+func (m *TxnCommitDNShardResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -4459,10 +4458,10 @@ func (m *TxnCommitPartitionResponse) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: TxnCommitPartitionResponse: wiretype end group for non-group")
+			return fmt.Errorf("proto: TxnCommitDNShardResponse: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: TxnCommitPartitionResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: TxnCommitDNShardResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		default:
@@ -4490,7 +4489,7 @@ func (m *TxnCommitPartitionResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TxnRollbackPartitionRequest) Unmarshal(dAtA []byte) error {
+func (m *TxnRollbackDNShardRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -4513,15 +4512,15 @@ func (m *TxnRollbackPartitionRequest) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: TxnRollbackPartitionRequest: wiretype end group for non-group")
+			return fmt.Errorf("proto: TxnRollbackDNShardRequest: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: TxnRollbackPartitionRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: TxnRollbackDNShardRequest: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Partition", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DNShard", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4548,10 +4547,10 @@ func (m *TxnRollbackPartitionRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Partition == nil {
-				m.Partition = &metadata.DNShard{}
+			if m.DNShard == nil {
+				m.DNShard = &metadata.DNShard{}
 			}
-			if err := m.Partition.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.DNShard.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -4580,7 +4579,7 @@ func (m *TxnRollbackPartitionRequest) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TxnRollbackPartitionResponse) Unmarshal(dAtA []byte) error {
+func (m *TxnRollbackDNShardResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -4603,10 +4602,10 @@ func (m *TxnRollbackPartitionResponse) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: TxnRollbackPartitionResponse: wiretype end group for non-group")
+			return fmt.Errorf("proto: TxnRollbackDNShardResponse: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: TxnRollbackPartitionResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: TxnRollbackDNShardResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		default:

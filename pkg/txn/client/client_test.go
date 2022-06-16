@@ -39,7 +39,7 @@ func TestNewTxn(t *testing.T) {
 	c := NewTxnClient(newTestTxnSender(), WithClock(clock.NewHLCClock(func() int64 {
 		return 1
 	}, 0)))
-	txnMeta := c.New().(*txnCoordinator).mu.txn
+	txnMeta := c.New().(*txnOperator).mu.txn
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)

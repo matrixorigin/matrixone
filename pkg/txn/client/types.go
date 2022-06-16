@@ -21,7 +21,7 @@ import (
 )
 
 // TxnOption options for setup transaction
-type TxnOption func(*txnCoordinator)
+type TxnOption func(*txnOperator)
 
 // TxnClientCreateOption options for create txn
 type TxnClientCreateOption func(*txnClient)
@@ -29,20 +29,20 @@ type TxnClientCreateOption func(*txnClient)
 // TxnClient transaction client, the operational entry point for transactions.
 // Each CN node holds one instance of TxnClient.
 type TxnClient interface {
-	// New returns a TxnCoordinator to handle read and write operation for a
+	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
-	New(options ...TxnOption) TxnCoordinator
+	New(options ...TxnOption) TxnOperator
 }
 
-// TxnCoordinator coordinator for transaction clients, handling read and write
+// TxnOperator operator for transaction clients, handling read and write
 // requests for transactions, and handling distributed transactions across DN
 // nodes.
-type TxnCoordinator interface {
-	// Read transaction read operation, the Coordinator routes the message based
+type TxnOperator interface {
+	// Read transaction read operation, the operator routes the message based
 	// on the given DN node information and waits for the read data synchronously.
 	// The transaction has been aborted if ErrTxnAborted returned.
 	Read(ctx context.Context, ops []txn.TxnRequest) ([]txn.TxnResponse, error)
-	// Write transaction write operation, and the Coordinator will record the DN
+	// Write transaction write operation, and the operator will record the DN
 	// nodes written by the current transaction, and when it finds that multiple
 	// DN nodes are written, it will start distributed transaction processing.
 	// The transaction has been aborted if ErrTxnAborted returned.

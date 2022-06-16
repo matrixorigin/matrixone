@@ -30,7 +30,7 @@ enum TxnStatus {
     // and the prepared status means that the transaction on a DN was executed 
     // successfully in the first phase. 
     // 
-    // Note that this status needs to be logged to the LogService. Once the first 
+    // Note that this status needs to be saved to the LogService. Once the first 
     // phase of a transaction is successful, data cannot be lost.
     Prepared = 1;
     // Committing for distributed transactions across DNs, once all DNs have completed
@@ -49,7 +49,7 @@ enum TxnStatus {
     // committed data, the status of the distributed transaction is explicitly recorded 
     // as Committed.
     //
-    // Note that this status needs to be logged to the LogService
+    // Note that this status needs to be saved to the LogService
     Committed = 3;
     // Aborting a client initiating a Rollback call or a distributed transaction that has
     // any error in the first phase will enter the Aborting state. This state starts an 
@@ -61,7 +61,7 @@ enum TxnStatus {
     // Aborted after the Aborting phase, all data involved in the DN is cleaned up and 
     // the transaction status is explicitly recorded as Aborted.
     //
-    // Note that this status needs to be logged to the LogService
+    // Note that this status needs to be saved to the LogService
     Aborted   = 5;
 }
 
@@ -114,20 +114,20 @@ enum TxnMethod {
     // Rollback rollback transaction
     Rollback          = 3;
     // Prepare when DN(Coordinator) receives a commit request from CN, it sends a prepare to 
-    // each DN(partition)
+    // each DN(DNShard)
     Prepare           = 4;
     // GetStatus query the status of a transaction on a DN. When a DN encounters a transaction
     // in the Prepared state, it needs to go to the DN(Coordinator) to query the status of the 
     // current transaction. When a DN encounters a transaction in the Prepared state during the 
-    // recover, it needs to query the status of the transaction on each DN(partition) to determine
+    // recover, it needs to query the status of the transaction on each DN(DNShard) to determine
     // if the transaction is committed.
     GetStatus         = 5;
-    // CommitPartition after the 2pc transaction is committed, the temporary data on each DN needs
+    // CommitDNShard after the 2pc transaction is committed, the temporary data on each DN needs
     // to be explicitly converted to committed data.
-    CommitPartition   = 6;
-    // RollbackPartition after the 2pc transaction is aborted, the temporary data on each DN needs
+    CommitDNShard     = 6;
+    // RollbackDNShard after the 2pc transaction is aborted, the temporary data on each DN needs
     // to cleanup.
-    RollbackPartition = 7;
+    RollbackDNShard   = 7;
 }
 
 // TxnRequest transaction request. All requests for the transaction are made using TxnRequest, so that 
@@ -136,7 +136,7 @@ enum TxnMethod {
 //
 // Request flow of TxnRequest as below:
 // 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
-// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitPartition, TxnMethod.RollbackPartition)
+// 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard)
 message TxnRequest {
     // Txn transaction metadata
     TxnMeta                     Txn                      = 1 [(gogoproto.nullable) = false];
@@ -154,10 +154,10 @@ message TxnRequest {
     TxnPrepareRequest           PrepareRequest           = 7;
     // TxnGetStatusRequest corresponds to TxnMethod.GetStatus
     TxnGetStatusRequest         GetStatusRequest         = 8;
-    // TxnCommitPartitionRequest corresponds to TxnMethod.CommitPartition
-    TxnCommitPartitionRequest   CommitPartitionRequest   = 9;
-    // TxnRollbackPartitionRequest corresponds to TxnMethod.RollbackPartition
-    TxnRollbackPartitionRequest RollbackPartitionRequest = 10;
+    // TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
+    TxnCommitDNShardRequest   CommitDNShardRequest   = 9;
+    // TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
+    TxnRollbackDNShardRequest RollbackDNShardRequest = 10;
 }
 
 // TxnResponse response of TxnRequest.
@@ -183,17 +183,17 @@ message TxnResponse {
     TxnPrepareResponse           PrepareResponse           = 8;
     // TxnGetStatusResponse corresponds to TxnMethod.GetStatus response
     TxnGetStatusResponse         GetStatusResponse         = 9;
-    // TxnCommitPartitionResponse corresponds to TxnMethod.CommitPartition response
-    TxnCommitPartitionResponse   CommitPartitionResponse   = 10;
-    // TxnRollbackPartitionResponse corresponds to TxnMethod.RollbackPartition response
-    TxnRollbackPartitionResponse RollbackPartitionResponse = 11;
+    // TxnCommitDNShardResponse corresponds to TxnMethod.CommitDNShard response
+    TxnCommitDNShardResponse   CommitDNShardResponse   = 10;
+    // TxnRollbackDNShardResponse corresponds to TxnMethod.RollbackDNShard response
+    TxnRollbackDNShardResponse RollbackDNShardResponse = 11;
 }
 
 // TxnCommitRequest CN sent the commit request to coordinator DN.
 message TxnCommitRequest {
-    // Partitions DNs for which data has been written in the current transaction.
+    // DNShards DNs for which data has been written in the current transaction.
     // The first DN is the coordinator of the transaction.
-    repeated metadata.DNShard Partitions    = 1 [(gogoproto.nullable) = false]; 
+    repeated metadata.DNShard DNShards    = 1 [(gogoproto.nullable) = false]; 
     bool                      disable1PCOpt = 2;
 }
 
@@ -203,8 +203,8 @@ message TxnCommitResponse {
 
 // TxnCommitRequest CN sent the rollback request to coordinator DN.
 message TxnRollbackRequest {
-    // Partitions DNs for which data has been written in the current transaction.
-    repeated metadata.DNShard Partitions = 1 [(gogoproto.nullable) = false]; 
+    // DNShards DNs for which data has been written in the current transaction.
+    repeated metadata.DNShard DNShards = 1 [(gogoproto.nullable) = false]; 
 }
 
 // TxnRollbackResponse response of TxnRollbackRequest.
@@ -215,14 +215,14 @@ message TxnRollbackResponse {
 // more than one DN is involved, the 2PC commit process is enabled and the first phase
 // is to send prepare requests to all DNs.
 message TxnPrepareRequest {
-    // Partition prepare DN
-    metadata.DNShard          Partition  = 1;
-    // Partitions if the partition is the coordinator DN, partitions is not empty, 
-    // otherwise is empty. The coordinator DN needs to write the partitions and prepare 
+    // DNShard prepare DN
+    metadata.DNShard          DNShard  = 1;
+    // DNShards if the DNShard is the coordinator DN, DNShards is not empty, 
+    // otherwise is empty. The coordinator DN needs to write the DNShards and prepare 
     // data together atomically to the LogService. So during error recovery we can use 
     // the coordinator DN to find all the DNs involved in the transaction to commit or
     // rollback the transaction.
-    repeated metadata.DNShard Partitions = 2 [(gogoproto.nullable) = false]; 
+    repeated metadata.DNShard DNShards = 2 [(gogoproto.nullable) = false]; 
 }
 
 // TxnPrepareResponse response of TxnPrepareRequest
@@ -232,33 +232,33 @@ message TxnPrepareResponse {
 
 // TxnGetStatusRequest query the status of a transaction on DN
 message TxnGetStatusRequest {
-    // Partition target DN
-    metadata.DNShard Partition = 1;
+    // DNShard target DN
+    metadata.DNShard DNShard = 1;
 }
 
 // TxnGetStatusResponse response of TxnGetStatusRequest
 message TxnGetStatusResponse {
 }
 
-// TxnCommitPartitionRequest commit txn on partition. Data needs to be written to the 
+// TxnCommitDNShardRequest commit txn on DNShard. Data needs to be written to the 
 // LogService.
-message TxnCommitPartitionRequest {
-     // Partition target DN
-     metadata.DNShard Partition = 1;
+message TxnCommitDNShardRequest {
+     // DNShard target DN
+     metadata.DNShard DNShard = 1;
 }
 
-// TxnCommitPartitionResponse response of TxnCommitPartitionRequest
-message TxnCommitPartitionResponse {
+// TxnCommitDNShardResponse response of TxnCommitDNShardRequest
+message TxnCommitDNShardResponse {
 }
 
-// TxnCommitPartitionRequest rollback txn on partition
-message TxnRollbackPartitionRequest {
-     // Partition target DN
-     metadata.DNShard Partition = 1;
+// TxnCommitDNShardRequest rollback txn on DNShard
+message TxnRollbackDNShardRequest {
+     // DNShard target DN
+     metadata.DNShard DNShard = 1;
 }
 
-// TxnRollbackPartitionResponse response of TxnRollbackPartitionRequest
-message TxnRollbackPartitionResponse {
+// TxnRollbackDNShardResponse response of TxnRollbackDNShardRequest
+message TxnRollbackDNShardResponse {
 }
 
 // TxnError all explicit errors in transaction operations.

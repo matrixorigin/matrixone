@@ -28,7 +28,7 @@ import (
 
 // WithReadyOnlyTxn setup readyonly flag
 func WithReadyOnlyTxn() TxnOption {
-	return func(tc *txnCoordinator) {
+	return func(tc *txnOperator) {
 		tc.option.readyOnly = true
 	}
 }
@@ -38,14 +38,14 @@ func WithReadyOnlyTxn() TxnOption {
 // executed successfully, then the transaction is considered committed and returned directly to the
 // client. Partitions' prepared data are committed asynchronously.
 func WithDisable1PCOpt() TxnOption {
-	return func(tc *txnCoordinator) {
+	return func(tc *txnOperator) {
 		tc.option.disable1PCOpt = true
 	}
 }
 
 // WithTxnLogger setup txn logger
 func WithTxnLogger(logger *zap.Logger) TxnOption {
-	return func(tc *txnCoordinator) {
+	return func(tc *txnOperator) {
 		tc.logger = logger
 	}
 }
@@ -60,13 +60,13 @@ func WithTxnLogger(logger *zap.Logger) TxnOption {
 // 2. Before commit, obviously, the cached write requests needs to be sent to the corresponding DN node
 //    before commit.
 func WithCacheWriteTxn() TxnOption {
-	return func(tc *txnCoordinator) {
+	return func(tc *txnOperator) {
 		tc.option.enableCacheWrite = true
 		tc.mu.cachedWrites = make(map[uint64][]txn.TxnRequest)
 	}
 }
 
-type txnCoordinator struct {
+type txnOperator struct {
 	logger *zap.Logger
 	sender TxnSender
 
@@ -81,12 +81,12 @@ type txnCoordinator struct {
 		closed       bool
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
-		partitions   []metadata.DNShard
+		dnShards     []metadata.DNShard
 	}
 }
 
-func newTxnCoordinator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnCoordinator {
-	tc := &txnCoordinator{sender: sender}
+func newTxnOperator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
+	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 
 	for _, opt := range options {
@@ -102,7 +102,7 @@ func newTxnCoordinator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOpti
 	return tc
 }
 
-func (tc *txnCoordinator) adjust() {
+func (tc *txnOperator) adjust() {
 	tc.logger = logutil.Adjust(tc.logger)
 	if tc.sender == nil {
 		tc.logger.Fatal("missing txn sender")
@@ -122,7 +122,7 @@ func (tc *txnCoordinator) adjust() {
 	}
 }
 
-func (tc *txnCoordinator) Read(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Read
 	}
@@ -143,15 +143,15 @@ func (tc *txnCoordinator) Read(ctx context.Context, requests []txn.TxnRequest) (
 	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, false)))
 }
 
-func (tc *txnCoordinator) Write(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
 	return tc.doWrite(ctx, requests, false)
 }
 
-func (tc *txnCoordinator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
 	return tc.doWrite(ctx, requests, true)
 }
 
-func (tc *txnCoordinator) Commit(ctx context.Context) error {
+func (tc *txnOperator) Commit(ctx context.Context) error {
 	tc.logger.Debug("handle commit")
 	defer tc.logger.Debug("txn closed by commit")
 
@@ -168,7 +168,7 @@ func (tc *txnCoordinator) Commit(ctx context.Context) error {
 	return err
 }
 
-func (tc *txnCoordinator) Rollback(ctx context.Context) error {
+func (tc *txnOperator) Rollback(ctx context.Context) error {
 	tc.logger.Debug("handle rollback")
 	defer tc.logger.Debug("txn closed by rollback")
 
@@ -179,7 +179,7 @@ func (tc *txnCoordinator) Rollback(ctx context.Context) error {
 	}()
 
 	// no write request handled
-	if len(tc.mu.partitions) == 0 {
+	if len(tc.mu.dnShards) == 0 {
 		tc.logger.Debug("rollback on 0 partitions")
 		return nil
 	}
@@ -187,7 +187,7 @@ func (tc *txnCoordinator) Rollback(ctx context.Context) error {
 	_, err := tc.handleError(tc.doSend(ctx, []txn.TxnRequest{{
 		Method: txn.TxnMethod_Rollback,
 		RollbackRequest: &txn.TxnRollbackRequest{
-			Partitions: tc.mu.partitions,
+			DNShards: tc.mu.dnShards,
 		},
 	}}, true))
 
@@ -199,7 +199,7 @@ func (tc *txnCoordinator) Rollback(ctx context.Context) error {
 	return err
 }
 
-func (tc *txnCoordinator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, commit bool) ([]txn.TxnResponse, error) {
 	for idx := range requests {
 		requests[idx].Method = txn.TxnMethod_Write
 	}
@@ -239,7 +239,7 @@ func (tc *txnCoordinator) doWrite(ctx context.Context, requests []txn.TxnRequest
 	}
 
 	if commit {
-		if len(tc.mu.partitions) == 0 { // commit no write handled txn
+		if len(tc.mu.dnShards) == 0 { // commit no write handled txn
 			tc.logger.Debug("commit on 0 partitions")
 			return nil, nil
 		}
@@ -249,12 +249,12 @@ func (tc *txnCoordinator) doWrite(ctx context.Context, requests []txn.TxnRequest
 			Method: txn.TxnMethod_Commit,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
-				Partitions:    tc.mu.partitions,
+				DNShards:      tc.mu.dnShards,
 				Disable1PCOpt: tc.option.disable1PCOpt,
 			}})
 		if ce := tc.logger.Check(zap.DebugLevel, "commit on partitions"); ce != nil {
-			fields := make([]zap.Field, 0, len(tc.mu.partitions))
-			for idx, p := range tc.mu.partitions {
+			fields := make([]zap.Field, 0, len(tc.mu.dnShards))
+			for idx, p := range tc.mu.dnShards {
 				fields = append(fields, zap.String(fmt.Sprintf("partition-%d", idx), p.DebugString()))
 			}
 			ce.Write(fields...)
@@ -263,7 +263,7 @@ func (tc *txnCoordinator) doWrite(ctx context.Context, requests []txn.TxnRequest
 	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, commit)))
 }
 
-func (tc *txnCoordinator) updateWritePartitions(requests []txn.TxnRequest, locked bool) {
+func (tc *txnOperator) updateWritePartitions(requests []txn.TxnRequest, locked bool) {
 	if len(requests) == 0 {
 		return
 	}
@@ -278,19 +278,19 @@ func (tc *txnCoordinator) updateWritePartitions(requests []txn.TxnRequest, locke
 	}
 }
 
-func (tc *txnCoordinator) addPartitionLocked(dn metadata.DNShard) {
-	for idx := range tc.mu.partitions {
-		if tc.mu.partitions[idx].ShardID == dn.ShardID {
+func (tc *txnOperator) addPartitionLocked(dn metadata.DNShard) {
+	for idx := range tc.mu.dnShards {
+		if tc.mu.dnShards[idx].ShardID == dn.ShardID {
 			return
 		}
 	}
-	tc.mu.partitions = append(tc.mu.partitions, dn)
+	tc.mu.dnShards = append(tc.mu.dnShards, dn)
 	if ce := tc.logger.Check(zap.DebugLevel, "partition added"); ce != nil {
 		ce.Write(zap.String("dn", dn.DebugString()))
 	}
 }
 
-func (tc *txnCoordinator) validate(ctx context.Context, locked bool) error {
+func (tc *txnOperator) validate(ctx context.Context, locked bool) error {
 	if _, ok := ctx.Deadline(); !ok {
 		tc.logger.Fatal("context deadline set")
 	}
@@ -298,7 +298,7 @@ func (tc *txnCoordinator) validate(ctx context.Context, locked bool) error {
 	return tc.checkStatus(locked)
 }
 
-func (tc *txnCoordinator) checkStatus(locked bool) error {
+func (tc *txnOperator) checkStatus(locked bool) error {
 	if !locked {
 		tc.mu.RLock()
 		defer tc.mu.RUnlock()
@@ -311,7 +311,7 @@ func (tc *txnCoordinator) checkStatus(locked bool) error {
 	return nil
 }
 
-func (tc *txnCoordinator) maybeCacheWrites(requests []txn.TxnRequest, locked bool) bool {
+func (tc *txnOperator) maybeCacheWrites(requests []txn.TxnRequest, locked bool) bool {
 	if tc.option.enableCacheWrite {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
@@ -326,7 +326,7 @@ func (tc *txnCoordinator) maybeCacheWrites(requests []txn.TxnRequest, locked boo
 	return false
 }
 
-func (tc *txnCoordinator) maybeInsertCachedWrites(ctx context.Context, requests []txn.TxnRequest, locked bool) []txn.TxnRequest {
+func (tc *txnOperator) maybeInsertCachedWrites(ctx context.Context, requests []txn.TxnRequest, locked bool) []txn.TxnRequest {
 	if len(requests) == 0 || !tc.option.enableCacheWrite {
 		return requests
 	}
@@ -367,7 +367,7 @@ func (tc *txnCoordinator) maybeInsertCachedWrites(ctx context.Context, requests 
 	return newRequests
 }
 
-func (tc *txnCoordinator) getCachedWritesLocked(dn uint64) ([]txn.TxnRequest, bool) {
+func (tc *txnOperator) getCachedWritesLocked(dn uint64) ([]txn.TxnRequest, bool) {
 	writes, ok := tc.mu.cachedWrites[dn]
 	if !ok || len(writes) == 0 {
 		return nil, false
@@ -375,13 +375,13 @@ func (tc *txnCoordinator) getCachedWritesLocked(dn uint64) ([]txn.TxnRequest, bo
 	return writes, true
 }
 
-func (tc *txnCoordinator) clearCachedWritesLocked(dn uint64) {
+func (tc *txnOperator) clearCachedWritesLocked(dn uint64) {
 	delete(tc.mu.cachedWrites, dn)
 	tc.logger.Debug("cached write requests removed",
 		zap.Uint64("dn", dn))
 }
 
-func (tc *txnCoordinator) getTxnMeta(locked bool) txn.TxnMeta {
+func (tc *txnOperator) getTxnMeta(locked bool) txn.TxnMeta {
 	if !locked {
 		tc.mu.RLock()
 		defer tc.mu.RUnlock()
@@ -389,7 +389,7 @@ func (tc *txnCoordinator) getTxnMeta(locked bool) txn.TxnMeta {
 	return tc.mu.txn
 }
 
-func (tc *txnCoordinator) doSend(ctx context.Context, requests []txn.TxnRequest, locked bool) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) doSend(ctx context.Context, requests []txn.TxnRequest, locked bool) ([]txn.TxnResponse, error) {
 	txnMeta := tc.getTxnMeta(locked)
 	for idx := range requests {
 		requests[idx].Txn = txnMeta
@@ -424,7 +424,7 @@ func (tc *txnCoordinator) doSend(ctx context.Context, requests []txn.TxnRequest,
 	return responses, nil
 }
 
-func (tc *txnCoordinator) handleError(responses []txn.TxnResponse, err error) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) handleError(responses []txn.TxnResponse, err error) ([]txn.TxnResponse, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +450,7 @@ func (tc *txnCoordinator) handleError(responses []txn.TxnResponse, err error) ([
 	return responses, nil
 }
 
-func (tc *txnCoordinator) trimResponses(responses []txn.TxnResponse, err error) ([]txn.TxnResponse, error) {
+func (tc *txnOperator) trimResponses(responses []txn.TxnResponse, err error) ([]txn.TxnResponse, error) {
 	if err != nil {
 		return nil, err
 	}
