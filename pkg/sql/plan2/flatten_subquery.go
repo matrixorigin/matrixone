@@ -47,15 +47,15 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 	subId := subquery.NodeId
 	subCtx := builder.ctxByNode[subId]
 
-	subId, preds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
+	subId, joinPreds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
 	if err != nil {
 		return 0, nil, err
 	}
 
-	correlatedPreds, preds := decreaseDepthAndDispatch(preds)
+	filterPreds, joinPreds := decreaseDepthAndDispatch(joinPreds)
 
-	if len(correlatedPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("correlated column deeper than 1 level in %s subquery not yet supported", subquery.Typ.String()))
+	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
+		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("correlated column in %s subquery in non-equi condition or deeper than 1 level not yet supported", subquery.Typ.String()))
 	}
 
 	alwaysTrue := &plan.Expr{
@@ -76,7 +76,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
-		for _, pred := range preds {
+		for _, pred := range filterPreds {
 			if f, ok := pred.Expr.(*plan.Expr_F); ok {
 				if f.F.Func.ObjName == "=" {
 					continue
@@ -86,22 +86,22 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		}
 
 		// Uncorrelated subquery
-		if len(preds) == 0 {
-			preds = append(preds, alwaysTrue)
+		if len(joinPreds) == 0 {
+			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, subId},
 			JoinType: plan.Node_LEFT,
-			OnList:   preds,
+			OnList:   joinPreds,
 		}, ctx)
 
-		if len(correlatedPreds) > 0 {
+		if len(filterPreds) > 0 {
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
 				Children:   []int32{nodeId},
-				FilterList: correlatedPreds,
+				FilterList: filterPreds,
 			}, ctx)
 		}
 
@@ -117,30 +117,30 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 	case plan.SubqueryRef_EXISTS:
 		// Uncorrelated subquery
-		if len(preds) == 0 {
-			preds = append(preds, alwaysTrue)
+		if len(joinPreds) == 0 {
+			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, subId},
 			JoinType: plan.Node_SEMI,
-			OnList:   preds,
+			OnList:   joinPreds,
 		}, ctx)
 
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
-		if len(preds) == 0 {
-			preds = append(preds, alwaysTrue)
+		if len(joinPreds) == 0 {
+			joinPreds = append(joinPreds, alwaysTrue)
 		}
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, subId},
 			JoinType: plan.Node_ANTI,
-			OnList:   preds,
+			OnList:   joinPreds,
 		}, ctx)
 
 		return nodeId, nil, nil
@@ -162,13 +162,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		preds = append(preds, expr)
+		joinPreds = append(joinPreds, expr)
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, subId},
 			JoinType: plan.Node_SEMI,
-			OnList:   preds,
+			OnList:   joinPreds,
 		}, ctx)
 
 		return nodeId, nil, nil
@@ -190,13 +190,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		preds = append(preds, expr)
+		joinPreds = append(joinPreds, expr)
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, subId},
 			JoinType: plan.Node_ANTI,
-			OnList:   preds,
+			OnList:   joinPreds,
 		}, ctx)
 
 		return nodeId, nil, nil
@@ -218,13 +218,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		preds = append(preds, expr)
+		joinPreds = append(joinPreds, expr)
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, subId},
 			JoinType: plan.Node_SEMI,
-			OnList:   preds,
+			OnList:   joinPreds,
 		}, ctx)
 
 		return nodeId, nil, nil
@@ -251,13 +251,13 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		preds = append(preds, expr)
+		joinPreds = append(joinPreds, expr)
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeId, subId},
 			JoinType: plan.Node_ANTI,
-			OnList:   preds,
+			OnList:   joinPreds,
 		}, ctx)
 
 		return nodeId, nil, nil
