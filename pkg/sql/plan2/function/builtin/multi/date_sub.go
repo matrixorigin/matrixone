@@ -25,9 +25,10 @@ import (
 
 func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues, secondValues, thirdValues := firstVector.Col.([]types.Date), secondVector.Col.([]int64), thirdVector.Col.([]int64)
+	firstValues := vector.MustTCols[types.Date](vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
+
 	resultType := types.Type{Oid: types.T_date, Size: 4}
 	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() {
@@ -53,9 +54,9 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 
 func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues, secondValues, thirdValues := firstVector.Col.([]types.Datetime), secondVector.Col.([]int64), thirdVector.Col.([]int64)
+	firstValues := vector.MustTCols[types.Datetime](vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
 	resultType := types.Type{Oid: types.T_datetime, Size: 8}
 	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() {
@@ -81,9 +82,10 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 func DateStringSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
-	secondVector := vectors[1]
-	thirdVector := vectors[2]
-	firstValues, secondValues, thirdValues := firstVector.Col.(*types.Bytes), secondVector.Col.([]int64), thirdVector.Col.([]int64)
+	firstValues := vector.MustBytesCols(vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
+
 	resultType := types.Type{Oid: types.T_varchar, Size: 26}
 	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() {
