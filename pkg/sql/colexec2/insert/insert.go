@@ -12,19 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package queryinsert
+package insert
 
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {
-	Ts          uint64
-	TargetTable engine.Relation
-	Affected    uint64
+	Ts            uint64
+	TargetTable   engine.Relation
+	TargetColDefs []*plan.ColDef
+	Affected      uint64
 }
 
 func String(_ interface{}, buf *bytes.Buffer) {
@@ -44,10 +49,27 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	// TODO: scalar vector's extension
-
+	{
+		// do null value check
+		for i := range bat.Vecs {
+			if n.TargetColDefs[i].Primary {
+				if nulls.Any(bat.Vecs[i].Nsp) {
+					return false, errors.New(errno.SyntaxErrororAccessRuleViolation,
+						fmt.Sprintf("Attribute '%s' does not allow null values to be inserted", n.TargetColDefs[i].GetName()))
+				}
+			}
+		}
+	}
+	{
+		bat.Ro = false
+		bat.Attrs = make([]string, len(bat.Vecs))
+		// scalar vector's extension
+		for i := range bat.Vecs {
+			bat.Attrs[i] = n.TargetColDefs[i].GetName()
+			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
+		}
+	}
 	println(fmt.Sprintf("query insert, and bat is %v, vec is %v", bat, bat.Vecs))
-	bat.Ro = false
 	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
 	println("query insert has wrote over")
 	n.Affected += uint64(len(bat.Zs))

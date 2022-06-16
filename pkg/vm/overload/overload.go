@@ -16,13 +16,12 @@ package overload
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/queryinsert"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/limit"
@@ -67,7 +66,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	MergeGroup:  mergegroup.String,
 	MergeOffset: mergeoffset.String,
 	Deletion:    deletion.String,
-	QueryInsert: queryinsert.String,
+	Insert:      insert.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
@@ -94,8 +93,8 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	MergeGroup:  mergegroup.Prepare,
 	MergeOffset: mergeoffset.Prepare,
 
-	Deletion:    deletion.Prepare,
-	QueryInsert: queryinsert.Prepare,
+	Deletion: deletion.Prepare,
+	Insert:   insert.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -122,6 +121,6 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	MergeGroup:  mergegroup.Call,
 	MergeOffset: mergeoffset.Call,
 
-	Deletion:    deletion.Call,
-	QueryInsert: queryinsert.Call,
+	Deletion: deletion.Call,
+	Insert:   insert.Call,
 }

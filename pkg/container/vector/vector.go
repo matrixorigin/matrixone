@@ -66,6 +66,16 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	if !v.IsConst {
 		return v
 	}
+	if v.IsScalarNull() {
+		var i uint64
+		l := uint64(v.Length)
+		temp := make([]uint64, v.Length)
+		for i = 0; i < l; i++ {
+			temp[i] = i
+		}
+		nulls.Add(v.Nsp, temp...)
+		return v
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		expandVector[bool](v, 1, m)
@@ -454,7 +464,8 @@ func setLengthFixed[T any](v *Vector, n int) {
 
 func SetLength(v *Vector, n int) {
 	if v.IsScalar() {
-
+		v.Length = n
+		return
 	}
 	switch v.Typ.Oid {
 	case types.T_bool:
@@ -946,6 +957,10 @@ func Append(v *Vector, arg interface{}) error {
 }
 
 func Shrink(v *Vector, sels []int64) {
+	if v.IsScalar() {
+		v.Length = len(sels)
+		return
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		vs := v.Col.([]bool)
@@ -1102,6 +1117,10 @@ func Shrink(v *Vector, sels []int64) {
 }
 
 func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
+	if v.IsScalar() {
+		v.Length = len(sels)
+		return nil
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		vs := v.Col.([]bool)

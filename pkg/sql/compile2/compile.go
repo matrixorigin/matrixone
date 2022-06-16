@@ -223,12 +223,12 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructQueryInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
 		if err != nil {
 			return nil, err
 		}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  overload.QueryInsert,
+			Op:  overload.Insert,
 			Arg: arg,
 		})
 	default:
@@ -356,7 +356,6 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		return ss, nil
 	case plan.Node_INSERT:
-		// todo(cms): 需要套上一层projection
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err
