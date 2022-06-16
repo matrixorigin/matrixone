@@ -48,6 +48,8 @@ type Decimal128 = types.Decimal128
 type Bytes = types.Bytes
 
 var CompareDecimal128Decimal128Aligned = types.CompareDecimal128Decimal128Aligned
+var FromClock = types.FromClock
+var FromCalendar = types.FromCalendar
 
 type OrderedT interface {
 	constraints.Ordered | Date | Datetime | Timestamp | Decimal64

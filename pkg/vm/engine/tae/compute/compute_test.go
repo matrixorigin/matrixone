@@ -20,17 +20,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestApplyUpdateToIVector(t *testing.T) {
-	typ := types.Type{
-		Oid:   types.T_int32,
-		Size:  4,
-		Width: 32,
-	}
+	typ := types.Type_INT32.ToType()
 	vec := vector.MockVector(typ, 10)
 
 	mask := roaring.NewBitmap()
@@ -53,7 +49,7 @@ func TestApplyUpdateToIVector(t *testing.T) {
 }
 func TestApplyUpdateToIVector2(t *testing.T) {
 	typ := types.Type{
-		Oid:   types.T_varchar,
+		Oid:   types.Type_VARCHAR,
 		Size:  24,
 		Width: 100,
 	}
@@ -108,7 +104,7 @@ func TestShuffleByDeletes(t *testing.T) {
 
 func TestCheckRowExists(t *testing.T) {
 	typ := types.Type{
-		Oid:   types.T_int32,
+		Oid:   types.Type_INT32,
 		Size:  4,
 		Width: 32,
 	}
