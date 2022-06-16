@@ -34,6 +34,7 @@ var EncodeFloat64Slice = encoding.EncodeFloat64Slice
 
 var EncodeDateSlice = encoding.EncodeDateSlice
 var EncodeDatetimeSlice = encoding.EncodeDatetimeSlice
+var EncodeTimestampSlice = encoding.EncodeTimestampSlice
 var EncodeDecimal64Slice = encoding.EncodeDecimal64Slice
 var EncodeDecimal128Slice = encoding.EncodeDecimal128Slice
 
@@ -51,6 +52,7 @@ var DecodeFloat64Slice = encoding.DecodeFloat64Slice
 
 var DecodeDateSlice = encoding.DecodeDateSlice
 var DecodeDatetimeSlice = encoding.DecodeDatetimeSlice
+var DecodeTimestampSlice = encoding.DecodeTimestampSlice
 var DecodeDecimal64Slice = encoding.DecodeDecimal64Slice
 var DecodeDecimal128Slice = encoding.DecodeDecimal128Slice
 
@@ -263,4 +265,9 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 		}
 	}
 	return
+}
+
+func CopyFixValueToBuf[T any](dest []byte, val T) {
+	vbuf := EncodeFixed[T](val)
+	copy(dest[:unsafe.Sizeof(val)], vbuf)
 }

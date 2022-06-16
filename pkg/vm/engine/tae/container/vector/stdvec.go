@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"sync/atomic"
@@ -23,7 +24,6 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
@@ -123,7 +123,7 @@ func (v *StdVector) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *StdVector) SetValue(idx int, val any) error {
+func (v *StdVector) SetValue(idx int, val any) (err error) {
 	if idx >= v.Length() || idx < 0 {
 		return ErrVecInvalidOffset
 	}
@@ -138,77 +138,47 @@ func (v *StdVector) SetValue(idx int, val any) error {
 	}
 
 	start := idx * int(v.Type.Size)
+	dest := v.Data[start:]
 	switch v.Type.Oid {
 	case types.Type_BOOL:
-		data := encoding.EncodeBool(val.(bool))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(bool))
 	case types.Type_INT8:
-		data := encoding.EncodeInt8(val.(int8))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(int8))
 	case types.Type_INT16:
-		data := encoding.EncodeInt16(val.(int16))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(int16))
 	case types.Type_INT32:
-		data := encoding.EncodeInt32(val.(int32))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(int32))
 	case types.Type_INT64:
-		data := encoding.EncodeInt64(val.(int64))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(int64))
 	case types.Type_UINT8:
-		data := encoding.EncodeUint8(val.(uint8))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(uint8))
 	case types.Type_UINT16:
-		data := encoding.EncodeUint16(val.(uint16))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(uint16))
 	case types.Type_UINT32:
-		data := encoding.EncodeUint32(val.(uint32))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(uint32))
 	case types.Type_UINT64:
-		data := encoding.EncodeUint64(val.(uint64))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(uint64))
 	case types.Type_FLOAT32:
-		data := encoding.EncodeFloat32(val.(float32))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(float32))
 	case types.Type_FLOAT64:
-		data := encoding.EncodeFloat64(val.(float64))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(float64))
 	case types.Type_DECIMAL64:
-		data := encoding.EncodeDecimal64(val.(types.Decimal64))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(types.Decimal64))
 	case types.Type_DECIMAL128:
-		data := encoding.EncodeDecimal128(val.(types.Decimal128))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(types.Decimal128))
 	case types.Type_DATE:
-		data := encoding.EncodeDate(val.(types.Date))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(types.Date))
 	case types.Type_DATETIME:
-		data := encoding.EncodeDatetime(val.(types.Datetime))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(types.Datetime))
 	case types.Type_TIMESTAMP:
-		data := encoding.EncodeTimestamp(val.(types.Timestamp))
-		copy(v.Data[start:start+int(v.Type.Size)], data)
-		return nil
+		types.CopyFixValueToBuf(dest, val.(types.Timestamp))
 	default:
-		return ErrVecTypeNotSupport
+		panic(fmt.Errorf("%w: %v", ErrVecTypeNotSupport, val))
 	}
+	return
 }
 
-func (v *StdVector) GetValue(idx int) (any, error) {
+func (v *StdVector) GetValue(idx int) (val any, err error) {
 	if idx >= v.Length() || idx < 0 {
 		return nil, ErrVecInvalidOffset
 	}
@@ -222,40 +192,41 @@ func (v *StdVector) GetValue(idx int) (any, error) {
 	}
 	switch v.Type.Oid {
 	case types.Type_BOOL:
-		return encoding.DecodeBool(data), nil
+		val = types.DecodeFixed[bool](data)
 	case types.Type_INT8:
-		return encoding.DecodeInt8(data), nil
+		val = types.DecodeFixed[int8](data)
 	case types.Type_INT16:
-		return encoding.DecodeInt16(data), nil
+		val = types.DecodeFixed[int16](data)
 	case types.Type_INT32:
-		return encoding.DecodeInt32(data), nil
+		val = types.DecodeFixed[int32](data)
 	case types.Type_INT64:
-		return encoding.DecodeInt64(data), nil
+		val = types.DecodeFixed[int64](data)
 	case types.Type_UINT8:
-		return encoding.DecodeUint8(data), nil
+		val = types.DecodeFixed[uint8](data)
 	case types.Type_UINT16:
-		return encoding.DecodeUint16(data), nil
+		val = types.DecodeFixed[uint16](data)
 	case types.Type_UINT32:
-		return encoding.DecodeUint32(data), nil
+		val = types.DecodeFixed[uint32](data)
 	case types.Type_UINT64:
-		return encoding.DecodeUint64(data), nil
+		val = types.DecodeFixed[uint64](data)
 	case types.Type_FLOAT32:
-		return encoding.DecodeFloat32(data), nil
+		val = types.DecodeFixed[float32](data)
 	case types.Type_FLOAT64:
-		return encoding.DecodeFloat64(data), nil
+		val = types.DecodeFixed[float64](data)
 	case types.Type_DECIMAL64:
-		return encoding.DecodeDecimal64(data), nil
+		val = types.DecodeFixed[types.Decimal64](data)
 	case types.Type_DECIMAL128:
-		return encoding.DecodeDecimal128(data), nil
+		val = types.DecodeFixed[types.Decimal128](data)
 	case types.Type_DATE:
-		return encoding.DecodeDate(data), nil
+		val = types.DecodeFixed[types.Date](data)
 	case types.Type_DATETIME:
-		return encoding.DecodeDatetime(data), nil
+		val = types.DecodeFixed[types.Datetime](data)
 	case types.Type_TIMESTAMP:
-		return encoding.DecodeTimestamp(data), nil
+		val = types.DecodeFixed[types.Timestamp](data)
 	default:
-		return nil, ErrVecTypeNotSupport
+		panic(fmt.Errorf("%w: %v", ErrVecTypeNotSupport, v.Type))
 	}
+	return
 }
 
 func (v *StdVector) Append(n int, vals any) error {
@@ -283,37 +254,37 @@ func (v *StdVector) appendWithOffset(offset, n int, vals any) error {
 	var data []byte
 	switch v.Type.Oid {
 	case types.Type_BOOL:
-		data = encoding.EncodeBoolSlice(vals.([]bool)[offset : offset+n])
+		data = types.EncodeBoolSlice(vals.([]bool)[offset : offset+n])
 	case types.Type_INT8:
-		data = encoding.EncodeInt8Slice(vals.([]int8)[offset : offset+n])
+		data = types.EncodeInt8Slice(vals.([]int8)[offset : offset+n])
 	case types.Type_INT16:
-		data = encoding.EncodeInt16Slice(vals.([]int16)[offset : offset+n])
+		data = types.EncodeInt16Slice(vals.([]int16)[offset : offset+n])
 	case types.Type_INT32:
-		data = encoding.EncodeInt32Slice(vals.([]int32)[offset : offset+n])
+		data = types.EncodeInt32Slice(vals.([]int32)[offset : offset+n])
 	case types.Type_INT64:
-		data = encoding.EncodeInt64Slice(vals.([]int64)[offset : offset+n])
+		data = types.EncodeInt64Slice(vals.([]int64)[offset : offset+n])
 	case types.Type_UINT8:
-		data = encoding.EncodeUint8Slice(vals.([]uint8)[offset : offset+n])
+		data = types.EncodeUint8Slice(vals.([]uint8)[offset : offset+n])
 	case types.Type_UINT16:
-		data = encoding.EncodeUint16Slice(vals.([]uint16)[offset : offset+n])
+		data = types.EncodeUint16Slice(vals.([]uint16)[offset : offset+n])
 	case types.Type_UINT32:
-		data = encoding.EncodeUint32Slice(vals.([]uint32)[offset : offset+n])
+		data = types.EncodeUint32Slice(vals.([]uint32)[offset : offset+n])
 	case types.Type_UINT64:
-		data = encoding.EncodeUint64Slice(vals.([]uint64)[offset : offset+n])
+		data = types.EncodeUint64Slice(vals.([]uint64)[offset : offset+n])
 	case types.Type_DECIMAL64:
-		data = encoding.EncodeDecimal64Slice(vals.([]types.Decimal64)[offset : offset+n])
+		data = types.EncodeDecimal64Slice(vals.([]types.Decimal64)[offset : offset+n])
 	case types.Type_DECIMAL128:
-		data = encoding.EncodeDecimal128Slice(vals.([]types.Decimal128)[offset : offset+n])
+		data = types.EncodeDecimal128Slice(vals.([]types.Decimal128)[offset : offset+n])
 	case types.Type_FLOAT32:
-		data = encoding.EncodeFloat32Slice(vals.([]float32)[offset : offset+n])
+		data = types.EncodeFloat32Slice(vals.([]float32)[offset : offset+n])
 	case types.Type_FLOAT64:
-		data = encoding.EncodeFloat64Slice(vals.([]float64)[offset : offset+n])
+		data = types.EncodeFloat64Slice(vals.([]float64)[offset : offset+n])
 	case types.Type_DATE:
-		data = encoding.EncodeDateSlice(vals.([]types.Date)[offset : offset+n])
+		data = types.EncodeDateSlice(vals.([]types.Date)[offset : offset+n])
 	case types.Type_DATETIME:
-		data = encoding.EncodeDatetimeSlice(vals.([]types.Datetime)[offset : offset+n])
+		data = types.EncodeDatetimeSlice(vals.([]types.Datetime)[offset : offset+n])
 	case types.Type_TIMESTAMP:
-		data = encoding.EncodeTimestampSlice(vals.([]types.Timestamp)[offset : offset+n])
+		data = types.EncodeTimestampSlice(vals.([]types.Timestamp)[offset : offset+n])
 	default:
 		return ErrVecTypeNotSupport
 	}
@@ -490,7 +461,7 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	}
 	length := v.Length()
 	vec := gvec.New(v.Type)
-	capacity := encoding.TypeSize + 4 + nullSize + length*int(v.Type.Size)
+	capacity := types.TypeSize + 4 + nullSize + length*int(v.Type.Size)
 	deCompressed.Reset()
 	if capacity > deCompressed.Cap() {
 		deCompressed.Grow(capacity)
@@ -498,9 +469,9 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	buf := deCompressed.Bytes()
 	buf = buf[:capacity]
 	dBuf := buf
-	copy(dBuf, encoding.EncodeType(v.Type))
-	dBuf = dBuf[encoding.TypeSize:]
-	copy(dBuf, encoding.EncodeUint32(uint32(nullSize)))
+	copy(dBuf, types.EncodeType(v.Type))
+	dBuf = dBuf[types.TypeSize:]
+	copy(dBuf, types.EncodeFixed(uint32(nullSize)))
 	dBuf = dBuf[4:]
 	if nullSize > 0 {
 		copy(dBuf, nullbuf)
@@ -545,97 +516,97 @@ func (v *StdVector) CopyToVector() (*gvec.Vector, error) {
 	switch v.Type.Oid {
 	case types.Type_BOOL:
 		col := make([]bool, length)
-		curCol := encoding.DecodeBoolSlice(v.Data)
+		curCol := types.DecodeBoolSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_INT8:
 		col := make([]int8, length)
-		curCol := encoding.DecodeInt8Slice(v.Data)
+		curCol := types.DecodeInt8Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_INT16:
 		col := make([]int16, length)
-		curCol := encoding.DecodeInt16Slice(v.Data)
+		curCol := types.DecodeInt16Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_INT32:
 		col := make([]int32, length)
-		curCol := encoding.DecodeInt32Slice(v.Data)
+		curCol := types.DecodeInt32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_INT64:
 		col := make([]int64, length)
-		curCol := encoding.DecodeInt64Slice(v.Data)
+		curCol := types.DecodeInt64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_UINT8:
 		col := make([]uint8, length)
-		curCol := encoding.DecodeUint8Slice(v.Data)
+		curCol := types.DecodeUint8Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_UINT16:
 		col := make([]uint16, length)
-		curCol := encoding.DecodeUint16Slice(v.Data)
+		curCol := types.DecodeUint16Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_UINT32:
 		col := make([]uint32, length)
-		curCol := encoding.DecodeUint32Slice(v.Data)
+		curCol := types.DecodeUint32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_UINT64:
 		col := make([]uint64, length)
-		curCol := encoding.DecodeUint64Slice(v.Data)
+		curCol := types.DecodeUint64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_FLOAT32:
 		col := make([]float32, length)
-		curCol := encoding.DecodeFloat32Slice(v.Data)
+		curCol := types.DecodeFloat32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_FLOAT64:
 		col := make([]float64, length)
-		curCol := encoding.DecodeFloat64Slice(v.Data)
+		curCol := types.DecodeFloat64Slice(v.Data)
 		copy(col[0:], curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_DECIMAL64:
 		col := make([]types.Decimal64, length)
-		curCol := encoding.DecodeDecimal64Slice(v.Data)
+		curCol := types.DecodeDecimal64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_DECIMAL128:
 		col := make([]types.Decimal128, length)
-		curCol := encoding.DecodeDecimal128Slice(v.Data)
+		curCol := types.DecodeDecimal128Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_DATE:
 		col := make([]types.Date, length)
-		curCol := encoding.DecodeDateSlice(v.Data)
+		curCol := types.DecodeDateSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_DATETIME:
 		col := make([]types.Datetime, length)
-		curCol := encoding.DecodeDatetimeSlice(v.Data)
+		curCol := types.DecodeDatetimeSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.Type_TIMESTAMP:
 		col := make([]types.Timestamp, length)
-		curCol := encoding.DecodeTimestampSlice(v.Data)
+		curCol := types.DecodeTimestampSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
@@ -666,7 +637,7 @@ func (vec *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 	case *os.File:
 		f.Seek(0, io.SeekStart)
 	}
-	realSize := encoding.DecodeUint64(capBuf)
+	realSize := types.DecodeFixed[uint64](capBuf)
 	buf := make([]byte, realSize)
 	_, err = r.Read(buf)
 	if err != nil {
@@ -682,13 +653,13 @@ func (vec *StdVector) Unmarshal(data []byte) error {
 		return nil
 	}
 	buf := data
-	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
+	vec.NodeCapacity = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
-	vec.StatMask = encoding.DecodeUint64(buf[:8])
+	vec.StatMask = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
-	vec.Type = encoding.DecodeType(buf[:encoding.TypeSize])
-	buf = buf[encoding.TypeSize:]
-	nb := encoding.DecodeUint32(buf[:4])
+	vec.Type = types.DecodeType(buf[:types.TypeSize])
+	buf = buf[types.TypeSize:]
+	nb := types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
 	if nb > 0 {
 		if err := vec.VMask.Read(buf[:nb]); err != nil {
@@ -707,20 +678,20 @@ func (vec *StdVector) Unmarshal(data []byte) error {
 
 func (vec *StdVector) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
-	buf.Write(encoding.EncodeUint64(uint64(0)))
-	buf.Write(encoding.EncodeUint64(vec.StatMask))
-	buf.Write(encoding.EncodeType(vec.Type))
+	buf.Write(types.EncodeFixed(uint64(0)))
+	buf.Write(types.EncodeFixed(vec.StatMask))
+	buf.Write(types.EncodeType(vec.Type))
 	nb, err := vec.VMask.Show()
 	if err != nil {
 		return nil, err
 	}
-	buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+	buf.Write(types.EncodeFixed(uint32(len(nb))))
 	if len(nb) > 0 {
 		buf.Write(nb)
 	}
 	buf.Write(vec.Data)
 	buffer := buf.Bytes()
-	capBuf := encoding.EncodeUint64(uint64(len(buffer)))
+	capBuf := types.EncodeFixed(uint64(len(buffer)))
 	copy(buffer[0:], capBuf)
 	vec.NodeCapacity = uint64(len(buffer))
 	return buf.Bytes(), nil
