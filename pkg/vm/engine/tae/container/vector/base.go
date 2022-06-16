@@ -75,70 +75,70 @@ func MockVector(t types.Type, rows uint64) IVector {
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int8(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_INT16:
 		vec = NewStdVector(t, rows)
 		var vals []int16
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int16(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_INT32:
 		vec = NewStdVector(t, rows)
 		var vals []int32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int32(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_INT64:
 		vec = NewStdVector(t, rows)
 		var vals []int64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int64(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_UINT8:
 		vec = NewStdVector(t, rows)
 		var vals []uint8
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint8(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_UINT16:
 		vec = NewStdVector(t, rows)
 		var vals []uint16
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint16(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_UINT32:
 		vec = NewStdVector(t, rows)
 		var vals []uint32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint32(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_UINT64:
 		vec = NewStdVector(t, rows)
 		var vals []uint64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint64(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_FLOAT32:
 		vec = NewStdVector(t, rows)
 		var vals []float32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, float32(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_FLOAT64:
 		vec = NewStdVector(t, rows)
 		var vals []float64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, float64(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_VARCHAR, types.Type_CHAR:
 		vec = NewStrVector(t, rows)
 		vals := make([][]byte, 0, rows)
@@ -147,21 +147,21 @@ func MockVector(t types.Type, rows uint64) IVector {
 			s := fmt.Sprintf("%s%d", prefix, i)
 			vals = append(vals, []byte(s))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_DATETIME:
 		vec = NewStdVector(t, rows)
 		vals := make([]types.Datetime, 0, rows)
 		for i := uint64(1); i <= rows; i++ {
 			vals = append(vals, types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	case types.Type_DATE:
 		vec = NewStdVector(t, rows)
 		vals := make([]types.Date, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.FromCalendar(i*100, 1, 1))
 		}
-		vec.Append(len(vals), vals)
+		_ = vec.Append(len(vals), vals)
 	default:
 		panic("not supported")
 	}

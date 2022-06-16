@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
@@ -259,7 +258,7 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 			common.GPool.Free(vec.MNode)
 			return n, err
 		}
-		t := encoding.DecodeType(data[:encoding.TypeSize])
+		t := types.DecodeType(data[:types.TypeSize])
 		v := gvec.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(data)
@@ -280,7 +279,7 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 			return n, err
 		}
 		data := vec.MNode.Buf[:originSize]
-		t := encoding.DecodeType(data[:encoding.TypeSize])
+		t := types.DecodeType(data[:types.TypeSize])
 		v := gvec.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(data)
@@ -348,7 +347,7 @@ func (vec *VectorWrapper) ReadWithBuffer(r io.Reader, compressed *bytes.Buffer, 
 		if len(buf) != int(originSize) {
 			panic(fmt.Sprintf("invalid decompressed size: %d, %d is expected", len(buf), originSize))
 		}
-		t := encoding.DecodeType(buf[:encoding.TypeSize])
+		t := types.DecodeType(buf[:types.TypeSize])
 		v := gvec.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(buf)
