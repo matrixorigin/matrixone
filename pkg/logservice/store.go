@@ -446,7 +446,6 @@ func (l *logStore) hakeeperTick() {
 			return
 		}
 	}
-	return
 }
 
 // TODO: add tests for this

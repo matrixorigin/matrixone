@@ -59,14 +59,17 @@ func TestIDAllocatorNext(t *testing.T) {
 	for _, tt := range tests {
 		expected := tt.next
 		alloc := idAllocator{nextID: tt.next, lastID: tt.last}
-		hasID := alloc.Capacity() != 0
-		v, ok := alloc.Next()
-		assert.Equal(t, hasID, ok)
-		if hasID {
-			assert.Equal(t, expected, v)
-			expected++
-		} else {
-			assert.Equal(t, uint64(0), v)
+		for {
+			hasID := alloc.Capacity() != 0
+			v, ok := alloc.Next()
+			assert.Equal(t, hasID, ok)
+			if hasID {
+				assert.Equal(t, expected, v)
+				expected++
+			} else {
+				assert.Equal(t, uint64(0), v)
+				break
+			}
 		}
 	}
 }
