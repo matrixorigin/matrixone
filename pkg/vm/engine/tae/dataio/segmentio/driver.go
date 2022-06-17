@@ -200,6 +200,8 @@ func (s *Driver) NewBlockFile(fname string) *DriverFile {
 	}
 	s.nodes[file.name] = file
 	s.lastInode += 1
+	file.OnZeroCB = file.close
+	file.Ref()
 	s.PrintLog(file.name, "NewBlockFile")
 	return file
 }

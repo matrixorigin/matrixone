@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
 )
 
 type DriverFile struct {
+	common.RefHelper
 	snode  *Inode
 	name   string
 	driver *Driver
@@ -267,4 +269,12 @@ func (b *DriverFile) ReadExtent(offset, length uint32, data []byte) (uint32, err
 			return read, nil
 		}
 	}
+}
+
+func (b *DriverFile) close() {
+	b.Destroy()
+}
+
+func (b *DriverFile) Destroy() {
+	b.driver.ReleaseFile(b)
 }

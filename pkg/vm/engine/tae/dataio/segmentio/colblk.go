@@ -41,19 +41,12 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	}
 	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
-		cb.indexes[i].dataFile.file = make([]*DriverFile, 1)
-		cb.indexes[i].dataFile.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
-			fmt.Sprintf("%d_%d_%d.idx", cb.col, cb.block.id, i))
+		cb.indexes[i].dataFile.file = append(cb.indexes[i].dataFile.file, cb.block.seg.GetSegmentFile().NewBlockFile(
+			fmt.Sprintf("%d_%d_%d.idx", cb.col, cb.block.id, i)))
 		cb.indexes[i].dataFile.file[0].snode.algo = compress.None
 	}
 	cb.updates = newUpdates(cb)
-	cb.updates.file = make([]*DriverFile, 1)
-	cb.updates.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
-		fmt.Sprintf("%d_%d.update", cb.col, cb.block.id))
 	cb.data = newData(cb)
-	cb.data.file = make([]*DriverFile, 1)
-	cb.data.file[0] = cb.block.seg.GetSegmentFile().NewBlockFile(
-		fmt.Sprintf("%d_%d.blk", cb.col, cb.block.id))
 	cb.OnZeroCB = cb.close
 	cb.Ref()
 	return cb

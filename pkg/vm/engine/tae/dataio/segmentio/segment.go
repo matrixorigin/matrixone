@@ -100,6 +100,7 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 }
 
 func (sf *segmentFile) replayInfo(stat *fileStat, file *DriverFile) {
+	file.Ref()
 	meta := file.GetInode()
 	stat.size = meta.GetFileSize()
 	stat.originSize = meta.GetOriginSize()

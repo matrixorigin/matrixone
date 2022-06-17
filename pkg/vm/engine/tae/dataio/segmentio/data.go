@@ -47,6 +47,7 @@ func newData(colBlk *columnBlock) *dataFile {
 	df := &dataFile{
 		colBlk: colBlk,
 		buf:    make([]byte, 0),
+		file : make([]*DriverFile, 0),
 	}
 	df.stat = &fileStat{}
 	return df
@@ -56,7 +57,6 @@ func newIndex(colBlk *columnBlock) *indexFile {
 	index := &indexFile{
 		dataFile: newData(colBlk),
 	}
-	index.dataFile.file = nil
 	return index
 }
 
@@ -64,7 +64,6 @@ func newUpdates(colBlk *columnBlock) *updatesFile {
 	update := &updatesFile{
 		dataFile: newData(colBlk),
 	}
-	update.dataFile.file = nil
 	return update
 }
 
@@ -74,7 +73,6 @@ func newDeletes(block *blockFile) *deletesFile {
 		block:    block,
 		dataFile: newData(nil),
 	}
-	del.dataFile.file = nil
 	return del
 }
 
