@@ -39,6 +39,24 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 	}}
 }
 
+func makePlan2Uint64ConstExpr(v uint64) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Uval{
+			Uval: v,
+		},
+	}}
+}
+
+func makePlan2Float32ConstExpr(v float32) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Fval{
+			Fval: v,
+		},
+	}}
+}
+
 func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
 		Isnull: false,
@@ -53,6 +71,51 @@ func makePlan2StringConstExpr(v string) *plan.Expr_C {
 		Isnull: false,
 		Value: &plan.Const_Sval{
 			Sval: v,
+		},
+	}}
+}
+
+func makePlan2DateConstExpr(v types.Date) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Dateval{
+			Dateval: int32(v),
+		},
+	}}
+}
+
+func makePlan2DatetimeConstExpr(v types.Datetime) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Datetimeval{
+			Datetimeval: int64(v),
+		},
+	}}
+}
+
+func makePlan2Decimal64ConstExpr(v types.Decimal64) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Decimal64Val{
+			Decimal64Val: int64(v),
+		},
+	}}
+}
+
+func makePlan2Decimal128ConstExpr(v types.Decimal128) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Decimal128Val{
+			Decimal128Val: &plan.Decimal128{Lo: v.Lo, Hi: v.Hi},
+		},
+	}}
+}
+
+func makePlan2TimestampConstExpr(v types.Timestamp) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Timestampval{
+			Timestampval: int64(v),
 		},
 	}}
 }
@@ -95,8 +158,20 @@ func MakePlan2DefaultExpr(expr engine.DefaultExpr) *plan.DefaultExpr {
 		ret.Value.ConstantValue = &plan.ConstantValue_Float64V{Float64V: t}
 	case string:
 		ret.Value.ConstantValue = &plan.ConstantValue_StringV{StringV: t}
+	case int8:
+		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: int64(t)}
+	case int16:
+		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: int64(t)}
+	case int32:
+		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: int64(t)}
 	case int64:
 		ret.Value.ConstantValue = &plan.ConstantValue_Int64V{Int64V: t}
+	case uint8:
+		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: uint64(t)}
+	case uint16:
+		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: uint64(t)}
+	case uint32:
+		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: uint64(t)}
 	case uint64:
 		ret.Value.ConstantValue = &plan.ConstantValue_Uint64V{Uint64V: t}
 	case types.Date:

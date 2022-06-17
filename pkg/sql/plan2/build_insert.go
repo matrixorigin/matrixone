@@ -16,8 +16,7 @@ package plan2
 
 import (
 	"fmt"
-	"go/constant"
-
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -104,7 +103,7 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 				}
 			} else {
 				// get default value, and init constant expr.
-				exprs[i], err = getDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
+				exprs[i], err = generateDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
 				if err != nil {
 					return nil, err
 				}
@@ -114,7 +113,7 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 	return exprs, nil
 }
 
-func getDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
+func generateDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
 	if e == nil || !e.Exist || e.IsNull {
 		return &plan.Expr{
 			Typ: t,
@@ -123,99 +122,51 @@ func getDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
 			},
 		}, nil
 	}
-	var ret plan.Expr
+	var ret = plan.Expr{Typ: &plan.Type{
+		Id:        t.Id,
+		Nullable:  t.Nullable,
+		Width:     t.Width,
+		Precision: t.Precision,
+		Size:      t.Size,
+		Scale:     t.Scale,
+	}}
 	switch d := e.Value.ConstantValue.(type) {
 	case *plan.ConstantValue_BoolV:
 		ret.Expr = makePlan2BoolConstExpr(d.BoolV)
 	case *plan.ConstantValue_Int64V:
 		ret.Expr = makePlan2Int64ConstExpr(d.Int64V)
+		ret.Typ.Id = plan.Type_INT64
+		ret.Typ.Size = 8
+		ret.Typ.Width = 64
 	case *plan.ConstantValue_Uint64V:
+		ret.Expr = makePlan2Uint64ConstExpr(d.Uint64V)
+		ret.Typ.Id = plan.Type_UINT64
+		ret.Typ.Size = 8
+		ret.Typ.Width = 64
 	case *plan.ConstantValue_Float32V:
-		ret.Expr = makePlan2Float64ConstExpr(float64(d.Float32V))
+		ret.Expr = makePlan2Float32ConstExpr(d.Float32V)
 	case *plan.ConstantValue_Float64V:
 		ret.Expr = makePlan2Float64ConstExpr(d.Float64V)
 	case *plan.ConstantValue_StringV:
 		ret.Expr = makePlan2StringConstExpr(d.StringV)
+		ret.Typ.Id = plan.Type_VARCHAR
 	case *plan.ConstantValue_DateV:
+		ret.Expr = makePlan2DateConstExpr(types.Date(d.DateV))
 	case *plan.ConstantValue_DateTimeV:
+		ret.Expr = makePlan2DatetimeConstExpr(types.Datetime(d.DateTimeV))
 	case *plan.ConstantValue_Decimal64V:
+		ret.Expr = makePlan2Decimal64ConstExpr(types.Decimal64(d.Decimal64V))
 	case *plan.ConstantValue_Decimal128V:
+		ret.Expr = makePlan2Decimal128ConstExpr(types.Decimal128{
+			Lo: d.Decimal128V.Lo,
+			Hi: d.Decimal128V.Hi,
+		})
 	case *plan.ConstantValue_TimeStampV:
+		ret.Expr = makePlan2TimestampConstExpr(types.Timestamp(d.TimeStampV))
 	default:
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("default type '%s' is not support now", d))
+		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("default type '%s' is not support now", t))
 	}
 	return &ret, nil
-}
-
-func getValues(rowset *RowsetData, rows *tree.ValuesClause, columnCount int) error {
-	setColData := func(col *plan.ColData, typ *plan.Type, val constant.Value) error {
-		switch val.Kind() {
-		case constant.Int:
-			switch typ.Id {
-			case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_UINT8, plan.Type_UINT16:
-				colVal, ok := constant.Int64Val(val)
-				if !ok {
-					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as i64", val))
-				}
-				col.I32 = append(col.I32, int32(colVal))
-				return nil
-			case plan.Type_INT64, plan.Type_INT128, plan.Type_UINT32, plan.Type_UINT64, plan.Type_UINT128:
-				colVal, ok := constant.Int64Val(val)
-				if !ok {
-					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  i64", val))
-				}
-				col.I64 = append(col.I64, colVal)
-				return nil
-			default:
-				return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("[%v] type must be int", val))
-			}
-		case constant.Float:
-			switch typ.Id {
-			case plan.Type_FLOAT32:
-				colVal, ok := constant.Float32Val(val)
-				if !ok {
-					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  f32", val))
-				}
-				col.F32 = append(col.F32, colVal)
-				return nil
-			case plan.Type_FLOAT64, plan.Type_DECIMAL, plan.Type_DECIMAL64, plan.Type_DECIMAL128:
-				colVal, ok := constant.Float64Val(val)
-				if !ok {
-					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  f64", val))
-				}
-				col.F64 = append(col.F64, colVal)
-				return nil
-			default:
-				return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("[%v] type must be float", val))
-			}
-		case constant.String:
-			colVal := constant.StringVal(val)
-			col.S = append(col.S, colVal)
-			return nil
-		default:
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", val))
-		}
-	}
-
-	for rowIdx, row := range rows.Rows {
-		if columnCount != len(row) {
-			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column count doesn't match value count at row '%v'", rowIdx))
-		}
-
-		for idx, colExpr := range row {
-			switch astExpr := colExpr.(type) {
-			case *tree.NumVal:
-				err := setColData(rowset.Cols[idx], rowset.Schema.Cols[idx].Typ, astExpr.Value)
-				if err != nil {
-					return err
-				}
-			default:
-				return errors.New(errno.InvalidSchemaName, "insert value must be constant")
-			}
-		}
-	}
-
-	return nil
 }
 
 func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *TableDef, error) {

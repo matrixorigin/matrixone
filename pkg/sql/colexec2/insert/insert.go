@@ -33,7 +33,7 @@ type Argument struct {
 }
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(fmt.Sprintf("insert select"))
+	buf.WriteString("insert select")
 }
 
 func Prepare(_ *process.Process, _ interface{}) error {
@@ -54,8 +54,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		for i := range bat.Vecs {
 			if n.TargetColDefs[i].Primary {
 				if nulls.Any(bat.Vecs[i].Nsp) {
-					return false, errors.New(errno.InvalidColumnReference,
-						fmt.Sprintf("Attribute '%s' does not allow null values to be inserted", n.TargetColDefs[i].GetName()))
+					return false, errors.New(errno.IntegrityConstraintViolation,
+						fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
 			}
 		}

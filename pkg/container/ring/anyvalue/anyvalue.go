@@ -176,6 +176,8 @@ func DecodeAnyRing2(data []byte) (*AnyVRing2, []byte, error) {
 
 func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return &AnyVRing1[bool]{Typ: typ}, nil
 	case types.T_uint8:
 		return &AnyVRing1[uint8]{Typ: typ}, nil
 	case types.T_uint16:
@@ -205,7 +207,7 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 	case types.T_decimal128:
 		return &AnyVRing1[types.Decimal128]{Typ: typ}, nil
 	}
-	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("'%v' not support Any_Value", typ.Oid))
+	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Any_Value do not support '%v'", typ.Oid))
 }
 
 // shouldSet returns true means we should assign the value
