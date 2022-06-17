@@ -238,6 +238,8 @@ func (s *Driver) Update(fd *DriverFile, pl []byte, fOffset uint64) error {
 }
 
 func (s *Driver) ReleaseFile(fd *DriverFile) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	if s.segFile == nil {
 		return
 	}
@@ -246,9 +248,7 @@ func (s *Driver) ReleaseFile(fd *DriverFile) {
 	if err != nil {
 		panic(any(err.Error()))
 	}
-	s.mutex.Lock()
 	delete(s.nodes, fd.name)
-	s.mutex.Unlock()
 	s.Free(fd)
 	s.PrintLog(fd.name, "ReleaseFile | End")
 	fd = nil
