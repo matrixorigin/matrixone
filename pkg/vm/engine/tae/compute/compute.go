@@ -16,6 +16,7 @@ package compute
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
@@ -30,7 +31,24 @@ import (
 
 func LengthOfMoVector(vec *gvec.Vector) int { return gvec.Length(vec) }
 
-func AppendTypedValue[T any](vec *gvec.Vector, v any) {
+func UpdateFixedValue[T any](vec *gvec.Vector, row uint32, v any) {
+	_, isNull := v.(types.Null)
+	vvals := vec.Col.([]T)
+	if isNull {
+		if vec.Nsp.Np == nil {
+			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
+		} else {
+			vec.Nsp.Np.Add(uint64(row))
+		}
+	} else {
+		vvals[row] = v.(T)
+		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
+			vec.Nsp.Np.Remove(uint64(row))
+		}
+	}
+}
+
+func AppendFixedValue[T any](vec *gvec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	vvals := vec.Col.([]T)
 	if isNull {
@@ -50,37 +68,37 @@ func AppendTypedValue[T any](vec *gvec.Vector, v any) {
 func AppendValue(vec *gvec.Vector, v any) {
 	switch vec.Typ.Oid {
 	case types.Type_BOOL:
-		AppendTypedValue[bool](vec, v)
+		AppendFixedValue[bool](vec, v)
 	case types.Type_INT8:
-		AppendTypedValue[int8](vec, v)
+		AppendFixedValue[int8](vec, v)
 	case types.Type_INT16:
-		AppendTypedValue[int16](vec, v)
+		AppendFixedValue[int16](vec, v)
 	case types.Type_INT32:
-		AppendTypedValue[int32](vec, v)
+		AppendFixedValue[int32](vec, v)
 	case types.Type_INT64:
-		AppendTypedValue[int64](vec, v)
+		AppendFixedValue[int64](vec, v)
 	case types.Type_UINT8:
-		AppendTypedValue[uint8](vec, v)
+		AppendFixedValue[uint8](vec, v)
 	case types.Type_UINT16:
-		AppendTypedValue[uint16](vec, v)
+		AppendFixedValue[uint16](vec, v)
 	case types.Type_UINT32:
-		AppendTypedValue[uint32](vec, v)
+		AppendFixedValue[uint32](vec, v)
 	case types.Type_UINT64:
-		AppendTypedValue[uint64](vec, v)
+		AppendFixedValue[uint64](vec, v)
 	case types.Type_DECIMAL64:
-		AppendTypedValue[types.Decimal64](vec, v)
+		AppendFixedValue[types.Decimal64](vec, v)
 	case types.Type_DECIMAL128:
-		AppendTypedValue[types.Decimal128](vec, v)
+		AppendFixedValue[types.Decimal128](vec, v)
 	case types.Type_FLOAT32:
-		AppendTypedValue[float32](vec, v)
+		AppendFixedValue[float32](vec, v)
 	case types.Type_FLOAT64:
-		AppendTypedValue[float64](vec, v)
+		AppendFixedValue[float64](vec, v)
 	case types.Type_DATE:
-		AppendTypedValue[types.Date](vec, v)
+		AppendFixedValue[types.Date](vec, v)
 	case types.Type_TIMESTAMP:
-		AppendTypedValue[types.Timestamp](vec, v)
+		AppendFixedValue[types.Timestamp](vec, v)
 	case types.Type_DATETIME:
-		AppendTypedValue[types.Datetime](vec, v)
+		AppendFixedValue[types.Datetime](vec, v)
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
@@ -169,82 +187,43 @@ func GetValue(col *gvec.Vector, row uint32) any {
 	}
 }
 
-func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
-	vals := col.Col
+func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) {
 	switch col.Typ.Oid {
 	case types.Type_BOOL:
-		data := vals.([]bool)
-		data[row] = val.(bool)
-		col.Col = data
+		UpdateFixedValue[bool](col, row, val)
 	case types.Type_INT8:
-		data := vals.([]int8)
-		data[row] = val.(int8)
-		col.Col = data
+		UpdateFixedValue[int8](col, row, val)
 	case types.Type_INT16:
-		data := vals.([]int16)
-		data[row] = val.(int16)
-		col.Col = data
+		UpdateFixedValue[int16](col, row, val)
 	case types.Type_INT32:
-		data := vals.([]int32)
-		data[row] = val.(int32)
-		col.Col = data
+		UpdateFixedValue[int32](col, row, val)
 	case types.Type_INT64:
-		data := vals.([]int64)
-		data[row] = val.(int64)
-		col.Col = data
+		UpdateFixedValue[int64](col, row, val)
 	case types.Type_UINT8:
-		data := vals.([]uint8)
-		data[row] = val.(uint8)
-		col.Col = data
+		UpdateFixedValue[uint8](col, row, val)
 	case types.Type_UINT16:
-		data := vals.([]uint16)
-		data[row] = val.(uint16)
-		col.Col = data
+		UpdateFixedValue[uint16](col, row, val)
 	case types.Type_UINT32:
-		data := vals.([]uint32)
-		data[row] = val.(uint32)
-		col.Col = data
+		UpdateFixedValue[uint32](col, row, val)
 	case types.Type_UINT64:
-		data := vals.([]uint64)
-		data[row] = val.(uint64)
-		col.Col = data
+		UpdateFixedValue[uint64](col, row, val)
 	case types.Type_DECIMAL64:
-		data := vals.([]types.Decimal64)
-		data[row] = val.(types.Decimal64)
-		col.Col = data
+		UpdateFixedValue[types.Decimal64](col, row, val)
 	case types.Type_DECIMAL128:
-		data := vals.([]types.Decimal128)
-		data[row] = val.(types.Decimal128)
-		col.Col = data
+		UpdateFixedValue[types.Decimal128](col, row, val)
 	case types.Type_FLOAT32:
-		data := vals.([]float32)
-		data[row] = val.(float32)
-		col.Col = data
+		UpdateFixedValue[float32](col, row, val)
 	case types.Type_FLOAT64:
-		data := vals.([]float64)
-		data[row] = val.(float64)
-		col.Col = data
+		UpdateFixedValue[float64](col, row, val)
 	case types.Type_DATE:
-		data := vals.([]types.Date)
-		data[row] = val.(types.Date)
-		col.Col = data
+		UpdateFixedValue[types.Date](col, row, val)
 	case types.Type_DATETIME:
-		data := vals.([]types.Datetime)
-		data[row] = val.(types.Datetime)
-		col.Col = data
+		UpdateFixedValue[types.Datetime](col, row, val)
 	case types.Type_TIMESTAMP:
-		data := vals.([]types.Timestamp)
-		data[row] = val.(types.Timestamp)
-		col.Col = data
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
-		// data := vals.(*types.Bytes)
-		// s := data.Offsets[row]
-		// e := data.Lengths[row]
-		// return string(data.Data[s:e])
+		UpdateFixedValue[types.Timestamp](col, row, val)
 	default:
-		return vector.ErrVecTypeNotSupport
+		panic(fmt.Errorf("%v not supported", col.Typ))
 	}
-	return nil
 }
 
 func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
@@ -557,14 +536,7 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 		types.Type_DATE, types.Type_DATETIME, types.Type_TIMESTAMP:
 		for iterator.HasNext() {
 			row := iterator.Next()
-			if err := SetFixSizeTypeValue(vec, row, vals[row]); err != nil {
-				panic(err)
-			}
-			if vec.Nsp != nil && vec.Nsp.Np != nil {
-				if vec.Nsp.Np.Contains(uint64(row)) {
-					vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
-				}
-			}
+			SetFixSizeTypeValue(vec, row, vals[row])
 		}
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data := col.(*types.Bytes)
