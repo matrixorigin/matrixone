@@ -28,11 +28,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
+func LengthOfMoVector(vec *gvec.Vector) int { return gvec.Length(vec) }
+
 func AppendTypedValue[T any](vec *gvec.Vector, v any) {
 	_, isNull := v.(types.Null)
 	vvals := vec.Col.([]T)
 	if isNull {
+		row := len(vvals)
 		vec.Col = append(vvals, types.DefaultVal[T]())
+		if vec.Nsp.Np == nil {
+			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
+		} else {
+			vec.Nsp.Np.Add(uint64(row))
+		}
 	} else {
 		vec.Col = append(vvals, v.(T))
 	}
@@ -76,8 +84,18 @@ func AppendValue(vec *gvec.Vector, v any) {
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
-		length := len(v.([]byte))
-		vvals.Data = append(vvals.Data, v.([]byte)...)
+		var val []byte
+		if _, ok := v.(types.Null); ok {
+			if vec.Nsp.Np == nil {
+				vec.Nsp.Np = roaring64.BitmapOf(uint64(offset))
+			} else {
+				vec.Nsp.Np.Add(uint64(offset))
+			}
+		} else {
+			val = v.([]byte)
+		}
+		length := len(val)
+		vvals.Data = append(vvals.Data, val...)
 		vvals.Offsets = append(vvals.Offsets, uint32(offset))
 		vvals.Lengths = append(vvals.Lengths, uint32(length))
 	default:

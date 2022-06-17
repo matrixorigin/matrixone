@@ -128,3 +128,17 @@ func TestCheckRowExists(t *testing.T) {
 	_, exist = GetOffsetByVal(vec, int32(55), dels)
 	require.False(t, exist)
 }
+
+func TestAppendNull(t *testing.T) {
+	colTypes := types.MockColTypes(17)
+	check := func(typ types.Type) {
+		vec := MockVec(typ, 10, 0)
+		AppendValue(vec, types.Null{})
+		assert.Equal(t, 11, LengthOfMoVector(vec))
+		assert.True(t, vec.Nsp.Np.Contains(uint64(10)))
+		t.Log(vec.String())
+	}
+	for _, typ := range colTypes {
+		check(typ)
+	}
+}
