@@ -53,9 +53,9 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query) {
 			n.OnList[i] = r.constantFold(n.OnList[i])
 		}
 	}
-	if len(n.WhereList) > 0 {
-		for i := range n.WhereList {
-			n.WhereList[i] = r.constantFold(n.WhereList[i])
+	if len(n.FilterList) > 0 {
+		for i := range n.FilterList {
+			n.FilterList[i] = r.constantFold(n.FilterList[i])
 		}
 	}
 	if len(n.ProjectList) > 0 {

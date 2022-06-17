@@ -101,23 +101,33 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.Decimal128](v, 16, m)
 	case types.T_char, types.T_varchar, types.T_json:
 		col := v.Col.(*types.Bytes)
-		data, err := mheap.Alloc(m, int64(v.Length*len(col.Data)))
-		if err != nil {
-			return nil
+		if nulls.Any(v.Nsp) {
+			col.Offsets = col.Offsets[:0]
+			col.Lengths = col.Lengths[:0]
+			for i := 0; i < v.Length; i++ {
+				nulls.Add(v.Nsp, uint64(i))
+				col.Offsets = append(col.Offsets, 0)
+				col.Lengths = append(col.Lengths, 0)
+			}
+		} else {
+			data, err := mheap.Alloc(m, int64(v.Length*len(col.Data)))
+			if err != nil {
+				return nil
+			}
+			data = data[:0]
+			o := uint32(0)
+			os := make([]uint32, v.Length)
+			ns := make([]uint32, v.Length)
+			for i := 0; i < v.Length; i++ {
+				os[i] = o
+				ns[i] = uint32(len(col.Data))
+				o += uint32(len(col.Data))
+				data = append(data, col.Data...)
+			}
+			col.Data = data
+			col.Offsets = os
+			col.Lengths = ns
 		}
-		data = data[:0]
-		o := uint32(0)
-		os := make([]uint32, v.Length)
-		ns := make([]uint32, v.Length)
-		for i := 0; i < v.Length; i++ {
-			os[i] = o
-			ns[i] = uint32(len(col.Data))
-			o += uint32(len(col.Data))
-			data = append(data, col.Data...)
-		}
-		col.Data = data
-		col.Offsets = os
-		col.Lengths = ns
 	}
 	v.IsConst = false
 	return v
@@ -128,12 +138,17 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 	if err != nil {
 		return nil
 	}
-	//sv := reflect.ValueOf(v.Col)
 	vs := encoding.DecodeFixedSlice[T](data, sz)
-	addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
-	val := unsafe.Slice((*T)(addr), sz)[0]
-	for i := 0; i < v.Length; i++ {
-		vs[i] = val
+	if nulls.Any(v.Nsp) {
+		for i := 0; i < v.Length; i++ {
+			nulls.Add(v.Nsp, uint64(i))
+		}
+	} else {
+		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
+		val := unsafe.Slice((*T)(addr), sz)[0]
+		for i := 0; i < v.Length; i++ {
+			vs[i] = val
+		}
 	}
 	v.Col = vs
 	v.Data = data

@@ -112,6 +112,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			if err := ctr.probe(bat, ap, proc); err != nil {
 				ctr.state = End
+				if ctr.bat != nil {
+					ctr.bat.Clean(proc.Mp)
+				}
+				bat.Clean(proc.Mp)
 				proc.Reg.InputBatch = nil
 				return true, err
 			}
@@ -159,7 +163,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		}
 		for i, cond := range ap.Conditions[1] {
 			vec, err := colexec.EvalExpr(ctr.bat, proc, cond.Expr)
-			if err != nil {
+			if err != nil || vec.ConstExpand(proc.Mp) == nil {
 				for j := 0; j < i; j++ {
 					if ctr.vecs[j].needFree {
 						vector.Clean(ctr.vecs[j].vec, proc.Mp)
@@ -268,7 +272,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		}
 		for i, cond := range ap.Conditions[1] {
 			vec, err := colexec.EvalExpr(bat, proc, cond.Expr)
-			if err != nil {
+			if err != nil || vec.ConstExpand(proc.Mp) == nil {
 				for j := 0; j < i; j++ {
 					if ctr.vecs[j].needFree {
 						vector.Clean(ctr.vecs[j].vec, proc.Mp)
@@ -393,7 +397,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	for i, cond := range ap.Conditions[0] {
 		vec, err := colexec.EvalExpr(bat, proc, cond.Expr)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.vecs[j].needFree {
 					vector.Clean(ctr.vecs[j].vec, proc.Mp)

@@ -113,6 +113,7 @@ type BindContext struct {
 	aggregateTag int32
 	projectTag   int32
 	distinctTag  int32
+	resultTag    int32
 
 	groups     []*plan.Expr
 	aggregates []*plan.Expr
@@ -158,10 +159,10 @@ type BindingTreeNode struct {
 
 type Binder interface {
 	BindExpr(tree.Expr, int32, bool) (*plan.Expr, error)
-	BindColRef(*tree.UnresolvedName, int32) (*plan.Expr, error)
-	BindAggFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
-	BindWinFunc(string, *tree.FuncExpr, int32) (*plan.Expr, error)
-	BindSubquery(*tree.Subquery) (*plan.Expr, error)
+	BindColRef(*tree.UnresolvedName, int32, bool) (*plan.Expr, error)
+	BindAggFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
+	BindWinFunc(string, *tree.FuncExpr, int32, bool) (*plan.Expr, error)
+	BindSubquery(*tree.Subquery, bool) (*plan.Expr, error)
 }
 
 type baseBinder struct {

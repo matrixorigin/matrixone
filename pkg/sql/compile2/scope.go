@@ -17,8 +17,9 @@ package compile2
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 
@@ -515,6 +516,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 						Arg: &group.Argument{
 							Aggs:  arg.Aggs,
 							Exprs: arg.Exprs,
+							Types: arg.Types,
 						},
 					})
 				}

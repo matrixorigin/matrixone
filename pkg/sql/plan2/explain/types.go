@@ -29,8 +29,9 @@ type NodeDescribe interface {
 	GetNodeBasicInfo(options *ExplainOptions) (string, error)
 	GetExtraInfo(options *ExplainOptions) ([]string, error)
 	GetProjectListInfo(options *ExplainOptions) (string, error)
+	GetJoinTypeInfo(options *ExplainOptions) (string, error)
 	GetJoinConditionInfo(options *ExplainOptions) (string, error)
-	GetWhereConditionInfo(options *ExplainOptions) (string, error)
+	GetFilterConditionInfo(options *ExplainOptions) (string, error)
 	GetOrderByInfo(options *ExplainOptions) (string, error)
 	GetGroupByInfo(options *ExplainOptions) (string, error)
 }
