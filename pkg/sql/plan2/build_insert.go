@@ -24,18 +24,42 @@ import (
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
+	rows := stmt.Rows
+	switch t := rows.Select.(type) {
+	case *tree.ValuesClause:
+		return buildInsertValues(stmt, ctx)
+	case *tree.SelectClause, *tree.ParenSelect:
+		return buildInsertSelect(stmt, ctx)
+	default:
+		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("unknown select statement: %v", t))
+	}
+}
+
+func buildInsertValues(_ *tree.Insert, _ CompilerContext) (p *Plan, err error) {
+	return nil, errors.New(errno.FeatureNotSupported, "building plan for insert values is not supported now")
+}
+
+func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 	pn, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Rows)
 	if err != nil {
 		return nil, err
 	}
 	cols := GetResultColumnsFromPlan(pn)
 	pn.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
-	if len(stmt.Columns) != 0 && len(stmt.Columns) < len(cols) {
-		return nil, errors.New(errno.InvalidColumnReference, "INSERT has more expressions than target columns")
+	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(cols) {
+		return nil, errors.New(errno.InvalidColumnReference, "Column count doesn't match value count")
 	}
+
 	objRef, tableDef, err := getInsertTable(stmt.Table, ctx)
 	if err != nil {
 		return nil, err
+	}
+	valueCount := len(stmt.Columns)
+	if len(stmt.Columns) == 0 {
+		valueCount = len(tableDef.Cols)
+	}
+	if valueCount != len(cols) {
+		return nil, errors.New(errno.InvalidColumnReference, "Column count doesn't match value count")
 	}
 
 	// generate values expr
@@ -60,7 +84,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 		Children:    []int32{qry.Steps[len(qry.Steps)-1]},
 		ProjectList: exprs,
 	}
-	qry.Nodes = append(qry.Nodes, n)
+	appendQueryNode(qry, n)
 	qry.Steps[len(qry.Steps)-1] = n.NodeId
 	return pn, nil
 }
@@ -90,6 +114,12 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 		}
 		for i, col := range tableDef.Cols {
 			tableColMap[col.GetName()] = i
+		}
+		// check if the column name is legal
+		for k := range targetMap {
+			if _, ok := tableColMap[k]; !ok {
+				return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%s' not exist", k))
+			}
 		}
 		for i := range exprs {
 			if ref, ok := targetMap[tableDef.Cols[i].GetName()]; ok {
