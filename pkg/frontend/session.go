@@ -657,6 +657,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Id:        plan.Type_TypeId(attr.Attr.Type.Oid),
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
+					Scale:     attr.Attr.Type.Scale,
 				},
 				Primary: attr.Attr.Primary,
 			})
@@ -670,6 +671,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Id:        plan.Type_TypeId(hideKey.Type.Oid),
 				Width:     hideKey.Type.Width,
 				Precision: hideKey.Type.Precision,
+				Scale:     hideKey.Type.Scale,
 			},
 			Primary: hideKey.Primary,
 		})

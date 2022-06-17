@@ -48,6 +48,7 @@ const (
 	MaxInt16Ring
 	MaxInt64Ring
 	MaxDatetimeRing
+	MaxTimestampRing
 	MaxUInt8Ring
 	MaxUInt16Ring
 	MaxUInt32Ring

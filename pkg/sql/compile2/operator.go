@@ -327,6 +327,7 @@ func constructGroup(n, cn *plan.Node) *group.Argument {
 		typs[i].Width = e.Typ.Width
 		typs[i].Size = e.Typ.Size
 		typs[i].Scale = e.Typ.Scale
+		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
 		Aggs:  aggs,
