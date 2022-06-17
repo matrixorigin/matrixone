@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -66,10 +67,20 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		// scalar vector's extension
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
-			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
+			bat.Vecs[i] = constExpandForInsert(bat.Vecs[i], proc)
 		}
 	}
 	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
 	n.Affected += uint64(len(bat.Zs))
 	return false, err
+}
+
+func constExpandForInsert(v *vector.Vector, proc *process.Process) *vector.Vector {
+	if v.IsScalarNull() {
+		v.ConstExpand(proc.Mp)
+		vector.PreAlloc(v, v, v.Length, proc.Mp)
+		vector.SetLength(v, v.Length)
+		return v
+	}
+	return v.ConstExpand(proc.Mp)
 }
