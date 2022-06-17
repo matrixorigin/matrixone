@@ -162,7 +162,8 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
-			plan.DataDefinition_SHOW_COLUMNS:
+			plan.DataDefinition_SHOW_COLUMNS,
+			plan.DataDefinition_SHOW_CREATETABLE:
 			return c.compileQuery(pn.GetDdl().GetQuery())
 			// 1、not supported: show arnings/errors/status/processlist
 			// 2、show variables will not return query
