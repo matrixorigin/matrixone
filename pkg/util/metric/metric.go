@@ -126,10 +126,9 @@ func StopMetricSync() {
 
 func mustRegiterToProm(collector prom.Collector) {
 	if err := prom.Register(collector); err != nil {
-		// ignore duplicate register error
-		if _, ok := err.(prom.AlreadyRegisteredError); !ok {
-			panic(err)
-		}
+		// err is either registering a collector more than once or metrics have duplicate description.
+		// in any case, we respect the existing collectors in the prom registry
+		logutil.Debugf("[Metric] register to prom register: %v", err)
 	}
 }
 
