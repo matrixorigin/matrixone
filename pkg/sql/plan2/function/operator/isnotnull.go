@@ -26,13 +26,13 @@ import (
 func IsNotNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
-	if input.IsScalarNull() {
-		vec, err := proc.AllocVector(retType, 1)
-		vec.IsConst = input.IsScalar()
-		if err != nil {
-			return nil, err
+	if input.IsScalar() {
+		vec := proc.AllocScalarVector(retType)
+		if input.IsScalarNull() {
+			vector.SetCol(vec, []bool{false})
+		} else {
+			vector.SetCol(vec, []bool{!nulls.Contains(input.Nsp, uint64(0))})
 		}
-		vector.SetCol(vec, []bool{false})
 		return vec, nil
 	} else {
 		cols, ok := input.Col.([]T)
@@ -44,8 +44,6 @@ func IsNotNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*v
 		if err != nil {
 			return nil, err
 		}
-		vec.IsConst = input.IsScalar()
-
 		col := make([]bool, l)
 		for i := range cols {
 			if nulls.Contains(input.Nsp, uint64(i)) {
@@ -54,7 +52,6 @@ func IsNotNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*v
 				col[i] = true
 			}
 		}
-
 		vector.SetCol(vec, col)
 		return vec, nil
 	}

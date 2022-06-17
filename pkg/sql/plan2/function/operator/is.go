@@ -18,6 +18,7 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -25,35 +26,45 @@ import (
 func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := vectors[0]
 	rv := vectors[1]
-	l := int64(1)
-
-	lefts, ok := lv.Col.([]bool)
-	if !ok && !lv.IsScalarNull() {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
+	retType := types.T_bool.ToType()
 
 	right, ok := rv.Col.(bool)
 	if !ok {
 		return nil, errors.New("the right vec col is not bool type")
 	}
 
-	if !lv.IsScalarNull() {
-		l = int64(len(lefts))
-	}
-	vec, err := proc.AllocVector(lv.Typ, l*1)
-	if err != nil {
-		return nil, err
-	}
-	vec.IsConst = lv.IsScalar()
-	col := make([]bool, l)
-	for i := range lefts {
-		if nulls.Contains(lv.Nsp, uint64(i)) {
-			col[i] = false
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(retType)
+		if lv.IsScalarNull() {
+			vector.SetCol(vec, []bool{false})
 		} else {
-			col[i] = (lefts[i] == right)
+			lefts, ok := lv.Col.([]bool)
+			if !ok {
+				return nil, errors.New("the left vec col is not []bool type")
+			}
+			vector.SetCol(vec, []bool{lefts[0] == right})
 		}
-	}
+		return vec, nil
+	} else {
+		lefts, ok := lv.Col.([]bool)
+		if !ok {
+			return nil, errors.New("the left vec col is not []bool type")
+		}
 
-	vector.SetCol(vec, col)
-	return vec, nil
+		l := int64(len(lefts))
+		col := make([]bool, l)
+		vec, err := proc.AllocVector(lv.Typ, l*1)
+		if err != nil {
+			return nil, err
+		}
+		for i := range lefts {
+			if nulls.Contains(lv.Nsp, uint64(i)) {
+				col[i] = false
+			} else {
+				col[i] = (lefts[i] == right)
+			}
+		}
+		vector.SetCol(vec, col)
+		return vec, nil
+	}
 }
