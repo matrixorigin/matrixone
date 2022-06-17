@@ -497,24 +497,20 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 }
 
 func (v *StdVector) Clone() *StdVector {
-	data := make([]byte, len(v.Data))
-	copy(data, v.Data)
-	vmask := &nulls.Nulls{}
+	var nullmask *roaring64.Bitmap
+	v.RLock()
+	size := len(v.Data)
 	if v.VMask.Np != nil {
-		vmask.Np = v.VMask.Np.Clone()
+		nullmask = v.VMask.Np.Clone()
 	}
-	return &StdVector{
-		Data: data,
-		BaseVector: BaseVector{
-			VMask:    vmask,
-			StatMask: v.StatMask,
-			Type: types.Type{
-				Oid:   v.Type.Oid,
-				Size:  v.Type.Size,
-				Width: v.Type.Width,
-			},
-		},
-	}
+	statmask := v.StatMask
+	v.RUnlock()
+	capacity := uint64(size) / uint64(v.Type.Size)
+	cloned := NewStdVector(v.Type, capacity)
+	cloned.Data = append(cloned.Data, v.Data[:size]...)
+	cloned.StatMask = statmask
+	cloned.VMask.Np = nullmask
+	return cloned
 }
 
 func (v *StdVector) CopyToVector() (*gvec.Vector, error) {

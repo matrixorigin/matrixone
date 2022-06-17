@@ -589,8 +589,10 @@ func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uin
 	switch vec.GetType() {
 	case container.StdVec:
 		if vec.IsReadonly() {
+			vec2 := vec
 			vec = vec.(*vector.StdVector).Clone()
 			vec.ResetReadonly()
+			_ = vec2.Close()
 		}
 		for updateIterator.HasNext() {
 			rowIdx := updateIterator.Next()
