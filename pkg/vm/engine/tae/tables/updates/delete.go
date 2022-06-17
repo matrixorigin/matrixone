@@ -187,8 +187,16 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	return
 }
 
+func (node *DeleteNode) GeneralString() string {
+	return fmt.Sprintf("TS=%d;Cnt=%d;LogIndex%v", node.commitTs, node.mask.GetCardinality(), node.logIndex)
+}
+
 func (node *DeleteNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d,Cnt=%d", node.commitTs, node.mask.GetCardinality())
+	return fmt.Sprintf("TS=%d;Cnt=%d", node.commitTs, node.mask.GetCardinality())
+}
+
+func (node *DeleteNode) GeneralVerboseString() string {
+	return fmt.Sprintf("TS=%d;%v;Cnt=%d;Deletes=%v", node.commitTs, node.logIndex, node.mask.GetCardinality(), node.mask)
 }
 
 func (node *DeleteNode) StringLocked() string {

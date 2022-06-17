@@ -297,7 +297,15 @@ func (node *ColumnUpdateNode) ApplyToColumn(vec *gvec.Vector, deletes *roaring.B
 }
 
 func (node *ColumnUpdateNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d,Cnt=%d", node.commitTs, len(node.vals))
+	return fmt.Sprintf("TS=%d;Cnt=%d", node.commitTs, len(node.vals))
+}
+
+func (node *ColumnUpdateNode) GeneralString() string {
+	return fmt.Sprintf("TS=%d;Cnt=%d", node.commitTs, len(node.vals))
+}
+
+func (node *ColumnUpdateNode) GeneralVerboseString() string {
+	return fmt.Sprintf("TS=%d;Cnt=%d;Vals=%v", node.commitTs, len(node.vals), node.vals)
 }
 
 func (node *ColumnUpdateNode) String() string {

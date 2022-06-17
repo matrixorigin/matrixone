@@ -16,6 +16,7 @@ package compile2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -147,6 +148,26 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 	return &deletion.Argument{
 		TableSource:  relation,
 		UseDeleteKey: n.UseDeleteKey,
+	}, nil
+}
+
+func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
+	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &update.Argument{
+		TableSource: relation,
+		PriKey:      n.UpdateInfo.PriKey,
+		PriKeyIdx:   n.UpdateInfo.PriKeyIdx,
+		HideKey:     n.UpdateInfo.HideKey,
+		UpdateAttrs: n.UpdateInfo.UpdateAttrs,
+		OtherAttrs:  n.UpdateInfo.OtherAttrs,
+		AttrOrders:  n.UpdateInfo.AttrOrders,
 	}, nil
 }
 
