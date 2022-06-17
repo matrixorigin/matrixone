@@ -16,6 +16,7 @@ package rule
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
 type PredicatePushdown struct {
@@ -26,12 +27,12 @@ func NewPredicatePushdown() *PredicatePushdown {
 }
 
 func (r *PredicatePushdown) Match(n *plan.Node) bool {
-	return n.NodeType != plan.Node_TABLE_SCAN && len(n.WhereList) > 0
+	return n.NodeType != plan.Node_TABLE_SCAN && len(n.FilterList) > 0
 }
 
 func (r *PredicatePushdown) Apply(n *plan.Node, qry *plan.Query) {
-	es := n.WhereList
-	n.WhereList = make([]*plan.Expr, 0, len(es))
+	es := n.FilterList
+	n.FilterList = make([]*plan.Expr, 0, len(es))
 	for i := range es {
 		r.pushdown(es[i], n, qry)
 	}
@@ -40,18 +41,26 @@ func (r *PredicatePushdown) Apply(n *plan.Node, qry *plan.Query) {
 func (r *PredicatePushdown) pushdown(e *plan.Expr, n *plan.Node, qry *plan.Query) bool {
 	var ne *plan.Expr // new expr
 
-	if n.NodeType == plan.Node_TABLE_SCAN {
-		n.WhereList = append(n.WhereList, e)
+	if _, ok := e.Expr.(*plan.Expr_F); !ok {
+		n.FilterList = append(n.FilterList, e)
+		return false
+	}
+	if n.NodeType == plan.Node_TABLE_SCAN || n.NodeType == plan.Node_AGG {
+		n.FilterList = append(n.FilterList, e)
+		return false
+	}
+	if len(n.Children) > 0 && (qry.Nodes[n.Children[0]].NodeType == plan.Node_JOIN || qry.Nodes[n.Children[0]].NodeType == plan.Node_AGG) {
+		n.FilterList = append(n.FilterList, e)
 		return false
 	}
 	relPos := int32(-1)
 	relPos, ne = r.newExpr(relPos, e, n, qry)
 	if ne == nil {
-		n.WhereList = append(n.WhereList, e)
+		n.FilterList = append(n.FilterList, e)
 		return false
 	}
 	if !r.pushdown(ne, qry.Nodes[relPos], qry) {
-		n.WhereList = append(n.WhereList, e)
+		n.FilterList = append(n.FilterList, e)
 		return false
 	}
 	return true
@@ -62,6 +71,14 @@ func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node,
 	case *plan.Expr_C:
 		return relPos, expr
 	case *plan.Expr_F:
+		overloadId := e.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
+		if err != nil {
+			return relPos, nil
+		}
+		if f.Flag == plan.Function_AGG {
+			return relPos, nil
+		}
 		args := make([]*plan.Expr, len(e.F.Args))
 		for i := range e.F.Args {
 			relPos, args[i] = r.newExpr(relPos, e.F.Args[i], n, qry)

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -150,6 +151,17 @@ func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, engine engine.Engine
 		return 0, err
 	}
 	return arg.Affected, nil
+}
+
+func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+	s.Magic = Merge
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*update.Argument)
+	arg.Ts = ts
+	defer arg.TableSource.Close(snapshot)
+	if err := s.MergeRun(engine); err != nil {
+		return 0, err
+	}
+	return arg.AffectedRows, nil
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
@@ -527,6 +539,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 						Arg: &group.Argument{
 							Aggs:  arg.Aggs,
 							Exprs: arg.Exprs,
+							Types: arg.Types,
 						},
 					})
 				}

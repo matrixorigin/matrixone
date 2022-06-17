@@ -17,8 +17,8 @@ package dates
 import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func Sort(col *vector.Vector, idx []uint32) {

@@ -16,9 +16,18 @@ package overload
 
 import (
 	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopcomplement"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopsemi"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
@@ -60,13 +69,20 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Projection: projection.String,
 	Complement: complement.String,
 
+	LoopJoin:       loopjoin.String,
+	LoopLeft:       loopleft.String,
+	LoopSemi:       loopsemi.String,
+	LoopComplement: loopcomplement.String,
+
 	MergeTop:    mergetop.String,
 	MergeLimit:  mergelimit.String,
 	MergeOrder:  mergeorder.String,
 	MergeGroup:  mergegroup.String,
 	MergeOffset: mergeoffset.String,
-	Deletion:    deletion.String,
-	Insert:      insert.String,
+
+	Deletion: deletion.String,
+	Insert:   insert.String,
+	Update:   update.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
@@ -87,6 +103,11 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Projection: projection.Prepare,
 	Complement: complement.Prepare,
 
+	LoopJoin:       loopjoin.Prepare,
+	LoopLeft:       loopleft.Prepare,
+	LoopSemi:       loopsemi.Prepare,
+	LoopComplement: loopcomplement.Prepare,
+
 	MergeTop:    mergetop.Prepare,
 	MergeLimit:  mergelimit.Prepare,
 	MergeOrder:  mergeorder.Prepare,
@@ -95,6 +116,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 
 	Deletion: deletion.Prepare,
 	Insert:   insert.Prepare,
+	Update:   update.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -115,6 +137,11 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Projection: projection.Call,
 	Complement: complement.Call,
 
+	LoopJoin:       loopjoin.Call,
+	LoopLeft:       loopleft.Call,
+	LoopSemi:       loopsemi.Call,
+	LoopComplement: loopcomplement.Call,
+
 	MergeTop:    mergetop.Call,
 	MergeLimit:  mergelimit.Call,
 	MergeOrder:  mergeorder.Call,
@@ -123,4 +150,5 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 
 	Deletion: deletion.Call,
 	Insert:   insert.Call,
+	Update:   update.Call,
 }

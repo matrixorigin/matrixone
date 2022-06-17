@@ -19,11 +19,10 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 const (
@@ -79,7 +78,7 @@ func UnmarshalID(buf []byte) *common.ID {
 	return &id
 }
 
-func MarshalBatch(types []types.Type, data batch.IBatch) (buf []byte, err error) {
+func MarshalBatch(colTypes []types.Type, data batch.IBatch) (buf []byte, err error) {
 	if data == nil {
 		return
 	}
@@ -106,7 +105,7 @@ func MarshalBatch(types []types.Type, data batch.IBatch) (buf []byte, err error)
 	for i, vec := range vecs {
 		vecBuf, _ := vec.Marshal()
 		bufs[i] = vecBuf
-		typeBuf := encoding.EncodeType(types[i])
+		typeBuf := types.EncodeType(colTypes[i])
 		_, err := bbuf.Write(typeBuf)
 		if err != nil {
 			return nil, err
@@ -151,9 +150,9 @@ func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, n
 	lens := make([]uint32, vecs)
 	vecTypes = make([]types.Type, vecs)
 	for i := uint16(0); i < vecs; i++ {
-		colType := encoding.DecodeType(buf[pos : pos+encoding.TypeSize])
+		colType := types.DecodeType(buf[pos : pos+types.TypeSize])
 		vecTypes[i] = colType
-		pos += encoding.TypeSize
+		pos += types.TypeSize
 		lens[i] = binary.BigEndian.Uint32(buf[pos:])
 		pos += 4
 	}

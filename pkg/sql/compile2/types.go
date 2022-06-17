@@ -37,6 +37,7 @@ const (
 	DropIndex
 	Deletion
 	QueryInsert
+	Update
 )
 
 // Address is the ip:port of local node
