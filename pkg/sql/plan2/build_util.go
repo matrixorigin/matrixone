@@ -202,7 +202,7 @@ func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, nod
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{node.NodeId},
 		ProjectList: make([]*plan.Expr, projectResultLen),
-		WhereList:   projectNodeWhere,
+		FilterList:  projectNodeWhere,
 	}
 
 	node.ProjectList = make([]*Expr, projectResultLen)
@@ -512,7 +512,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
-			return &plan.Type{Id: plan.Type_DATETIME, Size: 8}, nil
+			return &plan.Type{Id: plan.Type_DATETIME, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return &plan.Type{Id: plan.Type_TIMESTAMP, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
@@ -1078,110 +1078,4 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 		}
 	}
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
-}
-
-func DeepCopyExpr(expr *Expr) *Expr {
-	new_expr := &Expr{
-		Typ: &plan.Type{
-			Id:        expr.Typ.GetId(),
-			Nullable:  expr.Typ.GetNullable(),
-			Width:     expr.Typ.GetWidth(),
-			Precision: expr.Typ.GetPrecision(),
-			Size:      expr.Typ.GetSize(),
-			Scale:     expr.Typ.GetScale(),
-		},
-		TableName: expr.TableName,
-		ColName:   expr.ColName,
-	}
-
-	switch item := expr.Expr.(type) {
-	case *plan.Expr_C:
-		new_expr.Expr = &plan.Expr_C{
-			C: &plan.Const{
-				Isnull: item.C.GetIsnull(),
-				Value:  item.C.GetValue(),
-			},
-		}
-	case *plan.Expr_P:
-		new_expr.Expr = &plan.Expr_P{
-			P: &plan.ParamRef{
-				Pos: item.P.GetPos(),
-			},
-		}
-	case *plan.Expr_V:
-		new_expr.Expr = &plan.Expr_V{
-			V: &plan.VarRef{
-				Name: item.V.GetName(),
-			},
-		}
-	case *plan.Expr_Col:
-		new_expr.Expr = &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: item.Col.GetRelPos(),
-				ColPos: item.Col.GetColPos(),
-			},
-		}
-	case *plan.Expr_F:
-		new_args := make([]*Expr, len(item.F.Args))
-		for idx, arg := range item.F.Args {
-			new_args[idx] = DeepCopyExpr(arg)
-		}
-		new_expr.Expr = &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Server:     item.F.Func.GetServer(),
-					Db:         item.F.Func.GetDb(),
-					Schema:     item.F.Func.GetSchema(),
-					Obj:        item.F.Func.GetObj(),
-					ServerName: item.F.Func.GetServerName(),
-					DbName:     item.F.Func.GetDbName(),
-					SchemaName: item.F.Func.GetSchemaName(),
-					ObjName:    item.F.Func.GetObjName(),
-				},
-				Args: new_args,
-			},
-		}
-	case *plan.Expr_List:
-		new_list := make([]*Expr, len(item.List.List))
-		for idx, arg := range item.List.List {
-			new_list[idx] = DeepCopyExpr(arg)
-		}
-		new_expr.Expr = &plan.Expr_List{
-			List: &plan.ExprList{
-				List: new_list,
-			},
-		}
-	case *plan.Expr_Sub:
-		new_expr.Expr = &plan.Expr_Sub{
-			Sub: &plan.SubQuery{
-				NodeId:       item.Sub.GetNodeId(),
-				IsCorrelated: item.Sub.GetIsCorrelated(),
-				IsScalar:     item.Sub.GetIsScalar(),
-			},
-		}
-	case *plan.Expr_Corr:
-		new_expr.Expr = &plan.Expr_Corr{
-			Corr: &plan.CorrColRef{
-				NodeId: item.Corr.GetNodeId(),
-				ColPos: item.Corr.GetColPos(),
-				RelPos: item.Corr.GetRelPos(),
-				Depth:  item.Corr.GetDepth(),
-			},
-		}
-	case *plan.Expr_T:
-		new_expr.Expr = &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: &plan.Type{
-					Id:        item.T.Typ.GetId(),
-					Nullable:  item.T.Typ.GetNullable(),
-					Width:     item.T.Typ.GetWidth(),
-					Precision: item.T.Typ.GetPrecision(),
-					Size:      item.T.Typ.GetSize(),
-					Scale:     item.T.Typ.GetScale(),
-				},
-			},
-		}
-	}
-
-	return new_expr
 }

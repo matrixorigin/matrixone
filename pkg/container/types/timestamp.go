@@ -35,11 +35,12 @@ package types
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"strconv"
 	gotime "time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 const microSecondsDigits = 6

@@ -17,9 +17,9 @@ package tables
 import (
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type insertInfo struct {
@@ -40,13 +40,13 @@ func newInsertInfo(rwlocker *sync.RWMutex, maxTs uint64, capacity uint32) *inser
 	return &insertInfo{
 		rwlocker: rwlocker,
 		offsets: vector.NewVector(types.Type{
-			Oid:   types.T(types.T_uint32),
+			Oid:   types.Type_UINT32,
 			Size:  4,
 			Width: 32},
 			uint64(capacity)),
 		ts: vector.NewVector(
 			types.Type{
-				Oid:   types.T(types.T_uint64),
+				Oid:   types.Type_UINT64,
 				Size:  8,
 				Width: 64},
 			uint64(capacity)),

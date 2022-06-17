@@ -273,12 +273,13 @@ func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement, ddlType 
 	if err != nil {
 		return nil, err
 	}
-	return &Plan{
-		Plan: &plan.Plan_Ddl{
-			Ddl: &plan.DataDefinition{
-				DdlType: ddlType,
-				Query:   queryPlan.GetQuery(),
-			},
-		},
-	}, nil
+	return queryPlan, nil
+	// return &Plan{
+	// 	Plan: &plan.Plan_Ddl{
+	// 		Ddl: &plan.DataDefinition{
+	// 			DdlType: ddlType,
+	// 			Query:   queryPlan.GetQuery(),
+	// 		},
+	// 	},
+	// }, nil
 }

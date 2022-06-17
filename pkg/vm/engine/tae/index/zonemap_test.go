@@ -19,13 +19,13 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestZoneMapNumeric(t *testing.T) {
-	typ := types.Type{Oid: types.T_int32}
+	typ := types.Type{Oid: types.Type_INT32}
 	zm := NewZoneMap(typ)
 	var yes bool
 	var err error
@@ -90,7 +90,7 @@ func TestZoneMapNumeric(t *testing.T) {
 
 	rows = 500
 	typ1 := typ
-	typ1.Oid = types.T_int64
+	typ1.Oid = types.Type_INT64
 	ctx.Keys = compute.MockVec(typ1, rows, 2000)
 	ctx.Count = uint32(rows)
 	err = zm.BatchUpdate(ctx)
@@ -102,7 +102,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	yes = zm1.Contains(int32(1199))
 	require.True(t, yes)
 
-	typ1.Oid = types.T_int32
+	typ1.Oid = types.Type_INT32
 	vec := compute.MockVec(typ1, rows, 3000)
 	visibility, yes = zm1.ContainsAny(vec)
 	require.False(t, yes)
@@ -121,7 +121,7 @@ func TestZoneMapNumeric(t *testing.T) {
 }
 
 func TestZoneMapString(t *testing.T) {
-	typ := types.Type{Oid: types.T_char}
+	typ := types.Type{Oid: types.Type_CHAR}
 	zm := NewZoneMap(typ)
 	var yes bool
 	var err error

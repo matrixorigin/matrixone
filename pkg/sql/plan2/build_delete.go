@@ -28,7 +28,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	// check database's name and table's name
 	tbl, ok := stmt.Table.(*tree.AliasedTableExpr).Expr.(*tree.TableName)
 	if !ok {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot delete from multiple tables")
+		return nil, errors.New(errno.FeatureNotSupported, "cannot delete from multiple tables")
 	}
 	var dbName string
 	if tbl.SchemaName == "" {
@@ -36,10 +36,13 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 	}
 	objRef, tableDef := ctx.Resolve(dbName, string(tbl.ObjectName))
 	if tableDef == nil {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find delete table")
+		return nil, errors.New(errno.FeatureNotSupported, "cannot find delete table")
 	}
 
 	// build the projection of select
+	if len(stmt.OrderBy) > 0 && (stmt.Where == nil && stmt.Limit == nil) {
+		stmt.OrderBy = nil
+	}
 	var projectExprs tree.SelectExprs
 	if stmt.Where != nil {
 		if err := buildProjectionFromExpr(stmt.Where.Expr, &projectExprs); err != nil {

@@ -24,12 +24,11 @@ import (
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func StrVectorConstructor(vf common.IVFile, useCompress bool, freeFunc base.MemoryFreeFunc) base.IMemoryNode {
@@ -182,7 +181,7 @@ func (v *StrVector) Append(n int, vals any) error {
 func (v *StrVector) appendWithOffset(offset, n int, vals any) error {
 	var data [][]byte
 	switch v.Type.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data = vals.([][]byte)[offset : offset+n]
 	default:
 		return ErrVecTypeNotSupport
@@ -342,7 +341,7 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 		}
 		nullSize = len(nullbuf)
 	}
-	capacity := encoding.TypeSize + 4 + nullSize + 4
+	capacity := types.TypeSize + 4 + nullSize + 4
 	rows := len(v.Data.Offsets)
 	capacity += 4
 	if rows > 0 {
@@ -357,18 +356,18 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	buf := deCompressed.Bytes()
 	buf = buf[:capacity]
 	dBuf := buf
-	copy(dBuf, encoding.EncodeType(v.Type))
-	dBuf = dBuf[encoding.TypeSize:]
-	copy(dBuf, encoding.EncodeUint32(uint32(nullSize)))
+	copy(dBuf, types.EncodeType(v.Type))
+	dBuf = dBuf[types.TypeSize:]
+	copy(dBuf, types.EncodeFixed(uint32(nullSize)))
 	dBuf = dBuf[4:]
 	if nullSize > 0 {
 		copy(dBuf, nullbuf)
 		dBuf = dBuf[nullSize:]
 	}
-	copy(dBuf, encoding.EncodeUint32(uint32(rows)))
+	copy(dBuf, types.EncodeFixed(uint32(rows)))
 	dBuf = dBuf[4:]
 	if rows > 0 {
-		lenBuf := encoding.EncodeUint32Slice(v.Data.Lengths)
+		lenBuf := types.EncodeUint32Slice(v.Data.Lengths)
 		copy(dBuf, lenBuf)
 		dBuf = dBuf[len(lenBuf):]
 		copy(dBuf, v.Data.Data)
@@ -387,7 +386,7 @@ func (v *StrVector) CopyToVector() (*gvec.Vector, error) {
 	vec := gvec.New(v.Type)
 	vec.Data = v.Data.Data
 	switch v.Type.Oid {
-	case types.T_char, types.T_varchar, types.T_json:
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		col := vec.Col.(*types.Bytes)
 		col.Data = make([]byte, len(v.Data.Data))
 		col.Lengths = make([]uint32, len(v.Data.Lengths))
@@ -421,9 +420,11 @@ func (vec *StrVector) ReadFrom(r io.Reader) (n int64, err error) {
 	// TODO: will remove below os.File type check.
 	switch f := r.(type) {
 	case *os.File:
-		f.Seek(0, io.SeekStart)
+		if _, err = f.Seek(0, io.SeekStart); err != nil {
+			return
+		}
 	}
-	realSize := encoding.DecodeUint64(capBuf)
+	realSize := types.DecodeFixed[uint64](capBuf)
 	buf := make([]byte, realSize)
 	_, err = r.Read(buf)
 	if err != nil {
@@ -439,13 +440,13 @@ func (vec *StrVector) Unmarshal(data []byte) error {
 		return nil
 	}
 	buf := data
-	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
+	vec.NodeCapacity = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
-	vec.StatMask = encoding.DecodeUint64(buf[:8])
+	vec.StatMask = types.DecodeFixed[uint64](buf[:8])
 	buf = buf[8:]
-	vec.Type = encoding.DecodeType(buf[:encoding.TypeSize])
-	buf = buf[encoding.TypeSize:]
-	nb := encoding.DecodeUint32(buf[:4])
+	vec.Type = types.DecodeType(buf[:types.TypeSize])
+	buf = buf[types.TypeSize:]
+	nb := types.DecodeFixed[uint32](buf[:4])
 	buf = buf[4:]
 	if nb > 0 {
 		if err := vec.VMask.Read(buf[:nb]); err != nil {
@@ -453,7 +454,7 @@ func (vec *StrVector) Unmarshal(data []byte) error {
 		}
 		buf = buf[nb:]
 	}
-	cnt := encoding.DecodeInt32(buf[:4])
+	cnt := types.DecodeFixed[int32](buf[:4])
 	buf = buf[4:]
 	if vec.Data != nil {
 		vec.Data.Reset()
@@ -463,7 +464,7 @@ func (vec *StrVector) Unmarshal(data []byte) error {
 	if cnt == 0 {
 		return nil
 	}
-	lengths := encoding.DecodeUint32Slice(buf[:4*cnt])
+	lengths := types.DecodeUint32Slice(buf[:4*cnt])
 	if len(lengths) > cap(vec.Data.Lengths) {
 		vec.Data.Offsets = make([]uint32, cnt)
 		vec.Data.Lengths = lengths
@@ -484,26 +485,26 @@ func (vec *StrVector) Unmarshal(data []byte) error {
 
 func (vec *StrVector) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
-	buf.Write(encoding.EncodeUint64(uint64(0)))
-	buf.Write(encoding.EncodeUint64(vec.StatMask))
-	buf.Write(encoding.EncodeType(vec.Type))
+	buf.Write(types.EncodeFixed(uint64(0)))
+	buf.Write(types.EncodeFixed(vec.StatMask))
+	buf.Write(types.EncodeType(vec.Type))
 	nb, err := vec.VMask.Show()
 	if err != nil {
 		return nil, err
 	}
-	buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+	buf.Write(types.EncodeFixed(uint32(len(nb))))
 	if len(nb) > 0 {
 		buf.Write(nb)
 	}
 	cnt := int32(len(vec.Data.Lengths))
-	buf.Write(encoding.EncodeInt32(cnt))
+	buf.Write(types.EncodeFixed(cnt))
 	if cnt > 0 {
-		buf.Write(encoding.EncodeUint32Slice(vec.Data.Lengths))
+		buf.Write(types.EncodeUint32Slice(vec.Data.Lengths))
 		buf.Write(vec.Data.Data)
 	}
 
 	buffer := buf.Bytes()
-	capBuf := encoding.EncodeUint64(uint64(len(buffer)))
+	capBuf := types.EncodeFixed(uint64(len(buffer)))
 	copy(buffer[0:], capBuf)
 	vec.NodeCapacity = uint64(len(buffer))
 	return buf.Bytes(), nil

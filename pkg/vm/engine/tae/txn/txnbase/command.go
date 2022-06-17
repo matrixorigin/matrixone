@@ -21,9 +21,9 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 const (
@@ -123,12 +123,19 @@ func (c *BaseCustomizedCmd) GetID() uint32 {
 func (e *PointerCmd) GetType() int16 {
 	return CmdPointer
 }
-
+func (e *PointerCmd) Desc() string {
+	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d", e.Group, e.Lsn)
+	return s
+}
 func (e *PointerCmd) String() string {
-	s := fmt.Sprintf("PointerCmd: Group=%d, Lsn=%d", e.Group, e.Lsn)
+	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d]", e.Group, e.Lsn)
 	return s
 }
 
+func (e *PointerCmd) VerboseString() string {
+	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d]", e.Group, e.Lsn)
+	return s
+}
 func (e *PointerCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
 		return
@@ -206,11 +213,20 @@ func (e *DeleteBitmapCmd) Unmarshal(buf []byte) error {
 	return err
 }
 
-func (e *DeleteBitmapCmd) String() string {
-	s := fmt.Sprintf("DeleteBitmapCmd: Cardinality=%d", e.Bitmap.GetCardinality())
+func (e *DeleteBitmapCmd) Desc() string {
+	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d", e.Bitmap.GetCardinality())
 	return s
 }
 
+func (e *DeleteBitmapCmd) String() string {
+	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d", e.Bitmap.GetCardinality())
+	return s
+}
+
+func (e *DeleteBitmapCmd) VerboseString() string {
+	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d;Deletes=%v", e.Bitmap.GetCardinality(), e.Bitmap.String())
+	return s
+}
 func (e *BatchCmd) GetType() int16 {
 	return CmdBatch
 }
@@ -248,11 +264,20 @@ func (e *BatchCmd) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (e *BatchCmd) String() string {
-	s := fmt.Sprintf("BatchCmd: Rows=%d", e.Bat.Length())
+func (e *BatchCmd) Desc() string {
+	s := fmt.Sprintf("CmdName=BAT;Rows=%d", e.Bat.Length())
 	return s
 }
 
+func (e *BatchCmd) String() string {
+	s := fmt.Sprintf("CmdName=BAT;Rows=%d", e.Bat.Length())
+	return s
+}
+
+func (e *BatchCmd) VerboseString() string {
+	s := fmt.Sprintf("CmdName=BAT;Rows=%d;Data=%v", e.Bat.Length(), e.Bat)
+	return s
+}
 func (e *ComposedCmd) GetType() int16 {
 	return CmdComposed
 }
@@ -335,10 +360,30 @@ func (cc *ComposedCmd) ToString(prefix string) string {
 	return s
 }
 
+func (cc *ComposedCmd) ToDesc(prefix string) string {
+	s := fmt.Sprintf("%sComposedCmd: Cnt=%d/%d", prefix, cc.CmdSize, len(cc.Cmds))
+	for _, cmd := range cc.Cmds {
+		s = fmt.Sprintf("%s\n%s\t%s", s, prefix, cmd.Desc())
+	}
+	return s
+}
+func (cc *ComposedCmd) ToVerboseString(prefix string) string {
+	s := fmt.Sprintf("%sComposedCmd: Cnt=%d/%d", prefix, cc.CmdSize, len(cc.Cmds))
+	for _, cmd := range cc.Cmds {
+		s = fmt.Sprintf("%s\n%s\t%s", s, prefix, cmd.VerboseString())
+	}
+	return s
+}
+
+func (cc *ComposedCmd) VerboseString() string {
+	return cc.ToVerboseString("")
+}
 func (cc *ComposedCmd) String() string {
 	return cc.ToString("")
 }
-
+func (cc *ComposedCmd) Desc() string {
+	return cc.ToDesc("")
+}
 func BuildCommandFrom(r io.Reader) (cmd txnif.TxnCmd, n int64, err error) {
 	var cmdType int16
 	if err = binary.Read(r, binary.BigEndian, &cmdType); err != nil {

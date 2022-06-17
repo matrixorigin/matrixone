@@ -26,55 +26,64 @@ import (
 func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 	var result string
 
-	if expr.Expr == nil {
-		result += expr.ColName
-	} else {
-		switch expr.Expr.(type) {
-		case *plan.Expr_Col:
-			result += expr.ColName
-		case *plan.Expr_C:
-			constExpr := expr.Expr.(*plan.Expr_C)
-			if intConst, ok := constExpr.C.Value.(*plan.Const_Ival); ok {
-				result += strconv.FormatInt(intConst.Ival, 10)
-			}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		result += "#["
+		result += strconv.FormatInt(int64(exprImpl.Col.RelPos), 10)
+		result += ","
+		result += strconv.FormatInt(int64(exprImpl.Col.ColPos), 10)
+		result += "]"
+	case *plan.Expr_C:
+		switch val := exprImpl.C.Value.(type) {
+		case *plan.Const_Ival:
+			result += strconv.FormatInt(val.Ival, 10)
 
-			if floatConst, ok := constExpr.C.Value.(*plan.Const_Dval); ok {
-				result += strconv.FormatFloat(floatConst.Dval, 'f', -1, 64)
-			}
+		case *plan.Const_Dval:
+			result += strconv.FormatFloat(val.Dval, 'f', -1, 64)
 
-			if strConst, ok := constExpr.C.Value.(*plan.Const_Sval); ok {
-				result += "'" + strConst.Sval + "'"
-			}
-		case *plan.Expr_F:
-			funcExpr := expr.Expr.(*plan.Expr_F)
-			funcDesc, err := funcExprExplain(funcExpr, expr.Typ, options)
+		case *plan.Const_Sval:
+			result += "'" + val.Sval + "'"
+
+		case *plan.Const_Bval:
+			result += strconv.FormatBool(val.Bval)
+		}
+
+	case *plan.Expr_F:
+		funcExpr := expr.Expr.(*plan.Expr_F)
+		funcDesc, err := funcExprExplain(funcExpr, expr.Typ, options)
+		if err != nil {
+			return result, err
+		}
+		result += funcDesc
+	case *plan.Expr_Sub:
+		subqryExpr := expr.Expr.(*plan.Expr_Sub)
+		result += "subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10)
+	case *plan.Expr_Corr:
+		result += "#["
+		result += strconv.FormatInt(int64(exprImpl.Corr.RelPos), 10)
+		result += ","
+		result += strconv.FormatInt(int64(exprImpl.Corr.ColPos), 10)
+		result += ":"
+		result += strconv.FormatInt(int64(exprImpl.Corr.Depth), 10)
+		result += "]"
+	case *plan.Expr_V:
+		panic("unimplement Expr_V")
+	case *plan.Expr_P:
+		panic("unimplement Expr_P")
+	case *plan.Expr_List:
+		exprlist := expr.Expr.(*plan.Expr_List)
+		if exprlist.List.List != nil {
+			exprListDescImpl := NewExprListDescribeImpl(exprlist.List.List)
+			desclist, err := exprListDescImpl.GetDescription(options)
 			if err != nil {
 				return result, err
 			}
-			result += funcDesc
-		case *plan.Expr_Sub:
-			subqryExpr := expr.Expr.(*plan.Expr_Sub)
-			result += "subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10)
-		case *plan.Expr_Corr:
-			result += expr.ColName
-		case *plan.Expr_V:
-			panic("unimplement Expr_V")
-		case *plan.Expr_P:
-			panic("unimplement Expr_P")
-		case *plan.Expr_List:
-			exprlist := expr.Expr.(*plan.Expr_List)
-			if exprlist.List.List != nil {
-				exprListDescImpl := NewExprListDescribeImpl(exprlist.List.List)
-				desclist, err := exprListDescImpl.GetDescription(options)
-				if err != nil {
-					return result, err
-				}
-				result += desclist
-			}
-		default:
-			panic("error Expr")
+			result += desclist
 		}
+	default:
+		panic("error Expr")
 	}
+
 	return result, nil
 }
 
