@@ -34,9 +34,10 @@ type mergeBlocksCmd struct {
 	fromAddr    []uint32
 	toAddr      []uint32
 	txn         txnif.AsyncTxn
+	id          uint32
 }
 
-func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32, txn txnif.AsyncTxn) *mergeBlocksCmd {
+func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32, txn txnif.AsyncTxn, id uint32) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
 		tid:         tid,
 		droppedSegs: droppedSegs,
@@ -47,6 +48,7 @@ func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, create
 		fromAddr:    fromAddr,
 		toAddr:      toAddr,
 		txn:         txn,
+		id:          id,
 	}
 }
 
@@ -137,11 +139,15 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 
+	if err = binary.Write(w, binary.BigEndian, cmd.id); err != nil {
+		return
+	}
+
 	droppedSegsLength := uint32(len(cmd.droppedSegs))
 	if err = binary.Write(w, binary.BigEndian, droppedSegsLength); err != nil {
 		return
 	}
-	n = 2 + 4
+	n = 2 + 4 + 4
 	var sn int64
 	for _, seg := range cmd.droppedSegs {
 		if sn, err = WriteSegID(w, seg); err != nil {
@@ -201,12 +207,16 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &cmd.id); err != nil {
+		return
+	}
+	n = 4
 	dropSegmentLength := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &dropSegmentLength); err != nil {
 		return
 	}
 	var sn int64
-	n = 4
+	n += 4
 	cmd.droppedSegs = make([]*common.ID, dropSegmentLength)
 	for i := 0; i < int(dropSegmentLength); i++ {
 		id := &common.ID{}

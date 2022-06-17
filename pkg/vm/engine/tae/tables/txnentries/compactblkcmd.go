@@ -28,18 +28,23 @@ type compactBlockCmd struct {
 	from *common.ID
 	to   *common.ID
 	txn  txnif.AsyncTxn
+	id   uint32
 }
 
-func newCompactBlockCmd(from, to *common.ID, txn txnif.AsyncTxn) *compactBlockCmd {
+func newCompactBlockCmd(from, to *common.ID, txn txnif.AsyncTxn, id uint32) *compactBlockCmd {
 	return &compactBlockCmd{
 		txn:  txn,
 		from: from,
 		to:   to,
+		id:   id,
 	}
 }
 func (cmd *compactBlockCmd) GetType() int16 { return CmdCompactBlock }
 func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, CmdCompactBlock); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, cmd.id); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, cmd.from.TableID); err != nil {
@@ -61,11 +66,14 @@ func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, cmd.to.BlockID); err != nil {
 		return
 	}
-	n = 2 + 8 + 8 + 8 + 8 + 8 + 8
+	n = 2 + 4 + 8 + 8 + 8 + 8 + 8 + 8
 	return
 }
 func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmd.from = &common.ID{}
+	if err = binary.Read(r, binary.BigEndian, &cmd.id); err != nil {
+		return
+	}
 	if err = binary.Read(r, binary.BigEndian, &cmd.from.TableID); err != nil {
 		return
 	}
@@ -85,7 +93,7 @@ func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &cmd.to.BlockID); err != nil {
 		return
 	}
-	n = 8 + 8 + 8 + 8 + 8 + 8
+	n = 4 + 8 + 8 + 8 + 8 + 8 + 8
 	return
 }
 func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) {
@@ -102,11 +110,11 @@ func (cmd *compactBlockCmd) Unmarshal(buf []byte) (err error) {
 	return
 }
 func (cmd *compactBlockCmd) Desc() string {
-	return fmt.Sprintf("[CPCT]From%sTo%s", cmd.from.BlockString(), cmd.to.BlockString())
+	return fmt.Sprintf("[CPCT][CSN=%d]From%sTo%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
 }
 func (cmd *compactBlockCmd) String() string {
-	return fmt.Sprintf("[CPCT]From%sTo%s", cmd.from.BlockString(), cmd.to.BlockString())
+	return fmt.Sprintf("[CPCT][CSN=%d]From%sTo%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
 }
 func (cmd *compactBlockCmd) VerboseString() string {
-	return fmt.Sprintf("[CPCT]From%sTo%s", cmd.from.BlockString(), cmd.to.BlockString())
+	return fmt.Sprintf("[CPCT][CSN=%d]From%sTo%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
 }

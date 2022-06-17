@@ -165,7 +165,7 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
 }
 
 func (cmd *EntryCommand) Desc() string {
-	s := fmt.Sprintf("[%s][%s][TS=%d]%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.GetLogIndex().String())
+	s := fmt.Sprintf("[%s][%s][TS=%d][CSN=%d]", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID)
 	switch cmd.cmdType {
 	case CmdCreateTable, CmdLogTable:
 		s = fmt.Sprintf("%s[Schema:%v]", s, cmd.Table.schema.String())
@@ -318,12 +318,12 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 }
 
 func (cmd *EntryCommand) String() string {
-	s := fmt.Sprintf("[%s][%s][TS=%d]%s%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.GetLogIndex().String(), cmd.entry.String())
+	s := fmt.Sprintf("[%s][%s][TS=%d][CSN=%d]%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
 	return s
 }
 
 func (cmd *EntryCommand) VerboseString() string {
-	s := fmt.Sprintf("[%s][%s][TS=%d]%s%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.GetLogIndex().String(), cmd.entry.String())
+	s := fmt.Sprintf("[%s][%s][TS=%d][CSN=%d]%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
 	return s
 }
 func (cmd *EntryCommand) GetType() int16 { return cmd.cmdType }
