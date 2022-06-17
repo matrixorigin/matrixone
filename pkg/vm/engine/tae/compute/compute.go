@@ -33,7 +33,6 @@ func LengthOfMoVector(vec *gvec.Vector) int { return gvec.Length(vec) }
 
 func UpdateFixedValue[T any](vec *gvec.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
-	vvals := vec.Col.([]T)
 	if isNull {
 		if vec.Nsp.Np == nil {
 			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
@@ -41,6 +40,7 @@ func UpdateFixedValue[T any](vec *gvec.Vector, row uint32, v any) {
 			vec.Nsp.Np.Add(uint64(row))
 		}
 	} else {
+		vvals := vec.Col.([]T)
 		vvals[row] = v.(T)
 		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
 			vec.Nsp.Np.Remove(uint64(row))
@@ -123,6 +123,13 @@ func AppendValue(vec *gvec.Vector, v any) {
 
 func LengthOfBatch(bat *gbat.Batch) int {
 	return gvec.Length(bat.Vecs[0])
+}
+
+func GetNullableValue(col *gvec.Vector, row uint32) any {
+	if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
+		return types.Null{}
+	}
+	return GetValue(col, row)
 }
 
 func GetValue(col *gvec.Vector, row uint32) any {
@@ -543,16 +550,25 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 		pre := -1
 		for iterator.HasNext() {
 			row := iterator.Next()
+			v := vals[row]
+			if _, ok := v.(types.Null); ok {
+				if vec.Nsp.Np == nil {
+					vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
+				} else {
+					vec.Nsp.Np.Add(uint64(row))
+				}
+				continue
+			}
 			if pre != -1 {
 				UpdateOffsets(data, pre, int(row))
 			}
-			val := vals[row].([]byte)
+			val := v.([]byte)
 			suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
 			data.Lengths[row] = uint32(len(val))
 			val = append(val, suffix...)
 			data.Data = append(data.Data[:data.Offsets[row]], val...)
 			pre = int(row)
-			if vec.Nsp != nil && vec.Nsp.Np != nil {
+			if vec.Nsp.Np != nil {
 				if vec.Nsp.Np.Contains(uint64(row)) {
 					vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
 				}
