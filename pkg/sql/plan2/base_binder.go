@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"go/constant"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -868,6 +869,35 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
+	getStringExpr := func(val string) *Expr {
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: val,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_VARCHAR,
+				Nullable: false,
+				Size:     4,
+				Width:    int32(len(val)),
+			},
+		}
+	}
+
+	returnDecimalExpr := func(val string) (*Expr, error) {
+		typ := &plan.Type{
+			Id:       plan.Type_DECIMAL128,
+			Width:    int32(len(val)),
+			Scale:    0,
+			Nullable: false,
+		}
+		return appendCastBeforeExpr(getStringExpr(val), typ)
+	}
+
 	switch astExpr.Value.Kind() {
 	case constant.Unknown:
 		return &Expr{
@@ -899,7 +929,24 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			},
 		}, nil
 	case constant.Int:
-		intValue, _ := constant.Int64Val(astExpr.Value)
+		var intValue int64
+		var ok bool
+		var err error
+		if astExpr.ValType == tree.P_hexnum {
+			intValue, err = strconv.ParseInt(astExpr.String(), 0, 64)
+			if err != nil {
+				num, err := strconv.ParseUint(astExpr.String(), 0, 64)
+				if err != nil {
+					return nil, err
+				}
+				return returnDecimalExpr(strconv.FormatUint(num, 10))
+			}
+		} else {
+			intValue, ok = constant.Int64Val(astExpr.Value)
+			if !ok {
+				return returnDecimalExpr(astExpr.String())
+			}
+		}
 		if astExpr.Negative() {
 			intValue = -intValue
 		}
@@ -919,7 +966,10 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			},
 		}, nil
 	case constant.Float:
-		floatValue, _ := constant.Float64Val(astExpr.Value)
+		floatValue, ok := constant.Float64Val(astExpr.Value)
+		if !ok {
+			return returnDecimalExpr(astExpr.String())
+		}
 		if astExpr.Negative() {
 			floatValue = -floatValue
 		}
@@ -940,22 +990,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 		}, nil
 	case constant.String:
 		stringValue := constant.StringVal(astExpr.Value)
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: stringValue,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_VARCHAR,
-				Nullable: false,
-				Size:     4,
-				Width:    math.MaxInt32,
-			},
-		}, nil
+		return getStringExpr(stringValue), nil
 	default:
 		return nil, errors.New("", fmt.Sprintf("unsupport value: %v", astExpr.Value))
 	}
