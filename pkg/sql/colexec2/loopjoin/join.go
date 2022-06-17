@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package product
+package loopjoin
 
 import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" ⨯ ")
+	buf.WriteString(" ⨝ ")
 }
 
 func Prepare(proc *process.Process, arg interface{}) error {
@@ -113,20 +114,27 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := len(bat.Zs)
 	for i := 0; i < count; i++ {
 		for j := 0; j < len(ctr.bat.Zs); j++ {
-			for k, rp := range ap.Result {
-				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
-						rbat.Clean(proc.Mp)
-						return err
-					}
-				} else {
-					if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp); err != nil {
-						rbat.Clean(proc.Mp)
-						return err
+			vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, j, proc, ap.Cond)
+			if err != nil {
+				return err
+			}
+			if vec.Col.([]bool)[0] {
+				for k, rp := range ap.Result {
+					if rp.Rel == 0 {
+						if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
+							rbat.Clean(proc.Mp)
+							return err
+						}
+					} else {
+						if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp); err != nil {
+							rbat.Clean(proc.Mp)
+							return err
+						}
 					}
 				}
+				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
 			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+			vector.Free(vec, proc.Mp)
 		}
 	}
 	proc.Reg.InputBatch = rbat
