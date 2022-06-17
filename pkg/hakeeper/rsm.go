@@ -24,7 +24,8 @@ import (
 	sm "github.com/lni/dragonboat/v4/statemachine"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -53,6 +54,7 @@ const (
 	dnHeartbeatTag
 	logHeartbeatTag
 	getIDTag
+	updateScheduleCommandTag
 )
 
 type StateQuery struct{}
@@ -67,18 +69,36 @@ type logShardIDQueryResult struct {
 }
 
 type stateMachine struct {
-	replicaID   uint64
-	operators   map[string][]Operator // keyed by UUID
-	Tick        uint64
-	NextID      uint64
-	LogShards   map[string]uint64 // keyed by Log Shard name
-	DNState     DNState
-	LogState    LogState
-	ClusterInfo ClusterInfo
+	replicaID        uint64
+	term             uint64
+	scheduleCommands map[string][]hapb.ScheduleCommand // keyed by UUID
+	Tick             uint64
+	NextID           uint64
+	LogShards        map[string]uint64 // keyed by Log Shard name
+	DNState          DNState
+	LogState         LogState
+	ClusterInfo      ClusterInfo
 }
 
 func parseCmdTag(cmd []byte) uint16 {
 	return binaryEnc.Uint16(cmd)
+}
+
+func GetUpdateCommandsCmd(term uint64, cmds []hapb.ScheduleCommand) []byte {
+	b := hapb.CommandBatch{
+		Term:     term,
+		Commands: cmds,
+	}
+	data := make([]byte, headerSize+b.Size())
+	binaryEnc.PutUint16(data, updateScheduleCommandTag)
+	if _, err := b.MarshalTo(data[headerSize:]); err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func isUpdateCommandsCmd(cmd []byte) bool {
+	return parseCmdTag(cmd) == updateScheduleCommandTag
 }
 
 func GetGetIDCmd(count uint64) []byte {
@@ -170,10 +190,11 @@ func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "invalid HAKeeper shard ID"))
 	}
 	return &stateMachine{
-		replicaID: replicaID,
-		LogShards: make(map[string]uint64),
-		DNState:   NewDNState(),
-		LogState:  NewLogState(),
+		replicaID:        replicaID,
+		scheduleCommands: make(map[string][]hapb.ScheduleCommand),
+		LogShards:        make(map[string]uint64),
+		DNState:          NewDNState(),
+		LogState:         NewLogState(),
 	}
 }
 
@@ -184,6 +205,31 @@ func (s *stateMachine) Close() error {
 func (s *stateMachine) assignID() uint64 {
 	s.NextID++
 	return s.NextID
+}
+
+func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) (sm.Result, error) {
+	data := cmd[headerSize:]
+	var b hapb.CommandBatch
+	if err := b.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	plog.Infof("incoming term: %d, rsm term: %d", b.Term, s.term)
+	if s.term > b.Term {
+		return sm.Result{}, nil
+	}
+
+	s.term = b.Term
+	s.scheduleCommands = make(map[string][]hapb.ScheduleCommand)
+	for _, c := range b.Commands {
+		l, ok := s.scheduleCommands[c.UUID]
+		if !ok {
+			l = make([]hapb.ScheduleCommand, 0)
+		}
+		l = append(l, c)
+		s.scheduleCommands[c.UUID] = l
+	}
+
+	return sm.Result{}, nil
 }
 
 func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
@@ -202,7 +248,7 @@ func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) (sm.Result, error) {
 
 func (s *stateMachine) handleDNHeartbeat(cmd []byte) (sm.Result, error) {
 	data := parseHeartbeatCmd(cmd)
-	var hb logservice.DNStoreHeartbeat
+	var hb pb.DNStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
@@ -212,7 +258,7 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) (sm.Result, error) {
 
 func (s *stateMachine) handleLogHeartbeat(cmd []byte) (sm.Result, error) {
 	data := parseHeartbeatCmd(cmd)
-	var hb logservice.LogStoreHeartbeat
+	var hb pb.LogStoreHeartbeat
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
@@ -246,6 +292,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleTick(cmd)
 	} else if isGetIDCmd(cmd) {
 		return s.handleGetIDCmd(cmd)
+	} else if isUpdateCommandsCmd(cmd) {
+		return s.handleUpdateCommandsCmd(cmd)
 	}
 	panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
 }

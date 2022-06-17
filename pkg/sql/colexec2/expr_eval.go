@@ -104,6 +104,78 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	}
 }
 
+func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+	var vec *vector.Vector
+	e := expr.Expr
+	switch t := e.(type) {
+	case *plan.Expr_C:
+		if t.C.GetIsnull() {
+			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())})
+			nulls.Add(vec.Nsp, 0)
+		} else {
+			switch t.C.GetValue().(type) {
+			case *plan.Const_Bval:
+				vec = vector.NewConst(constBType)
+				vec.Col = []bool{t.C.GetBval()}
+			case *plan.Const_Ival:
+				vec = vector.NewConst(constIType)
+				vec.Col = []int64{t.C.GetIval()}
+			case *plan.Const_Dval:
+				vec = vector.NewConst(constDType)
+				vec.Col = []float64{t.C.GetDval()}
+			case *plan.Const_Sval:
+				vec = vector.NewConst(constSType)
+				sval := t.C.GetSval()
+				vec.Col = &types.Bytes{
+					Data:    []byte(sval),
+					Offsets: []uint32{0},
+					Lengths: []uint32{uint32(len(sval))},
+				}
+			default:
+				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
+			}
+		}
+		vec.Length = 1
+		return vec, nil
+	case *plan.Expr_T:
+		// return a vector recorded type information but without real data
+		return vector.New(types.Type{
+			Oid:       types.T(t.T.Typ.GetId()),
+			Width:     t.T.Typ.GetWidth(),
+			Scale:     t.T.Typ.GetScale(),
+			Precision: t.T.Typ.GetPrecision(),
+		}), nil
+	case *plan.Expr_Col:
+		if t.Col.RelPos == 0 {
+			return r.Vecs[t.Col.ColPos].ToConst(rRow), nil
+		}
+		return s.Vecs[t.Col.ColPos].ToConst(sRow), nil
+	case *plan.Expr_F:
+		overloadId := t.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
+		if err != nil {
+			return nil, err
+		}
+		vs := make([]*vector.Vector, len(t.F.Args))
+		for i := range vs {
+			v, err := JoinFilterEvalExpr(r, s, rRow, sRow, proc, t.F.Args[i])
+			if err != nil {
+				return nil, err
+			}
+			vs[i] = v
+		}
+		vec, err = f.VecFn(vs, proc)
+		if err != nil {
+			return nil, err
+		}
+		vec.Length = 1
+		return vec, nil
+	default:
+		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))
+	}
+}
+
 // RewriteFilterExprList will convert an expression list to be an AndExpr
 func RewriteFilterExprList(list []*plan.Expr) *plan.Expr {
 	l := len(list)
