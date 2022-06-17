@@ -146,7 +146,7 @@ func (rel *txnRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) e
 				continue
 			}
 			colIdx := schema.GetColIdx(attr)
-			err := rel.handle.UpdateByHiddenKey(v, colIdx, compute.GetNullableValue(data.Vecs[i], uint32(idx)))
+			err := rel.handle.UpdateByHiddenKey(v, colIdx, compute.GetValue(data.Vecs[i], uint32(idx)))
 			if err != nil {
 				return err
 			}

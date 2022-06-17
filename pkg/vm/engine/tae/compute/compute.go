@@ -125,14 +125,10 @@ func LengthOfBatch(bat *gbat.Batch) int {
 	return gvec.Length(bat.Vecs[0])
 }
 
-func GetNullableValue(col *gvec.Vector, row uint32) any {
+func GetValue(col *gvec.Vector, row uint32) any {
 	if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
 		return types.Null{}
 	}
-	return GetValue(col, row)
-}
-
-func GetValue(col *gvec.Vector, row uint32) any {
 	vals := col.Col
 	switch col.Typ.Oid {
 	case types.Type_BOOL:

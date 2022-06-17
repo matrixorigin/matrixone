@@ -2017,7 +2017,7 @@ func TestNull1(t *testing.T) {
 	blk := getOneBlock(rel)
 	view, err := blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
-	v := compute.GetNullableValue(view.GetColumnData(), 2)
+	v := compute.GetValue(view.GetColumnData(), 2)
 	assert.True(t, types.IsNull(v))
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
 	assert.NoError(t, txn.Commit())
@@ -2027,7 +2027,7 @@ func TestNull1(t *testing.T) {
 	blk = getOneBlock(rel)
 	view, err = blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
-	v = compute.GetNullableValue(view.GetColumnData(), 2)
+	v = compute.GetValue(view.GetColumnData(), 2)
 	assert.True(t, types.IsNull(v))
 	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
 
