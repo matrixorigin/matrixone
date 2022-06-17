@@ -1286,7 +1286,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 			case 0b00:
 				if c, ok := filter.Expr.(*plan.Expr_C); ok {
 					if c, ok := c.C.Value.(*plan.Const_Bval); ok {
-						if c.Bval == true {
+						if c.Bval {
 							break
 						}
 					}
