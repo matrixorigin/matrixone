@@ -2010,7 +2010,7 @@ func TestNull1(t *testing.T) {
 
 	bat := catalog.MockData(schema, schema.BlockMaxRows*3+1)
 	bats := compute.SplitBatch(bat, 4)
-	compute.SetFixSizeTypeValue(bats[0].Vecs[3], 2, types.Null{})
+	compute.UpdateValue(bats[0].Vecs[3], 2, types.Null{})
 	tae.createRelAndAppend(bats[0], true)
 
 	txn, rel := tae.getRelation()

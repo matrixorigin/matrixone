@@ -31,7 +31,7 @@ import (
 
 func LengthOfMoVector(vec *gvec.Vector) int { return gvec.Length(vec) }
 
-func UpdateFixedValue[T any](vec *gvec.Vector, row uint32, v any) {
+func GenericUpdateFixedValue[T any](vec *gvec.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
 	if isNull {
 		if vec.Nsp.Np == nil {
@@ -190,40 +190,50 @@ func GetValue(col *gvec.Vector, row uint32) any {
 	}
 }
 
-func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) {
+func UpdateValue(col *gvec.Vector, row uint32, val any) {
 	switch col.Typ.Oid {
 	case types.Type_BOOL:
-		UpdateFixedValue[bool](col, row, val)
+		GenericUpdateFixedValue[bool](col, row, val)
 	case types.Type_INT8:
-		UpdateFixedValue[int8](col, row, val)
+		GenericUpdateFixedValue[int8](col, row, val)
 	case types.Type_INT16:
-		UpdateFixedValue[int16](col, row, val)
+		GenericUpdateFixedValue[int16](col, row, val)
 	case types.Type_INT32:
-		UpdateFixedValue[int32](col, row, val)
+		GenericUpdateFixedValue[int32](col, row, val)
 	case types.Type_INT64:
-		UpdateFixedValue[int64](col, row, val)
+		GenericUpdateFixedValue[int64](col, row, val)
 	case types.Type_UINT8:
-		UpdateFixedValue[uint8](col, row, val)
+		GenericUpdateFixedValue[uint8](col, row, val)
 	case types.Type_UINT16:
-		UpdateFixedValue[uint16](col, row, val)
+		GenericUpdateFixedValue[uint16](col, row, val)
 	case types.Type_UINT32:
-		UpdateFixedValue[uint32](col, row, val)
+		GenericUpdateFixedValue[uint32](col, row, val)
 	case types.Type_UINT64:
-		UpdateFixedValue[uint64](col, row, val)
+		GenericUpdateFixedValue[uint64](col, row, val)
 	case types.Type_DECIMAL64:
-		UpdateFixedValue[types.Decimal64](col, row, val)
+		GenericUpdateFixedValue[types.Decimal64](col, row, val)
 	case types.Type_DECIMAL128:
-		UpdateFixedValue[types.Decimal128](col, row, val)
+		GenericUpdateFixedValue[types.Decimal128](col, row, val)
 	case types.Type_FLOAT32:
-		UpdateFixedValue[float32](col, row, val)
+		GenericUpdateFixedValue[float32](col, row, val)
 	case types.Type_FLOAT64:
-		UpdateFixedValue[float64](col, row, val)
+		GenericUpdateFixedValue[float64](col, row, val)
 	case types.Type_DATE:
-		UpdateFixedValue[types.Date](col, row, val)
+		GenericUpdateFixedValue[types.Date](col, row, val)
 	case types.Type_DATETIME:
-		UpdateFixedValue[types.Datetime](col, row, val)
+		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.Type_TIMESTAMP:
-		UpdateFixedValue[types.Timestamp](col, row, val)
+		GenericUpdateFixedValue[types.Timestamp](col, row, val)
+	case types.Type_VARCHAR, types.Type_CHAR, types.Type_JSON:
+		v := val.([]byte)
+		data := col.Col.(*types.Bytes)
+		tail := data.Data[data.Offsets[row]+data.Lengths[row]:]
+		data.Lengths[row] = uint32(len(v))
+		v = append(v, tail...)
+		data.Data = append(data.Data[:data.Offsets[row]], v...)
+		if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
+			col.Nsp.Np.Remove(uint64(row))
+		}
 	default:
 		panic(fmt.Errorf("%v not supported", col.Typ))
 	}
@@ -539,7 +549,7 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 		types.Type_DATE, types.Type_DATETIME, types.Type_TIMESTAMP:
 		for iterator.HasNext() {
 			row := iterator.Next()
-			SetFixSizeTypeValue(vec, row, vals[row])
+			UpdateValue(vec, row, vals[row])
 		}
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data := col.(*types.Bytes)
@@ -558,17 +568,8 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 			if pre != -1 {
 				UpdateOffsets(data, pre, int(row))
 			}
-			val := v.([]byte)
-			suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
-			data.Lengths[row] = uint32(len(val))
-			val = append(val, suffix...)
-			data.Data = append(data.Data[:data.Offsets[row]], val...)
+			UpdateValue(vec, row, vals[row])
 			pre = int(row)
-			if vec.Nsp.Np != nil {
-				if vec.Nsp.Np.Contains(uint64(row)) {
-					vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
-				}
-			}
 		}
 		if pre != -1 {
 			UpdateOffsets(data, pre, len(data.Lengths)-1)
