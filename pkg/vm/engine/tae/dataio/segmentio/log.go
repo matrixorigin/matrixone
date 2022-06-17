@@ -178,6 +178,8 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 				file.snode.logExtents.offset = uint32(int(offset) + data.Cap() - cache.Len() - n)
 				l.allocator.CheckAllocations(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
 				l.logFile.driver.nodes[file.name] = file
+				file.Ref()
+				file.OnZeroCB = file.close
 			}
 			if block == nil {
 				l.logFile.driver.lastInode++

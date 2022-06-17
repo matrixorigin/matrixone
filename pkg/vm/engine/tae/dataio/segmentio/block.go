@@ -75,9 +75,7 @@ func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) 
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*DriverFile, 1)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
-	bf.indexMeta.file = make([]*DriverFile, 1)
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -115,12 +113,7 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
-	if bf.deletes.file != nil {
-		bf.deletes.mutex.Lock()
-		defer bf.deletes.mutex.Unlock()
-		bf.deletes.file = append(bf.deletes.file,
-			bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)))
-	}
+	bf.deletes.SetFile(bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)))
 	return
 }
 
@@ -186,14 +179,14 @@ func (bf *blockFile) Destroy() error {
 		cb.Unref()
 	}
 	bf.columns = nil
-	for _, del := range bf.deletes.file{
+	for _, del := range bf.deletes.file {
 		if del == nil {
 			continue
 		}
 		del.Unref()
 	}
 	bf.deletes = nil
-	for _, idx := range bf.indexMeta.file{
+	for _, idx := range bf.indexMeta.file {
 		if idx == nil {
 			continue
 		}

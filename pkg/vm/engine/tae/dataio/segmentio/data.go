@@ -47,7 +47,7 @@ func newData(colBlk *columnBlock) *dataFile {
 	df := &dataFile{
 		colBlk: colBlk,
 		buf:    make([]byte, 0),
-		file : make([]*DriverFile, 0),
+		file:   make([]*DriverFile, 0),
 	}
 	df.stat = &fileStat{}
 	return df
@@ -77,18 +77,7 @@ func newDeletes(block *blockFile) *deletesFile {
 }
 
 func (df *dataFile) Write(buf []byte) (n int, err error) {
-	if df.file == nil {
-		n = len(buf)
-		df.buf = make([]byte, len(buf))
-		copy(df.buf, buf)
-		df.stat.size = int64(len(df.buf))
-		df.stat.algo = 0
-		df.stat.originSize = int64(len(df.buf))
-		return
-	}
-	df.mutex.RLock()
-	file := df.file[len(df.file)-1]
-	df.mutex.RUnlock()
+	file := df.GetFile()
 	if df.colBlk != nil && df.colBlk.block.rows > 0 {
 		file.SetRows(df.colBlk.block.rows)
 	}
@@ -102,18 +91,11 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 }
 
 func (df *dataFile) Read(buf []byte) (n int, err error) {
-	if df.file == nil {
-		n = len(buf)
-		copy(buf, df.buf)
-		return
-	}
 	bufLen := len(buf)
 	if bufLen == 0 {
 		return 0, nil
 	}
-	df.mutex.RLock()
-	file := df.file[len(df.file)-1]
-	df.mutex.RUnlock()
+	file := df.GetFile()
 	n, err = file.Read(buf)
 	return n, nil
 }
@@ -124,9 +106,12 @@ func (df *dataFile) upgradeFile() {
 	}
 	go func() {
 		df.mutex.Lock()
+		defer df.mutex.Unlock()
+		if len(df.file) < UPGRADE_FILE_NUM {
+			return
+		}
 		releaseFile := df.file[:len(df.file)-1]
 		df.file = df.file[len(df.file)-1 : len(df.file)]
-		df.mutex.Unlock()
 		for _, file := range releaseFile {
 			file.driver.ReleaseFile(file)
 		}
@@ -135,6 +120,18 @@ func (df *dataFile) upgradeFile() {
 
 func (df *dataFile) GetFileType() common.FileType {
 	return common.DiskFile
+}
+
+func (df *dataFile) GetFile() *DriverFile {
+	df.mutex.RLock()
+	defer df.mutex.RUnlock()
+	return df.file[len(df.file)-1]
+}
+
+func (df *dataFile) SetFile(file *DriverFile) {
+	df.mutex.Lock()
+	defer df.mutex.Unlock()
+	df.file = append(df.file, file)
 }
 
 func (df *dataFile) Ref()            { df.colBlk.Ref() }

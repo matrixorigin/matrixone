@@ -60,12 +60,9 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	}
 	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
-		cb.indexes[i].file = make([]*DriverFile, 1)
 	}
 	cb.updates = newUpdates(cb)
-	cb.updates.file = make([]*DriverFile, 1)
 	cb.data = newData(cb)
-	cb.data.file = make([]*DriverFile, 1)
 	cb.OnZeroCB = cb.close
 	cb.Ref()
 	return cb
@@ -73,18 +70,8 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
-	if cb.data.file != nil {
-		cb.data.mutex.Lock()
-		defer cb.data.mutex.Unlock()
-		cb.data.file = append(cb.data.file,
-			cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
-	}
-	if cb.updates.file != nil {
-		cb.updates.mutex.Lock()
-		defer cb.updates.mutex.Unlock()
-		cb.updates.file = append(cb.updates.file,
-			cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)))
-	}
+	cb.data.SetFile(cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
+	cb.updates.SetFile(cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)))
 	return
 }
 
@@ -178,17 +165,13 @@ func (cb *columnBlock) Destroy() {
 	cb.data.mutex.Unlock()
 	if files != nil {
 		for _, file := range files {
-			if file == nil {
-				continue
-			}
-			cb.block.seg.driver.ReleaseFile(file)
+			file.Unref()
 		}
 	}
 
 	for _, index := range cb.indexes {
-		if index.dataFile == nil || index.dataFile.file[0] == nil {
-			continue
+		for _, file := range index.dataFile.file {
+			file.Unref()
 		}
-		cb.block.seg.driver.ReleaseFile(index.dataFile.file[0])
 	}
 }
