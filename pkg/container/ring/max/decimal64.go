@@ -16,6 +16,7 @@ package max
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
@@ -107,7 +108,7 @@ func (r *Decimal64Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal64Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
-	r.Vs[n] = 0
+	r.Vs[n] = math.MinInt64
 	r.Ns = append(r.Ns, 0)
 	r.Es = append(r.Es, true)
 	return nil
@@ -138,6 +139,7 @@ func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Es = append(r.Es, true)
+		r.Vs[i+n] = math.MinInt64
 	}
 	return nil
 }
