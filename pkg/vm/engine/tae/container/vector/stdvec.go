@@ -442,13 +442,8 @@ func (v *StdVector) Window(start, end uint32) IVector {
 		Data: v.Data[startIdx:endIdx],
 	}
 	if mask&container.HasNullMask != 0 {
-		if mask&container.ReadonlyMask == 0 {
-			var np *roaring64.Bitmap
-			if v.VMask != nil {
-				np = common.BM64Window(v.VMask.Np, int(start), int(end))
-			}
-			vec.VMask = &nulls.Nulls{Np: np}
-		}
+		np := common.BM64Window(v.VMask.Np, int(start), int(end))
+		vec.VMask = &nulls.Nulls{Np: np}
 	} else {
 		vec.VMask = &nulls.Nulls{}
 	}

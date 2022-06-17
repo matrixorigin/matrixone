@@ -739,7 +739,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v an
 		view.MemNode = wrapper.MNode
 		defer view.Free()
 	}
-	v = compute.GetValue(view.RawVec, row)
+	v = compute.GetNullableValue(view.RawVec, row)
 	return
 }
 
