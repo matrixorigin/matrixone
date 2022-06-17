@@ -32,21 +32,21 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "unsupported expr in limit clause")
 	}
 
-	return b.baseBindExpr(astExpr, depth)
+	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
-func (b *LimitBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
+func (b *LimitBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.InvalidColumnReference, "column name not allowed in limit clause")
 }
 
-func (b *LimitBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *LimitBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.GroupingError, "aggregate functions not allowed in limit clause")
 }
 
-func (b *LimitBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *LimitBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "window functions not allowed in limit clause")
 }
 
-func (b *LimitBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
+func (b *LimitBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "subquery functions not allowed in limit clause")
 }

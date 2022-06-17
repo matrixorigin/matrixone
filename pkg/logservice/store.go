@@ -114,6 +114,7 @@ func newLogStore(cfg Config) (*logStore, error) {
 	ls := &logStore{
 		cfg:     cfg,
 		nh:      nh,
+		alloc:   newIDAllocator(),
 		stopper: syncutil.NewStopper(),
 	}
 	ls.mu.truncateCh = make(chan struct{})
