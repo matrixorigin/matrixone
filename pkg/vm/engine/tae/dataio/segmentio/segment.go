@@ -107,6 +107,18 @@ func (sf *segmentFile) replayInfo(stat *fileStat, file *DriverFile) {
 	stat.name = file.GetName()
 }
 
+func setFile(files *[]*DriverFile, file *DriverFile) {
+	if len(*files) > 1 {
+		panic(any("driver file err"))
+	}
+	if len(*files) == 1 {
+		(*files)[0].Unref()
+		(*files)[0] = file
+		return
+	}
+	*files = append(*files, file)
+}
+
 func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
 	err := sf.driver.Replay(cache)
 	if err != nil {
@@ -143,15 +155,14 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 		}
 		switch tmpName[1] {
 		case "blk":
-			if ts == 0 {
-				bf.columns[col].ts = 0
-				bf.columns[col].data.file[0] = file
+			if len(bf.columns[col].data.file) == 0 {
+				bf.columns[col].ts = ts
+				setFile(&bf.columns[col].data.file, file)
 				sf.replayInfo(bf.columns[col].data.stat, file)
-				break
 			}
 			if bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
-				bf.columns[col].data.file[0] = file
+				setFile(&bf.columns[col].data.file, file)
 				sf.replayInfo(bf.columns[col].data.stat, file)
 			}
 			if bf.ts <= ts {
@@ -162,22 +173,22 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			if bf.columns[col].updates.file[0] == nil {
-				bf.columns[col].updates.file[0] = file
+			if len(bf.columns[col].updates.file) == 0 {
+				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 				break
 			}
 			if bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
-				bf.columns[col].updates.file[0] = file
+				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 			}
 		case "del":
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			if bf.deletes.file[0] == nil {
-				bf.deletes.file[0] = file
+			if len(bf.deletes.file) == 0 {
+				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
 				break
 			}
@@ -191,16 +202,16 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				}
 			}
 			if ts > delTs {
-				bf.deletes.file[0] = file
+				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
 			}
 		case "idx":
 			if ts == 0 && len(fileName) < 3 {
-				bf.indexMeta.file[0] = file
+				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
 				break
 			}
-			bf.columns[col].indexes[ts].dataFile.file[0] = file
+			setFile(&bf.columns[col].indexes[ts].dataFile.file, file)
 			sf.replayInfo(bf.columns[col].indexes[ts].dataFile.stat, file)
 		default:
 			panic(any("No Support"))

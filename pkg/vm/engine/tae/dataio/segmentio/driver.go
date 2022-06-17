@@ -29,7 +29,7 @@ const INODE_NUM = 4096
 const INODE_SIZE = 512
 const BLOCK_SIZE = 4096
 const SIZE = 4 * 1024 * 1024 * 1024
-const LOG_START = 2 * INODE_SIZE
+const LOG_START = 2 * BLOCK_SIZE
 const DATA_START = LOG_START + INODE_SIZE*INODE_NUM
 const DATA_SIZE = SIZE - DATA_START
 const LOG_SIZE = DATA_START - LOG_START
@@ -200,6 +200,8 @@ func (s *Driver) NewBlockFile(fname string) *DriverFile {
 	}
 	s.nodes[file.name] = file
 	s.lastInode += 1
+	file.OnZeroCB = file.close
+	file.Ref()
 	s.PrintLog(file.name, "NewBlockFile")
 	return file
 }
