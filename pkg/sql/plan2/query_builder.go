@@ -1226,17 +1226,72 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 		}
 
 		var leftPushdown, rightPushdown []*plan.Expr
-		for _, filter := range filters {
-			side := getJoinSide(filter, leftTags)
-			var isEqui bool
+
+		joinSides := make([]int8, len(filters))
+		isEqui := make([]bool, len(filters))
+
+		var turnInner bool
+
+		for i, filter := range filters {
+			canTurnInner := true
+
+			joinSides[i] = getJoinSide(filter, leftTags)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
-				if f.F.Func.ObjName == "=" {
-					isEqui = true
+				isEqui[i] = f.F.Func.ObjName == "="
+				for _, arg := range f.F.Args {
+					if getJoinSide(arg, leftTags) == 0b11 {
+						canTurnInner = false
+						break
+					}
 				}
 			}
 
-			switch side {
+			if joinSides[i]&0b10 != 0 && canTurnInner && node.JoinType == plan.Node_LEFT {
+				turnInner = true
+				filters = append(node.OnList, filters...)
+				node.JoinType = plan.Node_INNER
+				node.OnList = nil
+
+				break
+			}
+
+			if joinSides[i]&0b01 != 0 && canTurnInner && node.JoinType == plan.Node_RIGHT {
+				turnInner = true
+				filters = append(node.OnList, filters...)
+				node.JoinType = plan.Node_INNER
+				node.OnList = nil
+
+				break
+			}
+
+			// TODO: FULL OUTER join should be handled here. However we don't have FULL OUTER join now.
+		}
+
+		if turnInner {
+			joinSides = make([]int8, len(filters))
+			isEqui = make([]bool, len(filters))
+
+			for i, filter := range filters {
+				joinSides[i] = getJoinSide(filter, leftTags)
+				if f, ok := filter.Expr.(*plan.Expr_F); ok {
+					if f.F.Func.ObjName == "=" {
+						isEqui[i] = (getJoinSide(f.F.Args[0], leftTags) != 0b11) && (getJoinSide(f.F.Args[1], leftTags) != 0b11)
+					}
+				}
+			}
+		}
+
+		for i, filter := range filters {
+			switch joinSides[i] {
 			case 0b00:
+				if c, ok := filter.Expr.(*plan.Expr_C); ok {
+					if c, ok := c.C.Value.(*plan.Const_Bval); ok {
+						if c.Bval == true {
+							break
+						}
+					}
+				}
+
 				switch node.JoinType {
 				case plan.Node_INNER:
 					leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
@@ -1267,7 +1322,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				}
 
 			case 0b11:
-				if node.JoinType == plan.Node_INNER && isEqui {
+				if node.JoinType == plan.Node_INNER && isEqui[i] {
 					node.OnList = append(node.OnList, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
