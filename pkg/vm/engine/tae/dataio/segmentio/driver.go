@@ -104,6 +104,7 @@ func (s *Driver) Init(name string) (err error) {
 	}
 
 	_, err = s.segFile.Write(sbuffer.Bytes())
+	logutil.Infof(" %s-%p | SegmentFile | Init ", s.name, &(s.name))
 	return
 }
 
@@ -128,6 +129,7 @@ func (s *Driver) Open(name string) (err error) {
 		state: RESIDENT,
 	}
 	s.super.lognode = log
+	logutil.Infof(" %s-%p | SegmentFile | Opened", s.name, &(s.name))
 	return
 }
 
@@ -148,6 +150,7 @@ func (s *Driver) Mount() {
 	s.nodes[logFile.name] = s.log.logFile
 	s.allocator = NewBitmapAllocator(DATA_SIZE, s.GetPageSize())
 	s.log.allocator = NewBitmapAllocator(LOG_SIZE, s.GetInodeSize())
+	s.PrintLog("Null", "SegmentFile | Mount")
 }
 
 func (s *Driver) Unmount() {
@@ -161,7 +164,7 @@ func (s *Driver) Destroy() {
 	if err != nil {
 		panic(any(err.Error()))
 	}
-	logutil.Infof(" %s | SegmentFile | Destroying", s.name)
+	s.PrintLog("Null", "SegmentFile | Destroying")
 	err = os.Remove(s.name)
 	if err != nil {
 		panic(any(err.Error()))
@@ -197,6 +200,7 @@ func (s *Driver) NewBlockFile(fname string) *DriverFile {
 	}
 	s.nodes[file.name] = file
 	s.lastInode += 1
+	s.PrintLog(file.name, "NewBlockFile")
 	return file
 }
 
@@ -234,17 +238,19 @@ func (s *Driver) Update(fd *DriverFile, pl []byte, fOffset uint64) error {
 }
 
 func (s *Driver) ReleaseFile(fd *DriverFile) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	if s.segFile == nil {
 		return
 	}
+	s.PrintLog(fd.name, "ReleaseFile | Start")
 	err := s.log.RemoveInode(fd)
 	if err != nil {
 		panic(any(err.Error()))
 	}
-	s.mutex.Lock()
 	delete(s.nodes, fd.name)
-	s.mutex.Unlock()
 	s.Free(fd)
+	s.PrintLog(fd.name, "ReleaseFile | End")
 	fd = nil
 }
 
@@ -277,4 +283,18 @@ func (s *Driver) GetNodes() map[string]*DriverFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	return s.nodes
+}
+
+func (s *Driver) PrintLog(name, info string) {
+	s.log.allocator.(*BitmapAllocator).mutex.RLock()
+	defer s.log.allocator.(*BitmapAllocator).mutex.RUnlock()
+	logutil.Infof(" %s-%p | %s | %s-%d-%d | Log Level1 %p-%x",
+		s.name,
+		&(s.name),
+		info,
+		name,
+		len(s.nodes),
+		s.lastInode,
+		&(s.log.allocator.(*BitmapAllocator).level1[0]),
+		s.log.allocator.(*BitmapAllocator).level1[0])
 }

@@ -191,11 +191,11 @@ func (bf *blockFile) Destroy() error {
 	}
 	bf.columns = nil
 	if bf.deletes.file[0] != nil {
-		bf.deletes.file[0].driver.ReleaseFile(bf.deletes.file[0])
+		bf.seg.driver.ReleaseFile(bf.deletes.file[0])
 		bf.deletes = nil
 	}
 	if bf.indexMeta.file[0] != nil {
-		bf.indexMeta.file[0].driver.ReleaseFile(bf.indexMeta.file[0])
+		bf.seg.driver.ReleaseFile(bf.indexMeta.file[0])
 		bf.indexMeta = nil
 	}
 	if bf.seg != nil {

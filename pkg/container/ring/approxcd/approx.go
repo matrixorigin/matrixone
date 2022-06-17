@@ -103,6 +103,7 @@ func (r *ApproxCountDistinctRing) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeUint64Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*8]
 	r.Vs[n] = 0
 	r.Sk = append(r.Sk, hll.New())
 	return nil
@@ -128,6 +129,7 @@ func (r *ApproxCountDistinctRing) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeUint64Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*8]
 	for i := 0; i < size; i++ {
 		r.Sk = append(r.Sk, hll.New())
 	}

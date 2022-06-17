@@ -214,7 +214,7 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 		}
 	}
 	v.Col = vs
-	v.Data = data
+	v.Data = data[:len(vs)*sz]
 	return v
 }
 
@@ -405,6 +405,12 @@ func SetCol(v *Vector, col interface{}) {
 }
 
 func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	v.Ref = w.Ref
 	switch v.Typ.Oid {
 	case types.T_int8:
@@ -607,6 +613,12 @@ func SetLength(v *Vector, n int) {
 }
 
 func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	switch v.Typ.Oid {
 	case types.T_bool:
 		vs := v.Col.([]bool)
@@ -1029,6 +1041,12 @@ func Shrink(v *Vector, sels []int64) {
 		v.Length = len(sels)
 		return
 	}
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	switch v.Typ.Oid {
 	case types.T_bool:
 		vs := v.Col.([]bool)
@@ -1189,6 +1207,12 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		v.Length = len(sels)
 		return nil
 	}
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	switch v.Typ.Oid {
 	case types.T_bool:
 		vs := v.Col.([]bool)
@@ -1406,6 +1430,12 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 
 // v[vi] = w[wi]
 func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
 	data := ws.Data[ws.Offsets[wi] : ws.Offsets[wi]+ws.Lengths[wi]]
 	if vs.Lengths[vi] >= ws.Lengths[wi] {
@@ -1436,6 +1466,12 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 	if v.Or {
 		return errors.New("UnionOne operation cannot be performed for origin vector")
 	}
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	switch v.Typ.Oid {
 	case types.T_bool:
 		if len(v.Data) == 0 {
@@ -1932,6 +1968,12 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 	if v.Or {
 		return errors.New("UnionNull operation cannot be performed for origin vector")
 	}
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	switch v.Typ.Oid {
 	case types.T_bool:
 		if len(v.Data) == 0 {
@@ -2378,6 +2420,12 @@ func Union(v, w *Vector, sels []int64, m *mheap.Mheap) error {
 	if v.Or {
 		return errors.New("Union operation cannot be performed for origin vector")
 	}
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 	oldLen := Length(v)
 	switch v.Typ.Oid {
 	case types.T_bool:
@@ -2713,6 +2761,12 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	if v.Or {
 		return errors.New("UnionOne operation cannot be performed for origin vector")
 	}
+	defer func() {
+		size := v.Typ.Oid.TypeLen()
+		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar {
+			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
+		}
+	}()
 
 	oldLen := Length(v)
 
