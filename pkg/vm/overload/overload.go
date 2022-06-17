@@ -18,10 +18,13 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopcomplement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopsemi"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/complement"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
@@ -77,6 +80,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	MergeOffset: mergeoffset.String,
 
 	Deletion: deletion.String,
+	Update:   update.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
@@ -109,6 +113,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	MergeOffset: mergeoffset.Prepare,
 
 	Deletion: deletion.Prepare,
+	Update:   update.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -141,4 +146,5 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	MergeOffset: mergeoffset.Call,
 
 	Deletion: deletion.Call,
+	Update:   update.Call,
 }

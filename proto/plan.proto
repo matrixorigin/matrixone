@@ -328,9 +328,13 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
-message UpdateList {
-	repeated Expr columns  = 1;
-	repeated Expr values   = 2; 
+message UpdateInfo {
+	string pri_key = 1;
+	int32 pri_key_idx = 2;
+	string hide_key = 3;
+	repeated string update_attrs = 4;
+	repeated string other_attrs = 5;
+	repeated string attr_orders = 6;
 }
 
 message Node {
@@ -420,7 +424,7 @@ message Node {
 	repeated Expr grouping_set = 10;
 	repeated Expr agg_list = 11;
 	repeated OrderBySpec order_by = 12;
-	UpdateList update_list = 13;
+	UpdateInfo update_info = 13;
 	WindowSpec win_spec = 14;
 	Expr limit = 15;
 	Expr offset = 16;

@@ -220,3 +220,57 @@ func DeepCopyExpr(expr *Expr) *Expr {
 
 	return new_expr
 }
+
+func getJoinSide(expr *plan.Expr, leftTags map[int32]*Binding) (side int8) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			side |= getJoinSide(arg, leftTags)
+		}
+
+	case *plan.Expr_Col:
+		if _, ok := leftTags[exprImpl.Col.RelPos]; ok {
+			side = 0b01
+		} else {
+			side = 0b10
+		}
+
+	case *plan.Expr_Corr:
+		side = 0b100
+	}
+
+	return
+}
+
+func containsTag(expr *plan.Expr, tag int32) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containsTag(arg, tag)
+		}
+
+	case *plan.Expr_Col:
+		return exprImpl.Col.RelPos == tag
+	}
+
+	return ret
+}
+
+func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefs(arg, tag, projects)
+		}
+
+	case *plan.Expr_Col:
+		colRef := exprImpl.Col
+		if colRef.RelPos == tag {
+			expr = DeepCopyExpr(projects[colRef.ColPos])
+		}
+	}
+
+	return expr
+}
