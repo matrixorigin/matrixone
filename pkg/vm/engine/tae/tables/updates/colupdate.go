@@ -35,8 +35,8 @@ import (
 type ColumnNode struct {
 	*common.DLNode
 	*sync.RWMutex
-	txnMask  *roaring.Bitmap
-	txnVals  map[uint32]any
+	mask     *roaring.Bitmap
+	vals     map[uint32]any
 	chain    *ColumnChain
 	startTs  uint64
 	commitTs uint64
@@ -47,8 +47,8 @@ type ColumnNode struct {
 
 func NewSimpleColumnNode() *ColumnNode {
 	node := &ColumnNode{
-		txnMask: roaring.NewBitmap(),
-		txnVals: make(map[uint32]any),
+		mask: roaring.NewBitmap(),
+		vals: make(map[uint32]any),
 	}
 	return node
 }
@@ -58,8 +58,8 @@ func NewCommittedColumnNode(startTs, commitTs uint64, id *common.ID, rwlocker *s
 	}
 	node := &ColumnNode{
 		RWMutex:  rwlocker,
-		txnMask:  roaring.NewBitmap(),
-		txnVals:  make(map[uint32]any),
+		mask:     roaring.NewBitmap(),
+		vals:     make(map[uint32]any),
 		startTs:  startTs,
 		commitTs: commitTs,
 		id:       id,
@@ -72,8 +72,8 @@ func NewColumnNode(txn txnif.AsyncTxn, id *common.ID, rwlocker *sync.RWMutex) *C
 	}
 	node := &ColumnNode{
 		RWMutex: rwlocker,
-		txnMask: roaring.NewBitmap(),
-		txnVals: make(map[uint32]any),
+		mask:    roaring.NewBitmap(),
+		vals:    make(map[uint32]any),
 		txn:     txn,
 		id:      id,
 	}
@@ -110,14 +110,14 @@ func (node *ColumnNode) GetDLNode() *common.DLNode {
 	return node.DLNode
 }
 
-func (node *ColumnNode) SetMask(mask *roaring.Bitmap) { node.txnMask = mask }
+func (node *ColumnNode) SetMask(mask *roaring.Bitmap) { node.mask = mask }
 
 func (node *ColumnNode) GetMask() *roaring.Bitmap {
-	return node.txnMask
+	return node.mask
 }
-func (node *ColumnNode) SetValues(vals map[uint32]any) { node.txnVals = vals }
+func (node *ColumnNode) SetValues(vals map[uint32]any) { node.vals = vals }
 func (node *ColumnNode) GetValues() map[uint32]any {
-	return node.txnVals
+	return node.vals
 }
 func (node *ColumnNode) Compare(o common.NodePayload) int {
 	op := o.(*ColumnNode)
@@ -142,22 +142,22 @@ func (node *ColumnNode) Compare(o common.NodePayload) int {
 }
 
 func (node *ColumnNode) GetValueLocked(row uint32) (v any, err error) {
-	v = node.txnVals[row]
+	v = node.vals[row]
 	if v == nil {
 		err = data.ErrNotFound
 	}
 	return
 }
 func (node *ColumnNode) HasUpdateLocked(row uint32) bool {
-	return node.txnVals[row] != nil
+	return node.vals[row] != nil
 }
 
 func (node *ColumnNode) EqualLocked(o *ColumnNode) bool {
 	if o == nil {
 		return node == nil
 	}
-	for k, v := range node.txnVals {
-		if v != o.txnVals[k] {
+	for k, v := range node.vals {
+		if v != o.vals[k] {
 			return false
 		}
 	}
@@ -165,7 +165,7 @@ func (node *ColumnNode) EqualLocked(o *ColumnNode) bool {
 }
 
 func (node *ColumnNode) GetUpdateCntLocked() int {
-	return int(node.txnMask.GetCardinality())
+	return int(node.mask.GetCardinality())
 }
 
 // TODO: rewrite
@@ -177,7 +177,7 @@ func (node *ColumnNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n = int64(sn)
 	node.id = txnbase.UnmarshalID(buf)
-	node.txnMask = roaring.New()
+	node.mask = roaring.New()
 
 	length := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -189,7 +189,7 @@ func (node *ColumnNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += int64(sn)
-	if err = node.txnMask.UnmarshalBinary(buf); err != nil {
+	if err = node.mask.UnmarshalBinary(buf); err != nil {
 		return
 	}
 	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
@@ -206,12 +206,12 @@ func (node *ColumnNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = vals.Read(buf); err != nil {
 		return
 	}
-	it := node.txnMask.Iterator()
+	it := node.mask.Iterator()
 	row := uint32(0)
 	for it.HasNext() {
 		key := it.Next()
 		v := compute.GetValue(&vals, row)
-		node.txnVals[key] = v
+		node.vals[key] = v
 		row++
 	}
 	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
@@ -228,7 +228,7 @@ func (node *ColumnNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(cn)
-	buf, err := node.txnMask.ToBytes()
+	buf, err := node.mask.ToBytes()
 	if err != nil {
 		return
 	}
@@ -243,10 +243,10 @@ func (node *ColumnNode) WriteTo(w io.Writer) (n int64, err error) {
 	n += int64(len(buf))
 
 	col := gvec.New(node.chain.GetMeta().GetSchema().ColDefs[node.chain.id.Idx].Type)
-	it := node.txnMask.Iterator()
+	it := node.mask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
-		compute.AppendValue(col, node.txnVals[row])
+		compute.AppendValue(col, node.vals[row])
 	}
 	buf, err = col.Show()
 	if err != nil {
@@ -269,16 +269,16 @@ func (node *ColumnNode) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (node *ColumnNode) UpdateLocked(row uint32, v any) error {
-	node.txnMask.Add(row)
-	node.txnVals[row] = v
+	node.mask.Add(row)
+	node.vals[row] = v
 	return nil
 }
 
 func (node *ColumnNode) MergeLocked(o *ColumnNode) {
-	for k, v := range o.txnVals {
-		if vv := node.txnVals[k]; vv == nil {
-			node.txnMask.Add(k)
-			node.txnVals[k] = v
+	for k, v := range o.vals {
+		if vv := node.vals[k]; vv == nil {
+			node.mask.Add(k)
+			node.vals[k] = v
 		}
 	}
 }
@@ -287,13 +287,13 @@ func (node *ColumnNode) GetStartTS() uint64        { return node.startTs }
 func (node *ColumnNode) GetCommitTSLocked() uint64 { return node.commitTs }
 
 func (node *ColumnNode) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector {
-	vec = compute.ApplyUpdateToVector(vec, node.txnMask, node.txnVals)
+	vec = compute.ApplyUpdateToVector(vec, node.mask, node.vals)
 	vec = compute.ApplyDeleteToVector(vec, deletes)
 	return vec
 }
 
 func (node *ColumnNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d,Cnt=%d", node.commitTs, len(node.txnVals))
+	return fmt.Sprintf("TS=%d,Cnt=%d", node.commitTs, len(node.vals))
 }
 
 func (node *ColumnNode) String() string {
@@ -308,7 +308,7 @@ func (node *ColumnNode) StringLocked() string {
 		commitState = "UC"
 	}
 	s := fmt.Sprintf("[%s:%s](%d-%d)[", commitState, node.id.BlockString(), node.startTs, node.commitTs)
-	for k, v := range node.txnVals {
+	for k, v := range node.vals {
 		s = fmt.Sprintf("%s%d:%v,", s, k, v)
 	}
 	s = fmt.Sprintf("%s]%s", s, node.logIndex.String())

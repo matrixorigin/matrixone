@@ -239,11 +239,11 @@ func TestColumnChain3(t *testing.T) {
 	updateCmd := cmd2.(*UpdateCmd)
 	assert.Equal(t, txnbase.CmdUpdate, updateCmd.GetType())
 	assert.Equal(t, *node.id, *updateCmd.update.id)
-	assert.True(t, node.txnMask.Equals(updateCmd.update.txnMask))
+	assert.True(t, node.mask.Equals(updateCmd.update.mask))
 	// t.Log(updateCmd.update.StringLocked())
-	// assert.Equal(t, node.txnVals, updateCmd.update.txnVals)
+	// assert.Equal(t, node.vals, updateCmd.update.vals)
 	// t.Log(updateCmd.update.id.BlockString())
-	// t.Log(updateCmd.update.txnMask.String())
+	// t.Log(updateCmd.update.mask.String())
 }
 
 func TestColumnChain4(t *testing.T) {

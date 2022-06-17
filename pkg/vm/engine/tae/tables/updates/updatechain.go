@@ -116,7 +116,7 @@ func (chain *ColumnChain) DeleteNode(node *common.DLNode) {
 
 func (chain *ColumnChain) DeleteNodeLocked(node *common.DLNode) {
 	n := node.GetPayload().(*ColumnNode)
-	for row := range n.txnVals {
+	for row := range n.vals {
 		_ = chain.view.Delete(row, n)
 	}
 	chain.Delete(node)
@@ -213,8 +213,8 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 	}, false)
 
 	if merged != nil {
-		mask = merged.txnMask
-		vals = merged.txnVals
+		mask = merged.mask
+		vals = merged.vals
 	}
 	return
 }
