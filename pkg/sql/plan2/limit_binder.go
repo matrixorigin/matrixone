@@ -37,10 +37,7 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 	if expr.Typ.Id == plan.Type_DECIMAL128 || expr.Typ.Id == plan.Type_DECIMAL64 {
-		return appendCastBeforeExpr(expr, &plan.Type{
-			Id:   plan.Type_INT64,
-			Size: 8,
-		})
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "only int64 support in limit/offset clause")
 	}
 	return expr, nil
 }

@@ -843,7 +843,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, errors.New("", "cast types length not match args length")
 		}
 		for idx, castType := range argsCastType {
-			if argsType[idx] != castType {
+			if argsType[idx] != castType && castType != types.T_any {
 				args[idx], err = appendCastBeforeExpr(args[idx], &plan.Type{
 					Id: plan.Type_TypeId(castType),
 				})
