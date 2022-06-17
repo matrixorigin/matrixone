@@ -16,8 +16,6 @@ package plan2
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 	"go/constant"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -49,7 +47,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 
 	// do type cast if needed
 	for i := range tableDef.Cols {
-		exprs[i], err = makeCastExpr(exprs[i], tableDef.Cols[i].Typ)
+		exprs[i], err = makePlan2CastExpr(exprs[i], tableDef.Cols[i].Typ)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +104,7 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 				}
 			} else {
 				// get default value, and init constant expr.
-				exprs[i], err = getDefaultExpr(tableDef.Cols[i].Default)
+				exprs[i], err = getDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
 				if err != nil {
 					return nil, err
 				}
@@ -116,9 +114,10 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 	return exprs, nil
 }
 
-func getDefaultExpr(e *plan.DefaultExpr) (*Expr, error) {
-	if !e.Exist || e.IsNull {
+func getDefaultExpr(e *plan.DefaultExpr, t *plan.Type) (*Expr, error) {
+	if e == nil || !e.Exist || e.IsNull {
 		return &plan.Expr{
+			Typ: t,
 			Expr: &plan.Expr_C{
 				C: &Const{Isnull: true},
 			},
@@ -127,73 +126,25 @@ func getDefaultExpr(e *plan.DefaultExpr) (*Expr, error) {
 	var ret plan.Expr
 	switch d := e.Value.ConstantValue.(type) {
 	case *plan.ConstantValue_BoolV:
-		ret.Expr = makeBoolConstExpr(d.BoolV)
+		ret.Expr = makePlan2BoolConstExpr(d.BoolV)
 	case *plan.ConstantValue_Int64V:
-		ret.Expr = makeInt64ConstExpr(d.Int64V)
+		ret.Expr = makePlan2Int64ConstExpr(d.Int64V)
+	case *plan.ConstantValue_Uint64V:
 	case *plan.ConstantValue_Float32V:
-		ret.Expr = makeFloat64ConstExpr(float64(d.Float32V))
+		ret.Expr = makePlan2Float64ConstExpr(float64(d.Float32V))
 	case *plan.ConstantValue_Float64V:
-		ret.Expr = makeFloat64ConstExpr(d.Float64V)
+		ret.Expr = makePlan2Float64ConstExpr(d.Float64V)
 	case *plan.ConstantValue_StringV:
-		ret.Expr = makeStringConstExpr(d.StringV)
+		ret.Expr = makePlan2StringConstExpr(d.StringV)
+	case *plan.ConstantValue_DateV:
+	case *plan.ConstantValue_DateTimeV:
+	case *plan.ConstantValue_Decimal64V:
+	case *plan.ConstantValue_Decimal128V:
+	case *plan.ConstantValue_TimeStampV:
 	default:
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("default type '%s' not support now", d))
+		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("default type '%s' is not support now", d))
 	}
 	return &ret, nil
-}
-
-func makeBoolConstExpr(v bool) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Bval{
-			Bval: v,
-		},
-	}}
-}
-
-func makeInt64ConstExpr(v int64) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Ival{
-			Ival: v,
-		},
-	}}
-}
-
-func makeFloat64ConstExpr(v float64) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Dval{
-			Dval: v,
-		},
-	}}
-}
-
-func makeStringConstExpr(v string) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Sval{
-			Sval: v,
-		},
-	}}
-}
-
-func makeCastExpr(expr *Expr, targetType *Type) (*Expr, error) {
-	t1, t2 := types.T(expr.Typ.Id), types.T(targetType.Id)
-	if t1 == t2 {
-		return expr, nil
-	}
-	_, id, _, err := function.GetFunctionByName("cast", []types.T{t1, t2})
-	if err != nil {
-		return nil, err
-	}
-	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{Typ: targetType}}}
-	return &plan.Expr{Expr: &plan.Expr_F{
-		F: &plan.Function{
-			Func: &ObjectRef{Obj: id},
-			Args: []*Expr{expr, t},
-		},
-	}}, nil
 }
 
 func getValues(rowset *RowsetData, rows *tree.ValuesClause, columnCount int) error {

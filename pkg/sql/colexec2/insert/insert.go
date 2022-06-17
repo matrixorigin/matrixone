@@ -54,7 +54,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		for i := range bat.Vecs {
 			if n.TargetColDefs[i].Primary {
 				if nulls.Any(bat.Vecs[i].Nsp) {
-					return false, errors.New(errno.SyntaxErrororAccessRuleViolation,
+					return false, errors.New(errno.InvalidColumnReference,
 						fmt.Sprintf("Attribute '%s' does not allow null values to be inserted", n.TargetColDefs[i].GetName()))
 				}
 			}
@@ -69,9 +69,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
 		}
 	}
-	println(fmt.Sprintf("query insert, and bat is %v, vec is %v", bat, bat.Vecs))
 	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
-	println("query insert has wrote over")
 	n.Affected += uint64(len(bat.Zs))
 	return false, err
 }

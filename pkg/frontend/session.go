@@ -659,6 +659,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Precision: attr.Attr.Type.Precision,
 				},
 				Primary: attr.Attr.Primary,
+				Default: plan2.MakePlan2DefaultExpr(attr.Attr.Default),
 			})
 		}
 	}
