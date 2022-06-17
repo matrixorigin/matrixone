@@ -71,3 +71,8 @@ func IsNull(v any) bool {
 	_, ok := v.(Null)
 	return ok
 }
+
+func DefaultVal[T any]() T {
+	var v T
+	return v
+}

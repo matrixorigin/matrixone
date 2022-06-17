@@ -35,9 +35,9 @@ import (
 type ColumnUpdateNode struct {
 	*common.DLNode
 	*sync.RWMutex
-	mask     *roaring.Bitmap
-	vals     map[uint32]any
-	nulls    *roaring.Bitmap
+	mask *roaring.Bitmap
+	vals map[uint32]any
+	// nulls    *roaring.Bitmap
 	chain    *ColumnChain
 	startTs  uint64
 	commitTs uint64
@@ -149,12 +149,13 @@ func (node *ColumnUpdateNode) GetValueLocked(row uint32) (v any, err error) {
 	}
 	return
 }
-func (node *ColumnUpdateNode) HasAnyNullLocked() bool {
-	if node.nulls == nil {
-		return false
-	}
-	return !node.nulls.IsEmpty()
-}
+
+// func (node *ColumnUpdateNode) HasAnyNullLocked() bool {
+// 	if node.nulls == nil {
+// 		return false
+// 	}
+// 	return !node.nulls.IsEmpty()
+// }
 
 func (node *ColumnUpdateNode) EqualLocked(o *ColumnUpdateNode) bool {
 	if o == nil {

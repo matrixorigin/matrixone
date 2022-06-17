@@ -28,72 +28,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
+func AppendTypedValue[T any](vec *gvec.Vector, v any) {
+	_, isNull := v.(types.Null)
+	vvals := vec.Col.([]T)
+	if isNull {
+		vec.Col = append(vvals, types.DefaultVal[T]())
+	} else {
+		vec.Col = append(vvals, v.(T))
+	}
+	vec.Data = types.EncodeFixedSlice(vvals, int(vec.Typ.Size))
+}
+
 func AppendValue(vec *gvec.Vector, v any) {
 	switch vec.Typ.Oid {
 	case types.Type_BOOL:
-		vvals := vec.Col.([]bool)
-		vec.Col = append(vvals, v.(bool))
-		vec.Data = types.EncodeFixedSlice(vvals, 1)
+		AppendTypedValue[bool](vec, v)
 	case types.Type_INT8:
-		vvals := vec.Col.([]int8)
-		vec.Col = append(vvals, v.(int8))
-		vec.Data = types.EncodeFixedSlice(vvals, 1)
+		AppendTypedValue[int8](vec, v)
 	case types.Type_INT16:
-		vvals := vec.Col.([]int16)
-		vec.Col = append(vvals, v.(int16))
-		vec.Data = types.EncodeFixedSlice(vvals, 2)
+		AppendTypedValue[int16](vec, v)
 	case types.Type_INT32:
-		vvals := vec.Col.([]int32)
-		vec.Col = append(vvals, v.(int32))
-		vec.Data = types.EncodeFixedSlice(vvals, 4)
+		AppendTypedValue[int32](vec, v)
 	case types.Type_INT64:
-		vvals := vec.Col.([]int64)
-		vec.Col = append(vvals, v.(int64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendTypedValue[int64](vec, v)
 	case types.Type_UINT8:
-		vvals := vec.Col.([]uint8)
-		vec.Col = append(vvals, v.(uint8))
-		vec.Data = types.EncodeFixedSlice(vvals, 1)
+		AppendTypedValue[uint8](vec, v)
 	case types.Type_UINT16:
-		vvals := vec.Col.([]uint16)
-		vec.Col = append(vvals, v.(uint16))
-		vec.Data = types.EncodeFixedSlice(vvals, 2)
+		AppendTypedValue[uint16](vec, v)
 	case types.Type_UINT32:
-		vvals := vec.Col.([]uint32)
-		vec.Col = append(vvals, v.(uint32))
-		vec.Data = types.EncodeFixedSlice(vvals, 4)
+		AppendTypedValue[uint32](vec, v)
 	case types.Type_UINT64:
-		vvals := vec.Col.([]uint64)
-		vec.Col = append(vvals, v.(uint64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendTypedValue[uint64](vec, v)
 	case types.Type_DECIMAL64:
-		vvals := vec.Col.([]types.Decimal64)
-		vec.Col = append(vvals, v.(types.Decimal64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendTypedValue[types.Decimal64](vec, v)
 	case types.Type_DECIMAL128:
-		vvals := vec.Col.([]types.Decimal128)
-		vec.Col = append(vvals, v.(types.Decimal128))
-		vec.Data = types.EncodeFixedSlice(vvals, 16)
+		AppendTypedValue[types.Decimal128](vec, v)
 	case types.Type_FLOAT32:
-		vvals := vec.Col.([]float32)
-		vec.Col = append(vvals, v.(float32))
-		vec.Data = types.EncodeFixedSlice(vvals, 4)
+		AppendTypedValue[float32](vec, v)
 	case types.Type_FLOAT64:
-		vvals := vec.Col.([]float64)
-		vec.Col = append(vvals, v.(float64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendTypedValue[float64](vec, v)
 	case types.Type_DATE:
-		vvals := vec.Col.([]types.Date)
-		vec.Col = append(vvals, v.(types.Date))
-		vec.Data = types.EncodeFixedSlice(vvals, types.DateSize)
+		AppendTypedValue[types.Date](vec, v)
 	case types.Type_TIMESTAMP:
-		vvals := vec.Col.([]types.Timestamp)
-		vec.Col = append(vvals, v.(types.Timestamp))
-		vec.Data = types.EncodeFixedSlice(vvals, types.TimestampSize)
+		AppendTypedValue[types.Timestamp](vec, v)
 	case types.Type_DATETIME:
-		vvals := vec.Col.([]types.Datetime)
-		vec.Col = append(vvals, v.(types.Datetime))
-		vec.Data = types.EncodeFixedSlice(vvals, types.DatetimeSize)
+		AppendTypedValue[types.Datetime](vec, v)
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
