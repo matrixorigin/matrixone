@@ -66,6 +66,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Sink Scan"
 	case plan.Node_AGG:
 		pname = "Aggregate"
+	case plan.Node_FILTER:
+		pname = "Filter"
 	case plan.Node_JOIN:
 		pname = "Join"
 	case plan.Node_SAMPLE:
@@ -137,6 +139,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 			fallthrough
 		case plan.Node_AGG:
 			fallthrough
+		case plan.Node_FILTER:
+			fallthrough
 		case plan.Node_JOIN:
 			fallthrough
 		case plan.Node_SAMPLE:
@@ -197,6 +201,15 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 		lines = append(lines, orderByInfo)
 	}
 
+	// Get Join type info
+	if ndesc.Node.NodeType == plan.Node_JOIN {
+		joinTypeInfo, err := ndesc.GetJoinTypeInfo(options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, joinTypeInfo)
+	}
+
 	// Get Join Condition info
 	if ndesc.Node.OnList != nil {
 		joinOnInfo, err := ndesc.GetJoinConditionInfo(options)
@@ -225,8 +238,8 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 	}
 
 	// Get Filter list info
-	if ndesc.Node.WhereList != nil && len(ndesc.Node.WhereList) != 0 {
-		filterInfo, err := ndesc.GetWhereConditionInfo(options)
+	if ndesc.Node.FilterList != nil && len(ndesc.Node.FilterList) != 0 {
+		filterInfo, err := ndesc.GetFilterConditionInfo(options)
 		if err != nil {
 			return nil, err
 		}
@@ -251,16 +264,16 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 		lines = append(lines, temp)
 	}
 
-	if ndesc.Node.UpdateList != nil {
-		updateListDesc := &UpdateListDescribeImpl{
-			UpdateList: ndesc.Node.UpdateList,
-		}
-		updatedesc, err := updateListDesc.GetDescription(options)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, "Set columns with("+updatedesc+")")
-	}
+	//if ndesc.Node.UpdateList != nil {
+	//	updateListDesc := &UpdateListDescribeImpl{
+	//		UpdateList: ndesc.Node.UpdateList,
+	//	}
+	//	updatedesc, err := updateListDesc.GetDescription(options)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	lines = append(lines, "Set columns with("+updatedesc+")")
+	//}
 	return lines, nil
 }
 
@@ -275,6 +288,11 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (stri
 	return result, nil
 }
 
+func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(options *ExplainOptions) (string, error) {
+	var result string = "Join Type: " + ndesc.Node.JoinType.String()
+	return result, nil
+}
+
 func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (string, error) {
 	var result string = "Join Cond:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
@@ -286,11 +304,11 @@ func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) (st
 	return result, nil
 }
 
-func (ndesc *NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) (string, error) {
-	var result string = "Filter: "
+func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (string, error) {
+	var result string = "Filter Cond: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
-		for _, v := range ndesc.Node.WhereList {
+		for _, v := range ndesc.Node.FilterList {
 			if !first {
 				result += " AND "
 			}
@@ -409,7 +427,7 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 }
 
 type ExprListDescribeImpl struct {
-	ExprList []*plan.Expr // ProjectList,OnList,WhereList,GroupBy,GroupingSet and so on
+	ExprList []*plan.Expr // ProjectList,OnList,FilterList,GroupBy,GroupingSet and so on
 }
 
 func NewExprListDescribeImpl(ExprList []*plan.Expr) *ExprListDescribeImpl {
@@ -492,30 +510,30 @@ func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string
 }
 
 type UpdateListDescribeImpl struct {
-	UpdateList *plan.UpdateList
+	//UpdateList *plan.UpdateList
 }
 
 func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	// u.UpdateList.Columns
 	var result string
-	var first bool = true
-	if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {
-		panic("update node number of columns and values is not equal")
-	}
-	for i, columnExpr := range u.UpdateList.Columns {
-		if !first {
-			result += ", "
-		}
-		colstr, err := describeExpr(columnExpr, options)
-		if err != nil {
-			return result, err
-		}
-		valstr, err := describeExpr(u.UpdateList.Values[i], options)
-		if err != nil {
-			return result, err
-		}
-		result += colstr + " = " + valstr
-		first = false
-	}
+	//var first bool = true
+	//if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {
+	//	panic("update node number of columns and values is not equal")
+	//}
+	//for i, columnExpr := range u.UpdateList.Columns {
+	//	if !first {
+	//		result += ", "
+	//	}
+	//	colstr, err := describeExpr(columnExpr, options)
+	//	if err != nil {
+	//		return result, err
+	//	}
+	//	valstr, err := describeExpr(u.UpdateList.Values[i], options)
+	//	if err != nil {
+	//		return result, err
+	//	}
+	//	result += colstr + " = " + valstr
+	//	first = false
+	//}
 	return result, nil
 }

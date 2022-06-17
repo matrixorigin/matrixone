@@ -110,10 +110,9 @@ message ColRef {
 
 // Reference a correlated column in the proj list of a node.
 message CorrColRef {
-	int32 node_id 	= 1;
-	int32 rel_pos	= 2;
-	int32 col_pos	= 3;
-	int32 depth		= 4;
+	int32 rel_pos	= 1;
+	int32 col_pos	= 2;
+	int32 depth		= 3;
 }
 
 // ExprList is a type of Expr
@@ -127,10 +126,21 @@ message TargetType {
 }
 
 // Reference a subquery
-message SubQuery {
-	int32 node_id		= 1;
-	bool is_correlated	= 2;
-	bool is_scalar		= 3;
+message SubqueryRef {
+	enum Type {
+		SCALAR		= 0;
+		EXISTS		= 1;
+		NOT_EXISTS	= 2;
+		IN			= 3;
+		NOT_IN		= 4;
+		ANY			= 5;
+		ALL			= 6;
+	}
+
+	Type typ		= 1;
+	int32 node_id	= 2;
+	string op		= 3;
+	Expr child		= 4;
 }
 
 // Object ref, reference a object in database, 4 part name.
@@ -176,19 +186,19 @@ message Function {
 
 message Expr {
 	Type	typ			= 1;
-	string	table_name	= 2;
-	string	col_name	= 3;
 	oneof expr {
-		Const		c		= 4;
-		ParamRef	p		= 5;
-		VarRef		v		= 6;
-		ColRef		col 	= 7;
-		Function	f		= 8;
-		ExprList	list	= 9;
-		SubQuery	sub		= 10;
-		CorrColRef	corr	= 11;
-		TargetType  t		= 12;
+		Const		c		= 2;
+		ParamRef	p		= 3;
+		VarRef		v		= 4;
+		ColRef		col 	= 5;
+		Function	f		= 6;
+		SubqueryRef	sub		= 7;
+		CorrColRef	corr	= 8;
+		TargetType  t		= 9;
+		ExprList	list	= 10;
 	}
+	string	table_name	= 11;
+	string	col_name	= 12;
 }
 
 enum CompressType {
@@ -226,12 +236,12 @@ message decimal128 {
 
 message ColDef {
 	string name 		= 1;
-	string alias		= 2;
-	CompressType alg 	= 3;
-	Type typ			= 4;
-	DefaultExpr default = 5;
-	bool primary        = 6;
-	int32 pkidx 		= 7;
+	CompressType alg 	= 2;
+	Type typ			= 3;
+	DefaultExpr default = 4;
+	bool primary        = 5;
+	int32 pkidx 		= 6;
+	string alias		= 7;
 }
 
 message IndexDef {
@@ -267,9 +277,9 @@ message TableDef {
 		}
 	}
 	string name				= 1;
-	string alias			= 2;
-	repeated ColDef cols	= 3;
-	repeated DefType defs	= 4;
+	repeated ColDef cols	= 2;
+	repeated DefType defs	= 3;
+	string alias			= 4;
 }
 
 message Cost {
@@ -318,9 +328,13 @@ message WindowSpec {
 	int32 lag  = 4;
 }
 
-message UpdateList {
-	repeated Expr columns  = 1;
-	repeated Expr values   = 2; 
+message UpdateInfo {
+	string pri_key = 1;
+	int32 pri_key_idx = 2;
+	string hide_key = 3;
+	repeated string update_attrs = 4;
+	repeated string other_attrs = 5;
+	repeated string attr_orders = 6;
 }
 
 message Node {
@@ -348,13 +362,14 @@ message Node {
 
 		// Proper Relational Operators
 		AGG = 30;
-		JOIN = 31;
-		SAMPLE = 32;
-		SORT = 33;
-		UNION = 34;
-		UNION_ALL = 35;
-		UNIQUE = 36;
-		WINDOW = 37;
+		FILTER = 31;
+		JOIN = 32;
+		SAMPLE = 33;
+		SORT = 34;
+		UNION = 35;
+		UNION_ALL = 36;
+		UNIQUE = 37;
+		WINDOW = 38;
 
 		// Physical tuple mover
 		BROADCAST = 40;
@@ -404,12 +419,12 @@ message Node {
 	repeated int32 children = 5;
 	JoinFlag join_type = 6;
 	repeated Expr on_list = 7;
-	repeated Expr where_list = 8;
+	repeated Expr filter_list = 8;
 	repeated Expr group_by = 9;
 	repeated Expr grouping_set = 10;
 	repeated Expr agg_list = 11;
 	repeated OrderBySpec order_by = 12;
-	UpdateList update_list = 13;
+	UpdateInfo update_info = 13;
 	WindowSpec win_spec = 14;
 	Expr limit = 15;
 	Expr offset = 16;

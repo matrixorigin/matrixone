@@ -522,16 +522,16 @@ func TestUpdate(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
 	sqls := []string{
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
 	sqls = []string{
-		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
-		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
+		//"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
+		//"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
 		// "UPDATE NATION SET N_NAME = 2, N_REGIONKEY=2",       // column type not match
 		// "UPDATE NATION SET N_NAME = 'U1', N_REGIONKEY=2.2",  // column type not match
 	}
@@ -561,7 +561,7 @@ func TestSubQuery(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		`select
 		sum(l_extendedprice) / 7.0 as avg_yearly
@@ -587,6 +587,7 @@ func TestSubQuery(t *testing.T) {
 	sqls = []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -705,7 +706,7 @@ func TestResultColumns(t *testing.T) {
 		"commit",
 		"rollback",
 		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
 		//"DELETE FROM NATION",
 		"create database db_name",
 		"drop database tpch",

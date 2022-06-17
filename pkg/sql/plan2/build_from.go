@@ -278,12 +278,12 @@ func pushOnListExprDown(query *Query, node *Node, onList []*Expr) ([]*Expr, []*E
 
 	if len(pushToLeft) > 0 {
 		leftNode := query.Nodes[node.Children[0]]
-		leftNode.WhereList = append(leftNode.WhereList, pushToLeft...)
+		leftNode.FilterList = append(leftNode.FilterList, pushToLeft...)
 	}
 
 	if len(pushToRight) > 0 {
 		rightNode := query.Nodes[node.Children[1]]
-		rightNode.WhereList = append(rightNode.WhereList, pushToRight...)
+		rightNode.FilterList = append(rightNode.FilterList, pushToRight...)
 	}
 
 	return newOnListExpr, projectNodeWhere, nil
