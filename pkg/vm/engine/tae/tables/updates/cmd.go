@@ -41,7 +41,7 @@ type UpdateCmd struct {
 	*txnbase.BaseCustomizedCmd
 	dbid    uint64
 	dest    *common.ID
-	update  *ColumnNode
+	update  *ColumnUpdateNode
 	delete  *DeleteNode
 	append  *AppendNode
 	cmdType int16
@@ -52,7 +52,7 @@ func NewEmptyCmd(cmdType int16) *UpdateCmd {
 	cmd.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, cmd)
 	cmd.cmdType = cmdType
 	if cmdType == txnbase.CmdUpdate {
-		cmd.update = NewColumnNode(nil, nil, nil)
+		cmd.update = NewColumnUpdateNode(nil, nil, nil)
 	} else if cmdType == txnbase.CmdDelete {
 		cmd.delete = NewDeleteNode(nil)
 	} else if cmdType == txnbase.CmdAppend {
@@ -83,7 +83,7 @@ func NewDeleteCmd(id uint32, del *DeleteNode) *UpdateCmd {
 	return impl
 }
 
-func NewUpdateCmd(id uint32, update *ColumnNode) *UpdateCmd {
+func NewUpdateCmd(id uint32, update *ColumnUpdateNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		update:  update,
 		cmdType: txnbase.CmdUpdate,
@@ -94,7 +94,7 @@ func NewUpdateCmd(id uint32, update *ColumnNode) *UpdateCmd {
 	return impl
 }
 
-func (c *UpdateCmd) GetUpdateNode() *ColumnNode {
+func (c *UpdateCmd) GetUpdateNode() *ColumnUpdateNode {
 	return c.update
 }
 
