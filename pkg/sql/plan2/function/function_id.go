@@ -46,6 +46,10 @@ const (
 	XOR                    // XOR
 	NOT                    // NOT
 	CAST                   // CAST
+	IS                     //IS
+	ISNOT                  //ISNOT
+	ISNULL                 //ISNULL
+	ISNOTNULL              //ISNOTNULL
 
 	ABS            // ABS
 	ACOS           // ACOS
@@ -234,6 +238,14 @@ var functionIdRegister = map[string]int32{
 	"unary_minus": UNARY_MINUS,
 	"case":        CASE,
 	"cast":        CAST,
+	"is":          IS,
+	"is_not":      ISNOT,
+	"isnot":       ISNOT,
+	"is_null":     ISNULL,
+	"isnull":      ISNULL,
+	"ifnull":      ISNULL,
+	"is_not_null": ISNOTNULL,
+	"isnotnull":   ISNOTNULL,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
