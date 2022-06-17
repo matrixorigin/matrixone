@@ -202,7 +202,7 @@ func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, nod
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{node.NodeId},
 		ProjectList: make([]*plan.Expr, projectResultLen),
-		WhereList:   projectNodeWhere,
+		FilterList:  projectNodeWhere,
 	}
 
 	node.ProjectList = make([]*Expr, projectResultLen)
@@ -512,7 +512,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
-			return &plan.Type{Id: plan.Type_DATETIME, Size: 8}, nil
+			return &plan.Type{Id: plan.Type_DATETIME, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return &plan.Type{Id: plan.Type_TIMESTAMP, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
@@ -589,6 +589,10 @@ func getDefaultExprFromColumn(column *tree.ColumnTableDef, typ *plan.Type) (*pla
 
 func convertToPlanValue(value interface{}) *plan.ConstantValue {
 	switch v := value.(type) {
+	case bool:
+		return &plan.ConstantValue{
+			ConstantValue: &plan.ConstantValue_BoolV{BoolV: v},
+		}
 	case int64:
 		return &plan.ConstantValue{
 			ConstantValue: &plan.ConstantValue_Int64V{Int64V: v},
@@ -713,7 +717,7 @@ func rangeCheck(value interface{}, typ *plan.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
-	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
+	case bool, types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
 		return v, nil
 	default:
 		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
@@ -918,6 +922,8 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 	switch val.Kind() {
 	case constant.Unknown:
 		return nil, nil
+	case constant.Bool:
+		return constant.BoolVal(val), nil
 	case constant.Int:
 		switch typ.GetId() {
 		case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_INT64:
@@ -958,14 +964,8 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 				return float64(-v), nil
 			}
 			return float64(v), nil
-		case plan.Type_DATE:
-			if !num.Negative() {
-				return types.ParseDate(str)
-			}
-		case plan.Type_DATETIME:
-			if !num.Negative() {
-				return types.ParseDatetime(str)
-			}
+		case plan.Type_TIMESTAMP:
+			return types.ParseTimestamp(str, typ.Precision)
 		}
 	case constant.Float:
 		switch typ.GetId() {
@@ -1017,8 +1017,6 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 				return float64(-v), nil
 			}
 			return float64(v), nil
-		case plan.Type_DATETIME:
-			return types.ParseDatetime(str)
 		case plan.Type_DECIMAL64:
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case plan.Type_DECIMAL128:
@@ -1026,6 +1024,41 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 		}
 	case constant.String:
 		switch typ.GetId() {
+		case plan.Type_BOOL:
+			switch strings.ToLower(str) {
+			case "false":
+				return false, nil
+			case "true":
+				return true, nil
+			}
+		case plan.Type_INT8:
+			return strconv.ParseInt(str, 10, 8)
+		case plan.Type_INT16:
+			return strconv.ParseInt(str, 10, 16)
+		case plan.Type_INT32:
+			return strconv.ParseInt(str, 10, 32)
+		case plan.Type_INT64:
+			return strconv.ParseInt(str, 10, 64)
+		case plan.Type_UINT8:
+			return strconv.ParseUint(str, 10, 8)
+		case plan.Type_UINT16:
+			return strconv.ParseUint(str, 10, 16)
+		case plan.Type_UINT32:
+			return strconv.ParseUint(str, 10, 32)
+		case plan.Type_UINT64:
+			return strconv.ParseUint(str, 10, 64)
+		case plan.Type_FLOAT32:
+			val, err := strconv.ParseFloat(str, 32)
+			if err != nil {
+				return nil, err
+			}
+			return float32(val), nil
+		case plan.Type_FLOAT64:
+			val, err := strconv.ParseFloat(str, 64)
+			if err != nil {
+				return nil, err
+			}
+			return val, nil
 		case plan.Type_DECIMAL64:
 			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case plan.Type_DECIMAL128:
@@ -1038,117 +1071,11 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 			case plan.Type_DATE:
 				return types.ParseDate(constant.StringVal(val))
 			case plan.Type_DATETIME:
-				return types.ParseDatetime(constant.StringVal(val))
+				return types.ParseDatetime(constant.StringVal(val), typ.Precision)
 			case plan.Type_TIMESTAMP:
 				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
 			}
 		}
 	}
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
-}
-
-func DeepCopyExpr(expr *Expr) *Expr {
-	new_expr := &Expr{
-		Typ: &plan.Type{
-			Id:        expr.Typ.GetId(),
-			Nullable:  expr.Typ.GetNullable(),
-			Width:     expr.Typ.GetWidth(),
-			Precision: expr.Typ.GetPrecision(),
-			Size:      expr.Typ.GetSize(),
-			Scale:     expr.Typ.GetScale(),
-		},
-		TableName: expr.TableName,
-		ColName:   expr.ColName,
-	}
-
-	switch item := expr.Expr.(type) {
-	case *plan.Expr_C:
-		new_expr.Expr = &plan.Expr_C{
-			C: &plan.Const{
-				Isnull: item.C.GetIsnull(),
-				Value:  item.C.GetValue(),
-			},
-		}
-	case *plan.Expr_P:
-		new_expr.Expr = &plan.Expr_P{
-			P: &plan.ParamRef{
-				Pos: item.P.GetPos(),
-			},
-		}
-	case *plan.Expr_V:
-		new_expr.Expr = &plan.Expr_V{
-			V: &plan.VarRef{
-				Name: item.V.GetName(),
-			},
-		}
-	case *plan.Expr_Col:
-		new_expr.Expr = &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: item.Col.GetRelPos(),
-				ColPos: item.Col.GetColPos(),
-			},
-		}
-	case *plan.Expr_F:
-		new_args := make([]*Expr, len(item.F.Args))
-		for idx, arg := range item.F.Args {
-			new_args[idx] = DeepCopyExpr(arg)
-		}
-		new_expr.Expr = &plan.Expr_F{
-			F: &plan.Function{
-				Func: &plan.ObjectRef{
-					Server:     item.F.Func.GetServer(),
-					Db:         item.F.Func.GetDb(),
-					Schema:     item.F.Func.GetSchema(),
-					Obj:        item.F.Func.GetObj(),
-					ServerName: item.F.Func.GetServerName(),
-					DbName:     item.F.Func.GetDbName(),
-					SchemaName: item.F.Func.GetSchemaName(),
-					ObjName:    item.F.Func.GetObjName(),
-				},
-				Args: new_args,
-			},
-		}
-	case *plan.Expr_List:
-		new_list := make([]*Expr, len(item.List.List))
-		for idx, arg := range item.List.List {
-			new_list[idx] = DeepCopyExpr(arg)
-		}
-		new_expr.Expr = &plan.Expr_List{
-			List: &plan.ExprList{
-				List: new_list,
-			},
-		}
-	case *plan.Expr_Sub:
-		new_expr.Expr = &plan.Expr_Sub{
-			Sub: &plan.SubQuery{
-				NodeId:       item.Sub.GetNodeId(),
-				IsCorrelated: item.Sub.GetIsCorrelated(),
-				IsScalar:     item.Sub.GetIsScalar(),
-			},
-		}
-	case *plan.Expr_Corr:
-		new_expr.Expr = &plan.Expr_Corr{
-			Corr: &plan.CorrColRef{
-				NodeId: item.Corr.GetNodeId(),
-				ColPos: item.Corr.GetColPos(),
-				RelPos: item.Corr.GetRelPos(),
-				Depth:  item.Corr.GetDepth(),
-			},
-		}
-	case *plan.Expr_T:
-		new_expr.Expr = &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: &plan.Type{
-					Id:        item.T.Typ.GetId(),
-					Nullable:  item.T.Typ.GetNullable(),
-					Width:     item.T.Typ.GetWidth(),
-					Precision: item.T.Typ.GetPrecision(),
-					Size:      item.T.Typ.GetSize(),
-					Scale:     item.T.Typ.GetScale(),
-				},
-			},
-		}
-	}
-
-	return new_expr
 }

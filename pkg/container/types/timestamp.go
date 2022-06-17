@@ -35,10 +35,12 @@ package types
 
 import (
 	"fmt"
+	"strconv"
+	gotime "time"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"strconv"
-	"unsafe"
 )
 
 const microSecondsDigits = 6
@@ -228,4 +230,20 @@ func FromClockUTC(year int32, month, day, hour, min, sec uint8, msec uint32) Tim
 	days := FromCalendar(year, month, day)
 	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec) - localTZ
 	return Timestamp((secs << 20) + int64(msec))
+}
+
+func NowUTC() Timestamp {
+	t := gotime.Now()
+	t.UTC()
+	wall := *(*uint64)(unsafe.Pointer(&t))
+	ext := *(*int64)(unsafe.Pointer(uintptr(unsafe.Pointer(&t)) + unsafe.Sizeof(wall)))
+	var sec, nsec int64
+	if wall&hasMonotonic != 0 {
+		sec = int64(wall<<1>>31) + wallToInternal
+		nsec = int64(wall << 34 >> 34)
+	} else {
+		sec = ext
+		nsec = int64(wall)
+	}
+	return Timestamp((sec << 20) + nsec/1000)
 }

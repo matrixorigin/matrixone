@@ -39,6 +39,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	return bc
 }
 
+func (bc *BindContext) rootTag() int32 {
+	if bc.resultTag > 0 {
+		return bc.resultTag
+	} else {
+		return bc.projectTag
+	}
+}
+
 func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
@@ -114,7 +122,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, rig
 
 	leftPos := leftBinding.colIdByName[col]
 	rightPos := rightBinding.colIdByName[col]
-	expr, err := bc.binder.(*TableBinder).bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+	expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
 		{
 			Typ: leftBinding.types[leftPos],
 			Expr: &plan.Expr_Col{

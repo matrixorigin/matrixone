@@ -6,18 +6,20 @@ Aggregate function.
 
 The AVG() function calculates the average value of the argument.
 
-
 ## **Syntax**
 
 ```
 > AVG(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Any numerical expression |
 
 ## **Returned Value**
+
 The arithmetic mean, always as Double.
 
 NaN if the input parameter is empty.
@@ -63,4 +65,5 @@ NaN if the input parameter is empty.
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

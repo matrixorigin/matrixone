@@ -2,9 +2,15 @@ package db
 
 import (
 	"bytes"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
+	"sync"
 
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -25,6 +31,7 @@ type Replayer struct {
 	maxTs        uint64
 	cache        *bytes.Buffer
 	staleIndexes []*wal.Index
+	once         sync.Once
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
@@ -36,7 +43,7 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 	}
 }
 
-func (replayer *Replayer) PreReplayWal() (err error) {
+func (replayer *Replayer) PreReplayWal() {
 	processor := new(catalog.LoopProcessor)
 	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
 		entry.InitData(replayer.DataFactory)
@@ -45,26 +52,133 @@ func (replayer *Replayer) PreReplayWal() (err error) {
 		return
 	}
 	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
-		if !entry.IsActive() || entry.GetTable().IsVirtual() {
+		if entry.GetTable().IsVirtual() {
 			return catalog.ErrStopCurrRecur
 		}
+		dropCommit := entry.TreeMaxDropCommitEntry()
+		if dropCommit != nil && dropCommit.LogIndex.LSN <= replayer.db.Wal.GetCheckpointed() {
+			return catalog.ErrStopCurrRecur
+		}
+		entry.InitData(replayer.DataFactory)
 		entry.ReplayFile(replayer.cache)
 		return
 	}
-	err = replayer.db.Catalog.RecurLoop(processor)
-	return
+	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
+		if err != catalog.ErrStopCurrRecur {
+			panic(err)
+		}
+	}
+}
+
+func (replayer *Replayer) scanFiles() map[uint64]string {
+	files := make(map[uint64]string)
+	infos, err := ioutil.ReadDir(replayer.db.Dir)
+	if err != nil {
+		panic(err)
+	}
+	for _, info := range infos {
+		if info.IsDir() {
+			continue
+		}
+		name := info.Name()
+		id, err := replayer.db.FileFactory.DecodeName(name)
+		if err != nil {
+			continue
+		}
+		files[id] = path.Join(replayer.db.Dir, name)
+	}
+	return files
 }
 
 func (replayer *Replayer) Replay() {
-	if err := replayer.PreReplayWal(); err != nil {
-		panic(err)
-	}
 	if err := replayer.db.Wal.Replay(replayer.OnReplayEntry); err != nil {
 		panic(err)
 	}
 	if _, err := replayer.db.Wal.Checkpoint(replayer.staleIndexes); err != nil {
 		panic(err)
 	}
+	replayer.PostReplayWal()
+}
+
+func (replayer *Replayer) PostReplayWal() {
+	activeSegs := make(map[uint64]*catalog.SegmentEntry)
+	processor := new(catalog.LoopProcessor)
+	processor.DatabaseFn = func(entry *catalog.DBEntry) (err error) {
+		if entry.IsActive() {
+			return
+		}
+		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+			return
+		}
+		if err = entry.GetCatalog().RemoveEntry(entry); err != nil {
+			panic(err)
+		}
+		err = catalog.ErrStopCurrRecur
+		return
+	}
+	processor.TableFn = func(entry *catalog.TableEntry) (err error) {
+		if entry.IsActive() {
+			return
+		}
+		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+			return
+		}
+		if err = entry.GetDB().RemoveEntry(entry); err != nil {
+			panic(err)
+		}
+		err = catalog.ErrStopCurrRecur
+		return
+	}
+	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
+		if entry.IsActive() {
+			if !entry.GetTable().IsVirtual() {
+				activeSegs[entry.ID] = entry
+			}
+			return
+		}
+		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+			if !entry.GetTable().IsVirtual() {
+				activeSegs[entry.ID] = entry
+			}
+			return
+		}
+		if err = entry.GetTable().RemoveEntry(entry); err != nil {
+			panic(err)
+		}
+		err = catalog.ErrStopCurrRecur
+		return
+	}
+	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
+		if entry.IsActive() {
+			return
+		}
+		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+			return
+		}
+		if err = gcBlockClosure(entry, GCType_Block)(); err != nil {
+			panic(err)
+		}
+		return
+	}
+	_ = replayer.db.Catalog.RecurLoop(processor)
+
+	files := replayer.scanFiles()
+	for id := range activeSegs {
+		_, ok := files[id]
+		if !ok {
+			panic(fmt.Errorf("Cannot find segment file for: %d", id))
+		}
+		delete(files, id)
+	}
+	for _, file := range files {
+		logutil.Info("[Replay]", common.OperationField("clean-segment"),
+			common.OperandField(file))
+		if err := os.Remove(file); err != nil {
+			panic(err)
+		}
+	}
+
+	logutil.Info(replayer.db.Catalog.SimplePPString(common.PPL1))
 }
 
 func (replayer *Replayer) OnStaleIndex(idx *wal.Index) {
@@ -72,6 +186,7 @@ func (replayer *Replayer) OnStaleIndex(idx *wal.Index) {
 }
 
 func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+	replayer.once.Do(replayer.PreReplayWal)
 	if group != wal.GroupC {
 		return
 	}
@@ -98,6 +213,11 @@ func (replayer *Replayer) OnTimeStamp(ts uint64) {
 }
 
 func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
+	if idxCtx != nil && idxCtx.Size > 0 {
+		logutil.Info("", common.OperationField("replay-cmd"),
+			common.OperandField(txncmd.String()),
+			common.AnyField("index", idxCtx.String()))
+	}
 	var err error
 	switch cmd := txncmd.(type) {
 	case *txnbase.ComposedCmd:
@@ -159,7 +279,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		if err != nil {
 			panic(err)
 		}
-		if blk.CurrOp == catalog.OpSoftDelete {
+		if !blk.IsActive() {
 			continue
 		}
 		if observer != nil {
@@ -235,7 +355,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	if err != nil {
 		panic(err)
 	}
-	if blk.CurrOp == catalog.OpSoftDelete {
+	if !blk.IsActive() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -265,7 +385,7 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	if err != nil {
 		panic(err)
 	}
-	if blk.CurrOp == catalog.OpSoftDelete {
+	if !blk.IsActive() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}

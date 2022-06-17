@@ -765,9 +765,9 @@ func makeMysqlDatetimeResultSet() *MysqlResultSet {
 
 	rs.AddColumn(mysqlCol)
 
-	d1, _ := types.ParseDatetime("2018-04-28 10:21:15")
-	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123")
-	d3, _ := types.ParseDatetime("2015-03-03 12:12:12")
+	d1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
+	d2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
+	d3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
 	var cases = []types.Datetime{
 		d1,
 		d2,
@@ -816,9 +816,9 @@ func make8ColumnsResultSet() *MysqlResultSet {
 	d1, _ := types.ParseDate("1997-01-01")
 	d2, _ := types.ParseDate("2008-02-02")
 
-	dt1, _ := types.ParseDatetime("2018-04-28 10:21:15")
-	dt2, _ := types.ParseDatetime("2018-04-28 10:21:15.123")
-	dt3, _ := types.ParseDatetime("2015-03-03 12:12:12")
+	dt1, _ := types.ParseDatetime("2018-04-28 10:21:15", 0)
+	dt2, _ := types.ParseDatetime("2018-04-28 10:21:15.123", 0)
+	dt3, _ := types.ParseDatetime("2015-03-03 12:12:12", 0)
 
 	var cases = [][]interface{}{
 		{int8(-128), int16(-32768), int32(-2147483648), int64(-9223372036854775808), "abc", float32(math.MaxFloat32), d1, dt1, float64(0.01)},
@@ -1382,11 +1382,11 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 					case defines.MYSQL_TYPE_FLOAT:
 						value, err := mrs.GetFloat64(rowIdx, i)
 						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', 4, 32)
+						data = strconv.AppendFloat(data, value, 'f', -1, 32)
 					case defines.MYSQL_TYPE_DOUBLE:
 						value, err := mrs.GetFloat64(rowIdx, i)
 						require.NoError(t, err)
-						data = strconv.AppendFloat(data, value, 'f', 4, 64)
+						data = strconv.AppendFloat(data, value, 'f', -1, 64)
 					case defines.MYSQL_TYPE_DATE:
 						value, err := mrs.GetValue(rowIdx, i)
 						require.NoError(t, err)

@@ -338,7 +338,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 	// build WHERE clause
 	if stmt.Where != nil {
-		node.WhereList, err = splitAndBuildExpr(stmt.Where.Expr, ctx, query, node, binderCtx, false)
+		node.FilterList, err = splitAndBuildExpr(stmt.Where.Expr, ctx, query, node, binderCtx, false)
 		if err != nil {
 			return
 		}
@@ -380,7 +380,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 				return
 			}
 
-			aggNode.WhereList, err = splitAndBuildExpr(stmt.Having.Expr, ctx, query, aggNode, binderCtx, true)
+			aggNode.FilterList, err = splitAndBuildExpr(stmt.Having.Expr, ctx, query, aggNode, binderCtx, true)
 			if err != nil {
 				return
 			}

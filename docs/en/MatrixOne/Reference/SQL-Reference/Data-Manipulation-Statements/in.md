@@ -1,16 +1,19 @@
 # **IN**
 
 ## **Description**
+
 The `IN` operator allows you to specify multiple values in a `WHERE` clause. And it's a shorthand for multiple `OR` conditions.
 
-
 ## **Syntax**
+
 ```
 > SELECT column1, column2, ...
 FROM table_name
 WHERE column_name IN (value1, value2, ...);
 ```
+
 ## **Examples**
+
 ``` sql
 > create table t2(a int,b varchar(5),c float, d date, e datetime);
 > insert into t2 values(1,'a',1.001,'2022-02-08','2022-02-08 12:00:00');
@@ -40,8 +43,6 @@ a	b	c	d	e
 4	d	4.0010	2022-02-11	2022-02-11 12:00:00
 
 ```
-
-
 
 ## **Constraints**
 

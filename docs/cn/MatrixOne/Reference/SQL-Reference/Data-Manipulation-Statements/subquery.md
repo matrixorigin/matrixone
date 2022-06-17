@@ -3,6 +3,7 @@
 子查询，也称为嵌套查询或子选择，是SELECT嵌入在另一个SQL查询的查询方式。
 
 一个子查询有几类：
+
 - SELECT子查询
 - FROM子查询
 - WHERE子查询
@@ -22,6 +23,7 @@
 ```
 
 ### **示例**
+
 ```sql
 > CREATE TABLE tb1 (c1 INT, c2 CHAR(5), c3 FLOAT);
 > INSERT INTO tb1 VALUES (1, '1', 1.0);
@@ -48,4 +50,5 @@
 ```
 
 ## **限制**
+
 MatrixOne目前仅支持FROM子查询。

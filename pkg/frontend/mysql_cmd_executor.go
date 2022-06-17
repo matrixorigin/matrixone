@@ -459,15 +459,16 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 			case types.T_datetime:
+				precision := vec.Typ.Precision
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Datetime)
-					row[i] = vs[rowIndex]
+					row[i] = vs[rowIndex].String2(precision)
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]types.Datetime)
-						row[i] = vs[rowIndex]
+						row[i] = vs[rowIndex].String2(precision)
 					}
 				}
 			case types.T_timestamp:
@@ -501,6 +502,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal128)
 					row[i] = vs[rowIndex].Decimal128ToString(scale)
+					fmt.Println(row[i])
 				} else {
 					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 						row[i] = nil
@@ -1102,7 +1104,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	buildPlan, err := plan2.BuildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	buildPlan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1670,7 +1672,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
-	cwft.plan, err = plan2.BuildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
+	cwft.plan, err = buildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1688,6 +1690,27 @@ func (cwft *TxnComputationWrapper) Compile(u interface{}, fill func(interface{},
 
 func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 	return nil
+}
+
+func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	switch stmt := stmt.(type) {
+	case *tree.Select, *tree.ParenSelect,
+		*tree.Update, *tree.Delete, *tree.Insert,
+		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
+		opt := plan2.NewBaseOptimizer(ctx)
+		optimized, err := opt.Optimize(stmt)
+		if err != nil {
+			return nil, err
+		}
+		return &plan2.Plan{
+			Plan: &plan2.Plan_Query{
+				Query: optimized,
+			},
+		}, nil
+	default:
+		return plan2.BuildPlan(ctx, stmt)
+	}
 }
 
 /*
@@ -1818,6 +1841,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	defer mce.afterRun(stmt, beginInstant)
 	// it is weired to do for loop here, why don't we ensure that run only one sql once
 	// it seems that mysql protocol has done that for us when reading packet from tcp
+	type TxnCommand int
+	const (
+		TxnNoCommand TxnCommand = iota
+		TxnBegin
+		TxnCommit
+		TxnRollback
+	)
 	for _, cw := range cws {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
@@ -1825,19 +1855,23 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
 		statementCount++
 
+		var fromTxnCommand TxnCommand = TxnNoCommand
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
+			fromTxnCommand = TxnBegin
 			err = txnHandler.StartByBegin()
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.CommitTransaction:
+			fromTxnCommand = TxnCommit
 			err = txnHandler.CommitAfterBegin()
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
+			fromTxnCommand = TxnRollback
 			err = txnHandler.Rollback()
 			if err != nil {
 				goto handleFailed
@@ -1921,6 +1955,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		selfHandle = false
 
 		switch st := stmt.(type) {
+		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
+			selfHandle = true
+			err = proto.sendOKPacket(0, 0, 0, 0, "")
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.Use:
 			selfHandle = true
 			err = mce.handleChangeDB(st.Name)
@@ -2177,7 +2217,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		}
 	handleSucceeded:
+		//load data handle txn failure internally
 		if !fromLoadData {
+			//txn begin,commit,rollback do not need to be committed
+			if fromTxnCommand != TxnNoCommand {
+				goto handleNext
+			}
 			txnErr = txnHandler.CommitAfterAutocommitOnly()
 			if txnErr != nil {
 				return txnErr
@@ -2185,9 +2230,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		}
 		goto handleNext
 	handleFailed:
-		txnErr = txnHandler.RollbackAfterAutocommitOnly()
-		if txnErr != nil {
-			return txnErr
+		//the failures due to txn begin,commit,rollback do not need to be rollback.
+		if fromTxnCommand == TxnNoCommand {
+			txnErr = txnHandler.RollbackAfterAutocommitOnly()
+			if txnErr != nil {
+				return txnErr
+			}
 		}
 		return err
 	handleNext:

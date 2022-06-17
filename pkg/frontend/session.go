@@ -38,7 +38,7 @@ var (
 	errorTaeTxnAutocommitInBegan      = goErrors.New("start autocommit txn in the txn has been began")
 	errorIsNotAutocommitTxn           = goErrors.New("it is not autocommit txn")
 	errorIsNotBeginCommitTxn          = goErrors.New("it is not the begin/commit txn ")
-	errorTaeTxnInIllegalState         = goErrors.New("the txn is in the illegal state and needed to be cleaned before using further")
+	errorTaeTxnInIllegalState         = goErrors.New("the txn is in the illegal state and needed to be cleaned before using again")
 )
 
 const (

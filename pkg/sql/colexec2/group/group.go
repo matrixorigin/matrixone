@@ -67,10 +67,22 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error) {
 	bat := proc.Reg.InputBatch
 	if bat == nil {
+		if len(ctr.aggVecs) == 0 {
+			bat := batch.NewWithSize(len(ap.Types))
+			for i := range bat.Vecs {
+				bat.Vecs[i] = vector.New(ap.Types[i])
+			}
+			proc.Reg.InputBatch = bat
+			if _, err := ctr.process(ap, proc); err != nil {
+				return false, err
+			}
+		}
 		if ctr.bat != nil {
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
+			return true, nil
 		}
+		proc.Reg.InputBatch = nil
 		return true, nil
 	}
 	defer bat.Clean(proc.Mp)
@@ -83,7 +95,7 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 	}
 	for i, agg := range ap.Aggs {
 		vec, err := colexec.EvalExpr(bat, proc, agg.E)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
@@ -155,7 +167,9 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 			}
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
+			return true, nil
 		}
+		proc.Reg.InputBatch = nil
 		return true, nil
 	}
 	if len(bat.Zs) == 0 {
@@ -168,7 +182,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 	}
 	for i, agg := range ap.Aggs {
 		vec, err := colexec.EvalExpr(bat, proc, agg.E)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.aggVecs[j].needFree {
 					vector.Clean(ctr.aggVecs[j].vec, proc.Mp)
@@ -197,7 +211,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 	}
 	for i, expr := range ap.Exprs {
 		vec, err := colexec.EvalExpr(bat, proc, expr)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.groupVecs[j].needFree {
 					vector.Clean(ctr.groupVecs[j].vec, proc.Mp)
@@ -553,7 +567,7 @@ func (ctr *Container) batchFill(i int, n int, bat *batch.Batch, ap *Argument, pr
 }
 
 func fillGroup[T1, T2 any](ctr *Container, vec *vector.Vector, keys []T2, n int, sz uint32, start int) {
-	vs := vector.DecodeFixedCol[T1](vec, int(sz))
+	vs := vector.GetFixedVectorValues[T1](vec, int(sz))
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {
 			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
@@ -575,10 +589,7 @@ func fillGroup[T1, T2 any](ctr *Container, vec *vector.Vector, keys []T2, n int,
 }
 
 func fillStringGroup[T any](ctr *Container, vec *vector.Vector, keys []T, n int, sz uint32, start int) {
-	vs := vec.Col.(*types.Bytes)
-	vData := vs.Data
-	vOff := vs.Offsets
-	vLen := vs.Lengths
+	vData, vOff, vLen := vector.GetStrVectorValues(vec)
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {
 			*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), ctr.keyOffs[i])) = 0
@@ -600,7 +611,7 @@ func fillStringGroup[T any](ctr *Container, vec *vector.Vector, keys []T, n int,
 }
 
 func fillGroupStr[T any](ctr *Container, vec *vector.Vector, n int, sz int, start int) {
-	vs := vector.DecodeFixedCol[T](vec, sz)
+	vs := vector.GetFixedVectorValues[T](vec, int(sz))
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
 	if !nulls.Any(vec.Nsp) {
 		for i := 0; i < n; i++ {

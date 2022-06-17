@@ -146,7 +146,7 @@ func TestJoinQuery(t *testing.T) {
 func TestNestedQuery(t *testing.T) {
 	sqls := []string{
 		"explain verbose SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",
-		"explain SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",
+		//"explain SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",
 		`explain verbose select
 		sum(l_extendedprice) / 7.0 as avg_yearly
 	from

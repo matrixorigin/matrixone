@@ -9,11 +9,11 @@ A user can send this request to any `Store` of the system. The `Shard Proxy` of 
 As we have explained in the `Raft Group and Leader`,`Leader` is the representative of a `Raft Group`, all read and write requests are handled only by the leader. 
 
 Therefore, when a request for certain rows are executed. 
+
 * Firstly, we need to locate the `Shard` where these rows are stored. 
 * Secondly, locate the `Leader Replica` of this `Shard` group. 
 * Thirdly, route the request to the `Store` where the `Leader Replica` is located. 
 * Finally, `Leader Replica` executes the request and returns response. 
-
 
 ## **Example**
 
@@ -28,4 +28,3 @@ We have a cluster of 3 `Stores`, and their status are as below:
 A user sends requests on key1, key10 and key20, the following diagram illustrates how the requests gets through `Shard Proxy` and being routed. 
 
 ![User Request Routing Diagram](https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixcube-requests.svg?raw=true)
-

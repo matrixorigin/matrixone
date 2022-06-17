@@ -4,7 +4,6 @@
 
 The function returns the current UTC date and time as a value in 'YYYY-MM-DD hh:mm:ss' or 'YYYYMMDDhhmmss' format,
 
-
 ## **Syntax**
 
 ```

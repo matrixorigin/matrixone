@@ -109,7 +109,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs = ts
 	if ts > 0 {
-		logutil.Infof("Replay BlockIndex %s: ts=%d,rows=%d", meta.Repr(), ts, block.file.ReadRows())
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
@@ -129,6 +128,13 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	masks, vals := blk.file.LoadUpdates()
 	if masks != nil {
 		for colIdx, mask := range masks {
+			logutil.Info("[Start]",
+				common.TimestampField(blk.ckpTs),
+				common.OperationField("install-update"),
+				common.OperandNameSpace(),
+				common.AnyField("rows", blk.node.rows),
+				common.AnyField("col", colIdx),
+				common.CountField(int(mask.GetCardinality())))
 			un := updates.NewCommittedColumnNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
 			un.SetMask(mask)
 			un.SetValues(vals[colIdx])
@@ -141,6 +147,11 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	if err != nil || deletes == nil {
 		return
 	}
+	logutil.Info("[Start]", common.TimestampField(blk.ckpTs),
+		common.OperationField("install-del"),
+		common.OperandNameSpace(),
+		common.AnyField("rows", blk.node.rows),
+		common.CountField(int(deletes.GetCardinality())))
 	deleteNode := updates.NewMergedNode(blk.ckpTs)
 	deleteNode.SetDeletes(deletes)
 	err = blk.OnReplayDelete(deleteNode)
@@ -821,7 +832,7 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 	}
 	defer common.GPool.Free(pkColumn.MNode)
 	col := &pkColumn.Vector
-	offset, existed := compute.CheckRowExists(col, filter.Val, nil)
+	offset, existed := compute.GetOffsetByVal(col, filter.Val, nil)
 	if !existed {
 		err = data.ErrNotFound
 		return
@@ -975,12 +986,12 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 	}
 	defer view.Free()
 	deduplicate := func(v any, _ uint32) error {
-		if _, existed := compute.CheckRowExists(view.AppliedVec, v, view.DeleteMask); existed {
+		if _, existed := compute.GetOffsetByVal(view.AppliedVec, v, view.DeleteMask); existed {
 			return data.ErrDuplicate
 		}
 		return nil
 	}
-	if err = compute.ProcessVector(pks, 0, uint32(movec.Length(pks)), deduplicate, keyselects); err != nil {
+	if err = compute.ApplyOpToColumn(pks, deduplicate, keyselects); err != nil {
 		return err
 	}
 	return

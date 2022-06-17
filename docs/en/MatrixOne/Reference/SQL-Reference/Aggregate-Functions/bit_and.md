@@ -6,17 +6,17 @@ Aggregate function.
 
 The BIT_AND(expr) function returns the bitwise AND of all bits in expr.
 
-
 ## **Syntax**
 
 ```
 > BIT_AND(expr)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | UINT data types |
-
 
 ## **Examples**
 

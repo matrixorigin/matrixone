@@ -34,12 +34,22 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
 
 	// gets a new vector to store our result
+
+	if origVecs[0].IsScalar() && origVecs[1].IsScalar() && origVecs[2].IsScalar() {
+		//evaluate the result
+		resultVec := proc.AllocScalarVector(origVecs[0].Typ)
+		result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+		if err != nil {
+			return nil, err
+		}
+		resultVec.Nsp = nsp
+		vector.SetCol(resultVec, result)
+		return resultVec, nil
+	}
+
 	resultVec, err := proc.AllocVector(origVecs[0].Typ, 24*int64(len(strs.Lengths)))
 	if err != nil {
 		return nil, err
-	}
-	if origVecs[0].IsScalar() && origVecs[1].IsScalar() && origVecs[2].IsScalar() {
-		resultVec.IsConst = true
 	}
 
 	result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)

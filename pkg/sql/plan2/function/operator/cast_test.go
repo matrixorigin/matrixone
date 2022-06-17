@@ -15,13 +15,17 @@
 package operator
 
 import (
+	"testing"
+	"unsafe"
+
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCastSameType(t *testing.T) {
@@ -1706,86 +1710,395 @@ func TestCastSpecial4(t *testing.T) {
 
 func TestCastVarcharAsDate(t *testing.T) {
 	//Cast converts varchar to date type
-	//Cast converts varchar to datetime type
-	//Cast converts varchar to timestamp type
-	makeTempVectors := func(src string, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
-		vectors := make([]*vector.Vector, 2)
-		vectors[0] = makeStringVector(src, srcType, srcIsConst)
-		vectors[1] = makeTypeVector(destType)
-		return vectors
-	}
+	convey.Convey("Cast varchar to date", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
 
-	procs := makeProcess()
+		kases := []kase{
+			{
+				s:    "2004-04-03",
+				want: "2004-04-03",
+			},
+			{
+				s:    "2021-10-03",
+				want: "2021-10-03",
+			},
+			{
+				s:    "2020-08-23",
+				want: "2020-08-23",
+			},
+			{
+				s:    "2021-11-23",
+				want: "2021-11-23",
+			},
+			{
+				s:    "2014-09-23",
+				want: "2014-09-23",
+			},
+		}
+
+		var inStrs []string
+		var wantStrs []string
+		for _, k := range kases {
+			inStrs = append(inStrs, k.s)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeVarcharVector(inStrs, nil)
+		destVector := testutil.MakeDateVector(nil, nil)
+
+		wantVec := testutil.MakeDateVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Cast scalar varchar to date", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+
+		k := kase{
+			s:    "2014-09-23",
+			want: "2014-09-23",
+		}
+
+		srcVector := testutil.MakeScalarVarchar(k.s, 10)
+		destVector := testutil.MakeDateVector(nil, nil)
+		wantVec := testutil.MakeScalarDate(k.want, 10)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts varchar to datetime type
+	convey.Convey("Cast varchar to datetime", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+
+		kases := []kase{
+			{
+				s:    "2004-04-03 12:14:35",
+				want: "2004-04-03 12:14:35",
+			},
+			{
+				s:    "2021-10-03 11:52:21",
+				want: "2021-10-03 11:52:21",
+			},
+			{
+				s:    "2020-08-23 11:52:21",
+				want: "2020-08-23 11:52:21",
+			},
+			{
+				s:    "2021-11-23 16:12:21",
+				want: "2021-11-23 16:12:21",
+			},
+			{
+				s:    "2014-09-23 16:17:21",
+				want: "2014-09-23 16:17:21",
+			},
+		}
+
+		var inStrs []string
+		var wantStrs []string
+		for _, k := range kases {
+			inStrs = append(inStrs, k.s)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeVarcharVector(inStrs, nil)
+		destVector := testutil.MakeDateTimeVector(nil, nil)
+
+		wantVec := testutil.MakeDateTimeVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Cast scalar varchar to datetime", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+
+		k := kase{
+			s:    "2004-04-03 12:14:35",
+			want: "2004-04-03 12:14:35",
+		}
+
+		srcVector := testutil.MakeScalarVarchar(k.s, 10)
+		destVector := testutil.MakeDateTimeVector(nil, nil)
+		wantVec := testutil.MakeScalarDateTime(k.want, 10)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts varchar to timestamp type
+	convey.Convey("Cast varchar to timestamp", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+
+		kases := []kase{
+			{
+				s:    "2004-04-03 12:14:35",
+				want: "2004-04-03 12:14:35",
+			},
+			{
+				s:    "2021-10-03 11:52:21",
+				want: "2021-10-03 11:52:21",
+			},
+			{
+				s:    "2020-08-23 11:52:21",
+				want: "2020-08-23 11:52:21",
+			},
+			{
+				s:    "2021-11-23 16:12:21",
+				want: "2021-11-23 16:12:21",
+			},
+			{
+				s:    "2014-09-23 16:17:21",
+				want: "2014-09-23 16:17:21",
+			},
+		}
+
+		var inStrs []string
+		var wantStrs []string
+		for _, k := range kases {
+			inStrs = append(inStrs, k.s)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeVarcharVector(inStrs, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Cast scalar varchar to timestamp", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+
+		k := kase{
+			s:    "2021-11-23 16:12:21",
+			want: "2021-11-23 16:12:21",
+		}
+
+		srcVector := testutil.MakeScalarVarchar(k.s, 10)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeScalarTimeStamp(k.want, 10)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestCastTimestampAsVarchar(t *testing.T) {
+	//Cast converts timestamp to varchar
+	//procs := testutil.NewProc()
 	cases := []struct {
-		name       string
-		vecs       []*vector.Vector
-		proc       *process.Process
-		wantValues interface{}
-		wantType   types.T
-		wantScalar bool
+		name     string
+		vecs     []*vector.Vector
+		proc     *process.Process
+		input    []types.Timestamp
+		expected *types.Bytes
+		isScalar bool
 	}{
-		{
-			name:       "Test01",
-			vecs:       makeTempVectors("1988-03-14", types.T_varchar, true, types.T_date),
-			proc:       procs,
-			wantValues: []types.Date{725809},
-			wantType:   types.T_date,
-			wantScalar: true,
-		},
-		{
-			name:       "Test02",
-			vecs:       makeTempVectors("1988-03-14", types.T_varchar, false, types.T_date),
-			proc:       procs,
-			wantValues: []types.Date{725809},
-			wantType:   types.T_date,
-			wantScalar: false,
-		},
-		{
-			name:       "Test03",
-			vecs:       makeTempVectors("2020-06-14 16:24:15.23", types.T_varchar, true, types.T_datetime),
-			proc:       procs,
-			wantValues: []types.Datetime{66823387773895280},
-			wantType:   types.T_datetime,
-			wantScalar: true,
-		},
-		{
-			name:       "Test04",
-			vecs:       makeTempVectors("2020-06-14 16:24:15.23", types.T_varchar, false, types.T_datetime),
-			proc:       procs,
-			wantValues: []types.Datetime{66823387773895280},
-			wantType:   types.T_datetime,
-			wantScalar: false,
-		},
 		//{
-		//	name:       "Test05",
-		//	vecs:       makeTempVectors("2020-06-14 16:24:15.23", types.T_varchar, true, types.T_timestamp),
-		//	proc:       procs,
-		//	wantValues: []types.Timestamp{66823357574906480},
-		//	wantType:   types.T_timestamp,
-		//	wantScalar: true,
+		//	name:  "01 - normal test",
+		//	proc:  procs,
+		//	input: []types.Timestamp{66823357574906480},
+		//	expected: &types.Bytes{
+		//		Data:    []byte("2020-06-14 16:24:15.230000"),
+		//		Offsets: []uint32{0},
+		//		Lengths: []uint32{26},
+		//	},
+		//	isScalar: false,
 		//},
 		//{
-		//	name:       "Test06",
-		//	vecs:       makeTempVectors("2020-06-14 16:24:15.23", types.T_varchar, false, types.T_timestamp),
-		//	proc:       procs,
-		//	wantValues: []types.Timestamp{66823357574906480},
-		//	wantType:   types.T_timestamp,
-		//	wantScalar: false,
+		//	name:  "02 - scalar test",
+		//	proc:  procs,
+		//	input: []types.Timestamp{66823357574906480},
+		//	expected: &types.Bytes{
+		//		Data:    []byte("2020-06-14 16:24:15.230000"),
+		//		Offsets: []uint32{0},
+		//		Lengths: []uint32{26},
+		//	},
+		//	isScalar: true,
 		//},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			castRes, err := Cast(c.vecs, c.proc)
+			vecs := make([]*vector.Vector, 2)
+			if c.input != nil {
+				vecs[0] = vector.New(types.T_timestamp.ToType())
+				vecs[0].Col = c.input
+				vecs[0].IsConst = c.isScalar
+			} else {
+				vecs[0] = testutil.MakeScalarNull(0)
+			}
+			vecs[1] = vector.New(types.T_varchar.ToType())
+
+			result, err := Cast(vecs, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
-			require.Equal(t, c.wantType, castRes.Typ.Oid)
-			require.Equal(t, c.wantScalar, castRes.IsScalar())
+			require.Equal(t, c.expected, result.Col.(*types.Bytes))
+			require.Equal(t, c.isScalar, result.IsScalar())
 		})
 	}
+}
 
+func TestCastFloatAsDecimal(t *testing.T) {
+	makeTempVectors := func(leftVal []float32, leftType types.Type, rightType types.Type) []*vector.Vector {
+		vecs := make([]*vector.Vector, 2)
+		vecs[0] = &vector.Vector{
+			Col:     leftVal,
+			Typ:     leftType,
+			Nsp:     &nulls.Nulls{},
+			IsConst: true,
+		}
+		vecs[1] = &vector.Vector{
+			Col: nil,
+			Typ: rightType,
+			Nsp: &nulls.Nulls{},
+		}
+		return vecs
+	}
+	leftType := types.Type{Oid: types.T_float32, Size: 4}
+	rightType := types.Type{Oid: types.T_decimal64, Size: 8, Scale: 2, Width: 34}
+
+	cases := []struct {
+		name      string
+		vecs      []*vector.Vector
+		proc      *process.Process
+		wantBytes interface{}
+	}{
+		{
+			name:      "TEST01",
+			vecs:      makeTempVectors([]float32{123.2}, leftType, rightType),
+			proc:      makeProcess(),
+			wantBytes: []types.Decimal64{12320},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, _ := Cast(c.vecs, c.proc)
+			require.Equal(t, c.wantBytes, result.Col.([]types.Decimal64))
+		})
+	}
+}
+
+func TestCastDecimalAsString(t *testing.T) {
+	makeTempVectors := func(leftVal []types.Decimal64, leftType types.Type, rightType types.Type) []*vector.Vector {
+		vecs := make([]*vector.Vector, 2)
+		vecs[0] = &vector.Vector{
+			Col:     leftVal,
+			Typ:     leftType,
+			Nsp:     &nulls.Nulls{},
+			IsConst: true,
+		}
+		vecs[1] = &vector.Vector{
+			Col: nil,
+			Typ: rightType,
+			Nsp: &nulls.Nulls{},
+		}
+		return vecs
+	}
+	leftType := types.Type{Oid: types.T_decimal64, Size: 8}
+	rightType := types.Type{Oid: types.T_varchar, Size: 24}
+
+	cases := []struct {
+		name      string
+		vecs      []*vector.Vector
+		proc      *process.Process
+		wantBytes interface{}
+	}{
+		{
+			name: "TEST01",
+			vecs: makeTempVectors([]types.Decimal64{types.Decimal64(1230)}, leftType, rightType),
+			proc: makeProcess(),
+			wantBytes: &types.Bytes{
+				Data:    []byte{0x31, 0x32, 0x33, 0x30},
+				Offsets: []uint32{0x0},
+				Lengths: []uint32{0x4},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, _ := Cast(c.vecs, c.proc)
+			require.Equal(t, c.wantBytes, result.Col.(*types.Bytes))
+		})
+	}
+}
+
+func TestCastTimestampAsDate(t *testing.T) {
+	makeTempVectors := func(leftVal []types.Timestamp, leftType types.Type, rightType types.Type) []*vector.Vector {
+		vecs := make([]*vector.Vector, 2)
+		vecs[0] = &vector.Vector{
+			Col:     leftVal,
+			Typ:     leftType,
+			Nsp:     &nulls.Nulls{},
+			IsConst: true,
+		}
+		vecs[1] = &vector.Vector{
+			Col: nil,
+			Typ: rightType,
+			Nsp: &nulls.Nulls{},
+		}
+		return vecs
+	}
+	leftType := types.Type{Oid: types.T_timestamp, Size: 8}
+	rightType := types.Type{Oid: types.T_date, Size: 4}
+
+	cases := []struct {
+		name      string
+		vecs      []*vector.Vector
+		proc      *process.Process
+		wantBytes interface{}
+	}{
+		{
+			name:      "TEST01",
+			vecs:      makeTempVectors([]types.Timestamp{types.Timestamp(382331223)}, leftType, rightType),
+			proc:      makeProcess(),
+			wantBytes: []types.Date{types.Date(0)},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result, _ := Cast(c.vecs, c.proc)
+			require.Equal(t, c.wantBytes, result.Col.([]types.Date))
+		})
+	}
 }
 
 func TestCastDecimal64AsDecimal128(t *testing.T) {
@@ -1985,61 +2298,600 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	}
 }
 
-//func TestCastTimeStampAsDatetime(t *testing.T) {
-//	//Cast converts timestamp to datetime
-//	makeTempVectors := func(src types.Timestamp, srcType types.T, srcIsConst bool, destType types.T) []*vector.Vector {
-//		vectors := make([]*vector.Vector, 2)
-//		vectors[0] = &vector.Vector{
-//			Col:     []types.Timestamp{src},
-//			Nsp:     &nulls.Nulls{},
-//			Typ:     types.Type{Oid: srcType},
-//			IsConst: srcIsConst,
-//			Length:  1,
-//		}
-//		vectors[1] = makeTypeVector(destType)
-//		return vectors
-//	}
-//
-//	procs := makeProcess()
-//	cases := []struct {
-//		name       string
-//		vecs       []*vector.Vector
-//		proc       *process.Process
-//		wantBytes  interface{}
-//		wantType   types.T
-//		wantScalar bool
-//	}{
-//		{
-//			name:       "TEST01", //cast(c_timestamp as datetime)  c_timestamp:'1999-04-05 11:01:02'
-//			vecs:       makeTempVectors(66122026122739712, types.T_timestamp, true, types.T_datetime),
-//			proc:       procs,
-//			wantBytes:  []types.Datetime{66122056321728512},
-//			wantType:   types.T_datetime,
-//			wantScalar: true,
-//		},
-//		{
-//			name:       "TEST02", //cast(333.33300 as decimal(20, 5))
-//			vecs:       makeTempVectors(66122026122739712, types.T_timestamp, false, types.T_datetime),
-//			proc:       procs,
-//			wantBytes:  []types.Datetime{66122056321728512},
-//			wantType:   types.T_datetime,
-//			wantScalar: false,
-//		},
-//	}
-//
-//	for _, c := range cases {
-//		t.Run(c.name, func(t *testing.T) {
-//			castRes, err := Cast(c.vecs, c.proc)
-//			if err != nil {
-//				t.Fatal(err)
-//			}
-//			require.Equal(t, c.wantBytes, castRes.Col)
-//			require.Equal(t, c.wantType, castRes.Typ.Oid)
-//			require.Equal(t, c.wantScalar, castRes.IsScalar())
-//		})
-//	}
-//
-//}
+func TestCastStringAsDecimal64(t *testing.T) {
+
+	makeDecimal64Vector := func(values []int64, nsp []uint64, width int32, scale int32) *vector.Vector {
+		d64 := types.Type{
+			Oid:   types.T_decimal64,
+			Size:  8,
+			Width: width,
+			Scale: scale,
+		}
+		vec := vector.New(d64)
+		for _, n := range nsp {
+			nulls.Add(vec.Nsp, n)
+		}
+		ptr := (*[]types.Decimal64)(unsafe.Pointer(&values))
+		vec.Col = *ptr
+		return vec
+	}
+
+	makeScalarDecimal64 := func(v int64, length int, width int32, scale int32) *vector.Vector {
+		d64 := types.Type{
+			Oid:   types.T_decimal64,
+			Size:  8,
+			Width: width,
+			Scale: scale,
+		}
+		vec := testutil.NewProc().AllocScalarVector(d64)
+		vec.Length = length
+		vec.Col = []types.Decimal64{types.Decimal64(v)}
+		return vec
+	}
+
+	convey.Convey("TestCastStringAsDecimal64", t, func() {
+		type kase struct {
+			s    string
+			want int64
+		}
+
+		kases := []kase{
+			{
+				s:    "333.333",
+				want: 33333300,
+			},
+			{
+				s:    "-1234.5",
+				want: -123450000,
+			},
+		}
+
+		var inStr []string
+		var wantDecimal64 []int64
+		for _, k := range kases {
+			inStr = append(inStr, k.s)
+			wantDecimal64 = append(wantDecimal64, k.want)
+		}
+
+		inVector := testutil.MakeVarcharVector(inStr, nil)
+		destVector := makeDecimal64Vector(nil, nil, 10, 5)
+		wantVector := makeDecimal64Vector(wantDecimal64, nil, 10, 5)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{inVector, destVector}, proc)
+		//res, err := CastStringAsDecimal64(inVector, destVector, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVector, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("TestCasetScalarStringAsDecimal64", t, func() {
+		type kase struct {
+			s    string
+			want int64
+		}
+
+		k := kase{
+			s:    "333.123",
+			want: 33312300,
+		}
+
+		inVector := testutil.MakeScalarVarchar(k.s, 10)
+		wantVector := makeScalarDecimal64(k.want, 10, 10, 5)
+		destVector := makeDecimal64Vector(nil, nil, 10, 5)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{inVector, destVector}, proc)
+		//res, err := CastStringAsDecimal64(inVector, destVector, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVector, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestCastTimeStampAsDatetime(t *testing.T) {
+	//Cast converts timestamp to datetime
+	convey.Convey("Cast timestamp to datetime", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+		kases := []kase{
+			{
+				s:    "2004-04-03 12:14:35",
+				want: "2004-04-03 12:14:35",
+			},
+			{
+				s:    "2021-10-03 11:52:21",
+				want: "2021-10-03 11:52:21",
+			},
+			{
+				s:    "2020-08-23 11:52:21",
+				want: "2020-08-23 11:52:21",
+			},
+			{
+				s:    "2021-11-23 16:12:21",
+				want: "2021-11-23 16:12:21",
+			},
+			{
+				s:    "2014-09-23 16:17:21",
+				want: "2014-09-23 16:17:21",
+			},
+		}
+
+		var inStrs []string
+		var wantStrs []string
+		for _, k := range kases {
+			inStrs = append(inStrs, k.s)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeTimeStampVector(inStrs, nil)
+		destVector := testutil.MakeDateTimeVector(nil, nil)
+		wantVec := testutil.MakeDateTimeVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Cast scalar timestamp to datetime", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+		k := kase{
+			s:    "2021-10-03 11:52:21",
+			want: "2021-10-03 11:52:21",
+		}
+
+		srcVector := testutil.MakeScalarTimeStamp(k.s, 10)
+		destVector := testutil.MakeDateTimeVector(nil, nil)
+		wantVec := testutil.MakeScalarDateTime(k.want, 10)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestCastDatetimeAsTimeStamp(t *testing.T) {
+	//Cast converts timestamp to datetime
+	convey.Convey("Cast datetime to timestamp", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+		kases := []kase{
+			{
+				s:    "2004-04-03 12:14:35",
+				want: "2004-04-03 12:14:35",
+			},
+			{
+				s:    "2021-10-03 11:52:21",
+				want: "2021-10-03 11:52:21",
+			},
+			{
+				s:    "2020-08-23 11:52:21",
+				want: "2020-08-23 11:52:21",
+			},
+			{
+				s:    "2021-11-23 16:12:21",
+				want: "2021-11-23 16:12:21",
+			},
+			{
+				s:    "2014-09-23 16:17:21",
+				want: "2014-09-23 16:17:21",
+			},
+		}
+
+		var inStrs []string
+		var wantStrs []string
+		for _, k := range kases {
+			inStrs = append(inStrs, k.s)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeDateTimeVector(inStrs, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Cast scalar datetimeto timestamp ", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+		k := kase{
+			s:    "2021-10-03 11:52:21",
+			want: "2021-10-03 11:52:21",
+		}
+
+		srcVector := testutil.MakeScalarDateTime(k.s, 10)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeScalarTimeStamp(k.want, 10)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestCastDateAsTimeStamp(t *testing.T) {
+	//Cast converts timestamp to datetime
+	convey.Convey("Cast date to timeStamp", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+		kases := []kase{
+			{
+				s:    "2004-04-03",
+				want: "2004-04-03 00:00:00",
+			},
+			{
+				s:    "2021-10-03",
+				want: "2021-10-03 00:00:00",
+			},
+			{
+				s:    "2020-08-23",
+				want: "2020-08-23 00:00:00",
+			},
+			{
+				s:    "2021-11-23",
+				want: "2021-11-23 00:00:00",
+			},
+			{
+				s:    "2014-09-23",
+				want: "2014-09-23 00:00:00",
+			},
+		}
+
+		var inStrs []string
+		var wantStrs []string
+		for _, k := range kases {
+			inStrs = append(inStrs, k.s)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeDateVector(inStrs, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("Cast scalar date to timestamp", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+		k := kase{
+			s:    "2021-10-03",
+			want: "2021-10-03 00:00:00",
+		}
+
+		srcVector := testutil.MakeScalarDate(k.s, 10)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeScalarTimeStamp(k.want, 10)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
+
+func TestCastIntegerAsTimestamp(t *testing.T) {
+	makeTempVectors := func(src interface{}, destType types.T, srcIsConst bool) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeVector(src, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues []types.Timestamp
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors(int8(120), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{120}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors(int16(12000), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{12000}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+		{
+			name:       "Test03",
+			vecs:       makeTempVectors(int32(89000000), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{89000000}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeTempVectors(int64(66823357574906480), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{66823357574906480}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+		{
+			name:       "Test05",
+			vecs:       makeTempVectors(uint8(120), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{120}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+		{
+			name:       "Test06",
+			vecs:       makeTempVectors(uint16(120), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{120}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+		{
+			name:       "Test07",
+			vecs:       makeTempVectors(uint32(2000120), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{2000120}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+		{
+			name:       "Test08",
+			vecs:       makeTempVectors(uint64(66823357574906480), types.T_timestamp, true),
+			proc:       procs,
+			wantValues: []types.Timestamp{66823357574906480}, //"2020-06-14 16:24:15.230000"
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantValues, castRes.Col)
+		})
+	}
+}
+
+func TestCastDecimal64AsTimestamp(t *testing.T) {
+	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = &vector.Vector{
+			Col:     []types.Decimal64{left},
+			Nsp:     &nulls.Nulls{},
+			Typ:     leftType,
+			IsConst: leftScalar,
+			Length:  1,
+		}
+
+		vectors[1] = &vector.Vector{
+			Col:     nil,
+			Nsp:     &nulls.Nulls{},
+			Typ:     destType,
+			IsConst: false,
+			Length:  0,
+		}
+		return vectors
+	}
+	// decimal(10,5)
+	leftType := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 5}
+	//timestamp
+	destType := types.Type{Oid: types.T_timestamp, Size: 8}
+
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantBytes  interface{}
+		wantType   types.Type
+		wantScalar bool
+	}{
+		{
+			name:       "TEST01",
+			vecs:       makeTempVector(33333300, leftType, true, destType),
+			proc:       procs,
+			wantBytes:  []types.Timestamp{333},
+			wantType:   destType,
+			wantScalar: true,
+		},
+		{
+			name:       "TEST02", //cast(333.33300 as decimal(10, 4))
+			vecs:       makeTempVector(33333300, leftType, false, destType),
+			proc:       procs,
+			wantBytes:  []types.Timestamp{333},
+			wantType:   destType,
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantType.Oid, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
+func TestCastDecimal128AsTimestamp(t *testing.T) {
+	// Cast converts decimal128 to decimal128
+	makeTempVector := func(left types.Decimal128, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = &vector.Vector{
+			Col:     []types.Decimal128{left},
+			Nsp:     &nulls.Nulls{},
+			Typ:     leftType,
+			IsConst: leftScalar,
+			Length:  1,
+		}
+
+		vectors[1] = &vector.Vector{
+			Col:     nil,
+			Nsp:     &nulls.Nulls{},
+			Typ:     destType,
+			IsConst: false,
+			Length:  0,
+		}
+		return vectors
+	}
+
+	leftType1 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
+	leftType2 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 5}
+	leftType3 := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
+	destType := types.Type{Oid: types.T_timestamp, Size: 8}
+
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantBytes  interface{}
+		wantType   types.Type
+		wantScalar bool
+	}{
+		{
+			name:       "TEST01", //cast(333.33300 as decimal(20, 5))
+			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType1, true, destType),
+			proc:       procs,
+			wantBytes:  []types.Timestamp{333},
+			wantType:   destType,
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVector(types.Decimal128{Lo: 33333300, Hi: 0}, leftType1, false, destType),
+			proc:       procs,
+			wantBytes:  []types.Timestamp{333},
+			wantType:   destType,
+			wantScalar: false,
+		},
+		{
+			//types.Decimal128{Lo: 156783300, Hi: 0}, resType2
+			name:       "Test03",
+			vecs:       makeTempVector(types.Decimal128{Lo: 156783300, Hi: 0}, leftType2, false, destType),
+			proc:       procs,
+			wantBytes:  []types.Timestamp{1567},
+			wantType:   destType,
+			wantScalar: false,
+		},
+		{
+			name:       "Test04",
+			vecs:       makeTempVector(types.Decimal128{Lo: -123450000, Hi: -1}, leftType3, false, destType),
+			proc:       procs,
+			wantBytes:  []types.Timestamp{-1234},
+			wantType:   destType,
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantBytes, castRes.Col)
+			require.Equal(t, c.wantType.Oid, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
+func TestCastDecimal128AsTimestamp2(t *testing.T) {
+	d128 := types.Type{
+		Oid:       types.T_decimal128,
+		Size:      16,
+		Precision: 20,
+		Width:     20,
+		Scale:     5,
+	}
+	ts := types.Type{
+		Oid:  types.T_timestamp,
+		Size: 8,
+	}
+
+	makeDecimal128Vector := func(values []types.Decimal128, precision int32, scale int32) *vector.Vector {
+		vec := vector.New(d128)
+		cols := make([]types.Decimal128, len(values))
+		vec.Col = cols
+		return vec
+	}
+
+	makeTimeStampVector := func(values []types.Timestamp) *vector.Vector {
+		vec := vector.New(ts)
+		ds := make([]types.Timestamp, len(values))
+		vec.Col = ds
+		return vec
+	}
+
+	convey.Convey("TestCol", t, func() {
+		type kase struct {
+			s    types.Decimal128
+			want types.Timestamp
+		}
+
+		kases := []kase{
+			{
+				s:    types.Decimal128{Lo: 33333300, Hi: 0},
+				want: types.Timestamp(333),
+			},
+			{
+				s:    types.Decimal128{Lo: 156783300, Hi: 0},
+				want: types.Timestamp(1567),
+			},
+			{
+				s:    types.Decimal128{Lo: 256783300, Hi: 0},
+				want: types.Timestamp(2567),
+			},
+		}
+
+		var inDecs []types.Decimal128
+		var wantDecs []types.Timestamp
+		for _, k := range kases {
+			inDecs = append(inDecs, k.s)
+			wantDecs = append(wantDecs, k.want)
+		}
+
+		decimal128Vector := makeDecimal128Vector(inDecs, d128.Precision, d128.Scale)
+		timestampVector := makeTimeStampVector(wantDecs)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{decimal128Vector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(timestampVector, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+}
 
 func TestCastNullAsAllType(t *testing.T) {
 	//Cast null as (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float32/float64/date/datetime/timestamp/decimal64/decimal128/char/varchar)
@@ -3213,6 +4065,239 @@ func TestCastNullAsAllType(t *testing.T) {
 	}
 }
 
+func TestCastBoolAsString(t *testing.T) {
+	//Cast converts bool to char
+	//Cast converts bool to varchar
+	makeTempVectors := func(src bool, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		vectors[0] = makeVector(src, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantType   types.T
+		wantScalar bool
+	}{
+		{
+			name: "Test01",
+			vecs: makeTempVectors(true, true, types.T_char),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("1"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{1},
+			},
+			wantType:   types.T_char,
+			wantScalar: true,
+		},
+		{
+			name: "Test02",
+			vecs: makeTempVectors(true, false, types.T_char),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("1"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{1},
+			},
+			wantType:   types.T_char,
+			wantScalar: false,
+		},
+		{
+			name: "Test03",
+			vecs: makeTempVectors(false, false, types.T_varchar),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("0"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{1},
+			},
+			wantType:   types.T_varchar,
+			wantScalar: false,
+		},
+		{
+			name: "Test04",
+			vecs: makeTempVectors(false, false, types.T_varchar),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("0"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{1},
+			},
+			wantType:   types.T_varchar,
+			wantScalar: false,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
+// date to datetime and date to string
+func TestCastDateAsDatetimeAndString(t *testing.T) {
+	makeTempVectors := func(src string, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		date, _ := types.ParseDate(src)
+		vectors[0] = makeVector(date, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantType   types.T
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("1992-01-01", true, types.T_datetime),
+			proc:       procs,
+			wantValues: []types.Datetime{types.FromClock(1992, 1, 1, 0, 0, 0, 0)},
+			wantType:   types.T_datetime,
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("1992-01-01", false, types.T_datetime),
+			proc:       procs,
+			wantValues: []types.Datetime{types.FromClock(1992, 1, 1, 0, 0, 0, 0)},
+			wantType:   types.T_datetime,
+			wantScalar: false,
+		},
+		{
+			name: "Test03",
+			vecs: makeTempVectors("1992-01-01", true, types.T_char),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("1992-01-01"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{10},
+			},
+			wantType:   types.T_char,
+			wantScalar: true,
+		},
+		{
+			name: "Test04",
+			vecs: makeTempVectors("1992-02-02", true, types.T_varchar),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("1992-02-02"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{10},
+			},
+			wantType:   types.T_varchar,
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
+// datetime to date and datetime to string
+func TestCastDatetimeAsDateAndString(t *testing.T) {
+	makeTempVectors := func(src string, srcIsConst bool, destType types.T) []*vector.Vector {
+		vectors := make([]*vector.Vector, 2)
+		date, _ := types.ParseDatetime(src, 0)
+		vectors[0] = makeVector(date, srcIsConst)
+		vectors[1] = makeTypeVector(destType)
+		return vectors
+	}
+
+	procs := makeProcess()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantValues interface{}
+		wantType   types.T
+		wantScalar bool
+	}{
+		{
+			name:       "Test01",
+			vecs:       makeTempVectors("1992-01-01 00:00:00", true, types.T_date),
+			proc:       procs,
+			wantValues: []types.Date{types.FromCalendar(1992, 1, 1)},
+			wantType:   types.T_date,
+			wantScalar: true,
+		},
+		{
+			name:       "Test02",
+			vecs:       makeTempVectors("1992-01-01 00:00:00", false, types.T_date),
+			proc:       procs,
+			wantValues: []types.Date{types.FromCalendar(1992, 1, 1)},
+			wantType:   types.T_date,
+			wantScalar: false,
+		},
+		{
+			name: "Test03",
+			vecs: makeTempVectors("1992-01-01 00:00:00", true, types.T_char),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("1992-01-01 00:00:00"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{19},
+			},
+			wantType:   types.T_char,
+			wantScalar: true,
+		},
+		{
+			name: "Test04",
+			vecs: makeTempVectors("1992-02-02 00:00:00", true, types.T_varchar),
+			proc: procs,
+			wantValues: &types.Bytes{
+				Data:    []byte("1992-02-02 00:00:00"),
+				Offsets: []uint32{0},
+				Lengths: []uint32{19},
+			},
+			wantType:   types.T_varchar,
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			castRes, err := Cast(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantValues, castRes.Col)
+			require.Equal(t, c.wantType, castRes.Typ.Oid)
+			require.Equal(t, c.wantScalar, castRes.IsScalar())
+		})
+	}
+
+}
+
 func makeTypeVector(t types.T) *vector.Vector {
 	return &vector.Vector{
 		Col:     nil,
@@ -3223,7 +4308,7 @@ func makeTypeVector(t types.T) *vector.Vector {
 	}
 }
 
-// make vector for type of int8,int16,int32,int64,uint8,uint16,uint32,uint64,date,datetime,timestamp
+// make vector for type of int8,int16,int32,int64,uint8,uint16,uint32,uint64,date,datetime,timestamp,bool
 func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 	var typeOid types.T
 	var col interface{}
@@ -3267,6 +4352,10 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 	case types.Timestamp:
 		typeOid = types.T_timestamp
 		col = []types.Timestamp{val}
+	case bool:
+		typeOid = types.T_bool
+		col = []bool{val}
+
 	}
 
 	return &vector.Vector{

@@ -20,17 +20,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestApplyUpdateToIVector(t *testing.T) {
-	typ := types.Type{
-		Oid:   types.T_int32,
-		Size:  4,
-		Width: 32,
-	}
+	typ := types.Type_INT32.ToType()
 	vec := vector.MockVector(typ, 10)
 
 	mask := roaring.NewBitmap()
@@ -53,7 +49,7 @@ func TestApplyUpdateToIVector(t *testing.T) {
 }
 func TestApplyUpdateToIVector2(t *testing.T) {
 	typ := types.Type{
-		Oid:   types.T_varchar,
+		Oid:   types.Type_VARCHAR,
 		Size:  24,
 		Width: 100,
 	}
@@ -108,27 +104,27 @@ func TestShuffleByDeletes(t *testing.T) {
 
 func TestCheckRowExists(t *testing.T) {
 	typ := types.Type{
-		Oid:   types.T_int32,
+		Oid:   types.Type_INT32,
 		Size:  4,
 		Width: 32,
 	}
 	vec := MockVec(typ, 100, 0)
-	_, exist := CheckRowExists(vec, int32(55), nil)
+	_, exist := GetOffsetByVal(vec, int32(55), nil)
 	require.True(t, exist)
-	_, exist = CheckRowExists(vec, int32(0), nil)
+	_, exist = GetOffsetByVal(vec, int32(0), nil)
 	require.True(t, exist)
-	_, exist = CheckRowExists(vec, int32(99), nil)
+	_, exist = GetOffsetByVal(vec, int32(99), nil)
 	require.True(t, exist)
 
-	_, exist = CheckRowExists(vec, int32(-1), nil)
+	_, exist = GetOffsetByVal(vec, int32(-1), nil)
 	require.False(t, exist)
-	_, exist = CheckRowExists(vec, int32(100), nil)
+	_, exist = GetOffsetByVal(vec, int32(100), nil)
 	require.False(t, exist)
-	_, exist = CheckRowExists(vec, int32(114514), nil)
+	_, exist = GetOffsetByVal(vec, int32(114514), nil)
 	require.False(t, exist)
 
 	dels := roaring.NewBitmap()
 	dels.Add(uint32(55))
-	_, exist = CheckRowExists(vec, int32(55), dels)
+	_, exist = GetOffsetByVal(vec, int32(55), dels)
 	require.False(t, exist)
 }

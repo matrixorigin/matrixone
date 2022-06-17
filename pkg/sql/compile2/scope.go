@@ -17,8 +17,9 @@ package compile2
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 
@@ -205,6 +206,8 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 
 func planValToExeVal(value *plan.ConstantValue, typ plan.Type_TypeId) interface{} {
 	switch v := value.GetConstantValue().(type) {
+	case *plan.ConstantValue_BoolV:
+		return v.BoolV
 	case *plan.ConstantValue_Int64V:
 		switch typ {
 		case plan.Type_INT8:
@@ -513,6 +516,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 						Arg: &group.Argument{
 							Aggs:  arg.Aggs,
 							Exprs: arg.Exprs,
+							Types: arg.Types,
 						},
 					})
 				}

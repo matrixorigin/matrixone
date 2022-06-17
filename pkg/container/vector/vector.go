@@ -29,6 +29,132 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+func GetStrVectorValues(v *Vector) ([]byte, []uint32, []uint32) {
+	if v.IsConst {
+		col := v.Col.(*types.Bytes)
+		data := make([]byte, 0, len(col.Data)*v.Length)
+		os := make([]uint32, v.Length)
+		ns := make([]uint32, v.Length)
+		o := uint32(0)
+		for i := 0; i < v.Length; i++ {
+			os[i] = o
+			ns[i] = uint32(len(col.Data))
+			o += uint32(len(col.Data))
+			data = append(data, col.Data...)
+		}
+		return data, os, ns
+	}
+	vs := v.Col.(*types.Bytes)
+	return vs.Data, vs.Offsets, vs.Lengths
+}
+
+func GetFixedVectorValues[T any](v *Vector, sz int) []T {
+	if v.IsConst {
+		vs := make([]T, v.Length)
+		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
+		data := unsafe.Slice((*byte)(addr), sz)
+		val := encoding.DecodeFixedSlice[T](data, sz)[0]
+		for i := range vs {
+			vs[i] = val
+		}
+		return vs
+	}
+	return DecodeFixedCol[T](v, sz)
+}
+
+func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
+	if !v.IsConst {
+		return v
+	}
+	switch v.Typ.Oid {
+	case types.T_bool:
+		expandVector[bool](v, 1, m)
+	case types.T_int8:
+		expandVector[int8](v, 1, m)
+	case types.T_int16:
+		expandVector[int16](v, 2, m)
+	case types.T_int32:
+		expandVector[int32](v, 4, m)
+	case types.T_int64:
+		expandVector[int64](v, 8, m)
+	case types.T_uint8:
+		expandVector[uint8](v, 1, m)
+	case types.T_uint16:
+		expandVector[uint16](v, 2, m)
+	case types.T_uint32:
+		expandVector[uint32](v, 4, m)
+	case types.T_uint64:
+		expandVector[uint64](v, 8, m)
+	case types.T_float32:
+		expandVector[float32](v, 4, m)
+	case types.T_float64:
+		expandVector[float64](v, 8, m)
+	case types.T_date:
+		expandVector[types.Date](v, 4, m)
+	case types.T_datetime:
+		expandVector[types.Datetime](v, 8, m)
+	case types.T_timestamp:
+		expandVector[types.Timestamp](v, 8, m)
+	case types.T_decimal64:
+		expandVector[types.Decimal64](v, 8, m)
+	case types.T_decimal128:
+		expandVector[types.Decimal128](v, 16, m)
+	case types.T_char, types.T_varchar, types.T_json:
+		col := v.Col.(*types.Bytes)
+		if nulls.Any(v.Nsp) {
+			col.Offsets = col.Offsets[:0]
+			col.Lengths = col.Lengths[:0]
+			for i := 0; i < v.Length; i++ {
+				nulls.Add(v.Nsp, uint64(i))
+				col.Offsets = append(col.Offsets, 0)
+				col.Lengths = append(col.Lengths, 0)
+			}
+		} else {
+			data, err := mheap.Alloc(m, int64(v.Length*len(col.Data)))
+			if err != nil {
+				return nil
+			}
+			data = data[:0]
+			o := uint32(0)
+			os := make([]uint32, v.Length)
+			ns := make([]uint32, v.Length)
+			for i := 0; i < v.Length; i++ {
+				os[i] = o
+				ns[i] = uint32(len(col.Data))
+				o += uint32(len(col.Data))
+				data = append(data, col.Data...)
+			}
+			col.Data = data
+			col.Offsets = os
+			col.Lengths = ns
+		}
+	}
+	v.IsConst = false
+	return v
+}
+
+func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
+	data, err := mheap.Alloc(m, int64(v.Length*sz))
+	if err != nil {
+		return nil
+	}
+	vs := encoding.DecodeFixedSlice[T](data, sz)
+	if nulls.Any(v.Nsp) {
+		for i := 0; i < v.Length; i++ {
+			nulls.Add(v.Nsp, uint64(i))
+		}
+	} else {
+		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
+		val := unsafe.Slice((*T)(addr), sz)[0]
+		for i := 0; i < v.Length; i++ {
+			vs[i] = val
+		}
+	}
+	v.Col = vs
+	v.Data = data
+	return v
+}
+
 func DecodeFixedCol[T any](v *Vector, sz int) []T {
 	return encoding.DecodeFixedSlice[T](v.Data, sz)
 }

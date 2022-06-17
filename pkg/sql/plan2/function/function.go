@@ -16,9 +16,10 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 	"math"
 	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -276,6 +277,25 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 		if args[i] != require[i] && isNotScalarNull(args[i]) {
 			return false
 		}
+	}
+	return true
+}
+
+func toDateTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) != 2 {
+		return false
+	}
+	if args[0] != types.T_char && args[0] != types.T_varchar {
+		return false
+	}
+	if args[0] == ScalarNull {
+		return false
+	}
+	if args[1] != types.T_char && args[1] != types.T_varchar {
+		return false
+	}
+	if args[1] == ScalarNull {
+		return false
 	}
 	return true
 }

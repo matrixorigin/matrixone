@@ -4,17 +4,17 @@
 
 The COS() function returns the cosine of input number(given in radians).
 
-
 ## **Syntax**
 
 ```
 > COS(number)
 ```
+
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | number | Required. Any numeric data type supported now. |
-
 
 ## **Examples**
 
@@ -33,4 +33,5 @@ The COS() function returns the cosine of input number(given in radians).
 ```
 
 ## Constraints
+
 Currently, MatrixOne doesn't support select function() without from tables.

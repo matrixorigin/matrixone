@@ -540,7 +540,7 @@ func (mp *MysqlProtocolImpl) appendStringLenEncOfUint64(data []byte, value uint6
 //return the buffer
 func (mp *MysqlProtocolImpl) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	mp.strconvBuffer = mp.strconvBuffer[:0]
-	mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', 4, bitSize)
+	mp.strconvBuffer = strconv.AppendFloat(mp.strconvBuffer, value, 'f', -1, bitSize)
 	return mp.appendCountOfBytesLenEnc(data, mp.strconvBuffer)
 }
 
@@ -1321,10 +1321,10 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				data = mp.appendStringLenEnc(data, value.(types.Date).String())
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := mrs.GetValue(r, i); err2 != nil {
+			if value, err2 := mrs.GetString(r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = mp.appendStringLenEnc(data, value.(types.Datetime).String())
+				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err2 := mrs.GetString(r, i); err2 != nil {

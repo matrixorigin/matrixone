@@ -183,6 +183,19 @@ func TestCwFn1(t *testing.T) {
 			err:    false,
 			expect: testutil.MakeInt64Vector([]int64{1, 1, 2, 0}, []uint64{3}),
 		},
+
+		{
+			// special case 2
+			info: "when true then null else null", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeScalarBool(true, 5),
+				testutil.MakeScalarNull(5),
+				testutil.MakeScalarNull(5),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeScalarNull(5),
+		},
 	}
 
 	for i, tc := range testCases {

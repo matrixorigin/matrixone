@@ -15,6 +15,8 @@
 package typecast
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
+	"math"
 	"strconv"
 	"unsafe"
 
@@ -156,6 +158,14 @@ var (
 	Uint64ToDecimal128 = UintToDecimal128[uint64]
 
 	TimestampToDatetime = timestampToDatetime
+	DatetimeToTimestamp = datetimeToTimestamp
+	DateToTimestamp     = dateToTimestamp
+	TimestampToVarchar  = timestampToVarchar
+	BoolToBytes         = boolToBytes
+	DateToBytes         = dateToBytes
+	DateToDatetime      = dateToDateTime
+	DateTimeToBytes     = datetimeToBytes
+	DateTimeToDate      = datetimeToDate
 )
 
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
@@ -183,6 +193,30 @@ func IntToBytes[T constraints.Integer](xs []T, rs *types.Bytes) (*types.Bytes, e
 	oldLen := uint32(0)
 	for _, x := range xs {
 		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func Decimal64ToBytes(xs []types.Decimal64, rs *types.Bytes, scale int32) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, x.Decimal64ToString(scale)...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func Decimal128ToBytes(xs []types.Decimal128, rs *types.Bytes, scale int32) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, x.Decimal128ToString(scale)...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
@@ -233,6 +267,13 @@ func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]ty
 	return rs, nil
 }
 
+func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, scale int64) ([]types.Decimal64, error) {
+	for i, x := range xs {
+		rs[i] = types.InitDecimal64(int64(x), scale)
+	}
+	return rs, nil
+}
+
 func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]types.Decimal128, error) {
 	for i, x := range xs {
 		rs[i] = types.InitDecimal128UsingUint(uint64(x))
@@ -242,4 +283,100 @@ func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]t
 
 func timestampToDatetime(xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
 	return types.TimestampToDatetime(xs, rs)
+}
+
+func datetimeToTimestamp(xs []types.Datetime, rs []types.Timestamp) ([]types.Timestamp, error) {
+	return types.DatetimeToTimestamp(xs, rs)
+}
+
+func dateToTimestamp(xs []types.Date, rs []types.Timestamp) ([]types.Timestamp, error) {
+	return types.DateToTimestamp(xs, rs)
+}
+
+func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for i, x := range xs {
+		//todo: pass precision arg?
+		rs.Data = append(rs.Data, []byte(x.String())...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets[i] = oldLen
+		rs.Lengths[i] = newLen - oldLen
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func boolToBytes(xs []bool, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = types.AppendBoolToByteArray(x, rs.Data)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, error) {
+	for i := range xs {
+		rs[i] = xs[i].ToTime()
+	}
+	return rs, nil
+}
+
+func dateToBytes(xs []types.Date, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, []byte(x.String())...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) {
+	for i := range xs {
+		rs[i] = xs[i].ToDate()
+	}
+	return rs, nil
+}
+
+func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, []byte(x.String())...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]types.Timestamp, error) {
+	for i, x := range xs {
+		rs[i] = types.Timestamp(x)
+	}
+	return rs, nil
+}
+
+func Decimal64ToTimestamp(xs []types.Decimal64, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+	for i, x := range xs {
+		ts := int64(x) / int64(math.Pow10(int(scale)))
+		rs[i] = types.Timestamp(ts)
+	}
+	return rs, nil
+}
+
+func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+	bydel128 := types.InitDecimal128UsingUint(uint64(math.Pow10(int(scale))))
+	tempdel128 := make([]types.Decimal128, len(xs))
+	div.Decimal128DivByScalar(bydel128, xs, 0, scale, tempdel128)
+	for i, x := range tempdel128 {
+		rs[i] = types.Timestamp(x.Lo)
+	}
+	return rs, nil
 }
