@@ -598,11 +598,6 @@ func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uin
 			if err != nil {
 				panic(err)
 			}
-			if vec.(*vector.StdVector).VMask != nil &&
-				vec.(*vector.StdVector).VMask.Np != nil &&
-				vec.(*vector.StdVector).VMask.Np.Contains(uint64(rowIdx)) {
-				vec.(*vector.StdVector).VMask.Np.Flip(uint64(rowIdx), uint64(rowIdx))
-			}
 		}
 	case container.StrVec:
 		strVec := vec.(*vector.StrVector)

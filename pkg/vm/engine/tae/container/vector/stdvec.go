@@ -130,11 +130,22 @@ func (v *StdVector) SetValue(idx int, val any) (err error) {
 	if v.IsReadonly() {
 		return ErrVecWriteRo
 	}
+	_, isNull := val.(types.Null)
+
 	v.Lock()
 	defer v.Unlock()
 
-	if v.VMask != nil && v.VMask.Np != nil && v.VMask.Np.Contains(uint64(idx)) {
-		v.VMask.Np.Flip(uint64(idx), uint64(idx))
+	if isNull {
+		if v.VMask.Np == nil {
+			v.VMask.Np = roaring64.BitmapOf(uint64(idx))
+		} else {
+			v.VMask.Np.Add(uint64(idx))
+		}
+		return
+	}
+
+	if v.VMask.Np != nil && v.VMask.Np.Contains(uint64(idx)) {
+		v.VMask.Np.Remove(uint64(idx))
 	}
 
 	start := idx * int(v.Type.Size)
