@@ -112,6 +112,8 @@ func setFile(files *[]*DriverFile, file *DriverFile) {
 		panic(any("driver file err"))
 	}
 	if len(*files) == 1 {
+		logutil.Infof("Remove %v, replay %v", (*files)[0].name, file.name)
+		(*files)[0].Unref()
 		(*files)[0] = file
 		return
 	}
@@ -155,6 +157,7 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 		switch tmpName[1] {
 		case "blk":
 			if len(bf.columns[col].data.file) == 0 {
+				bf.columns[col].ts = ts
 				setFile(&bf.columns[col].data.file, file)
 				sf.replayInfo(bf.columns[col].data.stat, file)
 			}

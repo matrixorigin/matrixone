@@ -174,4 +174,7 @@ func (cb *columnBlock) Destroy() {
 			file.Unref()
 		}
 	}
+	for _, update := range cb.updates.file {
+		update.Unref()
+	}
 }
