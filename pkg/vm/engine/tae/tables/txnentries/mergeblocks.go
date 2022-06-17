@@ -106,7 +106,7 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 	for _, blk := range entry.createdBlks {
 		createdBlks = append(createdBlks, blk.AsCommonID())
 	}
-	cmd = newMergeBlocksCmd(entry.relation.ID(), droppedSegs, createdSegs, droppedBlks, createdBlks, entry.mapping, entry.fromAddr, entry.toAddr)
+	cmd = newMergeBlocksCmd(entry.relation.ID(), droppedSegs, createdSegs, droppedBlks, createdBlks, entry.mapping, entry.fromAddr, entry.toAddr, entry.txn, csn)
 	return
 }
 

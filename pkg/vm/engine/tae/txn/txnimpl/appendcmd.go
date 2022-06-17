@@ -27,8 +27,6 @@ import (
 
 const (
 	CmdAppend int16 = txnbase.CmdCustomized + iota
-	CmdUpdate
-	CmdDelete
 )
 
 func init() {
@@ -62,13 +60,30 @@ func NewAppendCmd(id uint32, node InsertNode) *AppendCmd {
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
 }
-
-func (c *AppendCmd) String() string {
-	s := fmt.Sprintf("AppendCmd: ID=%d", c.ID)
-	s = fmt.Sprintf("%s\n%s", s, c.ComposedCmd.ToString("\t"))
+func (c *AppendCmd) Desc() string {
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=[", c.ID, c.Ts)
+	for _, info := range c.Infos {
+		s = fmt.Sprintf("%s %s", s, info.Desc())
+	}
+	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToDesc("\t\t"))
 	return s
 }
-
+func (c *AppendCmd) String() string {
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=[", c.ID, c.Ts)
+	for _, info := range c.Infos {
+		s = fmt.Sprintf("%s%s", s, info.String())
+	}
+	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToString("\t\t"))
+	return s
+}
+func (c *AppendCmd) VerboseString() string {
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=", c.ID, c.Ts)
+	for _, info := range c.Infos {
+		s = fmt.Sprintf("%s%s", s, info.String())
+	}
+	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToVerboseString("\t\t"))
+	return s
+}
 func (e *AppendCmd) GetType() int16 { return CmdAppend }
 func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
