@@ -99,6 +99,7 @@ func (r *CountRing) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeInt64Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*8]
 	r.Vs[n] = 0
 	r.Ns = append(r.Ns, 0)
 	return nil
@@ -125,6 +126,7 @@ func (r *CountRing) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeInt64Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*8]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 	}
