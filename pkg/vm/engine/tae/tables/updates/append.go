@@ -68,7 +68,13 @@ func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, mvcc *MVCCHandle) *AppendN
 }
 
 func (n *AppendNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d,MaxRow=%d", n.commitTs, n.maxRow)
+	return fmt.Sprintf("TS=%d;MaxRow=%d", n.commitTs, n.maxRow)
+}
+func (n *AppendNode) GeneralString() string {
+	return fmt.Sprintf("TS=%d;MaxRow=%d", n.commitTs, n.maxRow)
+}
+func (n *AppendNode) GeneralVerboseString() string {
+	return fmt.Sprintf("TS=%d;MaxRow=%d", n.commitTs, n.maxRow)
 }
 
 func (n *AppendNode) SetLogIndex(idx *wal.Index) {

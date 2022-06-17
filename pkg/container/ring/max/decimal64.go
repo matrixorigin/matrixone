@@ -107,6 +107,7 @@ func (r *Decimal64Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal64Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*8]
 	r.Vs[n] = 0
 	r.Ns = append(r.Ns, 0)
 	r.Es = append(r.Es, true)
@@ -135,6 +136,7 @@ func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal64Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*8]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Es = append(r.Es, true)

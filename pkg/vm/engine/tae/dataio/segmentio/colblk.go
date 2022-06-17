@@ -188,7 +188,7 @@ func (cb *columnBlock) Destroy() {
 			if file == nil {
 				continue
 			}
-			file.driver.ReleaseFile(file)
+			cb.block.seg.driver.ReleaseFile(file)
 		}
 	}
 
@@ -196,6 +196,6 @@ func (cb *columnBlock) Destroy() {
 		if index.dataFile == nil || index.dataFile.file[0] == nil {
 			continue
 		}
-		index.dataFile.file[0].driver.ReleaseFile(index.dataFile.file[0])
+		cb.block.seg.driver.ReleaseFile(index.dataFile.file[0])
 	}
 }
