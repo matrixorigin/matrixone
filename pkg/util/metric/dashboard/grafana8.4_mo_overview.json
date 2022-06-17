@@ -49,7 +49,7 @@
     "fiscalYearStartMonth": 0,
     "graphTooltip": 0,
     "id": null,
-    "iteration": 1654654415181,
+    "iteration": 1655706497698,
     "links": [],
     "liveNow": false,
     "panels": [
@@ -67,11 +67,7 @@
             "type": "row"
         },
         {
-            "datasource": {
-                "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
-            },
-            "description": "processed statement count increasing rate in the past 15 seconds",
+            "description": "processed statement count increasing rate in the past 30 seconds",
             "fieldConfig": {
                 "defaults": {
                     "color": {
@@ -149,12 +145,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  unix_timestamp(collecttime) AS time_sec,\n  sum(value) as value,\n  type as metric\nFROM sql_statement_total\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY collecttime, type\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"30s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_statement_total\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"30s\", 0), type\nORDER BY 1",
                     "refId": "A",
                     "select": [
                         [
@@ -181,11 +181,7 @@
             "type": "timeseries"
         },
         {
-            "datasource": {
-                "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
-            },
-            "description": "SQL processing time in seconds, averaged by the past 15 seconds",
+            "description": "SQL processing time in seconds, averaged by the past 30 seconds",
             "fieldConfig": {
                 "defaults": {
                     "color": {
@@ -272,7 +268,7 @@
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"15s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_latency_seconds\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"15s\", 0), type\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"30s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_latency_seconds\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"30s\", 0), type\nORDER BY 1",
                     "refId": "A",
                     "select": [
                         [
@@ -299,10 +295,6 @@
             "type": "timeseries"
         },
         {
-            "datasource": {
-                "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
-            },
             "description": "Total CPU time in used by MO server",
             "fieldConfig": {
                 "defaults": {
@@ -338,6 +330,7 @@
                         }
                     },
                     "mappings": [],
+                    "max": 100,
                     "min": 0,
                     "thresholds": {
                         "mode": "absolute",
@@ -352,7 +345,7 @@
                             }
                         ]
                     },
-                    "unit": "s"
+                    "unit": "percent"
                 },
                 "overrides": []
             },
@@ -377,12 +370,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as value\nFROM process_cpu_seconds_total\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as cpu\nFROM process_cpu_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -403,10 +400,6 @@
             "type": "timeseries"
         },
         {
-            "datasource": {
-                "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
-            },
             "description": "Total memory used by MO server，averaged by the past 1 minute",
             "fieldConfig": {
                 "defaults": {
@@ -493,7 +486,7 @@
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as memory\nFROM process_resident_memory_bytes\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as memory\nFROM process_resident_memory_bytes\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -514,10 +507,6 @@
             "type": "timeseries"
         },
         {
-            "datasource": {
-                "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
-            },
             "description": "number of open file descriptors and its max limit",
             "fieldConfig": {
                 "defaults": {
@@ -592,6 +581,10 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
@@ -620,6 +613,10 @@
                     ]
                 },
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "hide": false,
@@ -664,10 +661,6 @@
             "type": "row"
         },
         {
-            "datasource": {
-                "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
-            },
             "description": "CPU Percentage on the current machine, averaged by the number of logical cores",
             "fieldConfig": {
                 "defaults": {
@@ -743,12 +736,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '30s') as time_sec,\n  avg(value) as cpu\nFROM sys_cpu_combined_percent\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '30s')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as cpu\nFROM sys_cpu_combined_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -774,10 +771,6 @@
             "type": "timeseries"
         },
         {
-            "datasource": {
-                "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
-            },
             "description": "Memory usage on the current machine",
             "fieldConfig": {
                 "defaults": {
@@ -851,12 +844,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as used\nFROM sys_memory_used\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as used\nFROM sys_memory_used\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -878,12 +875,16 @@
                     ]
                 },
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${DS_MYSQL-MO}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "hide": false,
                     "metricColumn": "none",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as available\nFROM sys_memory_available\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as available\nFROM sys_memory_available\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "B",
                     "select": [
                         [
@@ -956,6 +957,6 @@
     "timezone": "",
     "title": "MO-Overview",
     "uid": "L4yqe2_7k",
-    "version": 3,
+    "version": 4,
     "weekStart": ""
 }
