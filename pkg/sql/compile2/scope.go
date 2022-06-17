@@ -446,6 +446,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 		ss[i].Proc.Lim = s.Proc.Lim
 		ss[i].Proc.UnixTime = s.Proc.UnixTime
 		ss[i].Proc.Snapshot = s.Proc.Snapshot
+		ss[i].Proc.SessionInfo = s.Proc.SessionInfo
 	}
 	{
 		var flg bool
