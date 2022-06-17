@@ -107,10 +107,11 @@ func (v *StdDevPopRing) Grow(m *mheap.Mheap) error {
 		}
 		mheap.Free(m, v.Data)
 		v.Data = data
-		v.SumX2 = encoding.DecodeFloat64Slice(data)
+		v.SumX = encoding.DecodeFloat64Slice(data)
 	}
 
 	v.SumX = v.SumX[:n+1]
+	v.Data = v.Data[:(n+1)*8]
 	v.SumX[n] = 0
 	v.SumX2 = append(v.SumX2, 0)
 	v.NullCounts = append(v.NullCounts, 0)
@@ -143,6 +144,7 @@ func (v *StdDevPopRing) Grows(N int, m *mheap.Mheap) error {
 	}
 
 	v.SumX = v.SumX[:n+N]
+	v.Data = v.Data[:(n+N)*8]
 	for i := 0; i < N; i++ {
 		v.NullCounts = append(v.NullCounts, 0)
 		v.SumX2 = append(v.SumX2, 0)

@@ -99,6 +99,7 @@ func (r *UInt16Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeUint16Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*2]
 	r.Ns = append(r.Ns, 0)
 	return nil
 }
@@ -124,6 +125,7 @@ func (r *UInt16Ring) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeUint16Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*2]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 	}

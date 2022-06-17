@@ -16,6 +16,7 @@ package sum
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -100,6 +101,7 @@ func (r *Decimal128Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal128Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*16]
 	r.Vs[n] = types.InitDecimal128(0)
 	r.Ns = append(r.Ns, 0)
 	return nil
@@ -126,6 +128,7 @@ func (r *Decimal128Ring) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal128Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*16]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 	}
