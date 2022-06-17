@@ -22,7 +22,7 @@ require (
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
 	github.com/google/uuid v1.3.0
-	github.com/lni/dragonboat/v4 v4.0.0-20220612172217-6ae1d0b2e535
+	github.com/lni/dragonboat/v4 v4.0.0-20220616104447-c8a4d1aff3f4
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220606032431-c944d801f1e5
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
@@ -106,7 +106,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.0.3 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/lni/vfs v0.2.1-0.20220408085249-8be85be1c3c1
+	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

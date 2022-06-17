@@ -46,10 +46,8 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, n
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", subquery))
 	}
 
-	expr := &plan.SubQuery{
-		NodeId:       nodeId,
-		IsScalar:     false,
-		IsCorrelated: newCtx.subqueryIsCorrelated,
+	expr := &plan.SubqueryRef{
+		NodeId: nodeId,
 	}
 
 	returnExpr := &Expr{

@@ -86,6 +86,9 @@ func Test_TPCH_Plan2(t *testing.T) {
 
 	// test tpch query
 	for qn := 1; qn <= 22; qn += 1 {
+		if qn == 21 {
+			continue
+		}
 		// qn := 15
 		qnf, err := os.ReadFile(fmt.Sprintf("%s/tpch/q%d.sql", dir, qn))
 		if err != nil {

@@ -17,9 +17,11 @@ package txnentries
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type mergeBlocksCmd struct {
@@ -31,9 +33,11 @@ type mergeBlocksCmd struct {
 	mapping     []uint32
 	fromAddr    []uint32
 	toAddr      []uint32
+	txn         txnif.AsyncTxn
+	id          uint32
 }
 
-func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32) *mergeBlocksCmd {
+func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32, txn txnif.AsyncTxn, id uint32) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
 		tid:         tid,
 		droppedSegs: droppedSegs,
@@ -43,6 +47,8 @@ func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, create
 		mapping:     mapping,
 		fromAddr:    fromAddr,
 		toAddr:      toAddr,
+		txn:         txn,
+		id:          id,
 	}
 }
 
@@ -133,11 +139,15 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 
+	if err = binary.Write(w, binary.BigEndian, cmd.id); err != nil {
+		return
+	}
+
 	droppedSegsLength := uint32(len(cmd.droppedSegs))
 	if err = binary.Write(w, binary.BigEndian, droppedSegsLength); err != nil {
 		return
 	}
-	n = 2 + 4
+	n = 2 + 4 + 4
 	var sn int64
 	for _, seg := range cmd.droppedSegs {
 		if sn, err = WriteSegID(w, seg); err != nil {
@@ -197,12 +207,16 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	if err = binary.Read(r, binary.BigEndian, &cmd.id); err != nil {
+		return
+	}
+	n = 4
 	dropSegmentLength := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &dropSegmentLength); err != nil {
 		return
 	}
 	var sn int64
-	n = 4
+	n += 4
 	cmd.droppedSegs = make([]*common.ID, dropSegmentLength)
 	for i := 0; i < int(dropSegmentLength); i++ {
 		id := &common.ID{}
@@ -284,4 +298,41 @@ func (cmd *mergeBlocksCmd) Unmarshal(buf []byte) (err error) {
 	_, err = cmd.ReadFrom(bbuf)
 	return
 }
-func (cmd *mergeBlocksCmd) String() string { return "" }
+
+func (cmd *mergeBlocksCmd) Desc() string {
+	s := "CmdName=MERGE;From=["
+	for _, blk := range cmd.droppedBlks {
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+	}
+	s = fmt.Sprintf("%s ];To=[", s)
+	for _, blk := range cmd.createdBlks {
+		s = fmt.Sprintf("%s %d }", s, blk.BlockID)
+	}
+	s = fmt.Sprintf("%s ]", s)
+	return s
+}
+
+func (cmd *mergeBlocksCmd) String() string {
+	s := "CmdName=MERGE;From=["
+	for _, blk := range cmd.droppedBlks {
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+	}
+	s = fmt.Sprintf("%s ];To=[", s)
+	for _, blk := range cmd.createdBlks {
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+	}
+	s = fmt.Sprintf("%s ]", s)
+	return s
+}
+func (cmd *mergeBlocksCmd) VerboseString() string {
+	s := "CmdName=MERGE;From=["
+	for _, blk := range cmd.droppedBlks {
+		s = fmt.Sprintf("%s %s", s, blk.BlockString())
+	}
+	s = fmt.Sprintf("%s ];To=[", s)
+	for _, blk := range cmd.createdBlks {
+		s = fmt.Sprintf("%s %s", s, blk.BlockString())
+	}
+	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v;Mapping=%v", s, cmd.fromAddr, cmd.toAddr, cmd.mapping)
+	return s
+}

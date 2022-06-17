@@ -13,10 +13,11 @@ on:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
-  tae-ut:
+
+  tae-sca:
     # The type of runner that the job will run on.
     runs-on: ubuntu-latest
-    name: Staticcheck and UT Test on CentOS/x64
+    name: SCA Test on CentOS/x64
 
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
@@ -34,7 +35,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE && make clean
           if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
-
       - name: Detect non-ascii characters
         run: |
           na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
@@ -43,29 +43,33 @@ jobs:
             printf '%s\n' "${na_characters[*]}"
             exit 1
           fi
-
-      - name: Build MatrixOne
-        run: |
-          cd $GITHUB_WORKSPACE && make clean && make config && make build
-
       - name: Static Code Analysis
         run: |
-          cd $GITHUB_WORKSPACE
+          cd $GITHUB_WORKSPACE && make clean && make config && make build
           make install-static-check-tools
           make static-check
 
+  tae-ut:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    name: UT Test on CentOS/x64
+
+    # Steps represent a sequence of tasks that will be executed as part of the job.
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.18
+
       - name: Unit Testing
         run: |
+          cd $GITHUB_WORKSPACE && make clean && make config
           make ut
-
-      - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
-        continue-on-error: true
-        with:
-          name: test_reports
-          path: |
-            ${{ github.workspace }}
-          retention-days: 7
 
   tae-bvt:
     # The type of runner that the job will run on.
@@ -189,17 +193,21 @@ jobs:
           echo '--------Cases only passed in base----------'
           uniq -u cmp.txt
           if [ "$(uniq -u cmp.txt | wc -l)" -gt 0 ]; then echo 'Some cases passed in base but failed in head. Pls check head version'; exit 3; fi
-          if [ "$( cat ./head-log/run.log | grep "panic runtime error:" | wc -l )" -gt "$( cat ./base-log/run.log | grep "panic runtime error:" | wc -l )" ]; then echo 'Less panic in base sha. Pls check head version'; exit 2; fi
+          echo '--------Panic in head----------'
+          cat ./head-log/run.log | grep -in 'panic runtime error:'
+          echo '--------Panic in base----------'
+          cat ./base-log/run.log | grep -in 'panic runtime error:'
+          if [ "$( cat ./head-log/run.log | grep -in 'panic runtime error:' | wc -l )" -gt "$( cat ./base-log/run.log | grep -in 'panic runtime error:' | wc -l )" ]; then echo 'Less panic in base sha. Pls check head version'; exit 2; fi
 
       - name: remove some files
         if: ${{ always() }}
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/store/"  ]; then rm -rf ./head/store/; fi
-          if  [ -d  "./base/store/"  ]; then rm -rf ./base/store/; fi
-          rm -rf ./head/mo-server
-          rm -rf ./base/mo-server
+          if  [ -d  "./head/"  ]; then mv ./head/mo-server.log ./head-mo-server.log; rm -rf ./head/; fi
+          if  [ -d  "./base/"  ]; then mv ./base/mo-server.log ./base-mo-server.log; rm -rf ./base/; fi
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
@@ -209,3 +217,9 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
+
+  lint-docs:
+    name: Lint Docs
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'echo "No build required" '
