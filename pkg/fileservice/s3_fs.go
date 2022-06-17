@@ -93,6 +93,7 @@ func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 			entries = append(entries, DirEntry{
 				Name:  name,
 				IsDir: false,
+				Size:  int(obj.Size),
 			})
 		}
 
