@@ -165,11 +165,7 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
 }
 
 func (cmd *EntryCommand) Desc() string {
-	s := fmt.Sprintf("[%s][%s][TS=%d][CSN=%d]", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID)
-	switch cmd.cmdType {
-	case CmdCreateTable, CmdLogTable:
-		s = fmt.Sprintf("%s[Schema:%v]", s, cmd.Table.schema.String())
-	}
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID)
 	return s
 }
 
@@ -199,13 +195,13 @@ func (cmd *EntryCommand) IDString() string {
 	dbid, id := cmd.GetID()
 	switch cmd.cmdType {
 	case CmdCreateDatabase, CmdDropDatabase, CmdLogDatabase:
-		s = fmt.Sprintf("%sDB-%d", s, dbid)
+		s = fmt.Sprintf("%sDB=%d", s, dbid)
 	case CmdCreateTable, CmdDropTable, CmdLogTable:
-		s = fmt.Sprintf("%sDB-%d%s", s, dbid, id.TableString())
+		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.TableString())
 	case CmdCreateSegment, CmdDropSegment, CmdLogSegment:
-		s = fmt.Sprintf("%sDB-%d%s", s, dbid, id.SegmentString())
+		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.SegmentString())
 	case CmdCreateBlock, CmdDropBlock, CmdLogBlock:
-		s = fmt.Sprintf("%sDB-%d%s", s, dbid, id.BlockString())
+		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.BlockString())
 	}
 	return s
 }
@@ -318,12 +314,16 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 }
 
 func (cmd *EntryCommand) String() string {
-	s := fmt.Sprintf("[%s][%s][TS=%d][CSN=%d]%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
 	return s
 }
 
 func (cmd *EntryCommand) VerboseString() string {
-	s := fmt.Sprintf("[%s][%s][TS=%d][CSN=%d]%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	switch cmd.cmdType {
+	case CmdCreateTable, CmdLogTable:
+		s = fmt.Sprintf("%s;Schema=%v", s, cmd.Table.schema.String())
+	}
 	return s
 }
 func (cmd *EntryCommand) GetType() int16 { return cmd.cmdType }

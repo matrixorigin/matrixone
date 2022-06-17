@@ -110,11 +110,11 @@ func (cmd *compactBlockCmd) Unmarshal(buf []byte) (err error) {
 	return
 }
 func (cmd *compactBlockCmd) Desc() string {
-	return fmt.Sprintf("[CPCT][CSN=%d]From%sTo%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
+	return fmt.Sprintf("CmdName=CPCT;CSN=%d;From=%s;To=%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
 }
 func (cmd *compactBlockCmd) String() string {
-	return fmt.Sprintf("[CPCT][CSN=%d]From%sTo%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
+	return fmt.Sprintf("CmdName=CPCT;CSN=%d;From=%s;To=%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
 }
 func (cmd *compactBlockCmd) VerboseString() string {
-	return fmt.Sprintf("[CPCT][CSN=%d]From%sTo%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
+	return fmt.Sprintf("CmdName=CPCT;CSN=%d;From=%s;To=%s", cmd.id, cmd.from.BlockString(), cmd.to.BlockString())
 }

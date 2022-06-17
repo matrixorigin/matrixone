@@ -61,27 +61,27 @@ func NewAppendCmd(id uint32, node InsertNode) *AppendCmd {
 	return impl
 }
 func (c *AppendCmd) Desc() string {
-	s := fmt.Sprintf("[InsertNode][ID=%d][ts=%d]", c.ID, c.Ts)
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=[", c.ID, c.Ts)
 	for _, info := range c.Infos {
-		s = fmt.Sprintf("%s%s", s, info.Desc())
+		s = fmt.Sprintf("%s %s", s, info.Desc())
 	}
-	s = fmt.Sprintf("%s\n%s", s, c.ComposedCmd.ToDesc("\t\t"))
+	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToDesc("\t\t"))
 	return s
 }
 func (c *AppendCmd) String() string {
-	s := fmt.Sprintf("[InsertNode][ID=%d][ts=%d]", c.ID, c.Ts)
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=[", c.ID, c.Ts)
 	for _, info := range c.Infos {
-		s = fmt.Sprintf("%s[%s]", s, info.String())
+		s = fmt.Sprintf("%s%s", s, info.String())
 	}
-	s = fmt.Sprintf("%s\n\t%s", s, c.ComposedCmd.ToString("\t"))
+	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToString("\t\t"))
 	return s
 }
 func (c *AppendCmd) VerboseString() string {
-	s := fmt.Sprintf("[InsertNode][ID=%d][ts=%d]", c.ID, c.Ts)
+	s := fmt.Sprintf("CmdName=InsertNode;ID=%d;TS=%d;Dests=", c.ID, c.Ts)
 	for _, info := range c.Infos {
-		s = fmt.Sprintf("%s\n\t%s", s, info.String())
+		s = fmt.Sprintf("%s%s", s, info.String())
 	}
-	s = fmt.Sprintf("%s\n%s", s, c.ComposedCmd.ToVerboseString("\t"))
+	s = fmt.Sprintf("%s];\n%s", s, c.ComposedCmd.ToVerboseString("\t\t"))
 	return s
 }
 func (e *AppendCmd) GetType() int16 { return CmdAppend }

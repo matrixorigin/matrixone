@@ -124,16 +124,16 @@ func (e *PointerCmd) GetType() int16 {
 	return CmdPointer
 }
 func (e *PointerCmd) Desc() string {
-	s := fmt.Sprintf("[Ptr][G%d-%d]", e.Group, e.Lsn)
+	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d", e.Group, e.Lsn)
 	return s
 }
 func (e *PointerCmd) String() string {
-	s := fmt.Sprintf("[Ptr][G%d-%d]", e.Group, e.Lsn)
+	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d]", e.Group, e.Lsn)
 	return s
 }
 
 func (e *PointerCmd) VerboseString() string {
-	s := fmt.Sprintf("[Ptr][G%d-%d]", e.Group, e.Lsn)
+	s := fmt.Sprintf("CmdName=Ptr;Group=%d;Lsn=%d]", e.Group, e.Lsn)
 	return s
 }
 func (e *PointerCmd) WriteTo(w io.Writer) (n int64, err error) {
@@ -214,17 +214,17 @@ func (e *DeleteBitmapCmd) Unmarshal(buf []byte) error {
 }
 
 func (e *DeleteBitmapCmd) Desc() string {
-	s := fmt.Sprintf("[DEL][Cardinality=%d]", e.Bitmap.GetCardinality())
+	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d", e.Bitmap.GetCardinality())
 	return s
 }
 
 func (e *DeleteBitmapCmd) String() string {
-	s := fmt.Sprintf("[DEL][Cardinality=%d]", e.Bitmap.GetCardinality())
+	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d", e.Bitmap.GetCardinality())
 	return s
 }
 
 func (e *DeleteBitmapCmd) VerboseString() string {
-	s := fmt.Sprintf("[DEL][Cardinality=%d]Deletes are %v", e.Bitmap.GetCardinality(), e.Bitmap.String())
+	s := fmt.Sprintf("CmdName=DEL;Cardinality=%d;Deletes=%v", e.Bitmap.GetCardinality(), e.Bitmap.String())
 	return s
 }
 func (e *BatchCmd) GetType() int16 {
@@ -265,17 +265,17 @@ func (e *BatchCmd) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (e *BatchCmd) Desc() string {
-	s := fmt.Sprintf("[BAT][Rows=%d]", e.Bat.Length())
+	s := fmt.Sprintf("CmdName=BAT;Rows=%d", e.Bat.Length())
 	return s
 }
 
 func (e *BatchCmd) String() string {
-	s := fmt.Sprintf("[BAT][Rows=%d]", e.Bat.Length())
+	s := fmt.Sprintf("CmdName=BAT;Rows=%d", e.Bat.Length())
 	return s
 }
 
 func (e *BatchCmd) VerboseString() string {
-	s := fmt.Sprintf("[BAT][Rows=%d]Data is %v", e.Bat.Length(), e.Bat)
+	s := fmt.Sprintf("CmdName=BAT;Rows=%d;Data=%v", e.Bat.Length(), e.Bat)
 	return s
 }
 func (e *ComposedCmd) GetType() int16 {

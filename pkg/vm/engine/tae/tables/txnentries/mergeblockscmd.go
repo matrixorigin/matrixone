@@ -300,37 +300,39 @@ func (cmd *mergeBlocksCmd) Unmarshal(buf []byte) (err error) {
 }
 
 func (cmd *mergeBlocksCmd) Desc() string {
-	s := "[MERGE] From"
+	s := "CmdName=MERGE;From=["
 	for _, blk := range cmd.droppedBlks {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
-	s = fmt.Sprintf("%s To", s)
+	s = fmt.Sprintf("%s ];To=[", s)
 	for _, blk := range cmd.createdBlks {
-		s = fmt.Sprintf("%s %d", s, blk.BlockID)
+		s = fmt.Sprintf("%s %d }", s, blk.BlockID)
 	}
+	s = fmt.Sprintf("%s ]", s)
 	return s
 }
 
 func (cmd *mergeBlocksCmd) String() string {
-	s := "[MERGE] From"
+	s := "CmdName=MERGE;From=["
 	for _, blk := range cmd.droppedBlks {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
-	s = fmt.Sprintf("%s To", s)
+	s = fmt.Sprintf("%s ];To=[", s)
 	for _, blk := range cmd.createdBlks {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
+	s = fmt.Sprintf("%s ]", s)
 	return s
 }
 func (cmd *mergeBlocksCmd) VerboseString() string {
-	s := "[MERGE]\n\tFrom\n"
+	s := "CmdName=MERGE;From=["
 	for _, blk := range cmd.droppedBlks {
-		s = fmt.Sprintf("%s\t%s\n", s, blk.BlockString())
+		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
-	s = fmt.Sprintf("%s\tTo\n", s)
+	s = fmt.Sprintf("%s ];To=[", s)
 	for _, blk := range cmd.createdBlks {
-		s = fmt.Sprintf("%s\t%s\n", s, blk.BlockString())
+		s = fmt.Sprintf("%s %s", s, blk.BlockString())
 	}
-	s = fmt.Sprintf("%s\tFrom format %v\n\tTo format %v\n\tMapping %v", s, cmd.fromAddr, cmd.toAddr, cmd.mapping)
+	s = fmt.Sprintf("%s ];FromFormat=%v;ToFormat=%v;Mapping=%v", s, cmd.fromAddr, cmd.toAddr, cmd.mapping)
 	return s
 }
