@@ -12,36 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package overload
+package loopleft
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 const (
-	Top = iota
-	Join
-	Semi
-	Left
-	Limit
-	Merge
-	Order
-	Group
-	Output
-	Offset
-	Product
-	Restrict
-	Dispatch
-	Connector
-	Projection
-	Complement
-
-	LoopJoin
-	LoopLeft
-	LoopSemi
-	LoopComplement
-
-	MergeTop
-	MergeLimit
-	MergeOrder
-	MergeGroup
-	MergeOffset
-
-	Deletion
+	Build = iota
+	Probe
+	End
 )
+
+type Container struct {
+	state int
+	bat   *batch.Batch
+}
+
+type ResultPos struct {
+	Rel int32
+	Pos int32
+}
+
+type Argument struct {
+	ctr    *Container
+	Cond   *plan.Expr
+	Result []ResultPos
+}

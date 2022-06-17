@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package product
+package loopsemi
 
 import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" ⨯ ")
+	buf.WriteString(" ⨝ ")
 }
 
 func Prepare(proc *process.Process, arg interface{}) error {
@@ -103,30 +104,28 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	defer bat.Clean(proc.Mp)
 	rbat := batch.NewWithSize(len(ap.Result))
-	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
-		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
-		}
+	for i, pos := range ap.Result {
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
 	count := len(bat.Zs)
 	for i := 0; i < count; i++ {
 		for j := 0; j < len(ctr.bat.Zs); j++ {
-			for k, rp := range ap.Result {
-				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
-						rbat.Clean(proc.Mp)
-						return err
-					}
-				} else {
-					if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp); err != nil {
+			vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, j, proc, ap.Cond)
+			if err != nil {
+				return err
+			}
+			if vec.Col.([]bool)[0] {
+				for k, pos := range ap.Result {
+					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp); err != nil {
 						rbat.Clean(proc.Mp)
 						return err
 					}
 				}
+				vector.Free(vec, proc.Mp)
+				rbat.Zs = append(rbat.Zs, bat.Zs[i])
+				break
 			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+			vector.Free(vec, proc.Mp)
 		}
 	}
 	proc.Reg.InputBatch = rbat

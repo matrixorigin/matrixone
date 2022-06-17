@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
@@ -77,6 +78,12 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
 		}
+	case *semi.Argument:
+		rin.Arg = &semi.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
 			IsPreBuild: arg.IsPreBuild,
@@ -124,7 +131,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 
 func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
-		E: colexec.RewriteFilterExprList(n.WhereList),
+		E: colexec.RewriteFilterExprList(n.FilterList),
 	}
 }
 
@@ -297,7 +304,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n *plan.Node) *group.Argument {
+func constructGroup(n, cn *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
@@ -314,9 +321,16 @@ func constructGroup(n *plan.Node) *group.Argument {
 			}
 		}
 	}
-
+	typs := make([]types.Type, len(cn.ProjectList))
+	for i, e := range cn.ProjectList {
+		typs[i].Oid = types.T(e.Typ.Id)
+		typs[i].Width = e.Typ.Width
+		typs[i].Size = e.Typ.Size
+		typs[i].Scale = e.Typ.Scale
+	}
 	return &group.Argument{
 		Aggs:  aggs,
+		Types: typs,
 		Exprs: n.GroupBy,
 	}
 }
@@ -387,6 +401,23 @@ func constructJoinResult(expr *plan.Expr) (int32, int32) {
 }
 
 func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
+	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
+		b, ok := e.C.Value.(*plan.Const_Bval)
+		if !ok {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+		}
+		if b.Bval {
+			return expr, expr
+		}
+		return expr, &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Value: &plan.Const_Bval{Bval: true},
+				},
+			},
+		}
+	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))

@@ -62,6 +62,61 @@ func GetFixedVectorValues[T any](v *Vector, sz int) []T {
 	return DecodeFixedCol[T](v, sz)
 }
 
+func (v *Vector) ToConst(row int) *Vector {
+	if v.IsConst {
+		return v
+	}
+	switch v.Typ.Oid {
+	case types.T_bool:
+		return toConstVector[bool](v, row)
+	case types.T_int8:
+		return toConstVector[int8](v, row)
+	case types.T_int16:
+		return toConstVector[int16](v, row)
+	case types.T_int32:
+		return toConstVector[int32](v, row)
+	case types.T_int64:
+		return toConstVector[int64](v, row)
+	case types.T_uint8:
+		return toConstVector[uint8](v, row)
+	case types.T_uint16:
+		return toConstVector[uint16](v, row)
+	case types.T_uint32:
+		return toConstVector[uint32](v, row)
+	case types.T_uint64:
+		return toConstVector[uint64](v, row)
+	case types.T_float32:
+		return toConstVector[float32](v, row)
+	case types.T_float64:
+		return toConstVector[float64](v, row)
+	case types.T_date:
+		return toConstVector[types.Date](v, row)
+	case types.T_datetime:
+		return toConstVector[types.Datetime](v, row)
+	case types.T_timestamp:
+		return toConstVector[types.Timestamp](v, row)
+	case types.T_decimal64:
+		return toConstVector[types.Decimal64](v, row)
+	case types.T_decimal128:
+		return toConstVector[types.Decimal128](v, row)
+	case types.T_char, types.T_varchar, types.T_json:
+		col := v.Col.(*types.Bytes)
+		src := col.Data[col.Offsets[row] : col.Offsets[row]+col.Lengths[row]]
+		data := make([]byte, len(src))
+		copy(data, src)
+		return &Vector{
+			IsConst: true,
+			Typ:     v.Typ,
+			Col: &types.Bytes{
+				Data:    data,
+				Offsets: []uint32{0},
+				Lengths: []uint32{col.Lengths[row]},
+			},
+		}
+	}
+	return nil
+}
+
 func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	if !v.IsConst {
 		return v
@@ -101,26 +156,44 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.Decimal128](v, 16, m)
 	case types.T_char, types.T_varchar, types.T_json:
 		col := v.Col.(*types.Bytes)
-		data, err := mheap.Alloc(m, int64(v.Length*len(col.Data)))
-		if err != nil {
-			return nil
+		if nulls.Any(v.Nsp) {
+			col.Offsets = col.Offsets[:0]
+			col.Lengths = col.Lengths[:0]
+			for i := 0; i < v.Length; i++ {
+				nulls.Add(v.Nsp, uint64(i))
+				col.Offsets = append(col.Offsets, 0)
+				col.Lengths = append(col.Lengths, 0)
+			}
+		} else {
+			data, err := mheap.Alloc(m, int64(v.Length*len(col.Data)))
+			if err != nil {
+				return nil
+			}
+			data = data[:0]
+			o := uint32(0)
+			os := make([]uint32, v.Length)
+			ns := make([]uint32, v.Length)
+			for i := 0; i < v.Length; i++ {
+				os[i] = o
+				ns[i] = uint32(len(col.Data))
+				o += uint32(len(col.Data))
+				data = append(data, col.Data...)
+			}
+			col.Data = data
+			col.Offsets = os
+			col.Lengths = ns
 		}
-		data = data[:0]
-		o := uint32(0)
-		os := make([]uint32, v.Length)
-		ns := make([]uint32, v.Length)
-		for i := 0; i < v.Length; i++ {
-			os[i] = o
-			ns[i] = uint32(len(col.Data))
-			o += uint32(len(col.Data))
-			data = append(data, col.Data...)
-		}
-		col.Data = data
-		col.Offsets = os
-		col.Lengths = ns
 	}
 	v.IsConst = false
 	return v
+}
+
+func toConstVector[T any](v *Vector, row int) *Vector {
+	return &Vector{
+		IsConst: true,
+		Typ:     v.Typ,
+		Col:     []T{v.Col.([]T)[row]},
+	}
 }
 
 func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
@@ -128,12 +201,17 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 	if err != nil {
 		return nil
 	}
-	//sv := reflect.ValueOf(v.Col)
 	vs := encoding.DecodeFixedSlice[T](data, sz)
-	addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
-	val := unsafe.Slice((*T)(addr), sz)[0]
-	for i := 0; i < v.Length; i++ {
-		vs[i] = val
+	if nulls.Any(v.Nsp) {
+		for i := 0; i < v.Length; i++ {
+			nulls.Add(v.Nsp, uint64(i))
+		}
+	} else {
+		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
+		val := unsafe.Slice((*T)(addr), sz)[0]
+		for i := 0; i < v.Length; i++ {
+			vs[i] = val
+		}
 	}
 	v.Col = vs
 	v.Data = data
