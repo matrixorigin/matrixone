@@ -222,7 +222,9 @@ func (sf *segmentFile) Destroy() {
 	blocks := sf.blocks
 	sf.RUnlock()
 	for _, block := range blocks {
-		block.Destroy()
+		if err := block.Destroy(); err != nil {
+			panic(err)
+		}
 	}
 	sf.driver.Unmount()
 	sf.driver.Destroy()
