@@ -287,12 +287,9 @@ func (l *Log) Append(file *DriverFile) error {
 			return err
 		}
 	}
-	if file.snode.logExtents.length == 0 {
-		file.snode.logExtents.offset = uint32(offset) + LOG_START
-		file.snode.logExtents.length = uint32(allocated)
-		return nil
+	if file.snode.logExtents.length > 0 {
+		l.allocator.Free(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
 	}
-	l.allocator.Free(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
 	file.snode.logExtents.offset = uint32(offset) + LOG_START
 	file.snode.logExtents.length = uint32(allocated)
 	return nil

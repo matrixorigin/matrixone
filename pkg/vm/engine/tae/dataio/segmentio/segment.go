@@ -112,7 +112,6 @@ func setFile(files *[]*DriverFile, file *DriverFile) {
 		panic(any("driver file err"))
 	}
 	if len(*files) == 1 {
-		logutil.Infof("Remove %v, replay %v", (*files)[0].name, file.name)
 		(*files)[0].Unref()
 		(*files)[0] = file
 		return
