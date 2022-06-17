@@ -21,7 +21,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
@@ -447,13 +446,12 @@ func CopyToIBatch(data *gbat.Batch, capacity uint64) (bat batch.IBatch, err erro
 }
 
 func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector {
-	if deletes == nil || deletes.GetCardinality() == 0 {
+	if deletes == nil || deletes.IsEmpty() {
 		return vec
 	}
 	col := vec.Col
 	deletesIterator := deletes.Iterator()
-	nsp := &nulls.Nulls{}
-	nsp.Np = &roaring64.Bitmap{}
+	np := roaring64.New()
 	var nspIterator roaring64.IntPeekable64
 	if vec.Nsp != nil && vec.Nsp.Np != nil {
 		nspIterator = vec.Nsp.Np.Iterator()
@@ -481,7 +479,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 							}
 							break
 						}
-						nsp.Np.Add(n - uint64(deleted))
+						np.Add(n - uint64(deleted))
 					}
 				}
 			}
@@ -490,7 +488,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 		if nspIterator != nil {
 			for nspIterator.HasNext() {
 				n := nspIterator.Next()
-				nsp.Np.Add(n - uint64(deleted))
+				np.Add(n - uint64(deleted))
 			}
 		}
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
@@ -528,7 +526,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 							}
 							break
 						}
-						nsp.Np.Add(n - uint64(deleted))
+						np.Add(n - uint64(deleted))
 					}
 				}
 			}
@@ -538,19 +536,19 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 		if nspIterator != nil {
 			for nspIterator.HasNext() {
 				n := nspIterator.Next()
-				nsp.Np.Add(n - uint64(deleted))
+				np.Add(n - uint64(deleted))
 			}
 		}
 		if pre != -1 {
 			UpdateOffsets(data, pre-1, len(data.Lengths)-1)
 		}
 	}
-	vec.Nsp = nsp
+	vec.Nsp.Np = np
 	return vec
 }
 
 func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32]any) *gvec.Vector {
-	if mask == nil || mask.GetCardinality() == 0 {
+	if mask == nil || mask.IsEmpty() {
 		return vec
 	}
 	iterator := mask.Iterator()
@@ -599,7 +597,7 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 }
 
 func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uint32]any) vector.IVector {
-	if mask == nil || mask.GetCardinality() == 0 {
+	if mask == nil || mask.IsEmpty() {
 		return vec
 	}
 	updateIterator := mask.Iterator()
@@ -745,7 +743,7 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes
 		ranges = append(ranges, &deleteRange{pos: pos, deleted: deletedCnt})
 		deletedCnt++
 	}
-	if origMask == nil || origMask.GetCardinality() == 0 {
+	if origMask == nil || origMask.IsEmpty() {
 		return origMask, origVals, destDelets
 	}
 

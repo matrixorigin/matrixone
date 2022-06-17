@@ -21,7 +21,6 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -37,6 +37,7 @@ type ColumnUpdateNode struct {
 	*sync.RWMutex
 	mask     *roaring.Bitmap
 	vals     map[uint32]any
+	nulls    *roaring.Bitmap
 	chain    *ColumnChain
 	startTs  uint64
 	commitTs uint64
@@ -148,8 +149,11 @@ func (node *ColumnUpdateNode) GetValueLocked(row uint32) (v any, err error) {
 	}
 	return
 }
-func (node *ColumnUpdateNode) HasUpdateLocked(row uint32) bool {
-	return node.vals[row] != nil
+func (node *ColumnUpdateNode) HasAnyNullLocked() bool {
+	if node.nulls == nil {
+		return false
+	}
+	return !node.nulls.IsEmpty()
 }
 
 func (node *ColumnUpdateNode) EqualLocked(o *ColumnUpdateNode) bool {
@@ -201,8 +205,7 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += int64(sn)
-	vals := gvec.Vector{}
-	vals.Nsp = &nulls.Nulls{}
+	vals := gvec.New(types.Type_ANY.ToType())
 	if err = vals.Read(buf); err != nil {
 		return
 	}
@@ -210,7 +213,7 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	row := uint32(0)
 	for it.HasNext() {
 		key := it.Next()
-		v := compute.GetValue(&vals, row)
+		v := compute.GetValue(vals, row)
 		node.vals[key] = v
 		row++
 	}
