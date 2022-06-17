@@ -113,7 +113,7 @@ func (c *Compile) Run(ts uint64) (err error) {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
-	case QueryInsert:
+	case Insert:
 		affectedRows, err := c.scope.Insert(ts, c.proc.Snapshot, c.e)
 		if err != nil {
 			return err
@@ -198,7 +198,7 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 		// needn't do merge work
 		rs = &Scope{
 			PreScopes: ss,
-			Magic:     QueryInsert,
+			Magic:     Insert,
 		}
 	case plan.Query_UPDATE:
 		rs = &Scope{
