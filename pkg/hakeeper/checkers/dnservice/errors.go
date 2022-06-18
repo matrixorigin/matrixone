@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package errors
+package dnservice
 
 import "fmt"
 
-type SqlError struct {
-	code  string
-	cause string
-}
-
-var _ error = (*SqlError)(nil)
-
-func (e *SqlError) Code() string { return e.code }
-func (e *SqlError) Error() string {
-	if len(e.code) > 0 {
-		return fmt.Sprintf("[%v]%v", e.code, e.cause)
-	} else {
-		return fmt.Sprintf("%v", e.cause)
-	}
-}
+var (
+	errShardNotExist  = fmt.Errorf("shard not exist")
+	errNoWrokingStore = fmt.Errorf("no working store")
+)

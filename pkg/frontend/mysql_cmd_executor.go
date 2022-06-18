@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -115,12 +116,13 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 type outputQueue struct {
-	proto   MysqlProtocol
-	mrs     *MysqlResultSet
-	rowIdx  uint64
-	length  uint64
-	ep      *tree.ExportParam
-	lineStr []byte
+	proto           MysqlProtocol
+	mrs             *MysqlResultSet
+	rowIdx          uint64
+	length          uint64
+	ep              *tree.ExportParam
+	lineStr         []byte
+	showCreateTable bool
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -130,13 +132,14 @@ func (oq *outputQueue) ResetLineStr() {
 	oq.lineStr = oq.lineStr[:0]
 }
 
-func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam) *outputQueue {
+func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showCreateTable bool) *outputQueue {
 	return &outputQueue{
-		proto:  proto,
-		mrs:    mrs,
-		rowIdx: 0,
-		length: length,
-		ep:     ep,
+		proto:           proto,
+		mrs:             mrs,
+		rowIdx:          0,
+		length:          length,
+		ep:              ep,
+		showCreateTable: showCreateTable,
 	}
 }
 
@@ -184,6 +187,11 @@ func (o *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
+		if o.showCreateTable {
+			if err := handleShowCreateTable2(o.mrs); err != nil {
+				return err
+			}
+		}
 		if err := o.proto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
 			//return err
 			logutil.Errorf("flush error %v \n", err)
@@ -191,6 +199,50 @@ func (o *outputQueue) flush() error {
 		}
 	}
 	o.rowIdx = 0
+	return nil
+}
+
+const (
+	tableNamePos = 1
+	attrNamePos  = 2
+	attrTypPos   = 3
+)
+
+/*
+handle show create table in plan2 and tae
+*/
+func handleShowCreateTable2(mrs *MysqlResultSet) error {
+	mrs.Data = mrs.Data[1:]
+	tableName := string(mrs.Data[0][tableNamePos].([]byte))
+	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
+	rowCount := 0
+	for i, d := range mrs.Data {
+		nullOrNot := ""
+		if d[7].(int8) != 0 {
+			nullOrNot = "NOT NULL"
+		} else {
+			nullOrNot = "NULL"
+		}
+		if rowCount == 0 {
+			createStr += "\n"
+		} else {
+			createStr += ",\n"
+		}
+		typ := types.Type{Oid: types.T(mrs.Data[i][attrTypPos].(int32))}
+		typeStr := typ.String()
+		createStr += fmt.Sprintf("`%s` %s %s", string(mrs.Data[i][attrNamePos].([]byte)), typeStr, nullOrNot)
+		rowCount++
+	}
+	if rowCount != 0 {
+		createStr += "\n"
+	}
+	createStr += ")"
+
+	row := make([]interface{}, 2)
+	row[0] = tableName
+	row[1] = createStr
+	mrs.Data = nil
+	mrs.AddRow(row)
 	return nil
 }
 
@@ -239,7 +291,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 	allocateOutBufferTime := time.Since(begin3)
 
-	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep)
+	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showCreateTable)
 	oq.reset()
 
 	row2colTime := time.Duration(0)
@@ -247,6 +299,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchBegin := time.Now()
 
 	n := vector.Length(bat.Vecs[0])
+	if ses.showCreateTable {
+		n--
+		oq.length = uint64(n)
+	}
 
 	if enableProfile {
 		if err := pprof.StartCPUProfile(cpuf); err != nil {
@@ -268,6 +324,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 		if bat.Zs[j] <= 0 {
 			continue
+		}
+		if oq.showCreateTable {
+			oq.rowIdx = 0
 		}
 		row, err := oq.getEmptyRow()
 		if err != nil {
@@ -527,6 +586,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			for l := 0; l < len(bat.Vecs); l++ {
 				erow[l] = row[l]
 			}
+		}
+		if oq.showCreateTable {
+			row2 := make([]interface{}, len(row))
+			for i := range row {
+				row2[i] = row[i]
+			}
+			oq.mrs.Data = append(oq.mrs.Data, row2)
 		}
 	}
 
@@ -1653,6 +1719,14 @@ func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
 func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	var err error
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	switch cwft.GetAst().(type) {
+	case *tree.ShowCreateTable:
+		fmt.Printf("%T\n", types.T_char)
+		cols = []*plan2.ColDef{
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Table"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Create Table"},
+		}
+	}
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
 		c := new(MysqlColumn)
@@ -1789,6 +1863,7 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
+	ses.showCreateTable = false
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
 	statementCount := uint64(1)
@@ -2066,6 +2141,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				}
 			}
 		case *tree.ShowCreateTable:
+			ses.showCreateTable = true
 			if usePlan2 && isAoe {
 				selfHandle = true
 				if err = mce.handleShowCreateTable(st); err != nil {

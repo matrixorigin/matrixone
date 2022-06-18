@@ -135,7 +135,7 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 				common.AnyField("rows", blk.node.rows),
 				common.AnyField("col", colIdx),
 				common.CountField(int(mask.GetCardinality())))
-			un := updates.NewCommittedColumnNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
+			un := updates.NewCommittedColumnUpdateNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
 			un.SetMask(mask)
 			un.SetValues(vals[colIdx])
 			if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {

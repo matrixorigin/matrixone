@@ -18,6 +18,8 @@ import (
 	goErrors "errors"
 	"fmt"
 
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"strings"
 )
 
 var (
@@ -164,7 +165,8 @@ type Session struct {
 
 	IsInternal bool
 
-	ep *tree.ExportParam
+	ep              *tree.ExportParam
+	showCreateTable bool
 
 	closeRef      *CloseExportData
 	txnHandler    *TxnHandler
