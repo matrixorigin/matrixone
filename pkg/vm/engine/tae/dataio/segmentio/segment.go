@@ -15,7 +15,6 @@
 package segmentio
 
 import (
-	"bytes"
 	"fmt"
 	"path"
 	"strconv"
@@ -100,6 +99,10 @@ func openSegment(name string, id uint64) *segmentFile {
 	sf.id = &common.ID{
 		SegmentID: id,
 	}
+	err = sf.Replay()
+	if err != nil {
+		panic(any(err.Error()))
+	}
 	sf.Ref()
 	sf.OnZeroCB = sf.close
 	return sf
@@ -175,11 +178,7 @@ func getFileTs(name string) (ts uint64, err error) {
 	return ts, nil
 }
 
-func (sf *segmentFile) Replay(_ int, _ map[int]int, cache *bytes.Buffer) error {
-	err := sf.driver.Replay(cache)
-	if err != nil {
-		return err
-	}
+func (sf *segmentFile) Replay() error {
 	nodes := sf.driver.GetNodes()
 	sf.Lock()
 	defer sf.Unlock()

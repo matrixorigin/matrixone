@@ -106,9 +106,6 @@ func TestSegmentFile_Replay(t *testing.T) {
 	}
 
 	seg = SegmentFactory.Build(dir, id)
-	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
-	err := seg.Replay(colCnt, indexCnt, cache)
-	assert.Nil(t, err)
 	for i := 0; i < 20; i++ {
 		block, err := seg.OpenBlock(ids[i], colCnt, indexCnt)
 		assert.Nil(t, err)
