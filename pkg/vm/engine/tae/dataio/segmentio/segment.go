@@ -172,6 +172,7 @@ func (sf *segmentFile) Replay() error {
 		fileName := strings.Split(name, ".")
 		info := strings.Split(fileName[0], "_")
 		if len(info) < 2 {
+			//logfile
 			continue
 		}
 		id, err := strconv.ParseUint(info[1], 10, 32)
@@ -215,9 +216,12 @@ func (sf *segmentFile) Replay() error {
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			updateTs, err := getFileTs(bf.columns[col].updates.file[0].name)
-			if err != nil {
-				return err
+			var updateTs uint64 = 0
+			if len(bf.columns[col].updates.file) > 0 {
+				updateTs, err = getFileTs(bf.columns[col].updates.file[0].name)
+				if err != nil {
+					return err
+				}
 			}
 			if len(bf.columns[col].updates.file) == 0 || updateTs < ts {
 				setFile(&bf.columns[col].updates.file, file)
@@ -228,9 +232,12 @@ func (sf *segmentFile) Replay() error {
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			delTs, err := getFileTs(bf.deletes.file[0].name)
-			if err != nil {
-				return err
+			var delTs uint64 = 0
+			if len(bf.deletes.file) > 0 {
+				delTs, err = getFileTs(bf.deletes.file[0].name)
+				if err != nil {
+					return err
+				}
 			}
 			if len(bf.deletes.file) == 0 || delTs < ts {
 				setFile(&bf.deletes.file, file)
@@ -271,7 +278,7 @@ func (sf *segmentFile) Destroy() {
 	sf.RUnlock()
 	for _, block := range blocks {
 		if err := block.Destroy(); err != nil {
-			panic(err)
+			panic(any(err))
 		}
 	}
 	sf.driver.Unmount()
