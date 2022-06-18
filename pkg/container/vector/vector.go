@@ -133,7 +133,6 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 			PreAlloc(v, v, v.Length, m)
 		}
 		SetLength(v, v.Length)
-		v.IsConst = false
 		return v
 	}
 	switch v.Typ.Oid {
