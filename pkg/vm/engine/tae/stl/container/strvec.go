@@ -117,6 +117,9 @@ func (vec *strVector[T]) Delete(i int) (deleted T) {
 }
 
 func (vec *strVector[T]) RangeDelete(offset, length int) {
+	for i := offset + length - 1; i >= offset; i-- {
+		vec.Delete(i)
+	}
 }
 
 func (vec *strVector[T]) AppendMany(vals ...T) {
