@@ -719,8 +719,8 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	}
 
 	var rightChildId int32
-	leftCtx := NewBindContext(builder, ctx, nil)
-	rightCtx := NewBindContext(builder, ctx, nil)
+	leftCtx := NewBindContext(builder, ctx)
+	rightCtx := NewBindContext(builder, ctx)
 
 	nodeId, err := builder.buildTable(stmt[0], leftCtx)
 	if err != nil {
@@ -740,7 +740,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 
 	// build the rest table with preNode as join step by step
 	for i := 2; i < len(stmt); i++ {
-		newCtx := NewBindContext(builder, ctx, nil)
+		newCtx := NewBindContext(builder, ctx)
 
 		builder.ctxByNode[nodeId] = newCtx
 		err = newCtx.mergeContexts(leftCtx, rightCtx)
@@ -748,7 +748,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 			return 0, err
 		}
 
-		rightCtx = NewBindContext(builder, ctx, nil)
+		rightCtx = NewBindContext(builder, ctx)
 		rightChildId, err = builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
 			return 0, err
@@ -772,7 +772,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeId int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		subCtx := NewBindContext(builder, ctx, nil)
+		subCtx := NewBindContext(builder, ctx)
 		nodeId, err = builder.buildSelect(tbl, subCtx, false)
 		if len(subCtx.corrCols) > 0 {
 			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
@@ -792,7 +792,9 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		if len(schema) == 0 {
 			cteRef := ctx.findCTE(table)
 			if cteRef != nil {
-				subCtx := NewBindContext(builder, ctx, cteRef.maskedCTEs)
+				subCtx := NewBindContext(builder, ctx)
+				subCtx.maskedCTEs = cteRef.maskedCTEs
+				subCtx.cteName = table
 
 				switch stmt := cteRef.ast.Stmt.(type) {
 				case *tree.Select:
@@ -818,8 +820,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				if len(cols) > len(subCtx.headings) {
 					return 0, errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols)))
 				}
-
-				subCtx.cteName = table
 
 				for i, col := range cols {
 					subCtx.headings[i] = string(col)
@@ -985,8 +985,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_OUTER
 	}
 
-	leftCtx := NewBindContext(builder, ctx, nil)
-	rightCtx := NewBindContext(builder, ctx, nil)
+	leftCtx := NewBindContext(builder, ctx)
+	rightCtx := NewBindContext(builder, ctx)
 
 	leftChildId, err := builder.buildTable(tbl.Left, leftCtx)
 	if err != nil {

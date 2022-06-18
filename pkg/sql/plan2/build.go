@@ -35,7 +35,7 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	// }, err
 
 	builder := NewQueryBuilder(stmtType, ctx)
-	bindCtx := NewBindContext(builder, nil, nil)
+	bindCtx := NewBindContext(builder, nil)
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
 	builder.qry.Steps = append(builder.qry.Steps, rootId)
 	if err != nil {
