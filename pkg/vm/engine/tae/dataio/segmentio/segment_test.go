@@ -156,4 +156,8 @@ func TestSegmentFile_Replay(t *testing.T) {
 
 		block.Unref()
 	}
+	assert.Equal(t, 1, len(seg.(*segmentFile).driver.nodes))
+
+	segReplay := SegmentFactory.Build(dir, id)
+	assert.Equal(t, 1, len(segReplay.(*segmentFile).driver.nodes))
 }
