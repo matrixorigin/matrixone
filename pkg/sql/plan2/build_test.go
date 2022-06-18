@@ -653,7 +653,7 @@ func TestShow(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"show variables",
-		"show create database tpch",
+		//"show create database tpch",
 		"show create table nation",
 		"show create table tpch.nation",
 		"show databases",
