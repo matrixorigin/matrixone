@@ -26,18 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
-type FileType uint8
-
-const (
-	BLOCK FileType = iota
-	UPDATES
-	INDEX
-	INDEX_MATE
-	DELETE
-)
-
 const BLOCK_SUFFIX = "blk"
-const SEGMENT_SUFFIX = ".seg"
 const UPDATE_SUFFIX = "update"
 const INDEX_SUFFIX = "idx"
 const DELETE_SUFFIX = "del"
@@ -81,9 +70,6 @@ type segmentFile struct {
 	blocks map[uint64]*blockFile
 	name   string
 	driver *Driver
-}
-
-type File struct {
 }
 
 func openSegment(name string, id uint64) *segmentFile {
@@ -183,46 +169,40 @@ func (sf *segmentFile) Replay() error {
 	sf.Lock()
 	defer sf.Unlock()
 	for name, file := range nodes {
-		tmpName := strings.Split(name, ".")
-		fileName := strings.Split(tmpName[0], "_")
-		if len(fileName) < 2 {
+		fileName := strings.Split(name, ".")
+		info := strings.Split(fileName[0], "_")
+		if len(info) < 2 {
 			continue
 		}
-		id, err := strconv.ParseUint(fileName[1], 10, 32)
+		id, err := strconv.ParseUint(info[1], 10, 32)
 		if err != nil {
 			return err
 		}
 		bf := sf.blocks[id]
 		if bf == nil {
-			//bf = replayBlock(id, sf, colCnt, indexCnt)
 			bf = getBlock(id, sf)
 			sf.blocks[id] = bf
 		}
-		col, err := strconv.ParseUint(fileName[0], 10, 32)
+		col, err := strconv.ParseUint(info[0], 10, 32)
 		if err != nil {
 			return err
 		}
 		var ts uint64 = 0
-		if len(fileName) > 2 {
-			ts, err = strconv.ParseUint(fileName[2], 10, 64)
+		if len(info) > 2 {
+			ts, err = strconv.ParseUint(info[2], 10, 64)
 			if err != nil {
 				return err
 			}
 		}
-		if file.snode.GetCols() > uint32(len(bf.columns)) && tmpName[1] != INDEX_SUFFIX {
+		if file.snode.GetCols() > uint32(len(bf.columns)) && fileName[1] != INDEX_SUFFIX {
 			bf.AddColumn(int(file.snode.GetCols()))
 		}
-		switch tmpName[1] {
+		switch fileName[1] {
 		case BLOCK_SUFFIX:
 			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
 				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
 			}
-			if len(bf.columns[col].data.file) == 0 {
-				bf.columns[col].ts = ts
-				setFile(&bf.columns[col].data.file, file)
-				sf.replayInfo(bf.columns[col].data.stat, file)
-			}
-			if bf.columns[col].ts < ts {
+			if len(bf.columns[col].data.file) == 0 || bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
 				setFile(&bf.columns[col].data.file, file)
 				sf.replayInfo(bf.columns[col].data.stat, file)
@@ -235,39 +215,30 @@ func (sf *segmentFile) Replay() error {
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			if len(bf.columns[col].updates.file) == 0 {
-				setFile(&bf.columns[col].updates.file, file)
-				sf.replayInfo(bf.columns[col].updates.stat, file)
-				break
-			}
 			updateTs, err := getFileTs(bf.columns[col].updates.file[0].name)
 			if err != nil {
 				return err
 			}
-			if updateTs < ts {
-				bf.columns[col].ts = ts
+			if len(bf.columns[col].updates.file) == 0 || updateTs < ts {
 				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
+				break
 			}
 		case DELETE_SUFFIX:
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			if len(bf.deletes.file) == 0 {
-				setFile(&bf.deletes.file, file)
-				sf.replayInfo(bf.deletes.stat, file)
-				break
-			}
 			delTs, err := getFileTs(bf.deletes.file[0].name)
 			if err != nil {
 				return err
 			}
-			if ts > delTs {
+			if len(bf.deletes.file) == 0 || delTs < ts {
 				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
+				break
 			}
 		case INDEX_SUFFIX:
-			if ts == 0 && len(fileName) < 3 {
+			if ts == 0 && len(info) < 3 {
 				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
 				break
