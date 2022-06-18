@@ -345,6 +345,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	// preprocess CTEs
 	if stmt.With != nil {
 		for _, cte := range stmt.With.CTEs {
+			if _, ok := ctx.cteByName[string(cte.Name.Alias)]; ok {
+				return 0, errors.New(errno.AmbiguousAlias, fmt.Sprintf("WITH query name %q specified more than once", cte.Name.Alias))
+			}
 			ctx.cteByName[string(cte.Name.Alias)] = cte
 		}
 	}
