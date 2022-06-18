@@ -125,17 +125,32 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	if t1 == t2 {
 		return expr, nil
 	}
+	if types.T(expr.Typ.Id) == types.T_any {
+		expr.Typ = copyType(targetType)
+		return expr, nil
+	}
 	_, id, _, err := function.GetFunctionByName("cast", []types.T{t1, t2})
 	if err != nil {
 		return nil, err
 	}
-	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{Typ: targetType}}}
+	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{Typ: copyType(targetType)}}}
 	return &plan.Expr{Expr: &plan.Expr_F{
 		F: &plan.Function{
 			Func: &ObjectRef{Obj: id},
 			Args: []*Expr{expr, t},
 		},
 	}}, nil
+}
+
+func copyType(t *Type) *Type {
+	return &Type{
+		Id:        t.Id,
+		Nullable:  t.Nullable,
+		Width:     t.Width,
+		Precision: t.Precision,
+		Size:      t.Size,
+		Scale:     t.Scale,
+	}
 }
 
 func MakePlan2DefaultExpr(expr engine.DefaultExpr) *plan.DefaultExpr {

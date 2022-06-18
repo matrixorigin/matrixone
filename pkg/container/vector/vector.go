@@ -128,8 +128,12 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		for i = 0; i < l; i++ {
 			temp[i] = i
 		}
-		v.IsConst = false
 		nulls.Add(v.Nsp, temp...)
+		if v.Typ.Oid != types.T_any {
+			PreAlloc(v, v, v.Length, m)
+		}
+		SetLength(v, v.Length)
+		v.IsConst = false
 		return v
 	}
 	switch v.Typ.Oid {
@@ -529,7 +533,7 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 }
 
 func Length(v *Vector) int {
-	if v.IsScalar() {
+	if v.IsScalar() || v.Typ.Oid == types.T_any {
 		return v.Length
 	}
 	switch v.Typ.Oid {
@@ -548,7 +552,7 @@ func setLengthFixed[T any](v *Vector, n int) {
 }
 
 func SetLength(v *Vector, n int) {
-	if v.IsScalar() {
+	if v.IsScalar() || v.Typ.Oid == types.T_any {
 		v.Length = n
 		return
 	}
