@@ -8,7 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
-func New[T any](opts ...*Options[T]) *stlVector[T] {
+func New[T any](opts ...*Options) *stlVector[T] {
 	vec := &stlVector[T]{
 		buf:   make([]byte, 0),
 		slice: make([]T, 0),
@@ -20,7 +20,7 @@ func New[T any](opts ...*Options[T]) *stlVector[T] {
 		vec.alloc = opt.Allocator
 	}
 	if vec.alloc == nil {
-		vec.alloc = stl.NewSimpleAllocator[T]()
+		vec.alloc = stl.DefaultAllocator
 	}
 	if capacity == 0 {
 		capacity = 4
@@ -39,7 +39,7 @@ func (vec *stlVector[T]) tryExpand(capacity int) {
 	if oldn != nil && newSize <= oldn.Size() {
 		return
 	}
-	newn := vec.alloc.Alloc(capacity)
+	newn := vec.alloc.Alloc(capacity * stl.Sizeof[T]())
 	buf := newn.GetBuf()[:0:newn.Size()]
 	buf = append(buf, vec.buf...)
 	vec.buf = buf
@@ -59,7 +59,7 @@ func (vec *stlVector[T]) Close() {
 	vec.alloc = nil
 }
 
-func (vec *stlVector[T]) GetAllocator() stl.MemAllocator[T] { return vec.alloc }
+func (vec *stlVector[T]) GetAllocator() stl.MemAllocator { return vec.alloc }
 
 func (vec *stlVector[T]) Length() int    { return len(vec.slice) }
 func (vec *stlVector[T]) Capacity() int  { return vec.capacity }

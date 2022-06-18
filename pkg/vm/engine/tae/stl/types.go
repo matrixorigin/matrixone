@@ -28,5 +28,5 @@ type Vector[T any] interface {
 	Allocated() int
 	String() string
 
-	GetAllocator() MemAllocator[T]
+	GetAllocator() MemAllocator
 }

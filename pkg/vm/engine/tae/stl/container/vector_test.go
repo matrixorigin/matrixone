@@ -8,7 +8,7 @@ import (
 )
 
 func TestVector1(t *testing.T) {
-	opts := new(Options[int64])
+	opts := new(Options)
 	opts.Capacity = 1
 	vec := New[int64](opts)
 	now := time.Now()
@@ -45,4 +45,9 @@ func TestVector1(t *testing.T) {
 	vec.Close()
 	vec2.Close()
 	assert.True(t, allocator.Usage() == 0)
+}
+
+func TestVector2(t *testing.T) {
+	vec := New[[]byte]()
+	vec.Append([]byte{byte(1)})
 }

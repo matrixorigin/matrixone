@@ -8,7 +8,7 @@ import (
 )
 
 func TestAlloctor(t *testing.T) {
-	allocator := new(simpleAllocator[int32])
+	allocator := new(simpleAllocator)
 	node := allocator.Alloc(10)
 	assert.True(t, int(unsafe.Sizeof(int32(0)))*10 <= allocator.Usage())
 	allocator.Free(node)

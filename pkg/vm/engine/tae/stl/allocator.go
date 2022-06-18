@@ -5,13 +5,14 @@ import (
 )
 
 var DefaultPool *common.Mempool
+var DefaultAllocator MemAllocator
 
 type MemNode interface {
 	GetBuf() []byte
 	Size() int
 }
 
-type MemAllocator[T any] interface {
+type MemAllocator interface {
 	Alloc(size int) MemNode
 	Free(n MemNode)
 	Usage() int
@@ -19,23 +20,23 @@ type MemAllocator[T any] interface {
 
 func init() {
 	DefaultPool = common.NewMempool(common.UNLIMIT)
+	DefaultAllocator = new(simpleAllocator)
 }
 
-func NewSimpleAllocator[T any]() MemAllocator[T] {
-	return new(simpleAllocator[T])
+func NewSimpleAllocator() MemAllocator {
+	return new(simpleAllocator)
 }
 
-type simpleAllocator[T any] struct{}
+type simpleAllocator struct{}
 
-func (alloc *simpleAllocator[T]) Alloc(size int) MemNode {
-	sz := uint64(LengthOfVals[T](size))
-	return DefaultPool.Alloc(sz)
+func (alloc *simpleAllocator) Alloc(size int) MemNode {
+	return DefaultPool.Alloc(uint64(size))
 }
 
-func (alloc *simpleAllocator[T]) Free(n MemNode) {
+func (alloc *simpleAllocator) Free(n MemNode) {
 	DefaultPool.Free(n.(*common.MemNode))
 }
 
-func (alloc *simpleAllocator[T]) Usage() int {
+func (alloc *simpleAllocator) Usage() int {
 	return int(DefaultPool.Usage())
 }
