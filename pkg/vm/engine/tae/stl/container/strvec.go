@@ -89,6 +89,16 @@ func (vec *strVector[T]) Update(i int, v T) {
 		copy(vec.data.Slice()[offset:], val)
 		return
 	}
+	tail := vec.data.Slice()[olen+offset:]
+	val = append(val, tail...)
+	vec.data.RangeDelete(int(offset), vec.data.Length()-int(offset))
+	vec.data.AppendMany(val...)
+	vec.lengths.Update(i, uint32(nlen))
+	delta := uint32(nlen) - olen
+	for j := i + 1; j < vec.Length(); j++ {
+		old := vec.offsets.Get(j)
+		vec.offsets.Update(j, old+delta)
+	}
 }
 
 func (vec *strVector[T]) Delete(i int) (deleted T) {

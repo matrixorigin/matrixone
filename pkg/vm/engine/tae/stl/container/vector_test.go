@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -60,4 +61,27 @@ func TestVector2(t *testing.T) {
 	assert.Equal(t, 1, vec.Length())
 	v = vec.Get(0)
 	assert.Equal(t, "world", string(v))
+}
+
+func TestVector3(t *testing.T) {
+	vec := New[[]byte]()
+	vec.Append([]byte("h1"))
+	vec.Append([]byte("h2"))
+	vec.Append([]byte("h3"))
+	vec.Append([]byte("h4"))
+	assert.Equal(t, 4, vec.Length())
+	vec.Update(1, []byte("hello"))
+	t.Logf("%s", vec.Get(3))
+	t.Logf("%s", vec.Get(2))
+	t.Logf("%s", vec.Get(1))
+	t.Logf("%s", vec.Get(0))
+	assert.Equal(t, "h1", string(vec.Get(0)))
+	assert.Equal(t, "hello", string(vec.Get(1)))
+	assert.Equal(t, "h3", string(vec.Get(2)))
+	assert.Equal(t, "h4", string(vec.Get(3)))
+	t.Log(vec.String())
+	alloc := vec.GetAllocator()
+	t.Log(stl.DefaultPool.String())
+	vec.Close()
+	assert.Equal(t, 0, alloc.Usage())
 }
