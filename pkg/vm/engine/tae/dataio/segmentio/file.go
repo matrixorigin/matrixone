@@ -43,6 +43,14 @@ func (b *DriverFile) SetRows(rows uint32) {
 	b.snode.rows = rows
 }
 
+func (b *DriverFile) SetCols(cols uint32) {
+	b.snode.cols = cols
+}
+
+func (b *DriverFile) SetIdxs(idxs uint32) {
+	b.snode.idxs = idxs
+}
+
 func (b *DriverFile) GetName() string {
 	return b.name
 }

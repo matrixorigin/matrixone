@@ -179,7 +179,7 @@ func getFileTs(name string) (ts uint64, err error) {
 	return ts, nil
 }
 
-func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+func (sf *segmentFile) Replay(_ int, _ map[int]int, cache *bytes.Buffer) error {
 	err := sf.driver.Replay(cache)
 	if err != nil {
 		return err
@@ -214,11 +214,14 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				return err
 			}
 		}
-		if int(col) > len(bf.columns)-1 {
-			bf.AddColumn(int(col))
+		if file.snode.GetCols() > uint32(len(bf.columns)) && tmpName[1] != INDEX_SUFFIX {
+			bf.AddColumn(int(file.snode.GetCols()))
 		}
 		switch tmpName[1] {
-		case "blk":
+		case BLOCK_SUFFIX:
+			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
+				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
+			}
 			if len(bf.columns[col].data.file) == 0 {
 				bf.columns[col].ts = ts
 				setFile(&bf.columns[col].data.file, file)
@@ -233,7 +236,7 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				bf.ts = ts
 				bf.rows = file.GetInode().GetRows()
 			}
-		case "update":
+		case UPDATE_SUFFIX:
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
@@ -251,7 +254,7 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 			}
-		case "del":
+		case DELETE_SUFFIX:
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
@@ -268,21 +271,23 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
 			}
-		case "idx":
+		case INDEX_SUFFIX:
 			if ts == 0 && len(fileName) < 3 {
 				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
 				break
 			}
-			if int(ts) > len(bf.columns[col].indexes)-1 {
-				bf.columns[col].AddIndex(int(ts))
+			if int(col) > len(bf.columns)-1 {
+				bf.AddColumn(int(col + 1))
+			}
+			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
+				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
 			}
 			setFile(&bf.columns[col].indexes[ts].dataFile.file, file)
 			sf.replayInfo(bf.columns[col].indexes[ts].dataFile.stat, file)
 		default:
 			panic(any("No Support"))
 		}
-
 	}
 	return nil
 }

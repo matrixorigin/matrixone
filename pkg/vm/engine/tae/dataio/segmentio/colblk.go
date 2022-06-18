@@ -44,6 +44,8 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 		cb.indexes[i].dataFile.file = append(cb.indexes[i].dataFile.file, cb.block.seg.GetSegmentFile().NewBlockFile(
 			fmt.Sprintf("%d_%d_%d.idx", cb.col, cb.block.id, i)))
 		cb.indexes[i].dataFile.file[0].snode.algo = compress.None
+		cb.indexes[i].dataFile.file[0].SetIdxs(uint32(len(cb.indexes)))
+		cb.indexes[i].dataFile.file[0].SetCols(uint32(col))
 	}
 	cb.updates = newUpdates(cb)
 	cb.data = newData(cb)
@@ -70,8 +72,8 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 
 func (cb *columnBlock) AddIndex(idx int) {
 	idxCnt := len(cb.indexes)
-	if idx > idxCnt-1 {
-		for i := idxCnt - 1; i < idx+1; i++ {
+	if idx > idxCnt {
+		for i := idxCnt; i < idx; i++ {
 			cb.indexes = append(cb.indexes, newIndex(cb))
 		}
 	}
@@ -79,8 +81,14 @@ func (cb *columnBlock) AddIndex(idx int) {
 
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
-	cb.data.SetFile(cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
-	cb.updates.SetFile(cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)))
+	cb.data.SetFile(
+		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)),
+		uint32(len(cb.block.columns)),
+		uint32(len(cb.indexes)))
+	cb.updates.SetFile(
+		cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.update", cb.col, cb.block.id, ts)),
+		uint32(len(cb.block.columns)),
+		uint32(len(cb.indexes)))
 	return
 }
 

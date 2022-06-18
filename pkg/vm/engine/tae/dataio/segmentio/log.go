@@ -78,6 +78,14 @@ func (l *Log) readInode(cache *bytes.Buffer, file *DriverFile) (n int, err error
 		return
 	}
 	n += int(unsafe.Sizeof(file.snode.rows))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.cols); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.cols))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.idxs); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.idxs))
 	if err = binary.Read(cache, binary.BigEndian, &extentLen); err != nil {
 		return
 	}
@@ -247,6 +255,12 @@ func (l *Log) Append(file *DriverFile) error {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.rows); err != nil {
+		return err
+	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.cols); err != nil {
+		return err
+	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.idxs); err != nil {
 		return err
 	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, uint64(len(file.snode.extents))); err != nil {

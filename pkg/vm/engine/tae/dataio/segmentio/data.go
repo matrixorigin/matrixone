@@ -128,10 +128,12 @@ func (df *dataFile) GetFile() *DriverFile {
 	return df.file[len(df.file)-1]
 }
 
-func (df *dataFile) SetFile(file *DriverFile) {
+func (df *dataFile) SetFile(file *DriverFile, col, idx uint32) {
 	df.mutex.Lock()
 	defer df.mutex.Unlock()
 	df.file = append(df.file, file)
+	file.SetCols(col)
+	file.SetIdxs(idx)
 }
 
 func (df *dataFile) Ref()            { df.colBlk.Ref() }

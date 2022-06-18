@@ -55,6 +55,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.indexMeta.file = append(bf.indexMeta.file, bf.seg.GetSegmentFile().NewBlockFile(
 		fmt.Sprintf("%d_%d.idx", colCnt, bf.id)))
+	bf.indexMeta.file[0].SetCols(uint32(colCnt))
 	bf.indexMeta.file[0].snode.algo = compress.None
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -70,8 +71,8 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 
 func (bf *blockFile) AddColumn(col int) {
 	colCnt := len(bf.columns)
-	if col > colCnt-1 {
-		for i := colCnt - 1; i < col+1; i++ {
+	if col > colCnt {
+		for i := colCnt; i < col; i++ {
 			bf.columns = append(bf.columns, getColumnBlock(i, bf))
 		}
 	}
@@ -102,7 +103,10 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
-	bf.deletes.SetFile(bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)))
+	bf.deletes.SetFile(
+		bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)),
+		uint32(len(bf.columns)),
+		uint32(len(bf.columns[0].indexes)))
 	return
 }
 
