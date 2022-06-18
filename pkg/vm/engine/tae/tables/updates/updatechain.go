@@ -87,8 +87,8 @@ func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v any, n txnif.UpdateN
 }
 
 func (chain *ColumnChain) OnReplayUpdateNode(updateNode txnif.UpdateNode) {
-	updateNode.(*ColumnNode).AttachTo(chain)
-	chain.mvcc.TrySetMaxVisible(updateNode.(*ColumnNode).commitTs)
+	updateNode.(*ColumnUpdateNode).AttachTo(chain)
+	chain.mvcc.TrySetMaxVisible(updateNode.(*ColumnUpdateNode).commitTs)
 	mask := updateNode.GetMask()
 	vals := updateNode.GetValues()
 	iterator := mask.Iterator()
@@ -103,7 +103,7 @@ func (chain *ColumnChain) OnReplayUpdateNode(updateNode txnif.UpdateNode) {
 }
 
 func (chain *ColumnChain) AddNodeLocked(txn txnif.AsyncTxn) txnif.UpdateNode {
-	node := NewColumnNode(txn, chain.id, nil)
+	node := NewColumnUpdateNode(txn, chain.id, nil)
 	node.AttachTo(chain)
 	return node
 }
@@ -115,8 +115,8 @@ func (chain *ColumnChain) DeleteNode(node *common.DLNode) {
 }
 
 func (chain *ColumnChain) DeleteNodeLocked(node *common.DLNode) {
-	n := node.GetPayload().(*ColumnNode)
-	for row := range n.txnVals {
+	n := node.GetPayload().(*ColumnUpdateNode)
+	for row := range n.vals {
 		_ = chain.view.Delete(row, n)
 	}
 	chain.Delete(node)
@@ -124,16 +124,16 @@ func (chain *ColumnChain) DeleteNodeLocked(node *common.DLNode) {
 }
 
 func (chain *ColumnChain) AddNode(txn txnif.AsyncTxn) txnif.UpdateNode {
-	col := NewColumnNode(txn, chain.id, nil)
+	col := NewColumnUpdateNode(txn, chain.id, nil)
 	chain.Lock()
 	defer chain.Unlock()
 	col.AttachTo(chain)
 	return col
 }
 
-func (chain *ColumnChain) LoopChainLocked(fn func(col *ColumnNode) bool, reverse bool) {
+func (chain *ColumnChain) LoopChainLocked(fn func(col *ColumnUpdateNode) bool, reverse bool) {
 	wrapped := func(node *common.DLNode) bool {
-		col := node.GetPayload().(*ColumnNode)
+		col := node.GetPayload().(*ColumnUpdateNode)
 		return fn(col)
 	}
 	chain.Loop(wrapped, reverse)
@@ -141,7 +141,7 @@ func (chain *ColumnChain) LoopChainLocked(fn func(col *ColumnNode) bool, reverse
 
 func (chain *ColumnChain) DepthLocked() int {
 	depth := 0
-	chain.LoopChainLocked(func(n *ColumnNode) bool {
+	chain.LoopChainLocked(func(n *ColumnUpdateNode) bool {
 		depth++
 		return true
 	}, false)
@@ -156,7 +156,7 @@ func (chain *ColumnChain) PrepareUpdate(row uint32, n txnif.UpdateNode) error {
 	return err
 }
 
-func (chain *ColumnChain) UpdateLocked(node *ColumnNode) {
+func (chain *ColumnChain) UpdateLocked(node *ColumnUpdateNode) {
 	chain.Update(node.DLNode)
 }
 
@@ -173,8 +173,8 @@ func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[
 }
 
 func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]any, indexes []*wal.Index, err error) {
-	var merged *ColumnNode
-	chain.LoopChainLocked(func(n *ColumnNode) bool {
+	var merged *ColumnUpdateNode
+	chain.LoopChainLocked(func(n *ColumnUpdateNode) bool {
 		n.RLock()
 		// 1. Committed in [endTs, +inf)
 		if n.GetCommitTSLocked() >= endTs {
@@ -204,7 +204,7 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 			n.RLock()
 		}
 		if merged == nil {
-			merged = NewSimpleColumnNode()
+			merged = NewSimpleColumnUpdateNode()
 		}
 		indexes = append(indexes, n.logIndex)
 		merged.MergeLocked(n)
@@ -213,8 +213,8 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 	}, false)
 
 	if merged != nil {
-		mask = merged.txnMask
-		vals = merged.txnVals
+		mask = merged.mask
+		vals = merged.vals
 	}
 	return
 }

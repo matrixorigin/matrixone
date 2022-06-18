@@ -16,12 +16,12 @@ package compute
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
@@ -29,77 +29,91 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
+func LengthOfMoVector(vec *gvec.Vector) int { return gvec.Length(vec) }
+
+func GenericUpdateFixedValue[T any](vec *gvec.Vector, row uint32, v any) {
+	_, isNull := v.(types.Null)
+	if isNull {
+		if vec.Nsp.Np == nil {
+			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
+		} else {
+			vec.Nsp.Np.Add(uint64(row))
+		}
+	} else {
+		vvals := vec.Col.([]T)
+		vvals[row] = v.(T)
+		if vec.Nsp.Np != nil && vec.Nsp.Np.Contains(uint64(row)) {
+			vec.Nsp.Np.Remove(uint64(row))
+		}
+	}
+}
+
+func AppendFixedValue[T any](vec *gvec.Vector, v any) {
+	_, isNull := v.(types.Null)
+	vvals := vec.Col.([]T)
+	if isNull {
+		row := len(vvals)
+		vec.Col = append(vvals, types.DefaultVal[T]())
+		if vec.Nsp.Np == nil {
+			vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
+		} else {
+			vec.Nsp.Np.Add(uint64(row))
+		}
+	} else {
+		vec.Col = append(vvals, v.(T))
+	}
+	vec.Data = types.EncodeFixedSlice(vvals, int(vec.Typ.Size))
+}
+
 func AppendValue(vec *gvec.Vector, v any) {
 	switch vec.Typ.Oid {
 	case types.Type_BOOL:
-		vvals := vec.Col.([]bool)
-		vec.Col = append(vvals, v.(bool))
-		vec.Data = types.EncodeFixedSlice(vvals, 1)
+		AppendFixedValue[bool](vec, v)
 	case types.Type_INT8:
-		vvals := vec.Col.([]int8)
-		vec.Col = append(vvals, v.(int8))
-		vec.Data = types.EncodeFixedSlice(vvals, 1)
+		AppendFixedValue[int8](vec, v)
 	case types.Type_INT16:
-		vvals := vec.Col.([]int16)
-		vec.Col = append(vvals, v.(int16))
-		vec.Data = types.EncodeFixedSlice(vvals, 2)
+		AppendFixedValue[int16](vec, v)
 	case types.Type_INT32:
-		vvals := vec.Col.([]int32)
-		vec.Col = append(vvals, v.(int32))
-		vec.Data = types.EncodeFixedSlice(vvals, 4)
+		AppendFixedValue[int32](vec, v)
 	case types.Type_INT64:
-		vvals := vec.Col.([]int64)
-		vec.Col = append(vvals, v.(int64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendFixedValue[int64](vec, v)
 	case types.Type_UINT8:
-		vvals := vec.Col.([]uint8)
-		vec.Col = append(vvals, v.(uint8))
-		vec.Data = types.EncodeFixedSlice(vvals, 1)
+		AppendFixedValue[uint8](vec, v)
 	case types.Type_UINT16:
-		vvals := vec.Col.([]uint16)
-		vec.Col = append(vvals, v.(uint16))
-		vec.Data = types.EncodeFixedSlice(vvals, 2)
+		AppendFixedValue[uint16](vec, v)
 	case types.Type_UINT32:
-		vvals := vec.Col.([]uint32)
-		vec.Col = append(vvals, v.(uint32))
-		vec.Data = types.EncodeFixedSlice(vvals, 4)
+		AppendFixedValue[uint32](vec, v)
 	case types.Type_UINT64:
-		vvals := vec.Col.([]uint64)
-		vec.Col = append(vvals, v.(uint64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendFixedValue[uint64](vec, v)
 	case types.Type_DECIMAL64:
-		vvals := vec.Col.([]types.Decimal64)
-		vec.Col = append(vvals, v.(types.Decimal64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendFixedValue[types.Decimal64](vec, v)
 	case types.Type_DECIMAL128:
-		vvals := vec.Col.([]types.Decimal128)
-		vec.Col = append(vvals, v.(types.Decimal128))
-		vec.Data = types.EncodeFixedSlice(vvals, 16)
+		AppendFixedValue[types.Decimal128](vec, v)
 	case types.Type_FLOAT32:
-		vvals := vec.Col.([]float32)
-		vec.Col = append(vvals, v.(float32))
-		vec.Data = types.EncodeFixedSlice(vvals, 4)
+		AppendFixedValue[float32](vec, v)
 	case types.Type_FLOAT64:
-		vvals := vec.Col.([]float64)
-		vec.Col = append(vvals, v.(float64))
-		vec.Data = types.EncodeFixedSlice(vvals, 8)
+		AppendFixedValue[float64](vec, v)
 	case types.Type_DATE:
-		vvals := vec.Col.([]types.Date)
-		vec.Col = append(vvals, v.(types.Date))
-		vec.Data = types.EncodeFixedSlice(vvals, types.DateSize)
+		AppendFixedValue[types.Date](vec, v)
 	case types.Type_TIMESTAMP:
-		vvals := vec.Col.([]types.Timestamp)
-		vec.Col = append(vvals, v.(types.Timestamp))
-		vec.Data = types.EncodeFixedSlice(vvals, types.TimestampSize)
+		AppendFixedValue[types.Timestamp](vec, v)
 	case types.Type_DATETIME:
-		vvals := vec.Col.([]types.Datetime)
-		vec.Col = append(vvals, v.(types.Datetime))
-		vec.Data = types.EncodeFixedSlice(vvals, types.DatetimeSize)
+		AppendFixedValue[types.Datetime](vec, v)
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
-		length := len(v.([]byte))
-		vvals.Data = append(vvals.Data, v.([]byte)...)
+		var val []byte
+		if _, ok := v.(types.Null); ok {
+			if vec.Nsp.Np == nil {
+				vec.Nsp.Np = roaring64.BitmapOf(uint64(offset))
+			} else {
+				vec.Nsp.Np.Add(uint64(offset))
+			}
+		} else {
+			val = v.([]byte)
+		}
+		length := len(val)
+		vvals.Data = append(vvals.Data, val...)
 		vvals.Offsets = append(vvals.Offsets, uint32(offset))
 		vvals.Lengths = append(vvals.Lengths, uint32(length))
 	default:
@@ -112,6 +126,9 @@ func LengthOfBatch(bat *gbat.Batch) int {
 }
 
 func GetValue(col *gvec.Vector, row uint32) any {
+	if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
+		return types.Null{}
+	}
 	vals := col.Col
 	switch col.Typ.Oid {
 	case types.Type_BOOL:
@@ -173,82 +190,53 @@ func GetValue(col *gvec.Vector, row uint32) any {
 	}
 }
 
-func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val any) error {
-	vals := col.Col
+func UpdateValue(col *gvec.Vector, row uint32, val any) {
 	switch col.Typ.Oid {
 	case types.Type_BOOL:
-		data := vals.([]bool)
-		data[row] = val.(bool)
-		col.Col = data
+		GenericUpdateFixedValue[bool](col, row, val)
 	case types.Type_INT8:
-		data := vals.([]int8)
-		data[row] = val.(int8)
-		col.Col = data
+		GenericUpdateFixedValue[int8](col, row, val)
 	case types.Type_INT16:
-		data := vals.([]int16)
-		data[row] = val.(int16)
-		col.Col = data
+		GenericUpdateFixedValue[int16](col, row, val)
 	case types.Type_INT32:
-		data := vals.([]int32)
-		data[row] = val.(int32)
-		col.Col = data
+		GenericUpdateFixedValue[int32](col, row, val)
 	case types.Type_INT64:
-		data := vals.([]int64)
-		data[row] = val.(int64)
-		col.Col = data
+		GenericUpdateFixedValue[int64](col, row, val)
 	case types.Type_UINT8:
-		data := vals.([]uint8)
-		data[row] = val.(uint8)
-		col.Col = data
+		GenericUpdateFixedValue[uint8](col, row, val)
 	case types.Type_UINT16:
-		data := vals.([]uint16)
-		data[row] = val.(uint16)
-		col.Col = data
+		GenericUpdateFixedValue[uint16](col, row, val)
 	case types.Type_UINT32:
-		data := vals.([]uint32)
-		data[row] = val.(uint32)
-		col.Col = data
+		GenericUpdateFixedValue[uint32](col, row, val)
 	case types.Type_UINT64:
-		data := vals.([]uint64)
-		data[row] = val.(uint64)
-		col.Col = data
+		GenericUpdateFixedValue[uint64](col, row, val)
 	case types.Type_DECIMAL64:
-		data := vals.([]types.Decimal64)
-		data[row] = val.(types.Decimal64)
-		col.Col = data
+		GenericUpdateFixedValue[types.Decimal64](col, row, val)
 	case types.Type_DECIMAL128:
-		data := vals.([]types.Decimal128)
-		data[row] = val.(types.Decimal128)
-		col.Col = data
+		GenericUpdateFixedValue[types.Decimal128](col, row, val)
 	case types.Type_FLOAT32:
-		data := vals.([]float32)
-		data[row] = val.(float32)
-		col.Col = data
+		GenericUpdateFixedValue[float32](col, row, val)
 	case types.Type_FLOAT64:
-		data := vals.([]float64)
-		data[row] = val.(float64)
-		col.Col = data
+		GenericUpdateFixedValue[float64](col, row, val)
 	case types.Type_DATE:
-		data := vals.([]types.Date)
-		data[row] = val.(types.Date)
-		col.Col = data
+		GenericUpdateFixedValue[types.Date](col, row, val)
 	case types.Type_DATETIME:
-		data := vals.([]types.Datetime)
-		data[row] = val.(types.Datetime)
-		col.Col = data
+		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.Type_TIMESTAMP:
-		data := vals.([]types.Timestamp)
-		data[row] = val.(types.Timestamp)
-		col.Col = data
-	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
-		// data := vals.(*types.Bytes)
-		// s := data.Offsets[row]
-		// e := data.Lengths[row]
-		// return string(data.Data[s:e])
+		GenericUpdateFixedValue[types.Timestamp](col, row, val)
+	case types.Type_VARCHAR, types.Type_CHAR, types.Type_JSON:
+		v := val.([]byte)
+		data := col.Col.(*types.Bytes)
+		tail := data.Data[data.Offsets[row]+data.Lengths[row]:]
+		data.Lengths[row] = uint32(len(v))
+		v = append(v, tail...)
+		data.Data = append(data.Data[:data.Offsets[row]], v...)
+		if col.Nsp.Np != nil && col.Nsp.Np.Contains(uint64(row)) {
+			col.Nsp.Np.Remove(uint64(row))
+		}
 	default:
-		return vector.ErrVecTypeNotSupport
+		panic(fmt.Errorf("%v not supported", col.Typ))
 	}
-	return nil
 }
 
 func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
@@ -447,13 +435,12 @@ func CopyToIBatch(data *gbat.Batch, capacity uint64) (bat batch.IBatch, err erro
 }
 
 func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector {
-	if deletes == nil || deletes.GetCardinality() == 0 {
+	if deletes == nil || deletes.IsEmpty() {
 		return vec
 	}
 	col := vec.Col
 	deletesIterator := deletes.Iterator()
-	nsp := &nulls.Nulls{}
-	nsp.Np = &roaring64.Bitmap{}
+	np := roaring64.New()
 	var nspIterator roaring64.IntPeekable64
 	if vec.Nsp != nil && vec.Nsp.Np != nil {
 		nspIterator = vec.Nsp.Np.Iterator()
@@ -481,7 +468,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 							}
 							break
 						}
-						nsp.Np.Add(n - uint64(deleted))
+						np.Add(n - uint64(deleted))
 					}
 				}
 			}
@@ -490,7 +477,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 		if nspIterator != nil {
 			for nspIterator.HasNext() {
 				n := nspIterator.Next()
-				nsp.Np.Add(n - uint64(deleted))
+				np.Add(n - uint64(deleted))
 			}
 		}
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
@@ -528,7 +515,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 							}
 							break
 						}
-						nsp.Np.Add(n - uint64(deleted))
+						np.Add(n - uint64(deleted))
 					}
 				}
 			}
@@ -538,19 +525,19 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 		if nspIterator != nil {
 			for nspIterator.HasNext() {
 				n := nspIterator.Next()
-				nsp.Np.Add(n - uint64(deleted))
+				np.Add(n - uint64(deleted))
 			}
 		}
 		if pre != -1 {
 			UpdateOffsets(data, pre-1, len(data.Lengths)-1)
 		}
 	}
-	vec.Nsp = nsp
+	vec.Nsp.Np = np
 	return vec
 }
 
 func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32]any) *gvec.Vector {
-	if mask == nil || mask.GetCardinality() == 0 {
+	if mask == nil || mask.IsEmpty() {
 		return vec
 	}
 	iterator := mask.Iterator()
@@ -562,34 +549,27 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 		types.Type_DATE, types.Type_DATETIME, types.Type_TIMESTAMP:
 		for iterator.HasNext() {
 			row := iterator.Next()
-			if err := SetFixSizeTypeValue(vec, row, vals[row]); err != nil {
-				panic(err)
-			}
-			if vec.Nsp != nil && vec.Nsp.Np != nil {
-				if vec.Nsp.Np.Contains(uint64(row)) {
-					vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
-				}
-			}
+			UpdateValue(vec, row, vals[row])
 		}
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		data := col.(*types.Bytes)
 		pre := -1
 		for iterator.HasNext() {
 			row := iterator.Next()
+			v := vals[row]
+			if _, ok := v.(types.Null); ok {
+				if vec.Nsp.Np == nil {
+					vec.Nsp.Np = roaring64.BitmapOf(uint64(row))
+				} else {
+					vec.Nsp.Np.Add(uint64(row))
+				}
+				continue
+			}
 			if pre != -1 {
 				UpdateOffsets(data, pre, int(row))
 			}
-			val := vals[row].([]byte)
-			suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
-			data.Lengths[row] = uint32(len(val))
-			val = append(val, suffix...)
-			data.Data = append(data.Data[:data.Offsets[row]], val...)
+			UpdateValue(vec, row, vals[row])
 			pre = int(row)
-			if vec.Nsp != nil && vec.Nsp.Np != nil {
-				if vec.Nsp.Np.Contains(uint64(row)) {
-					vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
-				}
-			}
 		}
 		if pre != -1 {
 			UpdateOffsets(data, pre, len(data.Lengths)-1)
@@ -599,26 +579,23 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 }
 
 func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uint32]any) vector.IVector {
-	if mask == nil || mask.GetCardinality() == 0 {
+	if mask == nil || mask.IsEmpty() {
 		return vec
 	}
 	updateIterator := mask.Iterator()
 	switch vec.GetType() {
 	case container.StdVec:
 		if vec.IsReadonly() {
+			vec2 := vec
 			vec = vec.(*vector.StdVector).Clone()
 			vec.ResetReadonly()
+			_ = vec2.Close()
 		}
 		for updateIterator.HasNext() {
 			rowIdx := updateIterator.Next()
 			err := vec.SetValue(int(rowIdx), vals[rowIdx])
 			if err != nil {
 				panic(err)
-			}
-			if vec.(*vector.StdVector).VMask != nil &&
-				vec.(*vector.StdVector).VMask.Np != nil &&
-				vec.(*vector.StdVector).VMask.Np.Contains(uint64(rowIdx)) {
-				vec.(*vector.StdVector).VMask.Np.Flip(uint64(rowIdx), uint64(rowIdx))
 			}
 		}
 	case container.StrVec:
@@ -745,7 +722,7 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes
 		ranges = append(ranges, &deleteRange{pos: pos, deleted: deletedCnt})
 		deletedCnt++
 	}
-	if origMask == nil || origMask.GetCardinality() == 0 {
+	if origMask == nil || origMask.IsEmpty() {
 		return origMask, origVals, destDelets
 	}
 

@@ -404,6 +404,7 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint32, fromLayout, toL
 			Lengths: newLengths,
 		}
 	}
+	ret = make([]*vector.Vector, to)
 
 	for i := 0; i < to; i++ {
 		ret[i] = vector.New(col[0].Typ)

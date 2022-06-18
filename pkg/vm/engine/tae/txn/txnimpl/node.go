@@ -457,7 +457,7 @@ func (n *insertNode) RowsWithoutDeletes() uint32 {
 }
 
 func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
+	if n.deletes == nil || n.deletes.IsEmpty() {
 		return toAppend
 	}
 	appendedOffset := n.OffsetWithDeletes(appended)
@@ -467,7 +467,7 @@ func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 }
 
 func (n *insertNode) OffsetWithDeletes(count uint32) uint32 {
-	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
+	if n.deletes == nil || n.deletes.IsEmpty() {
 		return count
 	}
 	offset := count

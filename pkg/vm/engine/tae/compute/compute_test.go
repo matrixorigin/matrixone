@@ -25,6 +25,29 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestUpdateVector(t *testing.T) {
+	colTypes := types.MockColTypes(17)
+	check := func(typ types.Type) {
+		vec := MockVec(typ, 10, 0)
+		mask := roaring.BitmapOf(4)
+		vals := map[uint32]any{4: types.Null{}}
+		vec = ApplyUpdateToVector(vec, mask, vals)
+		assert.Equal(t, 10, LengthOfMoVector(vec))
+		assert.True(t, vec.Nsp.Np.Contains(uint64(4)))
+		t.Log(vec.String())
+
+		v := GetValue(vec, 8)
+		vals[4] = v
+		vec = ApplyUpdateToVector(vec, mask, vals)
+		assert.Equal(t, 10, LengthOfMoVector(vec))
+		assert.True(t, vec.Nsp.Np.IsEmpty())
+		t.Log(vec.String())
+	}
+	for _, typ := range colTypes {
+		check(typ)
+	}
+}
+
 func TestApplyUpdateToIVector(t *testing.T) {
 	typ := types.Type_INT32.ToType()
 	vec := vector.MockVector(typ, 10)
@@ -127,4 +150,18 @@ func TestCheckRowExists(t *testing.T) {
 	dels.Add(uint32(55))
 	_, exist = GetOffsetByVal(vec, int32(55), dels)
 	require.False(t, exist)
+}
+
+func TestAppendNull(t *testing.T) {
+	colTypes := types.MockColTypes(17)
+	check := func(typ types.Type) {
+		vec := MockVec(typ, 10, 0)
+		AppendValue(vec, types.Null{})
+		assert.Equal(t, 11, LengthOfMoVector(vec))
+		assert.True(t, vec.Nsp.Np.Contains(uint64(10)))
+		t.Log(vec.String())
+	}
+	for _, typ := range colTypes {
+		check(typ)
+	}
 }
