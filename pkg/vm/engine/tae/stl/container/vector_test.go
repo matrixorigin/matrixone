@@ -54,4 +54,10 @@ func TestVector2(t *testing.T) {
 	t.Log(vec.String())
 	v := vec.Get(0)
 	assert.Equal(t, "hello", string(v))
+	vec.Append([]byte("world"))
+	assert.Equal(t, 2, vec.Length())
+	vec.Delete(0)
+	assert.Equal(t, 1, vec.Length())
+	v = vec.Get(0)
+	assert.Equal(t, "world", string(v))
 }

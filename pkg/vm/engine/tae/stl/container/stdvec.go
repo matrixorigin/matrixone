@@ -108,6 +108,10 @@ func (vec *stdVector[T]) Delete(i int) (deleted T) {
 	return
 }
 
+func (vec *stdVector[T]) RangeDelete(offset, length int) {
+	vec.slice = append(vec.slice[:offset], vec.slice[offset+length:]...)
+}
+
 func (vec *stdVector[T]) AppendMany(vals ...T) {
 	predictSize := len(vals) + len(vec.slice)
 	if predictSize > vec.capacity {

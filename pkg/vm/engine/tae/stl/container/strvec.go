@@ -84,7 +84,17 @@ func (vec *strVector[T]) Set(i int, v T) (old T) {
 }
 
 func (vec *strVector[T]) Delete(i int) (deleted T) {
+	s := vec.offsets.Get(i)
+	l := vec.lengths.Get(i)
+
+	deleted = any(vec.data.Slice()[s : s+l]).(T)
+	vec.data.RangeDelete(int(s), int(l))
+	vec.offsets.Delete(i)
+	vec.lengths.Delete(i)
 	return
+}
+
+func (vec *strVector[T]) RangeDelete(offset, length int) {
 }
 
 func (vec *strVector[T]) AppendMany(vals ...T) {

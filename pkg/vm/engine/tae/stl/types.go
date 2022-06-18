@@ -23,6 +23,7 @@ type Vector[T any] interface {
 	Get(i int) (v T)
 	Set(i int, v T) (old T)
 	Delete(i int) (deleted T)
+	RangeDelete(offset, length int)
 
 	Capacity() int
 	Length() int
