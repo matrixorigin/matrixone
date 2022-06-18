@@ -1,6 +1,6 @@
 package container
 
-func New[T any](opts ...*Options) *Vector[T] {
+func NewVector[T any](opts ...*Options) *Vector[T] {
 	var v T
 	_, ok := any(v).([]byte)
 	if !ok {

@@ -11,7 +11,7 @@ import (
 func TestVector1(t *testing.T) {
 	opts := new(Options)
 	opts.Capacity = 1
-	vec := New[int64](opts)
+	vec := NewVector[int64](opts)
 	now := time.Now()
 
 	for i := 0; i < 500; i++ {
@@ -36,7 +36,7 @@ func TestVector1(t *testing.T) {
 	vec.Delete(80)
 	assert.Equal(t, 499, vec.Length())
 
-	vec2 := New[int64]()
+	vec2 := NewVector[int64]()
 	for i := 0; i < 100; i++ {
 		vec2.Append(int64(i + 1000))
 	}
@@ -49,7 +49,7 @@ func TestVector1(t *testing.T) {
 }
 
 func TestVector2(t *testing.T) {
-	vec := New[[]byte]()
+	vec := NewVector[[]byte]()
 	defer vec.Close()
 	vec.Append([]byte("hello"))
 	t.Log(vec.String())
@@ -64,7 +64,7 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	vec := New[[]byte]()
+	vec := NewVector[[]byte]()
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
 	vec.Append([]byte("h3"))
@@ -87,7 +87,7 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector4(t *testing.T) {
-	vec := New[[]byte]()
+	vec := NewVector[[]byte]()
 	vec.Append([]byte("h1"))
 	vec.Append([]byte("h2"))
 	vec.Append([]byte("h3"))

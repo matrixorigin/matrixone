@@ -84,11 +84,11 @@ func (vec *stdVector[T]) String() string {
 	if end == 0 {
 		return s
 	}
-	data := ""
+	data := ";Vals=["
 	for i := 0; i < end; i++ {
 		data = fmt.Sprintf("%s %v", data, vec.Get(i))
 	}
-	s = fmt.Sprintf("%s %s", s, data)
+	s = fmt.Sprintf("%s %s]", s, data)
 	return s
 }
 
