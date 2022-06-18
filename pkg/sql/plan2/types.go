@@ -107,6 +107,7 @@ type QueryBuilder struct {
 type BindContext struct {
 	binder Binder
 
+	passCTEs  bool
 	cteByName map[string]*tree.CTE
 
 	groupTag     int32

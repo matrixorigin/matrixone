@@ -695,8 +695,8 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	}
 
 	var rightChildId int32
-	leftCtx := NewBindContext(builder, ctx)
-	rightCtx := NewBindContext(builder, ctx)
+	leftCtx := NewBindContext(builder, ctx, true)
+	rightCtx := NewBindContext(builder, ctx, true)
 
 	nodeId, err := builder.buildTable(stmt[0], leftCtx)
 	if err != nil {
@@ -716,7 +716,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 
 	// build the rest table with preNode as join step by step
 	for i := 2; i < len(stmt); i++ {
-		newCtx := NewBindContext(builder, ctx)
+		newCtx := NewBindContext(builder, ctx, true)
 
 		builder.ctxByNode[nodeId] = newCtx
 		err = newCtx.mergeContexts(leftCtx, rightCtx)
@@ -724,7 +724,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 			return 0, err
 		}
 
-		rightCtx = NewBindContext(builder, ctx)
+		rightCtx = NewBindContext(builder, ctx, true)
 		rightChildId, err = builder.buildTable(stmt[i], rightCtx)
 		if err != nil {
 			return 0, err
@@ -748,7 +748,7 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeId int32, err error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		subCtx := NewBindContext(builder, ctx)
+		subCtx := NewBindContext(builder, ctx, true)
 		nodeId, err = builder.buildSelect(tbl, subCtx, false)
 		if len(subCtx.corrCols) > 0 {
 			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
@@ -768,7 +768,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		if len(schema) == 0 {
 			cte := ctx.findCTE(table)
 			if cte != nil {
-				subCtx := NewBindContext(builder, ctx)
+				subCtx := NewBindContext(builder, ctx, false)
 				switch stmt := cte.Stmt.(type) {
 				case *tree.Select:
 					nodeId, err = builder.buildSelect(stmt, subCtx, false)
@@ -952,8 +952,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		joinType = plan.Node_OUTER
 	}
 
-	leftCtx := NewBindContext(builder, ctx)
-	rightCtx := NewBindContext(builder, ctx)
+	leftCtx := NewBindContext(builder, ctx, true)
+	rightCtx := NewBindContext(builder, ctx, true)
 
 	leftChildId, err := builder.buildTable(tbl.Left, leftCtx)
 	if err != nil {
