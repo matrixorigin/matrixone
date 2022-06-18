@@ -308,7 +308,7 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, isDate bool) (Datet
 }
 
 func (dt Datetime) MicroSec() int64 {
-	return int64(dt) << 44 >> 44
+	return int64(dt) & 0xfffff
 }
 
 func (dt Datetime) sec() int64 {

@@ -988,31 +988,74 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 		return nil, err
 	}
 
-	// returnNum, returnType, err := types.NormalizeInterval(intervalArray[0], intervalType)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// "date '2020-10-10' - interval 1 Hour"  will return datetime
-	// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
-	// if dateExpr.Typ.Id == plan.Type_DATE {
-	// 	switch returnType {
-	// 	case types.Day, types.Week, types.Month, types.Quarter, types.Year:
-	// 	default:
-	// 		dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
-	// 			Id:   plan.Type_DATETIME,
-	// 			Size: 8,
-	// 		})
-
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 	}
-	// }
-
 	intervalTypeInFunction := &plan.Type{
 		Id:   plan.Type_INT64,
 		Size: 8,
+	}
+
+	if firstExpr.Typ.Id == plan.Type_VARCHAR || firstExpr.Typ.Id == plan.Type_CHAR {
+		s := firstExpr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
+
+		if err != nil {
+			return nil, err
+		}
+		// "date '2020-10-10' - interval 1 Hour"  will return datetime
+		// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
+		if dateExpr.Typ.Id == plan.Type_DATE {
+			switch returnType {
+			case types.Day, types.Week, types.Month, types.Quarter, types.Year:
+			default:
+				dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
+					Id:   plan.Type_DATETIME,
+					Size: 8,
+				})
+
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return []*Expr{
+			dateExpr,
+			{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Value: &plan.Const_Ival{
+							Ival: returnNum,
+						},
+					},
+				},
+				Typ: intervalTypeInFunction,
+			},
+			{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Value: &plan.Const_Ival{
+							Ival: int64(returnType),
+						},
+					},
+				},
+				Typ: intervalTypeInFunction,
+			},
+		}, nil
+	}
+
+	// "date '2020-10-10' - interval 1 Hour"  will return datetime
+	// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
+	if dateExpr.Typ.Id == plan.Type_DATE {
+		switch intervalType {
+		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
+		default:
+			dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
+				Id:   plan.Type_DATETIME,
+				Size: 8,
+			})
+
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	numberExpr, err := appendCastBeforeExpr(firstExpr, intervalTypeInFunction)

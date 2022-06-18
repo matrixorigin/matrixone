@@ -397,8 +397,8 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION", //test distinct
 		"select sum(n_nationkey) as s from nation order by s",
 		"select date_add(date '2001-01-01', interval 1 day) as a",
-		"select date_sub(date '2001-01-01', interval '1 day') as a",
-		"select date_add('2001-01-01', interval '1 day') as a",
+		"select date_sub(date '2001-01-01', interval '1' day) as a",
+		"select date_add('2001-01-01', interval '1' day) as a",
 		"select n_name, count(*) from nation group by n_name order by 2 asc",
 		"select count(distinct 12)",
 
