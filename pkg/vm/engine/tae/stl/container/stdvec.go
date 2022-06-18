@@ -8,8 +8,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
-func New[T any](opts ...*Options) *stlVector[T] {
-	vec := &stlVector[T]{
+func NewStdVector[T any](opts ...*Options) *stdVector[T] {
+	vec := &stdVector[T]{
 		buf:   make([]byte, 0),
 		slice: make([]T, 0),
 	}
@@ -29,7 +29,7 @@ func New[T any](opts ...*Options) *stlVector[T] {
 	return vec
 }
 
-func (vec *stlVector[T]) tryExpand(capacity int) {
+func (vec *stdVector[T]) tryExpand(capacity int) {
 	if vec.capacity >= capacity {
 		return
 	}
@@ -49,7 +49,7 @@ func (vec *stlVector[T]) tryExpand(capacity int) {
 	}
 }
 
-func (vec *stlVector[T]) Close() {
+func (vec *stdVector[T]) Close() {
 	if vec.node != nil {
 		vec.alloc.Free(vec.node)
 	}
@@ -59,14 +59,14 @@ func (vec *stlVector[T]) Close() {
 	vec.alloc = nil
 }
 
-func (vec *stlVector[T]) GetAllocator() stl.MemAllocator { return vec.alloc }
+func (vec *stdVector[T]) GetAllocator() stl.MemAllocator { return vec.alloc }
 
-func (vec *stlVector[T]) Length() int    { return len(vec.slice) }
-func (vec *stlVector[T]) Capacity() int  { return vec.capacity }
-func (vec *stlVector[T]) Allocated() int { return vec.node.Size() }
-func (vec *stlVector[T]) Data() []byte   { return vec.buf }
-func (vec *stlVector[T]) Slice() []T     { return vec.slice }
-func (vec *stlVector[T]) String() string {
+func (vec *stdVector[T]) Length() int    { return len(vec.slice) }
+func (vec *stdVector[T]) Capacity() int  { return vec.capacity }
+func (vec *stdVector[T]) Allocated() int { return vec.node.Size() }
+func (vec *stdVector[T]) Data() []byte   { return vec.buf }
+func (vec *stdVector[T]) Slice() []T     { return vec.slice }
+func (vec *stdVector[T]) String() string {
 	var v T
 	s := fmt.Sprintf("Vector<%s>:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
 		reflect.TypeOf(v).Name(),
@@ -76,7 +76,7 @@ func (vec *stlVector[T]) String() string {
 	return s
 }
 
-func (vec *stlVector[T]) Append(v T) {
+func (vec *stdVector[T]) Append(v T) {
 	if len(vec.slice) == vec.capacity {
 		var newCap int
 		if vec.capacity < 1024 {
@@ -91,24 +91,24 @@ func (vec *stlVector[T]) Append(v T) {
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), size+1)
 }
 
-func (vec *stlVector[T]) Get(i int) (v T) {
+func (vec *stdVector[T]) Get(i int) (v T) {
 	v = vec.slice[i]
 	return
 }
 
-func (vec *stlVector[T]) Set(i int, v T) (old T) {
+func (vec *stdVector[T]) Set(i int, v T) (old T) {
 	old = vec.slice[i]
 	vec.slice[i] = v
 	return
 }
 
-func (vec *stlVector[T]) Delete(i int) (deleted T) {
+func (vec *stdVector[T]) Delete(i int) (deleted T) {
 	deleted = vec.slice[i]
 	vec.slice = append(vec.slice[:i], vec.slice[i+1:]...)
 	return
 }
 
-func (vec *stlVector[T]) AppendMany(vals ...T) {
+func (vec *stdVector[T]) AppendMany(vals ...T) {
 	predictSize := len(vals) + len(vec.slice)
 	if predictSize > vec.capacity {
 		vec.tryExpand(predictSize)

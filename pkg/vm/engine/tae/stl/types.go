@@ -19,9 +19,9 @@ type Vector[T any] interface {
 	Slice() []T
 
 	Append(v T)
-	Get(i int) (v T, err error)
-	Set(i int, v T) (old T, err error)
-	Delete(i int) (deleted T, err error)
+	Get(i int) (v T)
+	Set(i int, v T) (old T)
+	Delete(i int) (deleted T)
 
 	Capacity() int
 	Length() int

@@ -9,7 +9,7 @@ type Options struct {
 	Allocator stl.MemAllocator
 }
 
-type stlVector[T any] struct {
+type stdVector[T any] struct {
 	alloc    stl.MemAllocator
 	node     stl.MemNode
 	buf      []byte
@@ -17,12 +17,26 @@ type stlVector[T any] struct {
 	capacity int
 }
 
-type strVector struct {
-	alloc    stl.MemAllocator
-	offNode  stl.MemNode
-	lenNode  stl.MemNode
-	dataNode stl.MemNode
-	capacity int
+// type strVector struct {
+// 	alloc    stl.MemAllocator
+// 	offNode  stl.MemNode
+// 	lenNode  stl.MemNode
+// 	dataNode stl.MemNode
+// 	capacity int
+// }
+
+type Vector[T any] struct {
+	stl.Vector[T]
 }
 
-// func New2[T any]()
+func NewVector[T any](opts ...*Options) *Vector[T] {
+	var v T
+	_, ok := any(v).([]byte)
+	if ok {
+		return &Vector[T]{
+			Vector: NewStdVector[T](opts...),
+			// stdVector: New[T](opts...),
+		}
+	}
+	return nil
+}
