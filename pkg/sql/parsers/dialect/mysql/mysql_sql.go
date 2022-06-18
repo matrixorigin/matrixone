@@ -11333,7 +11333,7 @@ yydefault:
 //line mysql_sql.y:4772
 		{
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
-			arg1 := tree.SetUnresolvedName(strings.ToLower(yyDollar[3].str))
+			arg1 := tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:  tree.FuncName2ResolvableFunctionReference(name),
 				Exprs: tree.Exprs{arg1, yyDollar[5].exprUnion()},
@@ -11346,7 +11346,7 @@ yydefault:
 //line mysql_sql.y:4781
 		{
 			name := tree.SetUnresolvedName(strings.ToLower(yyDollar[1].str))
-			arg1 := tree.SetUnresolvedName(strings.ToLower(yyDollar[3].str))
+			arg1 := tree.NewNumValWithType(constant.MakeString(yyDollar[3].str), yyDollar[3].str, false, tree.P_char)
 			yyLOCAL = &tree.FuncExpr{
 				Func:  tree.FuncName2ResolvableFunctionReference(name),
 				Exprs: tree.Exprs{arg1, yyDollar[4].exprUnion(), yyDollar[6].exprUnion()},
