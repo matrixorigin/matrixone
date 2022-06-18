@@ -96,10 +96,8 @@ func (vec *stdVector[T]) Get(i int) (v T) {
 	return
 }
 
-func (vec *stdVector[T]) Set(i int, v T) (old T) {
-	old = vec.slice[i]
+func (vec *stdVector[T]) Update(i int, v T) {
 	vec.slice[i] = v
-	return
 }
 
 func (vec *stdVector[T]) Delete(i int) (deleted T) {

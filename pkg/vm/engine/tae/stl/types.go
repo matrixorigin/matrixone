@@ -21,7 +21,7 @@ type Vector[T any] interface {
 	Append(v T)
 	AppendMany(vals ...T)
 	Get(i int) (v T)
-	Set(i int, v T) (old T)
+	Update(i int, v T)
 	Delete(i int) (deleted T)
 	RangeDelete(offset, length int)
 

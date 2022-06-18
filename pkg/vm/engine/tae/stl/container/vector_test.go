@@ -27,7 +27,7 @@ func TestVector1(t *testing.T) {
 	}
 	t.Log(time.Since(now))
 
-	vec.Set(100, int64(999))
+	vec.Update(100, int64(999))
 	v := vec.Get(100)
 	assert.Equal(t, int64(999), v)
 

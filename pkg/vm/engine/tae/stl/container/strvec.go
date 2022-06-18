@@ -79,8 +79,16 @@ func (vec *strVector[T]) Get(i int) T {
 	return any(vec.data.Slice()[s : s+l]).(T)
 }
 
-func (vec *strVector[T]) Set(i int, v T) (old T) {
-	return
+func (vec *strVector[T]) Update(i int, v T) {
+	val := any(v).([]byte)
+	nlen := len(val)
+
+	olen := vec.lengths.Get(i)
+	offset := vec.offsets.Get(i)
+	if int(olen) == nlen {
+		copy(vec.data.Slice()[offset:], val)
+		return
+	}
 }
 
 func (vec *strVector[T]) Delete(i int) (deleted T) {
