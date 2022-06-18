@@ -14,10 +14,6 @@
 
 package file
 
-import (
-	"bytes"
-)
-
 type Segment interface {
 	Base
 	Name() string
@@ -26,5 +22,4 @@ type Segment interface {
 	ReadTS() uint64
 	String() string
 	RemoveBlock(id uint64)
-	Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error
 }
