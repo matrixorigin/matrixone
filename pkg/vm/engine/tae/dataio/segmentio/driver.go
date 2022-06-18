@@ -111,6 +111,7 @@ func (s *Driver) Init(name string) (err error) {
 func (s *Driver) Open(name string) (err error) {
 	if _, err = os.Stat(name); os.IsNotExist(err) {
 		err = s.Init(name)
+		s.Mount()
 		return
 	}
 	if s.segFile, err = os.OpenFile(name, os.O_RDWR, os.ModePerm); err != nil {
@@ -129,6 +130,11 @@ func (s *Driver) Open(name string) (err error) {
 		state: RESIDENT,
 	}
 	s.super.lognode = log
+	s.Mount()
+	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
+	if err := s.Replay(cache); err != nil {
+		return err
+	}
 	logutil.Infof(" %s-%p | SegmentFile | Opened", s.name, &(s.name))
 	return
 }

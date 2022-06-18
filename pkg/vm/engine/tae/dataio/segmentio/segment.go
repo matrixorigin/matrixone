@@ -27,6 +27,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
+type FileType uint8
+
+const (
+	BLOCK FileType = iota
+	UPDATES
+	INDEX
+	INDEX_MATE
+	DELETE
+)
+
+const BLOCK_SUFFIX = "blk"
+const SEGMENT_SUFFIX = ".seg"
+const UPDATE_SUFFIX = "update"
+const INDEX_SUFFIX = "idx"
+const DELETE_SUFFIX = "del"
+
 var SegmentFactory file.SegmentFactory
 
 func init() {
@@ -68,6 +84,9 @@ type segmentFile struct {
 	driver *Driver
 }
 
+type File struct {
+}
+
 func openSegment(name string, id uint64) *segmentFile {
 	sf := &segmentFile{
 		blocks: make(map[uint64]*blockFile),
@@ -78,7 +97,6 @@ func openSegment(name string, id uint64) *segmentFile {
 	if err != nil {
 		panic(any(err.Error()))
 	}
-	sf.driver.Mount()
 	sf.id = &common.ID{
 		SegmentID: id,
 	}
@@ -107,6 +125,10 @@ func (sf *segmentFile) replayInfo(stat *fileStat, file *DriverFile) {
 	stat.name = file.GetName()
 }
 
+func setColumnBlock(id int, col int, file *blockFile) {
+
+}
+
 func setFile(files *[]*DriverFile, file *DriverFile) {
 	if len(*files) > 1 {
 		panic(any("driver file err"))
@@ -117,6 +139,44 @@ func setFile(files *[]*DriverFile, file *DriverFile) {
 		return
 	}
 	*files = append(*files, file)
+}
+
+func getBlock(id uint64, seg *segmentFile) *blockFile {
+	bf := &blockFile{
+		seg:     seg,
+		id:      id,
+		columns: make([]*columnBlock, 0),
+	}
+	bf.deletes = newDeletes(bf)
+	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.OnZeroCB = bf.close
+	bf.Ref()
+	return bf
+}
+
+func getColumnBlock(col int, block *blockFile) *columnBlock {
+	cb := &columnBlock{
+		block:   block,
+		indexes: make([]*indexFile, 0),
+		col:     col,
+	}
+	cb.updates = newUpdates(cb)
+	cb.data = newData(cb)
+	cb.OnZeroCB = cb.close
+	cb.Ref()
+	return cb
+}
+
+func getFileTs(name string) (ts uint64, err error) {
+	tmpName := strings.Split(name, ".")
+	fileName := strings.Split(tmpName[0], "_")
+	if len(fileName) > 2 {
+		ts, err = strconv.ParseUint(fileName[2], 10, 64)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return ts, nil
 }
 
 func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
@@ -139,7 +199,8 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 		}
 		bf := sf.blocks[id]
 		if bf == nil {
-			bf = replayBlock(id, sf, colCnt, indexCnt)
+			//bf = replayBlock(id, sf, colCnt, indexCnt)
+			bf = getBlock(id, sf)
 			sf.blocks[id] = bf
 		}
 		col, err := strconv.ParseUint(fileName[0], 10, 32)
@@ -152,6 +213,9 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 			if err != nil {
 				return err
 			}
+		}
+		if int(col) > len(bf.columns)-1 {
+			bf.AddColumn(int(col))
 		}
 		switch tmpName[1] {
 		case "blk":
@@ -178,7 +242,11 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 				break
 			}
-			if bf.columns[col].ts < ts {
+			updateTs, err := getFileTs(bf.columns[col].updates.file[0].name)
+			if err != nil {
+				return err
+			}
+			if updateTs < ts {
 				bf.columns[col].ts = ts
 				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
@@ -192,14 +260,9 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				sf.replayInfo(bf.deletes.stat, file)
 				break
 			}
-			delTmp := strings.Split(bf.deletes.file[0].name, ".")
-			delName := strings.Split(delTmp[0], "_")
-			var delTs uint64 = 0
-			if len(delName) > 2 {
-				delTs, err = strconv.ParseUint(delName[2], 10, 64)
-				if err != nil {
-					return err
-				}
+			delTs, err := getFileTs(bf.deletes.file[0].name)
+			if err != nil {
+				return err
 			}
 			if ts > delTs {
 				setFile(&bf.deletes.file, file)
@@ -210,6 +273,9 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
 				break
+			}
+			if int(ts) > len(bf.columns[col].indexes)-1 {
+				bf.columns[col].AddIndex(int(ts))
 			}
 			setFile(&bf.columns[col].indexes[ts].dataFile.file, file)
 			sf.replayInfo(bf.columns[col].indexes[ts].dataFile.stat, file)

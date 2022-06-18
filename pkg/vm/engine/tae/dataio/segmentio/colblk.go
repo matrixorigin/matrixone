@@ -68,6 +68,15 @@ func openColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	return cb
 }
 
+func (cb *columnBlock) AddIndex(idx int) {
+	idxCnt := len(cb.indexes)
+	if idx > idxCnt-1 {
+		for i := idxCnt - 1; i < idx+1; i++ {
+			cb.indexes = append(cb.indexes, newIndex(cb))
+		}
+	}
+}
+
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
 	cb.data.SetFile(cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
