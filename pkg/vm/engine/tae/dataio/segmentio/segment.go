@@ -107,6 +107,18 @@ func (sf *segmentFile) replayInfo(stat *fileStat, file *DriverFile) {
 	stat.name = file.GetName()
 }
 
+func (sf *segmentFile) getFileTs(name string) (ts uint64,err error) {
+	tmpName := strings.Split(name, ".")
+	fileName := strings.Split(tmpName[0], "_")
+	if len(fileName) > 2 {
+		ts, err = strconv.ParseUint(fileName[2], 10, 64)
+		if err != nil {
+			return 0,err
+		}
+	}
+	return ts, nil
+}
+
 func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
 	err := sf.driver.Replay(cache)
 	if err != nil {
@@ -167,7 +179,11 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 				break
 			}
-			if bf.columns[col].ts < ts {
+			updateTs, err := sf.getFileTs(bf.columns[col].updates.file[0].name)
+			if err != nil {
+				return err
+			}
+			if updateTs < ts {
 				bf.columns[col].ts = ts
 				bf.columns[col].updates.file[0] = file
 				sf.replayInfo(bf.columns[col].updates.stat, file)
@@ -181,16 +197,11 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				sf.replayInfo(bf.deletes.stat, file)
 				break
 			}
-			delTmp := strings.Split(bf.deletes.file[0].name, ".")
-			delName := strings.Split(delTmp[0], "_")
-			var delTs uint64 = 0
-			if len(delName) > 2 {
-				delTs, err = strconv.ParseUint(delName[2], 10, 64)
-				if err != nil {
-					return err
-				}
+			delTs, err := sf.getFileTs(bf.deletes.file[0].name)
+			if err != nil {
+				return err
 			}
-			if ts > delTs {
+			if delTs < ts {
 				bf.deletes.file[0] = file
 				sf.replayInfo(bf.deletes.stat, file)
 			}
