@@ -17,26 +17,25 @@ type stdVector[T any] struct {
 	capacity int
 }
 
-// type strVector struct {
-// 	alloc    stl.MemAllocator
-// 	offNode  stl.MemNode
-// 	lenNode  stl.MemNode
-// 	dataNode stl.MemNode
-// 	capacity int
-// }
+type strVector[T any] struct {
+	offsets *stdVector[uint32]
+	lengths *stdVector[uint32]
+	data    *stdVector[byte]
+}
 
 type Vector[T any] struct {
 	stl.Vector[T]
 }
 
-func NewVector[T any](opts ...*Options) *Vector[T] {
+func New[T any](opts ...*Options) *Vector[T] {
 	var v T
 	_, ok := any(v).([]byte)
-	if ok {
+	if !ok {
 		return &Vector[T]{
 			Vector: NewStdVector[T](opts...),
-			// stdVector: New[T](opts...),
 		}
 	}
-	return nil
+	return &Vector[T]{
+		Vector: NewStrVector[T](opts...),
+	}
 }

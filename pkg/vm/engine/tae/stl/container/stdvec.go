@@ -68,7 +68,7 @@ func (vec *stdVector[T]) Data() []byte   { return vec.buf }
 func (vec *stdVector[T]) Slice() []T     { return vec.slice }
 func (vec *stdVector[T]) String() string {
 	var v T
-	s := fmt.Sprintf("Vector<%s>:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
+	s := fmt.Sprintf("StdVector<%s>:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
 		reflect.TypeOf(v).Name(),
 		vec.Length(),
 		vec.Capacity(),

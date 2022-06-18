@@ -19,6 +19,7 @@ type Vector[T any] interface {
 	Slice() []T
 
 	Append(v T)
+	AppendMany(vals ...T)
 	Get(i int) (v T)
 	Set(i int, v T) (old T)
 	Delete(i int) (deleted T)
