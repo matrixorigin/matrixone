@@ -16,6 +16,7 @@ type MemAllocator interface {
 	Alloc(size int) MemNode
 	Free(n MemNode)
 	Usage() int
+	String() string
 }
 
 func init() {
@@ -39,4 +40,8 @@ func (alloc *simpleAllocator) Free(n MemNode) {
 
 func (alloc *simpleAllocator) Usage() int {
 	return int(DefaultPool.Usage())
+}
+
+func (alloc *simpleAllocator) String() string {
+	return DefaultPool.String()
 }

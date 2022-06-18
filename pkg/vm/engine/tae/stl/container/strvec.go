@@ -56,11 +56,27 @@ func (vec *strVector[T]) Allocated() int {
 }
 func (vec *strVector[T]) Data() []byte { return vec.data.Data() }
 func (vec *strVector[T]) Slice() []T   { panic("not support") }
-func (vec *strVector[T]) String() string {
+func (vec *strVector[T]) Desc() string {
 	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
 		vec.Length(),
 		vec.Capacity(),
 		vec.Allocated())
+	return s
+}
+func (vec *strVector[T]) String() string {
+	s := vec.Desc()
+	end := 100
+	if vec.Length() < end {
+		end = vec.Length()
+	}
+	if end == 0 {
+		return s
+	}
+	data := ""
+	for i := 0; i < end; i++ {
+		data = fmt.Sprintf("%s %v", data, vec.Get(i))
+	}
+	s = fmt.Sprintf("%s %s", s, data)
 	return s
 }
 

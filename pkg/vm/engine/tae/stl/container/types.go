@@ -26,16 +26,3 @@ type strVector[T any] struct {
 type Vector[T any] struct {
 	stl.Vector[T]
 }
-
-func New[T any](opts ...*Options) *Vector[T] {
-	var v T
-	_, ok := any(v).([]byte)
-	if !ok {
-		return &Vector[T]{
-			Vector: NewStdVector[T](opts...),
-		}
-	}
-	return &Vector[T]{
-		Vector: NewStrVector[T](opts...),
-	}
-}

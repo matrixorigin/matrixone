@@ -29,6 +29,7 @@ type Vector[T any] interface {
 	Length() int
 	Allocated() int
 	String() string
+	Desc() string
 
 	GetAllocator() MemAllocator
 }

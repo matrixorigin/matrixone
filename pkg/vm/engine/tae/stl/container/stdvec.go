@@ -66,13 +66,29 @@ func (vec *stdVector[T]) Capacity() int  { return vec.capacity }
 func (vec *stdVector[T]) Allocated() int { return vec.node.Size() }
 func (vec *stdVector[T]) Data() []byte   { return vec.buf }
 func (vec *stdVector[T]) Slice() []T     { return vec.slice }
-func (vec *stdVector[T]) String() string {
+func (vec *stdVector[T]) Desc() string {
 	var v T
 	s := fmt.Sprintf("StdVector<%s>:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
 		reflect.TypeOf(v).Name(),
 		vec.Length(),
 		vec.Capacity(),
 		vec.Allocated())
+	return s
+}
+func (vec *stdVector[T]) String() string {
+	s := vec.Desc()
+	end := 100
+	if vec.Length() < end {
+		end = vec.Length()
+	}
+	if end == 0 {
+		return s
+	}
+	data := ""
+	for i := 0; i < end; i++ {
+		data = fmt.Sprintf("%s %v", data, vec.Get(i))
+	}
+	s = fmt.Sprintf("%s %s", s, data)
 	return s
 }
 
