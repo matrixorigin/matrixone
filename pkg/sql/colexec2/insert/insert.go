@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -66,7 +68,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		// scalar vector's extension
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
+			if bat.Vecs[i].IsScalarNull() && bat.Vecs[i].Typ.Oid != types.T_any {
+				vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
+			}
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
+			vector.SetLength(bat.Vecs[i], bat.Vecs[i].Length)
 		}
 	}
 	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
