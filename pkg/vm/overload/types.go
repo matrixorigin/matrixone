@@ -44,5 +44,6 @@ const (
 	MergeOffset
 
 	Deletion
+	Insert
 	Update
 )

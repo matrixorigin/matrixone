@@ -7216,7 +7216,7 @@ yydefault:
 //line mysql_sql.y:1996
 		{
 			yyLOCAL = &tree.Insert{
-				Rows: tree.NewSelect(yyDollar[1].selectUnion(), nil, nil),
+				Rows: yyDollar[1].selectUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -7250,7 +7250,7 @@ yydefault:
 		{
 			yyLOCAL = &tree.Insert{
 				Columns: yyDollar[2].identifierListUnion(),
-				Rows:    tree.NewSelect(yyDollar[4].selectUnion(), nil, nil),
+				Rows:    yyDollar[4].selectUnion(),
 			}
 		}
 		yyVAL.union = yyLOCAL
