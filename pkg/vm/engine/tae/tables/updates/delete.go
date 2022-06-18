@@ -120,7 +120,7 @@ func (node *DeleteNode) GetChain() txnif.DeleteChain          { return node.chai
 func (node *DeleteNode) GetDeleteMaskLocked() *roaring.Bitmap { return node.mask }
 
 func (node *DeleteNode) HasOverlapLocked(start, end uint32) bool {
-	if node.mask == nil || node.mask.GetCardinality() == 0 {
+	if node.mask == nil || node.mask.IsEmpty() {
 		return false
 	}
 	var yes bool

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -1996,4 +1997,176 @@ func TestDelete2(t *testing.T) {
 	// txn, rel = tae.getRelation()
 	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-1, true)
 	// assert.NoError(t, txn.Commit())
+}
+
+func TestNull1(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 9)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+
+	bat := catalog.MockData(schema, schema.BlockMaxRows*3+1)
+	bats := compute.SplitBatch(bat, 4)
+	compute.UpdateValue(bats[0].Vecs[3], 2, types.Null{})
+	tae.createRelAndAppend(bats[0], true)
+
+	txn, rel := tae.getRelation()
+	blk := getOneBlock(rel)
+	view, err := blk.GetColumnDataById(3, nil, nil)
+	assert.NoError(t, err)
+	v := compute.GetValue(view.GetColumnData(), 2)
+	assert.True(t, types.IsNull(v))
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+	txn, rel = tae.getRelation()
+	blk = getOneBlock(rel)
+	view, err = blk.GetColumnDataById(3, nil, nil)
+	assert.NoError(t, err)
+	v = compute.GetValue(view.GetColumnData(), 2)
+	assert.True(t, types.IsNull(v))
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+
+	v = getSingleSortKeyValue(bats[0], schema, 2)
+	filter_2 := handle.NewEQFilter(v)
+	uv0_2, err := rel.GetValueByFilter(filter_2, 3)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv0_2))
+
+	v0_4 := getSingleSortKeyValue(bats[0], schema, 4)
+	filter_4 := handle.NewEQFilter(v0_4)
+	err = rel.UpdateByFilter(filter_4, 3, types.Null{})
+	assert.NoError(t, err)
+	uv, err := rel.GetValueByFilter(filter_4, 3)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv))
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	uv, err = rel.GetValueByFilter(filter_4, 3)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv))
+
+	err = rel.Append(bats[1])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactBlocks(false)
+	txn, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
+	uv, err = rel.GetValueByFilter(filter_4, 3)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv))
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+	txn, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[:2]), false)
+	uv, err = rel.GetValueByFilter(filter_4, 3)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv))
+
+	v0_1 := getSingleSortKeyValue(bats[0], schema, 1)
+	filter0_1 := handle.NewEQFilter(v0_1)
+	err = rel.UpdateByFilter(filter0_1, 12, types.Null{})
+	assert.NoError(t, err)
+	uv0_1, err := rel.GetValueByFilter(filter0_1, 12)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv0_1))
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	uv0_1, err = rel.GetValueByFilter(filter0_1, 12)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv0_1))
+	err = rel.Append(bats[2])
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactBlocks(false)
+	tae.mergeBlocks(false)
+
+	txn, rel = tae.getRelation()
+	uv0_1, err = rel.GetValueByFilter(filter0_1, 12)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv0_1))
+	uv0_2, err = rel.GetValueByFilter(filter_2, 3)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv0_2))
+	assert.NoError(t, txn.Commit())
+
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	uv0_1, err = rel.GetValueByFilter(filter0_1, 12)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv0_1))
+	uv0_2, err = rel.GetValueByFilter(filter_2, 3)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv0_2))
+	assert.NoError(t, txn.Commit())
+}
+
+func TestNull2(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 6)
+	schema.BlockMaxRows = 10
+	tae.bindSchema(schema)
+	bat := catalog.MockData(schema, schema.BlockMaxRows-1)
+	tae.createRelAndAppend(bat, true)
+
+	txn, rel := tae.getRelation()
+	v1 := getSingleSortKeyValue(bat, schema, 1)
+	filter1 := handle.NewEQFilter(v1)
+	err := rel.UpdateByFilter(filter1, 2, int32(99))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	tae.compactABlocks(false)
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	uv1, err := rel.GetValueByFilter(filter1, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(99), uv1.(int32))
+	err = rel.UpdateByFilter(filter1, 2, types.Null{})
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	tae.compactABlocks(false)
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	uv1, err = rel.GetValueByFilter(filter1, 2)
+	assert.NoError(t, err)
+	assert.True(t, types.IsNull(uv1))
+	err = rel.UpdateByFilter(filter1, 2, int32(2))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+	tae.compactABlocks(false)
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	uv1, err = rel.GetValueByFilter(filter1, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(2), uv1.(int32))
+	err = rel.UpdateByFilter(filter1, 2, int32(2))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
+
+	tae.compactABlocks(false)
+	tae.restart()
+
+	txn, rel = tae.getRelation()
+	uv1, err = rel.GetValueByFilter(filter1, 2)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(2), uv1.(int32))
+	err = rel.UpdateByFilter(filter1, 2, int32(2))
+	assert.NoError(t, err)
+	assert.NoError(t, txn.Commit())
 }
