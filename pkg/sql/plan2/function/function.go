@@ -261,9 +261,9 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 		}
 	}
 	if len(fs) > 0 && fs[0].isFunction() {
-		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters [%v] will be implemented in future version.", name, args))
+		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, args))
 	}
-	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters [%v] will be implemented in future version.", name, args))
+	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
 }
 
 // strictTypeCheck is a general type check method.

@@ -152,7 +152,7 @@ func TestFunctionRegister(t *testing.T) {
 	}
 	{
 		_, _, _, err := GetFunctionByName("f1", []types.T{})
-		require.Equal(t, errors.New(errno.UndefinedFunction, "Function 'f1' with parameters [[]] will be implemented in future version."), err)
+		require.Equal(t, errors.New(errno.UndefinedFunction, "Function 'f1' with parameters [] will be implemented in future version."), err)
 	}
 	{
 		errMessage := "too many functions matched:\n" +
