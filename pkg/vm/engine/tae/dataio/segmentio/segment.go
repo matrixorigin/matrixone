@@ -107,13 +107,13 @@ func (sf *segmentFile) replayInfo(stat *fileStat, file *DriverFile) {
 	stat.name = file.GetName()
 }
 
-func (sf *segmentFile) getFileTs(name string) (ts uint64,err error) {
+func (sf *segmentFile) getFileTs(name string) (ts uint64, err error) {
 	tmpName := strings.Split(name, ".")
 	fileName := strings.Split(tmpName[0], "_")
 	if len(fileName) > 2 {
 		ts, err = strconv.ParseUint(fileName[2], 10, 64)
 		if err != nil {
-			return 0,err
+			return 0, err
 		}
 	}
 	return ts, nil
