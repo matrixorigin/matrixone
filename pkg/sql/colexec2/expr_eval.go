@@ -106,7 +106,11 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			Precision: t.T.Typ.GetPrecision(),
 		}), nil
 	case *plan.Expr_Col:
-		return bat.Vecs[t.Col.ColPos], nil
+		vec := bat.Vecs[t.Col.ColPos]
+		if vec.IsScalarNull() {
+			vec.Typ = types.T(expr.Typ.GetId()).ToType()
+		}
+		return vec, nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(overloadId)
