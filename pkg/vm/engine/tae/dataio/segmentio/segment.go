@@ -27,6 +27,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
+type FileType uint8
+
+const (
+	BLOCK FileType = iota
+	UPDATES
+	INDEX
+	INDEX_MATE
+	DELETE
+)
+
+const BLOCK_SUFFIX = "blk"
+const SEGMENT_SUFFIX = ".seg"
+const UPDATE_SUFFIX = "update"
+const INDEX_SUFFIX = "idx"
+const DELETE_SUFFIX = "del"
+
 var SegmentFactory file.SegmentFactory
 
 func init() {
@@ -68,6 +84,9 @@ type segmentFile struct {
 	driver *Driver
 }
 
+type File struct {
+}
+
 func openSegment(name string, id uint64) *segmentFile {
 	sf := &segmentFile{
 		blocks: make(map[uint64]*blockFile),
@@ -78,7 +97,6 @@ func openSegment(name string, id uint64) *segmentFile {
 	if err != nil {
 		panic(any(err.Error()))
 	}
-	sf.driver.Mount()
 	sf.id = &common.ID{
 		SegmentID: id,
 	}
@@ -107,7 +125,45 @@ func (sf *segmentFile) replayInfo(stat *fileStat, file *DriverFile) {
 	stat.name = file.GetName()
 }
 
-func (sf *segmentFile) getFileTs(name string) (ts uint64, err error) {
+func setFile(files *[]*DriverFile, file *DriverFile) {
+	if len(*files) > 1 {
+		panic(any("driver file err"))
+	}
+	if len(*files) == 1 {
+		(*files)[0].Unref()
+		(*files)[0] = file
+		return
+	}
+	*files = append(*files, file)
+}
+
+func getBlock(id uint64, seg *segmentFile) *blockFile {
+	bf := &blockFile{
+		seg:     seg,
+		id:      id,
+		columns: make([]*columnBlock, 0),
+	}
+	bf.deletes = newDeletes(bf)
+	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
+	bf.OnZeroCB = bf.close
+	bf.Ref()
+	return bf
+}
+
+func getColumnBlock(col int, block *blockFile) *columnBlock {
+	cb := &columnBlock{
+		block:   block,
+		indexes: make([]*indexFile, 0),
+		col:     col,
+	}
+	cb.updates = newUpdates(cb)
+	cb.data = newData(cb)
+	cb.OnZeroCB = cb.close
+	cb.Ref()
+	return cb
+}
+
+func getFileTs(name string) (ts uint64, err error) {
 	tmpName := strings.Split(name, ".")
 	fileName := strings.Split(tmpName[0], "_")
 	if len(fileName) > 2 {
@@ -119,7 +175,7 @@ func (sf *segmentFile) getFileTs(name string) (ts uint64, err error) {
 	return ts, nil
 }
 
-func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buffer) error {
+func (sf *segmentFile) Replay(_ int, _ map[int]int, cache *bytes.Buffer) error {
 	err := sf.driver.Replay(cache)
 	if err != nil {
 		return err
@@ -139,7 +195,8 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 		}
 		bf := sf.blocks[id]
 		if bf == nil {
-			bf = replayBlock(id, sf, colCnt, indexCnt)
+			//bf = replayBlock(id, sf, colCnt, indexCnt)
+			bf = getBlock(id, sf)
 			sf.blocks[id] = bf
 		}
 		col, err := strconv.ParseUint(fileName[0], 10, 32)
@@ -153,70 +210,80 @@ func (sf *segmentFile) Replay(colCnt int, indexCnt map[int]int, cache *bytes.Buf
 				return err
 			}
 		}
+		if file.snode.GetCols() > uint32(len(bf.columns)) && tmpName[1] != INDEX_SUFFIX {
+			bf.AddColumn(int(file.snode.GetCols()))
+		}
 		switch tmpName[1] {
-		case "blk":
-			if ts == 0 {
-				bf.columns[col].ts = 0
-				bf.columns[col].data.file[0] = file
+		case BLOCK_SUFFIX:
+			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
+				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
+			}
+			if len(bf.columns[col].data.file) == 0 {
+				bf.columns[col].ts = ts
+				setFile(&bf.columns[col].data.file, file)
 				sf.replayInfo(bf.columns[col].data.stat, file)
-				break
 			}
 			if bf.columns[col].ts < ts {
 				bf.columns[col].ts = ts
-				bf.columns[col].data.file[0] = file
+				setFile(&bf.columns[col].data.file, file)
 				sf.replayInfo(bf.columns[col].data.stat, file)
 			}
 			if bf.ts <= ts {
 				bf.ts = ts
 				bf.rows = file.GetInode().GetRows()
 			}
-		case "update":
+		case UPDATE_SUFFIX:
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			if bf.columns[col].updates.file[0] == nil {
-				bf.columns[col].updates.file[0] = file
+			if len(bf.columns[col].updates.file) == 0 {
+				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 				break
 			}
-			updateTs, err := sf.getFileTs(bf.columns[col].updates.file[0].name)
+			updateTs, err := getFileTs(bf.columns[col].updates.file[0].name)
 			if err != nil {
 				return err
 			}
 			if updateTs < ts {
 				bf.columns[col].ts = ts
-				bf.columns[col].updates.file[0] = file
+				setFile(&bf.columns[col].updates.file, file)
 				sf.replayInfo(bf.columns[col].updates.stat, file)
 			}
-		case "del":
+		case DELETE_SUFFIX:
 			if bf.ts <= ts {
 				bf.ts = ts
 			}
-			if bf.deletes.file[0] == nil {
-				bf.deletes.file[0] = file
+			if len(bf.deletes.file) == 0 {
+				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
 				break
 			}
-			delTs, err := sf.getFileTs(bf.deletes.file[0].name)
+			delTs, err := getFileTs(bf.deletes.file[0].name)
 			if err != nil {
 				return err
 			}
-			if delTs < ts {
-				bf.deletes.file[0] = file
+			if ts > delTs {
+				setFile(&bf.deletes.file, file)
 				sf.replayInfo(bf.deletes.stat, file)
 			}
-		case "idx":
+		case INDEX_SUFFIX:
 			if ts == 0 && len(fileName) < 3 {
-				bf.indexMeta.file[0] = file
+				setFile(&bf.indexMeta.file, file)
 				sf.replayInfo(bf.indexMeta.stat, file)
 				break
 			}
-			bf.columns[col].indexes[ts].dataFile.file[0] = file
+			if int(col) > len(bf.columns)-1 {
+				bf.AddColumn(int(col + 1))
+			}
+			if file.snode.GetIdxs() > uint32(len(bf.columns[col].indexes)) {
+				bf.columns[col].AddIndex(int(file.snode.GetIdxs()))
+			}
+			setFile(&bf.columns[col].indexes[ts].dataFile.file, file)
 			sf.replayInfo(bf.columns[col].indexes[ts].dataFile.stat, file)
 		default:
 			panic(any("No Support"))
 		}
-
 	}
 	return nil
 }
