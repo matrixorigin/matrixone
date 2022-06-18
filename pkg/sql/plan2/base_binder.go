@@ -313,7 +313,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = binding.types[colPos]
 			} else {
 				// return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", name))
-				return nil, errors.New("", fmt.Sprintf("Column reference %q is ambiguous", name))
+				return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", name))
 			}
 		} else {
 			// err = errors.New(errno.InvalidColumnReference, fmt.Sprintf("column %q does not exist", name))
@@ -622,7 +622,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 		if astExpr.SubOp == tree.ALL && op != "<>" {
 			// return nil, errors.New(errno.InternalError, "non-equi ANY subquery not yet supported")
-			return nil, errors.New("", "Subquery in SELECT clause will be supported in future version.")
+			return nil, errors.New("", "Supporting non-equi subquery will be fixed in 0.5.")
 		}
 
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
