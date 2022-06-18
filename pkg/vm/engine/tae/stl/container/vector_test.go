@@ -85,3 +85,25 @@ func TestVector3(t *testing.T) {
 	vec.Close()
 	assert.Equal(t, 0, alloc.Usage())
 }
+
+func TestVector4(t *testing.T) {
+	vec := New[[]byte]()
+	vec.Append([]byte("h1"))
+	vec.Append([]byte("h2"))
+	vec.Append([]byte("h3"))
+	vec.Append([]byte("h4"))
+	assert.Equal(t, 4, vec.Length())
+	vec.Delete(1)
+	assert.Equal(t, 3, vec.Length())
+	t.Logf("%s", vec.Get(2))
+	t.Logf("%s", vec.Get(1))
+	t.Logf("%s", vec.Get(0))
+	assert.Equal(t, "h1", string(vec.Get(0)))
+	assert.Equal(t, "h3", string(vec.Get(1)))
+	assert.Equal(t, "h4", string(vec.Get(2)))
+	t.Log(vec.String())
+	alloc := vec.GetAllocator()
+	t.Log(stl.DefaultPool.String())
+	vec.Close()
+	assert.Equal(t, 0, alloc.Usage())
+}

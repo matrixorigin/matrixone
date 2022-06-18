@@ -109,6 +109,10 @@ func (vec *strVector[T]) Delete(i int) (deleted T) {
 	vec.data.RangeDelete(int(s), int(l))
 	vec.offsets.Delete(i)
 	vec.lengths.Delete(i)
+	for j := i; j < vec.Length(); j++ {
+		old := vec.offsets.Get(j)
+		vec.offsets.Update(j, old-l)
+	}
 	return
 }
 
