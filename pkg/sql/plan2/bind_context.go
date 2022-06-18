@@ -23,10 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewBindContext(builder *QueryBuilder, parent *BindContext, passCTEs bool) *BindContext {
+func NewBindContext(builder *QueryBuilder, parent *BindContext, maskedCTEs map[string]any) *BindContext {
 	bc := &BindContext{
-		passCTEs:       passCTEs,
-		cteByName:      make(map[string]*tree.CTE),
+		maskedCTEs:     maskedCTEs,
 		groupByAst:     make(map[string]int32),
 		aggregateByAst: make(map[string]int32),
 		projectByExpr:  make(map[string]int32),
@@ -48,20 +47,22 @@ func (bc *BindContext) rootTag() int32 {
 	}
 }
 
-func (bc *BindContext) findCTE(name string) *tree.CTE {
+func (bc *BindContext) findCTE(name string) *CTERef {
 	if cte, ok := bc.cteByName[name]; ok {
-		return cte
+		if _, ok := bc.maskedCTEs[name]; !ok {
+			return cte
+		}
 	}
 
-	if bc.passCTEs {
-		parent := bc.parent
-		for parent != nil {
-			if cte, ok := parent.cteByName[name]; ok {
+	parent := bc.parent
+	for parent != nil {
+		if cte, ok := parent.cteByName[name]; ok {
+			if _, ok := parent.maskedCTEs[name]; !ok {
 				return cte
 			}
-
-			parent = parent.parent
 		}
+
+		parent = parent.parent
 	}
 
 	return nil

@@ -104,13 +104,18 @@ type QueryBuilder struct {
 	nextTag    int32
 }
 
+type CTERef struct {
+	ast        *tree.CTE
+	maskedCTEs map[string]any
+}
+
 type BindContext struct {
 	binder Binder
 
-	passCTEs  bool
-	cteByName map[string]*tree.CTE
+	cteByName  map[string]*CTERef
+	maskedCTEs map[string]any
 
-	cteAlias string
+	cteName  string
 	headings []string
 
 	groupTag     int32

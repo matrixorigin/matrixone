@@ -378,7 +378,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
-	subCtx := NewBindContext(b.builder, b.ctx, true)
+	subCtx := NewBindContext(b.builder, b.ctx, nil)
 
 	var nodeId int32
 	var err error
