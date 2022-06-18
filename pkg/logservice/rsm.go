@@ -111,8 +111,6 @@ type stateMachine struct {
 
 var _ (sm.IStateMachine) = (*stateMachine)(nil)
 
-// making this a IConcurrentStateMachine for now, IStateMachine need to be updated
-// to provide raft entry index to its Update() method
 func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	return &stateMachine{
 		shardID:      shardID,
