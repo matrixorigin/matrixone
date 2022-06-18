@@ -258,7 +258,7 @@ func TestGetHeartbeatMessage(t *testing.T) {
 
 		m := store.getHeartbeatMessage()
 		// hakeeper shard is included
-		assert.Equal(t, 3, len(m.Shards))
+		assert.Equal(t, 3, len(m.Replicas))
 	}
 	runStoreTest(t, fn)
 }

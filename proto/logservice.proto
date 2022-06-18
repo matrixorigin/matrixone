@@ -16,8 +16,9 @@ package logservice;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
-// LogShardInfo contains information of a launched shard.  
+// LogShardInfo contains information a log shard.
 message LogShardInfo {
+  // ShardID is the ID of a Log shard.
   uint64 ShardID               = 1;
   // Replicas is a map of ReplicaID to LogStore UUID, it describe the member
   // replicas of the shard at the given Epoch. 
@@ -34,6 +35,13 @@ message LogShardInfo {
   // TODO: per shard stats like CPU/memory/network usage can be added here
 };
 
+// LogReplicaInfo contains information of a log replica.
+message LogReplicaInfo {
+  LogShardInfo LogShardInfo = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
+  // ReplciaID is the ID of a replica within the Log shard. 
+  uint64 ReplicaID = 2;
+}
+
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
 message LogStoreHeartbeat {
   // UUID is the uuid of the Log Store.
@@ -43,11 +51,11 @@ message LogStoreHeartbeat {
   string ServiceAddress = 3;
   string GossipAddress  = 4;
 
-  // Shards is a list of LogShardInfo instances collected on the specified
+  // Replicas is a list of LogReplicaInfo instances collected on the specified
   // LogStore. Details in Shards are based on the local knowledge of each
   // replica running on the current LogStore, it may not be accurate or
   // update to date due to various reasons. 
-  repeated LogShardInfo Shards = 5 [(gogoproto.nullable) = false];
+  repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
 };
 
 // DNShardInfo contains information of a launched DN shard. 

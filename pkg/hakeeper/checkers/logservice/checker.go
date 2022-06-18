@@ -74,8 +74,8 @@ func collectStats(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, tick ui
 		for replicaID, uuid := range shardInfo.Replicas {
 			// Check dangling
 			started := false
-			for _, shard := range infos.Stores[uuid].Shards {
-				if shard.ShardID == shardInfo.ShardID {
+			for _, replica := range infos.Stores[uuid].Replicas {
+				if replica.ShardID == shardInfo.ShardID {
 					started = true
 				}
 			}
@@ -95,9 +95,9 @@ func collectStats(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, tick ui
 
 	// Check zombies
 	for uuid, storeInfo := range infos.Stores {
-		for _, shardInfo := range storeInfo.Shards {
-			if shardInfo.Epoch < infos.Shards[shardInfo.ShardID].Epoch {
-				s.toStop = append(s.toStop, replica{uuid: uuid, shardID: shardInfo.ShardID})
+		for _, replicaInfo := range storeInfo.Replicas {
+			if replicaInfo.Epoch < infos.Shards[replicaInfo.ShardID].Epoch {
+				s.toStop = append(s.toStop, replica{uuid: uuid, shardID: replicaInfo.ShardID})
 			}
 		}
 	}

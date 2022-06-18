@@ -81,7 +81,7 @@ type LogStoreInfo struct {
 	RaftAddress    string
 	ServiceAddress string
 	GossipAddress  string
-	Shards         []pb.LogShardInfo
+	Replicas       []pb.LogReplicaInfo
 }
 
 type LogState struct {
@@ -119,12 +119,12 @@ func (s *LogState) updateStores(hb pb.LogStoreHeartbeat, tick uint64) {
 	storeInfo.RaftAddress = hb.RaftAddress
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.GossipAddress = hb.GossipAddress
-	storeInfo.Shards = hb.Shards
+	storeInfo.Replicas = hb.Replicas
 	s.Stores[hb.UUID] = storeInfo
 }
 
 func (s *LogState) updateShards(hb pb.LogStoreHeartbeat) {
-	for _, incoming := range hb.Shards {
+	for _, incoming := range hb.Replicas {
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
 			recorded = pb.LogShardInfo{

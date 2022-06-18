@@ -49,28 +49,31 @@ func TestCollect(t *testing.T) {
 					}},
 				Stores: map[string]hakeeper.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0,
-						}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0,
+							}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0,
-						}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0,
+							}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}}},
 			}, tick: 10, expected: stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{}}},
 		{
 			desc: "Shard 1 has only 2 replicas, which is expected as 3.",
@@ -89,19 +92,21 @@ func TestCollect(t *testing.T) {
 					Term:     0}},
 				Stores: map[string]hakeeper.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 				},
 			}, tick: 10, expected: stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{1: 1}}},
 		{
@@ -116,21 +121,23 @@ func TestCollect(t *testing.T) {
 						Term:     0}},
 				Stores: map[string]hakeeper.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{}},
+						Replicas: []logservice.LogReplicaInfo{}},
 				},
 			}, tick: 10,
 			expected: stats{toStart: []replica{{"c", 1, 0, 3}},
@@ -147,33 +154,37 @@ func TestCollect(t *testing.T) {
 						Term:     0}},
 				Stores: map[string]hakeeper.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
-							Epoch:    0,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+								Epoch:    0,
+								LeaderID: 0,
+								Term:     0}}}},
 				},
 			}, tick: 10,
 			expected: stats{toStop: []replica{{"d", 1, 0, 0}},
@@ -196,33 +207,37 @@ func TestCollect(t *testing.T) {
 						Term:     0}},
 				Stores: map[string]hakeeper.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 				},
 			}, tick: 10,
 			expected: stats{toRemove: map[uint64][]replica{1: {{"a", 1, 0, 1}}},
@@ -239,26 +254,29 @@ func TestCollect(t *testing.T) {
 						Term:     0}},
 				Stores: map[string]hakeeper.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"b": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}},
 					"c": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Shards: []logservice.LogShardInfo{{
-							ShardID:  1,
-							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
-							Epoch:    1,
-							LeaderID: 0,
-							Term:     0}}}},
+						Replicas: []logservice.LogReplicaInfo{{
+							LogShardInfo: logservice.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 0,
+								Term:     0}}}}},
 			}, tick: 999999999, expected: stats{
 				toRemove: map[uint64][]replica{1: {{"a", 1, 1, 1}}},
 				toAdd:    map[uint64]int{}}},

@@ -139,26 +139,30 @@ func TestHandleLogHeartbeat(t *testing.T) {
 		RaftAddress:    "localhost:9090",
 		ServiceAddress: "localhost:9091",
 		GossipAddress:  "localhost:9092",
-		Shards: []pb.LogShardInfo{
+		Replicas: []pb.LogReplicaInfo{
 			{
-				ShardID: 100,
-				Replicas: map[uint64]string{
-					200: "localhost:8000",
-					300: "localhost:9000",
+				LogShardInfo: pb.LogShardInfo{
+					ShardID: 100,
+					Replicas: map[uint64]string{
+						200: "localhost:8000",
+						300: "localhost:9000",
+					},
+					Epoch:    200,
+					LeaderID: 200,
+					Term:     10,
 				},
-				Epoch:    200,
-				LeaderID: 200,
-				Term:     10,
 			},
 			{
-				ShardID: 101,
-				Replicas: map[uint64]string{
-					201: "localhost:8000",
-					301: "localhost:9000",
+				LogShardInfo: pb.LogShardInfo{
+					ShardID: 101,
+					Replicas: map[uint64]string{
+						201: "localhost:8000",
+						301: "localhost:9000",
+					},
+					Epoch:    202,
+					LeaderID: 201,
+					Term:     30,
 				},
-				Epoch:    202,
-				LeaderID: 201,
-				Term:     30,
 			},
 		},
 	}
@@ -175,8 +179,8 @@ func TestHandleLogHeartbeat(t *testing.T) {
 	assert.Equal(t, hb.RaftAddress, lsinfo.RaftAddress)
 	assert.Equal(t, hb.ServiceAddress, lsinfo.ServiceAddress)
 	assert.Equal(t, hb.GossipAddress, lsinfo.GossipAddress)
-	assert.Equal(t, 2, len(lsinfo.Shards))
-	assert.Equal(t, hb.Shards, lsinfo.Shards)
+	assert.Equal(t, 2, len(lsinfo.Replicas))
+	assert.Equal(t, hb.Replicas, lsinfo.Replicas)
 }
 
 func TestHandleDNHeartbeat(t *testing.T) {
