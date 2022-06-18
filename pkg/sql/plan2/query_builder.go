@@ -355,8 +355,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		clause = selectClause
 	case *tree.ParenSelect:
 		return builder.buildSelect(selectClause.Select, ctx, isRoot)
+	case *tree.UnionClause:
+		return 0, errors.New("", fmt.Sprintf("'%s' will be supported in future version.", selectClause.Type.String()))
+	case *tree.ValuesClause:
+		return 0, errors.New("", "'SELECT FROM VALUES' will be supported in future version.")
 	default:
-		return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
+		return 0, errors.New("", fmt.Sprintf("Statement '%s' will be supported in future version.", tree.String(stmt, dialect.MYSQL)))
 	}
 
 	// build FROM clause
@@ -611,7 +615,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if proj == nil {
 			// TODO: implement MARK join to better support non-scalar subqueries
-			return 0, errors.New(errno.InternalError, "non-scalar subquery in SELECT clause not yet supported")
+			// return 0, errors.New(errno.InternalError, "non-scalar subquery in SELECT clause not yet supported")
+			return 0, errors.New("", "Subquery in SELECT clause will be supported in future version.")
 		}
 
 		ctx.projects[i] = proj
