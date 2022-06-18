@@ -25,6 +25,7 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
+		cteByName:      make(map[string]*tree.CTE),
 		groupByAst:     make(map[string]int32),
 		aggregateByAst: make(map[string]int32),
 		projectByExpr:  make(map[string]int32),
@@ -32,7 +33,6 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
-		cteTables:      make(map[string]*plan.TableDef),
 		parent:         parent,
 	}
 
@@ -45,6 +45,23 @@ func (bc *BindContext) rootTag() int32 {
 	} else {
 		return bc.projectTag
 	}
+}
+
+func (bc *BindContext) findCTE(name string) *tree.CTE {
+	if cte, ok := bc.cteByName[name]; ok {
+		return cte
+	}
+
+	parent := bc.parent
+	for parent != nil {
+		if cte, ok := parent.cteByName[name]; ok {
+			return cte
+		}
+
+		parent = parent.parent
+	}
+
+	return nil
 }
 
 func (bc *BindContext) mergeContexts(left, right *BindContext) error {

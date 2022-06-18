@@ -107,7 +107,7 @@ type QueryBuilder struct {
 type BindContext struct {
 	binder Binder
 
-	cteTables map[string]*plan.TableDef
+	cteByName map[string]*tree.CTE
 
 	groupTag     int32
 	aggregateTag int32
