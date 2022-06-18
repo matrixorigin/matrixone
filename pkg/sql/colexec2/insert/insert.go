@@ -70,9 +70,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
 			if bat.Vecs[i].IsScalarNull() && bat.Vecs[i].Typ.Oid != types.T_any {
 				vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
+				vector.SetLength(bat.Vecs[i], bat.Vecs[i].Length)
 			}
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
-			vector.SetLength(bat.Vecs[i], bat.Vecs[i].Length)
 		}
 	}
 	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
