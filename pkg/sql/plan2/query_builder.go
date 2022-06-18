@@ -792,6 +792,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return 0, errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", cte.Name.Alias, len(subCtx.headings), len(cte.Name.Cols)))
 				}
 
+				subCtx.cteAlias = string(cte.Name.Alias)
+
 				for i, col := range cte.Name.Cols {
 					subCtx.headings[i] = string(col)
 				}
@@ -892,14 +894,18 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 		binding = NewBinding(builder.tagsByNode[nodeId][0], nodeId, table, cols, types)
 	} else {
 		// Subquery
-		headings := builder.ctxByNode[nodeId].headings
-		projects := builder.ctxByNode[nodeId].projects
+		subCtx := builder.ctxByNode[nodeId]
+		headings := subCtx.headings
+		projects := subCtx.projects
 
 		if len(alias.Cols) > len(headings) {
 			return errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols)))
 		}
 
-		table := string(alias.Alias)
+		table := subCtx.cteAlias
+		if len(alias.Alias) > 0 {
+			table = string(alias.Alias)
+		}
 		if _, ok := ctx.bindingByTable[table]; ok {
 			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
 		}

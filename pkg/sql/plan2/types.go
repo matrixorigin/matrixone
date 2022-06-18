@@ -110,6 +110,9 @@ type BindContext struct {
 	passCTEs  bool
 	cteByName map[string]*tree.CTE
 
+	cteAlias string
+	headings []string
+
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
@@ -120,8 +123,6 @@ type BindContext struct {
 	aggregates []*plan.Expr
 	projects   []*plan.Expr
 	results    []*plan.Expr
-
-	headings []string
 
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
