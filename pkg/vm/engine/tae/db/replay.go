@@ -60,7 +60,6 @@ func (replayer *Replayer) PreReplayWal() {
 			return catalog.ErrStopCurrRecur
 		}
 		entry.InitData(replayer.DataFactory)
-		entry.ReplayFile(replayer.cache)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {

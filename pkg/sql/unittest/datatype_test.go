@@ -106,9 +106,9 @@ func TestDateType(t *testing.T) {
 				{"2021-12-02"},
 			},
 		}},
-		{sql: "insert into tble values ('20201310')", err: "[22000]Incorrect date value"},
-		{sql: "insert into tble values ('20200631')", err: "[22000]Incorrect date value"},
-		{sql: "insert into tble values ('-3-5-3')", err: "[22000]Incorrect date value"},
+		{sql: "insert into tble values ('20201310')", err: "Incorrect date value"},
+		{sql: "insert into tble values ('20200631')", err: "Incorrect date value"},
+		{sql: "insert into tble values ('-3-5-3')", err: "Incorrect date value"},
 	}
 
 	test(t, testCases)
@@ -212,7 +212,7 @@ func TestDateComparison(t *testing.T) {
 				{"2005-01-05", "2005-01-05"}, {"2005-01-05", "2006-01-05"}, {"3001-08-25", "2004-11-12"},
 			},
 		}},
-		{sql: "select * from tdate where a <= '2004-14-01';", err: "[22000]Incorrect date value"},
+		{sql: "select * from tdate where a <= '2004-14-01';", err: "Incorrect date value"},
 	}
 	test(t, testCases)
 }
@@ -230,13 +230,13 @@ func TestDatetimeType(t *testing.T) {
 		{sql: "insert into tdatetimedef values ();"},
 		{sql: "create table tbl4 (a datetime);"},
 
-		{sql: "insert into tbl4 values ('-1-04-28 10:22:14');", err: "[22000]Incorrect datetime value"},
-		{sql: "insert into tbl4 values ('2010-13-28 10:22:14');", err: "[22000]Incorrect datetime value"},
-		{sql: "insert into tbl4 values ('2010-11-31 10:22:14');", err: "[22000]Incorrect datetime value"},
-		{sql: "insert into tbl4 values ('2010-11-30 24:22:14');", err: "[22000]Incorrect datetime value"},
-		{sql: "insert into tbl4 values ('2010-11-30 23:60:14');", err: "[22000]Incorrect datetime value"},
-		{sql: "insert into tbl4 values ('2010-11-30 23:59:60');", err: "[22000]Incorrect datetime value"},
-		{sql: "insert into tbl4 values ('1999-02-29 23:59:59');", err: "[22000]Incorrect datetime value"},
+		{sql: "insert into tbl4 values ('-1-04-28 10:22:14');", err: "Incorrect datetime value"},
+		{sql: "insert into tbl4 values ('2010-13-28 10:22:14');", err: "Incorrect datetime value"},
+		{sql: "insert into tbl4 values ('2010-11-31 10:22:14');", err: "Incorrect datetime value"},
+		{sql: "insert into tbl4 values ('2010-11-30 24:22:14');", err: "Incorrect datetime value"},
+		{sql: "insert into tbl4 values ('2010-11-30 23:60:14');", err: "Incorrect datetime value"},
+		{sql: "insert into tbl4 values ('2010-11-30 23:59:60');", err: "Incorrect datetime value"},
+		{sql: "insert into tbl4 values ('1999-02-29 23:59:59');", err: "Incorrect datetime value"},
 		{sql: "select * from tbl1;", res: executeResult{
 			attr: []string{"a"},
 			data: [][]string{
@@ -338,7 +338,7 @@ func TestDatetimeComparison(t *testing.T) {
 				{"2018-04-28 10:21:15"}, {"2017-04-28 03:05:01"}, {"2025-07-16 16:39:58"},
 			},
 		}},
-		{sql: "select * from tdatetime where a != '2020-01-01 10:21:61';", err: "[22000]Incorrect datetime value"},
+		{sql: "select * from tdatetime where a != '2020-01-01 10:21:61';", err: "Incorrect datetime value"},
 		{sql: "select * from tdatetime2 where a = b or b = a;", res: executeResult{
 			attr: []string{"a", "b"},
 			data: [][]string{

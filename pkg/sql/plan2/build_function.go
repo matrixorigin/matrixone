@@ -15,6 +15,7 @@
 package plan2
 
 import (
+	"fmt"
 	"go/constant"
 	"strings"
 
@@ -353,7 +354,7 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 				} else if value.Ival == 1 {
 					ex.C.Value = &plan.Const_Bval{Bval: true}
 				} else {
-					return errors.New("", "the params type is not right")
+					return errors.New("", fmt.Sprintf("Can't cast '%v' as boolean type.", value.Ival))
 				}
 			}
 		}

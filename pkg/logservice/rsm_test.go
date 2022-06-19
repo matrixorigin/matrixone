@@ -210,15 +210,15 @@ func TestStateMachineLookup(t *testing.T) {
 	tsm.Index = 1234
 	tsm.LeaseHolderID = 123456
 	tsm.TruncatedIndex = 456789
-	v, err := tsm.Lookup(leaseHolderIDTag)
+	v, err := tsm.Lookup(leaseHolderIDQuery{})
 	assert.Nil(t, err)
 	assert.Equal(t, tsm.LeaseHolderID, v.(uint64))
 
-	v2, err := tsm.Lookup(truncatedIndexTag)
+	v2, err := tsm.Lookup(truncatedIndexQuery{})
 	assert.Nil(t, err)
 	assert.Equal(t, tsm.TruncatedIndex, v2.(uint64))
 
-	v3, err := tsm.Lookup(indexTag)
+	v3, err := tsm.Lookup(indexQuery{})
 	assert.Nil(t, err)
 	assert.Equal(t, tsm.Index, v3.(uint64))
 }

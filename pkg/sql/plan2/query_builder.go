@@ -436,7 +436,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	if len(selectList) == 0 {
-		return 0, errors.New(errno.SyntaxErrororAccessRuleViolation, "No tables used")
+		return 0, errors.New("", "No tables used")
 	}
 
 	if clause.Where != nil {
