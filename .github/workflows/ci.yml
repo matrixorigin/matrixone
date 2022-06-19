@@ -194,10 +194,10 @@ jobs:
           uniq -u cmp.txt
           if [ "$(uniq -u cmp.txt | wc -l)" -gt 0 ]; then echo 'Some cases passed in base but failed in head. Pls check head version'; exit 3; fi
           echo '--------Panic in head----------'
-          cat ./head-log/run.log | grep -in 'panic runtime error:'
+          cat ./head-log/run.log | grep -in 'panic runtime error:' || true
           echo '--------Panic in base----------'
-          cat ./base-log/run.log | grep -in 'panic runtime error:'
-          if [ "$( cat ./head-log/run.log | grep -in 'panic runtime error:' | wc -l )" -gt "$( cat ./base-log/run.log | grep -in 'panic runtime error:' | wc -l )" ]; then echo 'Less panic in base sha. Pls check head version'; exit 2; fi
+          cat ./base-log/run.log | grep -in 'panic runtime error:' || true
+          if [ "$( cat ./head-log/run.log | grep -in 'panic runtime error:' | wc -l || echo 0)" -gt "$( cat ./base-log/run.log | grep -in 'panic runtime error:' | wc -l || echo 0 )" ]; then echo 'Less panic in base sha. Pls check head version'; exit 2; fi
 
       - name: remove some files
         if: ${{ always() }}

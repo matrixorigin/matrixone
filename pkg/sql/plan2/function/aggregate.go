@@ -885,5 +885,14 @@ var aggregates = map[int][]Function{
 			TypeCheckFn:   strictTypeCheck,
 			AggregateInfo: aggregate.AnyValue,
 		},
+		{
+			Index:         17,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_timestamp},
+			ReturnTyp:     types.T_timestamp,
+			TypeCheckFn:   strictTypeCheck,
+			AggregateInfo: aggregate.AnyValue,
+		},
 	},
 }
