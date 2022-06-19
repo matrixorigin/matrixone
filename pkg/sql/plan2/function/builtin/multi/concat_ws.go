@@ -72,7 +72,6 @@ func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return concatWs(inputCleaned, separator, vectorIsConst, proc)
 		}
 	}
-	return nil, nil
 }
 
 func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
