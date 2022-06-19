@@ -117,7 +117,11 @@ func (vec *stdVector[T]) String() string {
 	for i := 0; i < end; i++ {
 		data = fmt.Sprintf("%s %v", data, vec.Get(i))
 	}
-	s = fmt.Sprintf("%s %s]", s, data)
+	if vec.Length() > end {
+		s = fmt.Sprintf("%s %s...]", s, data)
+	} else {
+		s = fmt.Sprintf("%s %s]", s, data)
+	}
 	return s
 }
 
