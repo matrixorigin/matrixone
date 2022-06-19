@@ -14,10 +14,15 @@ func NewStdVector[T any](opts ...*Options) *stdVector[T] {
 		slice: make([]T, 0),
 	}
 	var capacity int
+	var buf []byte
 	if len(opts) > 0 {
 		opt := opts[0]
 		capacity = opt.Capacity
 		vec.alloc = opt.Allocator
+		if opts[0].DataBuf != nil && len(opts[0].DataBuf) > 0 {
+			buf = opts[0].DataBuf
+			capacity = len(buf) / stl.Sizeof[T]()
+		}
 	}
 	if vec.alloc == nil {
 		vec.alloc = stl.DefaultAllocator
@@ -25,7 +30,13 @@ func NewStdVector[T any](opts ...*Options) *stdVector[T] {
 	if capacity == 0 {
 		capacity = 4
 	}
-	vec.tryExpand(capacity)
+	if buf != nil {
+		vec.buf = buf
+		vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), capacity)
+		vec.capacity = capacity
+	} else {
+		vec.tryExpand(capacity)
+	}
 	return vec
 }
 
@@ -33,11 +44,15 @@ func (vec *stdVector[T]) tryExpand(capacity int) {
 	if vec.capacity >= capacity {
 		return
 	}
-	newSize := stl.LengthOfVals[T](capacity)
+	newSize := stl.SizeOfMany[T](capacity)
 	vec.capacity = capacity
 	oldn := vec.node
 	if oldn != nil && newSize <= oldn.Size() {
 		return
+	} else if oldn == nil {
+		if newSize <= cap(vec.buf) {
+			return
+		}
 	}
 	newn := vec.alloc.Alloc(capacity * stl.Sizeof[T]())
 	buf := newn.GetBuf()[:0:newn.Size()]
@@ -61,12 +76,17 @@ func (vec *stdVector[T]) Close() {
 
 func (vec *stdVector[T]) GetAllocator() stl.MemAllocator { return vec.alloc }
 
-func (vec *stdVector[T]) IsView() bool   { return false }
-func (vec *stdVector[T]) Length() int    { return len(vec.slice) }
-func (vec *stdVector[T]) Capacity() int  { return vec.capacity }
-func (vec *stdVector[T]) Allocated() int { return vec.node.Size() }
-func (vec *stdVector[T]) Data() []byte   { return vec.buf }
-func (vec *stdVector[T]) Slice() []T     { return vec.slice }
+func (vec *stdVector[T]) IsView() bool  { return false }
+func (vec *stdVector[T]) Length() int   { return len(vec.slice) }
+func (vec *stdVector[T]) Capacity() int { return vec.capacity }
+func (vec *stdVector[T]) Allocated() int {
+	if vec.node != nil {
+		return vec.node.Size()
+	}
+	return 0
+}
+func (vec *stdVector[T]) Data() []byte { return vec.buf }
+func (vec *stdVector[T]) Slice() []T   { return vec.slice }
 func (vec *stdVector[T]) SliceWindow(offset, length int) []T {
 	return vec.slice[offset : offset+length]
 }

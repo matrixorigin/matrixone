@@ -7,6 +7,9 @@ import (
 type Options struct {
 	Capacity  int
 	Allocator stl.MemAllocator
+	DataBuf   []byte
+	OffsetBuf []byte
+	LengthBuf []byte
 }
 
 type stdVector[T any] struct {

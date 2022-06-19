@@ -1,8 +1,10 @@
 package container
 
 import (
+	"bytes"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/stretchr/testify/assert"
@@ -159,4 +161,35 @@ func TestVector5(t *testing.T) {
 	vec.Close()
 	t.Log(opts.Allocator.String())
 	assert.Equal(t, 0, opts.Allocator.Usage())
+}
+
+func TestVector6(t *testing.T) {
+	w := bytes.Buffer{}
+	for i := 0; i < 10; i++ {
+		v := int64(i)
+		vs := unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
+		w.Write(vs)
+	}
+	buf := w.Bytes()
+	t.Logf("cap:%d,size:%d", cap(buf), len(buf))
+	opts := &Options{
+		DataBuf: buf,
+	}
+	vec := NewVector[int64](opts)
+	t.Log(vec.String())
+	assert.Equal(t, 0, vec.Allocated())
+	vec.Update(3, int64(3333))
+	t.Log(vec.String())
+	slice := unsafe.Slice((*int64)(unsafe.Pointer(&buf[0])), vec.Length())
+	assert.Equal(t, int64(3333), slice[3])
+
+	vec.Update(4, int64(444))
+	assert.Equal(t, int64(444), slice[4])
+
+	vec.Append(int64(99))
+	assert.True(t, vec.Allocated() > 0)
+	t.Log(vec.String())
+
+	vec.Update(3, int64(4444))
+	assert.Equal(t, int64(3333), slice[3])
 }

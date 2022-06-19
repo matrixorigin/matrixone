@@ -7,7 +7,7 @@ func Sizeof[T any]() int {
 	return int(unsafe.Sizeof(v))
 }
 
-func LengthOfVals[T any](cnt int) int {
+func SizeOfMany[T any](cnt int) int {
 	var v T
 	return int(unsafe.Sizeof(v)) * cnt
 }
