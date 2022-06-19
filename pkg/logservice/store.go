@@ -108,7 +108,9 @@ type logStore struct {
 }
 
 func newLogStore(cfg Config) (*logStore, error) {
+	plog.Infof("creating nodehost")
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
+	plog.Infof("create nodehost returned")
 	if err != nil {
 		return nil, err
 	}

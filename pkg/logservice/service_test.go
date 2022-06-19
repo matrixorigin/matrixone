@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -369,4 +370,33 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		done = true
 	}
 	assert.True(t, done)
+}
+
+func TestGossipConvergeDelay(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	configs := make([]Config, 0)
+	services := make([]*Service, 0)
+	for i := uint64(0); i < 48; i++ {
+		plog.Infof("creating node: %d", i)
+		cfg := Config{
+			FS:                  vfs.NewStrictMem(),
+			DeploymentID:        1,
+			RTTMillisecond:      5,
+			DataDir:             fmt.Sprintf("data-%d", i),
+			ServiceAddress:      fmt.Sprintf("127.0.0.1:%d", 6000+10*i),
+			RaftAddress:         fmt.Sprintf("127.0.0.1:%d", 6000+10*i+1),
+			GossipAddress:       fmt.Sprintf("127.0.0.1:%d", 6000+10*i+2),
+			GossipSeedAddresses: []string{"127.0.0.1:6002", "127.0.0.1:6012"},
+		}
+		configs = append(configs, cfg)
+		plog.Infof("calling new service")
+		service, err := NewService(cfg)
+		plog.Infof("NewService returned")
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, service.Close())
+		}()
+		services = append(services, service)
+		plog.Infof("node %d created", i)
+	}
 }
