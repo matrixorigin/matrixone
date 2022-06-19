@@ -143,7 +143,7 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
-	corrCols []*plan.CorrColRef
+	isCorrelated bool
 
 	parent     *BindContext
 	leftChild  *BindContext

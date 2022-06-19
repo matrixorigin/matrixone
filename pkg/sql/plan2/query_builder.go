@@ -774,7 +774,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	case *tree.Select:
 		subCtx := NewBindContext(builder, ctx)
 		nodeId, err = builder.buildSelect(tbl, subCtx, false)
-		if len(subCtx.corrCols) > 0 {
+		if subCtx.isCorrelated {
 			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
 		}
 
@@ -811,7 +811,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					return
 				}
 
-				if len(subCtx.corrCols) > 0 {
+				if subCtx.isCorrelated {
 					return 0, errors.New(errno.InvalidColumnReference, "correlated column in CTE is not yet supported")
 				}
 

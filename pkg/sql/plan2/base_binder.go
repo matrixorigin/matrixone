@@ -374,7 +374,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	return parent.binder.BindColRef(astExpr, depth+1, isRoot)
+	expr, err = parent.binder.BindColRef(astExpr, depth+1, isRoot)
+
+	if err == nil {
+		b.ctx.isCorrelated = true
+	}
+
+	return
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
