@@ -57,6 +57,7 @@ func (vec *vector[T]) Allocated() int { return vec.impl.Allocated() }
 func (vec *vector[T]) GetAllocator() MemAllocator { return vec.impl.GetAllocator() }
 func (vec *vector[T]) GetType() types.Type        { return vec.typ }
 func (vec *vector[T]) String() string             { return vec.impl.String() }
+func (vec *vector[T]) Close()                     { vec.impl.Close() }
 
 func (vec *nullableVector[T]) Nullable() bool { return true }
 func (vec *nullableVector[T]) IsNull(i int) bool {

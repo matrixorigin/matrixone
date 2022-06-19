@@ -30,14 +30,14 @@ type Vector interface {
 	GetAllocator() stl.MemAllocator
 	GetType() types.Type
 	String() string
+
+	Close()
 }
 
-type AttrRef struct {
-	Name string
-	Id   int
-}
-
-type Batch interface {
-	AttrsRef() []*AttrRef
-	GetVectorByName(name string) Vector
+type Batch struct {
+	AttrName []string
+	AttrRef  []int
+	Vecs     []Vector
+	nameidx  map[string]int
+	refidx   map[int]int
 }
