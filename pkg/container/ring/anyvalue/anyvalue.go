@@ -31,7 +31,7 @@ import (
 
 type ts1 interface {
 	constraints.Integer | bool | types.Date | types.Datetime |
-		constraints.Float | types.Decimal64 | types.Decimal128
+		constraints.Float | types.Decimal64 | types.Decimal128 | types.Timestamp
 }
 
 // AnyVRing1 for bool / int / uint / float / date / datetime
@@ -194,6 +194,10 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 		return &AnyVRing1[int32]{Typ: typ}, nil
 	case types.T_int64:
 		return &AnyVRing1[int64]{Typ: typ}, nil
+	case types.T_float32:
+		return &AnyVRing1[float32]{Typ: typ}, nil
+	case types.T_float64:
+		return &AnyVRing1[float64]{Typ: typ}, nil
 	case types.T_char:
 		return &AnyVRing2{Typ: typ}, nil
 	case types.T_varchar:
@@ -206,6 +210,8 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 		return &AnyVRing1[types.Decimal64]{Typ: typ}, nil
 	case types.T_decimal128:
 		return &AnyVRing1[types.Decimal128]{Typ: typ}, nil
+	case types.T_timestamp:
+		return &AnyVRing1[types.Timestamp]{Typ: typ}, nil
 	}
 	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Any_Value do not support '%v'", typ.Oid))
 }
