@@ -485,7 +485,7 @@ var aggregates = map[int][]Function{
 			Args:          []types.T{types.T_uint8},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_float64,
-			AggregateInfo: aggregate.Sum,
+			AggregateInfo: aggregate.Avg,
 		},
 		{
 			Index:         1,
