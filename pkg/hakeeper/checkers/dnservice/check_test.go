@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/stretchr/testify/require"
@@ -192,8 +193,8 @@ func TestCheck(t *testing.T) {
 
 	// 1. no working dn stores
 	{
-		dnState := hakeeper.DNState{
-			Stores: map[string]hakeeper.DNStoreInfo{
+		dnState := hapb.DNState{
+			Stores: map[string]hapb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
 					Shards: []logservice.DNShardInfo{
@@ -215,8 +216,8 @@ func TestCheck(t *testing.T) {
 
 	// 2. running cluster
 	{
-		dnState := hakeeper.DNState{
-			Stores: map[string]hakeeper.DNStoreInfo{
+		dnState := hapb.DNState{
+			Stores: map[string]hapb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
 					Shards: []logservice.DNShardInfo{
@@ -266,6 +267,6 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-func mockClusterInfo() hakeeper.ClusterInfo {
-	return hakeeper.ClusterInfo{}
+func mockClusterInfo() hapb.ClusterInfo {
+	return hapb.ClusterInfo{}
 }
