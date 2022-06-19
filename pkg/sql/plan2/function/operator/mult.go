@@ -39,7 +39,7 @@ func Mult[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 		vector.SetCol(vec, mul.NumericMul(lvs, rvs, rs))
 		return vec, nil
-	case lv.IsScalar() && !lv.IsScalar():
+	case lv.IsScalar() && !rv.IsScalar():
 		vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(rvs)))
 		if err != nil {
 			return nil, err

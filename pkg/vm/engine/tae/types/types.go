@@ -49,6 +49,7 @@ type Timestamp = types.Timestamp
 type Decimal64 = types.Decimal64
 type Decimal128 = types.Decimal128
 type Bytes = types.Bytes
+type Null struct{}
 
 var CompareDecimal128Decimal128Aligned = types.CompareDecimal128Decimal128Aligned
 var FromClock = types.FromClock
@@ -64,4 +65,14 @@ type FixedSizeT interface {
 
 type VarSizeT interface {
 	Bytes
+}
+
+func IsNull(v any) bool {
+	_, ok := v.(Null)
+	return ok
+}
+
+func DefaultVal[T any]() T {
+	var v T
+	return v
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -148,6 +149,21 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 	return &deletion.Argument{
 		TableSource:  relation,
 		UseDeleteKey: n.UseDeleteKey,
+	}, nil
+}
+
+func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*insert.Argument, error) {
+	db, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	relation, err := db.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &insert.Argument{
+		TargetTable:   relation,
+		TargetColDefs: n.TableDef.Cols,
 	}, nil
 }
 
@@ -348,6 +364,7 @@ func constructGroup(n, cn *plan.Node) *group.Argument {
 		typs[i].Width = e.Typ.Width
 		typs[i].Size = e.Typ.Size
 		typs[i].Scale = e.Typ.Scale
+		typs[i].Precision = e.Typ.Precision
 	}
 	return &group.Argument{
 		Aggs:  aggs,

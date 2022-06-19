@@ -117,6 +117,13 @@ type DatetimeRing struct {
 	Typ types.Type
 }
 
+type TimestampRing struct {
+	Da  []byte
+	Vs  []types.Timestamp
+	Ns  []int64
+	Typ types.Type
+}
+
 type Decimal64Ring struct {
 	Es  []bool
 	Da  []byte

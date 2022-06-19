@@ -283,7 +283,8 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr) error {
 				if binding != nil {
 					exprImpl.Parts[1] = binding.table
 				} else {
-					return errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					// return errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					return errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", col))
 				}
 			}
 		}
@@ -412,7 +413,8 @@ func (bc *BindContext) qualifyColumnNamesAndExpandAlias(astExpr tree.Expr, selec
 				if binding != nil {
 					exprImpl.Parts[1] = binding.table
 				} else {
-					return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					// return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", col))
 				}
 			}
 		}

@@ -126,6 +126,7 @@ func (r *BitXorRing) Grows(size int, m *mheap.Mheap) error {
 		r.Data = data
 		r.Values = encoding.DecodeUint64Slice(data)
 	}
+	r.Data = r.Data[:(n+1)*8]
 	r.Values = r.Values[:n+size]
 	for i := 0; i < size; i++ {
 		r.Values[n+i] = 0

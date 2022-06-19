@@ -420,7 +420,7 @@ func TestTruncate3(t *testing.T) {
 		entries[i].Free()
 	}
 
-	s.TryCompact()
+	_ = s.TryCompact()
 	testutils.WaitExpect(400, func() bool {
 		return uint64(1) == s.GetCheckpointed(11)
 	})
