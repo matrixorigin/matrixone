@@ -53,9 +53,9 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query) {
 			n.OnList[i] = r.constantFold(n.OnList[i])
 		}
 	}
-	if len(n.WhereList) > 0 {
-		for i := range n.WhereList {
-			n.WhereList[i] = r.constantFold(n.WhereList[i])
+	if len(n.FilterList) > 0 {
+		for i := range n.FilterList {
+			n.FilterList[i] = r.constantFold(n.FilterList[i])
 		}
 	}
 	if len(n.ProjectList) > 0 {
@@ -100,31 +100,30 @@ func (r *ConstantFold) constantFold(e *plan.Expr) *plan.Expr {
 }
 
 func getConstantValue(vec *vector.Vector) *plan.Const {
+	if nulls.Any(vec.Nsp) {
+		return &plan.Const{Isnull: true}
+	}
 	switch vec.Typ.Oid {
 	case types.T_bool:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Bval{
 				Bval: vec.Col.([]bool)[0],
 			},
 		}
 	case types.T_int64:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Ival{
 				Ival: vec.Col.([]int64)[0],
 			},
 		}
 	case types.T_float64:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Dval{
 				Dval: vec.Col.([]float64)[0],
 			},
 		}
 	case types.T_varchar:
 		return &plan.Const{
-			Isnull: nulls.Any(vec.Nsp),
 			Value: &plan.Const_Sval{
 				Sval: string(vec.Col.(*types.Bytes).Data),
 			},
@@ -139,6 +138,14 @@ func isConstant(e *plan.Expr) bool {
 	case *plan.Expr_C:
 		return true
 	case *plan.Expr_F:
+		overloadId := ef.F.Func.GetObj()
+		f, err := function.GetFunctionByID(overloadId)
+		if err != nil {
+			return false
+		}
+		if f.Volatile { // function cannot be fold
+			return false
+		}
 		for i := range ef.F.Args {
 			if !isConstant(ef.F.Args[i]) {
 				return false

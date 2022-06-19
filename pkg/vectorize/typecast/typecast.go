@@ -15,6 +15,8 @@
 package typecast
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
+	"math"
 	"strconv"
 	"unsafe"
 
@@ -199,6 +201,30 @@ func IntToBytes[T constraints.Integer](xs []T, rs *types.Bytes) (*types.Bytes, e
 	return rs, nil
 }
 
+func Decimal64ToBytes(xs []types.Decimal64, rs *types.Bytes, scale int32) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, x.Decimal64ToString(scale)...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func Decimal128ToBytes(xs []types.Decimal128, rs *types.Bytes, scale int32) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = append(rs.Data, x.Decimal128ToString(scale)...)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
 func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 
@@ -241,9 +267,9 @@ func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]ty
 	return rs, nil
 }
 
-func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64) ([]types.Decimal64, error) {
+func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, scale int64) ([]types.Decimal64, error) {
 	for i, x := range xs {
-		rs[i] = types.InitDecimal64(int64(x))
+		rs[i] = types.InitDecimal64(int64(x), scale)
 	}
 	return rs, nil
 }
@@ -326,6 +352,31 @@ func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error)
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
 		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]types.Timestamp, error) {
+	for i, x := range xs {
+		rs[i] = types.Timestamp(x)
+	}
+	return rs, nil
+}
+
+func Decimal64ToTimestamp(xs []types.Decimal64, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+	for i, x := range xs {
+		ts := int64(x) / int64(math.Pow10(int(scale)))
+		rs[i] = types.Timestamp(ts)
+	}
+	return rs, nil
+}
+
+func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, rs []types.Timestamp) ([]types.Timestamp, error) {
+	bydel128 := types.InitDecimal128UsingUint(uint64(math.Pow10(int(scale))))
+	tempdel128 := make([]types.Decimal128, len(xs))
+	div.Decimal128DivByScalar(bydel128, xs, 0, scale, tempdel128)
+	for i, x := range tempdel128 {
+		rs[i] = types.Timestamp(x.Lo)
 	}
 	return rs, nil
 }

@@ -17,8 +17,8 @@ package varchar
 import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func Sort(col *vector.Vector, idx []uint32) {
@@ -404,6 +404,7 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint32, fromLayout, toL
 			Lengths: newLengths,
 		}
 	}
+	ret = make([]*vector.Vector, to)
 
 	for i := 0; i < to; i++ {
 		ret[i] = vector.New(col[0].Typ)

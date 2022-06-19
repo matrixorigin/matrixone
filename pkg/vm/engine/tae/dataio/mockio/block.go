@@ -19,7 +19,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type blockFile struct {
@@ -71,8 +71,8 @@ func (bf *blockFile) Fingerprint() *common.ID {
 }
 
 func (bf *blockFile) close() {
-	bf.Close()
-	bf.Destroy()
+	_ = bf.Close()
+	_ = bf.Destroy()
 }
 
 func (bf *blockFile) WriteRows(rows uint32) (err error) {
@@ -206,7 +206,9 @@ func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) (er
 		return err
 	}
 	defer cb.Close()
-	cb.WriteTS(ts)
+	if err = cb.WriteTS(ts); err != nil {
+		return
+	}
 	buf, err := vec.Show()
 	if err != nil {
 		return err
@@ -247,7 +249,9 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 			return err
 		}
 		defer cb.Close()
-		cb.WriteTS(ts)
+		if err = cb.WriteTS(ts); err != nil {
+			return err
+		}
 		vec, err := bat.GetVectorByAttr(colIdx)
 		if err != nil {
 			return err

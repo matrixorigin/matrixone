@@ -169,6 +169,14 @@ import (
 // }
 import "C"
 
+var Decimal128Max = Decimal128{}
+var Decimal128Min = Decimal128{}
+
+func init() {
+	Decimal128Max, _ = ParseStringToDecimal128("99999999999999999999999999999999999999", 38, 0)
+	Decimal128Min, _ = ParseStringToDecimal128("-99999999999999999999999999999999999999", 38, 0)
+}
+
 func ScaleDecimal64(a Decimal64, b int64) (result Decimal64) {
 	return Decimal64(int64(a) * b)
 }
@@ -287,8 +295,8 @@ func InitDecimal128(value int64) (result Decimal128) {
 	return result
 }
 
-func InitDecimal64(value int64) (result Decimal64) {
-	return Decimal64(value)
+func InitDecimal64(value int64, scale int64) (result Decimal64) {
+	return Decimal64(int64(math.Pow10(int(scale))) * value)
 }
 
 func InitDecimal128UsingUint(value uint64) (result Decimal128) {

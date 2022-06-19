@@ -60,6 +60,8 @@ func TestBlock1(t *testing.T) {
 	var w bytes.Buffer
 	dataStr := "hello tae"
 	w.WriteString(dataStr)
+	err = colBlk0.WriteTS(blockTs)
+	assert.Nil(t, err)
 	err = colBlk0.WriteData(w.Bytes())
 	assert.Nil(t, err)
 

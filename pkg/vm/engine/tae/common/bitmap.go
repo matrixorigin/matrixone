@@ -7,7 +7,7 @@ import (
 
 func BM32Window(bm *roaring.Bitmap, start, end int) *roaring.Bitmap {
 	new := roaring.NewBitmap()
-	if bm == nil || bm.GetCardinality() == 0 {
+	if bm == nil || bm.IsEmpty() {
 		return new
 	}
 	iterator := bm.Iterator()
@@ -25,7 +25,7 @@ func BM32Window(bm *roaring.Bitmap, start, end int) *roaring.Bitmap {
 
 func BM64Window(bm *roaring64.Bitmap, start, end int) *roaring64.Bitmap {
 	new := roaring64.NewBitmap()
-	if bm == nil || bm.GetCardinality() == 0 {
+	if bm == nil || bm.IsEmpty() {
 		return new
 	}
 	iterator := bm.Iterator()

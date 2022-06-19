@@ -23,6 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/roaring64"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -34,13 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-
-	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -387,14 +385,13 @@ func TestApplyToColumn1(t *testing.T) {
 	deletes.Add(1)
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
 	err := node.UpdateLocked(3, []byte("update"))
 	assert.Nil(t, err)
 	deletes.AddRange(3, 4)
 
-	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_varchar
+	vec := gvec.New(types.Type_VARCHAR.ToType())
 	col := &types.Bytes{
 		Data:    make([]byte, 0),
 		Offsets: make([]uint32, 0),
@@ -408,13 +405,7 @@ func TestApplyToColumn1(t *testing.T) {
 	}
 	vec.Col = col
 
-	vec.Nsp = &nulls.Nulls{}
-	vec.Nsp.Np = &roaring64.Bitmap{}
-	vec.Nsp.Np.Add(2)
-	// vec.Nsp.Np.Add(1)
-	// vec.Nsp.Np.Add(3)
-	vec.Nsp.Np.Add(4)
-	// vec.Nsp.Np.Add(0)
+	vec.Nsp.Np = roaring64.BitmapOf(2, 4)
 
 	fmt.Printf("%s\n%v\n->\n", vec.Col, vec.Nsp.Np)
 	res := node.ApplyToColumn(vec, deletes)
@@ -422,26 +413,19 @@ func TestApplyToColumn1(t *testing.T) {
 }
 
 func TestApplyToColumn2(t *testing.T) {
-	deletes := &roaring.Bitmap{}
-	deletes.Add(1)
+	deletes := roaring.BitmapOf(1)
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
 	err := node.UpdateLocked(0, int32(8))
 	assert.Nil(t, err)
 	deletes.AddRange(2, 4)
 
-	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_int32
+	vec := gvec.New(types.Type_INT32.ToType())
 	vec.Col = []int32{1, 2, 3, 4}
 
-	vec.Nsp = &nulls.Nulls{}
-	vec.Nsp.Np = &roaring64.Bitmap{}
-	vec.Nsp.Np.Add(2)
-	vec.Nsp.Np.Add(1)
-	vec.Nsp.Np.Add(3)
-	vec.Nsp.Np.Add(0)
+	vec.Nsp.Np = roaring64.BitmapOf(2, 1, 3, 0)
 
 	fmt.Printf("%v\n%v\n->\n", vec.Col, vec.Nsp.Np)
 	res := node.ApplyToColumn(vec, deletes)
@@ -451,13 +435,12 @@ func TestApplyToColumn2(t *testing.T) {
 func TestApplyToColumn3(t *testing.T) {
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
 	err := node.UpdateLocked(3, []byte("update"))
 	assert.Nil(t, err)
 
-	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_varchar
+	vec := gvec.New(types.Type_VARCHAR.ToType())
 	col := &types.Bytes{
 		Data:    make([]byte, 0),
 		Offsets: make([]uint32, 0),
@@ -471,7 +454,7 @@ func TestApplyToColumn3(t *testing.T) {
 	}
 	vec.Col = col
 
-	deletes := &roaring.Bitmap{}
+	deletes := roaring.New()
 	deletes.Add(1)
 	fmt.Printf("%s\n->\n", vec.Col)
 	res := node.ApplyToColumn(vec, deletes)
@@ -481,13 +464,12 @@ func TestApplyToColumn3(t *testing.T) {
 func TestApplyToColumn4(t *testing.T) {
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
-	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
 	node.AttachTo(chain)
 	err := node.UpdateLocked(3, int32(8))
 	assert.Nil(t, err)
 
-	vec := &gvec.Vector{}
-	vec.Typ.Oid = types.T_int32
+	vec := gvec.New(types.Type_INT32.ToType())
 	vec.Col = []int32{1, 2, 3, 4}
 
 	fmt.Printf("%v\n->\n", vec.Col)

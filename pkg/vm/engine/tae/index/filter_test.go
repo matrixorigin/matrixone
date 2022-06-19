@@ -19,13 +19,13 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStaticFilterNumeric(t *testing.T) {
-	typ := types.Type{Oid: types.T_int32}
+	typ := types.Type{Oid: types.Type_INT32}
 	data := compute.MockVec(typ, 40000, 0)
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 }
 
 func TestStaticFilterString(t *testing.T) {
-	typ := types.Type{Oid: types.T_varchar}
+	typ := types.Type{Oid: types.Type_VARCHAR}
 	data := compute.MockVec(typ, 40000, 0)
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)

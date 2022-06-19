@@ -38,7 +38,414 @@ func initOperators() {
 
 // operators contains the operator function indexed by function id.
 var operators = map[int][]Function{
+	// is null operator
+	ISNULL: {
+		{
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint8,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[uint8],
+		},
+		{
+			Index:  1,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint16,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[uint16],
+		},
+		{
+			Index:  2,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint32,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[uint32],
+		},
+		{
+			Index:  3,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[uint64],
+		},
+		{
+			Index:  4,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int8,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[int8],
+		},
+		{
+			Index:  5,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int16,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[int16],
+		},
+		{
+			Index:  6,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int32,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[int32],
+		},
+		{
+			Index:  7,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[int64],
+		},
+		{
+			Index:  8,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_float32,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[float32],
+		},
+		{
+			Index:  9,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_float64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[float64],
+		},
+		{
+			Index:  10,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_decimal64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[types.Decimal64],
+		},
+		{
+			Index:  11,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_decimal128,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[types.Decimal128],
+		},
+		{
+			Index:  12,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[string],
+		},
+		{
+			Index:  13,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[string],
+		},
+		{
+			Index:  14,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[types.Date],
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[types.Datetime],
+		},
+		{
+			Index:  16,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNull[bool],
+		},
+	},
+	ISNOTNULL: {
+		{
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint8,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[uint8],
+		},
+		{
+			Index:  1,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint16,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[uint16],
+		},
+		{
+			Index:  2,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint32,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[uint32],
+		},
+		{
+			Index:  3,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_uint64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[uint64],
+		},
+		{
+			Index:  4,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int8,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[int8],
+		},
+		{
+			Index:  5,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int16,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[int16],
+		},
+		{
+			Index:  6,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int32,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[int32],
+		},
+		{
+			Index:  7,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_int64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[int64],
+		},
+		{
+			Index:  8,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_float32,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[float32],
+		},
+		{
+			Index:  9,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_float64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[float64],
+		},
+		{
+			Index:  10,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_decimal64,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[types.Decimal64],
+		},
+		{
+			Index:  11,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_decimal128,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[types.Decimal128],
+		},
+		{
+			Index:  12,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_varchar,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[string],
+		},
+		{
+			Index:  13,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_char,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[string],
+		},
+		{
+			Index:  14,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_date,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[types.Date],
+		},
+		{
+			Index:  15,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_datetime,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[types.Datetime],
+		},
+		{
+			Index:  16,
+			Flag:   plan.Function_STRICT,
+			Layout: IS_NULL_EXPRESSION,
+			Args: []types.T{
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNotNull[bool],
+		},
+	},
 	// comparison operator
+	IS: {
+		{
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Is,
+		},
+	},
+	ISNOT: {
+		{
+			Index:  0,
+			Flag:   plan.Function_STRICT,
+			Layout: COMPARISON_OPERATOR,
+			Args: []types.T{
+				types.T_bool,
+				types.T_bool,
+			},
+			ReturnTyp:   types.T_bool,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.IsNot,
+		},
+	},
 	EQUAL: {
 		{
 			Index:  0,
@@ -3855,10 +4262,128 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.Cast,
 		},
+		{
+			Index:       182,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal64, types.T_varchar},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       183,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal128, types.T_varchar},
+			ReturnTyp:   types.T_varchar,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       184,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_timestamp, types.T_date},
+			ReturnTyp:   types.T_date,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       185,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_int8, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       186,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_int16, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       187,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_int32, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       188,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_int64, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       189,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint8, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       190,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint16, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       191,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint32, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       192,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_uint64, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       193,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal64, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       194,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal128, types.T_timestamp},
+			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
 	},
 	CASE: {
 		{
 			Index:       0,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int8,
@@ -3867,6 +4392,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       1,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int16,
@@ -3875,6 +4401,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       2,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int32,
@@ -3883,6 +4410,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       3,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_int64,
@@ -3891,6 +4419,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       4,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint8,
@@ -3899,6 +4428,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       5,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint16,
@@ -3907,6 +4437,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       6,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint32,
@@ -3915,6 +4446,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       7,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_uint64,
@@ -3923,6 +4455,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       8,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_float32,
@@ -3931,6 +4464,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       9,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_float64,
@@ -3939,6 +4473,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       10,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_bool,
@@ -3947,6 +4482,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       11,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_date,
@@ -3955,6 +4491,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       12,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_datetime,
@@ -3963,6 +4500,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       13,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_varchar,
@@ -3971,6 +4509,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       14,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_char,
@@ -3979,6 +4518,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       15,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_decimal64,
@@ -3987,6 +4527,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       16,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      CASE_WHEN_EXPRESSION,
 			ReturnTyp:   types.T_decimal128,
@@ -3997,6 +4538,7 @@ var operators = map[int][]Function{
 	IFF: {
 		{
 			Index:       0,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int8,
@@ -4005,6 +4547,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       1,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int16,
@@ -4013,6 +4556,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       2,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int32,
@@ -4021,6 +4565,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       3,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_int64,
@@ -4029,6 +4574,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       4,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint8,
@@ -4037,6 +4583,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       5,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint16,
@@ -4045,6 +4592,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       6,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint32,
@@ -4053,6 +4601,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       7,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_uint64,
@@ -4061,6 +4610,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       8,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_float32,
@@ -4069,6 +4619,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       9,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_float64,
@@ -4077,6 +4628,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       10,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_bool,
@@ -4085,6 +4637,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       11,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_date,
@@ -4093,6 +4646,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       12,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_datetime,
@@ -4101,6 +4655,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       13,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_varchar,
@@ -4109,6 +4664,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       14,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_char,
@@ -4117,6 +4673,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       15,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_decimal64,
@@ -4125,6 +4682,7 @@ var operators = map[int][]Function{
 		},
 		{
 			Index:       16,
+			Volatile:    true,
 			Flag:        plan.Function_NONE,
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_decimal128,

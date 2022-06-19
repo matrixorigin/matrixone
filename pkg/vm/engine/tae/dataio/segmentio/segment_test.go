@@ -106,9 +106,6 @@ func TestSegmentFile_Replay(t *testing.T) {
 	}
 
 	seg = SegmentFactory.Build(dir, id)
-	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
-	err := seg.Replay(colCnt, indexCnt, cache)
-	assert.Nil(t, err)
 	for i := 0; i < 20; i++ {
 		block, err := seg.OpenBlock(ids[i], colCnt, indexCnt)
 		assert.Nil(t, err)
@@ -137,6 +134,7 @@ func TestSegmentFile_Replay(t *testing.T) {
 		_, err = inx.Read(dbuf)
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
+		inx.Unref()
 		update, err := colBlk0.OpenUpdateFile()
 		assert.Nil(t, err)
 		buf = make([]byte, size)
@@ -153,8 +151,13 @@ func TestSegmentFile_Replay(t *testing.T) {
 		dbuf, err = compress.Decompress(buf, dbuf, compress.Lz4)
 		assert.Nil(t, err)
 		assert.Equal(t, dataStr, string(dbuf))
+		update.Unref()
 		colBlk0.Close()
 
 		block.Unref()
 	}
+	assert.Equal(t, 1, len(seg.(*segmentFile).driver.nodes))
+
+	segReplay := SegmentFactory.Build(dir, id)
+	assert.Equal(t, 1, len(segReplay.(*segmentFile).driver.nodes))
 }

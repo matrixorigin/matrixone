@@ -32,6 +32,11 @@ const (
 	Projection
 	Complement
 
+	LoopJoin
+	LoopLeft
+	LoopSemi
+	LoopComplement
+
 	MergeTop
 	MergeLimit
 	MergeOrder
@@ -39,4 +44,6 @@ const (
 	MergeOffset
 
 	Deletion
+	Insert
+	Update
 )

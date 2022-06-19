@@ -39,6 +39,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	return bc
 }
 
+func (bc *BindContext) rootTag() int32 {
+	if bc.resultTag > 0 {
+		return bc.resultTag
+	} else {
+		return bc.projectTag
+	}
+}
+
 func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
@@ -114,7 +122,7 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, rig
 
 	leftPos := leftBinding.colIdByName[col]
 	rightPos := rightBinding.colIdByName[col]
-	expr, err := bc.binder.(*TableBinder).bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+	expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
 		{
 			Typ: leftBinding.types[leftPos],
 			Expr: &plan.Expr_Col{
@@ -275,7 +283,8 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr) error {
 				if binding != nil {
 					exprImpl.Parts[1] = binding.table
 				} else {
-					return errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					// return errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					return errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", col))
 				}
 			}
 		}
@@ -404,7 +413,8 @@ func (bc *BindContext) qualifyColumnNamesAndExpandAlias(astExpr tree.Expr, selec
 				if binding != nil {
 					exprImpl.Parts[1] = binding.table
 				} else {
-					return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					// return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference %q is ambiguous", col))
+					return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", col))
 				}
 			}
 		}

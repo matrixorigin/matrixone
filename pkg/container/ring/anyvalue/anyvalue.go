@@ -17,6 +17,7 @@ package anyvalue
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -175,6 +176,8 @@ func DecodeAnyRing2(data []byte) (*AnyVRing2, []byte, error) {
 
 func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return &AnyVRing1[bool]{Typ: typ}, nil
 	case types.T_uint8:
 		return &AnyVRing1[uint8]{Typ: typ}, nil
 	case types.T_uint16:
@@ -204,7 +207,7 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 	case types.T_decimal128:
 		return &AnyVRing1[types.Decimal128]{Typ: typ}, nil
 	}
-	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("'%v' not support Any_Value", typ.Oid))
+	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Any_Value do not support '%v'", typ.Oid))
 }
 
 // shouldSet returns true means we should assign the value
@@ -337,6 +340,7 @@ func (r *AnyVRing1[T]) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeFixedSlice[T](data, itemSize)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*itemSize]
 	r.Set = append(r.Set, false)
 	r.Ns = append(r.Ns, 0)
 	return nil
@@ -380,6 +384,7 @@ func (r *AnyVRing1[T]) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeFixedSlice[T](data, itemSize)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*itemSize]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Set = append(r.Set, false)
@@ -459,7 +464,7 @@ func (r *AnyVRing2) BatchFill(start int64, os []uint8, vps []uint64, zs []int64,
 				r.Ns[vps[i]-1] += zs[int64(i)+start]
 			} else {
 				j := vps[i] - 1
-				if v := vs.Get(int64(i) + start); shouldSet(r.Set[i]) {
+				if v := vs.Get(int64(i) + start); shouldSet(r.Set[j]) {
 					r.Vs[j] = append(r.Vs[j][:0], v...)
 					r.Set[j] = true
 				}
@@ -468,7 +473,7 @@ func (r *AnyVRing2) BatchFill(start int64, os []uint8, vps []uint64, zs []int64,
 	} else {
 		for i := range os {
 			j := vps[i] - 1
-			if v := vs.Get(int64(i) + start); shouldSet(r.Set[i]) {
+			if v := vs.Get(int64(i) + start); shouldSet(r.Set[j]) {
 				r.Vs[j] = append(r.Vs[j][:0], v...)
 				r.Set[j] = true
 			}

@@ -22,3 +22,24 @@ jobs:
       with:
         config: './.markdownlint.yaml'
         args: './docs/cn ./docs/en'
+
+  tae-sca:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    name: SCA Test on CentOS/x64
+    steps:
+      - run: 'echo "No build required" '
+
+  tae-ut:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    name: UT Test on CentOS/x64
+    steps:
+      - run: 'echo "No build required" '
+
+  tae-bvt:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    name: BVT Test on CentOS/x64
+    steps:
+      - run: 'echo "No build required" '

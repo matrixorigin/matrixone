@@ -22,7 +22,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestAssignID(t *testing.T) {
@@ -133,12 +134,12 @@ func TestHandleLogHeartbeat(t *testing.T) {
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 
-	hb := logservice.LogStoreHeartbeat{
+	hb := pb.LogStoreHeartbeat{
 		UUID:           "uuid1",
 		RaftAddress:    "localhost:9090",
 		ServiceAddress: "localhost:9091",
 		GossipAddress:  "localhost:9092",
-		Shards: []logservice.LogShardInfo{
+		Shards: []pb.LogShardInfo{
 			{
 				ShardID: 100,
 				Replicas: map[uint64]string{
@@ -188,9 +189,9 @@ func TestHandleDNHeartbeat(t *testing.T) {
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 
-	hb := logservice.DNStoreHeartbeat{
+	hb := pb.DNStoreHeartbeat{
 		UUID: "uuid1",
-		Shards: []logservice.DNShardInfo{
+		Shards: []pb.DNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1},
 			{ShardID: 3, ReplicaID: 1},
@@ -208,4 +209,87 @@ func TestHandleDNHeartbeat(t *testing.T) {
 	assert.Equal(t, uint64(3), dninfo.Tick)
 	require.Equal(t, 3, len(dninfo.Shards))
 	assert.Equal(t, hb.Shards, dninfo.Shards)
+}
+
+func TestGetIDCmd(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	cmd := GetGetIDCmd(100)
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 1}, result)
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 101}, result)
+	assert.Equal(t, uint64(201), tsm1.assignID())
+
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 202}, result)
+}
+
+func TestUpdateScheduleCommandsCmd(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	sc1 := hapb.ScheduleCommand{
+		UUID: "uuid1",
+		ConfigChange: hapb.ConfigChange{
+			Replica: hapb.Replica{
+				ShardID: 1,
+			},
+		},
+	}
+	sc2 := hapb.ScheduleCommand{
+		UUID: "uuid2",
+		ConfigChange: hapb.ConfigChange{
+			Replica: hapb.Replica{
+				ShardID: 2,
+			},
+		},
+	}
+	sc3 := hapb.ScheduleCommand{
+		UUID: "uuid1",
+		ConfigChange: hapb.ConfigChange{
+			Replica: hapb.Replica{
+				ShardID: 3,
+			},
+		},
+	}
+	sc4 := hapb.ScheduleCommand{
+		UUID: "uuid3",
+		ConfigChange: hapb.ConfigChange{
+			Replica: hapb.Replica{
+				ShardID: 4,
+			},
+		},
+	}
+
+	b := hapb.CommandBatch{
+		Term:     101,
+		Commands: []hapb.ScheduleCommand{sc1, sc2, sc3},
+	}
+	cmd := GetUpdateCommandsCmd(b.Term, b.Commands)
+	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, b.Term, tsm1.term)
+	require.Equal(t, 2, len(tsm1.scheduleCommands))
+	l1, ok := tsm1.scheduleCommands["uuid1"]
+	assert.True(t, ok)
+	assert.Equal(t, []hapb.ScheduleCommand{sc1, sc3}, l1)
+	l2, ok := tsm1.scheduleCommands["uuid2"]
+	assert.True(t, ok)
+	assert.Equal(t, []hapb.ScheduleCommand{sc2}, l2)
+
+	cmd2 := GetUpdateCommandsCmd(b.Term-1,
+		[]hapb.ScheduleCommand{sc1, sc2, sc3, sc4})
+	result, err = tsm1.Update(sm.Entry{Cmd: cmd2})
+	require.NoError(t, err)
+	assert.Equal(t, sm.Result{}, result)
+	assert.Equal(t, b.Term, tsm1.term)
+	require.Equal(t, 2, len(tsm1.scheduleCommands))
+	l1, ok = tsm1.scheduleCommands["uuid1"]
+	assert.True(t, ok)
+	assert.Equal(t, []hapb.ScheduleCommand{sc1, sc3}, l1)
+	l2, ok = tsm1.scheduleCommands["uuid2"]
+	assert.True(t, ok)
+	assert.Equal(t, []hapb.ScheduleCommand{sc2}, l2)
 }

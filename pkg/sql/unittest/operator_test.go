@@ -1608,10 +1608,10 @@ func TestComparisonOperator(t *testing.T) {
 				{"2007-01-01 12:13:04"},
 			},
 		}},
-		{sql: "select d1 from dds where d1 >= '2012=02=3';", err: "[22000]Incorrect date value"},
-		{sql: "select d1 from dds where '2012=02=3' >= d1;", err: "[22000]Incorrect date value"},
-		{sql: "select d2 from dds where d2 >= '2012=02=3';", err: "[22000]Incorrect datetime value"},
-		{sql: "select d2 from dds where '2012=02=3' >= d2;", err: "[22000]Incorrect datetime value"},
+		{sql: "select d1 from dds where d1 >= '2012=02=3';", err: "Incorrect date value"},
+		{sql: "select d1 from dds where '2012=02=3' >= d1;", err: "Incorrect date value"},
+		{sql: "select d2 from dds where d2 >= '2012=02=3';", err: "Incorrect datetime value"},
+		{sql: "select d2 from dds where '2012=02=3' >= d2;", err: "Incorrect datetime value"},
 		// test IN and NOT IN operator
 		{sql: "select * from iis where i4 in (1);", res: executeResult{
 			null: false,

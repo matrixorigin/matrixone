@@ -96,32 +96,23 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 
 	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
-		if len(s) < 19 {
+		// yyyy-mm-dd hh:mm:ss(.msec)
+		if len(s) < 19 || s[7] != '-' || s[10] != ' ' || s[13] != ':' || s[16] != ':' {
 			return -1, errIncorrectDatetimeValue
 		}
 		month = (s[5]-'0')*10 + (s[6] - '0')
-		if s[7] != '-' {
-			return -1, errIncorrectDatetimeValue
-		}
 		day = (s[8]-'0')*10 + (s[9] - '0')
-		if s[10] != ' ' {
-			return -1, errIncorrectDatetimeValue
-		}
 		if !validDate(year, month, day) {
 			return -1, errIncorrectDatetimeValue
 		}
+
 		hour = (s[11]-'0')*10 + (s[12] - '0')
-		if s[13] != ':' {
-			return -1, errIncorrectDatetimeValue
-		}
 		minute = (s[14]-'0')*10 + (s[15] - '0')
-		if s[16] != ':' {
-			return -1, errIncorrectDatetimeValue
-		}
 		second = (s[17]-'0')*10 + (s[18] - '0')
 		if !validTimeInDay(hour, minute, second) {
 			return -1, errIncorrectDatetimeValue
 		}
+
 		if len(s) > 19 {
 			if len(s) > 20 && s[19] == '.' {
 				msecStr := s[20:]
@@ -209,6 +200,21 @@ func (dt Datetime) Clock() (hour, min, sec int8) {
 	return
 }
 
+func (dt Datetime) Sec() int8 {
+	_, _, sec := dt.Clock()
+	return sec
+}
+
+func (dt Datetime) Minute() int8 {
+	_, minute, _ := dt.Clock()
+	return minute
+}
+
+func (dt Datetime) Hour() int8 {
+	hour, _, _ := dt.Clock()
+	return hour
+}
+
 func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Datetime {
 	days := FromCalendar(year, month, day)
 	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec)
@@ -217,7 +223,7 @@ func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Dateti
 
 func (dt Datetime) ConvertToGoTime() gotime.Time {
 	y, m, d, _ := dt.ToDate().Calendar(true)
-	msec := dt.microSec()
+	msec := dt.MicroSec()
 	hour, min, sec := dt.Clock()
 	return gotime.Date(int(y), gotime.Month(m), int(d), int(hour), int(min), int(sec), int(msec*1000), startupTime.Location())
 }
@@ -292,7 +298,7 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, isDate bool) (Datet
 	return dt.AddDateTime(goTime, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear, isDate)
 }
 
-func (dt Datetime) microSec() int64 {
+func (dt Datetime) MicroSec() int64 {
 	return int64(dt) << 44 >> 44
 }
 
@@ -314,6 +320,61 @@ func (dt Datetime) Day() uint8 {
 
 func (dt Datetime) WeekOfYear() (int32, uint8) {
 	return dt.ToDate().WeekOfYear()
+}
+
+func (dt Datetime) SecondMicrosecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Sec()) + "." + fmt.Sprintf("%06d", dt.MicroSec())
+	return result
+}
+
+func (dt Datetime) MinuteMicrosecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec()) + "." + fmt.Sprintf("%06d", dt.MicroSec())
+	return result
+}
+
+func (dt Datetime) MinuteSecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec())
+	return result
+}
+
+func (dt Datetime) HourMicrosecondStr() string {
+	result := fmt.Sprintf("%2d", dt.Hour()) + ":" + fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec()) + "." + fmt.Sprintf("%06d", dt.MicroSec())
+	return result
+}
+
+func (dt Datetime) HourSecondStr() string {
+	result := fmt.Sprintf("%2d", dt.Hour()) + ":" + fmt.Sprintf("%02d", dt.Minute()) + ":" + fmt.Sprintf("%02d", dt.Sec())
+	return result
+}
+
+func (dt Datetime) HourMinuteStr() string {
+	result := fmt.Sprintf("%2d", dt.Hour()) + ":" + fmt.Sprintf("%02d", dt.Minute())
+	return result
+}
+
+func (dt Datetime) DayMicrosecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + dt.HourMicrosecondStr()
+	return result
+}
+
+func (dt Datetime) DaySecondStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + dt.HourSecondStr()
+	return result
+}
+
+func (dt Datetime) DayMinuteStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + dt.HourMinuteStr()
+	return result
+}
+
+func (dt Datetime) DayHourStr() string {
+	result := fmt.Sprintf("%02d", dt.Day()) + " " + fmt.Sprintf("%02d", dt.Hour())
+	return result
+}
+
+func (dt Datetime) YearMonthStr() string {
+	result := fmt.Sprintf("%04d", dt.Year()) + " " + fmt.Sprintf("%02d", dt.Month())
+	return result
 }
 
 // date[0001-01-01 00:00:00 to 9999-12-31 23:59:59]
