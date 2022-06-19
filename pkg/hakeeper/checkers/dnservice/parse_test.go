@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/stretchr/testify/require"
@@ -30,8 +31,8 @@ func TestParseDNState(t *testing.T) {
 
 	// 1. no working dn stores
 	{
-		dnState := hakeeper.DNState{
-			Stores: map[string]hakeeper.DNStoreInfo{
+		dnState := hapb.DNState{
+			Stores: map[string]hapb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
 					Shards: []logservice.DNShardInfo{
@@ -69,8 +70,8 @@ func TestParseDNState(t *testing.T) {
 
 	// 2. verbose running shard replica
 	{
-		dnState := hakeeper.DNState{
-			Stores: map[string]hakeeper.DNStoreInfo{
+		dnState := hapb.DNState{
+			Stores: map[string]hapb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
 					Shards: []logservice.DNShardInfo{

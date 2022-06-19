@@ -22,7 +22,8 @@ package operator
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
 type OpStep interface {

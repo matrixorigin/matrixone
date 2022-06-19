@@ -100,7 +100,7 @@ func (l *logStore) healthCheck() {
 			// TODO: check whether this is temp error
 			return
 		}
-		state := s.(*hakeeper.HAKeeperState)
+		state := s.(*hapb.HAKeeperState)
 		cmds := l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
 		if len(cmds) > 0 {

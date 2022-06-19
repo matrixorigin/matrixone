@@ -75,9 +75,9 @@ type stateMachine struct {
 	Tick        uint64
 	NextID      uint64
 	LogShards   map[string]uint64 // keyed by Log Shard name
-	DNState     DNState
-	LogState    LogState
-	ClusterInfo ClusterInfo
+	DNState     hapb.DNState
+	LogState    hapb.LogState
+	ClusterInfo hapb.ClusterInfo
 }
 
 func parseCmdTag(cmd []byte) uint16 {
@@ -193,8 +193,8 @@ func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 		replicaID:        replicaID,
 		scheduleCommands: make(map[string][]hapb.ScheduleCommand),
 		LogShards:        make(map[string]uint64),
-		DNState:          NewDNState(),
-		LogState:         NewLogState(),
+		DNState:          hapb.NewDNState(),
+		LogState:         hapb.NewLogState(),
 	}
 }
 
@@ -299,7 +299,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) handleStateQuery() interface{} {
 	// FIXME: pretty sure we need to deepcopy here
-	return &HAKeeperState{
+	return &hapb.HAKeeperState{
 		Tick:        s.Tick,
 		ClusterInfo: s.ClusterInfo,
 		DNState:     s.DNState,
