@@ -2,6 +2,7 @@ package container
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
@@ -9,9 +10,26 @@ import (
 func NewStrVector[T any](opts ...*Options) *strVector[T] {
 	var capacity int
 	var alloc stl.MemAllocator
+	lenOpt := new(Options)
+	offOpt := new(Options)
+	dataOpt := new(Options)
 	if len(opts) > 0 {
-		capacity = opts[0].Capacity
-		alloc = opts[0].Allocator
+		opt := opts[0]
+		capacity = opt.Capacity
+		alloc = opt.Allocator
+		if opt.HasData() {
+			lenOpt.Data = new(stl.Bytes)
+			offOpt.Data = new(stl.Bytes)
+			dataOpt.Data = new(stl.Bytes)
+			data := opt.Data.Length
+			lenOpt.Data.Data = unsafe.Slice((*byte)(unsafe.Pointer(&data[0])),
+				len(data)*stl.Sizeof[uint32]())
+			data = opt.Data.Offset
+			offOpt.Data.Data = unsafe.Slice((*byte)(unsafe.Pointer(&data[0])),
+				len(data)*stl.Sizeof[uint32]())
+			capacity = len(data)
+			dataOpt.Data.Data = opt.Data.Data
+		}
 	}
 	if alloc == nil {
 		alloc = stl.DefaultAllocator
@@ -19,12 +37,15 @@ func NewStrVector[T any](opts ...*Options) *strVector[T] {
 	if capacity == 0 {
 		capacity = 4
 	}
-	opt := new(Options)
-	opt.Capacity = capacity
-	opt.Allocator = alloc
-	offsets := NewStdVector[uint32](opt)
-	lengths := NewStdVector[uint32](opt)
-	data := NewStdVector[byte](opt)
+	lenOpt.Capacity = capacity
+	lenOpt.Allocator = alloc
+	offOpt.Capacity = capacity
+	offOpt.Allocator = alloc
+	dataOpt.Capacity = capacity
+	dataOpt.Allocator = alloc
+	offsets := NewStdVector[uint32](offOpt)
+	lengths := NewStdVector[uint32](lenOpt)
+	data := NewStdVector[byte](dataOpt)
 
 	return &strVector[T]{
 		offsets: offsets,
@@ -174,4 +195,12 @@ func (vec *strVector[T]) Clone(offset, length int) stl.Vector[T] {
 	cloned.data.AppendMany(vec.data.Slice()[start : eoff+elen]...)
 
 	return cloned
+}
+
+func (vec *strVector[T]) Bytes() *stl.Bytes {
+	bs := new(stl.Bytes)
+	bs.Data = vec.data.Slice()
+	bs.Offset = vec.offsets.Slice()
+	bs.Length = vec.lengths.Slice()
+	return bs
 }

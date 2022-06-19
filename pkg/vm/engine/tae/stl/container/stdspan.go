@@ -35,6 +35,11 @@ func (span *stdSpan[T]) SliceWindow(offset, length int) []T {
 	return span.slice[offset : offset+length]
 }
 func (span *stdSpan[T]) Data() []byte { return span.buf }
+func (span *stdSpan[T]) Bytes() *stl.Bytes {
+	bs := new(stl.Bytes)
+	bs.Data = span.buf
+	return bs
+}
 func (span *stdSpan[T]) DataWindow(offset, length int) []byte {
 	start := offset * stl.Sizeof[T]()
 	end := start + length*stl.Sizeof[T]()

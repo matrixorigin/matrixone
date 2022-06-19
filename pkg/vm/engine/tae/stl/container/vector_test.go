@@ -83,7 +83,7 @@ func TestVector3(t *testing.T) {
 	assert.Equal(t, "h4", string(vec.Get(3)))
 	t.Log(vec.String())
 	alloc := vec.GetAllocator()
-	t.Log(stl.DefaultPool.String())
+	t.Log(alloc.String())
 	vec.Close()
 	assert.Equal(t, 0, alloc.Usage())
 }
@@ -105,7 +105,7 @@ func TestVector4(t *testing.T) {
 	assert.Equal(t, "h4", string(vec.Get(2)))
 	t.Log(vec.String())
 	alloc := vec.GetAllocator()
-	t.Log(stl.DefaultPool.String())
+	t.Log(alloc.String())
 	vec.Close()
 	assert.Equal(t, 0, alloc.Usage())
 }
@@ -173,7 +173,7 @@ func TestVector6(t *testing.T) {
 	buf := w.Bytes()
 	t.Logf("cap:%d,size:%d", cap(buf), len(buf))
 	opts := &Options{
-		DataBuf: buf,
+		Data: &stl.Bytes{Data: buf},
 	}
 	vec := NewVector[int64](opts)
 	t.Log(vec.String())
@@ -192,4 +192,55 @@ func TestVector6(t *testing.T) {
 
 	vec.Update(3, int64(4444))
 	assert.Equal(t, int64(3333), slice[3])
+}
+
+func TestVector7(t *testing.T) {
+	allocator := stl.NewSimpleAllocator()
+	opts := new(Options)
+	opts.Allocator = allocator
+	vec := NewVector[int16](opts)
+	vec.Append(int16(1))
+	vec.Append(int16(2))
+	vec.Append(int16(3))
+	d := vec.Data()
+	assert.Equal(t, len(d), 3*stl.Sizeof[int16]())
+	s := vec.Slice()
+	assert.Equal(t, 3, len(s))
+	vec.Close()
+
+	vec3 := NewVector[byte](opts)
+	vec3.AppendMany([]byte("world")...)
+	s2 := vec3.Slice()
+	assert.Equal(t, 5, len(s2))
+	d = vec3.Data()
+	assert.Equal(t, 5, len(d))
+	vec3.Close()
+	assert.Equal(t, 0, allocator.Usage())
+
+	vec2 := NewVector[[]byte](opts)
+	vec2.Append([]byte("h1"))
+	vec2.Append([]byte("hh2"))
+	vec2.Append([]byte("hhh3"))
+	vec2.Append([]byte("hhhh4"))
+	bs := vec2.Bytes()
+	assert.Equal(t, 14, len(bs.Data))
+	assert.Equal(t, 4, len(bs.Offset))
+	assert.Equal(t, 4, len(bs.Length))
+	t.Log(vec2.String())
+
+	allocated := allocator.Usage()
+
+	opt2 := new(Options)
+	opt2.Allocator = allocator
+	opt2.Data = bs
+
+	vec4 := NewVector[[]byte](opt2)
+	assert.Equal(t, vec2.Length(), vec4.Length())
+	assert.Equal(t, vec2.Get(0), vec4.Get(0))
+	assert.Equal(t, vec2.Get(1), vec4.Get(1))
+	assert.Equal(t, vec2.Get(2), vec4.Get(2))
+	assert.Equal(t, vec2.Get(3), vec4.Get(3))
+	assert.Equal(t, allocated, allocator.Usage())
+
+	vec2.Close()
 }

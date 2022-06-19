@@ -4,7 +4,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-var DefaultPool *common.Mempool
 var DefaultAllocator MemAllocator
 
 type MemNode interface {
@@ -20,28 +19,31 @@ type MemAllocator interface {
 }
 
 func init() {
-	DefaultPool = common.NewMempool(common.UNLIMIT)
-	DefaultAllocator = new(simpleAllocator)
+	DefaultAllocator = NewSimpleAllocator()
 }
 
 func NewSimpleAllocator() MemAllocator {
-	return new(simpleAllocator)
+	allocator := new(simpleAllocator)
+	allocator.pool = common.NewMempool(common.UNLIMIT)
+	return allocator
 }
 
-type simpleAllocator struct{}
+type simpleAllocator struct {
+	pool *common.Mempool
+}
 
 func (alloc *simpleAllocator) Alloc(size int) MemNode {
-	return DefaultPool.Alloc(uint64(size))
+	return alloc.pool.Alloc(uint64(size))
 }
 
 func (alloc *simpleAllocator) Free(n MemNode) {
-	DefaultPool.Free(n.(*common.MemNode))
+	alloc.pool.Free(n.(*common.MemNode))
 }
 
 func (alloc *simpleAllocator) Usage() int {
-	return int(DefaultPool.Usage())
+	return int(alloc.pool.Usage())
 }
 
 func (alloc *simpleAllocator) String() string {
-	return DefaultPool.String()
+	return alloc.pool.String()
 }

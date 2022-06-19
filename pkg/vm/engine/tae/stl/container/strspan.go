@@ -22,7 +22,14 @@ func (span *strSpan[T]) Capacity() int                      { return len(span.of
 func (span *strSpan[T]) Allocated() int                     { return 0 }
 func (span *strSpan[T]) Slice() []T                         { panic("not support") }
 func (span *strSpan[T]) SliceWindow(offset, length int) []T { panic("not support") }
-func (span *strSpan[T]) Data() []byte                       { return span.buf }
+func (span *strSpan[T]) Bytes() *stl.Bytes {
+	bs := new(stl.Bytes)
+	bs.Data = span.buf
+	bs.Offset = span.offsets
+	bs.Length = span.lengths
+	return bs
+}
+func (span *strSpan[T]) Data() []byte { return span.buf }
 func (span *strSpan[T]) DataWindow(offset, length int) []byte {
 	start := span.offsets[offset]
 	eoff := span.offsets[offset+length-1]

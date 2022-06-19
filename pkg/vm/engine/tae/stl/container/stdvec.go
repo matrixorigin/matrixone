@@ -19,8 +19,8 @@ func NewStdVector[T any](opts ...*Options) *stdVector[T] {
 		opt := opts[0]
 		capacity = opt.Capacity
 		vec.alloc = opt.Allocator
-		if opts[0].DataBuf != nil && len(opts[0].DataBuf) > 0 {
-			buf = opts[0].DataBuf
+		if opt.DataSize() > 0 {
+			buf = opt.Data.Data
 			capacity = len(buf) / stl.Sizeof[T]()
 		}
 	}
@@ -161,6 +161,7 @@ func (vec *stdVector[T]) AppendMany(vals ...T) {
 		vec.tryExpand(predictSize)
 	}
 	vec.slice = append(vec.slice, vals...)
+	vec.buf = unsafe.Slice((*byte)(unsafe.Pointer(&vec.slice[0])), stl.SizeOfMany[T](predictSize))
 }
 
 func (vec *stdVector[T]) Clone(offset, length int) stl.Vector[T] {
@@ -171,4 +172,10 @@ func (vec *stdVector[T]) Clone(offset, length int) stl.Vector[T] {
 	cloned := NewStdVector[T](opts)
 	cloned.AppendMany(vec.slice[offset : offset+length]...)
 	return cloned
+}
+
+func (vec *stdVector[T]) Bytes() *stl.Bytes {
+	bs := new(stl.Bytes)
+	bs.Data = vec.buf
+	return bs
 }

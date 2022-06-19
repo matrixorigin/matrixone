@@ -12,6 +12,12 @@ func SizeOfMany[T any](cnt int) int {
 	return int(unsafe.Sizeof(v)) * cnt
 }
 
+type Bytes struct {
+	Data   []byte
+	Offset []uint32
+	Length []uint32
+}
+
 type Vector[T any] interface {
 	Close()
 
@@ -19,6 +25,7 @@ type Vector[T any] interface {
 	IsView() bool
 	Data() []byte
 	Slice() []T
+	Bytes() *Bytes
 	DataWindow(offset, length int) []byte
 	SliceWindow(offset, length int) []T
 
