@@ -244,3 +244,59 @@ func TestVector7(t *testing.T) {
 
 	vec2.Close()
 }
+
+func TestVector8(t *testing.T) {
+	allocator := stl.NewSimpleAllocator()
+	opts := new(Options)
+	opts.Allocator = allocator
+	vec := NewVector[int32](opts)
+	vec.AppendMany(int32(1), int32(3), int32(9))
+	t.Log(vec.String())
+	assert.Equal(t, 3, vec.Length())
+
+	w := new(bytes.Buffer)
+	_, err := vec.WriteTo(w)
+	assert.NoError(t, err)
+
+	buf := w.Bytes()
+	vec2 := NewVector[int32](opts)
+
+	r := bytes.NewBuffer(buf)
+	_, err = vec2.ReadFrom(r)
+	assert.NoError(t, err)
+	t.Log(vec2.String())
+	vec.Close()
+	vec2.Close()
+	t.Log(allocator.String())
+	assert.Zero(t, allocator.Usage())
+}
+
+func TestVector9(t *testing.T) {
+	allocator := stl.NewSimpleAllocator()
+	opts := new(Options)
+	opts.Allocator = allocator
+	vec := NewVector[[]byte](opts)
+	vec.AppendMany([]byte("h1"), []byte("hh2"),
+		[]byte("hhh3"), []byte("hhhh4"))
+	vec.Delete(1)
+	assert.Equal(t, 11, len(vec.Data()))
+	assert.Equal(t, 3, vec.Length())
+	w := new(bytes.Buffer)
+	_, err := vec.WriteTo(w)
+	assert.NoError(t, err)
+
+	buf := w.Bytes()
+	r := bytes.NewBuffer(buf)
+	vec2 := NewVector[[]byte](opts)
+	_, err = vec2.ReadFrom(r)
+	assert.NoError(t, err)
+	t.Log(vec2.String())
+	assert.Equal(t, 11, len(vec2.Data()))
+	assert.Equal(t, 3, vec2.Length())
+	assert.Equal(t, vec.Get(0), vec2.Get(0))
+	assert.Equal(t, vec.Get(1), vec2.Get(1))
+	assert.Equal(t, vec.Get(2), vec2.Get(2))
+	vec.Close()
+	vec2.Close()
+	assert.Zero(t, allocator.Usage())
+}

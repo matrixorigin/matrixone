@@ -2,6 +2,7 @@ package container
 
 import (
 	"fmt"
+	"io"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
@@ -203,4 +204,38 @@ func (vec *strVector[T]) Bytes() *stl.Bytes {
 	bs.Offset = vec.offsets.Slice()
 	bs.Length = vec.lengths.Slice()
 	return bs
+}
+
+func (vec *strVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	var nr int64
+	if nr, err = vec.data.ReadFrom(r); err != nil {
+		return
+	}
+	n += nr
+	if nr, err = vec.offsets.ReadFrom(r); err != nil {
+		return
+	}
+	n += nr
+	if nr, err = vec.lengths.ReadFrom(r); err != nil {
+		return
+	}
+	n += nr
+	return
+}
+
+func (vec *strVector[T]) WriteTo(w io.Writer) (n int64, err error) {
+	var nr int64
+	if nr, err = vec.data.WriteTo(w); err != nil {
+		return
+	}
+	n += nr
+	if nr, err = vec.offsets.WriteTo(w); err != nil {
+		return
+	}
+	n += nr
+	if nr, err = vec.lengths.WriteTo(w); err != nil {
+		return
+	}
+	n += nr
+	return
 }

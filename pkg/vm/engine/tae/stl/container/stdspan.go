@@ -1,6 +1,7 @@
 package container
 
 import (
+	"io"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
@@ -46,12 +47,14 @@ func (span *stdSpan[T]) DataWindow(offset, length int) []byte {
 	return span.buf[start:end]
 }
 
-func (span *stdSpan[T]) Get(i int) (v T)                { return span.slice[i] }
-func (span *stdSpan[T]) Update(i int, v T)              { panic("span cannot modify") }
-func (span *stdSpan[T]) Delete(i int) (deleted T)       { panic("span cannot modify") }
-func (span *stdSpan[T]) RangeDelete(offset, length int) { panic("span cannot modify") }
-func (span *stdSpan[T]) AppendMany(vals ...T)           { panic("span cannot modify") }
-func (span *stdSpan[T]) Append(v T)                     { panic("span cannot modify") }
-func (span *stdSpan[T]) Clone(_, _ int) stl.Vector[T]   { panic("span cannot clone") }
-func (span *stdSpan[T]) Desc() string                   { return "" }
-func (span *stdSpan[T]) String() string                 { return "" }
+func (span *stdSpan[T]) Get(i int) (v T)                           { return span.slice[i] }
+func (span *stdSpan[T]) Update(i int, v T)                         { panic("span cannot modify") }
+func (span *stdSpan[T]) Delete(i int) (deleted T)                  { panic("span cannot modify") }
+func (span *stdSpan[T]) RangeDelete(offset, length int)            { panic("span cannot modify") }
+func (span *stdSpan[T]) AppendMany(vals ...T)                      { panic("span cannot modify") }
+func (span *stdSpan[T]) Append(v T)                                { panic("span cannot modify") }
+func (span *stdSpan[T]) Clone(_, _ int) stl.Vector[T]              { panic("span cannot clone") }
+func (span *stdSpan[T]) Desc() string                              { return "" }
+func (span *stdSpan[T]) String() string                            { return "" }
+func (span *stdSpan[T]) WriteTo(_ io.Writer) (n int64, err error)  { return }
+func (span *stdSpan[T]) ReadFrom(_ io.Reader) (n int64, err error) { return }

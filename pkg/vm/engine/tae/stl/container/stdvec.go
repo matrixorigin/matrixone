@@ -2,6 +2,7 @@ package container
 
 import (
 	"fmt"
+	"io"
 	"reflect"
 	"unsafe"
 
@@ -152,11 +153,15 @@ func (vec *stdVector[T]) Update(i int, v T) {
 func (vec *stdVector[T]) Delete(i int) (deleted T) {
 	deleted = vec.slice[i]
 	vec.slice = append(vec.slice[:i], vec.slice[i+1:]...)
+	size := len(vec.buf) - stl.Sizeof[T]()
+	vec.buf = vec.buf[:size]
 	return
 }
 
 func (vec *stdVector[T]) RangeDelete(offset, length int) {
 	vec.slice = append(vec.slice[:offset], vec.slice[offset+length:]...)
+	size := len(vec.buf) - stl.SizeOfMany[T](length)
+	vec.buf = vec.buf[:size]
 }
 
 func (vec *stdVector[T]) AppendMany(vals ...T) {
@@ -182,4 +187,40 @@ func (vec *stdVector[T]) Bytes() *stl.Bytes {
 	bs := new(stl.Bytes)
 	bs.Data = vec.buf
 	return bs
+}
+
+func (vec *stdVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	var nr int
+	sizeBuf := make([]byte, stl.Sizeof[uint32]())
+	if nr, err = r.Read(sizeBuf); err != nil {
+		return
+	}
+	n += int64(nr)
+	size := *(*uint32)(unsafe.Pointer(&sizeBuf[0]))
+	if size == 0 {
+		return
+	}
+	capacity := int(size) / stl.Sizeof[T]()
+	vec.tryExpand(capacity)
+	vec.buf = vec.node.GetBuf()[:size]
+	if nr, err = r.Read(vec.buf); err != nil {
+		return
+	}
+	n += int64(nr)
+	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), capacity)
+	return
+}
+
+func (vec *stdVector[T]) WriteTo(w io.Writer) (n int64, err error) {
+	var nr int
+	dataSize := uint32(len(vec.buf))
+	if nr, err = w.Write(unsafe.Slice((*byte)(unsafe.Pointer(&dataSize)), int(unsafe.Sizeof(dataSize)))); err != nil {
+		return
+	}
+	n += int64(nr)
+	if nr, err = w.Write(vec.buf); err != nil {
+		return
+	}
+	n += int64(nr)
+	return
 }

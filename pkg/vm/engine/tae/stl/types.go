@@ -1,6 +1,9 @@
 package stl
 
-import "unsafe"
+import (
+	"io"
+	"unsafe"
+)
 
 func Sizeof[T any]() int {
 	var v T
@@ -41,6 +44,8 @@ type Vector[T any] interface {
 	Allocated() int
 	String() string
 	Desc() string
+	WriteTo(io.Writer) (int64, error)
+	ReadFrom(io.Reader) (int64, error)
 
 	GetAllocator() MemAllocator
 }
