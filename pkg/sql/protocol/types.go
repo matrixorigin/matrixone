@@ -48,6 +48,7 @@ const (
 	MaxInt16Ring
 	MaxInt64Ring
 	MaxDatetimeRing
+	MaxTimestampRing
 	MaxUInt8Ring
 	MaxUInt16Ring
 	MaxUInt32Ring
@@ -65,6 +66,7 @@ const (
 	MinInt16Ring
 	MinInt64Ring
 	MinDatetimeRing
+	MinTimestampRing
 	MinUInt8Ring
 	MinUInt16Ring
 	MinUInt32Ring

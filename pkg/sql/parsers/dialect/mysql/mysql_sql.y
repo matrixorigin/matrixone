@@ -4771,7 +4771,7 @@ function_call_generic:
 |	TRIM '(' trim_direction FROM expression ')'
 	{
 		name := tree.SetUnresolvedName(strings.ToLower($1))
-		arg1 := tree.SetUnresolvedName(strings.ToLower($3))
+		arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{arg1, $5},
@@ -4780,7 +4780,7 @@ function_call_generic:
 |	TRIM '(' trim_direction expression FROM expression ')'
 	{
 		name := tree.SetUnresolvedName(strings.ToLower($1))
-        arg1 := tree.SetUnresolvedName(strings.ToLower($3))
+        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{arg1, $4, $6},

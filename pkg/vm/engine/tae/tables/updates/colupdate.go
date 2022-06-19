@@ -22,13 +22,13 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -206,7 +206,8 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += int64(sn)
-	vals := gvec.New(types.Type_ANY.ToType())
+	typ := encoding.DecodeType(buf[:encoding.TypeSize])
+	vals := gvec.New(typ)
 	if err = vals.Read(buf); err != nil {
 		return
 	}
