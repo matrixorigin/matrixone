@@ -73,6 +73,9 @@ type ColDef struct {
 	Default       Default
 }
 
+func (def *ColDef) GetName() string     { return def.Name }
+func (def *ColDef) GetType() types.Type { return def.Type }
+
 func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
 func (def *ColDef) IsPrimary() bool { return def.Primary == int8(1) }
 func (def *ColDef) IsSortKey() bool { return def.SortKey == int8(1) }

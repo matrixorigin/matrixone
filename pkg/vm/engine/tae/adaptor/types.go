@@ -38,9 +38,8 @@ type Vector interface {
 }
 
 type Batch struct {
-	AttrName []string
-	AttrRef  []int
-	Vecs     []Vector
-	nameidx  map[string]int
-	refidx   map[int]int
+	Attrs   []string
+	Vecs    []Vector
+	nameidx map[string]int
+	// refidx  map[int]int
 }
