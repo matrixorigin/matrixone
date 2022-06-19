@@ -71,13 +71,13 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 }
 
 var otherFormats = map[string]string{
-	"MMDDYYYY":        "01022006",
-	"DDMMYYYY":        "02012006",
-	"MM-DD-YYYY":      "01-02-2006",
-	"DD-MM-YYYY":      "02-01-2006",
-	"YYYY-MM-DD":      "2006-01-02",
-	"YYYYMMDD":        "20060102",
-	"YYYYMMDD HHMMSS": "20060102 15:04:05",
+	"MMDDYYYY":   "01022006",
+	"DDMMYYYY":   "02012006",
+	"MM-DD-YYYY": "01-02-2006",
+	"DD-MM-YYYY": "02-01-2006",
+	"YYYY-MM-DD": "2006-01-02",
+	"YYYYMMDD":   "20060102",
+	// "YYYYMMDD HHMMSS": "20060102 15:04:05",
 }
 
 func ToDateInputBytes(inputBytes *types.Bytes, format string, inputNsp *nulls.Nulls, resultBytes *types.Bytes) (*types.Bytes, *nulls.Nulls, error) {
@@ -97,7 +97,7 @@ func ToDateInputBytes(inputBytes *types.Bytes, format string, inputNsp *nulls.Nu
 		if val, ok := otherFormats[format]; ok {
 			t, err := time.Parse(val, string(inputValue))
 			if err != nil {
-				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "invalid input value")
+				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, string(inputValue)+"is not is a valid "+format+" format.")
 			}
 			resultValue := []byte(t.Format("2006-01-02")) // this is our output format
 			resultBytes.Data = append(resultBytes.Data, resultValue...)
@@ -107,7 +107,7 @@ func ToDateInputBytes(inputBytes *types.Bytes, format string, inputNsp *nulls.Nu
 		} else {
 			t, err := time.Parse(val, string(inputValue))
 			if err != nil {
-				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "invalid input value")
+				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "invalid inputs for function 'to_date()'"+string(inputValue)+" "+format)
 			}
 			resultValue := []byte(t.Format("2006-01-02")) // this is our output format
 			resultBytes.Data = append(resultBytes.Data, resultValue...)
