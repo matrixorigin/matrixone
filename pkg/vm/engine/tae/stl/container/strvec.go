@@ -151,3 +151,27 @@ func (vec *strVector[T]) AppendMany(vals ...T) {
 		vec.Append(val)
 	}
 }
+
+func (vec *strVector[T]) Clone(offset, length int) stl.Vector[T] {
+	opts := &Options{
+		Capacity:  length,
+		Allocator: vec.GetAllocator(),
+	}
+	cloned := NewStrVector[T](opts)
+	if offset == 0 {
+		cloned.offsets.AppendMany(vec.offsets.Slice()[:length]...)
+	} else {
+		delta := vec.offsets.Get(offset)
+		slice := vec.offsets.Slice()[offset : offset+length]
+		for _, off := range slice {
+			cloned.offsets.Append(off - delta)
+		}
+	}
+	cloned.lengths.AppendMany(vec.lengths.Slice()[offset : offset+length]...)
+	start := vec.offsets.Get(offset)
+	eoff := vec.offsets.Get(offset + length - 1)
+	elen := vec.lengths.Get(offset + length - 1)
+	cloned.data.AppendMany(vec.data.Slice()[start : eoff+elen]...)
+
+	return cloned
+}

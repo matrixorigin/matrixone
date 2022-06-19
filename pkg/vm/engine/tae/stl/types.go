@@ -15,6 +15,7 @@ func LengthOfVals[T any](cnt int) int {
 type Vector[T any] interface {
 	Close()
 
+	Clone(offset, length int) Vector[T]
 	IsView() bool
 	Data() []byte
 	Slice() []T

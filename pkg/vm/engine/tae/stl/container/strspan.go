@@ -40,5 +40,6 @@ func (span *strSpan[T]) Delete(i int) (deleted T)       { panic("span cannot mod
 func (span *strSpan[T]) RangeDelete(offset, length int) { panic("span cannot modify") }
 func (span *strSpan[T]) AppendMany(vals ...T)           { panic("span cannot modify") }
 func (span *strSpan[T]) Append(v T)                     { panic("span cannot modify") }
+func (span *strSpan[T]) Clone(v T)                      { panic("span cannot clone") }
 func (span *strSpan[T]) Desc() string                   { return "" }
 func (span *strSpan[T]) String() string                 { return "" }

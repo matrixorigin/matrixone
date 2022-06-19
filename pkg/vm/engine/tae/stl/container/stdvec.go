@@ -142,3 +142,13 @@ func (vec *stdVector[T]) AppendMany(vals ...T) {
 	}
 	vec.slice = append(vec.slice, vals...)
 }
+
+func (vec *stdVector[T]) Clone(offset, length int) stl.Vector[T] {
+	opts := &Options{
+		Capacity:  length,
+		Allocator: vec.GetAllocator(),
+	}
+	cloned := NewStdVector[T](opts)
+	cloned.AppendMany(vec.slice[offset : offset+length]...)
+	return cloned
+}
