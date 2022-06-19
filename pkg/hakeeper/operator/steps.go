@@ -22,7 +22,8 @@ package operator
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
 type OpStep interface {
@@ -77,8 +78,10 @@ func (a StartLogService) String() string {
 }
 
 func (a StartLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	for _, shardInfo := range state.Stores[a.UUID].Shards {
-		if shardInfo.ShardID == a.ShardID {
+	// FIXME: state.Stores[a.UUID] is going to return nil when a.UUID is not a
+	// key in state.Stores
+	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
+		if replicaInfo.ShardID == a.ShardID {
 			return true
 		}
 	}
@@ -96,8 +99,10 @@ func (a StopLogService) String() string {
 }
 
 func (a StopLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	for _, shardInfo := range state.Stores[a.UUID].Shards {
-		if shardInfo.ShardID == a.ShardID {
+	// FIXME: state.Stores[a.UUID] is going to return nil when a.UUID is not a
+	// key in state.Stores
+	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
+		if replicaInfo.ShardID == a.ShardID {
 			return false
 		}
 	}

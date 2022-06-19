@@ -108,7 +108,7 @@ func (r *Decimal128Ring) Grow(m *mheap.Mheap) error {
 	}
 	r.Vs = r.Vs[:n+1]
 	r.Da = r.Da[:(n+1)*16]
-	r.Vs[n] = types.InitDecimal128(0)
+	r.Vs[n] = types.Decimal128Max
 	r.Ns = append(r.Ns, 0)
 	r.Es = append(r.Es, true)
 	return nil
@@ -140,6 +140,7 @@ func (r *Decimal128Ring) Grows(size int, m *mheap.Mheap) error {
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Es = append(r.Es, true)
+		r.Vs[i+n] = types.Decimal128Max
 	}
 	return nil
 }

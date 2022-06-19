@@ -57,27 +57,12 @@ const (
 )
 
 type StateQuery struct{}
-
-type logShardIDQuery struct {
-	name string
-}
-
-type logShardIDQueryResult struct {
-	id    uint64
-	found bool
-}
+type logShardIDQuery struct{ name string }
+type logShardIDQueryResult struct{ id uint64 }
 
 type stateMachine struct {
-	replicaID        uint64
-	term             uint64
-	scheduleCommands map[string][]hapb.ScheduleCommand // keyed by UUID
-
-	Tick        uint64
-	NextID      uint64
-	LogShards   map[string]uint64 // keyed by Log Shard name
-	DNState     DNState
-	LogState    LogState
-	ClusterInfo ClusterInfo
+	replicaID uint64
+	state     hapb.RSMState
 }
 
 func parseCmdTag(cmd []byte) uint16 {
@@ -190,11 +175,8 @@ func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "invalid HAKeeper shard ID"))
 	}
 	return &stateMachine{
-		replicaID:        replicaID,
-		scheduleCommands: make(map[string][]hapb.ScheduleCommand),
-		LogShards:        make(map[string]uint64),
-		DNState:          NewDNState(),
-		LogState:         NewLogState(),
+		replicaID: replicaID,
+		state:     hapb.NewRSMState(),
 	}
 }
 
@@ -203,8 +185,8 @@ func (s *stateMachine) Close() error {
 }
 
 func (s *stateMachine) assignID() uint64 {
-	s.NextID++
-	return s.NextID
+	s.state.NextID++
+	return s.state.NextID
 }
 
 func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
@@ -213,20 +195,22 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	if err := b.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	plog.Infof("incoming term: %d, rsm term: %d", b.Term, s.term)
-	if s.term > b.Term {
+	plog.Infof("incoming term: %d, rsm term: %d", b.Term, s.state.Term)
+	if s.state.Term > b.Term {
 		return sm.Result{}
 	}
 
-	s.term = b.Term
-	s.scheduleCommands = make(map[string][]hapb.ScheduleCommand)
+	s.state.Term = b.Term
+	s.state.ScheduleCommands = make(map[string]hapb.CommandBatch)
 	for _, c := range b.Commands {
-		l, ok := s.scheduleCommands[c.UUID]
+		l, ok := s.state.ScheduleCommands[c.UUID]
 		if !ok {
-			l = make([]hapb.ScheduleCommand, 0)
+			l = hapb.CommandBatch{
+				Commands: make([]hapb.ScheduleCommand, 0),
+			}
 		}
-		l = append(l, c)
-		s.scheduleCommands[c.UUID] = l
+		l.Commands = append(l.Commands, c)
+		s.state.ScheduleCommands[c.UUID] = l
 	}
 
 	return sm.Result{}
@@ -237,13 +221,13 @@ func (s *stateMachine) handleCreateLogShardCmd(cmd []byte) sm.Result {
 	if !ok {
 		panic(moerr.NewError(moerr.INVALID_INPUT, "not create log shard cmd"))
 	}
-	if shardID, ok := s.LogShards[name]; ok {
+	if shardID, ok := s.state.LogShards[name]; ok {
 		data := make([]byte, 8)
 		binaryEnc.PutUint64(data, shardID)
 		return sm.Result{Value: 0, Data: data}
 	}
-	s.LogShards[name] = s.assignID()
-	return sm.Result{Value: s.NextID}
+	s.state.LogShards[name] = s.assignID()
+	return sm.Result{Value: s.state.NextID}
 }
 
 func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
@@ -252,7 +236,7 @@ func (s *stateMachine) handleDNHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.DNState.Update(hb, s.Tick)
+	s.state.DNState.Update(hb, s.state.Tick)
 	return sm.Result{}
 }
 
@@ -262,20 +246,20 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 	if err := hb.Unmarshal(data); err != nil {
 		panic(err)
 	}
-	s.LogState.Update(hb, s.Tick)
+	s.state.LogState.Update(hb, s.state.Tick)
 	return sm.Result{}
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
-	s.Tick++
+	s.state.Tick++
 	return sm.Result{}
 }
 
 func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
 	count := parseGetIDCmd(cmd)
-	s.NextID++
-	v := s.NextID
-	s.NextID += (count - 1)
+	s.state.NextID++
+	v := s.state.NextID
+	s.state.NextID += (count - 1)
 	return sm.Result{Value: v}
 }
 
@@ -299,20 +283,20 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) handleStateQuery() interface{} {
 	// FIXME: pretty sure we need to deepcopy here
-	return &HAKeeperState{
-		Tick:        s.Tick,
-		ClusterInfo: s.ClusterInfo,
-		DNState:     s.DNState,
-		LogState:    s.LogState,
+	return &hapb.HAKeeperState{
+		Tick:        s.state.Tick,
+		ClusterInfo: s.state.ClusterInfo,
+		DNState:     s.state.DNState,
+		LogState:    s.state.LogState,
 	}
 }
 
 func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
-	id, ok := s.LogShards[name]
+	id, ok := s.state.LogShards[name]
 	if ok {
-		return &logShardIDQueryResult{found: true, id: id}
+		return &logShardIDQueryResult{id: id}
 	}
-	return &logShardIDQueryResult{found: false}
+	return &logShardIDQueryResult{}
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
@@ -326,12 +310,14 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
+	// FIXME: ready to use gogoproto to marshal the state, just need to figure
+	// out how to write to the writer.
 	enc := gob.NewEncoder(w)
-	return enc.Encode(s)
+	return enc.Encode(s.state)
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
 	dec := gob.NewDecoder(r)
-	return dec.Decode(s)
+	return dec.Decode(&s.state)
 }

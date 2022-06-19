@@ -194,6 +194,10 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 		return &AnyVRing1[int32]{Typ: typ}, nil
 	case types.T_int64:
 		return &AnyVRing1[int64]{Typ: typ}, nil
+	case types.T_float32:
+		return &AnyVRing1[float32]{Typ: typ}, nil
+	case types.T_float64:
+		return &AnyVRing1[float64]{Typ: typ}, nil
 	case types.T_char:
 		return &AnyVRing2{Typ: typ}, nil
 	case types.T_varchar:

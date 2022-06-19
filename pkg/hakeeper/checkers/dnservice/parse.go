@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 
 // parseDnState parses cluster dn state.
 func parseDnState(
-	dnState hakeeper.DNState, currTick uint64,
+	dnState hapb.DNState, currTick uint64,
 ) (*clusterStores, *clusterShards) {
 	stores := newClusterStores()
 	shards := newClusterShards()
