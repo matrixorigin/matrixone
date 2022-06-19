@@ -61,6 +61,7 @@ func (vec *stdVector[T]) Close() {
 
 func (vec *stdVector[T]) GetAllocator() stl.MemAllocator { return vec.alloc }
 
+func (vec *stdVector[T]) IsView() bool   { return false }
 func (vec *stdVector[T]) Length() int    { return len(vec.slice) }
 func (vec *stdVector[T]) Capacity() int  { return vec.capacity }
 func (vec *stdVector[T]) Allocated() int { return vec.node.Size() }

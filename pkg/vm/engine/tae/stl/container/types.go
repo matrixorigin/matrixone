@@ -26,3 +26,14 @@ type strVector[T any] struct {
 type Vector[T any] struct {
 	stl.Vector[T]
 }
+
+type stdSpan[T any] struct {
+	slice []T
+	buf   []byte
+}
+
+type strSpan[T any] struct {
+	buf     []byte
+	offsets []uint32
+	lengths []uint32
+}

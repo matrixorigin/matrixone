@@ -54,6 +54,7 @@ func (vec *strVector[T]) Capacity() int { return vec.lengths.Capacity() }
 func (vec *strVector[T]) Allocated() int {
 	return vec.lengths.Allocated() + vec.offsets.Allocated() + vec.data.Allocated()
 }
+func (vec *strVector[T]) IsView() bool             { return false }
 func (vec *strVector[T]) Data() []byte             { return vec.data.Data() }
 func (vec *strVector[T]) Slice() []T               { panic("not support") }
 func (vec *strVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
