@@ -173,6 +173,24 @@ var aggregates = map[int][]Function{
 			ReturnTyp:     types.T_bool,
 			AggregateInfo: aggregate.Max,
 		},
+		{
+			Index:         15,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_varchar},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_varchar,
+			AggregateInfo: aggregate.Max,
+		},
+		{
+			Index:         16,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_char},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_char,
+			AggregateInfo: aggregate.Max,
+		},
 	},
 	MIN: {
 		{
@@ -310,6 +328,24 @@ var aggregates = map[int][]Function{
 			ReturnTyp:     types.T_bool,
 			AggregateInfo: aggregate.Min,
 		},
+		{
+			Index:         15,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_varchar},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_varchar,
+			AggregateInfo: aggregate.Min,
+		},
+		{
+			Index:         16,
+			Flag:          plan.Function_AGG,
+			Layout:        STANDARD_FUNCTION,
+			Args:          []types.T{types.T_char},
+			TypeCheckFn:   strictTypeCheck,
+			ReturnTyp:     types.T_char,
+			AggregateInfo: aggregate.Min,
+		},
 	},
 	SUM: {
 		{
@@ -421,7 +457,6 @@ var aggregates = map[int][]Function{
 				ReturnTyp:     types.T_datetime,
 				AggregateInfo: aggregate.Sum,
 			},
-
 		*/
 		{
 			Index:         10,
