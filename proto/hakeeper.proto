@@ -103,9 +103,23 @@ message LogState {
   map<string, LogStoreInfo> Stores = 2 [(gogoproto.nullable) = false];
 }
 
+// HAKeeperState contains all HAKeeper state required for making schedule
+// commands.
 message HAKeeperState {
   uint64 Tick = 1;
   ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
   DNState DNState = 3 [(gogoproto.nullable) = false];
   LogState LogState = 4 [(gogoproto.nullable) = false];
+}
+
+// RSMState contains state maintained by HAKeeper's RSM.  
+message RSMState {
+  uint64 Tick = 1;
+  uint64 NextID = 2;
+  uint64 Term = 3;
+  map<string, CommandBatch> ScheduleCommands = 4 [(gogoproto.nullable) = false];
+  map<string, uint64> LogShards = 5;
+  DNState DNState = 6 [(gogoproto.nullable) = false];
+  LogState LogState = 7 [(gogoproto.nullable) = false];
+  ClusterInfo ClusterInfo = 8 [(gogoproto.nullable) = false];
 }

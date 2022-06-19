@@ -18,12 +18,31 @@ import (
 	"reflect"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 const (
 	// NoLeader is the replica ID of the leader node.
 	NoLeader uint64 = 0
 )
+
+// NewRSMState creates a new RSMState instance.
+func NewRSMState() RSMState {
+	return RSMState{
+		ScheduleCommands: make(map[string]CommandBatch),
+		LogShards:        make(map[string]uint64),
+		DNState:          NewDNState(),
+		LogState:         NewLogState(),
+		ClusterInfo:      newClusterInfo(),
+	}
+}
+
+func newClusterInfo() ClusterInfo {
+	return ClusterInfo{
+		DNShards:  make([]metadata.DNShardRecord, 0),
+		LogShards: make([]metadata.LogShardRecord, 0),
+	}
+}
 
 // NewDNState creates a new DNState.
 func NewDNState() DNState {

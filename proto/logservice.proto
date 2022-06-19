@@ -81,6 +81,13 @@ message DNStoreHeartbeat {
   repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
 };
 
+message RSMState {
+  uint64 Index = 1;
+  uint64 LeaseHolderID = 2;
+  uint64 TruncatedIndex = 3;
+  map<uint64, uint64> LeaseHistory = 4; // log index -> truncate index
+}
+
 enum MethodType {
   CREATE       = 0;
   DESTROY      = 1;

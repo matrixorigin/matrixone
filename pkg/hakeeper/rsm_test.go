@@ -28,9 +28,9 @@ import (
 
 func TestAssignID(t *testing.T) {
 	tsm := NewStateMachine(0, 1).(*stateMachine)
-	assert.Equal(t, uint64(0), tsm.NextID)
+	assert.Equal(t, uint64(0), tsm.state.NextID)
 	assert.Equal(t, uint64(1), tsm.assignID())
-	assert.Equal(t, uint64(1), tsm.NextID)
+	assert.Equal(t, uint64(1), tsm.state.NextID)
 }
 
 func TestCreateLogShardCmd(t *testing.T) {
@@ -54,29 +54,29 @@ func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
 func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	tsm2 := NewStateMachine(0, 2).(*stateMachine)
-	tsm1.NextID = 12345
-	tsm1.LogShards["test1"] = 23456
-	tsm1.LogShards["test2"] = 34567
+	tsm1.state.NextID = 12345
+	tsm1.state.LogShards["test1"] = 23456
+	tsm1.state.LogShards["test2"] = 34567
 
 	buf := bytes.NewBuffer(nil)
 	assert.Nil(t, tsm1.SaveSnapshot(buf, nil, nil))
 	assert.Nil(t, tsm2.RecoverFromSnapshot(buf, nil, nil))
-	assert.Equal(t, tsm1.NextID, tsm2.NextID)
-	assert.Equal(t, tsm1.LogShards, tsm2.LogShards)
+	assert.Equal(t, tsm1.state.NextID, tsm2.state.NextID)
+	assert.Equal(t, tsm1.state.LogShards, tsm2.state.LogShards)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
 }
 
 func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	tsm1.NextID = 100
+	tsm1.state.NextID = 100
 
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
-	assert.Equal(t, uint64(101), tsm1.NextID)
+	assert.Equal(t, uint64(101), tsm1.state.NextID)
 
-	tsm1.NextID = 200
+	tsm1.state.NextID = 200
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	data := make([]byte, 8)
@@ -87,7 +87,7 @@ func TestHAKeeperLogShardCanBeCreated(t *testing.T) {
 func TestHAKeeperQueryLogShardID(t *testing.T) {
 	cmd := getCreateLogShardCmd("test1")
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	tsm1.NextID = 100
+	tsm1.state.NextID = 100
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.Nil(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
@@ -114,13 +114,13 @@ func TestHAKeeperCanBeClosed(t *testing.T) {
 
 func TestHAKeeperTick(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	assert.Equal(t, uint64(0), tsm1.Tick)
+	assert.Equal(t, uint64(0), tsm1.state.Tick)
 	cmd := GetTickCmd()
 	_, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	assert.Equal(t, uint64(2), tsm1.Tick)
+	assert.Equal(t, uint64(2), tsm1.state.Tick)
 }
 
 func TestHandleLogHeartbeat(t *testing.T) {
@@ -170,7 +170,7 @@ func TestHandleLogHeartbeat(t *testing.T) {
 	cmd = GetLogStoreHeartbeatCmd(data)
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	s := tsm1.LogState
+	s := tsm1.state.LogState
 	assert.Equal(t, 1, len(s.Stores))
 	lsinfo, ok := s.Stores[hb.UUID]
 	require.True(t, ok)
@@ -205,7 +205,7 @@ func TestHandleDNHeartbeat(t *testing.T) {
 	cmd = GetDNStoreHeartbeatCmd(data)
 	_, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
-	s := tsm1.DNState
+	s := tsm1.state.DNState
 	assert.Equal(t, 1, len(s.Stores))
 	dninfo, ok := s.Stores[hb.UUID]
 	assert.True(t, ok)
@@ -273,26 +273,26 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
 	require.NoError(t, err)
 	assert.Equal(t, sm.Result{}, result)
-	assert.Equal(t, b.Term, tsm1.term)
-	require.Equal(t, 2, len(tsm1.scheduleCommands))
-	l1, ok := tsm1.scheduleCommands["uuid1"]
+	assert.Equal(t, b.Term, tsm1.state.Term)
+	require.Equal(t, 2, len(tsm1.state.ScheduleCommands))
+	l1, ok := tsm1.state.ScheduleCommands["uuid1"]
 	assert.True(t, ok)
-	assert.Equal(t, []hapb.ScheduleCommand{sc1, sc3}, l1)
-	l2, ok := tsm1.scheduleCommands["uuid2"]
+	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc1, sc3}}, l1)
+	l2, ok := tsm1.state.ScheduleCommands["uuid2"]
 	assert.True(t, ok)
-	assert.Equal(t, []hapb.ScheduleCommand{sc2}, l2)
+	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc2}}, l2)
 
 	cmd2 := GetUpdateCommandsCmd(b.Term-1,
 		[]hapb.ScheduleCommand{sc1, sc2, sc3, sc4})
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd2})
 	require.NoError(t, err)
 	assert.Equal(t, sm.Result{}, result)
-	assert.Equal(t, b.Term, tsm1.term)
-	require.Equal(t, 2, len(tsm1.scheduleCommands))
-	l1, ok = tsm1.scheduleCommands["uuid1"]
+	assert.Equal(t, b.Term, tsm1.state.Term)
+	require.Equal(t, 2, len(tsm1.state.ScheduleCommands))
+	l1, ok = tsm1.state.ScheduleCommands["uuid1"]
 	assert.True(t, ok)
-	assert.Equal(t, []hapb.ScheduleCommand{sc1, sc3}, l1)
-	l2, ok = tsm1.scheduleCommands["uuid2"]
+	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc1, sc3}}, l1)
+	l2, ok = tsm1.state.ScheduleCommands["uuid2"]
 	assert.True(t, ok)
-	assert.Equal(t, []hapb.ScheduleCommand{sc2}, l2)
+	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc2}}, l2)
 }
