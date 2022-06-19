@@ -66,6 +66,14 @@ func (vec *stdVector[T]) Capacity() int  { return vec.capacity }
 func (vec *stdVector[T]) Allocated() int { return vec.node.Size() }
 func (vec *stdVector[T]) Data() []byte   { return vec.buf }
 func (vec *stdVector[T]) Slice() []T     { return vec.slice }
+func (vec *stdVector[T]) SliceWindow(offset, length int) []T {
+	return vec.slice[offset : offset+length]
+}
+func (vec *stdVector[T]) DataWindow(offset, length int) []byte {
+	start := offset * stl.Sizeof[T]()
+	end := start + length*stl.Sizeof[T]()
+	return vec.buf[start:end]
+}
 func (vec *stdVector[T]) Desc() string {
 	var v T
 	s := fmt.Sprintf("StdVector<%s>:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",

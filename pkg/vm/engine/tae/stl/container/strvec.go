@@ -54,8 +54,15 @@ func (vec *strVector[T]) Capacity() int { return vec.lengths.Capacity() }
 func (vec *strVector[T]) Allocated() int {
 	return vec.lengths.Allocated() + vec.offsets.Allocated() + vec.data.Allocated()
 }
-func (vec *strVector[T]) Data() []byte { return vec.data.Data() }
-func (vec *strVector[T]) Slice() []T   { panic("not support") }
+func (vec *strVector[T]) Data() []byte             { return vec.data.Data() }
+func (vec *strVector[T]) Slice() []T               { panic("not support") }
+func (vec *strVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
+func (vec *strVector[T]) DataWindow(offset, length int) []byte {
+	start := vec.offsets.Get(offset)
+	eoff := vec.offsets.Get(offset + length - 1)
+	elen := vec.lengths.Get(offset + length - 1)
+	return vec.data.Data()[start:(eoff + elen)]
+}
 func (vec *strVector[T]) Desc() string {
 	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
 		vec.Length(),

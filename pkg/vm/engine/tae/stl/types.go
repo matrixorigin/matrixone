@@ -17,6 +17,8 @@ type Vector[T any] interface {
 
 	Data() []byte
 	Slice() []T
+	DataWindow(offset, length int) []byte
+	SliceWindow(offset, length int) []T
 
 	Append(v T)
 	AppendMany(vals ...T)

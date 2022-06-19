@@ -11,12 +11,14 @@ type MemAllocator = stl.MemAllocator
 type Options = container.Options
 
 type Vector interface {
+	IsView() bool
 	Nullable() bool
 	IsNull(i int) bool
 	HasNull() bool
 	NullMask() *roaring64.Bitmap
 
 	Data() []byte
+	DataWindow(offset, length int) []byte
 	Get(i int) any
 	Update(i int, v any)
 	Delete(i int)
@@ -30,6 +32,7 @@ type Vector interface {
 	GetAllocator() stl.MemAllocator
 	GetType() types.Type
 	String() string
+	Window() Vector
 
 	Close()
 }
