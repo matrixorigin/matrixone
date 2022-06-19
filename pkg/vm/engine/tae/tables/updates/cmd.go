@@ -41,7 +41,7 @@ type UpdateCmd struct {
 	*txnbase.BaseCustomizedCmd
 	dbid    uint64
 	dest    *common.ID
-	update  *ColumnNode
+	update  *ColumnUpdateNode
 	delete  *DeleteNode
 	append  *AppendNode
 	cmdType int16
@@ -52,7 +52,7 @@ func NewEmptyCmd(cmdType int16) *UpdateCmd {
 	cmd.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(0, cmd)
 	cmd.cmdType = cmdType
 	if cmdType == txnbase.CmdUpdate {
-		cmd.update = NewColumnNode(nil, nil, nil)
+		cmd.update = NewColumnUpdateNode(nil, nil, nil)
 	} else if cmdType == txnbase.CmdDelete {
 		cmd.delete = NewDeleteNode(nil)
 	} else if cmdType == txnbase.CmdAppend {
@@ -83,7 +83,7 @@ func NewDeleteCmd(id uint32, del *DeleteNode) *UpdateCmd {
 	return impl
 }
 
-func NewUpdateCmd(id uint32, update *ColumnNode) *UpdateCmd {
+func NewUpdateCmd(id uint32, update *ColumnUpdateNode) *UpdateCmd {
 	impl := &UpdateCmd{
 		update:  update,
 		cmdType: txnbase.CmdUpdate,
@@ -94,7 +94,7 @@ func NewUpdateCmd(id uint32, update *ColumnNode) *UpdateCmd {
 	return impl
 }
 
-func (c *UpdateCmd) GetUpdateNode() *ColumnNode {
+func (c *UpdateCmd) GetUpdateNode() *ColumnUpdateNode {
 	return c.update
 }
 
@@ -112,14 +112,35 @@ func (c *UpdateCmd) GetDest() *common.ID {
 	return c.dest
 }
 
-// TODO
+func (c *UpdateCmd) Desc() string {
+	if c.cmdType == txnbase.CmdAppend {
+		return fmt.Sprintf("CmdName=Append;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.append.GeneralDesc(), c.ID)
+	} else if c.cmdType == txnbase.CmdUpdate {
+		return fmt.Sprintf("CmdName=Update;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.update.GeneralDesc(), c.ID)
+	} else if c.cmdType == txnbase.CmdDelete {
+		return fmt.Sprintf("CmdName=Delete;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.delete.GeneralDesc(), c.ID)
+	}
+	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
+}
+
 func (c *UpdateCmd) String() string {
 	if c.cmdType == txnbase.CmdAppend {
-		return fmt.Sprintf("[CmdAppend]: Dest=%s,Payload=%s", c.dest.BlockString(), c.append.GeneralDesc())
+		return fmt.Sprintf("CmdName=Append;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.append.GeneralString(), c.ID)
 	} else if c.cmdType == txnbase.CmdUpdate {
-		return fmt.Sprintf("[CmdUpdate]: Dest=%s,Payload=%s", c.dest.BlockString(), c.update.GeneralDesc())
+		return fmt.Sprintf("CmdName=Update;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.update.GeneralString(), c.ID)
 	} else if c.cmdType == txnbase.CmdDelete {
-		return fmt.Sprintf("[CmdDelete]: Dest=%s,Payload=%s", c.dest.BlockString(), c.delete.GeneralDesc())
+		return fmt.Sprintf("CmdName=Delete;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.delete.GeneralString(), c.ID)
+	}
+	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
+}
+
+func (c *UpdateCmd) VerboseString() string {
+	if c.cmdType == txnbase.CmdAppend {
+		return fmt.Sprintf("CmdName=Append;Dest=%s;CSN=%d;%s", c.dest.BlockString(), c.ID, c.append.GeneralVerboseString())
+	} else if c.cmdType == txnbase.CmdUpdate {
+		return fmt.Sprintf("CmdName=Update;Dest=%s;CSN=%d;%s", c.dest.BlockString(), c.ID, c.update.GeneralVerboseString())
+	} else if c.cmdType == txnbase.CmdDelete {
+		return fmt.Sprintf("CmdName=Delete;Dest=%s;CSN=%d;%s", c.dest.BlockString(), c.ID, c.delete.GeneralVerboseString())
 	}
 	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
 }

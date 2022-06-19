@@ -148,11 +148,11 @@ func TestFunctionRegister(t *testing.T) {
 	// test errMsg
 	{
 		_, _, _, err := GetFunctionByName("testFunctionName", nil)
-		require.Equal(t, errors.New(errno.UndefinedFunction, "function or operator 'testFunctionName' is not implemented"), err)
+		require.Equal(t, errors.New(errno.UndefinedFunction, "Function or operator 'testFunctionName' will be implemented in future version."), err)
 	}
 	{
 		_, _, _, err := GetFunctionByName("f1", []types.T{})
-		require.Equal(t, errors.New(errno.UndefinedFunction, "unsupported parameter types [] for function 'f1'"), err)
+		require.Equal(t, errors.New(errno.UndefinedFunction, "Function 'f1' with parameters [] will be implemented in future version."), err)
 	}
 	{
 		errMessage := "too many functions matched:\n" +

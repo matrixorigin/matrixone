@@ -368,7 +368,6 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory Dat
 	cmd.Segment.link = new(common.Link)
 	cmd.Segment.entries = make(map[uint64]*common.DLNode)
 	cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
-	cmd.Segment.ReplayFile(cache)
 	tbl.AddEntryLocked(cmd.Segment)
 	cmd.Segment.LogIndex = idx
 	if observer != nil {

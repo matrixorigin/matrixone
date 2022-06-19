@@ -81,12 +81,12 @@ func TestIndexFunction(t *testing.T) {
 		{sql: "create table tbl(a int, b varchar(10));"},
 		{sql: "create index index_name on tbl(a);"},
 		{sql: "create index index_names using bsi on tbl(a);"},
-		{sql: "create index index_nameb using btree on tbl(a);", err: "[0A000]unsupported index type"},
-		{sql: "create index index_nameb using hash on tbl(a);", err: "[0A000]unsupported index type"},
-		{sql: "create index index_nameb using rtree on tbl(a);", err: "[0A000]unsupported index type"},
-		{sql: "create index index_nameb using bsi on tbl(c);", err: "[42703]unknown column 'c'"},
-		{sql: "create index index_nameb using bsi on tbl(a, b);", err: "[0A000]unsupported index type"},
-		{sql: "drop index noeindex on tbl;", err: "[42602]index doesn't exist"},
+		{sql: "create index index_nameb using btree on tbl(a);", err: "unsupported index type"},
+		{sql: "create index index_nameb using hash on tbl(a);", err: "unsupported index type"},
+		{sql: "create index index_nameb using rtree on tbl(a);", err: "unsupported index type"},
+		{sql: "create index index_nameb using bsi on tbl(c);", err: "unknown column 'c'"},
+		{sql: "create index index_nameb using bsi on tbl(a, b);", err: "unsupported index type"},
+		{sql: "drop index noeindex on tbl;", err: "index doesn't exist"},
 	}
 	test(t, testCases)
 }

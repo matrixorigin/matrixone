@@ -102,9 +102,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			if err := ctr.probe(bat, ap, proc); err != nil {
 				ctr.state = End
-				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp)
-				}
 				bat.Clean(proc.Mp)
 				proc.Reg.InputBatch = nil
 				return true, err

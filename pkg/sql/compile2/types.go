@@ -36,6 +36,8 @@ const (
 	DropTable
 	DropIndex
 	Deletion
+	Insert
+	Update
 )
 
 // Address is the ip:port of local node

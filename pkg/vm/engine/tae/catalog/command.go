@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -163,9 +164,167 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
 	return impl
 }
 
-// TODO
+func (cmd *EntryCommand) Desc() string {
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID)
+	return s
+}
+
+func (cmd *EntryCommand) GetLogIndex() *wal.Index {
+	if cmd.entry == nil {
+		return nil
+	}
+	return cmd.entry.LogIndex
+}
+
+func (cmd *EntryCommand) GetTs() uint64 {
+	ts := uint64(0)
+	switch cmd.cmdType {
+	case CmdCreateDatabase, CmdCreateTable, CmdCreateSegment, CmdCreateBlock:
+		ts = cmd.entry.CreateAt
+	case CmdDropDatabase, CmdDropTable, CmdDropSegment, CmdDropBlock:
+		ts = cmd.entry.DeleteAt
+	case CmdLogDatabase:
+	case CmdLogTable:
+	case CmdLogSegment:
+	case CmdLogBlock:
+	}
+	return ts
+}
+func (cmd *EntryCommand) IDString() string {
+	s := ""
+	dbid, id := cmd.GetID()
+	switch cmd.cmdType {
+	case CmdCreateDatabase, CmdDropDatabase, CmdLogDatabase:
+		s = fmt.Sprintf("%sDB=%d", s, dbid)
+	case CmdCreateTable, CmdDropTable, CmdLogTable:
+		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.TableString())
+	case CmdCreateSegment, CmdDropSegment, CmdLogSegment:
+		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.SegmentString())
+	case CmdCreateBlock, CmdDropBlock, CmdLogBlock:
+		s = fmt.Sprintf("%sDB=%d;CommonID=%s", s, dbid, id.BlockString())
+	}
+	return s
+}
+func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
+	id := &common.ID{}
+	dbid := uint64(0)
+	switch cmd.cmdType {
+	case CmdCreateDatabase:
+		dbid = cmd.entry.ID
+	case CmdDropDatabase:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+		} else {
+			dbid = cmd.DB.ID
+		}
+	case CmdCreateTable:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.Table.ID
+		} else {
+			dbid = cmd.Table.db.ID
+			id.TableID = cmd.entry.ID
+		}
+	case CmdDropTable:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.TableID
+		} else {
+			dbid = cmd.Table.db.ID
+			id.TableID = cmd.Table.ID
+		}
+	case CmdCreateSegment:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.TableID
+			id.SegmentID = cmd.entry.ID
+		} else {
+			dbid = cmd.DB.ID
+			id.TableID = cmd.Table.ID
+			id.SegmentID = cmd.Segment.ID
+		}
+	case CmdDropSegment:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.TableID
+			id.SegmentID = cmd.entry.ID
+		} else {
+			dbid = cmd.DB.ID
+			id.TableID = cmd.Table.ID
+			id.SegmentID = cmd.entry.ID
+		}
+	case CmdCreateBlock:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.TableID
+			id.SegmentID = cmd.SegmentID
+			id.BlockID = cmd.entry.ID
+		} else {
+			dbid = cmd.DB.ID
+			id.TableID = cmd.Table.ID
+			id.SegmentID = cmd.Segment.ID
+			id.BlockID = cmd.entry.ID
+		}
+	case CmdDropBlock:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.TableID
+			id.SegmentID = cmd.SegmentID
+			id.BlockID = cmd.entry.ID
+		} else {
+			dbid = cmd.Table.db.ID
+			id.TableID = cmd.Table.ID
+			id.SegmentID = cmd.Segment.ID
+			id.BlockID = cmd.entry.ID
+		}
+	case CmdLogDatabase:
+		dbid = cmd.DB.ID
+	case CmdLogTable:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.Table.ID
+		} else {
+			dbid = cmd.DB.ID
+			id.TableID = cmd.Table.ID
+		}
+	case CmdLogSegment:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.TableID
+			id.SegmentID = cmd.Segment.ID
+		} else {
+			dbid = cmd.DB.ID
+			id.TableID = cmd.Table.ID
+			id.SegmentID = cmd.Segment.ID
+		}
+	case CmdLogBlock:
+		if cmd.DBID != 0 {
+			dbid = cmd.DBID
+			id.TableID = cmd.TableID
+			id.SegmentID = cmd.SegmentID
+			id.BlockID = cmd.Block.ID
+		} else {
+			dbid = cmd.DB.ID
+			id.TableID = cmd.Table.ID
+			id.SegmentID = cmd.Segment.ID
+			id.BlockID = cmd.Block.ID
+		}
+	}
+	return dbid, id
+}
+
 func (cmd *EntryCommand) String() string {
-	return fmt.Sprintf("[%s]%s", CmdName(cmd.cmdType), cmd.entry.String())
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	return s
+}
+
+func (cmd *EntryCommand) VerboseString() string {
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d;BaseEntry=%s", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID, cmd.entry.String())
+	switch cmd.cmdType {
+	case CmdCreateTable, CmdLogTable:
+		s = fmt.Sprintf("%s;Schema=%v", s, cmd.Table.schema.String())
+	}
+	return s
 }
 func (cmd *EntryCommand) GetType() int16 { return cmd.cmdType }
 

@@ -113,6 +113,20 @@ func (c *Compile) Run(ts uint64) (err error) {
 		}
 		c.setAffectedRows(affectedRows)
 		return nil
+	case Insert:
+		affectedRows, err := c.scope.Insert(ts, c.proc.Snapshot, c.e)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
+	case Update:
+		affectedRows, err := c.scope.Update(ts, c.proc.Snapshot, c.e)
+		if err != nil {
+			return err
+		}
+		c.setAffectedRows(affectedRows)
+		return nil
 	}
 	return nil
 }
@@ -155,7 +169,8 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 			}, nil
 		case plan.DataDefinition_SHOW_DATABASES,
 			plan.DataDefinition_SHOW_TABLES,
-			plan.DataDefinition_SHOW_COLUMNS:
+			plan.DataDefinition_SHOW_COLUMNS,
+			plan.DataDefinition_SHOW_CREATETABLE:
 			return c.compileQuery(pn.GetDdl().GetQuery())
 			// 1、not supported: show arnings/errors/status/processlist
 			// 2、show variables will not return query
@@ -180,6 +195,17 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 			PreScopes: ss,
 			Magic:     Deletion,
 		}
+	case plan.Query_INSERT:
+		// needn't do merge work
+		rs = &Scope{
+			PreScopes: ss,
+			Magic:     Insert,
+		}
+	case plan.Query_UPDATE:
+		rs = &Scope{
+			PreScopes: ss,
+			Magic:     Update,
+		}
 	default:
 		rs = &Scope{
 			PreScopes: ss,
@@ -200,6 +226,24 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 		}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  overload.Deletion,
+			Arg: scp,
+		})
+	case plan.Query_INSERT:
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  overload.Insert,
+			Arg: arg,
+		})
+	case plan.Query_UPDATE:
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.Snapshot)
+		if err != nil {
+			return nil, err
+		}
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op:  overload.Update,
 			Arg: scp,
 		})
 	default:
@@ -315,6 +359,18 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ss = c.compileSort(n, ss)
 		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
 	case plan.Node_DELETE:
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		return ss, nil
+	case plan.Node_INSERT:
+		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
+		if err != nil {
+			return nil, err
+		}
+		return c.compileProjection(n, c.compileRestrict(n, ss)), nil
+	case plan.Node_UPDATE:
 		ss, err := c.compilePlanScope(ns[n.Children[0]], ns)
 		if err != nil {
 			return nil, err

@@ -37,9 +37,11 @@ const (
 	indexTag
 )
 
-type leaseHistoryQuery struct {
-	index uint64
-}
+// used to indicate query types
+type leaseHolderIDQuery struct{}
+type indexQuery struct{}
+type truncatedIndexQuery struct{}
+type leaseHistoryQuery struct{ index uint64 }
 
 func getAppendCmd(cmd []byte, replicaID uint64) []byte {
 	if len(cmd) < headerSize+8 {
@@ -109,22 +111,12 @@ type stateMachine struct {
 
 var _ (sm.IStateMachine) = (*stateMachine)(nil)
 
-// making this a IConcurrentStateMachine for now, IStateMachine need to be updated
-// to provide raft entry index to its Update() method
 func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	return &stateMachine{
 		shardID:      shardID,
 		replicaID:    replicaID,
 		LeaseHistory: make(map[uint64]uint64),
 	}
-}
-
-func (s *stateMachine) setLeaseHolderID(index uint64, cmd []byte) {
-	if !isSetLeaseHolderUpdate(cmd) {
-		panic("not a setLeaseHolder update")
-	}
-	s.LeaseHolderID = parseLeaseHolderID(cmd)
-	s.LeaseHistory[index] = s.LeaseHolderID
 }
 
 func (s *stateMachine) truncateLeaseHistory(index uint64) {
@@ -151,32 +143,32 @@ func (s *stateMachine) getLeaseHistory(index uint64) (uint64, uint64) {
 	return lease, max
 }
 
-func (s *stateMachine) setTruncatedIndex(cmd []byte) bool {
-	if !isSetTruncatedIndexUpdate(cmd) {
-		panic("not a setTruncatedIndex update")
-	}
+func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
+	s.LeaseHolderID = parseLeaseHolderID(cmd)
+	s.LeaseHistory[s.Index] = s.LeaseHolderID
+	return sm.Result{}
+}
+
+func (s *stateMachine) handleTruncateIndex(cmd []byte) sm.Result {
 	index := parseTruncatedIndex(cmd)
 	if index > s.TruncatedIndex {
 		s.TruncatedIndex = index
 		s.truncateLeaseHistory(index)
-		return true
+		return sm.Result{}
 	}
-	return false
+	return sm.Result{Value: s.TruncatedIndex}
 }
 
 // handleUserUpdate returns an empty sm.Result on success or it returns a
 // sm.Result value with the Value field set to the current lease holder ID
 // to indicate rejection by mismatched lease holder ID.
-func (s *stateMachine) handleUserUpdate(index uint64, cmd []byte) sm.Result {
-	if !isUserUpdate(cmd) {
-		panic("not user update")
-	}
+func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
 	if s.LeaseHolderID != parseLeaseHolderID(cmd) {
 		data := make([]byte, 8)
 		binaryEnc.PutUint64(data, s.LeaseHolderID)
 		return sm.Result{Data: data}
 	}
-	return sm.Result{Value: index}
+	return sm.Result{Value: s.Index}
 }
 
 func (s *stateMachine) Close() error {
@@ -187,33 +179,23 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
 	s.Index = e.Index
 	if isSetLeaseHolderUpdate(cmd) {
-		s.setLeaseHolderID(e.Index, cmd)
-		return sm.Result{}, nil
+		return s.handleSetLeaseHolderID(cmd), nil
 	} else if isSetTruncatedIndexUpdate(cmd) {
-		if s.setTruncatedIndex(cmd) {
-			return sm.Result{}, nil
-		} else {
-			return sm.Result{Value: s.TruncatedIndex}, nil
-		}
+		return s.handleTruncateIndex(cmd), nil
 	} else if isUserUpdate(cmd) {
-		return s.handleUserUpdate(e.Index, cmd), nil
+		return s.handleUserUpdate(cmd), nil
 	}
 	panic("corrupted entry")
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
-	if v, ok := query.(uint16); ok {
-		if v == indexTag {
-			return s.Index, nil
-		} else if v == leaseHolderIDTag {
-			return s.LeaseHolderID, nil
-		} else if v == truncatedIndexTag {
-			return s.TruncatedIndex, nil
-		} else {
-			panic("unknown lookup command type")
-		}
-	}
-	if v, ok := query.(leaseHistoryQuery); ok {
+	if _, ok := query.(indexQuery); ok {
+		return s.Index, nil
+	} else if _, ok := query.(leaseHolderIDQuery); ok {
+		return s.LeaseHolderID, nil
+	} else if _, ok := query.(truncatedIndexQuery); ok {
+		return s.TruncatedIndex, nil
+	} else if v, ok := query.(leaseHistoryQuery); ok {
 		lease, _ := s.getLeaseHistory(v.index)
 		return lease, nil
 	}
