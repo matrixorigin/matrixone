@@ -91,6 +91,7 @@ func getRaftConfig(shardID uint64, replicaID uint64) config.Config {
 	}
 }
 
+// logStore manages log shards including the HAKeeper shard on each node.
 type logStore struct {
 	cfg               Config
 	nh                *dragonboat.NodeHost
@@ -254,7 +255,7 @@ func (l *logStore) Append(ctx context.Context,
 
 func (l *logStore) GetTruncatedIndex(ctx context.Context,
 	shardID uint64) (uint64, error) {
-	v, err := l.read(ctx, shardID, truncatedIndexTag)
+	v, err := l.read(ctx, shardID, truncatedIndexQuery{})
 	if err != nil {
 		return 0, err
 	}
@@ -367,7 +368,7 @@ func getNextIndex(entries []raftpb.Entry, firstIndex Lsn, lastIndex Lsn) Lsn {
 
 func (l *logStore) QueryLog(ctx context.Context, shardID uint64,
 	firstIndex Lsn, maxSize uint64) ([]LogRecord, Lsn, error) {
-	v, err := l.read(ctx, shardID, indexTag)
+	v, err := l.read(ctx, shardID, indexQuery{})
 	if err != nil {
 		return nil, 0, err
 	}

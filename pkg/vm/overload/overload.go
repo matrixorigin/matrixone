@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/limit"
@@ -80,6 +81,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	MergeOffset: mergeoffset.String,
 
 	Deletion: deletion.String,
+	Insert:   insert.String,
 	Update:   update.String,
 }
 
@@ -113,6 +115,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	MergeOffset: mergeoffset.Prepare,
 
 	Deletion: deletion.Prepare,
+	Insert:   insert.Prepare,
 	Update:   update.Prepare,
 }
 
@@ -146,5 +149,6 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	MergeOffset: mergeoffset.Call,
 
 	Deletion: deletion.Call,
+	Insert:   insert.Call,
 	Update:   update.Call,
 }

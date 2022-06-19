@@ -1902,8 +1902,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		ses.Pu.StorageEngine,
 		proc, ses, usePlan2)
 	if err != nil {
-		return NewMysqlError(ER_PARSE_ERROR, err,
-			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use")
+		return NewMysqlError(ER_PARSE_ERROR, err, "")
 	}
 
 	defer func() {

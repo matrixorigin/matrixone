@@ -273,7 +273,7 @@ func TestSegment_Replay2(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	for i := INODE_NUM / 2; i < INODE_NUM; i++ {
+	for i := INODE_NUM / 2; i < INODE_NUM-1; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
@@ -286,7 +286,21 @@ func TestSegment_Replay2(t *testing.T) {
 	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
-	assert.Equal(t, INODE_NUM+1, len(seg1.nodes))
+	assert.Equal(t, INODE_NUM, len(seg1.nodes))
+	checkSegment(t, &seg, &seg1)
+
+	for _, file := range seg1.nodes {
+		if file.name == "logfile" {
+			continue
+		}
+		file.Unref()
+	}
+	assert.Equal(t, 1, len(seg1.nodes))
+	name = path.Join(dir, "init2.driver")
+	seg = Driver{}
+	err = seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
 	checkSegment(t, &seg, &seg1)
 }
 
