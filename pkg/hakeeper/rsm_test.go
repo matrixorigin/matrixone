@@ -97,7 +97,6 @@ func TestHAKeeperQueryLogShardID(t *testing.T) {
 	assert.NoError(t, err)
 	r1, ok := r.(*logShardIDQueryResult)
 	assert.True(t, ok)
-	assert.True(t, r1.found)
 	assert.Equal(t, uint64(101), r1.id)
 
 	q2 := &logShardIDQuery{name: "test2"}
@@ -105,7 +104,7 @@ func TestHAKeeperQueryLogShardID(t *testing.T) {
 	assert.NoError(t, err)
 	r2, ok := r.(*logShardIDQueryResult)
 	assert.True(t, ok)
-	assert.False(t, r2.found)
+	assert.Equal(t, uint64(0), r2.id)
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {

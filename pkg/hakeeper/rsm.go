@@ -57,15 +57,8 @@ const (
 )
 
 type StateQuery struct{}
-
-type logShardIDQuery struct {
-	name string
-}
-
-type logShardIDQueryResult struct {
-	id    uint64
-	found bool
-}
+type logShardIDQuery struct{ name string }
+type logShardIDQueryResult struct{ id uint64 }
 
 type stateMachine struct {
 	replicaID        uint64
@@ -310,9 +303,9 @@ func (s *stateMachine) handleStateQuery() interface{} {
 func (s *stateMachine) handleShardIDQuery(name string) *logShardIDQueryResult {
 	id, ok := s.LogShards[name]
 	if ok {
-		return &logShardIDQueryResult{found: true, id: id}
+		return &logShardIDQueryResult{id: id}
 	}
-	return &logShardIDQueryResult{found: false}
+	return &logShardIDQueryResult{}
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
