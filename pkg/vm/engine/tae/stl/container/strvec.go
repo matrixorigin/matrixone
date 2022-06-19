@@ -206,6 +206,19 @@ func (vec *strVector[T]) Bytes() *stl.Bytes {
 	return bs
 }
 
+func (vec *strVector[T]) ReadBytes(bs *stl.Bytes) {
+	if bs == nil {
+		return
+	}
+	bs1 := stl.NewBytes()
+	bs1.Data = bs.Data
+	vec.data.ReadBytes(bs1)
+	bs1.Data = bs.LengthBuf()
+	vec.lengths.ReadBytes(bs1)
+	bs1.Data = bs.OffsetBuf()
+	vec.offsets.ReadBytes(bs1)
+}
+
 func (vec *strVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	var nr int64
 	if nr, err = vec.data.ReadFrom(r); err != nil {

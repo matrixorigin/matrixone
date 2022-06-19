@@ -189,6 +189,22 @@ func (vec *stdVector[T]) Bytes() *stl.Bytes {
 	return bs
 }
 
+func (vec *stdVector[T]) ReadBytes(bs *stl.Bytes) {
+	if bs == nil {
+		return
+	}
+	if vec.node != nil {
+		vec.alloc.Free(vec.node)
+	}
+	vec.capacity = 0
+	if bs.DataSize() == 0 {
+		return
+	}
+	vec.buf = bs.Data
+	vec.capacity = len(vec.buf) / stl.Sizeof[T]()
+	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
+}
+
 func (vec *stdVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	var nr int
 	sizeBuf := make([]byte, stl.Sizeof[uint32]())
