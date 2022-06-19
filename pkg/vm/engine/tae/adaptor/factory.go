@@ -44,12 +44,12 @@ func MakeVector(typ types.Type, opts ...*Options) (vec Vector) {
 	return
 }
 
-func BuildBatch(attrs []types.Attr, capacity int) *Batch {
+func BuildBatch(attrs []string, colTypes []types.Type, capacity int) *Batch {
 	opts := new(Options)
 	opts.Capacity = capacity
 	bat := NewBatch()
-	for _, attr := range attrs {
-		vec := MakeVector(attr.GetType(), opts)
+	for i, attr := range attrs {
+		vec := MakeVector(colTypes[i], opts)
 		bat.AddVector(attr, vec)
 	}
 	return bat

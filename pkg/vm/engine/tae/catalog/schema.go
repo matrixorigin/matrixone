@@ -433,6 +433,14 @@ func (s *Schema) AllTypes() []types.Type {
 	return ts
 }
 
+func (s *Schema) AllNames() []string {
+	names := make([]string, 0, len(s.ColDefs))
+	for _, def := range s.ColDefs {
+		names = append(names, def.Name)
+	}
+	return names
+}
+
 func (s *Schema) Finalize(rebuild bool) (err error) {
 	if s == nil {
 		err = fmt.Errorf("%w: nil schema", ErrSchemaValidation)

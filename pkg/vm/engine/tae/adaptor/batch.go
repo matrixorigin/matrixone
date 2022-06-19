@@ -2,8 +2,6 @@ package adaptor
 
 import (
 	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 func NewBatch() *Batch {
@@ -14,13 +12,13 @@ func NewBatch() *Batch {
 	}
 }
 
-func (bat *Batch) AddVector(attr types.Attr, vec Vector) {
-	if _, exist := bat.nameidx[attr.GetName()]; exist {
-		panic(fmt.Errorf("duplicate vector %s", attr.GetName()))
+func (bat *Batch) AddVector(attr string, vec Vector) {
+	if _, exist := bat.nameidx[attr]; exist {
+		panic(fmt.Errorf("duplicate vector %s", attr))
 	}
 	idx := len(bat.Vecs)
-	bat.nameidx[attr.GetName()] = idx
-	bat.Attrs = append(bat.Attrs, attr.GetName())
+	bat.nameidx[attr] = idx
+	bat.Attrs = append(bat.Attrs, attr)
 	bat.Vecs = append(bat.Vecs, vec)
 }
 
