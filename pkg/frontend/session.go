@@ -58,6 +58,14 @@ type TxnState struct {
 	err       error
 }
 
+type ShowStatementType int
+
+const (
+	NotShowStatement   ShowStatementType = 0
+	ShowCreateDatabase ShowStatementType = 1
+	ShowCreateTable    ShowStatementType = 2
+)
+
 func InitTxnState() *TxnState {
 	return &TxnState{
 		state:     TxnInit,
@@ -165,8 +173,8 @@ type Session struct {
 
 	IsInternal bool
 
-	ep              *tree.ExportParam
-	showCreateTable bool
+	ep           *tree.ExportParam
+	showStmtType ShowStatementType
 
 	closeRef      *CloseExportData
 	txnHandler    *TxnHandler
