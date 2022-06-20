@@ -197,10 +197,31 @@ func (vec *stdVector[T]) Bytes() *stl.Bytes {
 	return bs
 }
 
-func (vec *stdVector[T]) ReadBytes(bs *stl.Bytes) {
+func (vec *stdVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 	if bs == nil {
 		return
 	}
+	if share {
+		vec.readBytesShared(bs)
+		return
+	}
+	vec.readBytesNotShared(bs)
+}
+
+func (vec *stdVector[T]) readBytesNotShared(bs *stl.Bytes) {
+	vec.Reset()
+	newSize := bs.DataSize()
+	if newSize == 0 {
+		return
+	}
+	capacity := newSize / stl.Sizeof[T]()
+	vec.tryExpand(capacity)
+	vec.buf = vec.node.GetBuf()[:newSize]
+	copy(vec.buf[0:], bs.Data)
+	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
+}
+
+func (vec *stdVector[T]) readBytesShared(bs *stl.Bytes) {
 	if vec.node != nil {
 		vec.alloc.Free(vec.node)
 		vec.node = nil

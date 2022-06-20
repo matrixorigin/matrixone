@@ -212,17 +212,17 @@ func (vec *strVector[T]) Bytes() *stl.Bytes {
 	return bs
 }
 
-func (vec *strVector[T]) ReadBytes(bs *stl.Bytes) {
+func (vec *strVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 	if bs == nil {
 		return
 	}
 	bs1 := stl.NewBytes()
 	bs1.Data = bs.Data
-	vec.data.ReadBytes(bs1)
+	vec.data.ReadBytes(bs1, share)
 	bs1.Data = bs.LengthBuf()
-	vec.lengths.ReadBytes(bs1)
+	vec.lengths.ReadBytes(bs1, share)
 	bs1.Data = bs.OffsetBuf()
-	vec.offsets.ReadBytes(bs1)
+	vec.offsets.ReadBytes(bs1, share)
 }
 
 func (vec *strVector[T]) ReadFrom(r io.Reader) (n int64, err error) {

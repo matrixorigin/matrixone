@@ -29,7 +29,7 @@ type Vector[T any] interface {
 	Data() []byte
 	Slice() []T
 	Bytes() *Bytes
-	ReadBytes(*Bytes)
+	ReadBytes(buf *Bytes, share bool)
 	DataWindow(offset, length int) []byte
 	SliceWindow(offset, length int) []T
 

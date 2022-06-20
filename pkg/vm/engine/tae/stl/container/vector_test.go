@@ -325,20 +325,31 @@ func TestVector10(t *testing.T) {
 	bs := vec.Bytes()
 
 	vec2 := NewVector[[]byte](opts)
+	vec2.ReadBytes(bs, true)
 	t.Log(vec2.String())
-	vec2.ReadBytes(bs)
 	assert.Equal(t, vec.Length(), vec2.Length())
 	assert.Equal(t, vec.Capacity(), vec2.Capacity())
 	assert.Equal(t, vec.Get(0), vec2.Get(0))
 	assert.Equal(t, vec.Get(1), vec2.Get(1))
 	assert.Equal(t, vec.Get(2), vec2.Get(2))
 	assert.Equal(t, vec.Get(3), vec2.Get(3))
-	t.Log(vec.String())
-	t.Log(vec2.String())
-	t.Log(opts.Allocator.Usage())
+	assert.Zero(t, vec2.Allocated())
+
+	vec3 := NewVector[[]byte](opts)
+	vec3.ReadBytes(bs, false)
+	t.Log(vec3.String())
+	assert.Equal(t, vec.Allocated(), vec3.Allocated())
+	assert.Equal(t, vec.Length(), vec3.Length())
+	for i := 0; i < vec.Length(); i++ {
+		assert.Equal(t, vec.Get(i), vec3.Get(i))
+	}
+	vec3.Append([]byte("x1"))
+	assert.Equal(t, vec.Length()+1, vec3.Length())
+
 	vec.Close()
 	vec2.Close()
-	// assert.Zero(t, opts.Allocator.Usage())
+	vec3.Close()
+	assert.Zero(t, opts.Allocator.Usage())
 }
 
 func TestVector11(t *testing.T) {
