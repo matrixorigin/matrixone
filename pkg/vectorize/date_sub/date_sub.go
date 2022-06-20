@@ -31,6 +31,12 @@ func init() {
 }
 
 func dateSub(xs []types.Date, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Date) []types.Date {
+	if len(ys) == 0 || len(zs) == 0 {
+		for i := range xs {
+			nulls.Add(ns, uint64(i))
+		}
+		return rs
+	}
 	for i, d := range xs {
 		date, success := d.ToTime().AddInterval(-ys[0], types.IntervalType(zs[0]), true)
 		if success {
@@ -44,6 +50,12 @@ func dateSub(xs []types.Date, ys []int64, zs []int64, ns *nulls.Nulls, rs []type
 }
 
 func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Datetime) []types.Datetime {
+	if len(ys) == 0 || len(zs) == 0 {
+		for i := range xs {
+			nulls.Add(ns, uint64(i))
+		}
+		return rs
+	}
 	for i, d := range xs {
 		date, success := d.AddInterval(-ys[0], types.IntervalType(zs[0]), false)
 		if success {
@@ -57,6 +69,13 @@ func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, ns *nulls.Nulls, r
 }
 
 func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs *types.Bytes) *types.Bytes {
+	if len(ys) == 0 || len(zs) == 0 {
+		for i := range xs.Lengths {
+			nulls.Add(ns, uint64(i))
+			rs.AppendOnce([]byte(""))
+		}
+		return rs
+	}
 	for i := range xs.Lengths {
 		str := string(xs.Get(int64(i)))
 		if types.UnitIsDayOrLarger(types.IntervalType(zs[0])) {
@@ -72,7 +91,7 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs 
 				continue
 			}
 		}
-		d, e := types.ParseDatetime(str, 0)
+		d, e := types.ParseDatetime(str, 6)
 		if e != nil {
 			// set null
 			nulls.Add(ns, uint64(i))
@@ -81,7 +100,11 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs 
 		}
 		date, success := d.AddInterval(-ys[0], types.IntervalType(zs[0]), false)
 		if success {
-			rs.AppendOnce([]byte(date.String()))
+			if date.MicroSec() == 0 {
+				rs.AppendOnce([]byte(date.String2(0)))
+			} else {
+				rs.AppendOnce([]byte(date.String2(6)))
+			}
 		} else {
 			nulls.Add(ns, uint64(i))
 			rs.AppendOnce([]byte(""))

@@ -39,3 +39,11 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 	}
 	return db.txnDatabase.DropRelationByName(name)
 }
+
+func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
+	if isSys := sysTableNames[name]; isSys {
+		err = catalog.ErrNotPermitted
+		return
+	}
+	return db.txnDatabase.TruncateByName(name)
+}
