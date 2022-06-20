@@ -18,22 +18,19 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
-// IDAllocator is used to fetch new replica ID.
-type IDAllocator interface {
-	// When IDAllocator was exhaused temporarily, return `false`.
-	Next() (uint64, bool)
-}
+// FIXME: placeholder
+type idGenerator func() (uint64, bool)
 
 // CheckService check dn state and generate operator for expired dn store.
 // The less shard id, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
-	idAlloc IDAllocator, dnState hapb.DNState, currTick uint64,
-) []*operator.Operator {
+	cluster hakeeper.ClusterInfo,
+	dnState hakeeper.DNState, currTick uint64, idGen idGenerator,
+) []Operator {
 	stores, shards := parseDnState(dnState, currTick)
 	if len(stores.workingStores()) < 1 {
 		// warning with no working store
@@ -46,7 +43,7 @@ func Check(
 		return shardIDs[i] < shardIDs[j]
 	})
 
-	var operators []*operator.Operator
+	var ops []Operator
 	for _, shardID := range shardIDs {
 		shard, err := shards.getShard(shardID)
 		if err != nil {
@@ -54,25 +51,22 @@ func Check(
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, stores.workingStores(), idAlloc)
-		if len(steps) > 0 {
-			operators = append(operators,
-				operator.NewOperator("dn", shardID, operator.NoopEpoch, steps...),
-			)
+		steps := checkShard(shard, stores.workingStores(), idGen)
+		for _, step := range steps {
+			ops = append(ops, Operator{Step: step})
 		}
-
 	}
-	return operators
+	return ops
 }
 
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
 func checkShard(
-	shard *dnShard, workingStores []*dnStore, idAlloc IDAllocator,
-) []operator.OpStep {
+	shard *dnShard, workingStores []*dnStore, idGen idGenerator,
+) []Step {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica
-		newReplicaID, ok := idAlloc.Next()
+		newReplicaID, ok := idGen()
 		if !ok {
 			// temproray failure when allocate replica ID
 			return nil
@@ -84,38 +78,22 @@ func checkShard(
 			return nil
 		}
 
-		return []operator.OpStep{
-			newAddStep(target, shard.shardID, newReplicaID),
+		return []Step{
+			newLaunchStep(shard.shardID, newReplicaID, target),
 		}
 	case 1: // ignore expired replicas
 		return nil
 	default: // remove extra working replicas
 		replicas := extraWorkingReplicas(shard)
-		steps := make([]operator.OpStep, 0, len(replicas))
-		for _, r := range replicas {
-			steps = append(steps,
-				newRemoveStep(r.storeID, r.shardID, r.replicaID),
-			)
+		steps := make([]Step, 0, len(replicas))
+		for _, replica := range replicas {
+			steps = append(steps, newStopStep(
+				replica.shardID,
+				replica.replicaID,
+				replica.storeID,
+			))
 		}
 		return steps
-	}
-}
-
-// newAddStep constructs operator to launch a dn shard replica
-func newAddStep(target StoreID, shardID, replicaID uint64) operator.OpStep {
-	return operator.AddDnReplica{
-		StoreID:   string(target),
-		ShardID:   shardID,
-		ReplicaID: replicaID,
-	}
-}
-
-// newRemoveStep constructs operator to remove a dn shard replica
-func newRemoveStep(target StoreID, shardID, replicaID uint64) operator.OpStep {
-	return operator.RemoveDnReplica{
-		StoreID:   string(target),
-		ShardID:   shardID,
-		ReplicaID: replicaID,
 	}
 }
 

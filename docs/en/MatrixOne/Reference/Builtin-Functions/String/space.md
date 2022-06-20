@@ -2,7 +2,7 @@
 
 ## **Description**
 
-SPACE(N) Returns a string consisting of N space characters.
+SPACE(N) returns a string consisting of N space characters.
 
 ## **Syntax**
 

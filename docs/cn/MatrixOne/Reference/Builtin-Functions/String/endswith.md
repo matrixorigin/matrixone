@@ -14,8 +14,8 @@
 
 |  参数   | 说明  |
 |  ----  | ----  |
-| str | 必要参数.  CHAR和VARCHAR类型都支持.|
-| suffix | 必要参数.  CHAR和VARCHAR类型都支持.|
+| str | 必要参数。CHAR和VARCHAR类型都支持。|
+| suffix | 必要参数。CHAR和VARCHAR类型都支持。|
 
 ## **返回值**
 
