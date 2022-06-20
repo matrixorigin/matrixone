@@ -76,8 +76,3 @@ func DefaultVal[T any]() T {
 	var v T
 	return v
 }
-
-type Attr interface {
-	GetName() string
-	GetType() Type
-}
