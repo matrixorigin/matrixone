@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	dto "github.com/prometheus/client_model/go"
+	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,29 +107,25 @@ func TestMetricNoProm(t *testing.T) {
 	})
 }
 
+func TestDescExtra(t *testing.T) {
+	desc := prom.NewDesc("sys_xxx_yyy_FEFA", "help info", []string{"is_internal", "xy"}, map[string]string{"node": "1"})
+	extra := newDescExtra(desc)
+	assert.Equal(t, extra.fqName, "sys_xxx_yyy_FEFA")
+	assert.Equal(t, extra.labels[0].GetName(), "is_internal")
+	assert.Equal(t, extra.labels[1].GetName(), "node")
+	assert.Equal(t, extra.labels[2].GetName(), "xy")
+}
+
 func TestCreateTable(t *testing.T) {
 	buf := new(bytes.Buffer)
 	name := "sql_test_counter"
-	l1, v1 := "time", "12"
-	counterV := 123.0
-	sql := createTableSqlFromMetricFamily(&dto.MetricFamily{
-		Name: &name,
-		Type: dto.MetricType_COUNTER.Enum(),
-		Metric: []*dto.Metric{
-			{Label: []*dto.LabelPair{{Name: &l1, Value: &v1}}, Counter: &dto.Counter{Value: &counterV}},
-		},
-	}, buf)
+	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf)
 	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20), `time` varchar(20))",
+		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
 		METRIC_DB, name, LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
 	))
 
-	sql = createTableSqlFromMetricFamily(&dto.MetricFamily{
-		Name:   &name,
-		Type:   dto.MetricType_COUNTER.Enum(),
-		Metric: []*dto.Metric{{Counter: &dto.Counter{Value: &counterV}}},
-	}, buf)
-
+	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf)
 	assert.Equal(t, sql, fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20))",
 		METRIC_DB, name, LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,

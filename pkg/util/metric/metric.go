@@ -126,10 +126,9 @@ func StopMetricSync() {
 
 func mustRegiterToProm(collector prom.Collector) {
 	if err := prom.Register(collector); err != nil {
-		// ignore duplicate register error
-		if _, ok := err.(prom.AlreadyRegisteredError); !ok {
-			panic(err)
-		}
+		// err is either registering a collector more than once or metrics have duplicate description.
+		// in any case, we respect the existing collectors in the prom registry
+		logutil.Debugf("[Metric] register to prom register: %v", err)
 	}
 }
 
@@ -155,43 +154,64 @@ func initTables(ieFactory func() ie.InternalExecutor) {
 		mustExec(SQL_DROP_DB)
 	}
 	mustExec(SQL_CREATE_DB)
-	var gatherCost, createCost time.Duration
+	var createCost time.Duration
 	defer func() {
 		logutil.Debugf(
-			"[Metric] init metrics tables: gather cost %d ms, create cost %d ms",
-			gatherCost.Milliseconds(),
+			"[Metric] init metrics tables: create cost %d ms",
 			createCost.Milliseconds())
 	}()
 	instant := time.Now()
-	mfs, err := registry.Gather()
-	if err != nil {
-		panic(fmt.Sprintf("[Metric] init metric tables error: %v", err))
-	}
-	gatherCost = time.Since(instant)
-	instant = time.Now()
+
+	descChan := make(chan *prom.Desc, 10)
+
+	go func() {
+		for _, c := range initCollectors {
+			c.Describe(descChan)
+		}
+		close(descChan)
+	}()
 
 	buf := new(bytes.Buffer)
-	for _, mf := range mfs {
-		sql := createTableSqlFromMetricFamily(mf, buf)
+	for desc := range descChan {
+		sql := createTableSqlFromMetricFamily(desc, buf)
 		mustExec(sql)
 	}
+
 	createCost = time.Since(instant)
 }
 
-func createTableSqlFromMetricFamily(mf *dto.MetricFamily, buf *bytes.Buffer) string {
+// instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
+func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer) string {
 	buf.Reset()
+	extra := newDescExtra(desc)
 	buf.WriteString(fmt.Sprintf(
 		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20)",
-		METRIC_DB, mf.GetName(), LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
+		METRIC_DB, extra.fqName, LBL_TIME, LBL_VALUE, LBL_NODE, LBL_ROLE,
 	))
-	// Metric must exists, thus MetricFamily can be created
-	for _, lbl := range mf.Metric[0].Label {
+	for _, lbl := range extra.labels {
 		buf.WriteString(", `")
 		buf.WriteString(lbl.GetName())
 		buf.WriteString("` varchar(20)")
 	}
 	buf.WriteRune(')')
 	return buf.String()
+}
+
+type descExtra struct {
+	orig   *prom.Desc
+	fqName string
+	labels []*dto.LabelPair
+}
+
+// decode inner infomation of a prom.Desc
+func newDescExtra(desc *prom.Desc) *descExtra {
+	str := desc.String()[14:] // strip Desc{fqName: "
+	fqName := str[:strings.Index(str, "\"")]
+	str = str[strings.Index(str, "variableLabels: [")+17:] // spot varlbl list
+	str = str[:strings.Index(str, "]")]
+	varLblCnt := len(strings.Split(str, " "))
+	labels := prom.MakeLabelPairs(desc, make([]string, varLblCnt))
+	return &descExtra{orig: desc, fqName: fqName, labels: labels}
 }
 
 func mustValidLbls(name string, consts prom.Labels, vars []string) {
