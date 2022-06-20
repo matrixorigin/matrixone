@@ -128,12 +128,7 @@ func (vec *stdVector[T]) String() string {
 
 func (vec *stdVector[T]) Append(v T) {
 	if len(vec.slice) == vec.capacity {
-		var newCap int
-		if vec.capacity < 1024 {
-			newCap = vec.capacity * 2
-		} else {
-			newCap = vec.capacity + 1024
-		}
+		newCap := vec.capacity * 2
 		vec.tryExpand(newCap)
 	}
 	vec.buf = append(vec.buf, unsafe.Slice((*byte)(unsafe.Pointer(&v)), int(unsafe.Sizeof(v)))...)
