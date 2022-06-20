@@ -184,7 +184,7 @@ func mockDnShard(
 func TestCheck(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, dnStoreTimeout) + 1
+	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.DnStoreTimeout) + 1
 
 	newReplicaID := uint64(100)
 	idGen := func() (uint64, bool) {
