@@ -4,6 +4,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/container"
@@ -63,6 +64,16 @@ func (vec *vector[T]) String() string             { return vec.impl.String() }
 func (vec *vector[T]) Close()                     { vec.impl.Close() }
 
 func (vec *vector[T]) Window() Vector { return nil }
+
+func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
+	if deletes == nil || deletes.IsEmpty() {
+		return
+	}
+	arr := deletes.ToArray()
+	for i := len(arr) - 1; i >= 0; i-- {
+		vec.Delete(int(arr[i]))
+	}
+}
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int

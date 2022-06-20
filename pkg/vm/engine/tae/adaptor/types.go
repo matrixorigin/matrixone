@@ -3,6 +3,7 @@ package adaptor
 import (
 	"io"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/container"
@@ -29,6 +30,7 @@ type Vector interface {
 	Append(v any)
 	AppendMany(vs ...any)
 	Extend(o Vector)
+	Compact(deletes *roaring.Bitmap)
 
 	Length() int
 	Capacity() int
@@ -51,6 +53,7 @@ type Vector interface {
 type Batch struct {
 	Attrs   []string
 	Vecs    []Vector
+	Deletes *roaring.Bitmap
 	nameidx map[string]int
 	// refidx  map[int]int
 }

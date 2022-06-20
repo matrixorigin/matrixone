@@ -2,6 +2,8 @@ package adaptor
 
 import (
 	"fmt"
+
+	"github.com/RoaringBitmap/roaring"
 )
 
 func NewBatch() *Batch {
@@ -41,6 +43,42 @@ func (bat *Batch) GetVectorByName(name string) Vector {
 // 	pos := bat.refidx[id]
 // 	return bat.Vecs[pos]
 // }
+
+func (bat *Batch) Delete(i int) {
+	if bat.Deletes == nil {
+		bat.Deletes = roaring.BitmapOf(uint32(i))
+	} else {
+		bat.Deletes.Add(uint32(i))
+	}
+}
+
+func (bat *Batch) HasDelete() bool {
+	return bat.Deletes != nil && !bat.Deletes.IsEmpty()
+}
+
+func (bat *Batch) IsDeleted(i int) bool {
+	if !bat.HasDelete() {
+		return false
+	}
+	return bat.Deletes.ContainsInt(i)
+}
+
+func (bat *Batch) DeleteCnt() int {
+	if !bat.HasDelete() {
+		return 0
+	}
+	return int(bat.Deletes.GetCardinality())
+}
+
+func (bat *Batch) Compact() {
+	if !bat.HasDelete() {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		vec.Compact(bat.Deletes)
+	}
+	bat.Deletes = nil
+}
 
 func (bat *Batch) Length() int {
 	return bat.Vecs[0].Length()
