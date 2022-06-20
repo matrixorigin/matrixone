@@ -165,6 +165,13 @@ func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
 	return l.nh.StartReplica(initialReplicas, false, newStateMachine, raftConfig)
 }
 
+func (l *logStore) addReplica(shardID uint64, replicaID uint64,
+	target dragonboat.Target, cci uint64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci)
+}
+
 func (l *logStore) propose(ctx context.Context,
 	session *cli.Session, cmd []byte) (sm.Result, error) {
 	count := 0
