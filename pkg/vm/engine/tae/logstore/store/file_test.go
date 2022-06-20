@@ -166,10 +166,10 @@ func TestVInfo(t *testing.T) {
 		err := vinfo.LogCommit(commitInfo)
 		assert.Nil(t, err)
 	}
-	assert.Equal(t, uint64(end), vinfo.groups[entry.GTCustomizedStart].(*commitGroup).Commits.End)
+	assert.Equal(t, uint64(end), vinfo.groups[entry.GTCustomizedStart].(*commitGroup).Commits.Intervals[0].End)
 	commitInfo := &entry.Info{Group: entry.GTCustomizedStart, GroupLSN: uint64(end + 2)}
 	err := vinfo.LogCommit(commitInfo)
-	assert.NotNil(t, err)
+	assert.Nil(t, err)
 	checkpointInfo := &entry.Info{
 		Group: entry.GTCKp,
 		Checkpoints: []entry.CkpRanges{{
