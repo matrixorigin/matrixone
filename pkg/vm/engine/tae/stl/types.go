@@ -39,6 +39,7 @@ type Vector[T any] interface {
 	Update(i int, v T)
 	Delete(i int) (deleted T)
 	RangeDelete(offset, length int)
+	Reset()
 
 	Capacity() int
 	Length() int

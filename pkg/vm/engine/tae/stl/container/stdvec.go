@@ -183,6 +183,14 @@ func (vec *stdVector[T]) Clone(offset, length int) stl.Vector[T] {
 	return cloned
 }
 
+func (vec *stdVector[T]) Reset() {
+	if vec.Length() == 0 {
+		return
+	}
+	vec.slice = vec.slice[:0]
+	vec.buf = vec.buf[:0]
+}
+
 func (vec *stdVector[T]) Bytes() *stl.Bytes {
 	bs := new(stl.Bytes)
 	bs.Data = vec.buf

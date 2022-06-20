@@ -198,6 +198,12 @@ func (vec *strVector[T]) Clone(offset, length int) stl.Vector[T] {
 	return cloned
 }
 
+func (vec *strVector[T]) Reset() {
+	vec.data.Reset()
+	vec.offsets.Reset()
+	vec.lengths.Reset()
+}
+
 func (vec *strVector[T]) Bytes() *stl.Bytes {
 	bs := new(stl.Bytes)
 	bs.Data = vec.data.Slice()
