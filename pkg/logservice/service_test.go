@@ -15,8 +15,6 @@
 package logservice
 
 import (
-	"fmt"
-	"sync"
 	"testing"
 	"time"
 
