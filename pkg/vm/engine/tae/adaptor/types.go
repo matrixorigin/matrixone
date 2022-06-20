@@ -1,6 +1,8 @@
 package adaptor
 
 import (
+	"io"
+
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/container"
@@ -9,6 +11,7 @@ import (
 
 type MemAllocator = stl.MemAllocator
 type Options = container.Options
+type Bytes = stl.Bytes
 
 type Vector interface {
 	IsView() bool
@@ -18,6 +21,7 @@ type Vector interface {
 	NullMask() *roaring64.Bitmap
 
 	Data() []byte
+	Bytes() *Bytes
 	DataWindow(offset, length int) []byte
 	Get(i int) any
 	Update(i int, v any)
@@ -33,6 +37,13 @@ type Vector interface {
 	GetType() types.Type
 	String() string
 	Window() Vector
+
+	// Marshal() ([]byte, error)
+	// Unmarshal(buf []byte) error
+	WriteTo(w io.Writer) (int64, error)
+	ReadFrom(r io.Reader) (int64, error)
+
+	// ReadVectorFromReader(r io.Reader) (Vector, int64, error)
 
 	Close()
 }
