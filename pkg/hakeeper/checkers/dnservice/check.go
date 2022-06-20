@@ -18,12 +18,13 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
-// IDAllocator fetch new replica ID.
+// IDAllocator is used to fetch new replica ID.
 type IDAllocator interface {
-	// When IDAllocator was exhaused temprory, return `false`
+	// When IDAllocator was exhaused temporarily, return `false`.
 	Next() (uint64, bool)
 }
 
@@ -32,7 +33,7 @@ type IDAllocator interface {
 // NB: the returned order should be deterministic.
 func Check(
 	idAlloc IDAllocator, dnState hapb.DNState, currTick uint64,
-) []Operator {
+) []*operator.Operator {
 	stores, shards := parseDnState(dnState, currTick)
 	if len(stores.workingStores()) < 1 {
 		// warning with no working store
@@ -45,7 +46,7 @@ func Check(
 		return shardIDs[i] < shardIDs[j]
 	})
 
-	var ops []Operator
+	var operators []*operator.Operator
 	for _, shardID := range shardIDs {
 		shard, err := shards.getShard(shardID)
 		if err != nil {
@@ -54,18 +55,21 @@ func Check(
 		}
 
 		steps := checkShard(shard, stores.workingStores(), idAlloc)
-		for _, step := range steps {
-			ops = append(ops, Operator{Step: step})
+		if len(steps) > 0 {
+			operators = append(operators,
+				operator.NewOperator("dn", shardID, operator.NoopEpoch, steps...),
+			)
 		}
+
 	}
-	return ops
+	return operators
 }
 
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
 func checkShard(
 	shard *dnShard, workingStores []*dnStore, idAlloc IDAllocator,
-) []Step {
+) []operator.OpStep {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica
 		newReplicaID, ok := idAlloc.Next()
@@ -80,22 +84,38 @@ func checkShard(
 			return nil
 		}
 
-		return []Step{
-			newLaunchStep(shard.shardID, newReplicaID, target),
+		return []operator.OpStep{
+			newAddStep(target, shard.shardID, newReplicaID),
 		}
 	case 1: // ignore expired replicas
 		return nil
 	default: // remove extra working replicas
 		replicas := extraWorkingReplicas(shard)
-		steps := make([]Step, 0, len(replicas))
-		for _, replica := range replicas {
-			steps = append(steps, newStopStep(
-				replica.shardID,
-				replica.replicaID,
-				replica.storeID,
-			))
+		steps := make([]operator.OpStep, 0, len(replicas))
+		for _, r := range replicas {
+			steps = append(steps,
+				newRemoveStep(r.storeID, r.shardID, r.replicaID),
+			)
 		}
 		return steps
+	}
+}
+
+// newAddStep constructs operator to launch a dn shard replica
+func newAddStep(target StoreID, shardID, replicaID uint64) operator.OpStep {
+	return operator.AddDnReplica{
+		StoreID:   string(target),
+		ShardID:   shardID,
+		ReplicaID: replicaID,
+	}
+}
+
+// newRemoveStep constructs operator to remove a dn shard replica
+func newRemoveStep(target StoreID, shardID, replicaID uint64) operator.OpStep {
+	return operator.RemoveDnReplica{
+		StoreID:   string(target),
+		ShardID:   shardID,
+		ReplicaID: replicaID,
 	}
 }
 

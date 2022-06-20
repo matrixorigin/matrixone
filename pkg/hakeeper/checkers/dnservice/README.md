@@ -1,5 +1,4 @@
 ## TODO
 
-- [ ] Integration with OperatorController framework
-- [ ] Replica ID generator
-
+- [x] Integration with OperatorController framework
+- [x] Replica ID generator
