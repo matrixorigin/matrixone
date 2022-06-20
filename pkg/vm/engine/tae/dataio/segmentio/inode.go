@@ -32,6 +32,8 @@ type Inode struct {
 	size       uint64
 	originSize uint64
 	rows       uint32
+	cols       uint32
+	idxs       uint32
 	mutex      sync.RWMutex
 	extents    []Extent
 	logExtents Extent
@@ -53,4 +55,12 @@ func (i *Inode) GetAlgo() uint8 {
 
 func (i *Inode) GetRows() uint32 {
 	return i.rows
+}
+
+func (i *Inode) GetCols() uint32 {
+	return i.cols
+}
+
+func (i *Inode) GetIdxs() uint32 {
+	return i.idxs
 }

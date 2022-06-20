@@ -36,6 +36,7 @@ const (
 	DropTable
 	DropIndex
 	Deletion
+	Insert
 	Update
 )
 

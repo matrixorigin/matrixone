@@ -121,6 +121,16 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	if !v.IsConst {
 		return v
 	}
+	if v.IsScalarNull() {
+		var i uint64
+		l := uint64(v.Length)
+		temp := make([]uint64, v.Length)
+		for i = 0; i < l; i++ {
+			temp[i] = i
+		}
+		nulls.Add(v.Nsp, temp...)
+		return v
+	}
 	switch v.Typ.Oid {
 	case types.T_bool:
 		expandVector[bool](v, 1, m)
@@ -207,8 +217,7 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 			nulls.Add(v.Nsp, uint64(i))
 		}
 	} else {
-		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
-		val := unsafe.Slice((*T)(addr), sz)[0]
+		val := v.Col.([]T)[0]
 		for i := 0; i < v.Length; i++ {
 			vs[i] = val
 		}
@@ -518,7 +527,7 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 }
 
 func Length(v *Vector) int {
-	if v.IsScalar() {
+	if v.IsScalar() || v.Typ.Oid == types.T_any {
 		return v.Length
 	}
 	switch v.Typ.Oid {
@@ -537,7 +546,7 @@ func setLengthFixed[T any](v *Vector, n int) {
 }
 
 func SetLength(v *Vector, n int) {
-	if v.IsScalar() {
+	if v.IsScalar() || v.Typ.Oid == types.T_any {
 		v.Length = n
 		return
 	}

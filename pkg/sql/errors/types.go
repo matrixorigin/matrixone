@@ -23,11 +23,5 @@ type SqlError struct {
 
 var _ error = (*SqlError)(nil)
 
-func (e *SqlError) Code() string { return e.code }
-func (e *SqlError) Error() string {
-	if len(e.code) > 0 {
-		return fmt.Sprintf("[%v]%v", e.code, e.cause)
-	} else {
-		return fmt.Sprintf("%v", e.cause)
-	}
-}
+func (e *SqlError) Code() string  { return e.code }
+func (e *SqlError) Error() string { return fmt.Sprintf("%v", e.cause) }

@@ -112,8 +112,8 @@ func TestLimitOperator(t *testing.T) {
 				{"1"}, {"2"}, {"3"}, {"4"}, {"5"},
 			},
 		}},
-		{sql: "select a from l_table limit a;", err: "[42000]Undeclared variable 'a'"},
-		{sql: "select a from l_table limit 0.5;", err: "[42000]Undeclared variable '0.5'"},
+		{sql: "select a from l_table limit a;", err: "Undeclared variable 'a'"},
+		{sql: "select a from l_table limit 0.5;", err: "Undeclared variable '0.5'"},
 	}
 	test(t, testCases)
 }

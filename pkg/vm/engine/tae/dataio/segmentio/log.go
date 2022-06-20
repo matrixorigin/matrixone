@@ -78,6 +78,14 @@ func (l *Log) readInode(cache *bytes.Buffer, file *DriverFile) (n int, err error
 		return
 	}
 	n += int(unsafe.Sizeof(file.snode.rows))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.cols); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.cols))
+	if err = binary.Read(cache, binary.BigEndian, &file.snode.idxs); err != nil {
+		return
+	}
+	n += int(unsafe.Sizeof(file.snode.idxs))
 	if err = binary.Read(cache, binary.BigEndian, &extentLen); err != nil {
 		return
 	}
@@ -178,6 +186,8 @@ func (l *Log) replayData(data *bytes.Buffer, offset int64) (pos int, hole uint32
 				file.snode.logExtents.offset = uint32(int(offset) + data.Cap() - cache.Len() - n)
 				l.allocator.CheckAllocations(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
 				l.logFile.driver.nodes[file.name] = file
+				file.Ref()
+				file.OnZeroCB = file.close
 			}
 			if block == nil {
 				l.logFile.driver.lastInode++
@@ -204,7 +214,10 @@ func (l *Log) RemoveInode(file *DriverFile) error {
 	if err != nil {
 		return err
 	}
-	l.allocator.Free(file.snode.logExtents.offset, file.snode.logExtents.length)
+	if file.snode.logExtents.length == 0 {
+		return nil
+	}
+	l.allocator.Free(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
 	return nil
 }
 
@@ -244,6 +257,12 @@ func (l *Log) Append(file *DriverFile) error {
 	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.rows); err != nil {
 		return err
 	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.cols); err != nil {
+		return err
+	}
+	if err = binary.Write(&ibuffer, binary.BigEndian, file.snode.idxs); err != nil {
+		return err
+	}
 	if err = binary.Write(&ibuffer, binary.BigEndian, uint64(len(file.snode.extents))); err != nil {
 		return err
 	}
@@ -277,13 +296,15 @@ func (l *Log) Append(file *DriverFile) error {
 			logutil.Infof("remove file: %v, but it is empty", file.name)
 			return nil
 		}
-		err = l.CoverState(uint32(file.snode.logExtents.offset+LOG_START), REMOVE)
+		err = l.CoverState(file.snode.logExtents.offset, REMOVE)
 		if err != nil {
 			return err
 		}
 	}
-	l.allocator.Free(file.snode.logExtents.offset, file.snode.logExtents.length)
-	file.snode.logExtents.offset = uint32(offset)
+	if file.snode.logExtents.length > 0 {
+		l.allocator.Free(file.snode.logExtents.offset-LOG_START, file.snode.logExtents.length)
+	}
+	file.snode.logExtents.offset = uint32(offset) + LOG_START
 	file.snode.logExtents.length = uint32(allocated)
 	return nil
 }

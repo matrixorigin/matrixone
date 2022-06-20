@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
 // FIXME: placeholder

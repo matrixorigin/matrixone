@@ -29,10 +29,17 @@ import (
 )
 
 var (
-	constBType = types.Type{Oid: types.T_bool}
-	constIType = types.Type{Oid: types.T_int64}
-	constDType = types.Type{Oid: types.T_float64}
-	constSType = types.Type{Oid: types.T_varchar}
+	constBType          = types.Type{Oid: types.T_bool}
+	constIType          = types.Type{Oid: types.T_int64}
+	constUType          = types.Type{Oid: types.T_uint64}
+	constFType          = types.Type{Oid: types.T_float32}
+	constDType          = types.Type{Oid: types.T_float64}
+	constSType          = types.Type{Oid: types.T_varchar}
+	constDateType       = types.Type{Oid: types.T_date}
+	constDatetimeType   = types.Type{Oid: types.T_datetime}
+	constDecimal64Type  = types.Type{Oid: types.T_decimal64}
+	constDecimal128Type = types.Type{Oid: types.T_decimal128}
+	constTimestampType  = types.Type{Oid: types.T_timestamp}
 )
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
@@ -51,9 +58,31 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			case *plan.Const_Ival:
 				vec = vector.NewConst(constIType)
 				vec.Col = []int64{t.C.GetIval()}
+			case *plan.Const_Fval:
+				vec = vector.NewConst(constFType)
+				vec.Col = []float32{t.C.GetFval()}
+			case *plan.Const_Uval:
+				vec = vector.NewConst(constUType)
+				vec.Col = []uint64{t.C.GetUval()}
 			case *plan.Const_Dval:
 				vec = vector.NewConst(constDType)
 				vec.Col = []float64{t.C.GetDval()}
+			case *plan.Const_Dateval:
+				vec = vector.NewConst(constDateType)
+				vec.Col = []types.Date{types.Date(t.C.GetDateval())}
+			case *plan.Const_Datetimeval:
+				vec = vector.NewConst(constDatetimeType)
+				vec.Col = []types.Datetime{types.Datetime(t.C.GetDatetimeval())}
+			case *plan.Const_Decimal64Val:
+				vec = vector.NewConst(constDecimal64Type)
+				vec.Col = []types.Decimal64{types.Decimal64(t.C.GetDecimal64Val())}
+			case *plan.Const_Decimal128Val:
+				vec = vector.NewConst(constDecimal128Type)
+				d128 := t.C.GetDecimal128Val()
+				vec.Col = []types.Decimal128{{Lo: d128.Lo, Hi: d128.Hi}}
+			case *plan.Const_Timestampval:
+				vec = vector.NewConst(constTimestampType)
+				vec.Col = []types.Timestamp{types.Timestamp(t.C.GetTimestampval())}
 			case *plan.Const_Sval:
 				vec = vector.NewConst(constSType)
 				sval := t.C.GetSval()
@@ -77,7 +106,11 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			Precision: t.T.Typ.GetPrecision(),
 		}), nil
 	case *plan.Expr_Col:
-		return bat.Vecs[t.Col.ColPos], nil
+		vec := bat.Vecs[t.Col.ColPos]
+		if vec.IsScalarNull() {
+			vec.Typ = types.T(expr.Typ.GetId()).ToType()
+		}
+		return vec, nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(overloadId)

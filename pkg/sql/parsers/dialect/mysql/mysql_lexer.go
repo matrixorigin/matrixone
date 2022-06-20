@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 
@@ -76,7 +77,8 @@ func (l *Lexer) Lex(lval *yySymType) int {
 }
 
 func (l *Lexer) Error(err string) {
-	l.scanner.LastError = scanner.PositionedErr{Err: err, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
+	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)
+	l.scanner.LastError = scanner.PositionedErr{Err: errMsg, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {
