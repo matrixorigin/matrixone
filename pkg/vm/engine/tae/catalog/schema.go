@@ -134,6 +134,18 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
+func (s *Schema) Clone() *Schema {
+	buf, err := s.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	ns := NewEmptySchema(s.Name)
+	r := bytes.NewBuffer(buf)
+	if _, err = ns.ReadFrom(r); err != nil {
+		panic(err)
+	}
+	return ns
+}
 func (s *Schema) GetSortKeyType() types.Type {
 	if s.IsSinglePK() {
 		return s.GetSingleSortKey().Type

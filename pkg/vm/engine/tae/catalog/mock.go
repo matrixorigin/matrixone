@@ -131,6 +131,10 @@ func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) 
 	return
 }
 
+func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err error) {
+	panic("not implemented")
+}
+
 func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err error) {
 	entry, err := h.entry.DropTableEntry(name, h.Txn)
 	if err != nil {
