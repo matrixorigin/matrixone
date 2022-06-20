@@ -1,35 +1,4 @@
 {
-    "__inputs": [
-        {
-            "name": "DS_MYSQL-MO",
-            "label": "MySQL-MO",
-            "description": "",
-            "type": "datasource",
-            "pluginId": "mysql",
-            "pluginName": "MySQL"
-        }
-    ],
-    "__elements": [],
-    "__requires": [
-        {
-            "type": "grafana",
-            "id": "grafana",
-            "name": "Grafana",
-            "version": "8.4.5"
-        },
-        {
-            "type": "datasource",
-            "id": "mysql",
-            "name": "MySQL",
-            "version": "1.0.0"
-        },
-        {
-            "type": "panel",
-            "id": "timeseries",
-            "name": "Time series",
-            "version": ""
-        }
-    ],
     "annotations": {
         "list": [
             {
@@ -48,8 +17,8 @@
     "editable": true,
     "fiscalYearStartMonth": 0,
     "graphTooltip": 0,
-    "id": null,
-    "iteration": 1654654415181,
+    "id": 4,
+    "iteration": 1655711770352,
     "links": [],
     "liveNow": false,
     "panels": [
@@ -69,9 +38,9 @@
         {
             "datasource": {
                 "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
+                "uid": "${datasource}"
             },
-            "description": "processed statement count increasing rate in the past 15 seconds",
+            "description": "processed statement count increasing rate in the past 30 seconds",
             "fieldConfig": {
                 "defaults": {
                     "color": {
@@ -149,12 +118,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${datasource}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  unix_timestamp(collecttime) AS time_sec,\n  sum(value) as value,\n  type as metric\nFROM sql_statement_total\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY collecttime, type\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"30s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_statement_total\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"30s\", 0), type\nORDER BY 1",
                     "refId": "A",
                     "select": [
                         [
@@ -183,9 +156,9 @@
         {
             "datasource": {
                 "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
+                "uid": "${datasource}"
             },
-            "description": "SQL processing time in seconds, averaged by the past 15 seconds",
+            "description": "SQL processing time in seconds, averaged by the past 30 seconds",
             "fieldConfig": {
                 "defaults": {
                     "color": {
@@ -265,14 +238,14 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"15s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_latency_seconds\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"15s\", 0), type\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  $__timeGroup(collecttime, \"30s\", 0) AS time_sec,\n  avg(value) as value,\n  type as metric\nFROM sql_latency_seconds\nWHERE\n  $__timeFilter(collecttime) AND internal=\"0\"\nGROUP BY $__timeGroup(collecttime, \"30s\", 0), type\nORDER BY 1",
                     "refId": "A",
                     "select": [
                         [
@@ -301,7 +274,7 @@
         {
             "datasource": {
                 "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
+                "uid": "${datasource}"
             },
             "description": "Total CPU time in used by MO server",
             "fieldConfig": {
@@ -338,6 +311,7 @@
                         }
                     },
                     "mappings": [],
+                    "max": 100,
                     "min": 0,
                     "thresholds": {
                         "mode": "absolute",
@@ -352,7 +326,7 @@
                             }
                         ]
                     },
-                    "unit": "s"
+                    "unit": "percent"
                 },
                 "overrides": []
             },
@@ -377,12 +351,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${datasource}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as value\nFROM process_cpu_seconds_total\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as cpu\nFROM process_cpu_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -405,7 +383,7 @@
         {
             "datasource": {
                 "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
+                "uid": "${datasource}"
             },
             "description": "Total memory used by MO server，averaged by the past 1 minute",
             "fieldConfig": {
@@ -486,14 +464,14 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as memory\nFROM process_resident_memory_bytes\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as memory\nFROM process_resident_memory_bytes\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -516,7 +494,7 @@
         {
             "datasource": {
                 "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
+                "uid": "${datasource}"
             },
             "description": "number of open file descriptors and its max limit",
             "fieldConfig": {
@@ -592,6 +570,10 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${datasource}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
@@ -620,6 +602,10 @@
                     ]
                 },
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${datasource}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "hide": false,
@@ -666,7 +652,7 @@
         {
             "datasource": {
                 "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
+                "uid": "${datasource}"
             },
             "description": "CPU Percentage on the current machine, averaged by the number of logical cores",
             "fieldConfig": {
@@ -743,12 +729,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${datasource}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '30s') as time_sec,\n  avg(value) as cpu\nFROM sys_cpu_combined_percent\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '30s')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as cpu\nFROM sys_cpu_combined_percent\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -776,7 +766,7 @@
         {
             "datasource": {
                 "type": "mysql",
-                "uid": "${DS_MYSQL-MO}"
+                "uid": "${datasource}"
             },
             "description": "Memory usage on the current machine",
             "fieldConfig": {
@@ -851,12 +841,16 @@
             "pluginVersion": "8.4.5",
             "targets": [
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${datasource}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "metricColumn": "none",
                     "queryType": "randomWalk",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as used\nFROM sys_memory_used\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as used\nFROM sys_memory_used\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "A",
                     "select": [
                         [
@@ -878,12 +872,16 @@
                     ]
                 },
                 {
+                    "datasource": {
+                        "type": "mysql",
+                        "uid": "${datasource}"
+                    },
                     "format": "time_series",
                     "group": [],
                     "hide": false,
                     "metricColumn": "none",
                     "rawQuery": true,
-                    "rawSql": "SELECT\n  $__timeGroup(collecttime, '1m') as time_sec,\n  avg(value) as available\nFROM sys_memory_available\nWHERE $__timeFilter(collecttime)\nGROUP by $__timeGroup(collecttime, '1m')\nORDER BY collecttime",
+                    "rawSql": "SELECT\n  collecttime as time_sec,\n  value as available\nFROM sys_memory_available\nWHERE $__timeFilter(collecttime)\nORDER BY collecttime",
                     "refId": "B",
                     "select": [
                         [
@@ -917,7 +915,7 @@
         "list": [
             {
                 "current": {
-                    "selected": false,
+                    "selected": true,
                     "text": "MySQL-MO",
                     "value": "MySQL-MO"
                 },
@@ -927,6 +925,7 @@
                 "name": "datasource",
                 "options": [],
                 "query": "mysql",
+                "queryValue": "",
                 "refresh": 1,
                 "regex": "",
                 "skipUrlSync": false,
@@ -956,6 +955,6 @@
     "timezone": "",
     "title": "MO-Overview",
     "uid": "L4yqe2_7k",
-    "version": 3,
+    "version": 4,
     "weekStart": ""
 }

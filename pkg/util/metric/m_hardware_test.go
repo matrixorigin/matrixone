@@ -27,7 +27,7 @@ import (
 func TestHardwareCPU(t *testing.T) {
 	Convey("collect cpu succ", t, func() {
 		reg := prom.NewRegistry()
-		reg.MustRegister(newHardwareStatsCollector(cpuPercent{}, cpuTotal{}))
+		reg.MustRegister(newBatchStatsCollector(cpuPercent{}, cpuTotal{}))
 
 		mf, err := reg.Gather()
 		So(err, ShouldBeNil)
@@ -51,7 +51,7 @@ func TestHardwareCPU(t *testing.T) {
 func TestHardwareMem(t *testing.T) {
 	Convey("collect mem succ", t, func() {
 		reg := prom.NewRegistry()
-		reg.MustRegister(newHardwareStatsCollector(memAvail{}, memUsed{}))
+		reg.MustRegister(newBatchStatsCollector(memAvail{}, memUsed{}))
 
 		mf, err := reg.Gather()
 		So(err, ShouldBeNil)
@@ -69,14 +69,14 @@ func (c errorMetric) Desc() *prom.Desc {
 	)
 }
 
-func (c errorMetric) Metric(_ *stats) (prom.Metric, error) {
+func (c errorMetric) Metric(_ *statCaches) (prom.Metric, error) {
 	return nil, errors.New("Something went wrong")
 }
 
 func TestHardwareError(t *testing.T) {
 	Convey("collect no error metric", t, func() {
 		reg := prom.NewRegistry()
-		reg.MustRegister(newHardwareStatsCollector(errorMetric{}))
+		reg.MustRegister(newBatchStatsCollector(errorMetric{}))
 
 		mf, err := reg.Gather()
 		So(err, ShouldBeNil)
