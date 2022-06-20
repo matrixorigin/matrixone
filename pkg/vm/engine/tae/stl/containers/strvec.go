@@ -8,7 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
-func NewStrVector[T any](opts ...*Options) *strVector[T] {
+func NewStrVector[T any](opts ...*Options) *StrVector[T] {
 	var capacity int
 	var alloc stl.MemAllocator
 	lenOpt := new(Options)
@@ -48,14 +48,14 @@ func NewStrVector[T any](opts ...*Options) *strVector[T] {
 	lengths := NewStdVector[uint32](lenOpt)
 	data := NewStdVector[byte](dataOpt)
 
-	return &strVector[T]{
+	return &StrVector[T]{
 		offsets: offsets,
 		lengths: lengths,
 		data:    data,
 	}
 }
 
-func (vec *strVector[T]) Close() {
+func (vec *StrVector[T]) Close() {
 	if vec.offsets != nil {
 		vec.offsets.Close()
 	}
@@ -67,33 +67,33 @@ func (vec *strVector[T]) Close() {
 	}
 }
 
-func (vec *strVector[T]) GetAllocator() stl.MemAllocator {
+func (vec *StrVector[T]) GetAllocator() stl.MemAllocator {
 	return vec.offsets.GetAllocator()
 }
 
-func (vec *strVector[T]) Length() int   { return vec.lengths.Length() }
-func (vec *strVector[T]) Capacity() int { return vec.lengths.Capacity() }
-func (vec *strVector[T]) Allocated() int {
+func (vec *StrVector[T]) Length() int   { return vec.lengths.Length() }
+func (vec *StrVector[T]) Capacity() int { return vec.lengths.Capacity() }
+func (vec *StrVector[T]) Allocated() int {
 	return vec.lengths.Allocated() + vec.offsets.Allocated() + vec.data.Allocated()
 }
-func (vec *strVector[T]) IsView() bool             { return false }
-func (vec *strVector[T]) Data() []byte             { return vec.data.Data() }
-func (vec *strVector[T]) Slice() []T               { panic("not support") }
-func (vec *strVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
-func (vec *strVector[T]) DataWindow(offset, length int) []byte {
+func (vec *StrVector[T]) IsView() bool             { return false }
+func (vec *StrVector[T]) Data() []byte             { return vec.data.Data() }
+func (vec *StrVector[T]) Slice() []T               { panic("not support") }
+func (vec *StrVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
+func (vec *StrVector[T]) DataWindow(offset, length int) []byte {
 	start := vec.offsets.Get(offset)
 	eoff := vec.offsets.Get(offset + length - 1)
 	elen := vec.lengths.Get(offset + length - 1)
 	return vec.data.Data()[start:(eoff + elen)]
 }
-func (vec *strVector[T]) Desc() string {
+func (vec *StrVector[T]) Desc() string {
 	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
 		vec.Length(),
 		vec.Capacity(),
 		vec.Allocated())
 	return s
 }
-func (vec *strVector[T]) String() string {
+func (vec *StrVector[T]) String() string {
 	s := vec.Desc()
 	end := 100
 	if vec.Length() < end {
@@ -110,7 +110,7 @@ func (vec *strVector[T]) String() string {
 	return s
 }
 
-func (vec *strVector[T]) Append(v T) {
+func (vec *StrVector[T]) Append(v T) {
 	val := any(v).([]byte)
 	length := len(val)
 	offset := vec.data.Length()
@@ -119,13 +119,13 @@ func (vec *strVector[T]) Append(v T) {
 	vec.data.AppendMany(val...)
 }
 
-func (vec *strVector[T]) Get(i int) T {
+func (vec *StrVector[T]) Get(i int) T {
 	s := vec.offsets.Get(i)
 	l := vec.lengths.Get(i)
 	return any(vec.data.Slice()[s : s+l]).(T)
 }
 
-func (vec *strVector[T]) Update(i int, v T) {
+func (vec *StrVector[T]) Update(i int, v T) {
 	val := any(v).([]byte)
 	nlen := len(val)
 
@@ -147,7 +147,7 @@ func (vec *strVector[T]) Update(i int, v T) {
 	}
 }
 
-func (vec *strVector[T]) Delete(i int) (deleted T) {
+func (vec *StrVector[T]) Delete(i int) (deleted T) {
 	s := vec.offsets.Get(i)
 	l := vec.lengths.Get(i)
 
@@ -162,19 +162,19 @@ func (vec *strVector[T]) Delete(i int) (deleted T) {
 	return
 }
 
-func (vec *strVector[T]) RangeDelete(offset, length int) {
+func (vec *StrVector[T]) RangeDelete(offset, length int) {
 	for i := offset + length - 1; i >= offset; i-- {
 		vec.Delete(i)
 	}
 }
 
-func (vec *strVector[T]) AppendMany(vals ...T) {
+func (vec *StrVector[T]) AppendMany(vals ...T) {
 	for _, val := range vals {
 		vec.Append(val)
 	}
 }
 
-func (vec *strVector[T]) Clone(offset, length int) stl.Vector[T] {
+func (vec *StrVector[T]) Clone(offset, length int) stl.Vector[T] {
 	opts := &Options{
 		Capacity:  length,
 		Allocator: vec.GetAllocator(),
@@ -198,13 +198,13 @@ func (vec *strVector[T]) Clone(offset, length int) stl.Vector[T] {
 	return cloned
 }
 
-func (vec *strVector[T]) Reset() {
+func (vec *StrVector[T]) Reset() {
 	vec.data.Reset()
 	vec.offsets.Reset()
 	vec.lengths.Reset()
 }
 
-func (vec *strVector[T]) Bytes() *stl.Bytes {
+func (vec *StrVector[T]) Bytes() *stl.Bytes {
 	bs := new(stl.Bytes)
 	bs.Data = vec.data.Slice()
 	bs.Offset = vec.offsets.Slice()
@@ -212,7 +212,7 @@ func (vec *strVector[T]) Bytes() *stl.Bytes {
 	return bs
 }
 
-func (vec *strVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
+func (vec *StrVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 	if bs == nil {
 		return
 	}
@@ -225,7 +225,7 @@ func (vec *strVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 	vec.offsets.ReadBytes(bs1, share)
 }
 
-func (vec *strVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+func (vec *StrVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	var nr int64
 	if nr, err = vec.data.ReadFrom(r); err != nil {
 		return
@@ -242,7 +242,7 @@ func (vec *strVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (vec *strVector[T]) WriteTo(w io.Writer) (n int64, err error) {
+func (vec *StrVector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int64
 	if nr, err = vec.data.WriteTo(w); err != nil {
 		return

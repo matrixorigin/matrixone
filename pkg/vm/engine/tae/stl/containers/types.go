@@ -18,7 +18,7 @@ func (opts *Options) DataSize() int {
 	return len(opts.Data.Data)
 }
 
-type stdVector[T any] struct {
+type StdVector[T any] struct {
 	alloc    stl.MemAllocator
 	node     stl.MemNode
 	buf      []byte
@@ -26,10 +26,10 @@ type stdVector[T any] struct {
 	capacity int
 }
 
-type strVector[T any] struct {
-	offsets *stdVector[uint32]
-	lengths *stdVector[uint32]
-	data    *stdVector[byte]
+type StrVector[T any] struct {
+	offsets *StdVector[uint32]
+	lengths *StdVector[uint32]
+	data    *StdVector[byte]
 }
 
 type Vector[T any] struct {
