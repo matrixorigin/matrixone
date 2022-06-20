@@ -47,6 +47,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 	subId := subquery.NodeId
 	subCtx := builder.ctxByNode[subId]
 
+	if subquery.Typ == plan.SubqueryRef_SCALAR && !subCtx.hasSingleRow {
+		return 0, nil, errors.New(errno.InternalError, "runtime scalar subquery not yet supported")
+	}
+
 	subId, preds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
 	if err != nil {
 		return 0, nil, err
