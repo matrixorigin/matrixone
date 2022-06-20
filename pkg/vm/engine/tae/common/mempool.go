@@ -54,6 +54,8 @@ var (
 		256 * K,
 		512 * K,
 		M,
+		2 * M,
+		4 * M,
 	}
 	pools []sync.Pool
 )
