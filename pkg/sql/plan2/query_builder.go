@@ -423,13 +423,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}
 
-				err = ctx.qualifyColumnNames(expr)
+				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
 				if err != nil {
 					return 0, err
 				}
 
 				selectList = append(selectList, tree.SelectExpr{
-					Expr: expr,
+					Expr: newExpr,
 					As:   selectExpr.As,
 				})
 			}
@@ -448,7 +448,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 			}
 
-			err = ctx.qualifyColumnNames(expr)
+			expr, err = ctx.qualifyColumnNames(expr, nil, false)
 			if err != nil {
 				return 0, err
 			}
@@ -526,7 +526,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 	ctx.binder = projectionBinder
 	for _, selectExpr := range selectList {
-		err = ctx.qualifyColumnNames(selectExpr.Expr)
+		selectExpr.Expr, err = ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
 		if err != nil {
 			return 0, err
 		}
@@ -606,6 +606,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		return 0, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0]))
 	}
 
+	// FIXME: delete this when SINGLE join is ready
+	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
+		ctx.hasSingleRow = true
+	}
+
 	// append AGG node
 	if len(ctx.groups) > 0 || len(ctx.aggregates) > 0 {
 		nodeId = builder.appendNode(&plan.Node{
@@ -616,17 +621,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}, ctx, ctx.groupTag, ctx.aggregateTag)
 
 		if len(havingList) > 0 {
-			for i, cond := range havingList {
-				nodeId, havingList[i], err = builder.flattenSubqueries(nodeId, cond, ctx)
+			var newFilterList []*plan.Expr
+			var expr *plan.Expr
+
+			for _, cond := range havingList {
+				nodeId, expr, err = builder.flattenSubqueries(nodeId, cond, ctx)
 				if err != nil {
 					return 0, err
+				}
+
+				if expr != nil {
+					newFilterList = append(newFilterList, expr)
 				}
 			}
 
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
 				Children:   []int32{nodeId},
-				FilterList: havingList,
+				FilterList: newFilterList,
 			}, ctx)
 		}
 	}
@@ -778,6 +790,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
 		}
 
+		if subCtx.hasSingleRow {
+			ctx.hasSingleRow = true
+		}
+
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
@@ -785,6 +801,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}, ctx)
+
+			ctx.hasSingleRow = true
 
 			break
 		}
@@ -813,6 +831,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 				if subCtx.isCorrelated {
 					return 0, errors.New(errno.InvalidColumnReference, "correlated column in CTE is not yet supported")
+				}
+
+				if subCtx.hasSingleRow {
+					ctx.hasSingleRow = true
 				}
 
 				cols := cteRef.ast.Name.Cols
@@ -1019,8 +1041,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			return 0, err
 		}
 
-		// FIXME: put all conditions in FILTER node and later use optimizer to push down
-
 		var joinConds, filterConds, leftConds, rightConds []*plan.Expr
 		for _, cond := range conds {
 			if joinType == plan.Node_INNER {
@@ -1029,12 +1049,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			}
 
 			side := getJoinSide(cond, leftCtx.bindingByTag)
-			var isEqui bool
-			if f, ok := cond.Expr.(*plan.Expr_F); ok {
-				if f.F.Func.ObjName == "=" {
-					isEqui = true
-				}
-			}
 
 			switch side {
 			case 0b00:
@@ -1046,10 +1060,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 					leftConds = append(leftConds, cond)
 
 				case plan.Node_OUTER:
-					if !isEqui {
-						return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
-					}
-
 					joinConds = append(joinConds, cond)
 				}
 
@@ -1057,10 +1067,6 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 				if joinType == plan.Node_RIGHT {
 					leftConds = append(leftConds, cond)
 				} else {
-					if !isEqui {
-						return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
-					}
-
 					joinConds = append(joinConds, cond)
 				}
 
@@ -1068,18 +1074,10 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 				if joinType == plan.Node_LEFT {
 					rightConds = append(rightConds, cond)
 				} else {
-					if !isEqui {
-						return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
-					}
-
 					joinConds = append(joinConds, cond)
 				}
 
 			case 0b11:
-				if !isEqui {
-					return 0, errors.New(errno.InternalError, "non-equi join condition not yet supported")
-				}
-
 				joinConds = append(joinConds, cond)
 
 			default:
