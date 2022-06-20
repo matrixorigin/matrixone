@@ -15,10 +15,11 @@
 package common
 
 import (
-	"github.com/panjf2000/ants/v2"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -91,7 +92,7 @@ func TestPool(t *testing.T) {
 	t.Logf("Takes %s", time.Since(now))
 	assert.Equal(t, uint64(0), mp.Usage())
 	t.Log(mp.String())
-	n := mp.Alloc(2 * M)
+	n := mp.Alloc(5 * M)
 	if n != nil {
 		assert.Equal(t, uint64(1), mp.other)
 		mp.Free(n)

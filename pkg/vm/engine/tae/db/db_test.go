@@ -2170,3 +2170,14 @@ func TestNull2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
+
+// func TestBatch(t *testing.T) {
+// 	schema := catalog.MockSchemaAll(18, 13)
+// 	bat := adaptor.BuildBatch(schema.AllNames(), schema.AllTypes(), 10)
+// 	bat.Vecs[3].Append(int64(100))
+// 	bat.Vecs[12].Append([]byte("hello"))
+// 	t.Log(bat.Vecs[3].String())
+// 	t.Log(bat.Vecs[12].String())
+// 	t.Log(stl.DefaultAllocator.String())
+// 	bat.Close()
+// }

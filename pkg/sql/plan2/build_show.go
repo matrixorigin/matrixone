@@ -32,7 +32,8 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", stmt.Name))
 	}
 
-	sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
+	//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
+	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
