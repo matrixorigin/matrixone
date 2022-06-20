@@ -621,17 +621,24 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}, ctx, ctx.groupTag, ctx.aggregateTag)
 
 		if len(havingList) > 0 {
-			for i, cond := range havingList {
-				nodeId, havingList[i], err = builder.flattenSubqueries(nodeId, cond, ctx)
+			var newFilterList []*plan.Expr
+			var expr *plan.Expr
+
+			for _, cond := range havingList {
+				nodeId, expr, err = builder.flattenSubqueries(nodeId, cond, ctx)
 				if err != nil {
 					return 0, err
+				}
+
+				if expr != nil {
+					newFilterList = append(newFilterList, expr)
 				}
 			}
 
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType:   plan.Node_FILTER,
 				Children:   []int32{nodeId},
-				FilterList: havingList,
+				FilterList: newFilterList,
 			}, ctx)
 		}
 	}
