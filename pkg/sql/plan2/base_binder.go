@@ -621,16 +621,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	}
 
 	if astExpr.SubOp >= tree.ANY {
-		if (astExpr.SubOp == tree.ANY || astExpr.SubOp == tree.SOME) && op != "=" {
-			// return nil, errors.New(errno.InternalError, "non-equi ANY subquery not yet supported")
-			return nil, errors.New("", "Supporting non-equi subquery will be fixed in 0.5.")
-		}
-
-		if astExpr.SubOp == tree.ALL && op != "<>" {
-			// return nil, errors.New(errno.InternalError, "non-equi ANY subquery not yet supported")
-			return nil, errors.New("", "Supporting non-equi subquery will be fixed in 0.5.")
-		}
-
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
 			return nil, err
