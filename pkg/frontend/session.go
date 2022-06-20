@@ -64,6 +64,7 @@ const (
 	NotShowStatement   ShowStatementType = 0
 	ShowCreateDatabase ShowStatementType = 1
 	ShowCreateTable    ShowStatementType = 2
+	ShowColumns        ShowStatementType = 3
 )
 
 func InitTxnState() *TxnState {
@@ -173,6 +174,7 @@ type Session struct {
 
 	IsInternal bool
 
+	Data         [][]interface{}
 	ep           *tree.ExportParam
 	showStmtType ShowStatementType
 
