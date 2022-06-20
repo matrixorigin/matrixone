@@ -144,6 +144,7 @@ type BindContext struct {
 	bindingTree *BindingTreeNode
 
 	isCorrelated bool
+	hasSingleRow bool
 
 	parent     *BindContext
 	leftChild  *BindContext

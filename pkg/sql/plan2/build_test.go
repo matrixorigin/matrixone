@@ -504,6 +504,11 @@ func TestCTESqlBuilder(t *testing.T) {
 		"WITH qn AS (SELECT * FROM nation) SELECT * FROM qn;",
 		"WITH qn(a, b) AS (SELECT * FROM nation) SELECT * FROM qn;",
 		"with qn0 as (select 1), qn1 as (select * from qn0), qn2 as (select 1), qn3 as (select 1 from qn1, qn2) select 1 from qn3",
+
+		`WITH qn AS (select "outer" as a)
+		SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
+		qn.a
+		FROM qn`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -590,6 +595,7 @@ func TestSubQuery(t *testing.T) {
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		`select
 		sum(l_extendedprice) / 7.0 as avg_yearly
@@ -615,7 +621,6 @@ func TestSubQuery(t *testing.T) {
 	sqls = []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
 	}
 	runTestShouldError(mock, t, sqls)
 }
