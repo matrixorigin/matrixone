@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
@@ -41,10 +42,10 @@ func TestExtraWorkingReplicas(t *testing.T) {
 	shard := mockDnShard(10, workingIDs, nil)
 
 	extraFirst := extraWorkingReplicas(shard)
-	require.Equal(t, len(extraFirst), 4)
+	require.Equal(t, 4, len(extraFirst))
 
 	extraSecond := extraWorkingReplicas(shard)
-	require.Equal(t, len(extraSecond), 4)
+	require.Equal(t, 4, len(extraSecond))
 
 	// whether the order is deterministic or not
 	for i := 0; i < len(extraFirst); i++ {
@@ -83,24 +84,23 @@ func TestConsumeLeastSpareStore(t *testing.T) {
 
 	id, err := consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, id, StoreID("store12"))
+	require.Equal(t, StoreID("store12"), id)
 
 	id, err = consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, id, StoreID("store13"))
+	require.Equal(t, StoreID("store13"), id)
 
 	id, err = consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, id, StoreID("store11"))
+	require.Equal(t, StoreID("store11"), id)
 }
 
 func TestCheckShard(t *testing.T) {
 	// normal running cluster
 	{
-		newReplicaID := uint64(100)
-		idGen := func() (uint64, bool) {
-			return newReplicaID, true
-		}
+		nextReplicaID := uint64(100)
+		enough := true
+		idAlloc := newMockIDAllocator(nextReplicaID, enough)
 
 		workingStores := []*dnStore{
 			newDnStore("store1", 2, DnStoreCapacity),
@@ -111,35 +111,36 @@ func TestCheckShard(t *testing.T) {
 		shardID := uint64(10)
 		shard := newDnShard(10)
 
-		// register a expired replica, should add a new replica
+		// register a expired replica => should add a new replica
 		shard.register(newReplica(11, shardID, "store11"), true)
-		steps := checkShard(shard, workingStores, idGen)
-		require.Equal(t, len(steps), 1)
-		require.Equal(t, steps[0].Command(), AddReplica)
-		require.Equal(t, steps[0].ReplicaID(), newReplicaID)
-		require.Equal(t, steps[0].ShardID(), shardID)
-		require.Equal(t, steps[0].Target(), StoreID("store1"))
+		steps := checkShard(shard, workingStores, idAlloc)
+		require.Equal(t, 1, len(steps))
+		add, ok := (steps[0]).(operator.AddDnReplica)
+		require.True(t, ok)
+		require.Equal(t, nextReplicaID, add.ReplicaID)
+		require.Equal(t, shardID, add.ShardID)
+		require.Equal(t, "store1", add.StoreID)
 
-		// register a working replica, no more step
+		// register a working replica => no more step
 		shard.register(newReplica(12, shardID, "store12"), false)
-		steps = checkShard(shard, workingStores, idGen)
-		require.Equal(t, len(steps), 0)
+		steps = checkShard(shard, workingStores, idAlloc)
+		require.Equal(t, 0, len(steps))
 
-		// register another working replica, should remove extra replicas
+		// register another working replica => should remove extra replicas
 		shard.register(newReplica(13, shardID, "store13"), false)
-		steps = checkShard(shard, workingStores, idGen)
-		require.Equal(t, len(steps), 1)
-		require.Equal(t, steps[0].Command(), RemoveReplica)
-		require.Equal(t, steps[0].ReplicaID(), uint64(12))
-		require.Equal(t, steps[0].ShardID(), shardID)
-		require.Equal(t, steps[0].Target(), StoreID("store12"))
+		steps = checkShard(shard, workingStores, idAlloc)
+		require.Equal(t, 1, len(steps))
+		remove, ok := (steps[0]).(operator.RemoveDnReplica)
+		require.True(t, ok)
+		require.Equal(t, uint64(12), remove.ReplicaID)
+		require.Equal(t, shardID, remove.ShardID)
+		require.Equal(t, "store12", remove.StoreID)
 	}
 
 	{
-		// id generator temporary failed
-		idGen := func() (uint64, bool) {
-			return 0, false
-		}
+		// id exhausted temporarily
+		enough := false
+		idAlloc := newMockIDAllocator(0, enough)
 
 		workingStores := []*dnStore{
 			newDnStore("store1", 2, DnStoreCapacity),
@@ -150,8 +151,8 @@ func TestCheckShard(t *testing.T) {
 		anotherShard := uint64(100)
 		// register another expired replica, should add a new replica
 		shard := mockDnShard(anotherShard, nil, []uint64{101})
-		steps := checkShard(shard, workingStores, idGen)
-		require.Equal(t, len(steps), 0)
+		steps := checkShard(shard, workingStores, idAlloc)
+		require.Equal(t, 0, len(steps))
 	}
 }
 
@@ -186,10 +187,9 @@ func TestCheck(t *testing.T) {
 	// construct current tick in order to make hearbeat tick expired
 	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.DnStoreTimeout) + 1
 
+	enough := true
 	newReplicaID := uint64(100)
-	idGen := func() (uint64, bool) {
-		return newReplicaID, true
-	}
+	idAlloc := newMockIDAllocator(newReplicaID, enough)
 
 	// 1. no working dn stores
 	{
@@ -210,8 +210,8 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops := Check(mockClusterInfo(), dnState, currTick, idGen)
-		require.Equal(t, len(ops), 0)
+		steps := Check(idAlloc, dnState, currTick)
+		require.Equal(t, len(steps), 0)
 	}
 
 	// 2. running cluster
@@ -248,25 +248,55 @@ func TestCheck(t *testing.T) {
 		}
 
 		// shard 10, 12, 14:
-		//	10 - add replica
-		//  12 - remote two extra replica (16, 13)
+		//  10 - add replica
+		//  12 - remove two extra replica (16, 13)
 		//  14 - no command
-		ops := Check(mockClusterInfo(), dnState, currTick, idGen)
-		require.Equal(t, len(ops), 3)
+		operators := Check(idAlloc, dnState, currTick)
+		require.Equal(t, 2, len(operators))
 
-		require.Equal(t, ops[0].Step.ShardID(), uint64(10))
-		require.Equal(t, ops[0].Step.Command(), AddReplica)
+		// shard 10 - single operator step
+		op := operators[0]
+		require.Equal(t, op.ShardID(), uint64(10))
+		steps := op.OpSteps()
+		require.Equal(t, len(steps), 1)
+		add, ok := steps[0].(operator.AddDnReplica)
+		require.True(t, ok)
+		require.Equal(t, add.StoreID, "working1")
 
-		require.Equal(t, ops[1].Step.ShardID(), uint64(12))
-		require.Equal(t, ops[1].Step.Command(), RemoveReplica)
-		require.Equal(t, ops[1].Step.ReplicaID(), uint64(13))
-
-		require.Equal(t, ops[2].Step.ShardID(), uint64(12))
-		require.Equal(t, ops[2].Step.Command(), RemoveReplica)
-		require.Equal(t, ops[2].Step.ReplicaID(), uint64(16))
+		// shard 12 - two operator steps
+		op = operators[1]
+		require.Equal(t, op.ShardID(), uint64(12))
+		steps = op.OpSteps()
+		require.Equal(t, len(steps), 2)
+		remove, ok := steps[0].(operator.RemoveDnReplica)
+		require.True(t, ok)
+		require.Equal(t, remove.StoreID, "working1")
+		require.Equal(t, remove.ReplicaID, uint64(13))
+		remove, ok = steps[1].(operator.RemoveDnReplica)
+		require.True(t, ok)
+		require.Equal(t, remove.StoreID, "working2")
+		require.Equal(t, remove.ReplicaID, uint64(16))
 	}
 }
 
-func mockClusterInfo() hapb.ClusterInfo {
-	return hapb.ClusterInfo{}
+type mockIDAllocator struct {
+	next   uint64
+	enough bool
+}
+
+func newMockIDAllocator(next uint64, enough bool) *mockIDAllocator {
+	return &mockIDAllocator{
+		next:   next,
+		enough: enough,
+	}
+}
+
+func (idAlloc *mockIDAllocator) Next() (uint64, bool) {
+	if !idAlloc.enough {
+		return 0, false
+	}
+
+	id := idAlloc.next
+	idAlloc.next += 1
+	return id, true
 }
