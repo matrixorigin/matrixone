@@ -2171,6 +2171,50 @@ func TestNull2(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 }
 
+func TestTruncate(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 15)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockData(schema, schema.BlockMaxRows*5+1)
+	bats := compute.SplitBatch(bat, 20)
+	tae.createRelAndAppend(bats[0], true)
+
+	var wg sync.WaitGroup
+	p, _ := ants.NewPool(10)
+	tryAppend := func(i int) func() {
+		return func() {
+			defer wg.Done()
+			tae.tryAppend(bats[1+i])
+		}
+	}
+
+	for i := range bats[1:] {
+		if i == 10 {
+			wg.Add(1)
+			_ = p.Submit(func() {
+				defer wg.Done()
+				tae.truncate()
+				t.Log(tae.Catalog.SimplePPString(common.PPL1))
+			})
+		}
+		wg.Add(1)
+		_ = p.Submit(tryAppend(i + 1))
+		time.Sleep(time.Millisecond * 2)
+	}
+	wg.Wait()
+	txn, rel := tae.getRelation()
+	t.Logf("Rows: %d", rel.Rows())
+	assert.NoError(t, txn.Commit())
+	tae.truncate()
+	txn, rel = tae.getRelation()
+	assert.Zero(t, 0, rel.Rows())
+	assert.NoError(t, txn.Commit())
+}
+
 // func TestBatch(t *testing.T) {
 // 	schema := catalog.MockSchemaAll(18, 13)
 // 	bat := adaptor.BuildBatch(schema.AllNames(), schema.AllTypes(), 10)

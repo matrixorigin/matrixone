@@ -48,8 +48,14 @@ type VFile interface {
 	// MergeCheckpoint(map[uint32]*common.ClosedIntervals)
 	// MergeTidCidMap(map[uint32]map[uint64]uint64)
 	Replay(*replayer, ReplayObserver) error
+	ReplayCWithCkp(*replayer, ReplayObserver) error
+	ReplayUCWithCkp(*replayer, ReplayObserver) error
+	GetAddrs() (map[uint32]map[uint64]int, *sync.RWMutex)
+	OnReplayCommitted()
+	GetUncommitGidTid(lsn uint64) *entry.Tid
 
 	Load(groupId uint32, lsn uint64) (entry.Entry, error)
+	LoadByOffset(offset int) (entry.Entry, error)
 	LoadMeta() error
 
 	FreeMeta()
@@ -87,7 +93,7 @@ type History interface {
 	DropEntry(int) (VFile, error)
 	OldestEntry() VFile
 	Empty() bool
-	Replay(*replayer, ReplayObserver) error
+	// Replay(*replayer, ReplayObserver) error
 	TryTruncate(*compactor) error
 }
 
