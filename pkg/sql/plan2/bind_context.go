@@ -32,7 +32,6 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		bindingByTag:   make(map[int32]*Binding),
 		bindingByTable: make(map[string]*Binding),
 		bindingByCol:   make(map[string]*Binding),
-		cteTables:      make(map[string]*plan.TableDef),
 		parent:         parent,
 	}
 
@@ -45,6 +44,26 @@ func (bc *BindContext) rootTag() int32 {
 	} else {
 		return bc.projectTag
 	}
+}
+
+func (bc *BindContext) findCTE(name string) *CTERef {
+	if cte, ok := bc.cteByName[name]; ok {
+		return cte
+	}
+
+	parent := bc.parent
+	for parent != nil && name != parent.cteName {
+		if cte, ok := parent.cteByName[name]; ok {
+			if _, ok := bc.maskedCTEs[name]; !ok {
+				return cte
+			}
+		}
+
+		bc = parent
+		parent = bc.parent
+	}
+
+	return nil
 }
 
 func (bc *BindContext) mergeContexts(left, right *BindContext) error {
