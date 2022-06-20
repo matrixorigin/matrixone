@@ -655,6 +655,7 @@ type CaseExpr struct {
 func (node *CaseExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("case")
 	if node.Expr != nil {
+		ctx.WriteByte(' ')
 		node.Expr.Format(ctx)
 	}
 	ctx.WriteByte(' ')
