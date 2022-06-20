@@ -1,35 +1,4 @@
 {
-    "__inputs": [
-        {
-            "name": "DS_MYSQL-MO",
-            "label": "MySQL-MO",
-            "description": "",
-            "type": "datasource",
-            "pluginId": "mysql",
-            "pluginName": "MySQL"
-        }
-    ],
-    "__elements": [],
-    "__requires": [
-        {
-            "type": "grafana",
-            "id": "grafana",
-            "name": "Grafana",
-            "version": "8.4.5"
-        },
-        {
-            "type": "datasource",
-            "id": "mysql",
-            "name": "MySQL",
-            "version": "1.0.0"
-        },
-        {
-            "type": "panel",
-            "id": "timeseries",
-            "name": "Time series",
-            "version": ""
-        }
-    ],
     "annotations": {
         "list": [
             {
@@ -48,8 +17,8 @@
     "editable": true,
     "fiscalYearStartMonth": 0,
     "graphTooltip": 0,
-    "id": null,
-    "iteration": 1655706497698,
+    "id": 4,
+    "iteration": 1655711770352,
     "links": [],
     "liveNow": false,
     "panels": [
@@ -67,6 +36,10 @@
             "type": "row"
         },
         {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${datasource}"
+            },
             "description": "processed statement count increasing rate in the past 30 seconds",
             "fieldConfig": {
                 "defaults": {
@@ -147,7 +120,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -181,6 +154,10 @@
             "type": "timeseries"
         },
         {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${datasource}"
+            },
             "description": "SQL processing time in seconds, averaged by the past 30 seconds",
             "fieldConfig": {
                 "defaults": {
@@ -261,7 +238,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -295,6 +272,10 @@
             "type": "timeseries"
         },
         {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${datasource}"
+            },
             "description": "Total CPU time in used by MO server",
             "fieldConfig": {
                 "defaults": {
@@ -372,7 +353,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -400,6 +381,10 @@
             "type": "timeseries"
         },
         {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${datasource}"
+            },
             "description": "Total memory used by MO server，averaged by the past 1 minute",
             "fieldConfig": {
                 "defaults": {
@@ -479,7 +464,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -507,6 +492,10 @@
             "type": "timeseries"
         },
         {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${datasource}"
+            },
             "description": "number of open file descriptors and its max limit",
             "fieldConfig": {
                 "defaults": {
@@ -583,7 +572,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -615,7 +604,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -661,6 +650,10 @@
             "type": "row"
         },
         {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${datasource}"
+            },
             "description": "CPU Percentage on the current machine, averaged by the number of logical cores",
             "fieldConfig": {
                 "defaults": {
@@ -738,7 +731,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -771,6 +764,10 @@
             "type": "timeseries"
         },
         {
+            "datasource": {
+                "type": "mysql",
+                "uid": "${datasource}"
+            },
             "description": "Memory usage on the current machine",
             "fieldConfig": {
                 "defaults": {
@@ -846,7 +843,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -877,7 +874,7 @@
                 {
                     "datasource": {
                         "type": "mysql",
-                        "uid": "${DS_MYSQL-MO}"
+                        "uid": "${datasource}"
                     },
                     "format": "time_series",
                     "group": [],
@@ -918,7 +915,7 @@
         "list": [
             {
                 "current": {
-                    "selected": false,
+                    "selected": true,
                     "text": "MySQL-MO",
                     "value": "MySQL-MO"
                 },
@@ -928,6 +925,7 @@
                 "name": "datasource",
                 "options": [],
                 "query": "mysql",
+                "queryValue": "",
                 "refresh": 1,
                 "regex": "",
                 "skipUrlSync": false,
