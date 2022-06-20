@@ -18,41 +18,30 @@ import (
 	"reflect"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	metapb "github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
-// FIXME: dragonboat should have a public value indicating what is NoLeader node id
 const (
 	// NoLeader is the replica ID of the leader node.
 	NoLeader uint64 = 0
 )
 
-type HAKeeperState struct {
-	Tick        uint64
-	ClusterInfo ClusterInfo
-	DNState     DNState
-	LogState    LogState
+// NewRSMState creates a new RSMState instance.
+func NewRSMState() RSMState {
+	return RSMState{
+		ScheduleCommands: make(map[string]CommandBatch),
+		LogShards:        make(map[string]uint64),
+		DNState:          NewDNState(),
+		LogState:         NewLogState(),
+		ClusterInfo:      newClusterInfo(),
+	}
 }
 
-// ClusterInfo provides a global view of all shards in the cluster. It
-// describes the logical sharding of the system, rather than physical
-// distribution of all replicas that belong to those shards.
-type ClusterInfo struct {
-	DNShards  []metapb.DNShardRecord
-	LogShards []metapb.LogShardRecord
-}
-
-// DNStoreInfo contins information on a list of shards.
-type DNStoreInfo struct {
-	Tick   uint64
-	Shards []pb.DNShardInfo
-}
-
-// DNState contains all DN details known to the HAKeeper.
-type DNState struct {
-	// Stores is keyed by DN store UUID, it contains details found on each DN
-	// store. Each DNStoreInfo reflects what was last reported by each DN store.
-	Stores map[string]DNStoreInfo
+func newClusterInfo() ClusterInfo {
+	return ClusterInfo{
+		DNShards:  make([]metadata.DNShardRecord, 0),
+		LogShards: make([]metadata.LogShardRecord, 0),
+	}
 }
 
 // NewDNState creates a new DNState.
@@ -73,26 +62,6 @@ func (s *DNState) Update(hb pb.DNStoreHeartbeat, tick uint64) {
 	storeInfo.Tick = tick
 	storeInfo.Shards = hb.Shards
 	s.Stores[hb.UUID] = storeInfo
-}
-
-// LogStoreInfo contains information of all replicas found on a Log store.
-type LogStoreInfo struct {
-	Tick           uint64
-	RaftAddress    string
-	ServiceAddress string
-	GossipAddress  string
-	Shards         []pb.LogShardInfo
-}
-
-type LogState struct {
-	// Shards is keyed by ShardID, it contains details aggregated from all Log
-	// stores. Each pb.LogShardInfo here contains data aggregated from
-	// different replicas and thus reflect a more accurate description on each
-	// shard.
-	Shards map[uint64]pb.LogShardInfo
-	// Stores is keyed by log store UUID, it contains details found on each store.
-	// Each LogStoreInfo here reflects what was last reported by each Log store.
-	Stores map[string]LogStoreInfo
 }
 
 // NewLogState creates a new LogState.
@@ -119,12 +88,12 @@ func (s *LogState) updateStores(hb pb.LogStoreHeartbeat, tick uint64) {
 	storeInfo.RaftAddress = hb.RaftAddress
 	storeInfo.ServiceAddress = hb.ServiceAddress
 	storeInfo.GossipAddress = hb.GossipAddress
-	storeInfo.Shards = hb.Shards
+	storeInfo.Replicas = hb.Replicas
 	s.Stores[hb.UUID] = storeInfo
 }
 
 func (s *LogState) updateShards(hb pb.LogStoreHeartbeat) {
-	for _, incoming := range hb.Shards {
+	for _, incoming := range hb.Replicas {
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
 			recorded = pb.LogShardInfo{
@@ -138,9 +107,7 @@ func (s *LogState) updateShards(hb pb.LogStoreHeartbeat) {
 			recorded.Replicas = incoming.Replicas
 		} else if incoming.Epoch == recorded.Epoch && incoming.Epoch > 0 {
 			if !reflect.DeepEqual(recorded.Replicas, incoming.Replicas) {
-				plog.Panicf("inconsistent replicas, %+v, %+v, nil: %t, nil: %t",
-					recorded.Replicas, incoming.Replicas,
-					recorded.Replicas == nil, incoming.Replicas == nil)
+				panic("inconsistent replicas")
 			}
 		}
 

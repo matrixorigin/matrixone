@@ -20,14 +20,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestDNStateUpdate(t *testing.T) {
 	s := NewDNState()
-	hb := logservice.DNStoreHeartbeat{
+	hb := pb.DNStoreHeartbeat{
 		UUID: "uuid1",
-		Shards: []logservice.DNShardInfo{
+		Shards: []pb.DNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 2, ReplicaID: 1},
 			{ShardID: 3, ReplicaID: 1},
@@ -41,17 +41,17 @@ func TestDNStateUpdate(t *testing.T) {
 	require.Equal(t, 3, len(dninfo.Shards))
 	assert.Equal(t, hb.Shards, dninfo.Shards)
 
-	hb = logservice.DNStoreHeartbeat{
+	hb = pb.DNStoreHeartbeat{
 		UUID: "uuid2",
-		Shards: []logservice.DNShardInfo{
+		Shards: []pb.DNShardInfo{
 			{ShardID: 100, ReplicaID: 1},
 		},
 	}
 	s.Update(hb, 2)
 
-	hb = logservice.DNStoreHeartbeat{
+	hb = pb.DNStoreHeartbeat{
 		UUID: "uuid1",
-		Shards: []logservice.DNShardInfo{
+		Shards: []pb.DNShardInfo{
 			{ShardID: 1, ReplicaID: 1},
 			{ShardID: 3, ReplicaID: 1},
 			{ShardID: 4, ReplicaID: 1},
@@ -69,31 +69,35 @@ func TestDNStateUpdate(t *testing.T) {
 
 func TestUpdateLogStateStore(t *testing.T) {
 	s := NewLogState()
-	hb := logservice.LogStoreHeartbeat{
+	hb := pb.LogStoreHeartbeat{
 		UUID:           "uuid1",
 		RaftAddress:    "localhost:9090",
 		ServiceAddress: "localhost:9091",
 		GossipAddress:  "localhost:9092",
-		Shards: []logservice.LogShardInfo{
+		Replicas: []pb.LogReplicaInfo{
 			{
-				ShardID: 100,
-				Replicas: map[uint64]string{
-					200: "localhost:8000",
-					300: "localhost:9000",
+				LogShardInfo: pb.LogShardInfo{
+					ShardID: 100,
+					Replicas: map[uint64]string{
+						200: "localhost:8000",
+						300: "localhost:9000",
+					},
+					Epoch:    200,
+					LeaderID: 200,
+					Term:     10,
 				},
-				Epoch:    200,
-				LeaderID: 200,
-				Term:     10,
 			},
 			{
-				ShardID: 101,
-				Replicas: map[uint64]string{
-					201: "localhost:8000",
-					301: "localhost:9000",
+				LogShardInfo: pb.LogShardInfo{
+					ShardID: 101,
+					Replicas: map[uint64]string{
+						201: "localhost:8000",
+						301: "localhost:9000",
+					},
+					Epoch:    202,
+					LeaderID: 201,
+					Term:     30,
 				},
-				Epoch:    202,
-				LeaderID: 201,
-				Term:     30,
 			},
 		},
 	}
@@ -106,42 +110,46 @@ func TestUpdateLogStateStore(t *testing.T) {
 	assert.Equal(t, hb.RaftAddress, lsinfo.RaftAddress)
 	assert.Equal(t, hb.ServiceAddress, lsinfo.ServiceAddress)
 	assert.Equal(t, hb.GossipAddress, lsinfo.GossipAddress)
-	assert.Equal(t, 2, len(lsinfo.Shards))
-	assert.Equal(t, hb.Shards, lsinfo.Shards)
+	assert.Equal(t, 2, len(lsinfo.Replicas))
+	assert.Equal(t, hb.Replicas, lsinfo.Replicas)
 
 	require.Equal(t, 2, len(s.Shards))
 	shard1, ok := s.Shards[100]
 	assert.True(t, ok)
-	assert.Equal(t, hb.Shards[0], shard1)
+	assert.Equal(t, hb.Replicas[0].LogShardInfo, shard1)
 	shard2, ok := s.Shards[101]
 	assert.True(t, ok)
-	assert.Equal(t, hb.Shards[1], shard2)
+	assert.Equal(t, hb.Replicas[1].LogShardInfo, shard2)
 
-	hb2 := logservice.LogStoreHeartbeat{
+	hb2 := pb.LogStoreHeartbeat{
 		UUID:           "uuid1",
 		RaftAddress:    "localhost:9090",
 		ServiceAddress: "localhost:9091",
 		GossipAddress:  "localhost:9092",
-		Shards: []logservice.LogShardInfo{
+		Replicas: []pb.LogReplicaInfo{
 			{
-				ShardID: 100,
-				Replicas: map[uint64]string{
-					200: "localhost:8000",
-					300: "localhost:9000",
-					400: "localhost:10000",
+				LogShardInfo: pb.LogShardInfo{
+					ShardID: 100,
+					Replicas: map[uint64]string{
+						200: "localhost:8000",
+						300: "localhost:9000",
+						400: "localhost:10000",
+					},
+					Epoch:    201,
+					LeaderID: 400,
+					Term:     20,
 				},
-				Epoch:    201,
-				LeaderID: 400,
-				Term:     20,
 			},
 			{
-				ShardID: 101,
-				Replicas: map[uint64]string{
-					201: "localhost:8000",
+				LogShardInfo: pb.LogShardInfo{
+					ShardID: 101,
+					Replicas: map[uint64]string{
+						201: "localhost:8000",
+					},
+					Epoch:    200,
+					LeaderID: NoLeader,
+					Term:     100,
 				},
-				Epoch:    200,
-				LeaderID: NoLeader,
-				Term:     100,
 			},
 		},
 	}
@@ -154,15 +162,15 @@ func TestUpdateLogStateStore(t *testing.T) {
 	assert.Equal(t, hb2.RaftAddress, lsinfo.RaftAddress)
 	assert.Equal(t, hb2.ServiceAddress, lsinfo.ServiceAddress)
 	assert.Equal(t, hb2.GossipAddress, lsinfo.GossipAddress)
-	assert.Equal(t, 2, len(lsinfo.Shards))
-	assert.Equal(t, hb2.Shards, lsinfo.Shards)
+	assert.Equal(t, 2, len(lsinfo.Replicas))
+	assert.Equal(t, hb2.Replicas, lsinfo.Replicas)
 
 	require.Equal(t, 2, len(s.Shards))
 	shard1, ok = s.Shards[100]
 	assert.True(t, ok)
-	assert.Equal(t, hb2.Shards[0], shard1)
+	assert.Equal(t, hb2.Replicas[0].LogShardInfo, shard1)
 	shard2, ok = s.Shards[101]
 	assert.True(t, ok)
 	// shard2 didn't change to hb2.Shard[1]
-	assert.Equal(t, hb.Shards[1], shard2)
+	assert.Equal(t, hb.Replicas[1].LogShardInfo, shard2)
 }
