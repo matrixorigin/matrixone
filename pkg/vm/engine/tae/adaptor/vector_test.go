@@ -18,11 +18,11 @@ func withAllocator(opt *Options) *Options {
 	return opt
 }
 
-func checkFullyEqualVector(t *testing.T, v1, v2 Vector) {
-	checkEqualVector(t, v1, v2)
-	assert.Equal(t, v1.Capacity(), v2.Capacity())
-	assert.Equal(t, v1.Allocated(), v2.Allocated())
-}
+// func checkFullyEqualVector(t *testing.T, v1, v2 Vector) {
+// 	checkEqualVector(t, v1, v2)
+// 	assert.Equal(t, v1.Capacity(), v2.Capacity())
+// 	assert.Equal(t, v1.Allocated(), v2.Allocated())
+// }
 
 func checkEqualVector(t *testing.T, v1, v2 Vector) {
 	assert.Equal(t, v1.GetType(), v2.GetType())

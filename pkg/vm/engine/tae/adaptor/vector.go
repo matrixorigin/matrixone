@@ -135,6 +135,7 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	if tmpn, err = vec.stlvec.ReadFrom(r); err != nil {
 		return
 	}
+	n += tmpn
 
 	// 4. Null
 	if !nullable {
