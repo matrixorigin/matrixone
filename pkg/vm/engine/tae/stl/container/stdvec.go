@@ -195,9 +195,12 @@ func (vec *stdVector[T]) ReadBytes(bs *stl.Bytes) {
 	}
 	if vec.node != nil {
 		vec.alloc.Free(vec.node)
+		vec.node = nil
 	}
 	vec.capacity = 0
 	if bs.DataSize() == 0 {
+		vec.buf = vec.buf[:0]
+		vec.slice = vec.slice[:0]
 		return
 	}
 	vec.buf = bs.Data

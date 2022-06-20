@@ -10,6 +10,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func withAllocator(opts *Options) *Options {
+	if opts == nil {
+		opts = new(Options)
+	}
+	allocator := stl.NewSimpleAllocator()
+	opts.Allocator = allocator
+	return opts
+}
+
 func TestVector1(t *testing.T) {
 	opts := new(Options)
 	opts.Capacity = 1
@@ -299,4 +308,35 @@ func TestVector9(t *testing.T) {
 	vec.Close()
 	vec2.Close()
 	assert.Zero(t, allocator.Usage())
+}
+
+func TestVector10(t *testing.T) {
+	opts := withAllocator(nil)
+	vec := NewVector[[]byte](opts)
+	h1 := "h1"
+	h2 := "hh2"
+	h3 := "hhh3"
+	h4 := "hhhh4"
+	vec.Append([]byte(h1))
+	vec.Append([]byte(h2))
+	vec.Append([]byte(h3))
+	vec.Append([]byte(h4))
+
+	bs := vec.Bytes()
+
+	vec2 := NewVector[[]byte](opts)
+	t.Log(vec2.String())
+	vec2.ReadBytes(bs)
+	assert.Equal(t, vec.Length(), vec2.Length())
+	assert.Equal(t, vec.Capacity(), vec2.Capacity())
+	assert.Equal(t, vec.Get(0), vec2.Get(0))
+	assert.Equal(t, vec.Get(1), vec2.Get(1))
+	assert.Equal(t, vec.Get(2), vec2.Get(2))
+	assert.Equal(t, vec.Get(3), vec2.Get(3))
+	t.Log(vec.String())
+	t.Log(vec2.String())
+	t.Log(opts.Allocator.Usage())
+	vec.Close()
+	vec2.Close()
+	// assert.Zero(t, opts.Allocator.Usage())
 }
