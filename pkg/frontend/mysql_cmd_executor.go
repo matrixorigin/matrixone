@@ -184,11 +184,8 @@ func (o *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
-		if o.showStmtType == ShowCreateTable {
+		if o.showStmtType == ShowCreateTable || o.showStmtType == ShowCreateDatabase || o.showStmtType == ShowColumns {
 			o.rowIdx = 0
-			return nil
-		}
-		if o.showStmtType == ShowCreateDatabase {
 			return nil
 		}
 
@@ -217,8 +214,8 @@ func handleShowCreateTable2(ses *Session) error {
 	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
 	rowCount := 0
 	var pkDefs []string
-	for i, d := range ses.Data {
-		colName := string(ses.Data[i][attrNamePos].([]byte))
+	for _, d := range ses.Data {
+		colName := string(d[attrNamePos].([]byte))
 		if colName == "PADDR" {
 			continue
 		}
@@ -233,14 +230,14 @@ func handleShowCreateTable2(ses *Session) error {
 		} else {
 			createStr += ",\n"
 		}
-		typ := types.Type{Oid: types.T(ses.Data[i][attrTypPos].(int32))}
+		typ := types.Type{Oid: types.T(d[attrTypPos].(int32))}
 		typeStr := typ.String()
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
-			typeStr += fmt.Sprintf("(%d)", ses.Data[i][charWidthPos].(int32))
+			typeStr += fmt.Sprintf("(%d)", d[charWidthPos].(int32))
 		}
 		createStr += fmt.Sprintf("`%s` %s %s", colName, typeStr, nullOrNot)
 		rowCount++
-		if string(ses.Data[i][primaryKeyPos].([]byte)) == "p" {
+		if string(d[primaryKeyPos].([]byte)) == "p" {
 			pkDefs = append(pkDefs, colName)
 		}
 	}
@@ -292,6 +289,36 @@ func handleShowCreateDatabase2(ses *Session) error {
 	ses.Mrs.AddRow(row)
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
 		logutil.Errorf("handleShowCreateDatabase2 error %v \n", err)
+		return err
+	}
+	return nil
+}
+
+/*
+handle show columns from table in plan2 and tae
+*/
+func handleShowColumns2(ses *Session) error {
+	for _, d := range ses.Data {
+		row := make([]interface{}, 6)
+		colName := string(d[0].([]byte))
+		if colName == "PADDR" {
+			continue
+		}
+		row[0] = colName
+		typ := types.Type{Oid: types.T(d[1].(int32))}
+		row[1] = typ.String()
+		if d[2].(int8) == 0 {
+			row[2] = "NO"
+		} else {
+			row[2] = "YES"
+		}
+		row[3] = d[3]
+		row[4] = "NULL"
+		row[5] = d[5]
+		ses.Mrs.AddRow(row)
+	}
+	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
+		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
 		return err
 	}
 	return nil
@@ -631,11 +658,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				erow[l] = row[l]
 			}
 		}
-		if oq.showStmtType == ShowCreateTable {
-			row2 := make([]interface{}, len(row))
-			copy(row2, row)
-			ses.Data = append(ses.Data, row2)
-		} else if oq.showStmtType == ShowCreateDatabase {
+		if oq.showStmtType == ShowCreateDatabase || oq.showStmtType == ShowCreateTable || oq.showStmtType == ShowColumns {
 			row2 := make([]interface{}, len(row))
 			copy(row2, row)
 			ses.Data = append(ses.Data, row2)
@@ -1649,10 +1672,18 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
 	case *tree.ShowCreateTable:
-		fmt.Printf("%T\n", types.T_char)
 		cols = []*plan2.ColDef{
 			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Table"},
 			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Create Table"},
+		}
+	case *tree.ShowColumns:
+		cols = []*plan2.ColDef{
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Field"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Type"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Null"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Key"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Default"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Comment"},
 		}
 	}
 	columns := make([]interface{}, len(cols))
@@ -2154,6 +2185,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				}
 			} else if ses.showStmtType == ShowCreateDatabase {
 				if err = handleShowCreateDatabase2(ses); err != nil {
+					goto handleFailed
+				}
+			} else if ses.showStmtType == ShowColumns {
+				if err = handleShowColumns2(ses); err != nil {
 					goto handleFailed
 				}
 			}
