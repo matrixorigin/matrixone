@@ -202,6 +202,7 @@ func toConstVector[T any](v *Vector, row int) *Vector {
 	return &Vector{
 		IsConst: true,
 		Typ:     v.Typ,
+		Nsp:     &nulls.Nulls{},
 		Col:     []T{v.Col.([]T)[row]},
 	}
 }
