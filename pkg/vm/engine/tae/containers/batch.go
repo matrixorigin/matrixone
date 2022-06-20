@@ -2,6 +2,7 @@ package adaptor
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/RoaringBitmap/roaring"
 )
@@ -24,25 +25,10 @@ func (bat *Batch) AddVector(attr string, vec Vector) {
 	bat.Vecs = append(bat.Vecs, vec)
 }
 
-// func (bat *Batch) AddRefVector(id int, vec Vector) {
-// 	if _, exist := bat.refidx[id]; exist {
-// 		panic(fmt.Errorf("duplicate vector ref %d", id))
-// 	}
-// 	idx := len(bat.Vecs)
-// 	bat.refidx[id] = idx
-// 	bat.AttrRef = append(bat.AttrRef, id)
-// 	bat.Vecs = append(bat.Vecs, vec)
-// }
-
 func (bat *Batch) GetVectorByName(name string) Vector {
 	pos := bat.nameidx[name]
 	return bat.Vecs[pos]
 }
-
-// func (bat *Batch) GetVectorByRef(id int) Vector {
-// 	pos := bat.refidx[id]
-// 	return bat.Vecs[pos]
-// }
 
 func (bat *Batch) Delete(i int) {
 	if bat.Deletes == nil {
@@ -100,4 +86,12 @@ func (bat *Batch) Close() {
 	for _, vec := range bat.Vecs {
 		vec.Close()
 	}
+}
+
+func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
+	return
+}
+
+func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
+	return
 }
