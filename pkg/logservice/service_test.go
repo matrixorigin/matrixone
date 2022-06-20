@@ -16,7 +16,7 @@ package logservice
 
 import (
 	"fmt"
-	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -374,9 +374,9 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 }
 
 func TestGossipConvergeDelay(t *testing.T) {
-	if os.Getenv("LONG_TEST") == "" {
+	/*if os.Getenv("LONG_TEST") == "" {
 		t.Skip("Skipping long test")
-	}
+	}*/
 	defer leaktest.AfterTest(t)()
 	// start all services
 	configs := make([]Config, 0)
@@ -398,11 +398,20 @@ func TestGossipConvergeDelay(t *testing.T) {
 		services = append(services, service)
 	}
 	defer func() {
+		plog.Infof("going to close all services")
+		var wg sync.WaitGroup
 		for _, s := range services {
 			if s != nil {
-				require.NoError(t, s.Close())
+				selected := s
+				wg.Add(1)
+				go func() {
+					require.NoError(t, selected.Close())
+					wg.Done()
+					plog.Infof("closed a service")
+				}()
 			}
 		}
+		wg.Wait()
 	}()
 	// start all replicas
 	// shardID: [1, 16]
