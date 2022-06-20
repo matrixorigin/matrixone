@@ -33,26 +33,6 @@ var (
 	ErrVFileVersionTimeOut = errors.New("get vfile version timeout")
 )
 
-type syncBase struct {
-	*sync.RWMutex
-	groupLSN                     map[uint32]uint64 // for alloc
-	lsnmu                        sync.RWMutex
-	checkpointing                map[uint32]*checkpointInfo
-	ckpmu                        sync.RWMutex
-	syncing                      map[uint32]uint64
-	checkpointed, synced, ckpCnt *syncMap
-	tidLsnMaps                   map[uint32]map[uint64]uint64
-	tidLsnMapmu                  *sync.RWMutex
-	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
-	addrmu                       sync.RWMutex
-	commitCond                   sync.Cond
-
-	// internal entry
-	calculatedVersion uint64
-	calculatedCond    sync.Cond
-	syncedVersion     uint64
-}
-
 type checkpointInfo struct {
 	ranges  *common.ClosedIntervals
 	partial map[uint64]*partialCkpInfo
@@ -209,6 +189,104 @@ func newSyncMap() *syncMap {
 		ids:     make(map[uint32]uint64),
 	}
 }
+
+type internalCmd struct {
+	checkpointing map[uint32]*checkpointInfo
+	ckpmu         *sync.RWMutex
+}
+
+func newEmptyInternalCmd() *internalCmd {
+	return &internalCmd{
+		checkpointing: make(map[uint32]*checkpointInfo),
+	}
+}
+
+// func newInternalCmd(checkpointing map[uint32]*checkpointInfo, ckpmu *sync.RWMutex) *internalCmd {
+// 	return &internalCmd{
+// 		checkpointing: checkpointing,
+// 		ckpmu:         ckpmu,
+// 	}
+// }
+
+func (cmd *internalCmd) WriteTo(w io.Writer) (n int64, err error) {
+	cmd.ckpmu.RLock()
+	defer cmd.ckpmu.RUnlock()
+	//checkpointing
+	length := uint32(len(cmd.checkpointing))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 4
+	for groupID, ckpInfo := range cmd.checkpointing {
+		if err = binary.Write(w, binary.BigEndian, groupID); err != nil {
+			return
+		}
+		n += 4
+		sn, err := ckpInfo.WriteTo(w)
+		n += sn
+		if err != nil {
+			return n, err
+		}
+	}
+	return
+}
+func (cmd *internalCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	length := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 4
+	for i := 0; i < int(length); i++ {
+		groupID := uint32(0)
+		if err = binary.Read(r, binary.BigEndian, &groupID); err != nil {
+			return
+		}
+		n += 4
+		ckpInfo := newCheckpointInfo()
+		sn, err := ckpInfo.ReadFrom(r)
+		n += sn
+		if err != nil {
+			return n, err
+		}
+		cmd.checkpointing[groupID] = ckpInfo
+	}
+	return
+}
+func (cmd *internalCmd) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = cmd.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
+func (cmd *internalCmd) Unarshal(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	_, err := cmd.ReadFrom(bbuf)
+	return err
+}
+
+type syncBase struct {
+	*sync.RWMutex
+	groupLSN                     map[uint32]uint64 // for alloc
+	lsnmu                        sync.RWMutex
+	checkpointing                map[uint32]*checkpointInfo
+	ckpmu                        *sync.RWMutex
+	syncing                      map[uint32]uint64
+	checkpointed, synced, ckpCnt *syncMap
+	tidLsnMaps                   map[uint32]map[uint64]uint64
+	tidLsnMapmu                  *sync.RWMutex
+	addrs                        map[uint32]map[int]common.ClosedIntervals //group-version-glsn range
+	addrmu                       sync.RWMutex
+	commitCond                   sync.Cond
+
+	// internal entry
+	calculatedVersion uint64
+	calculatedCond    sync.Cond
+	syncedVersion     uint64
+}
+
 func newSyncBase() *syncBase {
 	return &syncBase{
 		groupLSN:       make(map[uint32]uint64),
@@ -222,7 +300,7 @@ func newSyncBase() *syncBase {
 		tidLsnMapmu:    &sync.RWMutex{},
 		addrs:          make(map[uint32]map[int]common.ClosedIntervals),
 		addrmu:         sync.RWMutex{},
-		ckpmu:          sync.RWMutex{},
+		ckpmu:          &sync.RWMutex{},
 		commitCond:     *sync.NewCond(new(sync.Mutex)),
 		calculatedCond: *sync.NewCond(new(sync.Mutex)),
 	}
@@ -327,19 +405,8 @@ func (base *syncBase) OnReplay(r *replayer) {
 	for k, v := range r.groupLSN {
 		base.syncing[k] = v
 	}
-	if r.ckpEntry != nil {
-		err := base.UnarshalPostCommitEntry(r.ckpEntry.payload)
-		if err != nil {
-			panic(err)
-		}
-	}
-	for groupId, ckps := range r.checkpointrange {
-		ckpInfo, ok := base.checkpointing[groupId]
-		if !ok {
-			base.checkpointing[groupId] = ckps
-		} else {
-			ckpInfo.MergeCheckpointInfo(ckps)
-		}
+	base.checkpointing = r.checkpointrange
+	for groupId := range base.checkpointing {
 		base.checkpointed.ids[groupId] = base.checkpointing[groupId].GetCheckpointed()
 		base.ckpCnt.ids[groupId] = base.checkpointing[groupId].GetCkpCnt()
 	}
