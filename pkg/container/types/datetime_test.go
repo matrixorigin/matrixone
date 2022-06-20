@@ -109,6 +109,8 @@ func TestAddDatetime(t *testing.T) {
 		{"1992-12-31 23:59:59.000002", "1.999999", Second_MicroSecond, "1993-01-01 00:00:01.000001", true},
 		{"1992-12-31 23:59:59.1", "1.1", Second_MicroSecond, "1993-01-01 00:00:00.200000", true},
 		{"2022-01-31 00:00:00.1", "100000", Month, "0001-01-01 00:00:00.000000", false},
+		{"2022-01-31 00:00:00.999999", "1", MicroSecond, "2022-01-31 00:00:01.000000", true},
+		{"2022-01-31 00:00:00.888888", "1", MicroSecond, "2022-01-31 00:00:00.888889", true},
 	}
 	for _, test := range addDateTimeTbl {
 		ret, rettype, _ := NormalizeInterval(test.InputIntervalNum, test.InputIntervalTypes)
@@ -179,6 +181,11 @@ func TestParseDatetime(t *testing.T) {
 			name: "yyyy-mm-dd hh:mm:ss",
 			args: "1987-08-25 00:00:00.000000",
 			want: "1987-08-25 00:00:00.000000",
+		},
+		{
+			name: "yyyy-mm-dd hh:mm:ss",
+			args: "1987-08-25 00:00:00.999999",
+			want: "1987-08-25 00:00:00.999999",
 		},
 		{
 			name: "yyyy-mm-dd hh:mm:ss.sec",

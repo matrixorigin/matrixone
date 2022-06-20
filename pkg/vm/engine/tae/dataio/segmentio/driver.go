@@ -104,7 +104,7 @@ func (s *Driver) Init(name string) (err error) {
 	}
 
 	_, err = s.segFile.Write(sbuffer.Bytes())
-	logutil.Infof(" %s-%p | SegmentFile | Init ", s.name, &(s.name))
+	logutil.Debugf(" %s-%p | SegmentFile | Init ", s.name, &(s.name))
 	return
 }
 
@@ -135,7 +135,7 @@ func (s *Driver) Open(name string) (err error) {
 	if err := s.Replay(cache); err != nil {
 		return err
 	}
-	logutil.Infof(" %s-%p | SegmentFile | Opened", s.name, &(s.name))
+	logutil.Debugf(" %s-%p | SegmentFile | Opened", s.name, &(s.name))
 	return
 }
 
@@ -296,7 +296,7 @@ func (s *Driver) GetNodes() map[string]*DriverFile {
 func (s *Driver) PrintLog(name, info string) {
 	s.log.allocator.(*BitmapAllocator).mutex.RLock()
 	defer s.log.allocator.(*BitmapAllocator).mutex.RUnlock()
-	logutil.Infof(" %s-%p | %s | %s-%d-%d | Log Level1 %p-%x",
+	logutil.Debugf(" %s-%p | %s | %s-%d-%d | Log Level1 %p-%x",
 		s.name,
 		&(s.name),
 		info,

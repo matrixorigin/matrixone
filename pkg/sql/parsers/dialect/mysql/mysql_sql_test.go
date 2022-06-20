@@ -113,13 +113,13 @@ var (
 		output: "select from_unixtime(2147483647) as c1, from_unixtime(2147483648) as c2, from_unixtime(2147483647.9999999) as c3, from_unixtime(32536771199) as c4, from_unixtime(32536771199.9999999) as c5 from dual",
 	}, {
 		input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-		output: "select date_add(1997-12-31 23:59:59, interval(-100000 year)) from dual",
+		output: "select date_add(1997-12-31 23:59:59, interval(-100000, year)) from dual",
 	}, {
 		input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-		output: "select adddate(date(2021-01-01), interval(1 day)) from dual",
+		output: "select adddate(date(2021-01-01), interval(1, day)) from dual",
 	}, {
 		input:  "select '2007-01-01' + interval a day from t1;",
-		output: "select 2007-01-01 + interval(a day) from t1",
+		output: "select 2007-01-01 + interval(a, day) from t1",
 	}, {
 		input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
 		output: "select cast(coalesce(t0.c0, -1) as unsigned unsigned) = true from t0",
@@ -172,16 +172,16 @@ var (
 		output: "select sum(all a), count(all a), avg(all a), std(all a), variance(all a), bit_or(all a), bit_and(all a), min(all a), max(all a), min(all c), max(all c) from t",
 	}, {
 		input:  "insert into t1 values (date_add(NULL, INTERVAL 1 DAY));",
-		output: "insert into t1 values (date_add(null, interval(1 day)))",
+		output: "insert into t1 values (date_add(null, interval(1, day)))",
 	}, {
 		input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-		output: "select date_add(2022-02-28 23:59:59.9999, interval(1 second)) as 1 second later from dual",
+		output: "select date_add(2022-02-28 23:59:59.9999, interval(1, second)) as 1 second later from dual",
 	}, {
 		input:  "SELECT sum(a) as 'hello' from t1;",
 		output: "select sum(a) as hello from t1",
 	}, {
 		input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-		output: "select date_add(2017-06-15, interval(-10 month)) from dual",
+		output: "select date_add(2017-06-15, interval(-10, month)) from dual",
 	}, {
 		input:  "create table t1 (a varchar)",
 		output: "create table t1 (a varchar)",
@@ -196,13 +196,13 @@ var (
 		output: "select cast(19999999999999999999 as signed) from dual",
 	}, {
 		input:  "select date_sub(now(), interval 1 day) from t1;",
-		output: "select date_sub(now(), interval(1 day)) from t1",
+		output: "select date_sub(now(), interval(1, day)) from t1",
 	}, {
-		input:  "select date_sub(now(), interval '1 day') from t1;",
-		output: "select date_sub(now(), interval(1 day)) from t1",
+		input:  "select date_sub(now(), interval '1' day) from t1;",
+		output: "select date_sub(now(), interval(1, day)) from t1",
 	}, {
-		input:  "select date_add(now(), interval '1 day') from t1;",
-		output: "select date_add(now(), interval(1 day)) from t1",
+		input:  "select date_add(now(), interval '1' day) from t1;",
+		output: "select date_add(now(), interval(1, day)) from t1",
 	}, {
 		input:  "SELECT md.datname as `Database` FROM TT md",
 		output: "select md.datname as Database from tt as md",
@@ -236,8 +236,8 @@ var (
 		input:  "select extract(year from l_shipdate) as l_year from t",
 		output: "select extract(year, l_shipdate) as l_year from t",
 	}, {
-		input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112 day'",
-		output: "select * from r inner join s on r.uid = s.uid where l_shipdate <= date(1998-12-01) - interval(112 day)",
+		input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
+		output: "select * from r inner join s on r.uid = s.uid where l_shipdate <= date(1998-12-01) - interval(112, day)",
 	}, {
 		input: "create table deci_table (a decimal(10, 5))",
 	}, {
@@ -497,7 +497,7 @@ var (
 		input: "select sum(distinct s) from tbl where 1",
 	}, {
 		input:  "select u.a, interval 1 second from t",
-		output: "select u.a, interval(1 second) from t",
+		output: "select u.a, interval(1, second) from t",
 	}, {
 		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 	}, {
