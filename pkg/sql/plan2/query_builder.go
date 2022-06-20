@@ -423,13 +423,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}
 
-				err = ctx.qualifyColumnNames(expr)
+				newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
 				if err != nil {
 					return 0, err
 				}
 
 				selectList = append(selectList, tree.SelectExpr{
-					Expr: expr,
+					Expr: newExpr,
 					As:   selectExpr.As,
 				})
 			}
@@ -448,7 +448,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 			}
 
-			err = ctx.qualifyColumnNames(expr)
+			expr, err = ctx.qualifyColumnNames(expr, nil, false)
 			if err != nil {
 				return 0, err
 			}
@@ -526,7 +526,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 	ctx.binder = projectionBinder
 	for _, selectExpr := range selectList {
-		err = ctx.qualifyColumnNames(selectExpr.Expr)
+		selectExpr.Expr, err = ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
 		if err != nil {
 			return 0, err
 		}
@@ -604,6 +604,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
 		return 0, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0]))
+	}
+
+	// FIXME: delete this when SINGLE join is ready
+	if len(ctx.groups) == 0 && len(ctx.aggregates) > 0 {
+		ctx.hasSingleRow = true
 	}
 
 	// append AGG node
@@ -778,6 +783,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
 		}
 
+		if subCtx.hasSingleRow {
+			ctx.hasSingleRow = true
+		}
+
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
@@ -785,6 +794,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}, ctx)
+
+			ctx.hasSingleRow = true
 
 			break
 		}
@@ -813,6 +824,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 				if subCtx.isCorrelated {
 					return 0, errors.New(errno.InvalidColumnReference, "correlated column in CTE is not yet supported")
+				}
+
+				if subCtx.hasSingleRow {
+					ctx.hasSingleRow = true
 				}
 
 				cols := cteRef.ast.Name.Cols
