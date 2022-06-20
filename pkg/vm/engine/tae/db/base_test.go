@@ -77,6 +77,40 @@ func (e *testEngine) mergeBlocks(skipConflict bool) {
 	mergeBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
+func (e *testEngine) getDB() (txn txnif.AsyncTxn, db handle.Database) {
+	txn, err := e.DB.StartTxn(nil)
+	assert.NoError(e.t, err)
+	db, err = txn.GetDatabase(defaultTestDB)
+	assert.NoError(e.t, err)
+	return
+}
+
+func (e *testEngine) tryAppend(bat *mobat.Batch) {
+	txn, err := e.DB.StartTxn(nil)
+	assert.NoError(e.t, err)
+	db, err := txn.GetDatabase(defaultTestDB)
+	assert.NoError(e.t, err)
+	rel, err := db.GetRelationByName(e.schema.Name)
+	if err != nil {
+		_ = txn.Rollback()
+		return
+	}
+
+	err = rel.Append(bat)
+	if err != nil {
+		_ = txn.Rollback()
+		return
+	}
+	_ = txn.Commit()
+}
+
+func (e *testEngine) truncate() {
+	txn, db := e.getDB()
+	_, err := db.TruncateByName(e.schema.Name)
+	assert.NoError(e.t, err)
+	assert.NoError(e.t, txn.Commit())
+}
+
 func initDB(t *testing.T, opts *options.Options) *DB {
 	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
