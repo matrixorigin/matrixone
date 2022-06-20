@@ -280,14 +280,33 @@ func (info *vInfo) MarshalMeta() (buf []byte, err error) {
 
 func (info *vInfo) UnmarshalMeta(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	_, err := info.MetaReadFrom(bbuf)
+	e := entry.GetBase()
+	defer e.Free()
+
+	metaBuf := e.GetMetaBuf()
+	_, err := bbuf.Read(metaBuf)
+	if err != nil {
+		return err
+	}
+	if e.GetType() != entry.ETMeta {
+		return ErrReadMetaFailed
+	}
+	_, err = e.ReadFrom(bbuf)
+	if err != nil {
+		return err
+	}
+	bbuf2 := bytes.NewBuffer(e.GetPayload())
+	_, err = info.MetaReadFrom(bbuf2)
 	return err
 }
 
 func (info *vInfo) OnReplay(r *replayer) {
 	if info.unloaded && info.vf.committed == int32(1) {
 		info.vf.WriteMeta()
-		info.vf.Sync()
+		err := info.vf.Sync()
+		if err != nil {
+			panic(err)
+		}
 	}
 	info.inited = true
 	info.flushWg.Wait()

@@ -209,21 +209,32 @@ func (vf *vFile) Sync() error {
 }
 
 func (vf *vFile) WriteMeta() {
+	e := entry.GetBase()
+	defer e.Free()
 	buf, err := vf.MarshalMeta()
 	if err != nil {
 		panic(err)
 	}
-	n, err := vf.WriteAt(buf, int64(vf.size))
+	e.SetType(entry.ETMeta)
+	err = e.Unmarshal(buf)
 	if err != nil {
 		panic(err)
 	}
-	if n != len(buf) {
+	n1, err := vf.WriteAt(e.GetMetaBuf(), int64(vf.size))
+	if err != nil {
+		panic(err)
+	}
+	n2, err := vf.WriteAt(e.GetPayload(), int64(vf.size))
+	if err != nil {
+		panic(err)
+	}
+	if n1+n2 != e.TotalSize() {
 		panic("logic err")
 	}
 
 	buf = make([]byte, Metasize)
-	binary.BigEndian.PutUint16(buf, uint16(n))
-	n, err = vf.WriteAt(buf, int64(vf.size))
+	binary.BigEndian.PutUint16(buf, uint16(e.TotalSize()))
+	n, err := vf.WriteAt(buf, int64(vf.size))
 	if err != nil {
 		panic(err)
 	}

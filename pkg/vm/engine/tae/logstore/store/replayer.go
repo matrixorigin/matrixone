@@ -251,10 +251,10 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		r.version = vfile.version
 	}
 	current := vfile.GetState()
-	entry := entry.GetBase()
-	defer entry.Free()
+	e := entry.GetBase()
+	defer e.Free()
 
-	metaBuf := entry.GetMetaBuf()
+	metaBuf := e.GetMetaBuf()
 	_, err := vfile.Read(metaBuf)
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
@@ -266,8 +266,11 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		}
 		return err
 	}
+	if e.GetType() == entry.ETMeta {
+		return io.EOF
+	}
 
-	n, err := entry.ReadFrom(vfile)
+	n, err := e.ReadFrom(vfile)
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
 			return err
@@ -279,7 +282,7 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		// }
 		// return err
 	}
-	if int(n) != entry.TotalSizeExpectMeta() {
+	if int(n) != e.TotalSizeExpectMeta() {
 		if current.pos == r.state.pos+int(n) {
 			panic("wrong wal")
 			// err2 := vfile.Truncate(int64(current.pos))
@@ -289,13 +292,13 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 			// }
 			// return io.EOF
 		} else {
-			return fmt.Errorf("payload mismatch: %d != %d", n, entry.GetPayloadSize())
+			return fmt.Errorf("payload mismatch: %d != %d", n, e.GetPayloadSize())
 		}
 	}
-	if err = r.onReplayEntry(entry, v.(*vFile), false); err != nil {
+	if err = r.onReplayEntry(e, v.(*vFile), false); err != nil {
 		return err
 	}
-	r.state.pos += entry.TotalSize()
+	r.state.pos += e.TotalSize()
 	return nil
 }
 
