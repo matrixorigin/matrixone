@@ -116,13 +116,13 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 type outputQueue struct {
-	proto           MysqlProtocol
-	mrs             *MysqlResultSet
-	rowIdx          uint64
-	length          uint64
-	ep              *tree.ExportParam
-	lineStr         []byte
-	showCreateTable bool
+	proto        MysqlProtocol
+	mrs          *MysqlResultSet
+	rowIdx       uint64
+	length       uint64
+	ep           *tree.ExportParam
+	lineStr      []byte
+	showStmtType ShowStatementType
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -132,14 +132,14 @@ func (oq *outputQueue) ResetLineStr() {
 	oq.lineStr = oq.lineStr[:0]
 }
 
-func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showCreateTable bool) *outputQueue {
+func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
 	return &outputQueue{
-		proto:           proto,
-		mrs:             mrs,
-		rowIdx:          0,
-		length:          length,
-		ep:              ep,
-		showCreateTable: showCreateTable,
+		proto:        proto,
+		mrs:          mrs,
+		rowIdx:       0,
+		length:       length,
+		ep:           ep,
+		showStmtType: showStatementType,
 	}
 }
 
@@ -187,13 +187,17 @@ func (o *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
-		if o.showCreateTable {
-			if err := handleShowCreateTable2(o.mrs); err != nil {
+		if o.showStmtType == ShowCreateTable {
+			o.rowIdx = 0
+			return nil
+		}
+		if o.showStmtType == ShowCreateDatabase {
+			if err := handleShowCreateDatabase2(o.mrs); err != nil {
 				return err
 			}
 		}
+
 		if err := o.proto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
-			//return err
 			logutil.Errorf("flush error %v \n", err)
 			return err
 		}
@@ -203,36 +207,60 @@ func (o *outputQueue) flush() error {
 }
 
 const (
-	tableNamePos = 1
-	attrNamePos  = 2
-	attrTypPos   = 3
+	tableNamePos  = 1
+	attrNamePos   = 2
+	attrTypPos    = 3
+	charWidthPos  = 5
+	primaryKeyPos = 10
 )
 
 /*
 handle show create table in plan2 and tae
 */
-func handleShowCreateTable2(mrs *MysqlResultSet) error {
-	mrs.Data = mrs.Data[1:]
-	tableName := string(mrs.Data[0][tableNamePos].([]byte))
+func handleShowCreateTable2(ses *Session) error {
+	tableName := string(ses.Data[0][tableNamePos].([]byte))
 	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
 	rowCount := 0
-	for i, d := range mrs.Data {
+	var pkDefs []string
+	for i, d := range ses.Data {
+		colName := string(ses.Data[i][attrNamePos].([]byte))
+		if colName == "PADDR" {
+			continue
+		}
 		nullOrNot := ""
 		if d[7].(int8) != 0 {
 			nullOrNot = "NOT NULL"
 		} else {
-			nullOrNot = "NULL"
+			nullOrNot = "DEFAULT NULL"
 		}
 		if rowCount == 0 {
 			createStr += "\n"
 		} else {
 			createStr += ",\n"
 		}
-		typ := types.Type{Oid: types.T(mrs.Data[i][attrTypPos].(int32))}
+		typ := types.Type{Oid: types.T(ses.Data[i][attrTypPos].(int32))}
 		typeStr := typ.String()
-		createStr += fmt.Sprintf("`%s` %s %s", string(mrs.Data[i][attrNamePos].([]byte)), typeStr, nullOrNot)
+		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
+			typeStr += fmt.Sprintf("(%d)", ses.Data[i][charWidthPos].(int32))
+		}
+		createStr += fmt.Sprintf("`%s` %s %s", colName, typeStr, nullOrNot)
 		rowCount++
+		if string(ses.Data[i][primaryKeyPos].([]byte)) == "p" {
+			pkDefs = append(pkDefs, colName)
+		}
 	}
+	if len(pkDefs) != 0 {
+		pkStr := "PRIMARY KEY ("
+		for _, def := range pkDefs {
+			pkStr += fmt.Sprintf("`%s`", def)
+		}
+		pkStr += ")"
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += pkStr
+	}
+
 	if rowCount != 0 {
 		createStr += "\n"
 	}
@@ -241,8 +269,26 @@ func handleShowCreateTable2(mrs *MysqlResultSet) error {
 	row := make([]interface{}, 2)
 	row[0] = tableName
 	row[1] = createStr
-	mrs.Data = nil
-	mrs.AddRow(row)
+
+	ses.Mrs.AddRow(row)
+
+	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
+		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
+		return err
+	}
+	return nil
+}
+
+/*
+handle show create database in plan2 and tae
+*/
+func handleShowCreateDatabase2(mrs *MysqlResultSet) error {
+	dbNameIndex := mrs.Name2Index["Database"]
+	dbsqlIndex := mrs.Name2Index["Create Database"]
+	firstRow := mrs.Data[0]
+	dbName := firstRow[dbNameIndex]
+	createDBSql := fmt.Sprintf("CREATE DATABASE `%s`", dbName)
+	firstRow[dbsqlIndex] = createDBSql
 	return nil
 }
 
@@ -291,7 +337,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 	allocateOutBufferTime := time.Since(begin3)
 
-	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showCreateTable)
+	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showStmtType)
 	oq.reset()
 
 	row2colTime := time.Duration(0)
@@ -299,10 +345,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchBegin := time.Now()
 
 	n := vector.Length(bat.Vecs[0])
-	if ses.showCreateTable {
-		n--
-		oq.length = uint64(n)
-	}
 
 	if enableProfile {
 		if err := pprof.StartCPUProfile(cpuf); err != nil {
@@ -324,9 +366,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 		if bat.Zs[j] <= 0 {
 			continue
-		}
-		if oq.showCreateTable {
-			oq.rowIdx = 0
 		}
 		row, err := oq.getEmptyRow()
 		if err != nil {
@@ -572,7 +611,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			default:
 				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-				return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+				return fmt.Errorf("getDataFromPipeline : unsupported type %d", vec.Typ.Oid)
 			}
 			rowIndex = rowIndexBackup
 		}
@@ -587,12 +626,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				erow[l] = row[l]
 			}
 		}
-		if oq.showCreateTable {
+		if oq.showStmtType == ShowCreateTable {
 			row2 := make([]interface{}, len(row))
-			for i := range row {
-				row2[i] = row[i]
-			}
-			oq.mrs.Data = append(oq.mrs.Data, row2)
+			copy(row2, row)
+			ses.Data = append(ses.Data, row2)
 		}
 	}
 
@@ -1863,7 +1900,7 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
-	ses.showCreateTable = false
+	ses.showStmtType = NotShowStatement
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
 	statementCount := uint64(1)
@@ -2133,6 +2170,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				}
 			}
 		case *tree.ShowCreateDatabase:
+			ses.showStmtType = ShowCreateDatabase
 			if usePlan2 && isAoe {
 				selfHandle = true
 				if err = mce.handleShowCreateDatabase(st); err != nil {
@@ -2140,7 +2178,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				}
 			}
 		case *tree.ShowCreateTable:
-			ses.showCreateTable = true
+			ses.showStmtType = ShowCreateTable
+			ses.Data = nil
 			if usePlan2 && isAoe {
 				selfHandle = true
 				if err = mce.handleShowCreateTable(st); err != nil {
@@ -2237,6 +2276,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err = runner.Run(epoch); err != nil {
 				goto handleFailed
 			}
+			if ses.showStmtType == ShowCreateTable {
+				if err = handleShowCreateTable2(ses); err != nil {
+					goto handleFailed
+				}
+			}
+
 			if ses.ep.Outfile {
 				if err = ses.ep.Writer.Flush(); err != nil {
 					goto handleFailed

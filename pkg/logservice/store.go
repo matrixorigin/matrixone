@@ -499,24 +499,27 @@ func (l *logStore) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		RaftAddress:    l.cfg.RaftAddress,
 		ServiceAddress: l.cfg.ServiceAddress,
 		GossipAddress:  l.cfg.GossipAddress,
-		Shards:         make([]pb.LogShardInfo, 0),
+		Replicas:       make([]pb.LogReplicaInfo, 0),
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,
 	}
 	nhi := l.nh.GetNodeHostInfo(opts)
 	for _, ci := range nhi.ShardInfoList {
-		shardInfo := pb.LogShardInfo{
-			ShardID:  ci.ShardID,
-			Replicas: ci.Nodes,
-			Epoch:    ci.ConfigChangeIndex,
-			LeaderID: ci.LeaderID,
-			Term:     ci.Term,
+		replicaInfo := pb.LogReplicaInfo{
+			LogShardInfo: pb.LogShardInfo{
+				ShardID:  ci.ShardID,
+				Replicas: ci.Nodes,
+				Epoch:    ci.ConfigChangeIndex,
+				LeaderID: ci.LeaderID,
+				Term:     ci.Term,
+			},
+			ReplicaID: ci.ReplicaID,
 		}
-		if shardInfo.Replicas == nil {
-			shardInfo.Replicas = make(map[uint64]dragonboat.Target)
+		if replicaInfo.Replicas == nil {
+			replicaInfo.Replicas = make(map[uint64]dragonboat.Target)
 		}
-		m.Shards = append(m.Shards, shardInfo)
+		m.Replicas = append(m.Replicas, replicaInfo)
 	}
 	return m
 }

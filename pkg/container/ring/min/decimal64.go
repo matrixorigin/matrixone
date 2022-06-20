@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"math"
 )
 
 var Decimal64Size = encoding.Decimal64Size
@@ -106,7 +107,7 @@ func (r *Decimal64Ring) Grow(m *mheap.Mheap) error {
 	}
 	r.Vs = r.Vs[:n+1]
 	r.Da = r.Da[:(n+1)*8]
-	r.Vs[n] = 0
+	r.Vs[n] = math.MaxInt64
 	r.Ns = append(r.Ns, 0)
 	r.Es = append(r.Es, true)
 	return nil
@@ -138,6 +139,7 @@ func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Es = append(r.Es, true)
+		r.Vs[i+n] = math.MaxInt64
 	}
 	return nil
 }

@@ -82,6 +82,7 @@ func ReturnType(op int, typ types.T) types.T {
 }
 
 func New(op int, dist bool, typ types.Type) (ring.Ring, error) {
+	fmt.Println(typ.Precision, typ.Width, typ.Scale)
 	switch op {
 	case Sum:
 		return NewSum(typ)
@@ -189,6 +190,8 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 		return max.NewDate(typ), nil
 	case types.T_datetime:
 		return max.NewDatetime(typ), nil
+	case types.T_timestamp:
+		return max.NewTimestamp(typ), nil
 	case types.T_decimal64:
 		return max.NewDecimal64(typ), nil
 	case types.T_decimal128:
@@ -227,6 +230,8 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 		return min.NewDate(typ), nil
 	case types.T_datetime:
 		return min.NewDatetime(typ), nil
+	case types.T_timestamp:
+		return min.NewTimestamp(typ), nil
 	case types.T_decimal64:
 		return min.NewDecimal64(typ), nil
 	case types.T_decimal128:

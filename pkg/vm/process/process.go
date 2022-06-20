@@ -77,7 +77,7 @@ func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, er
 		return nil, err
 	}
 	vec := vector.New(typ)
-	vec.Data = data
+	vec.Data = data[:size]
 	return vec, nil
 }
 
