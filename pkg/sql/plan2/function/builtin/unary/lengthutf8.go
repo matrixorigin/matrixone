@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,38 +23,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var (
-	errorParameterIsNotString = errors.New("the parameter is not char or varchar")
-	errorParameterIsInvalid   = errors.New("invalid parameter")
-)
-
 func LengthUTF8(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(vectors) == 0 || proc == nil {
-		return nil, errorParameterIsInvalid
-	}
-	if vectors[0] == nil {
-		return nil, errorParameterIsInvalid
-	}
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustBytesCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
-		}
-		inputValues, ok := inputVector.Col.(*types.Bytes)
-		if !ok {
-			return nil, errorParameterIsNotString
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint64, 1)
 		vector.SetCol(resultVector, lengthutf8.StrLengthUTF8(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues, ok := inputVector.Col.(*types.Bytes)
-		if !ok {
-			return nil, errorParameterIsNotString
-		}
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
 		if err != nil {
 			return nil, err

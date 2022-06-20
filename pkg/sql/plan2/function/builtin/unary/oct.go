@@ -27,11 +27,11 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.([]T)
 		resultVector := vector.NewConst(resultType)
 		resultValues := &types.Bytes{
 			Data:    []byte{},
@@ -41,7 +41,6 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		vector.SetCol(resultVector, oct.Oct(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]T)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err

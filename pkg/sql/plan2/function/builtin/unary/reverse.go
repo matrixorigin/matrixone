@@ -28,21 +28,12 @@ var (
 )
 
 func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(vectors) == 0 || proc == nil {
-		return nil, errorParameterIsInvalid
-	}
-	if vectors[0] == nil {
-		return nil, errorParameterIsInvalid
-	}
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	inputValues := vector.MustBytesCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
-		}
-		inputValues, ok := inputVector.Col.(*types.Bytes)
-		if !ok {
-			return nil, errorParameterIsNotString
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := &types.Bytes{
@@ -57,10 +48,6 @@ func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		vector.SetCol(resultVector, res)
 		return resultVector, nil
 	} else {
-		inputValues, ok := inputVector.Col.(*types.Bytes)
-		if !ok {
-			return nil, errorParameterIsNotString
-		}
 		resultVector, err := proc.AllocVector(resultType, int64(len(inputValues.Data)))
 		if err != nil {
 			return nil, err
