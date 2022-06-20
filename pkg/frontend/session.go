@@ -173,6 +173,7 @@ type Session struct {
 
 	IsInternal bool
 
+	Data         [][]interface{}
 	ep           *tree.ExportParam
 	showStmtType ShowStatementType
 
