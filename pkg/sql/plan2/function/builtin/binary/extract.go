@@ -70,12 +70,12 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_uint32, Size: 4}
 	resultElementSize := int(resultType.Size)
+	leftValues, rightValues := vector.MustBytesCols(left), vector.MustTCols[types.Date](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.([]types.Date)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint32, 1)
 		unit := string(leftValues.Get(0))
@@ -89,7 +89,6 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.([]types.Date)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 		if err != nil {
 			return nil, err
@@ -113,12 +112,12 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	resultElementSize := int(resultType.Size)
+	leftValues, rightValues := vector.MustBytesCols(left), vector.MustTCols[types.Datetime](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.([]types.Datetime)
 		resultVector := vector.NewConst(resultType)
 		resultValues := &types.Bytes{
 			Data:    make([]byte, 0),
@@ -136,7 +135,6 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.([]types.Datetime)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 		if err != nil {
 			return nil, err
