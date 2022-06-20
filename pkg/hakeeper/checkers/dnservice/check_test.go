@@ -97,10 +97,9 @@ func TestConsumeLeastSpareStore(t *testing.T) {
 func TestCheckShard(t *testing.T) {
 	// normal running cluster
 	{
-		newReplicaID := uint64(100)
-		idGen := func() (uint64, bool) {
-			return newReplicaID, true
-		}
+		nextReplicaID := uint64(100)
+		enough := true
+		idAlloc := newMockIDAllocator(nextReplicaID, enough)
 
 		workingStores := []*dnStore{
 			newDnStore("store1", 2, DnStoreCapacity),
@@ -113,21 +112,21 @@ func TestCheckShard(t *testing.T) {
 
 		// register a expired replica, should add a new replica
 		shard.register(newReplica(11, shardID, "store11"), true)
-		steps := checkShard(shard, workingStores, idGen)
+		steps := checkShard(shard, workingStores, idAlloc)
 		require.Equal(t, len(steps), 1)
 		require.Equal(t, steps[0].Command(), AddReplica)
-		require.Equal(t, steps[0].ReplicaID(), newReplicaID)
+		require.Equal(t, steps[0].ReplicaID(), nextReplicaID)
 		require.Equal(t, steps[0].ShardID(), shardID)
 		require.Equal(t, steps[0].Target(), StoreID("store1"))
 
 		// register a working replica, no more step
 		shard.register(newReplica(12, shardID, "store12"), false)
-		steps = checkShard(shard, workingStores, idGen)
+		steps = checkShard(shard, workingStores, idAlloc)
 		require.Equal(t, len(steps), 0)
 
 		// register another working replica, should remove extra replicas
 		shard.register(newReplica(13, shardID, "store13"), false)
-		steps = checkShard(shard, workingStores, idGen)
+		steps = checkShard(shard, workingStores, idAlloc)
 		require.Equal(t, len(steps), 1)
 		require.Equal(t, steps[0].Command(), RemoveReplica)
 		require.Equal(t, steps[0].ReplicaID(), uint64(12))
@@ -136,10 +135,9 @@ func TestCheckShard(t *testing.T) {
 	}
 
 	{
-		// id generator temporary failed
-		idGen := func() (uint64, bool) {
-			return 0, false
-		}
+		// id exhausted temporarily
+		enough := false
+		idAlloc := newMockIDAllocator(0, enough)
 
 		workingStores := []*dnStore{
 			newDnStore("store1", 2, DnStoreCapacity),
@@ -150,7 +148,7 @@ func TestCheckShard(t *testing.T) {
 		anotherShard := uint64(100)
 		// register another expired replica, should add a new replica
 		shard := mockDnShard(anotherShard, nil, []uint64{101})
-		steps := checkShard(shard, workingStores, idGen)
+		steps := checkShard(shard, workingStores, idAlloc)
 		require.Equal(t, len(steps), 0)
 	}
 }
@@ -186,10 +184,9 @@ func TestCheck(t *testing.T) {
 	// construct current tick in order to make hearbeat tick expired
 	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.DnStoreTimeout) + 1
 
+	enough := true
 	newReplicaID := uint64(100)
-	idGen := func() (uint64, bool) {
-		return newReplicaID, true
-	}
+	idAlloc := newMockIDAllocator(newReplicaID, enough)
 
 	// 1. no working dn stores
 	{
@@ -210,7 +207,7 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops := Check(mockClusterInfo(), dnState, currTick, idGen)
+		ops := Check(idAlloc, dnState, currTick)
 		require.Equal(t, len(ops), 0)
 	}
 
@@ -251,7 +248,7 @@ func TestCheck(t *testing.T) {
 		//	10 - add replica
 		//  12 - remote two extra replica (16, 13)
 		//  14 - no command
-		ops := Check(mockClusterInfo(), dnState, currTick, idGen)
+		ops := Check(idAlloc, dnState, currTick)
 		require.Equal(t, len(ops), 3)
 
 		require.Equal(t, ops[0].Step.ShardID(), uint64(10))
@@ -267,6 +264,24 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-func mockClusterInfo() hapb.ClusterInfo {
-	return hapb.ClusterInfo{}
+type mockIDAllocator struct {
+	next   uint64
+	enough bool
+}
+
+func newMockIDAllocator(next uint64, enough bool) *mockIDAllocator {
+	return &mockIDAllocator{
+		next:   next,
+		enough: enough,
+	}
+}
+
+func (idAlloc *mockIDAllocator) Next() (uint64, bool) {
+	if !idAlloc.enough {
+		return 0, false
+	}
+
+	id := idAlloc.next
+	idAlloc.next += 1
+	return id, true
 }

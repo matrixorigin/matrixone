@@ -18,18 +18,20 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
-// FIXME: placeholder
-type idGenerator func() (uint64, bool)
+// IDAllocator fetch new replica ID.
+type IDAllocator interface {
+	// When IDAllocator was exhaused temprory, return `false`
+	Next() (uint64, bool)
+}
 
 // CheckService check dn state and generate operator for expired dn store.
 // The less shard id, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
-	cluster hakeeper.ClusterInfo,
-	dnState hakeeper.DNState, currTick uint64, idGen idGenerator,
+	idAlloc IDAllocator, dnState hapb.DNState, currTick uint64,
 ) []Operator {
 	stores, shards := parseDnState(dnState, currTick)
 	if len(stores.workingStores()) < 1 {
@@ -51,7 +53,7 @@ func Check(
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, stores.workingStores(), idGen)
+		steps := checkShard(shard, stores.workingStores(), idAlloc)
 		for _, step := range steps {
 			ops = append(ops, Operator{Step: step})
 		}
@@ -62,11 +64,11 @@ func Check(
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
 func checkShard(
-	shard *dnShard, workingStores []*dnStore, idGen idGenerator,
+	shard *dnShard, workingStores []*dnStore, idAlloc IDAllocator,
 ) []Step {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica
-		newReplicaID, ok := idGen()
+		newReplicaID, ok := idAlloc.Next()
 		if !ok {
 			// temproray failure when allocate replica ID
 			return nil
