@@ -16,9 +16,9 @@ package logservice
 import (
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/utils"
-	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -37,7 +37,7 @@ type stats struct {
 	toAdd    map[uint64]int
 }
 
-func collectStats(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, tick uint64) stats {
+func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, tick uint64) stats {
 	s := stats{
 		toRemove: make(map[uint64][]replica),
 		toAdd:    make(map[uint64]int),
@@ -85,7 +85,7 @@ func collectStats(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, tick ui
 			}
 
 			// Check expired
-			if utils.ExpiredTick(infos.Stores[uuid].Tick, utils.StoreTimeout) < tick {
+			if hakeeper.ExpiredTick(infos.Stores[uuid].Tick, hakeeper.LogStoreTimeout) < tick {
 				s.toRemove[shardInfo.ShardID] = append(s.toRemove[shardInfo.ShardID],
 					replica{uuid: uuid, shardID: shardInfo.ShardID,
 						epoch: shardInfo.Epoch, replicaID: replicaID})
@@ -105,7 +105,7 @@ func collectStats(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, tick ui
 	return s
 }
 
-func Check(cluster hakeeper.ClusterInfo, infos hakeeper.LogState, removing map[uint64][]uint64, adding map[uint64][]uint64, tick uint64) (operators []*operator.Operator, err error) {
+func Check(cluster hapb.ClusterInfo, infos hapb.LogState, removing map[uint64][]uint64, adding map[uint64][]uint64, tick uint64) (operators []*operator.Operator, err error) {
 	stats := collectStats(cluster, infos, tick)
 
 	for shardID, toAdd := range stats.toAdd {
