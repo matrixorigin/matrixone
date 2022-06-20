@@ -7,7 +7,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/container"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -20,7 +20,7 @@ type vector[T any] struct {
 
 func NewVector[T any](typ types.Type, nullable bool, opts ...*Options) *vector[T] {
 	vec := &vector[T]{
-		stlvec: container.NewVector[T](opts...),
+		stlvec: containers.NewVector[T](opts...),
 		typ:    typ,
 	}
 	if nullable {
