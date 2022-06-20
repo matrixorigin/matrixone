@@ -320,6 +320,7 @@ func (b *Base) reset() {
 	}
 	b.payload = nil
 	b.info = nil
+	b.infobuf = nil
 	b.wg = sync.WaitGroup{}
 	b.err = nil
 }
@@ -403,6 +404,9 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	if err != nil {
 		return int64(n2), err
 	}
+	infobuf := b.GetInfoBuf()
+	info := Unmarshal(infobuf)
+	b.SetInfo(info)
 	return int64(n1 + n2), nil
 }
 
@@ -419,6 +423,8 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	}
 	offset += n1
 	b.SetInfoBuf(infoBuf)
+	info := Unmarshal(infoBuf)
+	b.SetInfo(info)
 	n2, err := r.ReadAt(b.payload, int64(offset))
 	if err != nil {
 		return n2, err
