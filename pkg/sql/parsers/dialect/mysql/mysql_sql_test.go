@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "SET timestamp=DEFAULT;",
-		output: "set timestamp = default",
+		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
+		output: "create table t1 (datetime datetime(26, 6), timestamp timestamp(26, 6), date date)",
 	}
 )
 
@@ -52,6 +52,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
+		output: "create table t1 (datetime datetime(26, 6), timestamp timestamp(26, 6), date date)",
+	}, {
 		input:  "SET timestamp=DEFAULT;",
 		output: "set timestamp = default",
 	}, {
