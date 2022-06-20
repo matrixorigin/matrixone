@@ -24,7 +24,7 @@ import (
 
 func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inVec := lv[0]
-	times := inVec.Col.([]int64)
+	times := vector.MustTCols[int64](inVec)
 	size := types.T(types.T_datetime).TypeLen()
 	if inVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_datetime, Size: int32(size)}), nil
