@@ -17,7 +17,6 @@ package mysql
     
 import (
     "strings"
-    "strconv"
     "go/constant"
 
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -5036,46 +5035,13 @@ name_confict:
 |   YEAR
 
 interval_expr:
-    INTERVAL STRING
-	{
-		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-        }
-	}
-|   INTERVAL INTEGRAL time_unit
+    INTERVAL expression time_unit
     {
-		str := strconv.FormatInt($2.(int64), 10)
-		str += " " + $3
  		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
+		arg2 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-        }
-    }
-|   INTERVAL ident time_unit
-    {
-		str := $2
-		str += " " + $3
- 		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-        }
-    }
-|   INTERVAL '-' INTEGRAL time_unit
-    {
-		str := strconv.FormatInt(-$3.(int64), 10)
-		str += " " + $4
- 		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
+            Exprs: tree.Exprs{$2, arg2},
         }
     }
 

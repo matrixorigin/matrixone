@@ -83,11 +83,9 @@ func decreaseDepthAndDispatch(preds []*plan.Expr) ([]*plan.Expr, []*plan.Expr) {
 	var filterPreds, joinPreds []*plan.Expr
 	for _, pred := range preds {
 		newPred, correlated := decreaseDepth(pred)
-		if f, ok := pred.Expr.(*plan.Expr_F); ok && !correlated {
-			if f.F.Func.ObjName == "=" {
-				joinPreds = append(joinPreds, newPred)
-				continue
-			}
+		if !correlated {
+			joinPreds = append(joinPreds, newPred)
+			continue
 		}
 		filterPreds = append(filterPreds, newPred)
 	}

@@ -278,6 +278,7 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 					}
 					if (*val & (1 << nextPos)) == 0 {
 						l0freePos = b.getBitPos(*val, nextPos+1)
+						startPos = l0freePos
 						nextPos = l0freePos + 1
 						allocatedPage = 0
 					} else {

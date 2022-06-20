@@ -27,7 +27,7 @@ import (
 func TestParseDNState(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, dnStoreTimeout) + 1
+	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.DnStoreTimeout) + 1
 
 	// 1. no working dn stores
 	{
