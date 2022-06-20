@@ -318,10 +318,18 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeId int32, ctx *BindC
 
 func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {
 	if !hasCorrCol(expr) {
+		switch expr.Expr.(type) {
+		case *plan.Expr_Col, *plan.Expr_F:
+			break
+
+		default:
+			return expr
+		}
+
 		colPos := int32(len(node.GroupBy))
 		node.GroupBy = append(node.GroupBy, expr)
 
-		expr = &plan.Expr{
+		return &plan.Expr{
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -344,10 +352,18 @@ func (builder *QueryBuilder) pullupThroughAgg(ctx *BindContext, node *plan.Node,
 
 func (builder *QueryBuilder) pullupThroughProj(ctx *BindContext, node *plan.Node, tag int32, expr *plan.Expr) *plan.Expr {
 	if !hasCorrCol(expr) {
+		switch expr.Expr.(type) {
+		case *plan.Expr_Col, *plan.Expr_F:
+			break
+
+		default:
+			return expr
+		}
+
 		colPos := int32(len(node.ProjectList))
 		node.ProjectList = append(node.ProjectList, expr)
 
-		expr = &plan.Expr{
+		return &plan.Expr{
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
