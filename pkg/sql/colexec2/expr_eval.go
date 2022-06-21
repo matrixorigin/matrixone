@@ -201,7 +201,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		if err != nil {
 			return nil, err
 		}
-		vec.Length = 1
+		vec.Length = len(s.Zs)
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
