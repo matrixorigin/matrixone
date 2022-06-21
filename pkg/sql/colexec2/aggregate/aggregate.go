@@ -82,7 +82,6 @@ func ReturnType(op int, typ types.T) types.T {
 }
 
 func New(op int, dist bool, typ types.Type) (ring.Ring, error) {
-	fmt.Println(typ.Precision, typ.Width, typ.Scale)
 	switch op {
 	case Sum:
 		return NewSum(typ)
