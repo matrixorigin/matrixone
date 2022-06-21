@@ -16,7 +16,6 @@ package plan2
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -117,7 +116,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			})
 		}
 
-		colIdx := int32(len(returnMap))
+		colIdx := int32(len(node.ProjectList))
 		childId = node.Children[1]
 
 		if node.JoinType == plan.Node_MARK {
@@ -653,7 +652,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if proj == nil {
 			// TODO: implement MARK join to better support non-scalar subqueries
 			// return 0, errors.New(errno.InternalError, "non-scalar subquery in SELECT clause not yet supported")
-			return 0, errors.New("", "Subquery in SELECT clause will be supported in future version.")
+			return 0, errors.New("", "non-scalar subquery in SELECT clause will be supported in future version.")
 		}
 
 		ctx.projects[i] = proj
@@ -676,14 +675,19 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	// append SORT node (include limit, offset)
-	if len(orderBys) > 0 || limitExpr != nil || offsetExpr != nil {
+	if len(orderBys) > 0 {
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_SORT,
 			Children: []int32{nodeId},
 			OrderBy:  orderBys,
-			Limit:    limitExpr,
-			Offset:   offsetExpr,
 		}, ctx)
+	}
+
+	if limitExpr != nil || offsetExpr != nil {
+		node := builder.qry.Nodes[nodeId]
+
+		node.Limit = limitExpr
+		node.Offset = offsetExpr
 	}
 
 	// append result PROJECT node
@@ -797,7 +801,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
-		if strings.ToLower(table) == "dual" { //special table name
+		if table == "dual" { //special table name
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}, ctx)
@@ -1036,9 +1040,14 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
-		conds, err := splitAndBindCondition(cond.Expr, ctx)
+		rawConds, err := splitAndBindCondition(cond.Expr, ctx)
 		if err != nil {
 			return 0, err
+		}
+
+		var conds []*plan.Expr
+		for _, cond := range rawConds {
+			conds = append(conds, splitPlanConjunction(applyDistributivity(cond))...)
 		}
 
 		var joinConds, filterConds, leftConds, rightConds []*plan.Expr
@@ -1195,7 +1204,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 		node.Children[0] = childId
 
 	case plan.Node_FILTER:
-		canPushdown = append(filters, node.FilterList...)
+		canPushdown = filters
+		for _, filter := range node.FilterList {
+			canPushdown = append(canPushdown, splitPlanConjunction(applyDistributivity(filter))...)
+		}
+
 		childId, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown)
 
 		if len(cantPushdownChild) > 0 {

@@ -1,4 +1,4 @@
-package container
+package containers
 
 func NewVector[T any](opts ...*Options) *Vector[T] {
 	var v T

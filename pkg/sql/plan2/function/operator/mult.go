@@ -26,7 +26,7 @@ import (
 
 func Mult[T constraints.Integer | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]T), rv.Col.([]T)
+	lvs, rvs := vector.MustTCols[T](lv), vector.MustTCols[T](rv)
 	rtl := lv.Typ.Oid.FixedLength()
 
 	if lv.IsScalarNull() || rv.IsScalarNull() {
@@ -74,7 +74,7 @@ func Mult[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 //ReturnType: types.T_decimal64,
 func MultDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)
 	resultScale := lv.Typ.Scale + rv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
 	if lv.IsScalarNull() || rv.IsScalarNull() {
@@ -128,7 +128,7 @@ func MultDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 //ReturnType: types.T_decimal128,
 func MultDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+	lvs, rvs := vector.MustTCols[types.Decimal128](lv), vector.MustTCols[types.Decimal128](rv)
 	resultScale := lv.Typ.Scale + rv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
 	if lv.IsScalarNull() || rv.IsScalarNull() {
