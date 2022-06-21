@@ -22,7 +22,7 @@ with q15_revenue0 as (
 		lineitem
 	where
 		l_shipdate >= date '1995-12-01'
-		and l_shipdate < date '1995-12-01' + interval '3 month'
+		and l_shipdate < date '1995-12-01' + interval '3' month
 	group by
 		l_suppkey
     )
