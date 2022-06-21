@@ -27,17 +27,16 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.([]types.Date)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DateToMonth(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]types.Date)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
@@ -54,17 +53,16 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsConst {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.([]types.Datetime)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]types.Datetime)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
@@ -81,17 +79,16 @@ func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustBytesCols(inputVector)
 	if inputVector.IsConst {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, month.DateStringToMonth(inputValues, resultVector.Nsp, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
 		if err != nil {
 			return nil, err
