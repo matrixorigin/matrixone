@@ -62,25 +62,25 @@ var (
 		output: "set timestamp = unix_timestamp(2011-07-31 10:00:00)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a) from dual",
+		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
 	}, {
 		input:  "select rpad('hello', -18446744073709551616, '1');",
-		output: "select rpad(hello, -18446744073709551616, 1) from dual",
+		output: "select rpad(hello, -18446744073709551616, 1)",
 	}, {
 		input:  "select rpad('hello', -18446744073709551616, '1');",
-		output: "select rpad(hello, -18446744073709551616, 1) from dual",
+		output: "select rpad(hello, -18446744073709551616, 1)",
 	}, {
 		input:  "SELECT CONCAT_WS(1471290948102948112341241204312904-23412412-4141, \"a\", \"b\")",
-		output: "select concat_ws(1471290948102948112341241204312904 - 23412412 - 4141, a, b) from dual",
+		output: "select concat_ws(1471290948102948112341241204312904 - 23412412 - 4141, a, b)",
 	}, {
 		input:  "SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );",
-		output: "select * from t1 where a = any (select 1 from dual union (select 1 from dual union select 1 from dual))",
+		output: "select * from t1 where a = any (select 1 union (select 1 union select 1))",
 	}, {
 		input:  "SELECT * FROM t1 WHERE (a,b) = ANY (SELECT a, max(b) FROM t1 GROUP BY a);",
 		output: "select * from t1 where (a, b) = any (select a, max(b) from t1 group by a)",
 	}, {
 		input:  "select  (1,2) != ALL (select * from t1);",
-		output: "select (1, 2) != all (select * from t1) from dual",
+		output: "select (1, 2) != all (select * from t1)",
 	}, {
 		input:  "select s1, s1 = ANY (SELECT s1 FROM t2) from t1;",
 		output: "select s1, s1 = any (select s1 from t2) from t1",
@@ -89,37 +89,37 @@ var (
 		output: "select * from t3 where a >= some (select b from t2)",
 	}, {
 		input:  "select 9999999999999999999;",
-		output: "select 9999999999999999999 from dual",
+		output: "select 9999999999999999999",
 	}, {
 		input:  "select substring('hello', -18446744073709551616, -18446744073709551616);",
-		output: "select substring(hello, -18446744073709551616, -18446744073709551616) from dual",
+		output: "select substring(hello, -18446744073709551616, -18446744073709551616)",
 	}, {
 		input:  "select substring('hello', -18446744073709551616, 1);",
-		output: "select substring(hello, -18446744073709551616, 1) from dual",
+		output: "select substring(hello, -18446744073709551616, 1)",
 	}, {
 		input:  "select space(18446744073709551616);",
-		output: "select space(18446744073709551616) from dual",
+		output: "select space(18446744073709551616)",
 	}, {
 		input:  "select space(-18446744073709551616);",
-		output: "select space(-18446744073709551616) from dual",
+		output: "select space(-18446744073709551616)",
 	}, {
 		input:  "select ltrim(\"a\"),rtrim(\"a\"),trim(BOTH \"\" from \"a\"),trim(BOTH \" \" from \"a\");",
-		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a) from dual",
+		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
 	}, {
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
-		output: "select (rpad(1.0, 2048, 1)) != false from dual",
+		output: "select (rpad(1.0, 2048, 1)) != false",
 	}, {
 		input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
-		output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999) from dual",
+		output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
 	}, {
 		input:  "SELECT FROM_UNIXTIME(2147483647) AS c1, FROM_UNIXTIME(2147483648) AS c2, FROM_UNIXTIME(2147483647.9999999) AS c3, FROM_UNIXTIME(32536771199) AS c4,FROM_UNIXTIME(32536771199.9999999) AS c5;",
-		output: "select from_unixtime(2147483647) as c1, from_unixtime(2147483648) as c2, from_unixtime(2147483647.9999999) as c3, from_unixtime(32536771199) as c4, from_unixtime(32536771199.9999999) as c5 from dual",
+		output: "select from_unixtime(2147483647) as c1, from_unixtime(2147483648) as c2, from_unixtime(2147483647.9999999) as c3, from_unixtime(32536771199) as c4, from_unixtime(32536771199.9999999) as c5",
 	}, {
 		input:  "select date_add(\"1997-12-31 23:59:59\",INTERVAL -100000 YEAR);",
-		output: "select date_add(1997-12-31 23:59:59, interval(-100000, year)) from dual",
+		output: "select date_add(1997-12-31 23:59:59, interval(-100000, year))",
 	}, {
 		input:  "SELECT ADDDATE(DATE'2021-01-01', INTERVAL 1 DAY);",
-		output: "select adddate(date(2021-01-01), interval(1, day)) from dual",
+		output: "select adddate(date(2021-01-01), interval(1, day))",
 	}, {
 		input:  "select '2007-01-01' + interval a day from t1;",
 		output: "select 2007-01-01 + interval(a, day) from t1",
@@ -131,7 +131,7 @@ var (
 		output: "select fld1, variance(fld2) as q from t1 group by fld1 having q is not null",
 	}, {
 		input:  "select variance(-99999999999999999.99999);",
-		output: "select variance(-99999999999999999.99999) from dual",
+		output: "select variance(-99999999999999999.99999)",
 	}, {
 		input:  "select Fld1, std(Fld2) from t1 group by Fld1 having variance(Fld2) is not null",
 		output: "select fld1, std(fld2) from t1 group by fld1 having variance(fld2) is not null",
@@ -178,25 +178,25 @@ var (
 		output: "insert into t1 values (date_add(null, interval(1, day)))",
 	}, {
 		input:  "SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';",
-		output: "select date_add(2022-02-28 23:59:59.9999, interval(1, second)) as 1 second later from dual",
+		output: "select date_add(2022-02-28 23:59:59.9999, interval(1, second)) as 1 second later",
 	}, {
 		input:  "SELECT sum(a) as 'hello' from t1;",
 		output: "select sum(a) as hello from t1",
 	}, {
 		input:  "SELECT DATE_ADD(\"2017-06-15\", INTERVAL -10 MONTH);",
-		output: "select date_add(2017-06-15, interval(-10, month)) from dual",
+		output: "select date_add(2017-06-15, interval(-10, month))",
 	}, {
 		input:  "create table t1 (a varchar)",
 		output: "create table t1 (a varchar)",
 	}, {
 		input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
-		output: "select (cast(0x7fffffffffffffff as char)) from dual",
+		output: "select (cast(0x7fffffffffffffff as char))",
 	}, {
 		input:  "select cast(-19999999999999999999 as signed);",
-		output: "select cast(-19999999999999999999 as signed) from dual",
+		output: "select cast(-19999999999999999999 as signed)",
 	}, {
 		input:  "select cast(19999999999999999999 as signed);",
-		output: "select cast(19999999999999999999 as signed) from dual",
+		output: "select cast(19999999999999999999 as signed)",
 	}, {
 		input:  "select date_sub(now(), interval 1 day) from t1;",
 		output: "select date_sub(now(), interval(1, day)) from t1",
@@ -279,10 +279,10 @@ var (
 		output: "set sql_mode = TRADITIONAL",
 	}, {
 		input:  "select @session.tx_isolation",
-		output: "select @tx_isolation from dual",
+		output: "select @tx_isolation",
 	}, {
 		input:  "select @@session.tx_isolation",
-		output: "select @@tx_isolation from dual",
+		output: "select @@tx_isolation",
 	}, {
 		input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 		output: "show variables",
@@ -852,8 +852,7 @@ var (
 	}, {
 		input: "select * from t1 natural left join t2",
 	}, {
-		input:  "select 1",
-		output: "select 1 from dual",
+		input: "select 1",
 	}, {
 		input: "select $ from t",
 	}, {
