@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -418,6 +419,9 @@ func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[u
 		defer common.GPool.Free(onode)
 		obuf := onode.Buf[:osize]
 		obuf, err = compress.Decompress(buf, obuf, compress.Lz4)
+		if err != nil {
+			panic(err)
+		}
 		maskLen := binary.BigEndian.Uint32(obuf[:4])
 		obuf = obuf[4:]
 		mask := roaring.New()
@@ -425,7 +429,8 @@ func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[u
 			panic(err)
 		}
 		obuf = obuf[maskLen:]
-		vec := gvec.New(types.Type_ANY.ToType())
+		typ := encoding.DecodeType(obuf[:encoding.TypeSize])
+		vec := gvec.New(typ)
 		if err = vec.Read(obuf); err != nil {
 			panic(err)
 		}

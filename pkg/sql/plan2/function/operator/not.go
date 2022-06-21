@@ -23,10 +23,7 @@ import (
 )
 
 func NotCol(lv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
+	lvs := vector.MustTCols[bool](lv)
 	n := len(lvs)
 	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
 	if err != nil {
@@ -45,10 +42,7 @@ func NotCol(lv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 }
 
 func NotConst(lv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
+	lvs := vector.MustTCols[bool](lv)
 	vec := proc.AllocScalarVector(lv.Typ)
 	vector.SetCol(vec, []bool{!lvs[0]})
 	return vec, nil
