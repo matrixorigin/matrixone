@@ -14,6 +14,8 @@ type MemAllocator = stl.MemAllocator
 type Options = containers.Options
 type Bytes = stl.Bytes
 
+type ItOp = func(v any, row int) error
+
 type Vector interface {
 	IsView() bool
 	Nullable() bool
@@ -40,6 +42,9 @@ type Vector interface {
 	GetType() types.Type
 	String() string
 	Window() Vector
+
+	Foreach(op ItOp, sels *roaring.Bitmap) error
+	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
 
 	// Marshal() ([]byte, error)
 	// Unmarshal(buf []byte) error

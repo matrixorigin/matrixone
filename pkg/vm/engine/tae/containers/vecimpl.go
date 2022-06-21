@@ -3,6 +3,7 @@ package containers
 import (
 	"fmt"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -108,4 +109,48 @@ func (impl *nullableVecImpl[T]) String() string {
 		s = fmt.Sprintf("%s:Nulls=%s", s, impl.derived.nulls.String())
 	}
 	return s
+}
+
+func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	if !impl.HasNull() {
+		return impl.vecBase.ForeachWindow(offset, length, op, sels)
+	}
+	var v T
+	if _, ok := any(v).([]byte); !ok {
+		slice := impl.derived.stlvec.Slice()
+		slice = slice[offset : offset+length]
+		if sels == nil || sels.IsEmpty() {
+			for i, elem := range slice {
+				var v any
+				if impl.IsNull(i) {
+					v = types.Null{}
+				} else {
+					v = elem
+				}
+				if err = op(v, i); err != nil {
+					return
+				}
+			}
+		} else {
+			idxes := sels.ToArray()
+			end := offset + length
+			for _, idx := range idxes {
+				if int(idx) < offset {
+					continue
+				} else if int(idx) >= end {
+					break
+				}
+				var v any
+				if impl.IsNull(int(idx)) {
+					v = types.Null{}
+				} else {
+					v = slice[int(idx)-offset]
+				}
+				if err = op(v, int(idx)); err != nil {
+					return
+				}
+			}
+		}
+	}
+	return
 }

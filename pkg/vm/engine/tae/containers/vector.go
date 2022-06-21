@@ -197,3 +197,11 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 func (vec *vector[T]) ReadVectorFromReader(r io.Reader) (created Vector, n int64, err error) {
 	return
 }
+
+func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindow(0, vec.Length(), op, sels)
+}
+
+func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return vec.impl.ForeachWindow(offset, length, op, sels)
+}
