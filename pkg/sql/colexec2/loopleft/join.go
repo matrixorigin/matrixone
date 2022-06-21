@@ -138,7 +138,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
 			}
 		}
-		vector.Free(vec, proc.Mp)
+		vector.Clean(vec, proc.Mp)
 		if flg {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {

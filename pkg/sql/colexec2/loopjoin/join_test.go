@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -138,56 +139,41 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []ResultPos) j
 		Ctx: ctx,
 		Ch:  make(chan *batch.Batch, 4),
 	}
-	/*
-		fid := function.EncodeOverloadID(function.EQUAL, 4)
-		args := make([]*plan.Expr, 0, 2)
-		args = append(args, &plan.Expr{
-			Typ: &plan.Type{
-				Size: ts[0].Size,
-				Id:   plan.Type_TypeId(ts[0].Oid),
+	fid := function.EncodeOverloadID(function.EQUAL, 4)
+	args := make([]*plan.Expr, 0, 2)
+	args = append(args, &plan.Expr{
+		Typ: &plan.Type{
+			Size: ts[0].Size,
+			Id:   plan.Type_TypeId(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
 			},
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: 0,
-				},
+		},
+	})
+	args = append(args, &plan.Expr{
+		Typ: &plan.Type{
+			Size: ts[0].Size,
+			Id:   plan.Type_TypeId(ts[0].Oid),
+		},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 1,
+				ColPos: 0,
 			},
-		})
-		args = append(args, &plan.Expr{
-			Typ: &plan.Type{
-				Size: ts[0].Size,
-				Id:   plan.Type_TypeId(ts[0].Oid),
-			},
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 1,
-					ColPos: 0,
-				},
-			},
-		})
-		cond := &plan.Expr{
-			Typ: &plan.Type{
-				Size: 1,
-				Id:   plan.Type_BOOL,
-			},
-			Expr: &plan.Expr_F{
-				F: &plan.Function{
-					Args: args,
-					Func: &plan.ObjectRef{Obj: fid},
-				},
-			},
-		}
-	*/
+		},
+	})
 	cond := &plan.Expr{
 		Typ: &plan.Type{
 			Size: 1,
 			Id:   plan.Type_BOOL,
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Bval{
-					Bval: true,
-				},
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Args: args,
+				Func: &plan.ObjectRef{Obj: fid},
 			},
 		},
 	}

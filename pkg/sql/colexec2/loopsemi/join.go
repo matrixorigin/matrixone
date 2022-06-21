@@ -122,12 +122,12 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						return err
 					}
 				}
-				vector.Free(vec, proc.Mp)
+				vector.Clean(vec, proc.Mp)
 				rbat.Zs = append(rbat.Zs, bat.Zs[i])
 				break
 			}
 		}
-		vector.Free(vec, proc.Mp)
+		vector.Clean(vec, proc.Mp)
 	}
 	proc.Reg.InputBatch = rbat
 	return nil

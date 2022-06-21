@@ -120,7 +120,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				flg = false
 			}
 		}
-		vector.Free(vec, proc.Mp)
+		vector.Clean(vec, proc.Mp)
 		if flg {
 			for k, pos := range ap.Result {
 				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp); err != nil {

@@ -136,7 +136,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
 			}
 		}
-		vector.Free(vec, proc.Mp)
+		vector.Clean(vec, proc.Mp)
 	}
 	proc.Reg.InputBatch = rbat
 	return nil
