@@ -14,6 +14,7 @@
 package unary
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -33,7 +34,7 @@ func TestSin(t *testing.T) {
 
 	sinIntAndFloat[uint8](t, types.T_uint8, 5, -0.9589242746631385)
 	sinIntAndFloat[uint16](t, types.T_uint16, 6, -0.27941549819892586)
-	sinIntAndFloat[uint32](t, types.T_uint32, 7, 0.6569865987187891)
+	sinIntAndFloat[uint32](t, types.T_uint32, 7, math.Sin(7))
 	sinIntAndFloat[uint64](t, types.T_uint64, 8, 0.9893582466233817)
 
 	sinIntAndFloat[float32](t, types.T_float32, -0.5, -0.479425538604203)

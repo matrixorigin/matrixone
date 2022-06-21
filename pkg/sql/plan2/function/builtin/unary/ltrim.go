@@ -26,11 +26,11 @@ func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	// totalCount - spaceCount is the total bytes need for the ltrim-ed string
+	inputValues := vector.MustBytesCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.(*types.Bytes)
 		spaceCount := ltrim.CountSpacesFromLeft(inputValues)
 		totalCount := int32(len(inputValues.Data))
 		resultVector := vector.NewConst(resultType)
@@ -42,7 +42,6 @@ func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		vector.SetCol(resultVector, ltrim.LtrimChar(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.(*types.Bytes)
 		spaceCount := ltrim.CountSpacesFromLeft(inputValues)
 		totalCount := int32(len(inputValues.Data))
 		resultVector, err := proc.AllocVector(resultType, int64(totalCount-spaceCount))
