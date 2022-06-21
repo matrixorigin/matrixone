@@ -50,7 +50,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	var paramNum int = len(inputVecs)
 	srcVector := inputVecs[0]
 	startVector := inputVecs[1]
-	columnSrcCol := srcVector.Col.(*types.Bytes)
+	columnSrcCol := vector.MustBytesCols(srcVector)
 
 	// request new memory space for result column
 	rows := calcResultVectorRows(inputVecs)

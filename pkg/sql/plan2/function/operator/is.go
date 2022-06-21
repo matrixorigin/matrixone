@@ -16,7 +16,6 @@ package operator
 
 import (
 	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -28,29 +27,21 @@ func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 	rv := vectors[1]
 	retType := types.T_bool.ToType()
 
-	right, ok := rv.Col.(bool)
-	if !ok {
-		return nil, errors.New("the right vec col is not bool type")
+	lefts := vector.MustTCols[bool](lv)
+	if !rv.IsScalar() || rv.IsScalarNull() {
+		return nil, errors.New("second parameter of IS must be TRUE or FALSE")
 	}
+	right := vector.MustTCols[bool](rv)[0]
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(retType)
 		if lv.IsScalarNull() {
 			vector.SetCol(vec, []bool{false})
 		} else {
-			lefts, ok := lv.Col.([]bool)
-			if !ok {
-				return nil, errors.New("the left vec col is not []bool type")
-			}
 			vector.SetCol(vec, []bool{lefts[0] == right})
 		}
 		return vec, nil
 	} else {
-		lefts, ok := lv.Col.([]bool)
-		if !ok {
-			return nil, errors.New("the left vec col is not []bool type")
-		}
-
 		l := int64(len(lefts))
 		col := make([]bool, l)
 		vec, err := proc.AllocVector(lv.Typ, l*1)

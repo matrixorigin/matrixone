@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
+	"math"
 	"testing"
 )
 
@@ -35,8 +36,8 @@ func TestMod(t *testing.T) {
 	modInteger[uint32](t, types.T_uint32, 28, 5, 3)
 	modInteger[uint64](t, types.T_uint64, 28, 5, 3)
 
-	modFloater[float32](t, types.T_float32, 24.45, 12.4, 0)
-	modFloater[float64](t, types.T_float64, 24.45, 12.4, 0)
+	modFloater[float32](t, types.T_float32, 24.45, 12.4, float32(math.Mod(float64(float32(24.45)), float64(float32(12.4)))))
+	modFloater[float64](t, types.T_float64, 24.45, 12.4, math.Mod(24.45, 12.4))
 }
 
 // Integer unit test entry for mod operator
