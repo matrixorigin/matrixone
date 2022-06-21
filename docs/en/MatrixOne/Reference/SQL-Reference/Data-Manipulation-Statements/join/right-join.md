@@ -1,16 +1,16 @@
-# **INNER JOIN**
+# **RIGHT JOIN**
 
 ## **Description**
 
-The ``INNER JOIN`` keyword selects records that have matching values in both tables.(Same as `JOIN`)
+The ``RIGHT JOIN`` keyword returns all records from the right table (table2), and the matching records from the left table (table1). The result is 0 records from the left side, if there is no match.
 
 ## **Syntax**
 
 ```
 > SELECT column_name(s)
 FROM table1
-INNER JOIN table2
-ON table1.column_name = table2.column_name;
+RIGHT JOIN table2
+ON table1.column_name=table2.column_name;
 
 ```
 
@@ -45,7 +45,7 @@ ON table1.column_name = table2.column_name;
 > insert into t1 values ('BerkeleyPublic2','Berkeley');
 > insert into t1 values ('NYCLib','NewYork');
 
-> select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
+> select city,libname1,count(libname1) as a from t3 right join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 
 +----------+--------------------+------+
 | city     | libname1           | a    |
