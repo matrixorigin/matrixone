@@ -29,21 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function"
 )
 
-func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
-	conds := splitConjunctiveCondition(astExpr)
-	exprs := make([]*plan.Expr, len(conds))
-
-	for i, cond := range conds {
-		expr, err := ctx.binder.BindExpr(cond, 0, true)
-		if err != nil {
-			return nil, err
-		}
-		exprs[i] = expr
-	}
-
-	return exprs, nil
-}
-
 func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (expr *Expr, err error) {
 	switch exprImpl := astExpr.(type) {
 	case *tree.NumVal:
@@ -1099,20 +1084,4 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 			Typ: intervalTypeInFunction,
 		},
 	}, nil
-}
-
-//splitConjunctiveCondition split a expression to a list of AND conditions.
-func splitConjunctiveCondition(astExpr tree.Expr) []tree.Expr {
-	var astExprs []tree.Expr
-	switch typ := astExpr.(type) {
-	case nil:
-	case *tree.AndExpr:
-		astExprs = append(astExprs, splitConjunctiveCondition(typ.Left)...)
-		astExprs = append(astExprs, splitConjunctiveCondition(typ.Right)...)
-	case *tree.ParenExpr:
-		astExprs = append(astExprs, splitConjunctiveCondition(typ.Expr)...)
-	default:
-		astExprs = append(astExprs, astExpr)
-	}
-	return astExprs
 }
