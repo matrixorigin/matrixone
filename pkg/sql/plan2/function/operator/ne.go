@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	encoding2 "github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/ne"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -194,7 +195,17 @@ func ColNeConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 func ColNeNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
+	n := GetRetColLen[T](lv)
+	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
+	if err != nil {
+		return nil, err
+	}
+	col := encoding2.DecodeFixedSlice[bool](vec.Data, 1)
+	vector.SetCol(vec, col)
+	for i := 0; i < n; i++ {
+		nulls.Add(vec.Nsp, uint64(i))
+	}
+	return vec, nil
 }
 
 func ConstNeCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -216,7 +227,7 @@ func ConstNeNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*ve
 }
 
 func NullNeCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
+	return ColNeNull[T](rv, lv, proc)
 }
 
 func NullNeConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {

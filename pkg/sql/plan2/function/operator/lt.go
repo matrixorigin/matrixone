@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	encoding2 "github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/gt"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/lt"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -195,7 +196,17 @@ func ColLtConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 func ColLtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
+	n := GetRetColLen[T](lv)
+	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
+	if err != nil {
+		return nil, err
+	}
+	col := encoding2.DecodeFixedSlice[bool](vec.Data, 1)
+	vector.SetCol(vec, col)
+	for i := 0; i < n; i++ {
+		nulls.Add(vec.Nsp, uint64(i))
+	}
+	return vec, nil
 }
 
 func ConstLtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -228,7 +239,7 @@ func ConstLtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*ve
 }
 
 func NullLtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
+	return ColLtNull[T](rv, lv, proc)
 }
 
 func NullLtConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
