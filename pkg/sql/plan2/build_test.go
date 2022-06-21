@@ -402,6 +402,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select n_name, count(*) from nation group by n_name order by 2 asc",
 		"select count(distinct 12)",
 		"select nullif(n_name, n_comment), ifnull(n_comment, n_name) from nation",
+		"select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - 1) >10",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr

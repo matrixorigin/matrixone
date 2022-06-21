@@ -38,13 +38,37 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	if isRoot {
-		astStr := tree.String(astExpr, dialect.MYSQL)
-		if _, ok := b.ctx.groupByAst[astStr]; ok {
-			return nil, nil
-		}
+		if nameExpr, ok := astExpr.(*tree.UnresolvedName); ok {
+			col := nameExpr.Parts[0]
+			table := nameExpr.Parts[1]
+			if len(table) == 0 {
+				if binding, ok := b.ctx.bindingByCol[col]; ok {
+					table = binding.table
+				}
+			}
+			// if UnresolvedName expr. we add column_name & table_name.column_name to groupByAst
+			astStr := col
+			if _, ok := b.ctx.groupByAst[astStr]; ok {
+				return nil, nil
+			}
+			b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
 
-		b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
-		b.ctx.groups = append(b.ctx.groups, expr)
+			astStr = table + "." + col
+			if _, ok := b.ctx.groupByAst[astStr]; ok {
+				return nil, nil
+			}
+			b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
+
+			b.ctx.groups = append(b.ctx.groups, expr)
+		} else {
+			astStr := tree.String(astExpr, dialect.MYSQL)
+			if _, ok := b.ctx.groupByAst[astStr]; ok {
+				return nil, nil
+			}
+
+			b.ctx.groupByAst[astStr] = int32(len(b.ctx.groups))
+			b.ctx.groups = append(b.ctx.groups, expr)
+		}
 	}
 
 	return expr, err
