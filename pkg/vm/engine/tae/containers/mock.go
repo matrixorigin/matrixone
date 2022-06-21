@@ -197,6 +197,12 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 	return
 }
 
+func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
+	bat = MockBatch(vecTypes, rows, uniqueIdx, provider)
+	bat.Attrs = attrs
+	return
+}
+
 func MockBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
 	bat = NewEmptyBatch()
 	for idx := range vecTypes {
