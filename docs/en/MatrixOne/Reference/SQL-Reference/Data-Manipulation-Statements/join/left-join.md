@@ -45,7 +45,7 @@ ON table1.column_name=table2.column_name;
 > insert into t1 values ('BerkeleyPublic2','Berkeley');
 > insert into t1 values ('NYCLib','NewYork');
 
-> select select city,libname1,count(libname1) as a from t3 left join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
+> select city,libname1,count(libname1) as a from t3 left join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 +----------+--------------------+------+
 | city     | libname1           | a    |
 +----------+--------------------+------+
