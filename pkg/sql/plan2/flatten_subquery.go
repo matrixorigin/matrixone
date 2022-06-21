@@ -141,23 +141,45 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_IN:
-		expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
+		if row, ok := subquery.Child.Expr.(*plan.Expr_List); ok {
+			for i, expr := range row.List.List {
+				expr, err = bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+					expr,
+					{
+						Typ: subCtx.projects[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: subCtx.rootTag(),
+								ColPos: int32(i),
+							},
+						},
+					},
+				})
+				if err != nil {
+					return 0, nil, err
+				}
+
+				joinPreds = append(joinPreds, expr)
+			}
+		} else {
+			expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+				subquery.Child,
+				{
+					Typ: subCtx.projects[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: subCtx.rootTag(),
+							ColPos: 0,
+						},
 					},
 				},
-			},
-		})
-		if err != nil {
-			return 0, nil, err
-		}
+			})
+			if err != nil {
+				return 0, nil, err
+			}
 
-		joinPreds = append(joinPreds, expr)
+			joinPreds = append(joinPreds, expr)
+		}
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
@@ -169,23 +191,45 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_NOT_IN:
-		expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
+		if row, ok := subquery.Child.Expr.(*plan.Expr_List); ok {
+			for i, expr := range row.List.List {
+				expr, err = bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+					expr,
+					{
+						Typ: subCtx.projects[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: subCtx.rootTag(),
+								ColPos: int32(i),
+							},
+						},
+					},
+				})
+				if err != nil {
+					return 0, nil, err
+				}
+
+				joinPreds = append(joinPreds, expr)
+			}
+		} else {
+			expr, err := bindFuncExprImplByPlanExpr("=", []*plan.Expr{
+				subquery.Child,
+				{
+					Typ: subCtx.projects[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: subCtx.rootTag(),
+							ColPos: 0,
+						},
 					},
 				},
-			},
-		})
-		if err != nil {
-			return 0, nil, err
-		}
+			})
+			if err != nil {
+				return 0, nil, err
+			}
 
-		joinPreds = append(joinPreds, expr)
+			joinPreds = append(joinPreds, expr)
+		}
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
@@ -197,23 +241,45 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_ANY:
-		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
+		if row, ok := subquery.Child.Expr.(*plan.Expr_List); ok {
+			for i, expr := range row.List.List {
+				expr, err = bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
+					expr,
+					{
+						Typ: subCtx.projects[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: subCtx.rootTag(),
+								ColPos: int32(i),
+							},
+						},
+					},
+				})
+				if err != nil {
+					return 0, nil, err
+				}
+
+				joinPreds = append(joinPreds, expr)
+			}
+		} else {
+			expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
+				subquery.Child,
+				{
+					Typ: subCtx.projects[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: subCtx.rootTag(),
+							ColPos: 0,
+						},
 					},
 				},
-			},
-		})
-		if err != nil {
-			return 0, nil, err
-		}
+			})
+			if err != nil {
+				return 0, nil, err
+			}
 
-		joinPreds = append(joinPreds, expr)
+			joinPreds = append(joinPreds, expr)
+		}
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
@@ -225,28 +291,62 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_ALL:
-		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
-			subquery.Child,
-			{
-				Typ: subCtx.projects[0].Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: subCtx.rootTag(),
-						ColPos: 0,
+		if row, ok := subquery.Child.Expr.(*plan.Expr_List); ok {
+			var andExpr *plan.Expr
+			for i, expr := range row.List.List {
+				expr, err = bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
+					expr,
+					{
+						Typ: subCtx.projects[i].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: subCtx.rootTag(),
+								ColPos: int32(i),
+							},
+						},
+					},
+				})
+				if err != nil {
+					return 0, nil, err
+				}
+
+				if i > 1 {
+					andExpr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{andExpr, expr})
+				} else {
+					andExpr = expr
+				}
+			}
+
+			andExpr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{andExpr})
+			if err != nil {
+				return 0, nil, err
+			}
+
+			joinPreds = append(joinPreds, andExpr)
+		} else {
+			expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
+				subquery.Child,
+				{
+					Typ: subCtx.projects[0].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: subCtx.rootTag(),
+							ColPos: 0,
+						},
 					},
 				},
-			},
-		})
-		if err != nil {
-			return 0, nil, err
-		}
+			})
+			if err != nil {
+				return 0, nil, err
+			}
 
-		expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
-		if err != nil {
-			return 0, nil, err
-		}
+			expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
+			if err != nil {
+				return 0, nil, err
+			}
 
-		joinPreds = append(joinPreds, expr)
+			joinPreds = append(joinPreds, expr)
+		}
 
 		nodeId = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,

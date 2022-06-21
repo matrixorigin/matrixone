@@ -402,11 +402,13 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		}
 		returnExpr.Expr.(*plan.Expr_Sub).Sub.Typ = plan.SubqueryRef_EXISTS
 	} else {
-		if len(subCtx.projects) > 1 {
-			// TODO: may support row constructor in the future?
-			return nil, errors.New(errno.SyntaxError, "subquery must return only one column")
+		if len(subCtx.projects) == 1 {
+			returnExpr.Typ = subCtx.projects[0].Typ
+		} else {
+			returnExpr.Typ = &plan.Type{
+				Id: plan.Type_TUPLE,
+			}
 		}
-		returnExpr.Typ = subCtx.projects[0].Typ
 	}
 
 	return returnExpr, nil
@@ -541,8 +543,15 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New(errno.InternalError, "IN subquery as non-root expression not yet supported")
 				}
 
-				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
-					return nil, errors.New(errno.InternalError, "row constructor in IN subquery not yet supported")
+				if row, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					expected := len(row.List.List)
+					if expected != len(b.builder.ctxByNode[subquery.Sub.NodeId].projects) {
+						return nil, errors.New("", fmt.Sprintf("operand should contain %d columns", expected))
+					}
+				} else {
+					if 1 != len(b.builder.ctxByNode[subquery.Sub.NodeId].projects) {
+						return nil, errors.New("", "operand should contain 1 column")
+					}
 				}
 
 				subquery.Sub.Typ = plan.SubqueryRef_IN
@@ -584,8 +593,15 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					return nil, errors.New(errno.InternalError, "IN subquery as non-root expression not yet supported")
 				}
 
-				if _, ok := leftArg.Expr.(*plan.Expr_List); ok {
-					return nil, errors.New(errno.InternalError, "row constructor in IN subquery not yet supported")
+				if row, ok := leftArg.Expr.(*plan.Expr_List); ok {
+					expected := len(row.List.List)
+					if expected != len(b.builder.ctxByNode[subquery.Sub.NodeId].projects) {
+						return nil, errors.New("", fmt.Sprintf("operand should contain %d columns", expected))
+					}
+				} else {
+					if 1 != len(b.builder.ctxByNode[subquery.Sub.NodeId].projects) {
+						return nil, errors.New("", "operand should contain 1 column")
+					}
 				}
 
 				subquery.Sub.Typ = plan.SubqueryRef_NOT_IN
@@ -616,14 +632,21 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			return nil, err
 		}
 
-		if _, ok := child.Expr.(*plan.Expr_List); ok {
-			return nil, errors.New(errno.InternalError, "row constructor in ANY subquery not yet supported")
-		}
-
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
 			if !isRoot {
 				// TODO: implement MARK join to better support non-scalar subqueries
 				return nil, errors.New(errno.InternalError, fmt.Sprintf("%q subquery as non-root expression not yet supported", strings.ToUpper(astExpr.SubOp.ToString())))
+			}
+
+			if row, ok := child.Expr.(*plan.Expr_List); ok {
+				expected := len(row.List.List)
+				if expected != len(b.builder.ctxByNode[subquery.Sub.NodeId].projects) {
+					return nil, errors.New("", fmt.Sprintf("operand should contain %d columns", expected))
+				}
+			} else {
+				if 1 != len(b.builder.ctxByNode[subquery.Sub.NodeId].projects) {
+					return nil, errors.New("", "operand should contain 1 column")
+				}
 			}
 
 			subquery.Sub.Op = op

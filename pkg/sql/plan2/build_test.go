@@ -614,6 +614,11 @@ func TestSubQuery(t *testing.T) {
 			where
 				l_partkey = p_partkey
 		);`, //tpch q17
+		"select * from nation where (1, 2) in (select 1, 2)",
+		"select * from nation where (1, 2) > any (select 1, 2)",
+		"select * from nation where (1, 2) <= all (select 1, 3)",
+		"select * from nation where (1, 2) <> (select 1, 2)",
+		"select * from nation where (1, '2', '3') in (select * from region)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -621,6 +626,11 @@ func TestSubQuery(t *testing.T) {
 	sqls = []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
+		"select * from nation where (1, 2) in (select 1, 2, 3)",
+		"select * from nation where (1, 2) > any (select 1)",
+		"select * from nation where (1, 2) <= all (select 1, false)",
+		"select * from nation where (1, '2', '3', 4) in (select * from region)",
+		"select * from nation where (1, 2, 3) in (select * from region)",
 	}
 	runTestShouldError(mock, t, sqls)
 }
