@@ -24,15 +24,15 @@ func withAllocator(opt *Options) *Options {
 // 	assert.Equal(t, v1.Allocated(), v2.Allocated())
 // }
 
-func checkEqualVector(t *testing.T, v1, v2 Vector) {
-	assert.Equal(t, v1.GetType(), v2.GetType())
-	assert.Equal(t, v1.Length(), v2.Length())
-	assert.Equal(t, v1.HasNull(), v2.HasNull())
-	assert.Equal(t, v1.Nullable(), v2.Nullable())
-	for i := 0; i < v1.Length(); i++ {
-		assert.Equal(t, v1.Get(i), v2.Get(i))
-	}
-}
+// func checkEqualVector(t *testing.T, v1, v2 Vector) {
+// 	assert.Equal(t, v1.GetType(), v2.GetType())
+// 	assert.Equal(t, v1.Length(), v2.Length())
+// 	assert.Equal(t, v1.HasNull(), v2.HasNull())
+// 	assert.Equal(t, v1.Nullable(), v2.Nullable())
+// 	for i := 0; i < v1.Length(); i++ {
+// 		assert.Equal(t, v1.Get(i), v2.Get(i))
+// 	}
+// }
 
 func TestVector1(t *testing.T) {
 	opt := withAllocator(nil)
@@ -134,7 +134,7 @@ func TestVector3(t *testing.T) {
 	_, err = vec2.ReadFrom(r)
 	assert.NoError(t, err)
 
-	checkEqualVector(t, vec1, vec2)
+	assert.True(t, vec1.Equals(vec2))
 
 	// t.Log(vec1.String())
 	// t.Log(vec2.String())

@@ -9,19 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func checkEqualBatch(t *testing.T, b1, b2 *Batch) {
-	assert.Equal(t, b1.Length(), b2.Length())
-	assert.Equal(t, b1.DeleteCnt(), b2.DeleteCnt())
-	assert.Equal(t, b1.DeleteCnt(), b2.DeleteCnt())
-	if b1.HasDelete() {
-		assert.True(t, b1.Deletes.Equals(b2.Deletes))
-	}
-	for i := range b1.Vecs {
-		assert.Equal(t, b1.Attrs[i], b2.Attrs[i])
-		checkEqualVector(t, b1.Vecs[i], b2.Vecs[i])
-	}
-}
-
 func TestBatch1(t *testing.T) {
 	vecTypes := types.MockColTypes(4)[2:]
 	attrs := []string{"attr1", "attr2"}
@@ -49,7 +36,7 @@ func TestBatch1(t *testing.T) {
 	bat2 := NewEmptyBatch()
 	_, err = bat2.ReadFrom(r)
 	assert.NoError(t, err)
-	checkEqualBatch(t, bat, bat2)
+	assert.True(t, bat.Equals(bat2))
 
 	bat.Close()
 }

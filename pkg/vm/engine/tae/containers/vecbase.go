@@ -18,6 +18,7 @@ func newVecBase[T any](derived *vector[T]) *vecBase[T] {
 	}
 }
 
+func (vec *vecBase[T]) Equals(o Vector) bool         { panic("not supported") }
 func (base *vecBase[T]) IsView() bool                { return false }
 func (base *vecBase[T]) Nullable() bool              { return false }
 func (base *vecBase[T]) IsNull(i int) bool           { return false }

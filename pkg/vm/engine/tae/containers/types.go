@@ -32,6 +32,7 @@ type Vector interface {
 	Extend(o Vector)
 	Compact(deletes *roaring.Bitmap)
 
+	Equals(o Vector) bool
 	Length() int
 	Capacity() int
 	Allocated() int

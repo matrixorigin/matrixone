@@ -91,6 +91,29 @@ func (bat *Batch) Close() {
 	}
 }
 
+func (bat *Batch) Equals(o *Batch) bool {
+	if bat.Length() != o.Length() {
+		return false
+	}
+	if bat.DeleteCnt() != o.DeleteCnt() {
+		return false
+	}
+	if bat.HasDelete() {
+		if !bat.Deletes.Equals(o.Deletes) {
+			return false
+		}
+	}
+	for i := range bat.Vecs {
+		if bat.Attrs[i] != o.Attrs[i] {
+			return false
+		}
+		if !bat.Vecs[i].Equals(o.Vecs[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64

@@ -38,6 +38,31 @@ func NewVector[T any](typ types.Type, nullable bool, opts ...*Options) *vector[T
 // 	return vec
 // }
 
+func (vec *vector[T]) Equals(o Vector) bool {
+	if vec.Length() != o.Length() {
+		return false
+	}
+	if vec.GetType() != o.GetType() {
+		return false
+	}
+	if vec.Nullable() != o.Nullable() {
+		return false
+	}
+	if vec.HasNull() != o.HasNull() {
+		return false
+	}
+	if vec.HasNull() {
+		if !vec.NullMask().Equals(o.NullMask()) {
+			return false
+		}
+	}
+	for i := 0; i < vec.Length(); i++ {
+		if vec.Get(i) != o.Get(i) {
+			return false
+		}
+	}
+	return true
+}
 func (vec *vector[T]) IsView() bool                { return vec.impl.IsView() }
 func (vec *vector[T]) Nullable() bool              { return vec.impl.Nullable() }
 func (vec *vector[T]) IsNull(i int) bool           { return vec.impl.IsNull(i) }
