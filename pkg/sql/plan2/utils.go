@@ -310,12 +310,16 @@ func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
 func applyDistributivity(expr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName != "or" {
-			return expr
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = applyDistributivity(arg)
 		}
 
-		leftConds := splitPlanConjunction(applyDistributivity(exprImpl.F.Args[0]))
-		rightConds := splitPlanConjunction(applyDistributivity(exprImpl.F.Args[1]))
+		if exprImpl.F.Func.ObjName != "or" {
+			break
+		}
+
+		leftConds := splitPlanConjunction(exprImpl.F.Args[0])
+		rightConds := splitPlanConjunction(exprImpl.F.Args[1])
 
 		condMap := make(map[string]int)
 
