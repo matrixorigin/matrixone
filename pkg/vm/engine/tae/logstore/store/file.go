@@ -154,6 +154,9 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 			}
 		} else {
 			rf.history.Extend(vfiles[:len(vfiles)-1]...)
+			for _, vf := range vfiles[:len(vfiles)-1] {
+				vf.OnReplayCommitted()
+			}
 			rf.uncommitted = append(
 				rf.uncommitted, vfiles[len(vfiles)-1].(*vFile))
 			rf.nextVer = uint64(vfiles[len(vfiles)-1].Id())
@@ -169,19 +172,68 @@ func OpenRotateFile(dir, name string, mu *sync.RWMutex, rotateChecker RotateChec
 }
 
 func (rf *rotateFile) Replay(r *replayer, o ReplayObserver) error {
-	err := rf.history.Replay(r, o)
-	if err != nil {
-		return err
-	}
+	entryIDs := rf.history.EntryIds()
 	for _, vf := range rf.uncommitted {
-		err = vf.Replay(r, vf)
+		entryIDs = append(entryIDs, vf.Id())
+	}
+	entries := make([]VFile, 0)
+	failedIDs := make([]int, 0)
+	for _, id := range entryIDs {
+		entry := rf.history.GetEntry(id)
+		if entry == nil {
+			vf := rf.getEntryFromUncommitted(id)
+			if vf == nil {
+				panic("wrong id")
+			}
+			entry = vf
+		}
+
+		err := entry.LoadMeta()
 		if err != nil {
-			return nil
+			err := entry.Replay(r, o)
+			if err != nil {
+				panic(err)
+			}
+			failedIDs = append(failedIDs, id)
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	r.MergeCkps(entries)
+	for _, vf := range entries {
+		for _, id := range failedIDs {
+			if vf.Id() == id {
+				continue
+			}
+		}
+		err := vf.ReplayCWithCkp(r, o)
+		if err != nil {
+			panic(err)
+		}
+	}
+	for _, vf := range entries {
+		for _, id := range failedIDs {
+			if vf.Id() == id {
+				continue
+			}
+		}
+		err := vf.ReplayUCWithCkp(r, o)
+		if err != nil {
+			panic(err)
 		}
 	}
 	return nil
 }
 
+// for replay
+func (rf *rotateFile) getEntryFromUncommitted(id int) (e *vFile) {
+	for _, vf := range rf.uncommitted {
+		if vf.version == id {
+			return vf
+		}
+	}
+	return nil
+}
 func (rf *rotateFile) TryTruncate(size int64) error {
 	l := len(rf.uncommitted)
 	if l == 0 {

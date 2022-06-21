@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	encoding2 "github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/eq"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -293,7 +294,17 @@ func ColEqConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vec
 }
 
 func ColEqNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
+	n := GetRetColLen[T](lv)
+	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
+	if err != nil {
+		return nil, err
+	}
+	col := encoding2.DecodeFixedSlice[bool](vec.Data, 1)
+	vector.SetCol(vec, col)
+	for i := 0; i < n; i++ {
+		nulls.Add(vec.Nsp, uint64(i))
+	}
+	return vec, nil
 }
 
 func ConstEqCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -315,7 +326,7 @@ func ConstEqNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*ve
 }
 
 func NullEqCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
+	return ColEqNull[T](rv, lv, proc)
 }
 
 func NullEqConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {

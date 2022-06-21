@@ -29,7 +29,7 @@ func RoundUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_uint64, Size: 8}), nil
 	}
 	digits := int64(0)
-	vs := vecs[0].Col.([]uint64)
+	vs := vector.MustTCols[uint64](vecs[0])
 	if len(vecs) > 1 {
 		if vecs[1].IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_uint64, Size: 8}), nil
@@ -37,7 +37,7 @@ func RoundUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
 			return nil, errors.New("the second argument of the round function must be an int64 constant")
 		}
-		digits = vecs[1].Col.([]int64)[0]
+		digits = vector.MustTCols[int64](vecs[1])[0]
 	}
 
 	if vecs[0].IsScalar() {
@@ -65,7 +65,7 @@ func RoundInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: 8}), nil
 	}
 	digits := int64(0)
-	vs := vecs[0].Col.([]int64)
+	vs := vector.MustTCols[int64](vecs[0])
 	if len(vecs) > 1 {
 		if vecs[1].IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: 8}), nil
@@ -73,7 +73,7 @@ func RoundInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
 			return nil, errors.New("the second argument of the round function must be an int64 constant")
 		}
-		digits = vecs[1].Col.([]int64)[0]
+		digits = vector.MustTCols[int64](vecs[1])[0]
 	}
 	if vecs[0].IsScalar() {
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
@@ -100,7 +100,7 @@ func RoundFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 	}
 	digits := int64(0)
-	vs := vecs[0].Col.([]float64)
+	vs := vector.MustTCols[float64](vecs[0])
 	if len(vecs) > 1 {
 		if vecs[1].IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
@@ -108,7 +108,7 @@ func RoundFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
 			return nil, errors.New("the second argument of the round function must be an int64 constant")
 		}
-		digits = vecs[1].Col.([]int64)[0]
+		digits = vector.MustTCols[int64](vecs[1])[0]
 	}
 
 	if vecs[0].IsScalar() {

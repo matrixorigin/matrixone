@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -271,4 +272,130 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 	}
 
 	return expr
+}
+
+func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
+	conds := splitAstConjunction(astExpr)
+	exprs := make([]*plan.Expr, len(conds))
+
+	for i, cond := range conds {
+		expr, err := ctx.binder.BindExpr(cond, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		exprs[i] = expr
+	}
+
+	return exprs, nil
+}
+
+//splitAstConjunction split a expression to a list of AND conditions.
+func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
+	var astExprs []tree.Expr
+	switch typ := astExpr.(type) {
+	case nil:
+	case *tree.AndExpr:
+		astExprs = append(astExprs, splitAstConjunction(typ.Left)...)
+		astExprs = append(astExprs, splitAstConjunction(typ.Right)...)
+	case *tree.ParenExpr:
+		astExprs = append(astExprs, splitAstConjunction(typ.Expr)...)
+	default:
+		astExprs = append(astExprs, astExpr)
+	}
+	return astExprs
+}
+
+// applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
+// TODO: move it into optimizer
+func applyDistributivity(expr *plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = applyDistributivity(arg)
+		}
+
+		if exprImpl.F.Func.ObjName != "or" {
+			break
+		}
+
+		leftConds := splitPlanConjunction(exprImpl.F.Args[0])
+		rightConds := splitPlanConjunction(exprImpl.F.Args[1])
+
+		condMap := make(map[string]int)
+
+		for _, cond := range rightConds {
+			condMap[cond.String()] = 0b10
+		}
+
+		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
+
+		for _, cond := range leftConds {
+			exprStr := cond.String()
+
+			if condMap[exprStr] == 0b10 {
+				commonConds = append(commonConds, cond)
+				condMap[exprStr] = 0b11
+			} else {
+				leftOnlyConds = append(leftOnlyConds, cond)
+				condMap[exprStr] = 0b01
+			}
+		}
+
+		for _, cond := range rightConds {
+			if condMap[cond.String()] == 0b10 {
+				rightOnlyConds = append(rightOnlyConds, cond)
+			}
+		}
+
+		if len(commonConds) == 0 {
+			return expr
+		}
+
+		expr, _ = combinePlanConjunction(commonConds)
+
+		if len(leftOnlyConds) == 0 || len(rightOnlyConds) == 0 {
+			return expr
+		}
+
+		leftExpr, _ := combinePlanConjunction(leftOnlyConds)
+		rightExpr, _ := combinePlanConjunction(rightOnlyConds)
+
+		leftExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{leftExpr, rightExpr})
+
+		expr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, leftExpr})
+	}
+
+	return expr
+}
+
+func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
+	var exprs []*plan.Expr
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "and" {
+			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[0])...)
+			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[1])...)
+		} else {
+			exprs = append(exprs, expr)
+		}
+
+	default:
+		exprs = append(exprs, expr)
+	}
+
+	return exprs
+}
+
+func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
+	expr = exprs[0]
+
+	for i := 1; i < len(exprs); i++ {
+		expr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, exprs[i]})
+
+		if err != nil {
+			break
+		}
+	}
+
+	return
 }

@@ -67,12 +67,5 @@ type DirEntry struct {
 	// file name, not full path
 	Name  string
 	IsDir bool
-}
-
-// MutableFileService is an extension interface to FileService that allow mutation
-type MutableFileService interface {
-	FileService
-
-	// Mutate mutates file contents
-	Mutate(ctx context.Context, vector IOVector) error
+	Size  int
 }
