@@ -109,12 +109,13 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	count := len(bat.Zs)
 	for i := 0; i < count; i++ {
-		for j := 0; j < len(ctr.bat.Zs); j++ {
-			vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, j, proc, ap.Cond)
-			if err != nil {
-				return err
-			}
-			if vec.Col.([]bool)[0] {
+		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
+		if err != nil {
+			return err
+		}
+		bs := vec.Col.([]bool)
+		for _, b := range bs {
+			if b {
 				for k, pos := range ap.Result {
 					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp); err != nil {
 						rbat.Clean(proc.Mp)
@@ -125,8 +126,8 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				rbat.Zs = append(rbat.Zs, bat.Zs[i])
 				break
 			}
-			vector.Free(vec, proc.Mp)
 		}
+		vector.Free(vec, proc.Mp)
 	}
 	proc.Reg.InputBatch = rbat
 	return nil

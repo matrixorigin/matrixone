@@ -137,7 +137,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	}
 }
 
-func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var vec *vector.Vector
 	e := expr.Expr
 	switch t := e.(type) {
@@ -182,7 +182,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow), nil
 		}
-		return s.Vecs[t.Col.ColPos].ToConst(sRow), nil
+		return s.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(overloadId)
@@ -191,7 +191,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := JoinFilterEvalExpr(r, s, rRow, sRow, proc, t.F.Args[i])
+			v, err := JoinFilterEvalExpr(r, s, rRow, proc, t.F.Args[i])
 			if err != nil {
 				return nil, err
 			}
