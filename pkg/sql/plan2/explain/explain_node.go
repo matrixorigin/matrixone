@@ -310,7 +310,7 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (
 		var first bool = true
 		for _, v := range ndesc.Node.FilterList {
 			if !first {
-				result += " AND "
+				result += ", "
 			}
 			first = false
 			descV, err := describeExpr(v, options)
