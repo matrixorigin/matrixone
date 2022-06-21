@@ -77,5 +77,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
 	n.Affected += uint64(len(bat.Zs))
+	bat.Clean(proc.Mp)
 	return false, err
 }
