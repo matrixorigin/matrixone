@@ -197,6 +197,87 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 	return
 }
 
+func MockVector2(typ types.Type, rows int, offset int) Vector {
+	vec := MakeVector(typ, true)
+	switch typ.Oid {
+	case types.Type_BOOL:
+		for i := 0; i < rows; i++ {
+			if i%2 == 0 {
+				vec.Append(true)
+			} else {
+				vec.Append(false)
+			}
+		}
+	case types.Type_INT8:
+		for i := 0; i < rows; i++ {
+			vec.Append(int8(i + offset))
+		}
+	case types.Type_INT16:
+		for i := 0; i < rows; i++ {
+			vec.Append(int16(i + offset))
+		}
+	case types.Type_INT32:
+		for i := 0; i < rows; i++ {
+			vec.Append(int32(i + offset))
+		}
+	case types.Type_INT64:
+		for i := 0; i < rows; i++ {
+			vec.Append(int64(i + offset))
+		}
+	case types.Type_UINT8:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint8(i + offset))
+		}
+	case types.Type_UINT16:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint16(i + offset))
+		}
+	case types.Type_UINT32:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint32(i + offset))
+		}
+	case types.Type_UINT64:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint64(i + offset))
+		}
+	case types.Type_FLOAT32:
+		for i := 0; i < rows; i++ {
+			vec.Append(float32(i + offset))
+		}
+	case types.Type_FLOAT64:
+		for i := 0; i < rows; i++ {
+			vec.Append(float64(i + offset))
+		}
+	case types.Type_DECIMAL64:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Decimal64(i + offset))
+		}
+	case types.Type_DECIMAL128:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Decimal128{Lo: int64(i + offset)})
+		}
+	case types.Type_TIMESTAMP:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Timestamp(i + offset))
+		}
+	case types.Type_DATE:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Date(i + offset))
+		}
+	case types.Type_DATETIME:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Datetime(i + offset))
+		}
+	case types.Type_CHAR, types.Type_VARCHAR:
+		for i := 0; i < rows; i++ {
+			vec.Append([]byte(strconv.Itoa(i + offset)))
+		}
+	default:
+		panic("not support")
+	}
+	return vec
+}
+
 func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
 	bat = MockBatch(vecTypes, rows, uniqueIdx, provider)
 	bat.Attrs = attrs
