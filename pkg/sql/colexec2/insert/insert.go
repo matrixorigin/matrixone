@@ -51,6 +51,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
+	defer bat.Clean(proc.Mp)
 	{
 		// do null value check
 		for i := range bat.Vecs {
@@ -77,6 +78,5 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	err := n.TargetTable.Write(n.Ts, bat, proc.Snapshot)
 	n.Affected += uint64(len(bat.Zs))
-	bat.Clean(proc.Mp)
 	return false, err
 }

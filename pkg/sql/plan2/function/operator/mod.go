@@ -48,7 +48,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 					return nil, ErrModByZero
 				}
 			}
-			vector.SetCol(vec, mod.IntMod(lvs, rvs, rs))
+			vector.SetCol(vec, mod.IntMod[T](lvs, rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -62,7 +62,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 			}
 			sels = append(sels, int64(i))
 		}
-		vector.SetCol(vec, mod.IntModSels(lvs, rvs, rs, sels))
+		vector.SetCol(vec, mod.IntModSels[T](lvs, rvs, rs, sels))
 		return vec, nil
 	case lv.IsScalar() && !rv.IsScalar():
 		if !nulls.Any(rv.Nsp) {
@@ -77,7 +77,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 			}
 			rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 			nulls.Set(vec.Nsp, rv.Nsp)
-			vector.SetCol(vec, mod.IntModScalar(lvs[0], rvs, rs))
+			vector.SetCol(vec, mod.IntModScalar[T](lvs[0], rvs, rs))
 			return vec, nil
 		}
 		sels := process.GetSels(proc)
@@ -97,7 +97,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, rv.Nsp)
-		vector.SetCol(vec, mod.IntModByScalarSels(lvs[0], rvs, rs, sels))
+		vector.SetCol(vec, mod.IntModByScalarSels[T](lvs[0], rvs, rs, sels))
 		return vec, nil
 	case !lv.IsScalar() && rv.IsScalar():
 		if rvs[0] == 0 {
@@ -109,7 +109,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 		}
 		rs := encoding.DecodeFixedSlice[T](vec.Data, rtl)
 		nulls.Set(vec.Nsp, lv.Nsp)
-		vector.SetCol(vec, mod.IntModByScalar(rvs[0], lvs, rs))
+		vector.SetCol(vec, mod.IntModByScalar[T](rvs[0], lvs, rs))
 		return vec, nil
 	}
 	vec, err := proc.AllocVector(lv.Typ, int64(rtl)*int64(len(lvs)))
@@ -124,7 +124,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 				return nil, ErrModByZero
 			}
 		}
-		vector.SetCol(vec, mod.IntMod(lvs, rvs, rs))
+		vector.SetCol(vec, mod.IntMod[T](lvs, rvs, rs))
 		return vec, nil
 	}
 	sels := process.GetSels(proc)
@@ -138,7 +138,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 		}
 		sels = append(sels, int64(i))
 	}
-	vector.SetCol(vec, mod.IntModSels(lvs, rvs, rs, sels))
+	vector.SetCol(vec, mod.IntModSels[T](lvs, rvs, rs, sels))
 	return vec, nil
 }
 
