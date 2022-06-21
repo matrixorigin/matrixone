@@ -108,9 +108,7 @@ type logStore struct {
 }
 
 func newLogStore(cfg Config) (*logStore, error) {
-	plog.Infof("creating nodehost")
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
-	plog.Infof("create nodehost returned")
 	if err != nil {
 		return nil, err
 	}
@@ -163,13 +161,6 @@ func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
 	raftConfig := getRaftConfig(shardID, replicaID)
 	// TODO: add another API for joining
 	return l.nh.StartReplica(initialReplicas, false, newStateMachine, raftConfig)
-}
-
-func (l *logStore) addReplica(shardID uint64, replicaID uint64,
-	target dragonboat.Target, cci uint64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	return l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci)
 }
 
 func (l *logStore) propose(ctx context.Context,

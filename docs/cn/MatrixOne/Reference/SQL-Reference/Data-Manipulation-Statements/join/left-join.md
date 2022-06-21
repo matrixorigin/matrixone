@@ -1,20 +1,20 @@
-# **INNER JOIN**
+# **LEFT JOIN**
 
-## **Description**
+## **语法说明**
 
-The INNER JOIN keyword selects records that have matching values in both tables.(Same as `JOIN`)
+``LEFT JOIN`` 关键字从左表（table1）返回所有的行，即使右表（table2）中没有匹配。如果右表中没有匹配，则结果为 ``NULL``。
 
-## **Syntax**
+## **语法结构**
 
 ```
 > SELECT column_name(s)
 FROM table1
-INNER JOIN table2
-ON table1.column_name = table2.column_name;
+LEFT JOIN table2
+ON table1.column_name=table2.column_name;
 
 ```
 
-## **Examples**
+## **示例**
 
 ```sql
 > drop table if exists t1,t2,t3;
@@ -45,8 +45,7 @@ ON table1.column_name = table2.column_name;
 > insert into t1 values ('BerkeleyPublic2','Berkeley');
 > insert into t1 values ('NYCLib','NewYork');
 
-> select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
-
+> select select city,libname1,count(libname1) as a from t3 left join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 +----------+--------------------+------+
 | city     | libname1           | a    |
 +----------+--------------------+------+
@@ -54,10 +53,7 @@ ON table1.column_name = table2.column_name;
 | SanFran  | SanFransiscoPublic |    1 |
 | Berkeley | BerkeleyPublic1    |    1 |
 | Berkeley | BerkeleyPublic2    |    1 |
+| NULL     | NULL               |    0 |
 +----------+--------------------+------+
 
 ```
-
-## **Constraints**
-
-Currently, `INNER JOIN` statement may cause crashing when executing some quiries.

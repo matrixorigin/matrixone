@@ -117,7 +117,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			})
 		}
 
-		colIdx := int32(len(node.ProjectList))
+		colIdx := int32(len(returnMap))
 		childId = node.Children[1]
 
 		if node.JoinType == plan.Node_MARK {

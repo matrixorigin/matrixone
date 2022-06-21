@@ -1,22 +1,20 @@
-# **INNER JOIN**
+# **FULL JOIN**
 
-## **语法说明**
+## **Description**
 
-`INNER JOIN` 选取两个表中具有匹配值的数据记录。（等同于`JOIN`）
+The ``FULL OUTER`` JOIN keyword returns all records when there is a match in left (table1) or right (table2) table records.
 
-## **语法结构**
+## **Syntax**
 
 ```
 > SELECT column_name(s)
 FROM table1
-INNER JOIN table2
-ON table1.column_name = table2.column_name;
+FULL OUTER JOIN table2
+ON table1.column_name=table2.column_name;
 
 ```
 
-## **参数释义**
-
-## **示例**
+## **Examples**
 
 ```sql
 > drop table if exists t1,t2,t3;
@@ -47,8 +45,7 @@ ON table1.column_name = table2.column_name;
 > insert into t1 values ('BerkeleyPublic2','Berkeley');
 > insert into t1 values ('NYCLib','NewYork');
 
-> select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
-
+> select city,libname1,count(libname1) as a from t3 full join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 +----------+--------------------+------+
 | city     | libname1           | a    |
 +----------+--------------------+------+
@@ -57,9 +54,4 @@ ON table1.column_name = table2.column_name;
 | Berkeley | BerkeleyPublic1    |    1 |
 | Berkeley | BerkeleyPublic2    |    1 |
 +----------+--------------------+------+
-
 ```
-
-## **限制**
-
-目前， `INNER JOIN`语句在进行某些查询时将导致崩溃（与服务器失去连接）。

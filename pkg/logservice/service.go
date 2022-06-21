@@ -53,13 +53,12 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	cfg.Fill()
-	plog.Infof("calling newLogStore")
+
 	store, err := newLogStore(cfg)
 	if err != nil {
 		plog.Errorf("failed to create log store %v", err)
 		return nil, err
 	}
-	plog.Infof("store created")
 	service := &Service{
 		cfg:         cfg,
 		store:       store,
@@ -75,7 +74,6 @@ func NewService(cfg Config) (*Service, error) {
 		}
 		return nil, err
 	}
-	plog.Infof("server started")
 	return service, nil
 }
 
