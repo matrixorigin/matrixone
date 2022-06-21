@@ -121,13 +121,15 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		for i := range vs {
 			v, err := EvalExpr(bat, proc, t.F.Args[i])
 			if err != nil {
-				mp := make(map[*vector.Vector]uint8)
-				for i := range bat.Vecs {
-					mp[bat.Vecs[i]] = 0
-				}
-				for j := 0; j < i; j++ {
-					if _, ok := mp[vs[j]]; !ok {
-						vector.Clean(vs[j], proc.Mp)
+				if proc != nil {
+					mp := make(map[*vector.Vector]uint8)
+					for i := range bat.Vecs {
+						mp[bat.Vecs[i]] = 0
+					}
+					for j := 0; j < i; j++ {
+						if _, ok := mp[vs[j]]; !ok {
+							vector.Clean(vs[j], proc.Mp)
+						}
 					}
 				}
 				return nil, err
