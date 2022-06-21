@@ -1,4 +1,4 @@
-package adaptor
+package containers
 
 import (
 	"io"
