@@ -91,6 +91,10 @@ var (
 	IfChar = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return ifForString(vs, proc, types.Type{Oid: types.T_char})
 	}
+
+	IfTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return ifGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
+	}
 )
 
 func IfTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
@@ -108,7 +112,7 @@ func IfTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 
 type IfRet interface {
 	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-		types.Decimal64 | types.Decimal128
+		types.Decimal64 | types.Decimal128 | types.Timestamp
 }
 
 func ifGeneral[T IfRet](vs []*vector.Vector, proc *process.Process, ret types.Type) (*vector.Vector, error) {

@@ -18,14 +18,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/mod"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
+// ErrModByZero is reported when computing the rest of a division by zero.
+var ErrModByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
+
 func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]T), rv.Col.([]T)
+	lvs, rvs := vector.MustTCols[T](lv), vector.MustTCols[T](rv)
 	rtl := lv.Typ.Oid.FixedLength()
 
 	if lv.IsScalarNull() || rv.IsScalarNull() {
@@ -139,7 +144,7 @@ func ModInt[T constraints.Integer](vectors []*vector.Vector, proc *process.Proce
 
 func ModFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]T), rv.Col.([]T)
+	lvs, rvs := vector.MustTCols[T](lv), vector.MustTCols[T](rv)
 	rtl := lv.Typ.Oid.FixedLength()
 
 	if lv.IsScalarNull() || rv.IsScalarNull() {
