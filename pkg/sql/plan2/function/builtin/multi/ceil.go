@@ -29,7 +29,7 @@ func CeilUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_uint64, Size: 8}), nil
 	}
 	digits := int64(0)
-	vs := vecs[0].Col.([]uint64)
+	vs := vector.MustTCols[uint64](vecs[0])
 	if len(vecs) > 1 {
 		if vecs[1].IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_uint64, Size: 8}), nil
@@ -64,7 +64,7 @@ func CeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: 8}), nil
 	}
 	digits := int64(0)
-	vs := vecs[0].Col.([]int64)
+	vs := vector.MustTCols[int64](vecs[0])
 	if len(vecs) > 1 {
 		if vecs[1].IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: 8}), nil
@@ -100,7 +100,7 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 	}
 	digits := int64(0)
-	vs := vecs[0].Col.([]float64)
+	vs := vector.MustTCols[float64](vecs[0])
 	if len(vecs) > 1 {
 		if vecs[1].IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil

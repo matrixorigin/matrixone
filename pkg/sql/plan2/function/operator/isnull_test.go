@@ -23,50 +23,64 @@ import (
 
 func TestIsNullNormal(t *testing.T) {
 	procs := testutil.NewProc()
-	vecs := []*vector.Vector{testutil.MakeInt32Vector([]int32{1, 14, 42, 7656, 4324234, 543534523}, nil)}
-
-	expected := []bool{false, false, false, false, false, false}
+	vecs1 := []*vector.Vector{testutil.MakeInt32Vector([]int32{1, 14, 42, 7656, 4324234, 543534523}, nil)}
+	expected1 := []bool{false, false, false, false, false, false}
+	vecs2 := []*vector.Vector{testutil.MakeVarcharVector([]string{"1", "2", "3", "4"}, nil)}
+	expected2 := []bool{false, false, false, false}
 
 	t.Run("test null normal", func(t *testing.T) {
-		result, err := IsNull[int32](vecs, procs)
+		result, err := IsNull[int32](vecs1, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		checkIsNullResult(t, result, expected, false)
+		checkIsNullResult(t, result, expected1, false)
+		result, err = IsStringNull(vecs2, procs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkIsNullResult(t, result, expected2, false)
 	})
 }
 
 func TestIsNullNormalWithNull(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeInt32Vector([]int32{1, 14, 42, 7656, 4324234, 543534523}, []uint64{0, 1, 4})}
-
 	expected := []bool{true, true, false, false, true, false}
+	vecs2 := []*vector.Vector{testutil.MakeVarcharVector([]string{"1", "2", "3", "4"}, []uint64{1, 2})}
+	expected2 := []bool{false, true, true, false}
 
 	t.Run("test null normal with null", func(t *testing.T) {
 		result, err := IsNull[int32](vecs, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
-
 		checkIsNullResult(t, result, expected, false)
+		result, err = IsStringNull(vecs2, procs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkIsNullResult(t, result, expected2, false)
 	})
 }
 
 func TestIsNullScalar(t *testing.T) {
 	procs := testutil.NewProc()
-	vecs := []*vector.Vector{testutil.MakeInt32Vector([]int32{543534523}, nil)}
-	vecs[0].IsConst = true
-
+	vecs := []*vector.Vector{testutil.MakeScalarInt32(543534523, 1)}
 	expected := []bool{false}
+	vecs2 := []*vector.Vector{testutil.MakeScalarVarchar("cms", 1)}
+	expected2 := []bool{false}
 
 	t.Run("test null scalar", func(t *testing.T) {
 		result, err := IsNull[int32](vecs, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
-
 		checkIsNullResult(t, result, expected, true)
+		result, err = IsStringNull(vecs2, procs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkIsNullResult(t, result, expected2, true)
 	})
 }
 

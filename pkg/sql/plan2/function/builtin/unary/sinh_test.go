@@ -14,6 +14,7 @@
 package unary
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -36,7 +37,7 @@ func TestSinh(t *testing.T) {
 	SinhIntAndFloat[uint32](t, types.T_uint32, 2, 3.626860407847019)
 	SinhIntAndFloat[uint64](t, types.T_uint64, 12, 81377.39570642984)
 
-	SinhIntAndFloat[float32](t, types.T_float32, 1.0001, 1.1753555331912737)
+	SinhIntAndFloat[float32](t, types.T_float32, 1.0001, math.Sinh(float64(float32(1.0001))))
 
 	SinhIntAndFloat[float64](t, types.T_float64, 0.2, 0.201336002541094)
 }
