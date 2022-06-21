@@ -126,8 +126,10 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			vs[i] = v
 		}
 		defer func() {
-			for i := range vs {
-				vector.Clean(vs[i], proc.Mp)
+			if proc != nil {
+				for i := range vs {
+					vector.Clean(vs[i], proc.Mp)
+				}
 			}
 		}()
 		vec, err = f.VecFn(vs, proc)
@@ -202,11 +204,13 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process
 			}
 			vs[i] = v
 		}
-		defer func() {
-			for i := range vs {
-				vector.Clean(vs[i], proc.Mp)
-			}
-		}()
+		if proc != nil {
+			defer func() {
+				for i := range vs {
+					vector.Clean(vs[i], proc.Mp)
+				}
+			}()
+		}
 		vec, err = f.VecFn(vs, proc)
 		if err != nil {
 			return nil, err
