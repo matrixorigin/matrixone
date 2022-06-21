@@ -133,29 +133,6 @@ func TestLengthUTF8(t *testing.T) {
 		convey.So(ret, convey.ShouldBeTrue)
 
 	})
-	convey.Convey("tinyint", t, func() {
-		ivec := testutil.MakeInt8Vector([]int8{
-			1, 71, 1, 1}, nil)
-		proc := testutil.NewProc()
-		_, err := LengthUTF8([]*vector.Vector{ivec}, proc)
-		convey.So(err, convey.ShouldNotBeNil)
-
-		ivec2 := testutil.MakeScalarInt8(1, 10)
-		_, err = LengthUTF8([]*vector.Vector{ivec2}, proc)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
-	convey.Convey("nil", t, func() {
-		proc := testutil.NewProc()
-		_, err := LengthUTF8([]*vector.Vector{}, proc)
-		convey.So(err, convey.ShouldNotBeNil)
-
-		_, err = LengthUTF8([]*vector.Vector{}, nil)
-		convey.So(err, convey.ShouldNotBeNil)
-
-		_, err = LengthUTF8([]*vector.Vector{nil}, proc)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
 
 	convey.Convey("scalar", t, func() {
 		ivec := testutil.MakeScalarVarchar("abc", 5)

@@ -99,6 +99,10 @@ var (
 	CaseWhenDecimal128 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return cwGeneral[types.Decimal128](vs, proc, types.Type{Oid: types.T_decimal128})
 	}
+
+	CaseWhenTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
+	}
 )
 
 // CwTypeCheckFn is type check function for case-when operator
@@ -127,14 +131,14 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 	return false
 }
 
-type CwRet interface {
+type NormalType interface {
 	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-		types.Decimal64 | types.Decimal128
+		types.Decimal64 | types.Decimal128 | types.Timestamp
 }
 
 // cwGeneral is a general evaluate function for case-when operator
 // whose return type is uint / int / float / bool / date / datetime
-func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
+func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	l := vector.Length(vs[0])
 
 	rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))

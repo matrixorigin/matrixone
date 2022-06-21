@@ -27,17 +27,16 @@ func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint16, Size: 2}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.([]types.Date)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint16, 1)
 		vector.SetCol(resultVector, dayofyear.GetDayOfYear(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]types.Date)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err

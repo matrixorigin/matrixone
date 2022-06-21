@@ -78,7 +78,7 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, binderCt
 	case *tree.TableName:
 		tblName := string(tbl.ObjectName)
 		dbName := string(tbl.SchemaName)
-		if strings.ToLower(tblName) == "dual" { //special table name
+		if len(tblName) == 0 || strings.ToLower(tblName) == "dual" { //special table name
 			node := &Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}

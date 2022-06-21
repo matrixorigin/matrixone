@@ -27,12 +27,12 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
+	leftValues, rightValues := vector.MustTCols[float64](left), vector.MustTCols[float64](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
@@ -41,7 +41,6 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 		if err != nil {
 			return nil, err
@@ -55,7 +54,6 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues)))
 		if err != nil {
 			return nil, err
@@ -66,7 +64,6 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		vector.SetCol(resultVector, power.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
-	leftValues, rightValues := left.Col.([]float64), right.Col.([]float64)
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
 	if err != nil {
 		return nil, err
