@@ -145,7 +145,7 @@ func Div[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (
 
 func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](lv)
+	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
@@ -262,7 +262,7 @@ func DivDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 
 func DivDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := vector.MustTCols[types.Decimal128](lv), vector.MustTCols[types.Decimal128](lv)
+	lvs, rvs := vector.MustTCols[types.Decimal128](lv), vector.MustTCols[types.Decimal128](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}

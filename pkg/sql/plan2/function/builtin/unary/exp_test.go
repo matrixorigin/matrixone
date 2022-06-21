@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
+	"math"
 	"testing"
 )
 
@@ -43,7 +44,7 @@ func TestExp(t *testing.T) {
 	expIntAndFloat[float32](t, types.T_float32, 7.5, 1808.0424144560632)
 	expIntAndFloat[float32](t, types.T_float32, -12342534564, 0)
 
-	expIntAndFloat[float64](t, types.T_float64, 0.141241241241313, 1.1517024526037205)
+	expIntAndFloat[float64](t, types.T_float64, 0.141241241241313, math.Exp(0.141241241241313))
 	expIntAndFloat[float64](t, types.T_float64, -124314124124.12412341, 0)
 }
 
