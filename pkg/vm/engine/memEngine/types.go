@@ -2,13 +2,14 @@ package memEngine
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
 )
 
 // standalone memory engine
-type memEngine struct {
+type MemEngine struct {
 	db *kv.KV
 	n  engine.Node
 }

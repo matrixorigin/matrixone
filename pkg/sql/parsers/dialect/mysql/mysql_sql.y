@@ -17,7 +17,6 @@ package mysql
     
 import (
     "strings"
-    "strconv"
     "go/constant"
 
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -175,11 +174,12 @@ import (
 %left <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
 %left <str> '(' ',' ')'
-%token <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
+%nonassoc LOWER_THAN_STRING
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
 %token <item> INTEGRAL HEX HEXNUM BIT_LITERAL FLOAT
 %token <str> NULL TRUE FALSE
 %left EMPTY_FROM_CLAUSE
-%nonassoc <str> LOWER_THAN_CHARSET
+%nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
 %left <str> OR
@@ -389,7 +389,7 @@ import (
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
 %type <exprs> expression_list row_value
-%type <expr> datatime_precision_opt datatime_precision
+%type <expr> datetime_precision_opt datetime_precision
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
 %type <createOption> create_option
@@ -454,7 +454,7 @@ import (
 %type <str> name_confict distinct_keyword
 %type <insert> insert_data
 %type <rowsExprs> values_list
-%type <str> name_datatime_precision braces_opt name_braces
+%type <str> name_datetime_precision braces_opt name_braces
 %type <str> std_dev_pop
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
@@ -1241,14 +1241,6 @@ var_assignment_list:
 var_assignment:
     var_name equal_or_assignment set_expr
     {
-        $$ = &tree.VarAssignmentExpr{
-            System: true,
-            Name: $1,
-            Value: $3,
-        }
-    }
-|	TIMESTAMP equal_or_assignment set_expr
-	{
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Name: $1,
@@ -4833,7 +4825,7 @@ time_stamp_unit:
 |	SQL_TSI_YEAR
 
 function_call_nonkeyword:
-    CURTIME datatime_precision
+    CURTIME datetime_precision
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -4845,7 +4837,7 @@ function_call_nonkeyword:
             Exprs: es,
         }
     }
-|   SYSDATE datatime_precision
+|   SYSDATE datetime_precision
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -4874,7 +4866,7 @@ function_call_keyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
         }
     }
-|   name_datatime_precision datatime_precision_opt
+|   name_datetime_precision datetime_precision_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -4967,16 +4959,16 @@ function_call_keyword:
         }
     }
 
-datatime_precision_opt:
+datetime_precision_opt:
     {
         $$ = nil
     }
-|   datatime_precision
+|   datetime_precision
     {
         $$ = $1
     }
 
-datatime_precision:
+datetime_precision:
    '(' ')'
     {
         $$ = nil
@@ -4986,7 +4978,7 @@ datatime_precision:
         $$ = $2
     }
 
-name_datatime_precision:
+name_datetime_precision:
     CURRENT_TIME
 |   CURRENT_TIMESTAMP
 |   LOCALTIME
@@ -5036,46 +5028,13 @@ name_confict:
 |   YEAR
 
 interval_expr:
-    INTERVAL STRING
-	{
-		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-        }
-	}
-|   INTERVAL INTEGRAL time_unit
+    INTERVAL expression time_unit
     {
-		str := strconv.FormatInt($2.(int64), 10)
-		str += " " + $3
  		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
+		arg2 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-        }
-    }
-|   INTERVAL ident time_unit
-    {
-		str := $2
-		str += " " + $3
- 		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-        }
-    }
-|   INTERVAL '-' INTEGRAL time_unit
-    {
-		str := strconv.FormatInt(-$3.(int64), 10)
-		str += " " + $4
- 		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
+            Exprs: tree.Exprs{$2, arg2},
         }
     }
 
@@ -6160,7 +6119,6 @@ reserved_keyword:
 |   DISTINCTROW
 |   DIV
 |   DROP
-|   DATE
 |   ELSE
 |   END
 |   ESCAPE
@@ -6268,7 +6226,6 @@ reserved_keyword:
 |	SQL_BIG_RESULT
 |	LEADING
 |	TRAILING
-|   TIMESTAMP
 
 non_reserved_keyword:
     AGAINST
@@ -6431,6 +6388,8 @@ non_reserved_keyword:
 |	UNKNOWN
 |	ANY
 |	SOME
+|   TIMESTAMP %prec LOWER_THAN_STRING
+|   DATE %prec LOWER_THAN_STRING
 
 func_not_keyword:
 	DATE_ADD

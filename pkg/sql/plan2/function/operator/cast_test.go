@@ -1919,7 +1919,7 @@ func TestCastVarcharAsDate(t *testing.T) {
 
 func TestCastTimestampAsVarchar(t *testing.T) {
 	//Cast converts timestamp to varchar
-	//procs := testutil.NewProc()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name     string
 		vecs     []*vector.Vector
@@ -1950,6 +1950,16 @@ func TestCastTimestampAsVarchar(t *testing.T) {
 		//	},
 		//	isScalar: true,
 		//},
+		{
+			name: "03 - null test",
+			proc: procs,
+			expected: &types.Bytes{
+				Data:    nil,
+				Offsets: nil,
+				Lengths: nil,
+			},
+			isScalar: true,
+		},
 	}
 
 	for _, c := range cases {

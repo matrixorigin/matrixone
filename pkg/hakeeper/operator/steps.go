@@ -43,6 +43,42 @@ func (a AddLogService) String() string {
 	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
 }
 
+type AddDnReplica struct {
+	StoreID            string
+	ShardID, ReplicaID uint64
+}
+
+func (a AddDnReplica) String() string {
+	return fmt.Sprintf("adding %v:%v to dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+}
+
+func (a AddDnReplica) IsFinish(_ hakeeper.LogState, state hakeeper.DNState) bool {
+	for _, info := range state.Stores[a.StoreID].Shards {
+		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
+			return true
+		}
+	}
+	return false
+}
+
+type RemoveDnReplica struct {
+	StoreID            string
+	ShardID, ReplicaID uint64
+}
+
+func (a RemoveDnReplica) String() string {
+	return fmt.Sprintf("removing %v:%v to dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+}
+
+func (a RemoveDnReplica) IsFinish(_ hakeeper.LogState, state hakeeper.DNState) bool {
+	for _, info := range state.Stores[a.StoreID].Shards {
+		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
+			return false
+		}
+	}
+	return true
+}
+
 func (a AddLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
 	if _, ok := state.Shards[a.ShardID].Replicas[a.ReplicaID]; ok {
 		return true

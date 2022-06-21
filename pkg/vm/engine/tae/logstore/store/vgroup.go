@@ -83,13 +83,6 @@ func (g *baseGroup) MergeCheckpointInfo(c *compactor) {}
 func (g *baseGroup) String() string                   { return "" }
 func (g *baseGroup) PrepareMerge(c *compactor)        {}
 
-type commitGroup struct {
-	*baseGroup
-	ckps       *common.ClosedIntervals //ckpped
-	Commits    *common.ClosedInterval
-	tidCidMap  map[uint64]uint64
-	partialCkp map[uint64]*partialCkpInfo
-}
 type partialCkpInfo struct {
 	size uint32
 	ckps *roaring.Bitmap
@@ -153,6 +146,14 @@ func (info *partialCkpInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
+type commitGroup struct {
+	*baseGroup
+	ckps       *common.ClosedIntervals //ckpped
+	Commits    *common.ClosedIntervals
+	tidCidMap  map[uint64]uint64
+	partialCkp map[uint64]*partialCkpInfo
+}
+
 func newcommitGroup(v *vInfo, gid uint32) *commitGroup {
 	return &commitGroup{
 		baseGroup:  newbaseGroup(v, gid),
@@ -178,11 +179,11 @@ func (g *commitGroup) String() string {
 func (g *commitGroup) Log(info any) error {
 	commitInfo := info.(*entry.Info)
 	if g.Commits == nil {
-		g.Commits = &common.ClosedInterval{}
+		g.Commits = common.NewClosedIntervals()
 	}
-	err := g.Commits.Append(commitInfo.GroupLSN)
+	g.Commits.TryMerge(*common.NewClosedIntervalsByInt(commitInfo.GroupLSN))
 	g.tidCidMap[commitInfo.TxnId] = commitInfo.GroupLSN
-	return err
+	return nil
 }
 
 func (g *commitGroup) IsCovered(c *compactor) bool {
@@ -278,13 +279,14 @@ func (g *commitGroup) OnCheckpoint(info any) {
 type uncommitGroup struct {
 	*baseGroup
 	//uncheckpointed gid-tids//-commands
-	UncommitTxn map[uint32][]uint64
+	//Only support single txn
+	UncommitTxn map[uint64]*entry.Tid
 }
 
 func newuncommitGroup(v *vInfo, gid uint32) *uncommitGroup {
 	return &uncommitGroup{
 		baseGroup:   newbaseGroup(v, gid),
-		UncommitTxn: make(map[uint32][]uint64),
+		UncommitTxn: make(map[uint64]*entry.Tid),
 	}
 }
 func (g *uncommitGroup) String() string {
@@ -299,23 +301,21 @@ func (g *uncommitGroup) OnCheckpoint(any) {} //calculate ckp when compact
 func (g *uncommitGroup) IsCovered(c *compactor) bool {
 	c.tidCidMapMu.RLock()
 	defer c.tidCidMapMu.RUnlock()
-	for group, tids := range g.UncommitTxn {
-		tidMap, ok := c.tidCidMap[group]
+	for _, gidTid := range g.UncommitTxn {
+		tidMap, ok := c.tidCidMap[gidTid.Group]
 		if !ok {
 			return false
 		}
-		ckp, ok := c.checkpointed[group]
+		ckp, ok := c.checkpointed[gidTid.Group]
 		if !ok {
 			return false
 		}
-		for _, tid := range tids {
-			lsn, ok := tidMap[tid]
-			if !ok {
-				return false
-			}
-			if lsn > ckp {
-				return false
-			}
+		lsn, ok := tidMap[gidTid.Tid]
+		if !ok {
+			return false
+		}
+		if lsn > ckp {
+			return false
 		}
 	}
 	return true
@@ -335,24 +335,7 @@ func (g *uncommitGroup) IsCommitGroup() bool {
 }
 func (g *uncommitGroup) Log(info any) error {
 	uncommitInfo := info.(*entry.Info)
-	for _, uncommit := range uncommitInfo.Uncommits {
-		tids, ok := g.UncommitTxn[uncommit.Group]
-		if !ok {
-			tids = make([]uint64, 0)
-			g.UncommitTxn[uncommit.Group] = tids
-		}
-		existed := false
-		for _, infoTid := range tids {
-			if infoTid == uncommit.Tid {
-				existed = true
-				return nil
-			}
-		}
-		if !existed {
-			tids = append(tids, uncommit.Tid)
-			g.UncommitTxn[uncommit.Group] = tids
-		}
-	}
+	g.UncommitTxn[uncommitInfo.GroupLSN] = &uncommitInfo.Uncommits[0]
 	return nil
 }
 

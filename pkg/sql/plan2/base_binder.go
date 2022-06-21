@@ -374,7 +374,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		return
 	}
 
-	return parent.binder.BindColRef(astExpr, depth+1, isRoot)
+	expr, err = parent.binder.BindColRef(astExpr, depth+1, isRoot)
+
+	if err == nil {
+		b.ctx.isCorrelated = true
+	}
+
+	return
 }
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
@@ -615,16 +621,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 	}
 
 	if astExpr.SubOp >= tree.ANY {
-		if (astExpr.SubOp == tree.ANY || astExpr.SubOp == tree.SOME) && op != "=" {
-			// return nil, errors.New(errno.InternalError, "non-equi ANY subquery not yet supported")
-			return nil, errors.New("", "Supporting non-equi subquery will be fixed in 0.5.")
-		}
-
-		if astExpr.SubOp == tree.ALL && op != "<>" {
-			// return nil, errors.New(errno.InternalError, "non-equi ANY subquery not yet supported")
-			return nil, errors.New("", "Supporting non-equi subquery will be fixed in 0.5.")
-		}
-
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
 			return nil, err
@@ -683,6 +679,26 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
 	// rewrite some ast Exprs before binding
 	switch name {
+	case "nullif":
+		// rewrite 'nullif(expr1, expr2)' to 'case when expr1=expr2 then null else expr1'
+		if len(astArgs) != 2 {
+			return nil, errors.New("", "nullif function need two args")
+		}
+		elseExpr := astArgs[0]
+		thenExpr := tree.NewNumVal(constant.MakeUnknown(), "", false)
+		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
+		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
+		name = "case"
+	case "ifnull":
+		// rewrite 'ifnull(expr1, expr2)' to 'case when isnull(expr1) then expr2 else null'
+		if len(astArgs) != 2 {
+			return nil, errors.New("", "ifnull function need two args")
+		}
+		elseExpr := tree.NewNumVal(constant.MakeUnknown(), "", false)
+		thenExpr := astArgs[1]
+		whenExpr := tree.NewIsNullExpr(astArgs[0])
+		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
+		name = "case"
 	case "extract":
 		// ”extract(year from col_name)"  parser return year as UnresolvedName.
 		// we must rewrite it to string。 because binder bind UnresolvedName as column name
@@ -733,10 +749,17 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			Id: plan.Type_DATE,
 		})
 	case "interval":
-		// rewrite interval function to cast function, and retrun directly
-		return appendCastBeforeExpr(args[0], &plan.Type{
-			Id: plan.Type_INTERVAL,
-		})
+		// rewrite interval function to ListExpr, and retrun directly
+		return &plan.Expr{
+			Typ: &plan.Type{
+				Id: plan.Type_INTERVAL,
+			},
+			Expr: &plan.Expr_List{
+				List: &plan.ExprList{
+					List: args,
+				},
+			},
+		}, nil
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -977,23 +1000,73 @@ func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 }
 
 func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	strExpr := intervalExpr.Expr.(*plan.Expr_F).F.Args[0].Expr
-	intervalStr := strExpr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
-	intervalArray := strings.Split(intervalStr, " ")
 
-	intervalType, err := types.IntervalTypeOf(intervalArray[1])
+	firstExpr := intervalExpr.Expr.(*plan.Expr_List).List.List[0]
+	secondExpr := intervalExpr.Expr.(*plan.Expr_List).List.List[1]
+
+	intervalTypeStr := secondExpr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
 	if err != nil {
 		return nil, err
 	}
-	returnNum, returnType, err := types.NormalizeInterval(intervalArray[0], intervalType)
-	if err != nil {
-		return nil, err
+
+	intervalTypeInFunction := &plan.Type{
+		Id:   plan.Type_INT64,
+		Size: 8,
+	}
+
+	if firstExpr.Typ.Id == plan.Type_VARCHAR || firstExpr.Typ.Id == plan.Type_CHAR {
+		s := firstExpr.Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+		returnNum, returnType, err := types.NormalizeInterval(s, intervalType)
+
+		if err != nil {
+			return nil, err
+		}
+		// "date '2020-10-10' - interval 1 Hour"  will return datetime
+		// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
+		if dateExpr.Typ.Id == plan.Type_DATE {
+			switch returnType {
+			case types.Day, types.Week, types.Month, types.Quarter, types.Year:
+			default:
+				dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
+					Id:   plan.Type_DATETIME,
+					Size: 8,
+				})
+
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		return []*Expr{
+			dateExpr,
+			{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Value: &plan.Const_Ival{
+							Ival: returnNum,
+						},
+					},
+				},
+				Typ: intervalTypeInFunction,
+			},
+			{
+				Expr: &plan.Expr_C{
+					C: &Const{
+						Value: &plan.Const_Ival{
+							Ival: int64(returnType),
+						},
+					},
+				},
+				Typ: intervalTypeInFunction,
+			},
+		}, nil
 	}
 
 	// "date '2020-10-10' - interval 1 Hour"  will return datetime
 	// so we rewrite "date '2020-10-10' - interval 1 Hour"  to  "date_add(datetime, 1, hour)"
 	if dateExpr.Typ.Id == plan.Type_DATE {
-		switch returnType {
+		switch intervalType {
 		case types.Day, types.Week, types.Month, types.Quarter, types.Year:
 		default:
 			dateExpr, err = appendCastBeforeExpr(dateExpr, &plan.Type{
@@ -1007,33 +1080,23 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 		}
 	}
 
+	numberExpr, err := appendCastBeforeExpr(firstExpr, intervalTypeInFunction)
+	if err != nil {
+		return nil, err
+	}
+
 	return []*Expr{
 		dateExpr,
+		numberExpr,
 		{
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Value: &plan.Const_Ival{
-						Ival: returnNum,
+						Ival: int64(intervalType),
 					},
 				},
 			},
-			Typ: &plan.Type{
-				Id:   plan.Type_INT64,
-				Size: 8,
-			},
-		},
-		{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Value: &plan.Const_Ival{
-						Ival: int64(returnType),
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:   plan.Type_INT64,
-				Size: 8,
-			},
+			Typ: intervalTypeInFunction,
 		},
 	}, nil
 }

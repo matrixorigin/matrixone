@@ -202,6 +202,7 @@ func toConstVector[T any](v *Vector, row int) *Vector {
 	return &Vector{
 		IsConst: true,
 		Typ:     v.Typ,
+		Nsp:     &nulls.Nulls{},
 		Col:     []T{v.Col.([]T)[row]},
 	}
 }
@@ -217,8 +218,7 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 			nulls.Add(v.Nsp, uint64(i))
 		}
 	} else {
-		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
-		val := unsafe.Slice((*T)(addr), sz)[0]
+		val := v.Col.([]T)[0]
 		for i := 0; i < v.Length; i++ {
 			vs[i] = val
 		}

@@ -1303,6 +1303,9 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	resultType := rv.Typ
 	resultElementSize := int(resultType.Size)
 	if lv.IsScalar() {
+		if lv.IsScalarNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
 		vec := proc.AllocScalarVector(resultType)
 		rs := &types.Bytes{
 			Data:    []byte{},
