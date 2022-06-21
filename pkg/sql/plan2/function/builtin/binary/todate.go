@@ -30,11 +30,11 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	if !vectors[1].IsScalar() {
 		return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the second parameter of function to_date must be char/varchar constant\n"+usage)
 	}
+	inputBytes0 := vector.MustBytesCols(vectors[0])
+	inputBytes1 := vector.MustBytesCols(vectors[1])
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if vectors[0].IsScalar() && vectors[1].IsScalar() {
 		resultVector := vector.NewConst(resultType)
-		inputBytes0 := vectors[0].Col.(*types.Bytes)
-		inputBytes1 := vectors[1].Col.(*types.Bytes)
 		results := &types.Bytes{
 			Data:    make([]byte, 0),
 			Offsets: make([]uint32, 1),
@@ -51,8 +51,6 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, 0) // I think we can calculate the bytes needed ahead and get rid of append though
-		inputBytes0 := vectors[0].Col.(*types.Bytes)
-		inputBytes1 := vectors[1].Col.(*types.Bytes)
 		results := &types.Bytes{
 			Data:    make([]byte, 0),
 			Offsets: make([]uint32, len(inputBytes0.Lengths)),

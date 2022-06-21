@@ -31,11 +31,11 @@ func Cot[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *p
 	//	1.1 if it's not a null value
 	//  1.2 if it's a null value
 	//2 common scene
+	origVecCol := vector.MustTCols[T](origVec)
 	if origVec.IsScalar() {
 		if origVec.IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
-			origVecCol := origVec.Col.([]T)
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
 			nulls.Set(resultVector.Nsp, origVec.Nsp)
@@ -43,7 +43,6 @@ func Cot[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *p
 			return resultVector, nil
 		}
 	} else {
-		origVecCol := origVec.Col.([]T)
 		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err

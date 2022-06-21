@@ -30,7 +30,7 @@ var (
 
 func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
+	lvs, rvs := vector.MustBytesCols(lv), vector.MustBytesCols(rv)
 	rtl := 8
 
 	if lv.IsScalarNull() || rv.IsScalarNull() {

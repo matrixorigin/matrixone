@@ -26,7 +26,7 @@ import (
 
 func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := left.Col.([]T), right.Col.([]T)
+	leftValues, rightValues := vector.MustTCols[T](left), vector.MustTCols[T](right)
 	resultElementSize := left.Typ.Oid.FixedLength()
 	switch {
 	case left.IsScalar() && right.IsScalar():
@@ -69,7 +69,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 //ReturnType: types.T_decimal64,
 func PlusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lvScale
 	if lvScale < rvScale {
@@ -123,7 +123,7 @@ func PlusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 //ReturnType: types.T_decimal128,
 func PlusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+	lvs, rvs := vector.MustTCols[types.Decimal128](lv), vector.MustTCols[types.Decimal128](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lvScale
 	if lvScale < rvScale {

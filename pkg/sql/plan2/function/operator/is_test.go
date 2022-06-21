@@ -16,7 +16,6 @@ package operator
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -90,8 +89,7 @@ func makeIsAndIsNotTestVectors(left []bool, right bool, isScalar bool) []*vector
 		vec[0] = testutil.MakeScalarNull(0)
 	}
 
-	vec[1] = vector.New(types.T_bool.ToType())
-	vec[1].Col = right
+	vec[1] = testutil.MakeScalarBool(right, len(left))
 
 	return vec
 }

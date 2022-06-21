@@ -26,7 +26,7 @@ import (
 
 func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]T), rv.Col.([]T)
+	lvs, rvs := vector.MustTCols[T](lv), vector.MustTCols[T](rv)
 	resultElementSize := lv.Typ.Oid.FixedLength()
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(lv.Typ), nil
@@ -72,7 +72,7 @@ func Minus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, 
 // Since the underlying operator does not generically process decimal64 and decimal128, sub of decimal64 and decimal128 are not generalized
 func MinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lvScale
 	if lvScale < rvScale {
@@ -126,7 +126,7 @@ func MinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 
 func MinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+	lvs, rvs := vector.MustTCols[types.Decimal128](lv), vector.MustTCols[types.Decimal128](rv)
 	lvScale := lv.Typ.Scale
 	rvScale := rv.Typ.Scale
 	resultScale := lvScale

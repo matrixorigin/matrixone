@@ -16,7 +16,6 @@ package multi
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/rpad"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,7 +29,7 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	isConst := []bool{origVecs[0].IsScalar(), origVecs[1].IsScalar(), origVecs[2].IsScalar()}
 
 	// gets all args
-	strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
+	strs, sizes, padstrs := vector.MustBytesCols(origVecs[0]), origVecs[1].Col, origVecs[2].Col
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
 
 	// gets a new vector to store our result
