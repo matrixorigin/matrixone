@@ -1,6 +1,6 @@
 # **Code Comment Style**
 
-This document describes the code comment style applied to MatrixOne style. When you are to commit, be sure to follow the style to write good code comments.
+This document describes the code comment style applied to MatrixOne style. When you are ready to commit, please follow the style to write good code comments.
 
 ## **Why does a good comment matter?**
 
