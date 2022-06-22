@@ -1,4 +1,4 @@
-package adaptor
+package containers
 
 import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
@@ -44,13 +44,25 @@ func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 	return
 }
 
-func BuildBatch(attrs []string, colTypes []types.Type, capacity int) *Batch {
+func BuildBatch(
+	attrs []string,
+	colTypes []types.Type,
+	nullables []bool,
+	capacity int) *Batch {
 	opts := new(Options)
 	opts.Capacity = capacity
 	bat := NewBatch()
 	for i, attr := range attrs {
-		vec := MakeVector(colTypes[i], true, opts)
+		vec := MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(attr, vec)
 	}
 	return bat
+}
+
+func NewEmptyBatch() *Batch {
+	return &Batch{
+		Attrs:   make([]string, 0),
+		Vecs:    make([]Vector, 0),
+		nameidx: make(map[string]int),
+	}
 }

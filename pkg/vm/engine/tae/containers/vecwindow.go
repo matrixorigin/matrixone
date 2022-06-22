@@ -1,4 +1,4 @@
-package adaptor
+package containers
 
 import (
 	"github.com/RoaringBitmap/roaring/roaring64"

@@ -1,4 +1,4 @@
-package adaptor
+package containers
 
 import (
 	"bytes"
@@ -141,4 +141,17 @@ func TestVector3(t *testing.T) {
 	vec1.Close()
 	vec2.Close()
 	assert.Zero(t, opts.Allocator.Usage())
+}
+
+func TestVector4(t *testing.T) {
+	vecTypes := types.MockColTypes(17)
+	for _, vecType := range vecTypes {
+		vec := MockVector(vecType, 10, true, true, nil)
+		assert.Equal(t, 10, vec.Length())
+		t.Log(vec.String())
+	}
+	vec := MakeVector(types.Type_INT32.ToType(), false)
+	vec.Append(int32(1))
+	vec.Append(int32(2))
+	t.Log(vec.String())
 }

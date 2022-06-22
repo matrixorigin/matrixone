@@ -14,28 +14,12 @@
 
 package fileservice
 
-import (
-	"testing"
+import "context"
 
-	"github.com/stretchr/testify/assert"
-)
+// MutableFileService is an extension interface to FileService that allow mutation
+type MutableFileService interface {
+	FileService
 
-func TestMemoryFS(t *testing.T) {
-
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewMemoryFS()
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-}
-
-func BenchmarkMemoryFS(b *testing.B) {
-	benchmarkFileService(b, func() FileService {
-		fs, err := NewMemoryFS()
-		assert.Nil(b, err)
-		return fs
-	})
+	// Mutate mutates file contents
+	Mutate(ctx context.Context, vector IOVector) error
 }
