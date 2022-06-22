@@ -67,7 +67,7 @@ type RemoveDnReplica struct {
 }
 
 func (a RemoveDnReplica) String() string {
-	return fmt.Sprintf("removing %v:%v to dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+	return fmt.Sprintf("removing %v:%v on dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
 }
 
 func (a RemoveDnReplica) IsFinish(_ hakeeper.LogState, state hakeeper.DNState) bool {
@@ -80,6 +80,9 @@ func (a RemoveDnReplica) IsFinish(_ hakeeper.LogState, state hakeeper.DNState) b
 }
 
 func (a AddLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
+	if _, ok := state.Shards[a.ShardID]; !ok {
+		return true
+	}
 	if _, ok := state.Shards[a.ShardID].Replicas[a.ReplicaID]; ok {
 		return true
 	}
@@ -93,15 +96,17 @@ type RemoveLogService struct {
 }
 
 func (a RemoveLogService) String() string {
-	return fmt.Sprintf("removing %v:%v to %s", a.ShardID, a.ReplicaID, a.UUID)
+	return fmt.Sprintf("removing %v:%v on log store %s", a.ShardID, a.ReplicaID, a.UUID)
 }
 
 func (a RemoveLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	if _, ok := state.Shards[a.ShardID].Replicas[a.ReplicaID]; !ok {
-		return true
+	if shard, ok := state.Shards[a.ShardID]; ok {
+		if _, ok := shard.Replicas[a.ReplicaID]; ok {
+			return false
+		}
 	}
 
-	return false
+	return true
 }
 
 type StartLogService struct {
@@ -114,8 +119,9 @@ func (a StartLogService) String() string {
 }
 
 func (a StartLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	// FIXME: state.Stores[a.UUID] is going to return nil when a.UUID is not a
-	// key in state.Stores
+	if _, ok := state.Stores[a.UUID]; !ok {
+		return true
+	}
 	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
 		if replicaInfo.ShardID == a.ShardID {
 			return true
@@ -131,15 +137,15 @@ type StopLogService struct {
 }
 
 func (a StopLogService) String() string {
-	return fmt.Sprintf("starting %v on %s", a.ShardID, a.UUID)
+	return fmt.Sprintf("stoping %v on %s", a.ShardID, a.UUID)
 }
 
 func (a StopLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	// FIXME: state.Stores[a.UUID] is going to return nil when a.UUID is not a
-	// key in state.Stores
-	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
-			return false
+	if store, ok := state.Stores[a.UUID]; ok {
+		for _, replicaInfo := range store.Replicas {
+			if replicaInfo.ShardID == a.ShardID {
+				return false
+			}
 		}
 	}
 

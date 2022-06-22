@@ -15,10 +15,11 @@
 package typecast
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"math"
 	"strconv"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
@@ -293,11 +294,10 @@ func dateToTimestamp(xs []types.Date, rs []types.Timestamp) ([]types.Timestamp, 
 	return types.DateToTimestamp(xs, rs)
 }
 
-func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes) (*types.Bytes, error) {
+func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes, precision int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for i, x := range xs {
-		//todo: pass precision arg?
-		rs.Data = append(rs.Data, []byte(x.String())...)
+		rs.Data = append(rs.Data, []byte(x.String2(precision))...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets[i] = oldLen
 		rs.Lengths[i] = newLen - oldLen
