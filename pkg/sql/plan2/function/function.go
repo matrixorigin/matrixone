@@ -81,8 +81,6 @@ var (
 		types.T_decimal64: {types.T_decimal128},
 		types.T_char:      {types.T_varchar},
 		types.T_varchar:   {types.T_char},
-
-		types.T_tuple: {types.T_float64},
 	}
 )
 
