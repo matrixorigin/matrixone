@@ -313,6 +313,7 @@ func (r *replayer) MergeCkps(vfiles []VFile) {
 				panic(err)
 			}
 			err = r.onReplayEntry(e, vf.(*vFile), true)
+			e.Free()
 			if err != nil {
 				panic(err)
 			}
@@ -324,6 +325,7 @@ func (r *replayer) MergeCkps(vfiles []VFile) {
 				panic(err)
 			}
 			err = r.onReplayEntry(e, vf.(*vFile), true)
+			e.Free()
 			if err != nil {
 				panic(err)
 			}
@@ -364,6 +366,7 @@ func (r *replayer) replayHandlerWithCkpForCommitGroups(vf VFile, o ReplayObserve
 				panic(err)
 			}
 			err = r.onReplayEntry(e, vf.(*vFile), true)
+			e.Free()
 			if err != nil {
 				panic(err)
 			}
@@ -399,6 +402,7 @@ func (r *replayer) replayHandlerWithCkpForUCGroups(vf VFile, o ReplayObserver) e
 			panic(err)
 		}
 		err = r.onReplayEntry(e, vf.(*vFile), true)
+		e.Free()
 		if err != nil {
 			panic(err)
 		}
