@@ -25,7 +25,7 @@ type ColumnView struct {
 	ColIdx     int
 	Ts         uint64
 	data       containers.Vector
-	dataView   containers.Vector
+	dataView   containers.VectorView
 	UpdateMask *roaring.Bitmap
 	UpdateVals map[uint32]any
 	DeleteMask *roaring.Bitmap
@@ -51,9 +51,9 @@ func (view *ColumnView) SetData(data containers.Vector) {
 	view.dataView = data.GetView()
 }
 
-func (view *ColumnView) ApplyDeletes() containers.Vector {
+func (view *ColumnView) ApplyDeletes() containers.VectorView {
 	if view.DeleteMask == nil {
-		return view.data
+		return view.dataView
 	}
 	it := view.DeleteMask.Iterator()
 	for it.HasNext() {
@@ -79,7 +79,7 @@ func (view *ColumnView) Eval(clear bool) (err error) {
 	return
 }
 
-func (view *ColumnView) GetData() containers.Vector {
+func (view *ColumnView) GetDataView() containers.VectorView {
 	return view.dataView
 }
 

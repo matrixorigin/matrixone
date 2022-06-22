@@ -36,6 +36,6 @@ func TestEval(t *testing.T) {
 
 	view.Eval(true)
 
-	assert.Equal(t, any(int16(7)), view.GetData(1).Get(3))
-	assert.Equal(t, any([]byte("testEval")), view.GetData(13).Get(4))
+	assert.Equal(t, any(int16(7)), view.GetDataView(1).Get(3))
+	assert.Equal(t, any([]byte("testEval")), view.GetDataView(13).Get(4))
 }
