@@ -16,12 +16,13 @@ package plan2
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"strings"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -1002,6 +1003,8 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
 	var joinType plan.Node_JoinFlag
+	leftTbl := tbl.Left
+	rightTbl := tbl.Right
 
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
@@ -1009,7 +1012,8 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
-		joinType = plan.Node_RIGHT
+		joinType = plan.Node_LEFT
+		leftTbl, rightTbl = rightTbl, leftTbl
 	case tree.JOIN_TYPE_FULL:
 		joinType = plan.Node_OUTER
 	}
@@ -1017,12 +1021,12 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildId, err := builder.buildTable(tbl.Left, leftCtx)
+	leftChildId, err := builder.buildTable(leftTbl, leftCtx)
 	if err != nil {
 		return 0, err
 	}
 
-	rightChildId, err := builder.buildTable(tbl.Right, rightCtx)
+	rightChildId, err := builder.buildTable(rightTbl, rightCtx)
 	if err != nil {
 		return 0, err
 	}
