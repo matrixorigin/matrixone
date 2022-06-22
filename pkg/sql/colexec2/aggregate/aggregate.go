@@ -16,6 +16,7 @@ package aggregate
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/ring/anyvalue"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"

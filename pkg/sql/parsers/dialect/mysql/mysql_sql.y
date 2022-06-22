@@ -178,7 +178,6 @@ import (
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
 %token <item> INTEGRAL HEX HEXNUM BIT_LITERAL FLOAT
 %token <str> NULL TRUE FALSE
-%left EMPTY_FROM_CLAUSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
@@ -2603,10 +2602,9 @@ select_expression:
     }
 
 from_opt:
-    %prec EMPTY_FROM_CLAUSE
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        tn := tree.NewTableName(tree.Identifier("dual"), prefix)
+    	prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        tn := tree.NewTableName(tree.Identifier(""), prefix)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
         }
