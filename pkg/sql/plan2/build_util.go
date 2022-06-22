@@ -513,9 +513,10 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
-			return &plan.Type{Id: plan.Type_DATETIME, Size: 8, Precision: n.InternalType.Precision}, nil
+			// currently the ast's width for datetime's is 26, this is not accurate and may need revise, not important though, as we don't need it anywhere else except to differentiate empty vector.Typ.
+			return &plan.Type{Id: plan.Type_DATETIME, Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			return &plan.Type{Id: plan.Type_TIMESTAMP, Size: 8, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: plan.Type_TIMESTAMP, Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 18 {
 				return &plan.Type{Id: plan.Type_DECIMAL128, Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
