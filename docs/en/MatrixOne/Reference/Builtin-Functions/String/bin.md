@@ -21,3 +21,5 @@ This function ``BIN()`` returns a string representation of the binary value of *
 ```SQL
 
 ```
+
+<!--end-->
