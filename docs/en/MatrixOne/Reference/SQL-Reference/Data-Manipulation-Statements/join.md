@@ -12,22 +12,16 @@ The following figure shows seven usages of ``LEFT JOIN``, ``RIGHT JOIN``, ``INNE
 |---|---|
 |SELECT /<select_list> FROM TableA A LEFT JOIN TableB B ON A.Key=B.Key WHERE B.Key IS NULL|![leftjoinwhere](https://github.com/matrixorigin/artwork/blob/main/docs/reference/left_join_where.png?raw=true)|
 
-
-
 - ``RIGHT JOIN``
 
 |SELECT /<select_list> FROM TableA A RIGHT JOIN TableB B ON A.Key=B.Key|![leftjoinwhere](https://github.com/matrixorigin/artwork/blob/main/docs/reference/right_join.png?raw=true)|
 |---|---|
 |SELECT /<select_list> FROM TableA A RIGHT JOIN TableB B ON A.Key=B.Key WHERE A.Key IS NULL|![leftjoinwhere](https://github.com/matrixorigin/artwork/blob/main/docs/reference/right_join_where.png?raw=true)|
 
-
-
-
 - ``INNER JOIN``
 
 |SELECT /<select_list> FROM TableA A INNER JOIN TableB B ON A.Key=B.Key|![innerjoin](https://github.com/matrixorigin/artwork/blob/main/docs/reference/inner_join.png?raw=true)|
 |---|---|
-
 
 - ``FULL JOIN``
 

@@ -26,7 +26,6 @@
 
 ## **示例**
 
-
 ```SQL
 SELECT CONCAT_WS(',','First name','Second name','Last Name');
 +--------------------------------------------------+
