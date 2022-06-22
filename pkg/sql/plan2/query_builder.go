@@ -467,6 +467,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		return 0, errors.New("", "No tables used")
 	}
 
+	// rewrite right join to left join
+	builder.rewriteRightJoinToLeftJoin(nodeId)
+
 	if clause.Where != nil {
 		whereList, err := splitAndBindCondition(clause.Where.Expr, ctx)
 		if err != nil {
@@ -731,6 +734,21 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext, tags 
 	builder.ctxByNode = append(builder.ctxByNode, ctx)
 	builder.tagsByNode = append(builder.tagsByNode, tags)
 	return nodeId
+}
+
+func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeId int32) {
+	node := builder.qry.Nodes[nodeId]
+	if node.NodeType == plan.Node_JOIN {
+		builder.rewriteRightJoinToLeftJoin(node.Children[0])
+		builder.rewriteRightJoinToLeftJoin(node.Children[1])
+
+		if node.JoinType == plan.Node_RIGHT {
+			node.JoinType = plan.Node_LEFT
+			node.Children = []int32{node.Children[1], node.Children[0]}
+		}
+	} else if len(node.Children) > 0 {
+		builder.rewriteRightJoinToLeftJoin(node.Children[0])
+	}
 }
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
@@ -1003,8 +1021,6 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 
 func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindContext) (int32, error) {
 	var joinType plan.Node_JoinFlag
-	leftTbl := tbl.Left
-	rightTbl := tbl.Right
 
 	switch tbl.JoinType {
 	case tree.JOIN_TYPE_CROSS, tree.JOIN_TYPE_INNER, tree.JOIN_TYPE_NATURAL:
@@ -1012,8 +1028,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	case tree.JOIN_TYPE_LEFT, tree.JOIN_TYPE_NATURAL_LEFT:
 		joinType = plan.Node_LEFT
 	case tree.JOIN_TYPE_RIGHT, tree.JOIN_TYPE_NATURAL_RIGHT:
-		joinType = plan.Node_LEFT
-		leftTbl, rightTbl = rightTbl, leftTbl
+		joinType = plan.Node_RIGHT
 	case tree.JOIN_TYPE_FULL:
 		joinType = plan.Node_OUTER
 	}
@@ -1021,12 +1036,12 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	leftCtx := NewBindContext(builder, ctx)
 	rightCtx := NewBindContext(builder, ctx)
 
-	leftChildId, err := builder.buildTable(leftTbl, leftCtx)
+	leftChildId, err := builder.buildTable(tbl.Left, leftCtx)
 	if err != nil {
 		return 0, err
 	}
 
-	rightChildId, err := builder.buildTable(rightTbl, rightCtx)
+	rightChildId, err := builder.buildTable(tbl.Right, rightCtx)
 	if err != nil {
 		return 0, err
 	}
