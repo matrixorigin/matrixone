@@ -19,6 +19,7 @@ package avg
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -208,12 +209,18 @@ func (r *DecimalRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *DecimalRing) Add(a interface{}, x, y int64) {
 	ar := a.(*DecimalRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	r.Vs[x] = types.Decimal128AddAligned(r.Vs[x], ar.Vs[y])
 	r.Ns[x] += ar.Ns[y]
 }
 
 func (r *DecimalRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*DecimalRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		r.Vs[vps[i]-1] = types.Decimal128AddAligned(r.Vs[vps[i]-1], ar.Vs[int64(i)+start])
 		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]

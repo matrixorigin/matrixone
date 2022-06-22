@@ -17,7 +17,6 @@ package plan2
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -47,7 +46,7 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[int64][2]int32) er
 			ne.Col.RelPos = ids[0]
 			ne.Col.ColPos = ids[1]
 		} else {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can't find column in context's map %v", colMap))
+			return errors.New("", fmt.Sprintf("can't find column in context's map %v", colMap))
 		}
 
 	case *plan.Expr_F:
@@ -320,10 +319,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_VALUE_SCAN:
-		//do nothing,  optimize can merge valueScan and project
-
+		// VALUE_SCAN always have one column now
+		node.ProjectList = append(node.ProjectList, &plan.Expr{
+			Typ:  &plan.Type{Id: plan.Type_INT64},
+			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
+		})
 	default:
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "unsupport node type to rebiuld query")
+		return nil, errors.New("", "unsupport node type to rebiuld query")
 	}
 
 	return returnMap, nil
@@ -352,7 +354,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			name := string(cte.Name.Alias)
 			if _, ok := ctx.cteByName[name]; ok {
-				return 0, errors.New(errno.AmbiguousAlias, fmt.Sprintf("WITH query name %q specified more than once", name))
+				return 0, errors.New("", fmt.Sprintf("WITH query name %q specified more than once", name))
 			}
 
 			var maskedCTEs map[string]any
@@ -602,7 +604,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	if (len(ctx.groups) > 0 || len(ctx.aggregates) > 0) && len(projectionBinder.boundCols) > 0 {
-		return 0, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0]))
+		return 0, errors.New("", fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", projectionBinder.boundCols[0]))
 	}
 
 	// FIXME: delete this when SINGLE join is ready
@@ -651,7 +653,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if proj == nil {
 			// TODO: implement MARK join to better support non-scalar subqueries
-			// return 0, errors.New(errno.InternalError, "non-scalar subquery in SELECT clause not yet supported")
 			return 0, errors.New("", "non-scalar subquery in SELECT clause will be supported in future version.")
 		}
 
@@ -791,7 +792,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		subCtx := NewBindContext(builder, ctx)
 		nodeId, err = builder.buildSelect(tbl, subCtx, false)
 		if subCtx.isCorrelated {
-			return 0, errors.New(errno.InvalidColumnReference, "correlated subquery in FROM clause is not yet supported")
+			return 0, errors.New("", "correlated subquery in FROM clause is will be supported in future version")
 		}
 
 		if subCtx.hasSingleRow {
@@ -801,7 +802,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	case *tree.TableName:
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
-		if table == "dual" { //special table name
+		if len(table) == 0 || table == "dual" { //special table name
 			nodeId = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_VALUE_SCAN,
 			}, ctx)
@@ -826,7 +827,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 					nodeId, err = builder.buildSelect(stmt.Select, subCtx, false)
 
 				default:
-					err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+					err = errors.New("", fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 				}
 
 				if err != nil {
@@ -834,7 +835,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				}
 
 				if subCtx.isCorrelated {
-					return 0, errors.New(errno.InvalidColumnReference, "correlated column in CTE is not yet supported")
+					return 0, errors.New("", "correlated column in CTE is will be supported in future version")
 				}
 
 				if subCtx.hasSingleRow {
@@ -844,7 +845,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 				cols := cteRef.ast.Name.Cols
 
 				if len(cols) > len(subCtx.headings) {
-					return 0, errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols)))
+					return 0, errors.New("", fmt.Sprintf("table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols)))
 				}
 
 				for i, col := range cols {
@@ -857,7 +858,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
-			return 0, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("table %q does not exist", table))
+			return 0, errors.New("", fmt.Sprintf("table %q does not exist", table))
 		}
 
 		nodeId = builder.appendNode(&plan.Node{
@@ -875,7 +876,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
 			if tbl.As.Alias == "" {
-				return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("subquery in FROM must have an alias: %T", stmt))
+				return 0, errors.New("", fmt.Sprintf("subquery in FROM must have an alias: %T", stmt))
 			}
 		}
 
@@ -890,11 +891,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 	case *tree.StatementSource:
 		// log.Printf("StatementSource")
-		return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+		return 0, errors.New("", fmt.Sprintf("unsupport table expr: %T", stmt))
 
 	default:
 		// Values table not support
-		return 0, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+		return 0, errors.New("", fmt.Sprintf("unsupport table expr: %T", stmt))
 	}
 
 	return
@@ -918,7 +919,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 
 	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
-			return errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
+			return errors.New("", fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
 		}
 
 		var table string
@@ -929,7 +930,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 		}
 
 		if _, ok := ctx.bindingByTable[table]; ok {
-			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
+			return errors.New("", fmt.Sprintf("table name %q specified more than once", table))
 		}
 
 		cols = make([]string, len(node.TableDef.Cols))
@@ -952,7 +953,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 		projects := subCtx.projects
 
 		if len(alias.Cols) > len(headings) {
-			return errors.New(errno.UndefinedColumn, fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols)))
+			return errors.New("", fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(headings), len(alias.Cols)))
 		}
 
 		table := subCtx.cteName
@@ -960,7 +961,7 @@ func (builder *QueryBuilder) addBinding(nodeId int32, alias tree.AliasClause, ct
 			table = string(alias.Alias)
 		}
 		if _, ok := ctx.bindingByTable[table]; ok {
-			return errors.New(errno.DuplicateTable, fmt.Sprintf("table name %q specified more than once", table))
+			return errors.New("", fmt.Sprintf("table name %q specified more than once", table))
 		}
 
 		cols = make([]string, len(headings))
@@ -1060,7 +1061,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 			side := getJoinSide(cond, leftCtx.bindingByTag)
 
 			switch side {
-			case 0b00:
+			case JoinSideNone:
 				switch joinType {
 				case plan.Node_LEFT:
 					rightConds = append(rightConds, cond)
@@ -1072,26 +1073,26 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 					joinConds = append(joinConds, cond)
 				}
 
-			case 0b01:
+			case JoinSideLeft:
 				if joinType == plan.Node_RIGHT {
 					leftConds = append(leftConds, cond)
 				} else {
 					joinConds = append(joinConds, cond)
 				}
 
-			case 0b10:
+			case JoinSideRight:
 				if joinType == plan.Node_LEFT {
 					rightConds = append(rightConds, cond)
 				} else {
 					joinConds = append(joinConds, cond)
 				}
 
-			case 0b11:
+			case JoinSideBoth:
 				joinConds = append(joinConds, cond)
 
 			default:
 				// has correlated columns
-				return 0, errors.New(errno.InternalError, "correlated columns in join condition not yet supported")
+				return 0, errors.New("", "correlated columns in join condition will be supported in future version")
 			}
 		}
 
@@ -1238,14 +1239,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
 				isEqui[i] = f.F.Func.ObjName == "="
 				for _, arg := range f.F.Args {
-					if getJoinSide(arg, leftTags) == 0b11 {
+					if getJoinSide(arg, leftTags) == JoinSideBoth {
 						canTurnInner = false
 						break
 					}
 				}
 			}
 
-			if joinSides[i]&0b10 != 0 && canTurnInner && node.JoinType == plan.Node_LEFT {
+			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT {
 				turnInner = true
 				filters = append(node.OnList, filters...)
 				node.JoinType = plan.Node_INNER
@@ -1254,7 +1255,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				break
 			}
 
-			if joinSides[i]&0b01 != 0 && canTurnInner && node.JoinType == plan.Node_RIGHT {
+			if joinSides[i]&JoinSideLeft != 0 && canTurnInner && node.JoinType == plan.Node_RIGHT {
 				turnInner = true
 				filters = append(node.OnList, filters...)
 				node.JoinType = plan.Node_INNER
@@ -1274,7 +1275,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				joinSides[i] = getJoinSide(filter, leftTags)
 				if f, ok := filter.Expr.(*plan.Expr_F); ok {
 					if f.F.Func.ObjName == "=" {
-						isEqui[i] = (getJoinSide(f.F.Args[0], leftTags) != 0b11) && (getJoinSide(f.F.Args[1], leftTags) != 0b11)
+						isEqui[i] = (getJoinSide(f.F.Args[0], leftTags) != JoinSideBoth) && (getJoinSide(f.F.Args[1], leftTags) != JoinSideBoth)
 					}
 				}
 			}
@@ -1282,7 +1283,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 
 		for i, filter := range filters {
 			switch joinSides[i] {
-			case 0b00:
+			case JoinSideNone:
 				if c, ok := filter.Expr.(*plan.Expr_C); ok {
 					if c, ok := c.C.Value.(*plan.Const_Bval); ok {
 						if c.Bval {
@@ -1306,21 +1307,21 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 					cantPushdown = append(cantPushdown, filter)
 				}
 
-			case 0b01:
+			case JoinSideLeft:
 				if node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_OUTER {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
-			case 0b10:
+			case JoinSideRight:
 				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
-			case 0b11:
+			case JoinSideBoth:
 				if node.JoinType == plan.Node_INNER && isEqui[i] {
 					node.OnList = append(node.OnList, filter)
 				} else {

@@ -66,6 +66,7 @@ func (m *S3FSMinio) List(ctx context.Context, dirPath string) (entries []DirEntr
 		entries = append(entries, DirEntry{
 			Name:  name,
 			IsDir: isDir,
+			Size:  int(info.Size),
 		})
 	}
 

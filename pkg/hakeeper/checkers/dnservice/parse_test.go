@@ -51,8 +51,8 @@ func TestParseDNState(t *testing.T) {
 		stores, shards := parseDnState(dnState, currTick)
 
 		// check stores
-		require.Equal(t, len(stores.workingStores()), 0)
-		require.Equal(t, len(stores.expiredStores()), 2)
+		require.Equal(t, len(stores.WorkingStores()), 0)
+		require.Equal(t, len(stores.ExpiredStores()), 2)
 
 		// check shards
 		shardIDs := shards.listShards()
@@ -98,8 +98,8 @@ func TestParseDNState(t *testing.T) {
 		stores, shards := parseDnState(dnState, currTick)
 
 		// check stores
-		require.Equal(t, len(stores.workingStores()), 2)
-		require.Equal(t, len(stores.expiredStores()), 1)
+		require.Equal(t, len(stores.WorkingStores()), 2)
+		require.Equal(t, len(stores.ExpiredStores()), 1)
 
 		// check shards
 		shardIDs := shards.listShards()

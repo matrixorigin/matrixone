@@ -229,13 +229,13 @@ func getJoinSide(expr *plan.Expr, leftTags map[int32]*Binding) (side int8) {
 
 	case *plan.Expr_Col:
 		if _, ok := leftTags[exprImpl.Col.RelPos]; ok {
-			side = 0b01
+			side = JoinSideLeft
 		} else {
-			side = 0b10
+			side = JoinSideRight
 		}
 
 	case *plan.Expr_Corr:
-		side = 0b100
+		side = JoinSideCorrelated
 	}
 
 	return
@@ -324,7 +324,7 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 		condMap := make(map[string]int)
 
 		for _, cond := range rightConds {
-			condMap[cond.String()] = 0b10
+			condMap[cond.String()] = JoinSideRight
 		}
 
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
@@ -332,17 +332,17 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 		for _, cond := range leftConds {
 			exprStr := cond.String()
 
-			if condMap[exprStr] == 0b10 {
+			if condMap[exprStr] == JoinSideRight {
 				commonConds = append(commonConds, cond)
-				condMap[exprStr] = 0b11
+				condMap[exprStr] = JoinSideBoth
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
-				condMap[exprStr] = 0b01
+				condMap[exprStr] = JoinSideLeft
 			}
 		}
 
 		for _, cond := range rightConds {
-			if condMap[cond.String()] == 0b10 {
+			if condMap[cond.String()] == JoinSideRight {
 				rightOnlyConds = append(rightOnlyConds, cond)
 			}
 		}

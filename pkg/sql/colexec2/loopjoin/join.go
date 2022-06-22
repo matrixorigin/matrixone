@@ -62,7 +62,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			if err := ctr.probe(bat, ap, proc); err != nil {
 				ctr.state = End
-				bat.Clean(proc.Mp)
 				proc.Reg.InputBatch = nil
 				return true, err
 			}
@@ -113,12 +112,13 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	count := len(bat.Zs)
 	for i := 0; i < count; i++ {
-		for j := 0; j < len(ctr.bat.Zs); j++ {
-			vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, j, proc, ap.Cond)
-			if err != nil {
-				return err
-			}
-			if vec.Col.([]bool)[0] {
+		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
+		if err != nil {
+			return err
+		}
+		bs := vec.Col.([]bool)
+		for j, b := range bs {
+			if b {
 				for k, rp := range ap.Result {
 					if rp.Rel == 0 {
 						if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
@@ -134,8 +134,8 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
 			}
-			vector.Free(vec, proc.Mp)
 		}
+		vector.Clean(vec, proc.Mp)
 	}
 	proc.Reg.InputBatch = rbat
 	return nil

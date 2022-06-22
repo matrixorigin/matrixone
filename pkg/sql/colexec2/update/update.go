@@ -16,6 +16,7 @@ package update
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -53,7 +54,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 
 		// Reduce batch for update column
-		vector.Free(bat.Vecs[0], proc.Mp)
+		vector.Clean(bat.Vecs[0], proc.Mp)
 		bat.Vecs = bat.Vecs[1:]
 		bat.Attrs = append(bat.Attrs, p.UpdateAttrs...)
 		bat.Attrs = append(bat.Attrs, p.OtherAttrs...)

@@ -127,6 +127,7 @@ func (ctr *Container) process(ap *Argument, proc *process.Process) (bool, error)
 		ctr.bat.Rs = make([]ring.Ring, len(ap.Aggs))
 		for i, agg := range ap.Aggs {
 			if ctr.bat.Rs[i], err = aggregate.New(agg.Op, agg.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+				ctr.bat = nil
 				return false, err
 			}
 		}
@@ -263,6 +264,7 @@ func (ctr *Container) processWithGroup(ap *Argument, proc *process.Process) (boo
 		ctr.bat.Rs = make([]ring.Ring, len(ap.Aggs))
 		for i, agg := range ap.Aggs {
 			if ctr.bat.Rs[i], err = aggregate.New(agg.Op, agg.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+				ctr.bat = nil
 				return false, err
 			}
 		}

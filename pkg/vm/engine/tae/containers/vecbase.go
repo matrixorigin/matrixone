@@ -1,8 +1,9 @@
-package adaptor
+package containers
 
 import (
 	"io"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -31,6 +32,9 @@ func (base *vecBase[T]) Get(i int) (v any)   { return base.derived.stlvec.Get(i)
 func (base *vecBase[T]) Update(i int, v any) { base.derived.stlvec.Update(i, v.(T)) }
 func (base *vecBase[T]) Delete(i int)        { base.derived.stlvec.Delete(i) }
 func (base *vecBase[T]) Append(v any)        { base.derived.stlvec.Append(v.(T)) }
+func (base *vecBase[T]) Compact(_ *roaring.Bitmap) {
+	panic("not supported")
+}
 func (base *vecBase[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		base.Append(v)

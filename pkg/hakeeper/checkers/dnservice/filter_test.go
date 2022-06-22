@@ -17,16 +17,17 @@ package dnservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAvailableStores(t *testing.T) {
-	dnStores := []*dnStore{
-		newDnStore("1", 1, 1), // full
-		newDnStore("2", 3, 3), // full
-		newDnStore("3", 1, 3), // 2 slots
-		newDnStore("4", 4, 4), // full
-		newDnStore("5", 1, 4), // 3 slots
+	dnStores := []*util.Store{
+		util.NewStore("1", 1, 1), // full
+		util.NewStore("2", 3, 3), // full
+		util.NewStore("3", 1, 3), // 2 slots
+		util.NewStore("4", 4, 4), // full
+		util.NewStore("5", 1, 4), // 3 slots
 	}
 
 	stores := spareStores(dnStores)
@@ -34,15 +35,15 @@ func TestAvailableStores(t *testing.T) {
 }
 
 func TestFilter(t *testing.T) {
-	dnStores := []*dnStore{
-		newDnStore("0", 0, 10),
-		newDnStore("1", 1, 10),
-		newDnStore("10", 10, 10),
-		newDnStore("5", 5, 5),
+	dnStores := []*util.Store{
+		util.NewStore("0", 0, 10),
+		util.NewStore("1", 1, 10),
+		util.NewStore("10", 10, 10),
+		util.NewStore("5", 5, 5),
 	}
 
 	fullFilter := &filterOutFull{}
-	candidates := make([]*dnStore, 0, len(dnStores))
+	candidates := make([]*util.Store, 0, len(dnStores))
 	for _, store := range dnStores {
 		if fullFilter.Filter(store) {
 			continue

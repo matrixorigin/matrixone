@@ -183,8 +183,20 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 	}
 	node.Exprs.Format(ctx)
 	if len(node.From.Tables) > 0 {
-		ctx.WriteByte(' ')
-		node.From.Format(ctx)
+		canFrom := true
+		als, ok := node.From.Tables[0].(*AliasedTableExpr)
+		if ok {
+			tbl, ok := als.Expr.(*TableName)
+			if ok {
+				if string(tbl.ObjectName) == "" {
+					canFrom = false
+				}
+			}
+		}
+		if canFrom {
+			ctx.WriteByte(' ')
+			node.From.Format(ctx)
+		}
 	}
 	if node.Where != nil {
 		ctx.WriteByte(' ')

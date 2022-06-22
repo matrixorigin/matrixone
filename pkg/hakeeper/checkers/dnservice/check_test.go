@@ -19,10 +19,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,27 +72,27 @@ func TestExtraWorkingReplicas(t *testing.T) {
 }
 
 func TestConsumeLeastSpareStore(t *testing.T) {
-	var working []*dnStore
+	var working []*util.Store
 	_, err := consumeLeastSpareStore(working)
 	require.Error(t, err)
 
-	working = []*dnStore{
-		newDnStore("store13", 1, DnStoreCapacity),
-		newDnStore("store12", 1, DnStoreCapacity),
-		newDnStore("store11", 2, DnStoreCapacity),
+	working = []*util.Store{
+		util.NewStore("store13", 1, DnStoreCapacity),
+		util.NewStore("store12", 1, DnStoreCapacity),
+		util.NewStore("store11", 2, DnStoreCapacity),
 	}
 
 	id, err := consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, StoreID("store12"), id)
+	require.Equal(t, util.StoreID("store12"), id)
 
 	id, err = consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, StoreID("store13"), id)
+	require.Equal(t, util.StoreID("store13"), id)
 
 	id, err = consumeLeastSpareStore(working)
 	require.NoError(t, err)
-	require.Equal(t, StoreID("store11"), id)
+	require.Equal(t, util.StoreID("store11"), id)
 }
 
 func TestCheckShard(t *testing.T) {
@@ -102,10 +102,10 @@ func TestCheckShard(t *testing.T) {
 		enough := true
 		idAlloc := newMockIDAllocator(nextReplicaID, enough)
 
-		workingStores := []*dnStore{
-			newDnStore("store1", 2, DnStoreCapacity),
-			newDnStore("store2", 3, DnStoreCapacity),
-			newDnStore("store3", 4, DnStoreCapacity),
+		workingStores := []*util.Store{
+			util.NewStore("store1", 2, DnStoreCapacity),
+			util.NewStore("store2", 3, DnStoreCapacity),
+			util.NewStore("store3", 4, DnStoreCapacity),
 		}
 
 		shardID := uint64(10)
@@ -138,14 +138,14 @@ func TestCheckShard(t *testing.T) {
 	}
 
 	{
-		// id exhausted temporarily
+		// ID exhausted temporarily
 		enough := false
 		idAlloc := newMockIDAllocator(0, enough)
 
-		workingStores := []*dnStore{
-			newDnStore("store1", 2, DnStoreCapacity),
-			newDnStore("store2", 3, DnStoreCapacity),
-			newDnStore("store3", 4, DnStoreCapacity),
+		workingStores := []*util.Store{
+			util.NewStore("store1", 2, DnStoreCapacity),
+			util.NewStore("store2", 3, DnStoreCapacity),
+			util.NewStore("store3", 4, DnStoreCapacity),
 		}
 
 		anotherShard := uint64(100)
