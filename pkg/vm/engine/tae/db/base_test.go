@@ -398,6 +398,10 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 	for _, meta := range metas {
 		txn, _ := getRelation(t, e, dbName, schema.Name)
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
+		if skipConflict && err != nil {
+			_ = txn.Rollback()
+			continue
+		}
 		assert.NoError(t, err)
 		err = task.OnExec()
 		if skipConflict {
