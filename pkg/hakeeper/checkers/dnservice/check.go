@@ -16,26 +16,22 @@ package dnservice
 
 import (
 	"fmt"
+
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
-// IDAllocator is used to fetch new replica ID.
-type IDAllocator interface {
-	// When IDAllocator was exhaused temporarily, return `false`.
-	Next() (uint64, bool)
-}
-
 // CheckService check dn state and generate operator for expired dn store.
-// The less shard id, the higher priority.
+// The less shard ID, the higher priority.
 // NB: the returned order should be deterministic.
 func Check(
-	idAlloc IDAllocator, dnState hapb.DNState, currTick uint64,
+	idAlloc util.IDAllocator, dnState hapb.DNState, currTick uint64,
 ) []*operator.Operator {
 	stores, shards := parseDnState(dnState, currTick)
-	if len(stores.workingStores()) < 1 {
+	if len(stores.WorkingStores()) < 1 {
 		// warning with no working store
 		return nil
 	}
@@ -54,7 +50,7 @@ func Check(
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, stores.workingStores(), idAlloc)
+		steps := checkShard(shard, stores.WorkingStores(), idAlloc)
 		if len(steps) > 0 {
 			operators = append(operators,
 				operator.NewOperator("dn", shardID, operator.NoopEpoch, steps...),
@@ -68,7 +64,7 @@ func Check(
 // schedule generator operator as much as possible
 // NB: the returned order should be deterministic.
 func checkShard(
-	shard *dnShard, workingStores []*dnStore, idAlloc IDAllocator,
+	shard *dnShard, workingStores []*util.Store, idAlloc util.IDAllocator,
 ) []operator.OpStep {
 	switch len(shard.workingReplicas()) {
 	case 0: // need add replica
@@ -102,7 +98,7 @@ func checkShard(
 }
 
 // newAddStep constructs operator to launch a dn shard replica
-func newAddStep(target StoreID, shardID, replicaID uint64) operator.OpStep {
+func newAddStep(target util.StoreID, shardID, replicaID uint64) operator.OpStep {
 	return operator.AddDnReplica{
 		StoreID:   string(target),
 		ShardID:   shardID,
@@ -111,7 +107,7 @@ func newAddStep(target StoreID, shardID, replicaID uint64) operator.OpStep {
 }
 
 // newRemoveStep constructs operator to remove a dn shard replica
-func newRemoveStep(target StoreID, shardID, replicaID uint64) operator.OpStep {
+func newRemoveStep(target util.StoreID, shardID, replicaID uint64) operator.OpStep {
 	return operator.RemoveDnReplica{
 		StoreID:   string(target),
 		ShardID:   shardID,
@@ -148,35 +144,35 @@ func extraWorkingReplicas(shard *dnShard) []*dnReplica {
 
 // consumeLeastSpareStore consume a slot from the least spare dn store.
 // If there are multiple dn store with the same least slots,
-// the store with less id would be chosen.
+// the store with less ID would be chosen.
 // NB: the returned result should be deterministic.
-func consumeLeastSpareStore(working []*dnStore) (StoreID, error) {
+func consumeLeastSpareStore(working []*util.Store) (util.StoreID, error) {
 	if len(working) == 0 {
-		return NullStoreID, errNoWrokingStore
+		return util.NullStoreID, errNoWorkingStore
 	}
 
 	// the least shards, the higher priority
 	sort.Slice(working, func(i, j int) bool {
-		return working[i].length < working[j].length
+		return working[i].Length < working[j].Length
 	})
 
-	// stores with the same length
-	var leastStores []*dnStore
+	// stores with the same Length
+	var leastStores []*util.Store
 
-	least := working[0].length
+	least := working[0].Length
 	for i := 0; i < len(working); i++ {
 		store := working[i]
-		if least != store.length {
+		if least != store.Length {
 			break
 		}
 		leastStores = append(leastStores, store)
 	}
 	sort.Slice(leastStores, func(i, j int) bool {
-		return leastStores[i].id < leastStores[j].id
+		return leastStores[i].ID < leastStores[j].ID
 	})
 
 	// consume a slot from this dn store
-	leastStores[0].length += 1
+	leastStores[0].Length += 1
 
-	return leastStores[0].id, nil
+	return leastStores[0].ID, nil
 }

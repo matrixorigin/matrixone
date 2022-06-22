@@ -1,20 +1,18 @@
-# **INNER JOIN**
+# **RIGHT JOIN**
 
 ## **语法说明**
 
-`INNER JOIN` 选取两个表中具有匹配值的数据记录。（等同于`JOIN`）
+``RIGHT JOIN``关键字从右表（table2）返回所有的行，即使左表（table1）中没有匹配。如果左表中没有匹配，则结果为 ``NULL``。
 
 ## **语法结构**
 
 ```
 > SELECT column_name(s)
 FROM table1
-INNER JOIN table2
-ON table1.column_name = table2.column_name;
+RIGHT JOIN table2
+ON table1.column_name=table2.column_name;
 
 ```
-
-## **参数释义**
 
 ## **示例**
 
@@ -47,7 +45,7 @@ ON table1.column_name = table2.column_name;
 > insert into t1 values ('BerkeleyPublic2','Berkeley');
 > insert into t1 values ('NYCLib','NewYork');
 
-> select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
+> select city,libname1,count(libname1) as a from t3 right join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 
 +----------+--------------------+------+
 | city     | libname1           | a    |
@@ -59,7 +57,3 @@ ON table1.column_name = table2.column_name;
 +----------+--------------------+------+
 
 ```
-
-## **限制**
-
-目前， `INNER JOIN`语句在进行某些查询时将导致崩溃（与服务器失去连接）。

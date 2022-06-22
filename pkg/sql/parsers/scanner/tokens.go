@@ -24,6 +24,7 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		CONFIG = MYSQL_CONFIG
 		SOME = MYSQL_SOME
 		ANY = MYSQL_ANY
 		UNKNOWN = MYSQL_UNKNOWN
@@ -255,7 +256,6 @@ func initTokens(dialectType dialect.DialectType) {
 		LOCK = MYSQL_LOCK
 		KEYS = MYSQL_KEYS
 		VALUES = MYSQL_VALUES
-		LAST_INSERT_ID = MYSQL_LAST_INSERT_ID
 		NEXT = MYSQL_NEXT
 		VALUE = MYSQL_VALUE
 		SHARE = MYSQL_SHARE
@@ -521,6 +521,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"continue":                 UNUSED,
 		"connection":               CONNECTION,
 		"convert":                  CONVERT,
+		"config":                   CONFIG,
 		"cipher":                   CIPHER,
 		"chain":                    CHAIN,
 		"client":                   CLIENT,
@@ -647,7 +648,6 @@ func initTokens(dialectType dialect.DialectType) {
 		"key_block_size":           KEY_BLOCK_SIZE,
 		"kill":                     UNUSED,
 		"language":                 LANGUAGE,
-		"last_insert_id":           LAST_INSERT_ID,
 		"leading":                  LEADING,
 		"leave":                    UNUSED,
 		"left":                     LEFT,
@@ -918,6 +918,7 @@ func initTokens(dialectType dialect.DialectType) {
 
 // mysql
 var (
+	CONFIG                   int
 	SOME                     int
 	ANY                      int
 	UNKNOWN                  int
@@ -1130,7 +1131,6 @@ var (
 	LOCK                     int
 	KEYS                     int
 	VALUES                   int
-	LAST_INSERT_ID           int
 	NEXT                     int
 	VALUE                    int
 	SHARE                    int
