@@ -832,6 +832,9 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	if funcDef.IsAggregate() && args[0].Typ.Nullable {
+		args[0].Typ.Id = plan.Type_TypeId(funcDef.ReturnTyp)
+	}
 	if argsCastType != nil {
 		if len(argsCastType) != argsLength {
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cast types length not match args length")
