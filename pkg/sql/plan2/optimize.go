@@ -15,7 +15,6 @@
 package plan2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -49,7 +48,7 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	}
 	qry, ok := pn.Plan.(*plan.Plan_Query)
 	if !ok {
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, pn.String()))
+		panic(errors.New("", pn.String()))
 	}
 	opt.qry = qry.Query
 	return opt.optimize()
