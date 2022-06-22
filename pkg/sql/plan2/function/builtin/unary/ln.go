@@ -28,11 +28,11 @@ func Ln[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pro
 	inputVector := vectors[0] // so these kinds of indexing are always guaranteed success because all the checks are done in the plan?
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.([]T)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 
@@ -43,7 +43,6 @@ func Ln[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pro
 		vector.SetCol(resultVector, lnResult.Result)
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]T)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err

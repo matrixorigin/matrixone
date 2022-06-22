@@ -59,6 +59,7 @@ func (appender *fileAppender) Prepare(size int, info any) error {
 			Offset:  appender.rollbackState.pos,
 		}
 	}
+	// logutil.Infof("log %d-%d at %d-%d",v.Group,v.GroupLSN,appender.rollbackState.file.version,appender.rollbackState.pos)
 	appender.info = info
 	// appender.activeId = appender.rfile.idAlloc.Alloc()
 	return err

@@ -519,12 +519,6 @@ func (s *baseStore) Replay(h ApplyHandle) error {
 	if err != nil {
 		return err
 	}
-	for group, checkpointed := range r.checkpointrange {
-		s.checkpointed.ids[group] = checkpointed.GetCheckpointed()
-	}
-	for _, ent := range r.entrys {
-		s.synced.ids[ent.group] = ent.commitId
-	}
 	s.OnReplay(r)
 	r.Apply()
 	return nil

@@ -20,6 +20,7 @@ import (
 	"io"
 
 	sm "github.com/lni/dragonboat/v4/statemachine"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
@@ -101,29 +102,29 @@ func tagMatch(cmd []byte, expectedTag uint16) bool {
 }
 
 type stateMachine struct {
-	shardID        uint64
-	replicaID      uint64
-	Index          uint64
-	LeaseHolderID  uint64
-	TruncatedIndex uint64
-	LeaseHistory   map[uint64]uint64 // log index -> truncate index
+	shardID   uint64
+	replicaID uint64
+	state     pb.RSMState
 }
 
 var _ (sm.IStateMachine) = (*stateMachine)(nil)
 
 func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
-	return &stateMachine{
-		shardID:      shardID,
-		replicaID:    replicaID,
+	state := pb.RSMState{
 		LeaseHistory: make(map[uint64]uint64),
+	}
+	return &stateMachine{
+		shardID:   shardID,
+		replicaID: replicaID,
+		state:     state,
 	}
 }
 
 func (s *stateMachine) truncateLeaseHistory(index uint64) {
 	_, index = s.getLeaseHistory(index)
-	for key := range s.LeaseHistory {
+	for key := range s.state.LeaseHistory {
 		if key < index {
-			delete(s.LeaseHistory, key)
+			delete(s.state.LeaseHistory, key)
 		}
 	}
 }
@@ -131,7 +132,7 @@ func (s *stateMachine) truncateLeaseHistory(index uint64) {
 func (s *stateMachine) getLeaseHistory(index uint64) (uint64, uint64) {
 	max := uint64(0)
 	lease := uint64(0)
-	for key, val := range s.LeaseHistory {
+	for key, val := range s.state.LeaseHistory {
 		if key >= index {
 			continue
 		}
@@ -144,31 +145,31 @@ func (s *stateMachine) getLeaseHistory(index uint64) (uint64, uint64) {
 }
 
 func (s *stateMachine) handleSetLeaseHolderID(cmd []byte) sm.Result {
-	s.LeaseHolderID = parseLeaseHolderID(cmd)
-	s.LeaseHistory[s.Index] = s.LeaseHolderID
+	s.state.LeaseHolderID = parseLeaseHolderID(cmd)
+	s.state.LeaseHistory[s.state.Index] = s.state.LeaseHolderID
 	return sm.Result{}
 }
 
 func (s *stateMachine) handleTruncateIndex(cmd []byte) sm.Result {
 	index := parseTruncatedIndex(cmd)
-	if index > s.TruncatedIndex {
-		s.TruncatedIndex = index
+	if index > s.state.TruncatedIndex {
+		s.state.TruncatedIndex = index
 		s.truncateLeaseHistory(index)
 		return sm.Result{}
 	}
-	return sm.Result{Value: s.TruncatedIndex}
+	return sm.Result{Value: s.state.TruncatedIndex}
 }
 
 // handleUserUpdate returns an empty sm.Result on success or it returns a
 // sm.Result value with the Value field set to the current lease holder ID
 // to indicate rejection by mismatched lease holder ID.
 func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
-	if s.LeaseHolderID != parseLeaseHolderID(cmd) {
+	if s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
 		data := make([]byte, 8)
-		binaryEnc.PutUint64(data, s.LeaseHolderID)
+		binaryEnc.PutUint64(data, s.state.LeaseHolderID)
 		return sm.Result{Data: data}
 	}
-	return sm.Result{Value: s.Index}
+	return sm.Result{Value: s.state.Index}
 }
 
 func (s *stateMachine) Close() error {
@@ -177,7 +178,7 @@ func (s *stateMachine) Close() error {
 
 func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	cmd := e.Cmd
-	s.Index = e.Index
+	s.state.Index = e.Index
 	if isSetLeaseHolderUpdate(cmd) {
 		return s.handleSetLeaseHolderID(cmd), nil
 	} else if isSetTruncatedIndexUpdate(cmd) {
@@ -190,11 +191,11 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 	if _, ok := query.(indexQuery); ok {
-		return s.Index, nil
+		return s.state.Index, nil
 	} else if _, ok := query.(leaseHolderIDQuery); ok {
-		return s.LeaseHolderID, nil
+		return s.state.LeaseHolderID, nil
 	} else if _, ok := query.(truncatedIndexQuery); ok {
-		return s.TruncatedIndex, nil
+		return s.state.TruncatedIndex, nil
 	} else if v, ok := query.(leaseHistoryQuery); ok {
 		lease, _ := s.getLeaseHistory(v.index)
 		return lease, nil
@@ -204,12 +205,14 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
+	// FIXME: use gogoproto to marshal the state, need to figure out how to
+	// marshal to a io.Writer
 	enc := gob.NewEncoder(w)
-	return enc.Encode(s)
+	return enc.Encode(s.state)
 }
 
 func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	_ []sm.SnapshotFile, _ <-chan struct{}) error {
 	dec := gob.NewDecoder(r)
-	return dec.Decode(s)
+	return dec.Decode(&s.state)
 }

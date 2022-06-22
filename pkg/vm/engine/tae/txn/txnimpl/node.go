@@ -213,15 +213,6 @@ func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver w
 	return impl
 }
 
-func mockInsertNodeWithAppendInfo(infos []*appendInfo) *insertNode {
-	node := new(insertNode)
-	node.appends = infos
-	attrs := []int{0, 1}
-	vecs := make([]vector.IVector, 2)
-	node.data, _ = batch.NewBatch(attrs, vecs)
-	node.lsn = 1
-	return node
-}
 func (n *insertNode) GetTxn() txnif.AsyncTxn {
 	return n.table.store.txn
 }

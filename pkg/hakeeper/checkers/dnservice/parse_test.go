@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/stretchr/testify/require"
@@ -26,12 +27,12 @@ import (
 func TestParseDNState(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, dnStoreTimeout) + 1
+	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.DnStoreTimeout) + 1
 
 	// 1. no working dn stores
 	{
-		dnState := hakeeper.DNState{
-			Stores: map[string]hakeeper.DNStoreInfo{
+		dnState := hapb.DNState{
+			Stores: map[string]hapb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
 					Shards: []logservice.DNShardInfo{
@@ -69,8 +70,8 @@ func TestParseDNState(t *testing.T) {
 
 	// 2. verbose running shard replica
 	{
-		dnState := hakeeper.DNState{
-			Stores: map[string]hakeeper.DNStoreInfo{
+		dnState := hapb.DNState{
+			Stores: map[string]hapb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
 					Shards: []logservice.DNShardInfo{

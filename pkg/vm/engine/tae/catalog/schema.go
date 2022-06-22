@@ -73,6 +73,9 @@ type ColDef struct {
 	Default       Default
 }
 
+func (def *ColDef) GetName() string     { return def.Name }
+func (def *ColDef) GetType() types.Type { return def.Type }
+
 func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
 func (def *ColDef) IsPrimary() bool { return def.Primary == int8(1) }
 func (def *ColDef) IsSortKey() bool { return def.SortKey == int8(1) }
@@ -131,6 +134,18 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
+func (s *Schema) Clone() *Schema {
+	buf, err := s.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	ns := NewEmptySchema(s.Name)
+	r := bytes.NewBuffer(buf)
+	if _, err = ns.ReadFrom(r); err != nil {
+		panic(err)
+	}
+	return ns
+}
 func (s *Schema) GetSortKeyType() types.Type {
 	if s.IsSinglePK() {
 		return s.GetSingleSortKey().Type
@@ -428,6 +443,14 @@ func (s *Schema) AllTypes() []types.Type {
 		ts = append(ts, def.Type)
 	}
 	return ts
+}
+
+func (s *Schema) AllNames() []string {
+	names := make([]string, 0, len(s.ColDefs))
+	for _, def := range s.ColDefs {
+		names = append(names, def.Name)
+	}
+	return names
 }
 
 func (s *Schema) Finalize(rebuild bool) (err error) {

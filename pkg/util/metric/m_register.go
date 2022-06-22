@@ -14,10 +14,16 @@
 
 package metric
 
+var initCollectors = []Collector{
+	SQLLatencyObserverFactory,
+	StatementCounterFactory,
+	ProcessCollector,
+	HardwareStatsCollector,
+}
+
 // register all defined collector here
 func registerAllMetrics() {
-	mustRegister(SQLLatencyObserverFactory)
-	mustRegister(StatementCounterFactory)
-	mustRegister(ProcessCollector)
-	mustRegister(HardwareStatsCollector)
+	for _, c := range initCollectors {
+		mustRegister(c)
+	}
 }

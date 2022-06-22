@@ -33,9 +33,6 @@ type MemoryFS struct {
 
 var _ FileService = new(MemoryFS)
 
-//TODO
-//var _ MutableFileService = new(MemoryFS)
-
 func NewMemoryFS() (*MemoryFS, error) {
 	return &MemoryFS{
 		tree: btree.New(2),
@@ -65,6 +62,7 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 			entries = append(entries, DirEntry{
 				IsDir: isDir,
 				Name:  name,
+				Size:  item.Size,
 			})
 		}
 
