@@ -453,6 +453,10 @@ func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, ski
 		}
 		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
 		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Scheduler)
+		if skipConflict && err != nil {
+			_ = txn.Rollback()
+			continue
+		}
 		assert.NoError(t, err)
 		err = task.OnExec()
 		if skipConflict {
