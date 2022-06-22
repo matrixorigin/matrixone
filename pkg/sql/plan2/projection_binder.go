@@ -15,7 +15,6 @@
 package plan2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -72,7 +71,7 @@ func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, 
 }
 
 func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.WindowingError, "window functions not yet supported")
+	return nil, errors.New("", "window functions will be supported in future version")
 }
 
 func (b *ProjectionBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {

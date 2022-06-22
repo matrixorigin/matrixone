@@ -17,7 +17,6 @@ package plan2
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
@@ -48,7 +47,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 	subCtx := builder.ctxByNode[subId]
 
 	//if subquery.Typ == plan.SubqueryRef_SCALAR && !subCtx.hasSingleRow {
-	//	return 0, nil, errors.New(errno.InternalError, "runtime scalar subquery not yet supported")
+	//	return 0, nil, errors.New("", "runtime scalar subquery will be supported in future version")
 	//}
 
 	subId, preds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
@@ -59,7 +58,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("correlated columns in %s subquery deeper than 1 level not yet supported", subquery.Typ.String()))
+		return 0, nil, errors.New("", fmt.Sprintf("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String()))
 	}
 
 	alwaysTrue := &plan.Expr{
@@ -258,7 +257,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	default:
-		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("%s subquery not supported", subquery.Typ.String()))
+		return 0, nil, errors.New("", fmt.Sprintf("%s subquery not supported", subquery.Typ.String()))
 	}
 }
 
