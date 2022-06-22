@@ -114,3 +114,5 @@ func (base *vecBase[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring
 	}
 	return
 }
+
+func (base *vecBase[T]) GetView() (view Vector) { panic("not supported") }

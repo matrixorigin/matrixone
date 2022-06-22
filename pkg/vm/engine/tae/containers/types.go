@@ -23,6 +23,7 @@ type Vector interface {
 	HasNull() bool
 	NullMask() *roaring64.Bitmap
 
+	GetView() Vector
 	Data() []byte
 	Bytes() *Bytes
 	DataWindow(offset, length int) []byte

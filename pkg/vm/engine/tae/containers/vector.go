@@ -205,3 +205,10 @@ func (vec *vector[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	return vec.impl.ForeachWindow(offset, length, op, sels)
 }
+
+func (vec *vector[T]) GetView() (view Vector) {
+	if vec.IsView() {
+		return vec
+	}
+	return newVecView(vec)
+}
