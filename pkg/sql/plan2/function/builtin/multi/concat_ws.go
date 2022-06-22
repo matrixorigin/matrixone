@@ -222,6 +222,10 @@ func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator []byte,
 	for i := range inputCleaned {
 		inputI := vector.MustBytesCols(inputCleaned[i])
 		lengthI := len(inputI.Offsets)
+		if lengthI == 0 {
+			length = 0 // this means that one column that needs to be concatenated is empty
+			break
+		}
 		if lengthI > length {
 			length = lengthI
 		}
