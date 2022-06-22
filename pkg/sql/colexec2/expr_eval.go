@@ -44,12 +44,16 @@ var (
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var vec *vector.Vector
+
+	if len(bat.Zs) == 0 {
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}), nil
+	}
+
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())})
-			nulls.Add(vec.Nsp, 0)
+			return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}), nil
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
