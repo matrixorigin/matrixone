@@ -106,3 +106,86 @@ func (c *Controller) RemoveFinishedOperator(dnState hakeeper.DNState, state hake
 		}
 	}
 }
+
+func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnState hakeeper.DNState) (commands []hakeeper.ScheduleCommand) {
+	for _, op := range ops {
+		c.operators[op.shardID] = append(c.operators[op.shardID], op)
+		step := op.Check(logState, dnState)
+		var cmd hakeeper.ScheduleCommand
+		switch st := step.(type) {
+		case AddLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.UUID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+						Epoch:     st.Epoch,
+					},
+					ChangeType: hakeeper.AddNode,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case RemoveLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.UUID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.RemoveNode,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case StartLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.UUID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.StartNode,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case StopLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.UUID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica:    hakeeper.Replica{ShardID: st.ShardID},
+					ChangeType: hakeeper.StopNode,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case AddDnReplica:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.StoreID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.AddNode,
+				},
+				ServiceType: hakeeper.DnService,
+			}
+		case RemoveDnReplica:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.StoreID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.RemoveNode,
+				},
+				ServiceType: hakeeper.DnService,
+			}
+		}
+		commands = append(commands, cmd)
+	}
+
+	return
+}
