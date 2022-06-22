@@ -158,7 +158,6 @@ func InitFuncMap() {
 	InitGtFuncMap()
 	InitLeFuncMap()
 	InitLtFuncMap()
-	InitNeFuncMap()
 }
 
 type AndFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)

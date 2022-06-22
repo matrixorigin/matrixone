@@ -1487,7 +1487,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint8],
+			Fn:          operator.NeGeneral[uint8],
 		},
 		{
 			Index:  1,
@@ -1499,7 +1499,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint16],
+			Fn:          operator.NeGeneral[uint16],
 		},
 		{
 			Index:  2,
@@ -1511,7 +1511,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint16],
+			Fn:          operator.NeGeneral[uint16],
 		},
 		{
 			Index:  3,
@@ -1523,7 +1523,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint64],
+			Fn:          operator.NeGeneral[uint64],
 		},
 		{
 			Index:  4,
@@ -1535,7 +1535,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int8],
+			Fn:          operator.NeGeneral[int8],
 		},
 		{
 			Index:  5,
@@ -1547,7 +1547,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int16],
+			Fn:          operator.NeGeneral[int16],
 		},
 		{
 			Index:  6,
@@ -1559,7 +1559,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int32],
+			Fn:          operator.NeGeneral[int32],
 		},
 		{
 			Index:  7,
@@ -1571,7 +1571,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int64],
+			Fn:          operator.NeGeneral[int64],
 		},
 		{
 			Index:  8,
@@ -1583,7 +1583,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[float32],
+			Fn:          operator.NeGeneral[float32],
 		},
 		{
 			Index:  9,
@@ -1595,7 +1595,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[float64],
+			Fn:          operator.NeGeneral[float64],
 		},
 		{
 			Index:  10,
@@ -1607,7 +1607,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Decimal64],
+			Fn:          operator.NeGeneral[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -1619,7 +1619,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Decimal128],
+			Fn:          operator.NeGeneral[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -1631,7 +1631,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[string],
+			Fn:          operator.NeString,
 		},
 		{
 			Index:  13,
@@ -1643,7 +1643,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[string],
+			Fn:          operator.NeString,
 		},
 		{
 			Index:  14,
@@ -1655,7 +1655,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Date],
+			Fn:          operator.NeGeneral[types.Date],
 		},
 		{
 			Index:  15,
@@ -1667,7 +1667,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Datetime],
+			Fn:          operator.NeGeneral[types.Datetime],
 		},
 		{
 			Index:  16,
@@ -1679,7 +1679,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[bool],
+			Fn:          nil,
 		},
 	},
 	LIKE: {
