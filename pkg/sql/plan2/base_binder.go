@@ -832,8 +832,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	if funcDef.IsAggregate() && args[0].Typ.Nullable {
-		args[0].Typ.Id = plan.Type_TypeId(funcDef.ReturnTyp)
+	if funcDef.IsAggregate() {
+		if constExpr, ok := args[0].Expr.(*plan.Expr_C); ok && constExpr.C.Isnull {
+			args[0].Typ.Id = plan.Type_TypeId(funcDef.ReturnTyp)
+		}
 	}
 	if argsCastType != nil {
 		if len(argsCastType) != argsLength {
