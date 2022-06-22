@@ -199,10 +199,14 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 }
 
 func toConstVector[T any](v *Vector, row int) *Vector {
+	nsp := new(nulls.Nulls)
+	if nulls.Contains(v.Nsp, uint64(row)) {
+		nulls.Add(nsp, 0)
+	}
 	return &Vector{
+		Nsp:     nsp,
 		IsConst: true,
 		Typ:     v.Typ,
-		Nsp:     &nulls.Nulls{},
 		Col:     []T{v.Col.([]T)[row]},
 	}
 }
