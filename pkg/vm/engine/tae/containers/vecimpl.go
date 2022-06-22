@@ -128,7 +128,7 @@ func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels 
 					v = elem
 				}
 				if err = op(v, i); err != nil {
-					return
+					break
 				}
 			}
 		} else {
@@ -147,9 +147,34 @@ func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels 
 					v = slice[int(idx)-offset]
 				}
 				if err = op(v, int(idx)); err != nil {
-					return
+					break
 				}
 			}
+		}
+		return
+	}
+
+	if sels == nil || sels.IsEmpty() {
+		for i := offset; i < offset+length; i++ {
+			elem := impl.Get(i)
+			if err = op(elem, i); err != nil {
+				break
+			}
+		}
+		return
+	}
+
+	idxes := sels.ToArray()
+	end := offset + length
+	for _, idx := range idxes {
+		if int(idx) < offset {
+			continue
+		} else if int(idx) >= end {
+			break
+		}
+		elem := impl.Get(int(idx))
+		if err = op(elem, int(idx)); err != nil {
+			break
 		}
 	}
 	return

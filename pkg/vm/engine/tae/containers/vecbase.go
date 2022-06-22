@@ -70,7 +70,7 @@ func (base *vecBase[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring
 		if sels == nil || sels.IsEmpty() {
 			for i, elem := range slice {
 				if err = op(elem, i); err != nil {
-					return
+					break
 				}
 			}
 		} else {
@@ -83,9 +83,33 @@ func (base *vecBase[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring
 					break
 				}
 				if err = op(slice[int(idx)-offset], int(idx)); err != nil {
-					return
+					break
 				}
 			}
+		}
+		return
+	}
+	if sels == nil || sels.IsEmpty() {
+		for i := offset; i < offset+length; i++ {
+			elem := base.derived.stlvec.Get(i)
+			if err = op(elem, i); err != nil {
+				break
+			}
+		}
+		return
+	}
+
+	idxes := sels.ToArray()
+	end := offset + length
+	for _, idx := range idxes {
+		if int(idx) < offset {
+			continue
+		} else if int(idx) >= end {
+			break
+		}
+		elem := base.derived.stlvec.Get(int(idx))
+		if err = op(elem, int(idx)); err != nil {
+			break
 		}
 	}
 	return
