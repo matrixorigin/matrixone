@@ -122,7 +122,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
 					},
-					ChangeType: hakeeper.AddNode,
+					ChangeType: hakeeper.AddReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -134,7 +134,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.RemoveNode,
+					ChangeType: hakeeper.RemoveReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -146,7 +146,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.StartNode,
+					ChangeType: hakeeper.StartReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -155,7 +155,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 				UUID: st.UUID,
 				ConfigChange: hakeeper.ConfigChange{
 					Replica:    hakeeper.Replica{ShardID: st.ShardID},
-					ChangeType: hakeeper.StopNode,
+					ChangeType: hakeeper.StopReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -167,7 +167,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.AddNode,
+					ChangeType: hakeeper.AddReplica,
 				},
 				ServiceType: hakeeper.DnService,
 			}
@@ -179,7 +179,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.RemoveNode,
+					ChangeType: hakeeper.RemoveReplica,
 				},
 				ServiceType: hakeeper.DnService,
 			}
