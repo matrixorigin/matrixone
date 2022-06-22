@@ -53,7 +53,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}), nil
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())})
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
