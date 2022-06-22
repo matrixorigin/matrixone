@@ -14,6 +14,8 @@ type MemAllocator = stl.MemAllocator
 type Options = containers.Options
 type Bytes = stl.Bytes
 
+var NewBytes = stl.NewBytes
+
 type ItOp = func(v any, row int) error
 
 type VectorView interface {
@@ -47,6 +49,8 @@ type Vector interface {
 	IsNull(i int) bool
 	HasNull() bool
 	NullMask() *roaring64.Bitmap
+
+	ResetWithData(bs *Bytes, nulls *roaring64.Bitmap)
 
 	IsView() bool
 	GetView() VectorView

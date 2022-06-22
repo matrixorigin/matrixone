@@ -209,3 +209,10 @@ func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.B
 func (vec *vector[T]) GetView() (view VectorView) {
 	return newVecView(vec)
 }
+
+func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+	if vec.Nullable() {
+		vec.nulls = nulls
+	}
+	vec.stlvec.ReadBytes(bs, true)
+}

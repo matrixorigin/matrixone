@@ -185,4 +185,10 @@ func TestCopy1(t *testing.T) {
 	for i := 0; i < v2.Length(); i++ {
 		assert.Equal(t, v2.Get(i), GetValue(mv2, uint32(i)))
 	}
+
+	v3 := MOToVector(mv2, true)
+	t.Log(v3.String())
+	for i := 0; i < v3.Length(); i++ {
+		assert.Equal(t, v2.Get(i), v3.Get(i))
+	}
 }

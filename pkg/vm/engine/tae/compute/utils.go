@@ -15,10 +15,12 @@ package compute
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -108,6 +110,69 @@ func ApplyOpToColumnWithOffset(vec *vector.Vector, offset, length uint32, op fun
 	return nil
 }
 
+func MOToVector(v *gvec.Vector, nullable bool) containers.Vector {
+	vec := containers.MakeVector(v.Typ, nullable)
+	bs := containers.NewBytes()
+	switch v.Typ.Oid {
+	case types.Type_BOOL:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]bool), 1)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_INT8:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int8), 1)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_INT16:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int16), 2)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_INT32:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int32), 4)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_INT64:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]int64), 8)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_UINT8:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint8), 1)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_UINT16:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint16), 2)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_UINT32:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint32), 4)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_UINT64:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint64), 8)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_FLOAT32:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]float32), 4)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_FLOAT64:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]float64), 8)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_DATE:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Date), 4)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_DATETIME:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_TIMESTAMP:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_DECIMAL64:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_DECIMAL128:
+		bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+		vec.ResetWithData(bs, v.Nsp.Np)
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+		vbs := v.Col.(*types.Bytes)
+		bs.Data = vbs.Data
+		bs.Offset = vbs.Offsets
+		bs.Length = vbs.Lengths
+	default:
+		panic(fmt.Errorf("%s not supported", v.Typ.String()))
+	}
+	return vec
+}
+
 func CopyToMoVector(vec containers.Vector) *gvec.Vector {
 	mov := gvec.New(vec.GetType())
 	w := new(bytes.Buffer)
@@ -136,4 +201,20 @@ func CopyToMoVector(vec containers.Vector) *gvec.Vector {
 		panic(err)
 	}
 	return mov
+}
+
+func CopyToMoVectors(vecs []containers.Vector) []*gvec.Vector {
+	movecs := make([]*gvec.Vector, len(vecs))
+	for i := range movecs {
+		movecs[i] = CopyToMoVector(vecs[i])
+	}
+	return movecs
+}
+
+func MOToVectors(movecs []*gvec.Vector, nullables []bool) []containers.Vector {
+	vecs := make([]containers.Vector, len(movecs))
+	for i := range movecs {
+		vecs[i] = MOToVector(movecs[i], nullables[i])
+	}
+	return vecs
 }

@@ -1,31 +1,17 @@
 package model
 
 import (
-	"encoding/binary"
-
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-func PrepareHiddenData(typ types.Type, prefix []byte, startRow, length uint32) (col *movec.Vector, closer func(), err error) {
-	bufSize := uint64(typ.Size) * uint64(length)
-	n := common.GPool.Alloc(bufSize)
+func PrepareHiddenData(typ types.Type, prefix []byte, startRow, length uint32) (col containers.Vector, err error) {
+	col = containers.MakeVector(typ, false)
+	buf := make([]byte, 16)
 	offsetBuf := make([]byte, 4)
-	pos := 0
 	for i := uint32(0); i < length; i++ {
-		copy(n.Buf[pos:], prefix)
-		binary.BigEndian.PutUint32(offsetBuf, startRow+i)
-		copy(n.Buf[pos+12:], offsetBuf)
-		pos += 16
-	}
-
-	col = movec.New(typ)
-	payload := types.DecodeDecimal128Slice(n.Buf[:pos])
-	movec.SetCol(col, payload)
-	closer = func() {
-		common.GPool.Free(n)
+		EncodeHiddenKeyWithPrefix(buf, prefix, offsetBuf, startRow+i)
+		col.Append(types.DecodeFixed[types.Decimal128](buf))
 	}
 	return
 }
@@ -33,21 +19,13 @@ func PrepareHiddenData(typ types.Type, prefix []byte, startRow, length uint32) (
 type PreparedCompactedBlockData struct {
 	Columns *containers.Batch
 	SortKey containers.Vector
-	closers []func()
 }
 
 func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
-	return &PreparedCompactedBlockData{
-		closers: make([]func(), 0),
-	}
-}
-
-func (preparer *PreparedCompactedBlockData) AddCloser(fn func()) {
-	preparer.closers = append(preparer.closers, fn)
+	return &PreparedCompactedBlockData{}
 }
 
 func (preparer *PreparedCompactedBlockData) Close() {
-	for _, fn := range preparer.closers {
-		fn()
-	}
+	preparer.Columns.Close()
+	preparer.SortKey.Close()
 }
