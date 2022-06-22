@@ -18,9 +18,9 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -66,8 +66,8 @@ func (rel *TxnRelation) GetCardinality(attr string) int64                       
 func (rel *TxnRelation) Schema() any                                                          { return nil }
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                                      { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                          { return nil }
-func (rel *TxnRelation) BatchDedup(cols ...*vector.Vector) error                              { return nil }
-func (rel *TxnRelation) Append(data *batch.Batch) error                                       { return nil }
+func (rel *TxnRelation) BatchDedup(cols ...containers.Vector) error                           { return nil }
+func (rel *TxnRelation) Append(data *containers.Batch) error                                  { return nil }
 func (rel *TxnRelation) GetMeta() any                                                         { return nil }
 func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)                 { return }
 func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                              { return }
@@ -78,7 +78,7 @@ func (rel *TxnRelation) GetValueByHiddenKey(any, int) (v any, err error)        
 func (rel *TxnRelation) UpdateByHiddenKey(any, int, any) (err error)                          { return }
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, any) (err error)                   { return }
 func (rel *TxnRelation) DeleteByHiddenKey(any) (err error)                                    { return }
-func (rel *TxnRelation) DeleteByHiddenKeys(*vector.Vector) (err error)                        { return }
+func (rel *TxnRelation) DeleteByHiddenKeys(containers.Vector) (err error)                     { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32) (err error)                   { return }
 func (rel *TxnRelation) GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error) { return }
 func (rel *TxnRelation) GetValueByFilter(filter *handle.Filter, col int) (v any, err error)   { return }
@@ -98,10 +98,9 @@ func (seg *TxnSegment) MakeBlockIt() (it handle.BlockIt) { return }
 // 	return
 // }
 
-func (seg *TxnSegment) GetRelation() (rel handle.Relation)                { return }
-func (seg *TxnSegment) Append(*batch.Batch, uint32) (n uint32, err error) { return }
-func (seg *TxnSegment) Update(uint64, uint32, uint16, any) (err error)    { return }
-func (seg *TxnSegment) RangeDelete(uint64, uint32, uint32) (err error)    { return }
+func (seg *TxnSegment) GetRelation() (rel handle.Relation)             { return }
+func (seg *TxnSegment) Update(uint64, uint32, uint16, any) (err error) { return }
+func (seg *TxnSegment) RangeDelete(uint64, uint32, uint32) (err error) { return }
 
 func (seg *TxnSegment) PushDeleteOp(handle.Filter) (err error)                  { return }
 func (seg *TxnSegment) PushUpdateOp(handle.Filter, string, any) (err error)     { return }
@@ -109,7 +108,7 @@ func (seg *TxnSegment) SoftDeleteBlock(id uint64) (err error)                   
 func (seg *TxnSegment) GetBlock(id uint64) (blk handle.Block, err error)        { return }
 func (seg *TxnSegment) CreateBlock() (blk handle.Block, err error)              { return }
 func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) { return }
-func (blk *TxnSegment) BatchDedup(*vector.Vector) (err error)                   { return }
+func (blk *TxnSegment) BatchDedup(containers.Vector) (err error)                { return }
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
 func (blk *TxnBlock) GetTotalChanges() int                                  { return 0 }
@@ -131,9 +130,9 @@ func (blk *TxnBlock) GetColumnDataByName(attr string, compressed, decompressed *
 
 func (blk *TxnBlock) GetSegment() (seg handle.Segment) { return }
 
-func (blk *TxnBlock) BatchDedup(*vector.Vector) (err error)               { return }
-func (blk *TxnBlock) Append(*batch.Batch, uint32) (n uint32, err error)   { return }
-func (blk *TxnBlock) Update(uint32, uint16, any) (err error)              { return }
-func (blk *TxnBlock) RangeDelete(uint32, uint32) (err error)              { return }
-func (blk *TxnBlock) PushDeleteOp(handle.Filter) (err error)              { return }
-func (blk *TxnBlock) PushUpdateOp(handle.Filter, string, any) (err error) { return }
+func (blk *TxnBlock) BatchDedup(containers.Vector) (err error)               { return }
+func (blk *TxnBlock) Append(*containers.Batch, uint32) (n uint32, err error) { return }
+func (blk *TxnBlock) Update(uint32, uint16, any) (err error)                 { return }
+func (blk *TxnBlock) RangeDelete(uint32, uint32) (err error)                 { return }
+func (blk *TxnBlock) PushDeleteOp(handle.Filter) (err error)                 { return }
+func (blk *TxnBlock) PushUpdateOp(handle.Filter, string, any) (err error)    { return }

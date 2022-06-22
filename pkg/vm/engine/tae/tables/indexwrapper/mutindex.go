@@ -2,8 +2,7 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -37,7 +36,7 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts u
 		posArr := resp.UpdatedKeys.ToArray()
 		rowArr := resp.UpdatedRows.ToArray()
 		for i := 0; i < len(posArr); i++ {
-			key := compute.GetValue(keysCtx.Keys, posArr[i])
+			key := keysCtx.Keys.Get(int(posArr[i]))
 			if err = idx.deletes.LogDeletedKey(key, rowArr[i], ts); err != nil {
 				return
 			}
@@ -88,7 +87,7 @@ func (idx *mutableIndex) String() string {
 	return idx.art.String()
 }
 func (idx *mutableIndex) Dedup(any) error { panic("implement me") }
-func (idx *mutableIndex) BatchDedup(keys *vector.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (idx *mutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := idx.zonemap.ContainsAny(keys)
 	// 1. all keys are definitely not existed
 	if !exist {

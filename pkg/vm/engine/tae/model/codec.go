@@ -7,6 +7,7 @@ import (
 
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -116,22 +117,19 @@ func EncodeTuple(w *bytes.Buffer, row uint32, cols ...*movec.Vector) []byte {
 	return EncodeTypedVals(w, vs...)
 }
 
-// TODO: use buffer pool for cc
-func EncodeCompoundColumn(cols ...*movec.Vector) (cc *movec.Vector) {
+func EncodeCompoundColumn(cols ...containers.Vector) (cc containers.Vector) {
 	if len(cols) == 1 {
 		cc = cols[0]
 		return
 	}
-	cc = movec.New(types.CompoundKeyType)
-	var buf bytes.Buffer
-	vs := make([]any, len(cols))
-	for row := 0; row < movec.Length(cols[0]); row++ {
-		buf.Reset()
-		for i := range vs {
-			vs[i] = compute.GetValue(cols[i], uint32(row))
+	cc = containers.MakeVector(types.CompoundKeyType, false)
+	w := new(bytes.Buffer)
+	for row := 0; row < cols[0].Length(); row++ {
+		w.Reset()
+		for i := range cols {
+			_, _ = w.Write(types.EncodeValue(cols[i].Get(row), cols[i].GetType()))
 		}
-		v := EncodeTypedVals(&buf, vs...)
-		compute.AppendValue(cc, v)
+		cc.Append(w.Bytes())
 	}
 	return cc
 }

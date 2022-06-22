@@ -14,8 +14,12 @@
 package compute
 
 import (
+	"bytes"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -102,4 +106,34 @@ func ApplyOpToColumnWithOffset(vec *vector.Vector, offset, length uint32, op fun
 		panic("unsupported type")
 	}
 	return nil
+}
+
+func CopyToMoVector(vec containers.Vector) *gvec.Vector {
+	mov := gvec.New(vec.GetType())
+	w := new(bytes.Buffer)
+	_, _ = w.Write(types.EncodeType(vec.GetType()))
+	if vec.HasNull() {
+		var nullBuf []byte
+		nullBuf, _ = vec.NullMask().ToBytes()
+		_, _ = w.Write(types.EncodeFixed(uint32(len(nullBuf))))
+		_, _ = w.Write(nullBuf)
+	} else {
+		_, _ = w.Write(types.EncodeFixed(uint32(0)))
+	}
+	switch vec.GetType().Oid {
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+		_, _ = w.Write(types.EncodeFixed(uint32(vec.Length())))
+		if vec.Length() > 0 {
+			bs := vec.Bytes()
+			_, _ = w.Write(bs.LengthBuf())
+			_, _ = w.Write(bs.DataBuf())
+		}
+	default:
+		bs := vec.Data()
+		_, _ = w.Write(bs)
+	}
+	if err := mov.Read(w.Bytes()); err != nil {
+		panic(err)
+	}
+	return mov
 }

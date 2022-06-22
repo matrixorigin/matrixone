@@ -17,7 +17,6 @@ package handle
 import (
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -44,7 +43,6 @@ type SegmentReader interface {
 type SegmentWriter interface {
 	io.Closer
 	String() string
-	Append(data *batch.Batch, offset uint32) (uint32, error)
 	Update(blk uint64, row uint32, col uint16, v any) error
 	RangeDelete(blk uint64, start, end uint32) error
 

@@ -23,6 +23,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -942,7 +943,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 	return
 }
 
-func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask *roaring.Bitmap) (err error) {
+func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
 	if blk.meta.IsAppendable() {
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
@@ -961,7 +962,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 		it := keyselects.Iterator()
 		for it.HasNext() {
 			row := it.Next()
-			key := compute.GetValue(pks, row)
+			key := pks.Get(int(row))
 			if blk.index.HasDeleteFrom(key, ts) {
 				err = txnif.TxnWWConflictErr
 				break

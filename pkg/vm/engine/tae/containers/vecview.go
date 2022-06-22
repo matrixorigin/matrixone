@@ -18,31 +18,31 @@ func newVecView(impl Vector) *vecView {
 	}
 }
 
-func (vec *vecView) Equals(o Vector) bool {
-	if vec.Length() != o.Length() {
-		return false
-	}
-	if vec.GetType() != o.GetType() {
-		return false
-	}
-	if vec.Nullable() != o.Nullable() {
-		return false
-	}
-	if vec.HasNull() != o.HasNull() {
-		return false
-	}
-	if vec.HasNull() {
-		if !vec.NullMask().Equals(o.NullMask()) {
-			return false
-		}
-	}
-	for i := 0; i < vec.Length(); i++ {
-		if vec.Get(i) != o.Get(i) {
-			return false
-		}
-	}
-	return true
-}
+// func (vec *vecView) Equals(o Vector) bool {
+// 	if vec.Length() != o.Length() {
+// 		return false
+// 	}
+// 	if vec.GetType() != o.GetType() {
+// 		return false
+// 	}
+// 	if vec.Nullable() != o.Nullable() {
+// 		return false
+// 	}
+// 	if vec.HasNull() != o.HasNull() {
+// 		return false
+// 	}
+// 	if vec.HasNull() {
+// 		if !vec.NullMask().Equals(o.NullMask()) {
+// 			return false
+// 		}
+// 	}
+// 	for i := 0; i < vec.Length(); i++ {
+// 		if vec.Get(i) != o.Get(i) {
+// 			return false
+// 		}
+// 	}
+// 	return true
+// }
 func (vec *vecView) IsView() bool                { return true }
 func (vec *vecView) Nullable() bool              { return vec.impl.Nullable() }
 func (vec *vecView) IsNull(i int) bool           { return vec.impl.IsNull(i) }
@@ -53,30 +53,21 @@ func (vec *vecView) Data() []byte                { return vec.impl.Data() }
 func (vec *vecView) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
 }
-func (vec *vecView) Get(i int) (v any)    { return vec.impl.Get(i) }
-func (vec *vecView) Update(i int, v any)  { panic("cannot write on view") }
-func (vec *vecView) Delete(i int)         { panic("cannot write on view") }
-func (vec *vecView) Append(v any)         { panic("cannot write on view") }
-func (vec *vecView) AppendMany(vs ...any) { panic("cannot write on view") }
-func (vec *vecView) Extend(o Vector)      { panic("cannot write on view") }
-func (vec *vecView) Length() int          { return vec.impl.Length() }
-func (vec *vecView) Capacity() int        { return vec.impl.Capacity() }
-func (vec *vecView) Allocated() int       { return vec.impl.Allocated() }
+func (vec *vecView) Get(i int) (v any) { return vec.impl.Get(i) }
+func (vec *vecView) Length() int       { return vec.impl.Length() }
+func (vec *vecView) Capacity() int     { return vec.impl.Capacity() }
+func (vec *vecView) Allocated() int    { return vec.impl.Allocated() }
 
 func (vec *vecView) GetAllocator() MemAllocator { return vec.impl.GetAllocator() }
 func (vec *vecView) GetType() types.Type        { return vec.impl.GetType() }
 func (vec *vecView) String() string             { return vec.impl.String() }
 func (vec *vecView) Close()                     {}
 
-func (vec *vecView) Window() Vector { panic("not implemented") }
-
-func (vec *vecView) Compact(deletes *roaring.Bitmap) { panic("cannot write on view") }
+func (vec *vecView) Window() VectorView { panic("not implemented") }
 
 func (vec *vecView) WriteTo(w io.Writer) (n int64, err error) {
 	return vec.impl.WriteTo(w)
 }
-
-func (vec *vecView) ReadFrom(r io.Reader) (n int64, err error) { panic("cannot write on view") }
 
 func (vec *vecView) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 	return vec.impl.ForeachWindow(0, vec.Length(), op, sels)
@@ -85,5 +76,3 @@ func (vec *vecView) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 func (vec *vecView) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
 	return vec.impl.ForeachWindow(offset, length, op, sels)
 }
-
-func (vec *vecView) GetView() Vector { return vec }

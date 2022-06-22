@@ -206,9 +206,6 @@ func (vec *vector[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.B
 	return vec.impl.ForeachWindow(offset, length, op, sels)
 }
 
-func (vec *vector[T]) GetView() (view Vector) {
-	if vec.IsView() {
-		return vec
-	}
+func (vec *vector[T]) GetView() (view VectorView) {
 	return newVecView(vec)
 }

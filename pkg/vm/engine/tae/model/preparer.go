@@ -3,9 +3,9 @@ package model
 import (
 	"encoding/binary"
 
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -31,8 +31,8 @@ func PrepareHiddenData(typ types.Type, prefix []byte, startRow, length uint32) (
 }
 
 type PreparedCompactedBlockData struct {
-	Columns *mobat.Batch
-	SortKey *movec.Vector
+	Columns *containers.Batch
+	SortKey containers.Vector
 	closers []func()
 }
 

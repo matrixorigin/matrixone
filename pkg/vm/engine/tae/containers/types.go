@@ -16,14 +16,40 @@ type Bytes = stl.Bytes
 
 type ItOp = func(v any, row int) error
 
-type Vector interface {
+type VectorView interface {
 	IsView() bool
 	Nullable() bool
 	IsNull(i int) bool
 	HasNull() bool
 	NullMask() *roaring64.Bitmap
 
-	GetView() Vector
+	Data() []byte
+	Bytes() *Bytes
+	DataWindow(offset, length int) []byte
+	Get(i int) any
+
+	Length() int
+	Capacity() int
+	Allocated() int
+	GetAllocator() stl.MemAllocator
+	GetType() types.Type
+	String() string
+	Window() VectorView
+
+	Foreach(op ItOp, sels *roaring.Bitmap) error
+	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
+
+	WriteTo(w io.Writer) (int64, error)
+}
+
+type Vector interface {
+	Nullable() bool
+	IsNull(i int) bool
+	HasNull() bool
+	NullMask() *roaring64.Bitmap
+
+	IsView() bool
+	GetView() VectorView
 	Data() []byte
 	Bytes() *Bytes
 	DataWindow(offset, length int) []byte
@@ -47,12 +73,8 @@ type Vector interface {
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
 
-	// Marshal() ([]byte, error)
-	// Unmarshal(buf []byte) error
 	WriteTo(w io.Writer) (int64, error)
 	ReadFrom(r io.Reader) (int64, error)
-
-	// ReadVectorFromReader(r io.Reader) (Vector, int64, error)
 
 	Close()
 }
