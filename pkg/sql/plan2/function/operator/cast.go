@@ -1302,6 +1302,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	lvs := vector.MustTCols[types.Timestamp](lv)
 	resultType := rv.Typ
 	resultElementSize := int(resultType.Size)
+	precision := lv.Typ.Precision
 	if lv.IsScalar() {
 		if lv.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -1312,7 +1313,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		if _, err := typecast.TimestampToVarchar(lvs, rs); err != nil {
+		if _, err := typecast.TimestampToVarchar(lvs, rs, precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1329,7 +1330,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 		Offsets: make([]uint32, len(lvs)),
 		Lengths: make([]uint32, len(lvs)),
 	}
-	if _, err := typecast.TimestampToVarchar(lvs, rs); err != nil {
+	if _, err := typecast.TimestampToVarchar(lvs, rs, precision); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
