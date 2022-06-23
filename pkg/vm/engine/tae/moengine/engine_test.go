@@ -395,6 +395,8 @@ func TestTxn10(t *testing.T) {
 		err = rel.Write(0, bats[0], txn.GetCtx())
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
+		err = tdb.Catalog.Checkpoint(8)
+		assert.Nil(t, err)
 		tdb.Close()
 	}
 	{
