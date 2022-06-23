@@ -1,6 +1,6 @@
 # **Report Issues**
 
-Any problem is encouraged to be published when you participate in MatrixOne, and you can [report issues](https://github.com/matrixorigin/matrixone/issues/new/choose) about this problem in GitHub with relative templates and labels we suggest.  
+Any problem is encouraged to be published when you participate in MatrixOne, and you can [report issues](https://github.com/matrixorigin/matrixone/issues/new/choose) about this problem in GitHub with templates and labels we suggest.  
 This page is intended to introduce templates, labels, and precautions you will follow when you report issues.
 
 ## **Avoid Duplicated Issues**
@@ -84,8 +84,8 @@ Before asking a question, make sure you have:
 
 ## **Issue Labels**
 
-Once your issue is submitted, it will be automatically labeled with `needs-triage`, a MatrixOne maintainer will look at the issue, tag it with more suitable labels and assign it to a suitable developer. 
-If you'd like to work on the issue by yourself, you can comment `/assign` on the issue you would like to work on, you will be automatically assigned to the issue. You can then find yourself listed under Assignees section.
+Once your issue is submitted, it will automatically be labeled with `needs-triage`, a MatrixOne maintainer will look at the issue, tag it with more suitable labels, and assign it to a suitable developer. 
+If you'd like to work on the issue by yourself, you can comment `/assign` on the issue you would like to work on, and you will be automatically assigned to the issue. You can then find yourself listed under Assignees section.
 
 ## **Good First Issues**
 
