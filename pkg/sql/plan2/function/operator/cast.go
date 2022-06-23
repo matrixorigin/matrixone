@@ -522,6 +522,13 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return CastTimestampAsDate(lv, rv, proc)
 	}
 
+	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_float32 {
+		return CastDecimal64ToFloat32(lv, rv, proc)
+	}
+	if lv.Typ.Oid == types.T_decimal128 && rv.Typ.Oid == types.T_float32 {
+		return CastDecimal128ToFloat32(lv, rv, proc)
+	}
+
 	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_float64 {
 		return CastDecimal64ToFloat64(lv, rv, proc)
 	}
@@ -1684,6 +1691,60 @@ func CastDecimal128AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*v
 	rs := encoding.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := typecast.Decimal128ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal64ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := lv.Col.([]types.Decimal64)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]float32, 1)
+		if _, err := typecast.Decimal64ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat32Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal64ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal128ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := lv.Col.([]types.Decimal128)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]float32, 1)
+		if _, err := typecast.Decimal128ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat32Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal128ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)

@@ -382,6 +382,30 @@ func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, 
 	return rs, nil
 }
 
+func Decimal64ToFloat32(xs []types.Decimal64, scale int32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal64ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 32)
+		if err != nil {
+			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = float32(result)
+	}
+	return rs, nil
+}
+
+func Decimal128ToFloat32(xs []types.Decimal128, scale int32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal128ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = float32(result)
+	}
+	return rs, nil
+}
+
 func Decimal64ToFloat64(xs []types.Decimal64, scale int32, rs []float64) ([]float64, error) {
 	for i, x := range xs {
 		xStr := string(x.Decimal64ToString(scale))
