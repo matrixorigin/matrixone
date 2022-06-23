@@ -418,6 +418,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select n_name from nation where n_name != @str_var and n_regionkey > @int_var",
 		"select n_name from nation where n_name != @@global.str_var and n_regionkey > @@session.int_var",
 		"select distinct(n_name), ((abs(n_regionkey))) from nation",
+		"SET @var = abs(-1), @@session.string_var = 'aaa'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -431,6 +432,8 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
 		"select n_name from nation where n_name != @not_exist_var",
+		"SET @var = abs(a)", // can't use column
+		"SET @var = avg(2)", // can't use agg function
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
 	}

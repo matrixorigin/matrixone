@@ -308,3 +308,48 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 	// 	},
 	// }, nil
 }
+
+func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
+	var err error
+	items := make([]*plan.SetVariablesItem, len(stmt.Assignments))
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	binder := NewWhereBinder(builder, &BindContext{})
+
+	for idx, assignment := range stmt.Assignments {
+		item := &plan.SetVariablesItem{
+			System: assignment.System,
+			Global: assignment.Global,
+			Name:   assignment.Name,
+		}
+		if assignment.Value == nil {
+			return nil, errors.New("", "value is required in SET statement")
+		}
+		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		if assignment.Reserved != nil {
+			item.Reserved, err = binder.baseBindExpr(assignment.Reserved, 0, true)
+			if err != nil {
+				return nil, err
+			}
+		}
+		items[idx] = item
+	}
+
+	setVariables := &plan.SetVariables{
+		Items: items,
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Ddl{
+			Ddl: &plan.DataDefinition{
+				DdlType: plan.DataDefinition_SET_VARIABLES,
+				Definition: &plan.DataDefinition_SetVariables{
+					SetVariables: setVariables,
+				},
+			},
+		},
+	}, nil
+}
