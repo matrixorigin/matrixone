@@ -30,10 +30,10 @@ var NestringBool = []bool{false, true, true, false, true, false, true, false, tr
 type testNeFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 var testNeFuncVec = []testNeFunc{
-	NeDataValue[int8], NeDataValue[int16], NeDataValue[int32], NeDataValue[int64],
-	NeDataValue[uint8], NeDataValue[uint16], NeDataValue[uint32], NeDataValue[uint64],
-	NeDataValue[float32], NeDataValue[float64], NeDataValue[types.Date],
-	NeDataValue[types.Datetime], NeDataValue[types.Decimal64], NeDataValue[bool], NeDataValue[string],
+	NeGeneral[int8], NeGeneral[int16], NeGeneral[int32], NeGeneral[int64],
+	NeGeneral[uint8], NeGeneral[uint16], NeGeneral[uint32], NeGeneral[uint64],
+	NeGeneral[float32], NeGeneral[float64], NeGeneral[types.Date],
+	NeGeneral[types.Datetime], NeGeneral[types.Decimal64], NeGeneral[bool], NeString,
 }
 
 var NeretVec = [][]bool{
@@ -43,7 +43,6 @@ var NeretVec = [][]bool{
 
 func Test_ColNeCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
-		InitFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {

@@ -30,10 +30,10 @@ var LtstringBool = []bool{false, true, true, false, false, false, true, false, f
 type testLtFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 var testLtFuncVec = []testLtFunc{
-	LtDataValue[int8], LtDataValue[int16], LtDataValue[int32], LtDataValue[int64],
-	LtDataValue[uint8], LtDataValue[uint16], LtDataValue[uint32], LtDataValue[uint64],
-	LtDataValue[float32], LtDataValue[float64], LtDataValue[types.Date],
-	LtDataValue[types.Datetime], LtDataValue[types.Decimal64], LtDataValue[bool], LtDataValue[string],
+	LtGeneral[int8], LtGeneral[int16], LtGeneral[int32], LtGeneral[int64],
+	LtGeneral[uint8], LtGeneral[uint16], LtGeneral[uint32], LtGeneral[uint64],
+	LtGeneral[float32], LtGeneral[float64], LtGeneral[types.Date],
+	LtGeneral[types.Datetime], LtGeneral[types.Decimal64], LtBool, LtString,
 }
 
 var LtretVec = [][]bool{
@@ -43,7 +43,6 @@ var LtretVec = [][]bool{
 
 func Test_ColLtCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
-		InitFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {
