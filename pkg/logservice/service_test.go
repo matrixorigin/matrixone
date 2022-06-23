@@ -50,7 +50,7 @@ func runServiceTest(t *testing.T, fn func(*testing.T, *Service)) {
 	require.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[1] = service.ID()
-	require.NoError(t, service.store.StartReplica(1, 1, peers))
+	require.NoError(t, service.store.StartReplica(1, 1, peers, false))
 	defer func() {
 		assert.NoError(t, service.Close())
 	}()
@@ -302,7 +302,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}()
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = service1.ID()
-	assert.NoError(t, service1.store.StartReplica(1, 1, peers1))
+	assert.NoError(t, service1.store.StartReplica(1, 1, peers1, false))
 
 	service2, err := NewService(cfg2)
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}()
 	peers2 := make(map[uint64]dragonboat.Target)
 	peers2[1] = service2.ID()
-	assert.NoError(t, service2.store.StartReplica(2, 1, peers2))
+	assert.NoError(t, service2.store.StartReplica(2, 1, peers2, false))
 
 	nhID1 := service1.ID()
 	nhID2 := service2.ID()

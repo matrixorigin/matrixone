@@ -21,11 +21,14 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
 	"github.com/lni/vfs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -79,7 +82,7 @@ func getTestStore(cfg Config) (*logStore, error) {
 	}
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
-	if err := store.StartReplica(1, 2, peers); err != nil {
+	if err := store.StartReplica(1, 2, peers, false); err != nil {
 		store.Close()
 		return nil, err
 	}
@@ -94,10 +97,11 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
-	assert.NoError(t, store.StartHAKeeperReplica(2, peers))
+	assert.NoError(t, store.StartHAKeeperReplica(2, peers, false))
 	defer func() {
 		assert.NoError(t, store.Close())
 	}()
+	mustHaveReplica(t, store, hakeeper.DefaultHAKeeperShardID, 2)
 }
 
 func TestStateMachineCanBeStarted(t *testing.T) {
@@ -109,6 +113,21 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 	defer func() {
 		assert.NoError(t, store.Close())
 	}()
+	mustHaveReplica(t, store, 1, 2)
+}
+
+func TestReplicaCanBeStopped(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	cfg := getStoreTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+	store, err := getTestStore(cfg)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, store.Close())
+	}()
+	mustHaveReplica(t, store, 1, 2)
+	store.stopReplica(1, 2)
+	assert.False(t, hasReplica(store, 1, 2))
 }
 
 func runStoreTest(t *testing.T, fn func(*testing.T, *logStore)) {
@@ -243,7 +262,7 @@ func TestHAKeeperTick(t *testing.T) {
 	fn := func(t *testing.T, store *logStore) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.ID()
-		assert.NoError(t, store.StartHAKeeperReplica(1, peers))
+		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
 		store.hakeeperTick()
 	}
 	runStoreTest(t, fn)
@@ -253,8 +272,8 @@ func TestGetHeartbeatMessage(t *testing.T) {
 	fn := func(t *testing.T, store *logStore) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.ID()
-		assert.NoError(t, store.StartReplica(10, 1, peers))
-		assert.NoError(t, store.StartHAKeeperReplica(1, peers))
+		assert.NoError(t, store.StartReplica(10, 1, peers, false))
+		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
 
 		m := store.getHeartbeatMessage()
 		// hakeeper shard is included
@@ -267,7 +286,7 @@ func TestAddHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, store *logStore) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.ID()
-		assert.NoError(t, store.StartHAKeeperReplica(1, peers))
+		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
 
 		m := store.getHeartbeatMessage()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -282,4 +301,118 @@ func TestAddHeartbeat(t *testing.T) {
 		assert.NoError(t, store.AddDNStoreHeartbeat(ctx, dnMsg))
 	}
 	runStoreTest(t, fn)
+}
+
+func TestAddReplicaRejectedForInvalidCCI(t *testing.T) {
+	fn := func(t *testing.T, store *logStore) {
+		err := store.addReplica(1, 100, uuid.New().String(), 0)
+		assert.Equal(t, dragonboat.ErrRejected, err)
+	}
+	runStoreTest(t, fn)
+}
+
+func TestAddReplica(t *testing.T) {
+	fn := func(t *testing.T, store *logStore) {
+		for {
+			_, _, ok, err := store.nh.GetLeaderID(1)
+			require.NoError(t, err)
+			if ok {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		m, err := store.nh.SyncGetShardMembership(ctx, 1)
+		require.NoError(t, err)
+		err = store.addReplica(1, 100, uuid.New().String(), m.ConfigChangeID)
+		assert.NoError(t, err)
+		hb := store.getHeartbeatMessage()
+		assert.Equal(t, 2, len(hb.Replicas[0].Replicas))
+	}
+	runStoreTest(t, fn)
+}
+
+func TestRemoveReplica(t *testing.T) {
+	cfg1 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9001",
+		RaftAddress:         "127.0.0.1:9002",
+		GossipAddress:       "127.0.0.1:9011",
+		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
+	}
+	cfg1.Fill()
+	store1, err := newLogStore(cfg1)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.Close())
+	}()
+	cfg2 := Config{
+		FS:                  vfs.NewStrictMem(),
+		DeploymentID:        1,
+		RTTMillisecond:      5,
+		DataDir:             "data-1",
+		ServiceAddress:      "127.0.0.1:9006",
+		RaftAddress:         "127.0.0.1:9007",
+		GossipAddress:       "127.0.0.1:9012",
+		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
+	}
+	cfg2.Fill()
+	store2, err := newLogStore(cfg2)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store2.Close())
+	}()
+	peers1 := make(map[uint64]dragonboat.Target)
+	peers1[1] = store1.nh.ID()
+	peers1[2] = store2.nh.ID()
+	require.NoError(t, store1.StartReplica(1, 1, peers1, false))
+	peers2 := make(map[uint64]dragonboat.Target)
+	peers2[1] = store1.nh.ID()
+	peers2[2] = store2.nh.ID()
+	require.NoError(t, store2.StartReplica(1, 2, peers2, false))
+
+	for {
+		_, _, ok, err := store1.nh.GetLeaderID(1)
+		require.NoError(t, err)
+		if ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	m, err := store1.nh.SyncGetShardMembership(ctx, 1)
+	require.NoError(t, err)
+	require.NoError(t, store1.removeReplica(1, 2, m.ConfigChangeID))
+
+}
+
+func hasReplica(s *logStore, shardID uint64, replicaID uint64) bool {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			for r := range info.Replicas {
+				if r == replicaID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func mustHaveReplica(t *testing.T,
+	s *logStore, shardID uint64, replicaID uint64) {
+	for i := 0; i < 100; i++ {
+		if hasReplica(s, shardID, replicaID) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("failed to locate the replica")
 }

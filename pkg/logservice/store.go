@@ -141,12 +141,11 @@ func (l *logStore) ID() string {
 }
 
 func (l *logStore) StartHAKeeperReplica(replicaID uint64,
-	initialReplicas map[uint64]dragonboat.Target) error {
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	l.haKeeperReplicaID = replicaID
 	raftConfig := getRaftConfig(hakeeper.DefaultHAKeeperShardID, replicaID)
-	// TODO: add another API for joining
 	if err := l.nh.StartReplica(initialReplicas,
-		false, hakeeper.NewStateMachine, raftConfig); err != nil {
+		join, hakeeper.NewStateMachine, raftConfig); err != nil {
 		return err
 	}
 	l.stopper.RunWorker(func() {
@@ -156,20 +155,64 @@ func (l *logStore) StartHAKeeperReplica(replicaID uint64,
 }
 
 func (l *logStore) StartReplica(shardID uint64, replicaID uint64,
-	initialReplicas map[uint64]dragonboat.Target) error {
+	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		return ErrInvalidShardID
 	}
 	raftConfig := getRaftConfig(shardID, replicaID)
-	// TODO: add another API for joining
-	return l.nh.StartReplica(initialReplicas, false, newStateMachine, raftConfig)
+	return l.nh.StartReplica(initialReplicas, join, newStateMachine, raftConfig)
+}
+
+func (l *logStore) stopReplica(shardID uint64, replicaID uint64) error {
+	return l.nh.StopReplica(shardID, replicaID)
 }
 
 func (l *logStore) addReplica(shardID uint64, replicaID uint64,
 	target dragonboat.Target, cci uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	return l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci)
+	count := 0
+	for {
+		count++
+		if err := l.nh.SyncRequestAddReplica(ctx, shardID, replicaID, target, cci); err != nil {
+			if errors.Is(err, dragonboat.ErrShardNotReady) {
+				l.retryWait()
+				continue
+			}
+			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
+				return dragonboat.ErrTimeout
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func (l *logStore) removeReplica(shardID uint64, replicaID uint64, cci uint64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	count := 0
+	for {
+		count++
+		if err := l.nh.SyncRequestDeleteReplica(ctx, shardID, replicaID, cci); err != nil {
+			if errors.Is(err, dragonboat.ErrShardNotReady) {
+				l.retryWait()
+				continue
+			}
+			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
+				return dragonboat.ErrTimeout
+			}
+			return err
+		}
+		return nil
+	}
+}
+
+func (l *logStore) retryWait() {
+	if l.nh.NodeHostConfig().RTTMillisecond == 1 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond/2) * time.Millisecond)
 }
 
 func (l *logStore) propose(ctx context.Context,
@@ -180,7 +223,7 @@ func (l *logStore) propose(ctx context.Context,
 		result, err := l.nh.SyncPropose(ctx, session, cmd)
 		if err != nil {
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
-				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
+				l.retryWait()
 				continue
 			}
 			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
@@ -200,7 +243,7 @@ func (l *logStore) read(ctx context.Context,
 		result, err := l.nh.SyncRead(ctx, shardID, query)
 		if err != nil {
 			if errors.Is(err, dragonboat.ErrShardNotReady) {
-				time.Sleep(time.Duration(l.nh.NodeHostConfig().RTTMillisecond) * time.Millisecond)
+				l.retryWait()
 				continue
 			}
 			if errors.Is(err, dragonboat.ErrTimeoutTooSmall) && count > 1 {
