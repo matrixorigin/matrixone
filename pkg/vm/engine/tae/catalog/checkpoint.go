@@ -107,7 +107,9 @@ func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointIt
 	// 4.1 entry was deleted at|before maxTs
 	if entry.DeleteBefore(maxTs + 1) {
 		ckpEntry.AddIndex(entry.LogIndex)
-		ckpEntry.AddIndex(entry.PrevCommit.LogIndex)
+		if entry.DeleteAfter(entry.CreateAt) {
+			ckpEntry.AddIndex(entry.PrevCommit.LogIndex)
+		}
 		cloned := item.Clone()
 		entry.RUnlock()
 		ckpEntry.AddCommand(cloned.MakeLogEntry())
@@ -119,6 +121,9 @@ func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointIt
 		cloned := item.Clone()
 		entry.RUnlock()
 		ckpEntry.AddCommand(cloned.MakeLogEntry())
+		return
+	}
+	if !entry.DeleteAfter(entry.CreateAt) {
 		return
 	}
 	// 4.3 entry was deleted after maxTs

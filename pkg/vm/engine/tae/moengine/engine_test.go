@@ -1,18 +1,18 @@
 package moengine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 const (
@@ -296,4 +296,161 @@ func TestTxnRelation_Update(t *testing.T) {
 	err = rel.Update(0, updatePK, nil)
 	assert.NotNil(t, err)
 	assert.Equal(t, data.ErrUpdateUniqueKey, err)
+}
+
+func TestTxn10(t *testing.T) {
+	tdb := initDB(t, nil)
+	tae := NewEngine(tdb)
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 4
+	cnt := uint32(10)
+	rows := schema.BlockMaxRows / 2 * cnt
+	bat := catalog.MockData(schema, rows)
+	bats := compute.SplitBatch(bat, int(cnt))
+	{
+		//Create DB -> Create Table -> Drop Table -> Drop DB
+		txn, _ := tae.StartTxn(nil)
+		err := tae.Create(0, "tae", 0, txn.GetCtx())
+		assert.Nil(t, err)
+		dbase, err := tae.Database("tae", txn.GetCtx())
+		assert.Nil(t, err)
+		defs, err := SchemaToDefs(schema)
+		assert.NoError(t, err)
+		err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+		assert.Nil(t, err)
+		rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = rel.Write(0, bats[0], txn.GetCtx())
+		assert.Nil(t, err)
+		err = rel.Write(0, bats[0], txn.GetCtx())
+		assert.NotNil(t, err)
+		err = dbase.Delete(0, schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+		txn, err = tae.StartTxn(nil)
+		assert.Nil(t, err)
+		dbase, err = tae.Database("tae", txn.GetCtx())
+		assert.Nil(t, err)
+		_, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.NotNil(t, err)
+		err = tae.Delete(0, "tae", txn.GetCtx())
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+		tdb.Close()
+	}
+	{
+		//Create DB -> Create Table -> Drop Table
+		tdb, err := db.Open(tdb.Dir, nil)
+		assert.Nil(t, err)
+		tae := NewEngine(tdb)
+		txn, err := tae.StartTxn(nil)
+		assert.Nil(t, err)
+		dbase, err := tae.Database("tae", txn.GetCtx())
+		assert.NotNil(t, err)
+		err = tae.Create(0, "tae", 0, txn.GetCtx())
+		assert.Nil(t, err)
+		dbase, err = tae.Database("tae", txn.GetCtx())
+		assert.Nil(t, err)
+		defs, err := SchemaToDefs(schema)
+		assert.NoError(t, err)
+		err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+		assert.Nil(t, err)
+		rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = rel.Write(0, bats[0], txn.GetCtx())
+		assert.Nil(t, err)
+		err = dbase.Delete(0, schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+		err = tdb.Catalog.Checkpoint(6)
+		assert.Nil(t, err)
+		tdb.Close()
+	}
+	{
+		//Create Table -> Drop Table -> Create Table
+		tdb, err := db.Open(tdb.Dir, nil)
+		assert.Nil(t, err)
+		tae := NewEngine(tdb)
+		txn, err := tae.StartTxn(nil)
+		assert.Nil(t, err)
+		dbase, err := tae.Database("tae", txn.GetCtx())
+		assert.Nil(t, err)
+		_, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.NotNil(t, err)
+		defs, err := SchemaToDefs(schema)
+		assert.NoError(t, err)
+		err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+		assert.Nil(t, err)
+		rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = rel.Write(0, bats[0], txn.GetCtx())
+		assert.Nil(t, err)
+		err = dbase.Delete(0, schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+		assert.Nil(t, err)
+		rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = rel.Write(0, bats[0], txn.GetCtx())
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+		tdb.Close()
+	}
+	{
+		//Drop Table -> Create Table -> Drop Table -> Create Table -> Drop Table
+		tdb, err := db.Open(tdb.Dir, nil)
+		assert.Nil(t, err)
+		tae := NewEngine(tdb)
+		txn, err := tae.StartTxn(nil)
+		assert.Nil(t, err)
+		dbase, err := tae.Database("tae", txn.GetCtx())
+		assert.Nil(t, err)
+		_, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = dbase.Delete(0, schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		_, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.NotNil(t, err)
+		defs, err := SchemaToDefs(schema)
+		assert.NoError(t, err)
+		err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+		assert.Nil(t, err)
+		rel, err := dbase.Relation(schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = rel.Write(0, bats[0], txn.GetCtx())
+		assert.Nil(t, err)
+		err = dbase.Delete(0, schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		_, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.NotNil(t, err)
+		err = dbase.Create(0, schema.Name, defs, txn.GetCtx())
+		assert.Nil(t, err)
+		rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		err = rel.Write(0, bats[0], txn.GetCtx())
+		assert.Nil(t, err)
+		err = dbase.Delete(0, schema.Name, txn.GetCtx())
+		assert.Nil(t, err)
+		_, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.NotNil(t, err)
+		assert.Nil(t, txn.Commit())
+		err = tdb.Catalog.Checkpoint(10)
+		assert.Nil(t, err)
+		tdb.Close()
+	}
+	{
+		tdb, err := db.Open(tdb.Dir, nil)
+		assert.Nil(t, err)
+		tae := NewEngine(tdb)
+		txn, err := tae.StartTxn(nil)
+		assert.Nil(t, err)
+		dbase, err := tae.Database("tae", txn.GetCtx())
+		assert.Nil(t, err)
+		_, err = dbase.Relation(schema.Name, txn.GetCtx())
+		assert.NotNil(t, err)
+		assert.Nil(t, txn.Commit())
+		tdb.Close()
+	}
+	t.Log(tdb.Opts.Catalog.SimplePPString(common.PPL1))
 }
