@@ -1,18 +1,18 @@
 package moengine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 const (
@@ -296,4 +296,32 @@ func TestTxnRelation_Update(t *testing.T) {
 	err = rel.Update(0, updatePK, nil)
 	assert.NotNil(t, err)
 	assert.Equal(t, data.ErrUpdateUniqueKey, err)
+}
+
+func TestTxn10(t *testing.T) {
+	tae := initDB(t, nil)
+
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 4
+	cnt := uint32(10)
+	rows := schema.BlockMaxRows / 2 * cnt
+	bat := catalog.MockData(schema, rows)
+	bats := compute.SplitBatch(bat, int(cnt))
+	{
+		txn, _ := tae.StartTxn(nil)
+		database, _ := txn.CreateDatabase("tae")
+		rel, err := database.CreateRelation(schema)
+		assert.Nil(t, err)
+		err = rel.Append(bats[0])
+		assert.Nil(t, err)
+		_, err = database.DropRelationByName(schema.Name)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	tae.Close()
+	tae, err := db.Open(tae.Dir, nil)
+	assert.Nil(t, err)
+	tae.Close()
+	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }
