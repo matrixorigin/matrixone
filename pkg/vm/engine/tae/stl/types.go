@@ -91,4 +91,5 @@ type Vector[T any] interface {
 	// ReadFrom reads data from r until EOF and appends it to the buffer, growing
 	// the buffer as needed.
 	ReadFrom(io.Reader) (int64, error)
+	InitFromSharedBuf(buf []byte) (int64, error)
 }

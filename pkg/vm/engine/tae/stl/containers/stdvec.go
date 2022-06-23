@@ -237,6 +237,22 @@ func (vec *StdVector[T]) readBytesShared(bs *stl.Bytes) {
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
 }
 
+func (vec *StdVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {
+	sizeBuf := buf[:stl.Sizeof[uint32]()]
+	size := *(*uint32)(unsafe.Pointer(&sizeBuf[0]))
+	n = int64(stl.Sizeof[uint32]())
+	if size == 0 {
+		vec.Reset()
+		return
+	}
+	buf = buf[stl.Sizeof[uint32]():]
+	bs := stl.NewBytes()
+	bs.Data = buf[:size]
+	vec.ReadBytes(bs, true)
+	n += int64(size)
+	return
+}
+
 func (vec *StdVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	var nr int
 	sizeBuf := make([]byte, stl.Sizeof[uint32]())

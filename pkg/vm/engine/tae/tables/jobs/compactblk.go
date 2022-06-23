@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -80,7 +79,6 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
 func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.PreparedCompactedBlockData, err error) {
-	attrs := make([]string, 0, 4)
 	preparer = model.NewPreparedCompactedBlockData()
 	preparer.Columns = containers.NewBatch()
 
@@ -94,40 +92,45 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 		if err != nil {
 			return
 		}
-		vec := view.ApplyDeletes()
-		preparer.Columns.Vecs = append(preparer.Columns.Vecs, vec)
-		preparer.Columns.Attrs = append(preparer.Columns.Attrs, def.Name)
+		view.ApplyDeletes()
+		vec := view.Orhpan()
+		preparer.Columns.AddVector(def.Name, vec)
 	}
 	// Sort only if sort key is defined
 	if schema.HasSortKey() {
-		var vecs []*vector.Vector
 		var idx int
+		vecs := compute.CopyToMoVectors(preparer.Columns.Vecs)
 		if schema.IsSingleSortKey() {
-			vecs = preparer.Columns.Vecs
 			idx = schema.SortKey.Defs[0].Idx
 			preparer.SortKey = preparer.Columns.Vecs[idx]
 		} else {
-			vecs = append(vecs, preparer.Columns.Vecs...)
-			cols := make([]*vector.Vector, schema.SortKey.Size())
+			cols := make([]containers.Vector, schema.SortKey.Size())
 			for i := range cols {
 				cols[i] = preparer.Columns.Vecs[schema.SortKey.Defs[i].Idx]
 			}
 			preparer.SortKey = model.EncodeCompoundColumn(cols...)
 			idx = len(vecs)
-			vecs = append(vecs, preparer.SortKey)
+			vecs = append(vecs, compute.CopyToMoVector(preparer.SortKey))
 		}
 		if err = mergesort.SortBlockColumns(vecs, idx); err != nil {
 			return
 		}
+		nullables := make([]bool, len(vecs))
+		for i := range vecs {
+			nullables[i] = preparer.Columns.Vecs[i].Nullable()
+		}
+		preparer.Columns.Vecs = compute.MOToVectors(vecs, nullables)
 	}
 	// Prepare hidden column data
-	hidden, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, blkKey, 0, uint32(compute.LengthOfBatch(preparer.Columns)))
+	hidden, err := model.PrepareHiddenData(
+		catalog.HiddenColumnType,
+		blkKey,
+		0,
+		uint32(preparer.Columns.Length()))
 	if err != nil {
 		return
 	}
-	preparer.AddCloser(closer)
-	preparer.Columns.Vecs = append(preparer.Columns.Vecs, hidden)
-	preparer.Columns.Attrs = append(preparer.Columns.Attrs, catalog.HiddenColumnName)
+	preparer.Columns.AddVector(catalog.HiddenColumnName, hidden)
 	return
 }
 
@@ -159,7 +162,13 @@ func (task *compactBlockTask) Execute() (err error) {
 	newBlkData := newMeta.GetBlockData()
 	blockFile := newBlkData.GetBlockFile()
 
-	ioTask := NewFlushBlkTask(tasks.WaitableCtx, blockFile, task.txn.GetStartTS(), newMeta, preparer.Columns, preparer.SortKey)
+	ioTask := NewFlushBlkTask(
+		tasks.WaitableCtx,
+		blockFile,
+		task.txn.GetStartTS(),
+		newMeta,
+		preparer.Columns,
+		preparer.SortKey)
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}

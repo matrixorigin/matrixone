@@ -225,6 +225,25 @@ func (vec *StrVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 	vec.offsets.ReadBytes(bs1, share)
 }
 
+func (vec *StrVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {
+	var nr int64
+	if nr, err = vec.data.InitFromSharedBuf(buf); err != nil {
+		return
+	}
+	n += nr
+	buf = buf[nr:]
+	if nr, err = vec.offsets.InitFromSharedBuf(buf); err != nil {
+		return
+	}
+	n += nr
+	buf = buf[nr:]
+	if nr, err = vec.lengths.InitFromSharedBuf(buf); err != nil {
+		return
+	}
+	n += nr
+	return
+}
+
 func (vec *StrVector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	var nr int64
 	if nr, err = vec.data.ReadFrom(r); err != nil {

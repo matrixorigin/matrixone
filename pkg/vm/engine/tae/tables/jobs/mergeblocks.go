@@ -22,6 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -159,7 +161,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 
 	schema := task.mergedBlks[0].GetSchema()
 	var view *model.ColumnView
-	vecs := make([]*vector.Vector, 0)
+	defer view.Close()
+	vecs := make([]containers.Vector, 0)
 	rows := make([]uint32, len(task.compacted))
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
@@ -168,31 +171,36 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// 1. Prepare sort key resources
 	// If there's no sort key, use hidden
 	for i, block := range task.compacted {
-		var vec *vector.Vector
+		var vec containers.Vector
 		if !schema.HasSortKey() {
 			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil, nil); err != nil {
 				return
 			}
-			vec = view.ApplyDeletes()
+			view.ApplyDeletes()
+			vec = view.Orhpan()
 		} else if schema.SortKey.Size() == 1 {
 			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil, nil); err != nil {
 				return
 			}
-			vec = view.ApplyDeletes()
+			view.ApplyDeletes()
+			vec = view.Orhpan()
 		} else {
-			cols := make([]*vector.Vector, schema.SortKey.Size())
+			cols := make([]containers.Vector, schema.SortKey.Size())
 			for idx := range cols {
 				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil, nil); err != nil {
 					return
 				}
-				cols[idx] = view.ApplyDeletes()
+				view.ApplyDeletes()
+				cols[idx] = view.Orhpan()
+				defer cols[idx].Close()
 			}
 			vec = model.EncodeCompoundColumn(cols...)
 		}
+		defer vec.Close()
 		vecs = append(vecs, vec)
-		rows[i] = uint32(vector.Length(vec))
+		rows[i] = uint32(vec.Length())
 		fromAddr = append(fromAddr, uint32(length))
-		length += vector.Length(vec)
+		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
 	}
 	to := make([]uint32, 0)
@@ -213,7 +221,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	buf := node.Buf[:length]
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
-	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
+	movecs := compute.CopyToMoVectors(vecs)
+	movecs, mapping := task.mergeColumn(movecs, &sortedIdx, true, rows, to, schema.HasSortKey())
+	nullables := make([]bool, len(vecs))
+	for i := range vecs {
+		nullables[i] = vecs[i].Nullable()
+	}
+	vecs = compute.MOToVectors(movecs, nullables)
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 
@@ -227,7 +241,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// Flush sort key it correlates to only one column
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
-		length += vector.Length(vec)
+		length += vec.Length()
 		blk, err = toSegEntry.CreateNonAppendableBlock()
 		if err != nil {
 			return err
@@ -266,11 +280,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// Flush hidden column
 	hidden := schema.HiddenKey
 	for i, blk := range task.createdBlks {
-		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[i])))
+		vec, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
 		if err != nil {
 			return err
 		}
-		defer closer()
+		defer vec.Close()
 		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 		if err != nil {
@@ -288,14 +302,18 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			continue
 		}
 		vecs = vecs[:0]
-		for _, block := range task.compacted {
+		nullables = nullables[:0]
+		for i, block := range task.compacted {
 			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
-			vec := view.ApplyDeletes()
-			vecs = append(vecs, vec)
+			view.ApplyDeletes()
+			vecs = append(vecs, view.Orhpan())
+			nullables = append(nullables, vecs[i].Nullable())
 		}
-		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
+		movecs = compute.CopyToMoVectors(vecs)
+		movecs, _ = task.mergeColumn(movecs, &sortedIdx, false, rows, to, schema.HasSortKey())
+		vecs = compute.MOToVectors(movecs, nullables)
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
 			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)

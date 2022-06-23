@@ -19,7 +19,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -82,7 +81,7 @@ type Block interface {
 
 	CheckpointWALClosure(endTs uint64) tasks.FuncT
 	SyncBlockDataClosure(ts uint64, rows uint32) tasks.FuncT
-	FlushColumnDataClosure(ts uint64, colIdx int, colData *vector.Vector, sync bool) tasks.FuncT
+	FlushColumnDataClosure(ts uint64, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
 	ForceCompact() error
 	Destroy() error
 	ReplayIndex() error
