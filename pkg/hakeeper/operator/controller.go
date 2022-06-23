@@ -49,12 +49,14 @@ func (c *Controller) RemoveOperator(op *Operator) bool {
 }
 
 func (c *Controller) removeOperatorLocked(op *Operator) bool {
-	curOps := c.operators[op.shardID]
-	for _, curOp := range curOps {
+	for i, curOp := range c.operators[op.shardID] {
 		if curOp == op {
-			delete(c.operators, op.shardID)
+			c.operators[op.shardID] = append(c.operators[op.shardID][:i], c.operators[op.shardID][i+1:]...)
+			if len(c.operators[op.shardID]) == 0 {
+				delete(c.operators, op.shardID)
+			}
+			return true
 		}
-		return true
 	}
 	return false
 }
