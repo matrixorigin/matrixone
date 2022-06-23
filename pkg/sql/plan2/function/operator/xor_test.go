@@ -26,7 +26,7 @@ func Test_ColXorCol(t *testing.T) {
 		if !ok {
 			log.Fatal(errors.New("the return vec type is not right"))
 		}
-		compVec := []bool{false, true, true, true, false, false, true, false, false}
+		compVec := []bool{false, true, false, true, false, false, false, false, false}
 		for i := 0; i < len(data); i++ {
 			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
@@ -55,7 +55,7 @@ func Test_ColXorConst(t *testing.T) {
 		if !ok {
 			log.Fatal(errors.New("the return vec type is not right"))
 		}
-		compVec := []bool{false, false, false, true, true, true, true, true, true}
+		compVec := []bool{false, false, false, true, true, true, false, false, false}
 		for i := 0; i < 9; i++ {
 			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
@@ -77,8 +77,9 @@ func Test_ColXorConst(t *testing.T) {
 		if !ok {
 			log.Fatal(errors.New("the return vec type is not right"))
 		}
+		compVec = []bool{true, true, true, false, false, false, false, false, false}
 		for i := 0; i < 9; i++ {
-			convey.So(data[i], convey.ShouldEqual, !compVec[i])
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 
 		for i := 0; i < len(NullPos); i++ {
@@ -171,7 +172,7 @@ func Test_ConstXorNull(t *testing.T) {
 			log.Fatal(err)
 		}
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
-		convey.So(ret.Col, convey.ShouldBeNil)
+		convey.So(ret.Col, convey.ShouldResemble, []bool{false})
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
 	})
 }
@@ -189,7 +190,6 @@ func Test_NullXorNull(t *testing.T) {
 			log.Fatal(err)
 		}
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
-		convey.So(ret.Col, convey.ShouldBeNil)
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
 	})
 }

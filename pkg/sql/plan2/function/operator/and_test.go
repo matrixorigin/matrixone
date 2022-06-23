@@ -18,7 +18,6 @@ import (
 var boolVec = []bool{true, true, true, false, false, false, false, false, false}
 
 func InitColVector() []*vector.Vector {
-	InitFuncMap()
 	vec := make([]*vector.Vector, 2)
 	vec[0] = &vector.Vector{
 		Col: boolVec,
@@ -41,7 +40,6 @@ func InitColVector() []*vector.Vector {
 }
 
 func InitConstVector() *vector.Vector {
-	InitFuncMap()
 	vec := &vector.Vector{Nsp: &nulls.Nulls{}}
 	vec.IsConst = true
 	return vec
@@ -207,7 +205,7 @@ func Test_ConstAndNull(t *testing.T) {
 			log.Fatal(err)
 		}
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
-		convey.So(ret.Col, convey.ShouldBeNil)
+		convey.So(ret.Col, convey.ShouldResemble, []bool{false})
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
 
 		vec[0].Col = []bool{false}
@@ -234,7 +232,6 @@ func Test_NullAndNull(t *testing.T) {
 			log.Fatal(err)
 		}
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
-		convey.So(ret.Col, convey.ShouldBeNil)
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
 	})
 }

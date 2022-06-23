@@ -24,7 +24,21 @@ type ref interface {
 		types.Date | types.Datetime | types.Timestamp | types.Decimal64 | types.Decimal128
 }
 
+type ref2 interface {
+	constraints.Integer | constraints.Float | string | types.Date | types.Datetime | types.Decimal64
+}
+
 func MustTCols[T ref](v *Vector) []T {
+	if t, ok := v.Col.([]T); ok {
+		return t
+	}
+	if v.Typ.Oid == types.T_any {
+		return nil
+	}
+	panic("unexpected parameter types were received")
+}
+
+func MustTCols2[T ref2](v *Vector) []T {
 	if t, ok := v.Col.([]T); ok {
 		return t
 	}
