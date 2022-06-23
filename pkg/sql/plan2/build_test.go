@@ -419,6 +419,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select n_name from nation where n_name != @@global.str_var and n_regionkey > @@session.int_var",
 		"select distinct(n_name), ((abs(n_regionkey))) from nation",
 		"SET @var = abs(-1), @@session.string_var = 'aaa'",
+		"SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
