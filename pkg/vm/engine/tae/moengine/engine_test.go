@@ -309,6 +309,7 @@ func TestTxn10(t *testing.T) {
 	bat := catalog.MockData(schema, rows)
 	bats := compute.SplitBatch(bat, int(cnt))
 	{
+		//Create DB -> Create Table -> Drop Table -> Drop DB
 		txn, _ := tae.StartTxn(nil)
 		err := tae.Create(0, "tae", 0, txn.GetCtx())
 		assert.Nil(t, err)
@@ -338,6 +339,7 @@ func TestTxn10(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	{
+		//Create DB -> Create Table -> Drop Table
 		tdb, err := db.Open(tdb.Dir, nil)
 		assert.Nil(t, err)
 		tae := NewEngine(tdb)
@@ -363,6 +365,7 @@ func TestTxn10(t *testing.T) {
 		tdb.Close()
 	}
 	{
+		//Create Table -> Drop Table -> Create Table
 		tdb, err := db.Open(tdb.Dir, nil)
 		assert.Nil(t, err)
 		tae := NewEngine(tdb)
@@ -392,6 +395,7 @@ func TestTxn10(t *testing.T) {
 		tdb.Close()
 	}
 	{
+		//Drop Table -> Create Table -> Drop Table -> Create Table -> Drop Table
 		tdb, err := db.Open(tdb.Dir, nil)
 		assert.Nil(t, err)
 		tae := NewEngine(tdb)
