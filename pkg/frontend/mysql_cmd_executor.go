@@ -2016,12 +2016,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				proto.SetUserName("")
 			}
 		case *tree.Load:
+			fromLoadData = true
 			selfHandle = true
 			err = mce.handleLoadData(st)
 			if err != nil {
 				goto handleFailed
 			}
-			fromLoadData = true
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -2280,11 +2280,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		}
 		goto handleNext
 	handleFailed:
-		//the failures due to txn begin,commit,rollback do not need to be rollback.
-		if fromTxnCommand == TxnNoCommand {
-			txnErr = txnHandler.RollbackAfterAutocommitOnly()
-			if txnErr != nil {
-				return txnErr
+		if !fromLoadData {
+			//the failures due to txn begin,commit,rollback do not need to be rollback.
+			if fromTxnCommand == TxnNoCommand {
+				txnErr = txnHandler.RollbackAfterAutocommitOnly()
+				if txnErr != nil {
+					return txnErr
+				}
 			}
 		}
 		return err
