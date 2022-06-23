@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -41,8 +40,8 @@ type BlockAppender interface {
 	GetID() *common.ID
 	GetMeta() any
 	PrepareAppend(rows uint32) (n uint32, err error)
-	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn, anode txnif.AppendNode) (txnif.AppendNode, uint32, error)
-	OnReplayInsertNode(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error)
+	ApplyAppend(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn, anode txnif.AppendNode) (txnif.AppendNode, int, error)
+	OnReplayInsertNode(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn) (node txnif.AppendNode, from int, err error)
 	IsAppendable() bool
 	OnReplayAppendNode(an txnif.AppendNode)
 }

@@ -18,10 +18,10 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -38,7 +38,7 @@ func (blk *dataBlock) SyncBlockDataClosure(ts uint64, rows uint32) tasks.FuncT {
 	}
 }
 
-func (blk *dataBlock) FlushColumnDataClosure(ts uint64, colIdx int, colData *gvec.Vector, sync bool) tasks.FuncT {
+func (blk *dataBlock) FlushColumnDataClosure(ts uint64, colIdx int, colData containers.Vector, sync bool) tasks.FuncT {
 	return func() error {
 		return blk.FlushColumnData(ts, colIdx, colData, sync)
 	}
@@ -144,7 +144,7 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs uint64) (err error) {
 	return
 }
 
-func (blk *dataBlock) FlushColumnData(ts uint64, colIdx int, colData *gvec.Vector, sync bool) (err error) {
+func (blk *dataBlock) FlushColumnData(ts uint64, colIdx int, colData containers.Vector, sync bool) (err error) {
 	if err = blk.file.WriteColumnVec(ts, colIdx, colData); err != nil {
 		return err
 	}

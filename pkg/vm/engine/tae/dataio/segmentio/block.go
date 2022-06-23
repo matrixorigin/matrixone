@@ -18,18 +18,20 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/adaptors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -238,8 +240,8 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 	return
 }
 
-func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error) {
-	bat = gbat.New(true, attrs)
+func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *containers.Batch, err error) {
+	bat = containers.NewBatch()
 	var f common.IRWFile
 	for i, colBlk := range bf.columns {
 		if f, err = colBlk.OpenDataFile(); err != nil {
@@ -251,7 +253,7 @@ func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat
 		if _, err = f.Read(buf); err != nil {
 			return
 		}
-		vec := gvec.New(colTypes[i])
+		vec := containers.MakeVector(colTypes[i], true)
 		if colBlk.data.stat.CompressAlgo() == compress.Lz4 {
 			decompress := make([]byte, colBlk.data.stat.OriginSize())
 			decompress, err = compress.Decompress(buf, decompress, compress.Lz4)
@@ -262,11 +264,13 @@ func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat
 				panic(any(fmt.Sprintf("invalid decompressed size: %d, %d is expected",
 					len(decompress), colBlk.data.stat.OriginSize())))
 			}
-			if err = vec.Read(decompress); err != nil {
+			r := bytes.NewBuffer(decompress)
+			if _, err = vec.ReadFrom(r); err != nil {
 				return
 			}
 		} else {
-			if err = vec.Read(buf); err != nil {
+			r := bytes.NewBuffer(buf)
+			if _, err = vec.ReadFrom(r); err != nil {
 				return
 			}
 		}
@@ -275,26 +279,27 @@ func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat
 	return
 }
 
-func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) (err error) {
+func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) (err error) {
 	cb, err := bf.OpenColumn(colIdx)
 	if err != nil {
 		return err
 	}
 	defer cb.Close()
 	err = cb.WriteTS(ts)
-	buf, err := vec.Show()
-	if err != nil {
-		return err
+	w := adaptors.NewBuffer(nil)
+	defer w.Close()
+	if _, err = vec.WriteTo(w); err != nil {
+		return
 	}
-	err = cb.WriteData(buf)
+	err = cb.WriteData(w.Bytes())
 	return
 }
 
-func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
+func (bf *blockFile) WriteBatch(bat *containers.Batch, ts uint64) (err error) {
 	if err = bf.WriteTS(ts); err != nil {
 		return
 	}
-	if err = bf.WriteRows(uint32(gvec.Length(bat.Vecs[0]))); err != nil {
+	if err = bf.WriteRows(uint32(bat.Length())); err != nil {
 		return
 	}
 	for colIdx := range bat.Attrs {

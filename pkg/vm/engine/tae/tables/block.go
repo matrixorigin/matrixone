@@ -29,14 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -166,7 +164,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 		}
 		keysCtx := new(index.KeysCtx)
 		err = blk.node.DoWithPin(func() (err error) {
-			var vec *movec.Vector
+			var vec containers.Vector
 			if blk.meta.GetSchema().IsSinglePK() {
 				// TODO: use mempool
 				vec, err = blk.node.GetVectorCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil, nil)
@@ -177,7 +175,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 				keysCtx.Keys = vec
 			} else {
 				sortKeys := blk.meta.GetSchema().SortKey
-				vs := make([]*movec.Vector, sortKeys.Size())
+				vs := make([]containers.Vector, sortKeys.Size())
 				for i := range vs {
 					vec, err = blk.node.GetVectorCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil, nil)
 					if err != nil {
@@ -194,7 +192,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 			return
 		}
 		keysCtx.Start = 0
-		keysCtx.Count = uint32(movec.Length(keysCtx.Keys))
+		keysCtx.Count = keysCtx.Keys.Length()
 		err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}
@@ -450,54 +448,7 @@ func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err e
 		return
 	}
 	if updateMask != nil {
-		view.UpdateMasks[colIdx] = updateMask
-		view.UpdateVals[colIdx] = updateVals
-	}
-	return
-}
-
-func (blk *dataBlock) MakeBlockView() (view *model.BlockView, err error) {
-	mvcc := blk.mvcc
-	mvcc.RLock()
-	ts := mvcc.LoadMaxVisible()
-	view = model.NewBlockView(ts)
-	for i := range blk.meta.GetSchema().ColDefs {
-		if err = blk.FillBlockView(uint16(i), view); err != nil {
-			break
-		}
-	}
-	if err != nil {
-		mvcc.RUnlock()
-		return
-	}
-	deleteChain := mvcc.GetDeleteChain()
-	n, err := deleteChain.CollectDeletesLocked(ts, true)
-	if err != nil {
-		mvcc.RUnlock()
-		return
-	}
-	dnode := n.(*updates.DeleteNode)
-	if dnode != nil {
-		view.DeleteMask = dnode.GetDeleteMaskLocked()
-	}
-	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
-	if err != nil {
-		mvcc.RUnlock()
-		return
-	}
-	if blk.node != nil {
-		attrs := make([]int, len(blk.meta.GetSchema().ColDefs))
-		vecs := make([]vector.IVector, len(blk.meta.GetSchema().ColDefs))
-		for i := range blk.meta.GetSchema().ColDefs {
-			attrs[i] = i
-			vecs[i], _ = blk.node.GetVectorView(maxRow, i)
-		}
-		view.Raw, err = batch.NewBatch(attrs, vecs)
-	}
-	mvcc.RUnlock()
-	if blk.node == nil {
-		// Load from block file
-		view.RawBatch, err = blk.file.LoadBatch(blk.meta.GetSchema().Attrs(), blk.meta.GetSchema().Types())
+		view.SetUpdates(int(colIdx), updateMask, updateVals)
 	}
 	return
 }
@@ -585,7 +536,11 @@ func (blk *dataBlock) getVectorCopy(
 
 		view = model.NewColumnView(ts, colIdx)
 		if raw {
-			view.RawVec, err = blk.node.GetVectorCopy(maxRow, colIdx, compressed, decompressed)
+			data, err := blk.node.GetVectorCopy(maxRow, colIdx, compressed, decompressed)
+			if err != nil {
+				return err
+			}
+			view.SetData(data)
 			return
 		}
 
@@ -1028,8 +983,8 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.
 	blk.mvcc.RUnlock()
 	return
 }
-func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *mobat.Batch) []*movec.Vector {
-	vs := make([]*movec.Vector, schema.GetSortKeyCnt())
+func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Batch) []containers.Vector {
+	vs := make([]containers.Vector, schema.GetSortKeyCnt())
 	for i := range vs {
 		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
 	}

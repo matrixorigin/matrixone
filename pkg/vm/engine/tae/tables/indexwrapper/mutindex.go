@@ -22,7 +22,7 @@ func NewMutableIndex(keyT types.Type) *mutableIndex {
 	}
 }
 
-func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts uint64) (err error) {
+func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -31,7 +31,7 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts u
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
 	// logutil.Infof("Post: %s", idx.art.String())
-	resp, err := idx.art.BatchInsert(keysCtx, offset, true)
+	resp, err := idx.art.BatchInsert(keysCtx, uint32(offset), true)
 	if resp != nil {
 		posArr := resp.UpdatedKeys.ToArray()
 		rowArr := resp.UpdatedRows.ToArray()

@@ -18,12 +18,12 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -178,58 +178,16 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 	return
 }
 
-func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error) {
-	bat = gbat.New(true, attrs)
-	var f common.IRWFile
-	for i, colBlk := range bf.columns {
-		if f, err = colBlk.OpenDataFile(); err != nil {
-			return
-		}
-		defer f.Unref()
-		size := f.Stat().Size()
-		buf := make([]byte, size)
-		if _, err = f.Read(buf); err != nil {
-			return
-		}
-		vec := gvec.New(colTypes[i])
-		if err = vec.Read(buf); err != nil {
-			return
-		}
-		bat.Vecs[i] = vec
-	}
-	return
+func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *containers.Batch, err error) {
+	panic("not implemented")
 }
 
-func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) (err error) {
-	cb, err := bf.OpenColumn(colIdx)
-	if err != nil {
-		return err
-	}
-	defer cb.Close()
-	if err = cb.WriteTS(ts); err != nil {
-		return
-	}
-	buf, err := vec.Show()
-	if err != nil {
-		return err
-	}
-	err = cb.WriteData(buf)
-	return
+func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) (err error) {
+	panic("not implemented")
 }
 
-func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
-	if err = bf.WriteTS(ts); err != nil {
-		return
-	}
-	if err = bf.WriteRows(uint32(gvec.Length(bat.Vecs[0]))); err != nil {
-		return
-	}
-	for colIdx := range bat.Attrs {
-		if err = bf.WriteColumnVec(ts, colIdx, bat.Vecs[colIdx]); err != nil {
-			return
-		}
-	}
-	return
+func (bf *blockFile) WriteBatch(bat *containers.Batch, ts uint64) (err error) {
+	panic("not implemented")
 }
 
 func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {

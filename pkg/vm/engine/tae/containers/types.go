@@ -1,6 +1,7 @@
 package containers
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -57,6 +58,7 @@ type Vector interface {
 	GetView() VectorView
 	Data() []byte
 	Bytes() *Bytes
+	Slice() any
 	DataWindow(offset, length int) []byte
 	Get(i int) any
 	Update(i int, v any)
@@ -81,7 +83,7 @@ type Vector interface {
 	WriteTo(w io.Writer) (int64, error)
 	ReadFrom(r io.Reader) (int64, error)
 
-	ReadFromFile(common.IVFile) error
+	ReadFromFile(common.IVFile, *bytes.Buffer) error
 
 	Close()
 }

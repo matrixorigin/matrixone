@@ -17,7 +17,7 @@ package handle
 import (
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type SegmentIt interface {
@@ -37,7 +37,7 @@ type SegmentReader interface {
 	GetBlock(id uint64) (Block, error)
 	GetRelation() Relation
 
-	BatchDedup(col *vector.Vector) error
+	BatchDedup(pks containers.Vector) error
 }
 
 type SegmentWriter interface {

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
@@ -747,7 +748,7 @@ func GetOffsetWithFunc[T any](
 	val T,
 	compare func(a, b T) int64,
 	skipmask *roaring.Bitmap,
-) (offset uint32, exist bool) {
+) (offset int, exist bool) {
 	start, end := 0, len(vals)-1
 	var mid int
 	for start <= end {
@@ -761,7 +762,7 @@ func GetOffsetWithFunc[T any](
 			if skipmask != nil && skipmask.Contains(uint32(mid)) {
 				return
 			}
-			offset = uint32(mid)
+			offset = mid
 			exist = true
 			return
 		}
@@ -769,7 +770,7 @@ func GetOffsetWithFunc[T any](
 	return
 }
 
-func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (offset uint32, exist bool) {
+func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (offset int, exist bool) {
 	column := vs.([]T)
 	val := v.(T)
 	start, end := 0, len(column)-1
@@ -784,7 +785,7 @@ func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (
 			if skipmask != nil && skipmask.Contains(uint32(mid)) {
 				return
 			}
-			offset = uint32(mid)
+			offset = mid
 			exist = true
 			return
 		}
@@ -792,52 +793,52 @@ func GetOffsetOfOrdered[T types.OrderedT](vs, v any, skipmask *roaring.Bitmap) (
 	return
 }
 
-func GetOffsetByVal(data *gvec.Vector, v any, skipmask *roaring.Bitmap) (offset uint32, exist bool) {
-	switch data.Typ.Oid {
+func GetOffsetByVal(data containers.Vector, v any, skipmask *roaring.Bitmap) (offset int, exist bool) {
+	switch data.GetType().Oid {
 	case types.Type_BOOL:
-		return GetOffsetWithFunc[bool](data.Col.([]bool), v.(bool), CompareBool, skipmask)
+		return GetOffsetWithFunc[bool](data.Slice().([]bool), v.(bool), CompareBool, skipmask)
 	case types.Type_INT8:
-		return GetOffsetOfOrdered[int8](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[int8](data.Slice(), v, skipmask)
 	case types.Type_INT16:
-		return GetOffsetOfOrdered[int16](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[int16](data.Slice(), v, skipmask)
 	case types.Type_INT32:
-		return GetOffsetOfOrdered[int32](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[int32](data.Slice(), v, skipmask)
 	case types.Type_INT64:
-		return GetOffsetOfOrdered[int64](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[int64](data.Slice(), v, skipmask)
 	case types.Type_UINT8:
-		return GetOffsetOfOrdered[uint8](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[uint8](data.Slice(), v, skipmask)
 	case types.Type_UINT16:
-		return GetOffsetOfOrdered[uint16](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[uint16](data.Slice(), v, skipmask)
 	case types.Type_UINT32:
-		return GetOffsetOfOrdered[uint32](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[uint32](data.Slice(), v, skipmask)
 	case types.Type_UINT64:
-		return GetOffsetOfOrdered[uint64](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[uint64](data.Slice(), v, skipmask)
 	case types.Type_FLOAT32:
-		return GetOffsetOfOrdered[float32](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[float32](data.Slice(), v, skipmask)
 	case types.Type_FLOAT64:
-		return GetOffsetOfOrdered[float64](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[float64](data.Slice(), v, skipmask)
 	case types.Type_DATE:
-		return GetOffsetOfOrdered[types.Date](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[types.Date](data.Slice(), v, skipmask)
 	case types.Type_DATETIME:
-		return GetOffsetOfOrdered[types.Datetime](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[types.Datetime](data.Slice(), v, skipmask)
 	case types.Type_TIMESTAMP:
-		return GetOffsetOfOrdered[types.Timestamp](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[types.Timestamp](data.Slice(), v, skipmask)
 	case types.Type_DECIMAL64:
-		return GetOffsetOfOrdered[types.Decimal64](data.Col, v, skipmask)
+		return GetOffsetOfOrdered[types.Decimal64](data.Slice(), v, skipmask)
 	case types.Type_DECIMAL128:
 		return GetOffsetWithFunc[types.Decimal128](
-			data.Col.([]types.Decimal128),
+			data.Slice().([]types.Decimal128),
 			v.(types.Decimal128),
 			types.CompareDecimal128Decimal128Aligned,
 			skipmask)
 	case types.Type_CHAR, types.Type_VARCHAR:
-		column := data.Col.(*types.Bytes)
+		// column := data.Slice().(*containers.Bytes)
 		val := v.([]byte)
-		start, end := 0, len(column.Offsets)-1
+		start, end := 0, data.Length()-1
 		var mid int
 		for start <= end {
 			mid = (start + end) / 2
-			res := bytes.Compare(column.Get(int64(mid)), val)
+			res := bytes.Compare(data.Get(mid).([]byte), val)
 			if res > 0 {
 				end = mid - 1
 			} else if res < 0 {
@@ -846,7 +847,7 @@ func GetOffsetByVal(data *gvec.Vector, v any, skipmask *roaring.Bitmap) (offset 
 				if skipmask != nil && skipmask.Contains(uint32(mid)) {
 					return
 				}
-				offset = uint32(mid)
+				offset = mid
 				exist = true
 				return
 			}

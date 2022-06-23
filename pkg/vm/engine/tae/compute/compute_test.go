@@ -127,12 +127,8 @@ func TestShuffleByDeletes(t *testing.T) {
 }
 
 func TestCheckRowExists(t *testing.T) {
-	typ := types.Type{
-		Oid:   types.Type_INT32,
-		Size:  4,
-		Width: 32,
-	}
-	vec := MockVec(typ, 100, 0)
+	typ := types.Type_INT32.ToType()
+	vec := containers.MockVector2(typ, 100, 0)
 	_, exist := GetOffsetByVal(vec, int32(55), nil)
 	require.True(t, exist)
 	_, exist = GetOffsetByVal(vec, int32(0), nil)

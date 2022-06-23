@@ -60,9 +60,20 @@ func (vec *vector[T]) Equals(o Vector) bool {
 			return false
 		}
 	}
+	mask := vec.NullMask()
 	for i := 0; i < vec.Length(); i++ {
-		if vec.Get(i) != o.Get(i) {
-			return false
+		if mask != nil && mask.ContainsInt(i) {
+			continue
+		}
+		var v T
+		if _, ok := any(v).([]byte); ok {
+			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
+				return false
+			}
+		} else {
+			if vec.Get(i) != o.Get(i) {
+				return false
+			}
 		}
 	}
 	return true
@@ -76,6 +87,13 @@ func (vec *vector[T]) Bytes() *Bytes               { return vec.impl.Bytes() }
 func (vec *vector[T]) Data() []byte                { return vec.impl.Data() }
 func (vec *vector[T]) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
+}
+func (vec *vector[T]) Slice() any {
+	var v T
+	if _, ok := any(v).([]byte); ok {
+		return vec.stlvec.Bytes()
+	}
+	return vec.stlvec.Slice()
 }
 func (vec *vector[T]) Get(i int) (v any)    { return vec.impl.Get(i) }
 func (vec *vector[T]) Update(i int, v any)  { vec.impl.Update(i, v) }
@@ -213,26 +231,34 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (vec *vector[T]) ReadFromFile(f common.IVFile) (err error) {
+func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
 	vec.releaseRoStorage()
 	stat := f.Stat()
-	if stat.CompressAlgo() == compress.None {
-		_, err = vec.ReadFrom(f)
-		return
-	}
-
-	size := stat.Size()
-	tmpNode := vec.GetAllocator().Alloc(int(size))
-	defer vec.GetAllocator().Free(tmpNode)
-	srcBuf := tmpNode.GetBuf()[:size]
-	if _, err = f.Read(srcBuf); err != nil {
-		return
-	}
-	n := vec.GetAllocator().Alloc(int(stat.OriginSize()))
-	buf := n.GetBuf()[:stat.OriginSize()]
-	if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
-		vec.GetAllocator().Free(n)
-		return
+	var n stl.MemNode
+	var buf []byte
+	if stat.CompressAlgo() != compress.None {
+		osize := int(stat.OriginSize())
+		size := stat.Size()
+		tmpNode := vec.GetAllocator().Alloc(int(size))
+		defer vec.GetAllocator().Free(tmpNode)
+		srcBuf := tmpNode.GetBuf()[:size]
+		if _, err = f.Read(srcBuf); err != nil {
+			return
+		}
+		if buffer == nil {
+			n = vec.GetAllocator().Alloc(osize)
+			buf = n.GetBuf()[:osize]
+		} else {
+			buffer.Reset()
+			if osize > buffer.Cap() {
+				buffer.Grow(osize)
+			}
+			buf = buffer.Bytes()[:osize]
+		}
+		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
+			vec.GetAllocator().Free(n)
+			return
+		}
 	}
 	vec.typ = types.DecodeType(buf[:types.TypeSize])
 	buf = buf[types.TypeSize:]
@@ -247,7 +273,9 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile) (err error) {
 	}
 	var nr int64
 	if nr, err = vec.stlvec.InitFromSharedBuf(buf); err != nil {
-		vec.GetAllocator().Free(n)
+		if n != nil {
+			vec.GetAllocator().Free(n)
+		}
 		return
 	}
 	buf = buf[nr:]
@@ -263,7 +291,9 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile) (err error) {
 		nulls := roaring64.New()
 		r := bytes.NewBuffer(nullBuf)
 		if _, err = nulls.ReadFrom(r); err != nil {
-			vec.GetAllocator().Free(n)
+			if n != nil {
+				vec.GetAllocator().Free(n)
+			}
 			return
 		}
 		vec.nulls = nulls

@@ -20,7 +20,7 @@ func NewImmutableIndex() *immutableIndex {
 func (index *immutableIndex) IsKeyDeleted(any, uint64) (bool, bool) { panic("not supported") }
 func (index *immutableIndex) GetActiveRow(any) (uint32, error)      { panic("not supported") }
 func (index *immutableIndex) Delete(any, uint64) error              { panic("not supported") }
-func (index *immutableIndex) BatchUpsert(*index.KeysCtx, uint32, uint64) error {
+func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, uint64) error {
 	panic("not supported")
 }
 

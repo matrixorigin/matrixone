@@ -20,8 +20,6 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -29,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -41,7 +40,7 @@ type appendableNode struct {
 	*buffer.Node
 	file      file.Block
 	block     *dataBlock
-	data      batch.IBatch
+	data      *containers.Batch
 	rows      uint32
 	mgr       base.INodeManager
 	flushTs   uint64
@@ -132,7 +131,7 @@ func (node *appendableNode) GetVectorView(maxRow uint32, colIdx int) (vec vector
 }
 
 // TODO: Apply updates and txn sels
-func (node *appendableNode) GetVectorCopy(maxRow uint32, colIdx int, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
+func (node *appendableNode) GetVectorCopy(maxRow uint32, colIdx int, compressed, decompressed *bytes.Buffer) (vec containers.Vector, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)
@@ -303,7 +302,7 @@ func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error
 	return
 }
 
-func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {
+func (node *appendableNode) ApplyAppend(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn) (from int, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)

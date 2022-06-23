@@ -15,8 +15,8 @@
 package tables
 
 import (
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -65,7 +65,7 @@ func (appender *blockAppender) OnReplayAppendNode(an txnif.AppendNode) {
 	appendNode := an.(*updates.AppendNode)
 	appender.node.block.mvcc.OnReplayAppendNode(appendNode)
 }
-func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
+func (appender *blockAppender) OnReplayInsertNode(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn) (node txnif.AppendNode, from int, err error) {
 	err = appender.node.DoWithPin(func() (err error) {
 		err = appender.node.Expand(0, func() error {
 			var err error
@@ -96,10 +96,10 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 	return
 }
 func (appender *blockAppender) ApplyAppend(
-	bat *gbat.Batch,
-	offset, length uint32,
+	bat *containers.Batch,
+	offset, length int,
 	txn txnif.AsyncTxn,
-	anode txnif.AppendNode) (node txnif.AppendNode, from uint32, err error) {
+	anode txnif.AppendNode) (node txnif.AppendNode, from int, err error) {
 	err = appender.node.DoWithPin(func() (err error) {
 		appender.node.block.mvcc.Lock()
 		defer appender.node.block.mvcc.Unlock()

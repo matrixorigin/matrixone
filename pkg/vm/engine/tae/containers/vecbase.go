@@ -1,6 +1,7 @@
 package containers
 
 import (
+	"bytes"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -26,6 +27,7 @@ func (base *vecBase[T]) Nullable() bool                              { return fa
 func (base *vecBase[T]) IsNull(i int) bool                           { return false }
 func (base *vecBase[T]) HasNull() bool                               { return false }
 func (base *vecBase[T]) NullMask() *roaring64.Bitmap                 { return base.derived.nulls }
+func (base *vecBase[T]) Slice() any                                  { panic("not supported") }
 func (base *vecBase[T]) Data() []byte                                { return base.derived.stlvec.Data() }
 func (base *vecBase[T]) DataWindow(offset, length int) []byte {
 	return base.derived.stlvec.DataWindow(offset, length)
@@ -76,7 +78,9 @@ func (base *vecBase[T]) Close() {
 }
 func (base *vecBase[T]) WriteTo(w io.Writer) (n int64, err error)  { panic("not supported") }
 func (base *vecBase[T]) ReadFrom(r io.Reader) (n int64, err error) { panic("not supported") }
-func (base *vecBase[T]) ReadFromFile(f common.IVFile) (err error)  { panic("not supported") }
+func (base *vecBase[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err error) {
+	panic("not supported")
+}
 
 func (base *vecBase[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 	panic("not supported")

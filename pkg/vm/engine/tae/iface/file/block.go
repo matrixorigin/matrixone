@@ -18,8 +18,6 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -53,8 +51,8 @@ type Block interface {
 	LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch.IBatch, err error)
 	WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
 	WriteBatch(bat *containers.Batch, ts uint64) error
-	LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error)
-	WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) error
+	LoadBatch(attrs []string, colTypes []types.Type) (bat *containers.Batch, err error)
+	WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) error
 
 	Destroy() error
 }
