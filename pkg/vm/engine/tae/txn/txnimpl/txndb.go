@@ -11,7 +11,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type txnDB struct {
@@ -44,9 +43,6 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 	if db.dropEntry != nil {
 		panic("logic error")
-	}
-	if db.createEntry != nil {
-		return txnbase.ErrDDLDropCreated
 	}
 	db.store.IncreateWriteCnt()
 	db.dropEntry = e

@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -256,9 +255,6 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
 	if tbl.dropEntry != nil {
 		panic("logic error")
-	}
-	if tbl.createEntry != nil {
-		return txnbase.ErrDDLDropCreated
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.dropEntry = e
