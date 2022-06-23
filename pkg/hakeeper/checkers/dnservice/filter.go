@@ -14,36 +14,19 @@
 
 package dnservice
 
-// Filter filter unexpected DN store
-type Filter interface {
-	Filter(store *dnStore) bool
-}
+import "github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 
 // filterOutFull filter out full DN store
 type filterOutFull struct {
 }
 
-func (f *filterOutFull) Filter(store *dnStore) bool {
-	return store.length >= store.capacity
-}
-
-// filterDnStore filters dn store according to Filters
-func filterDnStore(stores []*dnStore, filters []Filter) []*dnStore {
-	var candidates []*dnStore
-	for _, store := range stores {
-		for _, filter := range filters {
-			if filter.Filter(store) {
-				continue
-			}
-			candidates = append(candidates, store)
-		}
-	}
-	return candidates
+func (f *filterOutFull) Filter(store *util.Store) bool {
+	return store.Length >= store.Capacity
 }
 
 // availableStores selects available dn stores.
-func spareStores(working []*dnStore) []*dnStore {
-	return filterDnStore(working, []Filter{
+func spareStores(working []*util.Store) []*util.Store {
+	return util.FilterStore(working, []util.IFilter{
 		&filterOutFull{},
 	})
 }

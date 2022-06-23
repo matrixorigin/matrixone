@@ -1,7 +1,7 @@
 # **Contribute Code**
 
 MatrixOne is an open-source project maintained, improved, and extended by code contributors.  
-This document describes the conventions about development workflow, some styles and templates you need while contributing code to MatrixOne. If you encounter any problem or find some mistakes in participating in contribution to MatrixOne, please [file an issue](https://github.com/matrixorigin/matrixone/issues) in GitHub or contact us on other platforms we support.
+This document describes the conventions about development workflow, and some styles and templates you need while contributing code to MatrixOne. If you encounter any problem or find some mistakes in participating in contribution to MatrixOne, please [file an issue](https://github.com/matrixorigin/matrixone/issues) in GitHub or contact us on other platforms we support.
 
 ## **Before Contributions**
 
@@ -9,7 +9,7 @@ Before you start developing, make sure you have read [Preparation](preparation.m
 
 ## **Get familiar with style** <a name="get-familiar-with-style"></a>
 
-It's necessary to keep a consistent style for code, code comments, commit messages, and pull requests when contributing to MatrixOne. When you put together your pull request, we highly recommend you comply with the following style guides which make MatrixOne easy to review, maintain and develop.
+It's necessary to keep a consistent style for code, code comments, commit messages, and pull requests when contributing to MatrixOne. When you put together your pull request, we highly recommend you comply with the following style guides which make MatrixOne easy to review, maintain, and develop.
 
 * **Code Style**  
 The coding style suggested by the Golang community is used in MatrixOne. See the [style doc](https://github.com/golang/go/wiki/CodeReviewComments) for details.
@@ -71,6 +71,6 @@ If you still have some trouble, please refer to [GitHub Docs](https://docs.githu
 
 ## **Code review**
 
-When you open a pull request, you can assign some reviewers, or just leave it blank. And you can add some related labels so that it would be easier to recognize the PR's type/priority/etc. During reviewing, reviewers would comment on your code snippet, you could modify the code on your topic branch locally, commit the changes, and push to GitHub, the new commits would be attached to the PR automatically.
+When you open a pull request, you can assign some reviewers, or just leave it blank. And you can add some related labels so that it would be easier to recognize the PR's type/priority/etc. During review, reviewers would comment on your code snippet, and you can modify the code on your topic branch locally, commit the changes, and push to GitHub where the new commits would be attached to the PR automatically.
 
 For detailed code review tips, See [Review a pull request](review-a-pull-request.md) for details. 

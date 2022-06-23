@@ -29,7 +29,7 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	if vecs[0].IsScalarNull() || vecs[1].IsScalarNull() || vecs[2].IsScalarNull() {
 		return proc.AllocScalarNullVector(vecs[0].Typ), nil
 	}
-	vs := vecs[0].Col.(*types.Bytes) //Get the first arg
+	vs := vector.MustBytesCols(vecs[0]) //Get the first arg
 	if !vecs[1].IsScalar() && vecs[1].Typ.Oid != types.T_int64 {
 		return nil, errors.New("The second argument of the lpad function must be an int64 constant")
 	}
@@ -37,8 +37,8 @@ func Lpad(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return nil, errors.New("The third argument of the lpad function must be an string constant")
 	}
 
-	length := vecs[1].Col.([]int64)
-	padds := vecs[2].Col.(*types.Bytes)
+	length := vector.MustTCols[int64](vecs[1])
+	padds := vector.MustBytesCols(vecs[2])
 
 	if vecs[0].IsScalar() {
 		if length[0] < 0 || length[0] > int64(UINT16_MAX) {

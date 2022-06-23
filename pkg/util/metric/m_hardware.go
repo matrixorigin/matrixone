@@ -23,7 +23,7 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
-var HardwareStatsCollector = newHardwareStatsCollector(
+var HardwareStatsCollector = newBatchStatsCollector(
 	cpuTotal{},
 	cpuPercent{},
 	memUsed{},
@@ -46,7 +46,7 @@ func (c cpuTotal) Desc() *prom.Desc {
 	)
 }
 
-func (c cpuTotal) Metric(_ *stats) (prom.Metric, error) {
+func (c cpuTotal) Metric(_ *statCaches) (prom.Metric, error) {
 	cpus, _ := cpu.Times(false)
 	if len(cpus) == 0 {
 		return nil, errors.New("empty cpu times")
@@ -65,7 +65,7 @@ func (c cpuPercent) Desc() *prom.Desc {
 	)
 }
 
-func (c cpuPercent) Metric(_ *stats) (prom.Metric, error) {
+func (c cpuPercent) Metric(_ *statCaches) (prom.Metric, error) {
 	percents, err := cpu.Percent(0, false)
 	if err != nil {
 		return nil, err
@@ -75,6 +75,16 @@ func (c cpuPercent) Metric(_ *stats) (prom.Metric, error) {
 	}
 
 	return prom.MustNewConstMetric(c.Desc(), prom.GaugeValue, percents[0]), nil
+}
+
+// getMemStats get common data for memory metric
+func getMemStats() any /* *mem.VirtualMemoryStat */ {
+	if memstats, err := mem.VirtualMemory(); err == nil {
+		return memstats
+	} else {
+		logutil.Warnf("[Metric] failed to get VirtualMemory, %v", err)
+		return nil
+	}
 }
 
 // memTotal = /proc/meminfo.{MemFree + Cached}
@@ -88,11 +98,13 @@ func (m memUsed) Desc() *prom.Desc {
 	)
 }
 
-func (m memUsed) Metric(s *stats) (prom.Metric, error) {
-	if s.meminfo != nil {
-		return prom.MustNewConstMetric(m.Desc(), prom.GaugeValue, float64(s.meminfo.Used)), nil
+func (m memUsed) Metric(s *statCaches) (prom.Metric, error) {
+	val := s.getOrInsert(CacheKey_MemStats, getMemStats)
+	if val == nil {
+		return nil, errors.New("empty available memomry")
 	}
-	return nil, errors.New("empty used memomry")
+	memostats := val.(*mem.VirtualMemoryStat)
+	return prom.MustNewConstMetric(m.Desc(), prom.GaugeValue, float64(memostats.Used)), nil
 }
 
 // memAail = /proc/meminfo.MemAvailable
@@ -106,64 +118,11 @@ func (m memAvail) Desc() *prom.Desc {
 	)
 }
 
-func (m memAvail) Metric(s *stats) (prom.Metric, error) {
-	if s.meminfo != nil {
-		return prom.MustNewConstMetric(m.Desc(), prom.GaugeValue, float64(s.meminfo.Available)), nil
+func (m memAvail) Metric(s *statCaches) (prom.Metric, error) {
+	val := s.getOrInsert(CacheKey_MemStats, getMemStats)
+	if val == nil {
+		return nil, errors.New("empty available memomry")
 	}
-	return nil, errors.New("empty available memomry")
-}
-
-// Stats is some system values can be collected by a few function calls.
-// one stats may spawn many metrics
-type stats struct {
-	meminfo *mem.VirtualMemoryStat
-}
-
-type simpleEntry interface {
-	Desc() *prom.Desc
-	// entry return the metric for now. it can fetch from the stats or just compute by itself
-	Metric(*stats) (prom.Metric, error)
-}
-
-type hardwareStatsCollector struct {
-	selfAsPromCollector
-	entris []simpleEntry
-}
-
-func newHardwareStatsCollector(entries ...simpleEntry) Collector {
-	c := &hardwareStatsCollector{
-		entris: entries,
-	}
-	c.init(c)
-	return c
-}
-
-func (c *hardwareStatsCollector) collectStats() *stats {
-	s := new(stats)
-
-	if memstats, err := mem.VirtualMemory(); err == nil {
-		s.meminfo = memstats
-	}
-	return s
-}
-
-// Describe returns all descriptions of the collector.
-func (c *hardwareStatsCollector) Describe(ch chan<- *prom.Desc) {
-	for _, e := range c.entris {
-		ch <- e.Desc()
-	}
-}
-
-// Collect returns the current state of all metrics of the collector.
-func (c *hardwareStatsCollector) Collect(ch chan<- prom.Metric) {
-	stats := c.collectStats()
-	for _, e := range c.entris {
-		m, err := e.Metric(stats)
-		if err != nil {
-			logutil.Warnf("[Metric] %s collect a error: %v", e.Desc().String(), err)
-		} else {
-			// as we logged already, no need to issue a InvalidMetric
-			ch <- m
-		}
-	}
+	memostats := val.(*mem.VirtualMemoryStat)
+	return prom.MustNewConstMetric(m.Desc(), prom.GaugeValue, float64(memostats.Available)), nil
 }

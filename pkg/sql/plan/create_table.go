@@ -229,9 +229,9 @@ func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, 
 		case defines.MYSQL_TYPE_DATE:
 			return &types.Type{Oid: types.T_date, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
-			return &types.Type{Oid: types.T_datetime, Size: 8, Precision: n.InternalType.Precision}, nil
+			return &types.Type{Oid: types.T_datetime, Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			return &types.Type{Oid: types.T_timestamp, Size: 8, Precision: n.InternalType.Precision}, nil
+			return &types.Type{Oid: types.T_timestamp, Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
 			if n.InternalType.DisplayWith > 18 {
 				return &types.Type{Oid: types.T_decimal128, Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil

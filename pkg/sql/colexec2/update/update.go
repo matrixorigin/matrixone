@@ -16,6 +16,7 @@ package update
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,30 +36,25 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
-
+	defer bat.Clean(proc.Mp)
 	affectedRows := uint64(batch.Length(bat))
 	// Fill vector for constant value
 	for i := range bat.Vecs {
 		if i == 0 {
 			continue
 		}
-		if bat.Vecs[i].IsScalar() {
-			if err := vector.ConstantPadding(bat.Vecs[i], affectedRows); err != nil {
-				bat.Clean(proc.Mp)
-				return false, err
-			}
-		}
+		bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
 	}
 
 	if p.PriKeyIdx != -1 {
 		// Delete old data because update primary key
 		err := p.TableSource.Delete(p.Ts, bat.GetVector(p.PriKeyIdx), p.PriKey, proc.Snapshot)
 		if err != nil {
-			bat.Clean(proc.Mp)
 			return false, err
 		}
 
 		// Reduce batch for update column
+		vector.Clean(bat.Vecs[0], proc.Mp)
 		bat.Vecs = bat.Vecs[1:]
 		bat.Attrs = append(bat.Attrs, p.UpdateAttrs...)
 		bat.Attrs = append(bat.Attrs, p.OtherAttrs...)
@@ -66,7 +62,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		// Write new data after update
 		err = p.TableSource.Write(p.Ts, bat, proc.Snapshot)
 		if err != nil {
-			bat.Clean(proc.Mp)
 			return false, err
 		}
 	} else {
@@ -77,12 +72,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		// Write new data after update
 		err := p.TableSource.Update(p.Ts, bat, proc.Snapshot)
 		if err != nil {
-			bat.Clean(proc.Mp)
 			return false, err
 		}
 	}
 
-	defer bat.Clean(proc.Mp)
 	p.M.Lock()
 	p.AffectedRows += affectedRows
 	p.M.Unlock()

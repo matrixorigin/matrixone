@@ -91,6 +91,22 @@ func TestClientAppend(t *testing.T) {
 	runClientTest(t, false, fn)
 }
 
+func TestClientAppendAlloc(t *testing.T) {
+	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+		cmd := make([]byte, 16+headerSize+8)
+		cmd = getAppendCmd(cmd, cfg.ReplicaID)
+		rand.Read(cmd[headerSize+8:])
+		ac := testing.AllocsPerRun(1000, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+			require.NoError(t, err)
+		})
+		plog.Infof("ac: %f", ac)
+	}
+	runClientTest(t, false, fn)
+}
+
 func TestClientRead(t *testing.T) {
 	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)

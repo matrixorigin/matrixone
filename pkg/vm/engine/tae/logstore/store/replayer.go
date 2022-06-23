@@ -51,24 +51,9 @@ type replayer struct {
 	//internal entry
 	ckpVersion int
 	ckpEntry   *replayEntry
-
-	//vinfo
-	// Commits     map[uint32]*common.ClosedInterval
-	// Checkpoints map[uint32]*common.ClosedIntervals
-	vinfoAddrs map[uint32]map[uint64]int
 }
 
-func (r *replayer) updateVinfoAddrs(groupId uint32, lsn uint64, offset int) {
-	m, ok := r.vinfoAddrs[groupId]
-	if !ok {
-		m = make(map[uint64]int)
-	}
-	m[lsn] = offset
-	r.vinfoAddrs[groupId] = m
-}
 func (r *replayer) updateaddrs(groupId uint32, version int, lsn uint64) {
-	if groupId == entry.GTNoop {
-	}
 	m, ok := r.addrs[groupId]
 	if !ok {
 		m = make(map[int]common.ClosedIntervals)
@@ -99,7 +84,7 @@ func newReplayer(h ApplyHandle) *replayer {
 		addrs:           make(map[uint32]map[int]common.ClosedIntervals),
 		groupLSN:        make(map[uint32]uint64),
 		tidlsnMap:       make(map[uint32]map[uint64]uint64),
-		vinfoAddrs:      make(map[uint32]map[uint64]int),
+		// vinfoAddrs:      make(map[uint32]map[uint64]int),
 	}
 }
 
@@ -153,30 +138,35 @@ type replayEntry struct {
 	entryType uint16
 	group     uint32
 	commitId  uint64
-	// isTxn     bool
-	tid uint64
-	// checkpointRange *common.ClosedInterval
-	payload []byte
-	info    any
+	tid       uint64
+	payload   []byte
+	info      any
 }
 
 func (r *replayEntry) String() string {
 	return fmt.Sprintf("%v\n", r.info)
 }
-func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
-	infobuf := e.GetInfoBuf()
-	info := entry.Unmarshal(infobuf)
-	r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver, addrInMeta bool) error {
+	v := e.GetInfo()
+	if v == nil {
+		return nil
+	}
+	info := v.(*entry.Info)
+	if addrInMeta {
+		r.version = vf.(*vFile).Id()
+	}
 	r.updateaddrs(info.Group, r.version, info.GroupLSN)
 	if e.GetType() == entry.ETFlush {
 		return nil
 	}
 	r.updateGroupLSN(info.Group, info.GroupLSN)
-	info.Info = &VFileAddress{
-		Group:   info.Group,
-		LSN:     info.GroupLSN,
-		Version: r.version,
-		Offset:  r.state.pos,
+	if !addrInMeta {
+		info.Info = &VFileAddress{
+			Group:   info.Group,
+			LSN:     info.GroupLSN,
+			Version: r.version,
+			Offset:  r.state.pos,
+		}
 	}
 	switch info.Group {
 	case entry.GTCKp:
@@ -216,7 +206,6 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 			}
 			replayEty := &replayEntry{
 				payload: make([]byte, e.GetPayloadSize()),
-				// info:    addr,
 			}
 			copy(replayEty.payload, e.GetPayload())
 			entries = append(entries, replayEty)
@@ -248,6 +237,9 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		copy(replayEty.payload, e.GetPayload())
 		r.entrys = append(r.entrys, replayEty)
 	}
+	if addrInMeta && info.Group == entry.GTUncommit {
+		return nil
+	}
 	vf.OnLogInfo(info)
 	return nil
 }
@@ -259,10 +251,10 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		r.version = vfile.version
 	}
 	current := vfile.GetState()
-	entry := entry.GetBase()
-	defer entry.Free()
+	e := entry.GetBase()
+	defer e.Free()
 
-	metaBuf := entry.GetMetaBuf()
+	metaBuf := e.GetMetaBuf()
 	_, err := vfile.Read(metaBuf)
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
@@ -274,8 +266,11 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		}
 		return err
 	}
+	if e.GetType() == entry.ETMeta {
+		return io.EOF
+	}
 
-	n, err := entry.ReadFrom(vfile)
+	n, err := e.ReadFrom(vfile)
 	if err != nil {
 		if !errors.Is(err, io.EOF) {
 			return err
@@ -287,7 +282,7 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		// }
 		// return err
 	}
-	if int(n) != entry.TotalSizeExpectMeta() {
+	if int(n) != e.TotalSizeExpectMeta() {
 		if current.pos == r.state.pos+int(n) {
 			panic("wrong wal")
 			// err2 := vfile.Truncate(int64(current.pos))
@@ -297,12 +292,131 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 			// }
 			// return io.EOF
 		} else {
-			return fmt.Errorf("payload mismatch: %d != %d", n, entry.GetPayloadSize())
+			return fmt.Errorf("payload mismatch: %d != %d", n, e.GetPayloadSize())
 		}
 	}
-	if err = r.onReplayEntry(entry, o); err != nil {
+	if err = r.onReplayEntry(e, v.(*vFile), false); err != nil {
 		return err
 	}
-	r.state.pos += entry.TotalSize()
+	r.state.pos += e.TotalSize()
 	return nil
+}
+
+func (r *replayer) MergeCkps(vfiles []VFile) {
+	for _, vf := range vfiles {
+		addrs, addrmu := vf.GetAddrs()
+		addrmu.RLock()
+		for lsn, offset := range addrs[entry.GTInternal] {
+			e, err := vf.LoadByOffset(offset)
+			r.updateGroupLSN(entry.GTInternal, lsn)
+			if err != nil {
+				panic(err)
+			}
+			err = r.onReplayEntry(e, vf.(*vFile), true)
+			e.Free()
+			if err != nil {
+				panic(err)
+			}
+		}
+		for lsn, offset := range addrs[entry.GTCKp] {
+			e, err := vf.LoadByOffset(offset)
+			r.updateGroupLSN(entry.GTCKp, lsn)
+			if err != nil {
+				panic(err)
+			}
+			err = r.onReplayEntry(e, vf.(*vFile), true)
+			e.Free()
+			if err != nil {
+				panic(err)
+			}
+		}
+		addrmu.RUnlock()
+	}
+	if r.ckpEntry != nil {
+		cmd := newEmptyInternalCmd()
+		err := cmd.Unarshal(r.ckpEntry.payload)
+		if err != nil {
+			panic(err)
+		}
+		for groupId, ckps := range cmd.checkpointing {
+			ckpInfo, ok := r.checkpointrange[groupId]
+			if !ok {
+				r.checkpointrange[groupId] = ckps
+			} else {
+				ckpInfo.MergeCheckpointInfo(ckps)
+			}
+		}
+	}
+}
+
+func (r *replayer) replayHandlerWithCkpForCommitGroups(vf VFile, o ReplayObserver) error {
+	addrMap, addrmu := vf.GetAddrs()
+	addrmu.RLock()
+	for gid, addrs := range addrMap {
+		if gid == entry.GTUncommit {
+			continue
+		}
+		for lsn, offset := range addrs {
+			r.updateGroupLSN(gid, lsn)
+			if IsCheckpointed(gid, lsn, r.checkpointrange) {
+				continue
+			}
+			e, err := vf.LoadByOffset(offset)
+			if err != nil {
+				panic(err)
+			}
+			err = r.onReplayEntry(e, vf.(*vFile), true)
+			e.Free()
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+	addrmu.RUnlock()
+	return nil
+}
+
+func (r *replayer) replayHandlerWithCkpForUCGroups(vf VFile, o ReplayObserver) error {
+	addrMap, addrmu := vf.GetAddrs()
+	addrmu.RLock()
+	defer addrmu.RUnlock()
+	gid := entry.GTUncommit
+	addrs, ok := addrMap[gid]
+	if !ok {
+		return nil
+	}
+	for lsn, offset := range addrs {
+		r.updateGroupLSN(gid, lsn)
+		gidtid := vf.GetUncommitGidTid(lsn)
+		tidLsn, ok := r.tidlsnMap[gidtid.Group]
+		if ok {
+			commitLsn, ok := tidLsn[gidtid.Tid]
+			if ok {
+				if IsCheckpointed(gidtid.Group, commitLsn, r.checkpointrange) {
+					continue
+				}
+			}
+		}
+		e, err := vf.LoadByOffset(offset)
+		if err != nil {
+			panic(err)
+		}
+		err = r.onReplayEntry(e, vf.(*vFile), true)
+		e.Free()
+		if err != nil {
+			panic(err)
+		}
+	}
+	return nil
+}
+
+func IsCheckpointed(gid uint32, lsn uint64, ckps map[uint32]*checkpointInfo) bool {
+	if gid == entry.GTCKp {
+		return true
+	}
+	ckp, ok := ckps[gid]
+	if !ok {
+		return false
+	}
+	return ckp.ranges.ContainsInterval(common.ClosedInterval{Start: lsn, End: lsn})
 }

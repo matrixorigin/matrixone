@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,9 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dnservice
+package fileservice
 
-// FIXME: placeholder
-type Operator struct {
-	Step Step
+import "context"
+
+// MutableFileService is an extension interface to FileService that allow mutation
+type MutableFileService interface {
+	FileService
+
+	// Mutate mutates file contents
+	Mutate(ctx context.Context, vector IOVector) error
 }

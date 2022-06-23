@@ -17,7 +17,6 @@ package store
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -143,7 +142,8 @@ func (vf *vFile) Close() error {
 func (vf *vFile) Commit() {
 	logutil.Infof("Committing %s\n", vf.Name())
 	vf.wg.Wait()
-	// vf.WriteMeta()
+	vf.flushWg.Wait()
+	vf.WriteMeta()
 	err := vf.Sync()
 	if err != nil {
 		panic(err)
@@ -209,13 +209,38 @@ func (vf *vFile) Sync() error {
 }
 
 func (vf *vFile) WriteMeta() {
-	buf := vf.MetatoBuf()
-	n, _ := vf.WriteAt(buf, int64(vf.size))
-	// vf.size += n
+	e := entry.GetBase()
+	defer e.Free()
+	buf, err := vf.MarshalMeta()
+	if err != nil {
+		panic(err)
+	}
+	e.SetType(entry.ETMeta)
+	err = e.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
+	n1, err := vf.WriteAt(e.GetMetaBuf(), int64(vf.size))
+	if err != nil {
+		panic(err)
+	}
+	n2, err := vf.WriteAt(e.GetPayload(), int64(vf.size))
+	if err != nil {
+		panic(err)
+	}
+	if n1+n2 != e.TotalSize() {
+		panic("logic err")
+	}
+
 	buf = make([]byte, Metasize)
-	binary.BigEndian.PutUint16(buf, uint16(n))
-	n, _ = vf.WriteAt(buf, int64(vf.size))
-	// vf.size += n
+	binary.BigEndian.PutUint16(buf, uint16(e.TotalSize()))
+	n, err := vf.WriteAt(buf, int64(vf.size))
+	if err != nil {
+		panic(err)
+	}
+	if n != 2 {
+		panic("logic err")
+	}
 }
 
 func (vf *vFile) WaitCommitted() {
@@ -294,6 +319,23 @@ func (vf *vFile) Replay(r *replayer, observer ReplayObserver) error {
 	return nil
 }
 
+func (vf *vFile) ReplayCWithCkp(r *replayer, observer ReplayObserver) error {
+	observer.OnNewEntry(vf.Id())
+	if err := r.replayHandlerWithCkpForCommitGroups(vf, vf); err != nil {
+		return err
+	}
+	vf.OnReplay(r)
+	return nil
+}
+
+func (vf *vFile) ReplayUCWithCkp(r *replayer, observer ReplayObserver) error {
+	observer.OnNewEntry(vf.Id())
+	if err := r.replayHandlerWithCkpForUCGroups(vf, vf); err != nil {
+		return err
+	}
+	vf.OnReplay(r)
+	return nil
+}
 func (vf *vFile) OnNewEntry(int) {}
 func (vf *vFile) OnLogInfo(info *entry.Info) {
 	err := vf.Log(info)
@@ -347,9 +389,15 @@ func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	return vf.readEntryAt(offset)
+}
+func (vf *vFile) LoadByOffset(offset int) (entry.Entry, error) {
+	return vf.readEntryAt(offset)
+}
+func (vf *vFile) readEntryAt(offset int) (entry.Entry, error) {
 	entry := entry.GetBase()
 	metaBuf := entry.GetMetaBuf()
-	_, err = vf.ReadAt(metaBuf, int64(offset))
+	_, err := vf.ReadAt(metaBuf, int64(offset))
 	// fmt.Printf("%p|read meta [%v,%v]\n", vf, offset, offset+n)
 	if err != nil {
 		return nil, err
@@ -357,22 +405,24 @@ func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	_, err = entry.ReadAt(vf.File, offset)
 	return entry, err
 }
-
+func (vf *vFile) OnReplayCommitted() {
+	vf.committed = 1
+}
 func (vf *vFile) readMeta() error {
 	buf := make([]byte, Metasize)
 	_, err := vf.ReadAt(buf, int64(vf.size)-int64(Metasize))
 	if err != nil {
-		return err
+		return ErrReadMetaFailed
 	}
 	size := binary.BigEndian.Uint16(buf)
 	buf = make([]byte, int(size))
 	_, err = vf.ReadAt(buf, int64(vf.size)-int64(Metasize)-int64(size))
 	if err != nil {
-		return err
+		return ErrReadMetaFailed
 	}
-	err = json.Unmarshal(buf, vf.vInfo)
+	err = vf.UnmarshalMeta(buf)
 	if err != nil {
-		return errors.New("read vfile meta failed")
+		return ErrReadMetaFailed
 	}
 	return nil
 }

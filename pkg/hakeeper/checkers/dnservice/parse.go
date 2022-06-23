@@ -15,35 +15,33 @@
 package dnservice
 
 import (
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
 const (
-	dnStoreTimeout  = 5 * time.Second
 	DnStoreCapacity = 32
 )
 
 // parseDnState parses cluster dn state.
 func parseDnState(
 	dnState hapb.DNState, currTick uint64,
-) (*clusterStores, *clusterShards) {
-	stores := newClusterStores()
+) (*util.ClusterStores, *clusterShards) {
+	stores := util.NewClusterStores()
 	shards := newClusterShards()
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
-		if hakeeper.ExpiredTick(storeInfo.Tick, dnStoreTimeout) < currTick {
+		if hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.DnStoreTimeout) < currTick {
 			expired = true
 		}
 
-		store := newDnStore(storeID, len(storeInfo.Shards), DnStoreCapacity)
+		store := util.NewStore(storeID, len(storeInfo.Shards), DnStoreCapacity)
 		if expired {
-			stores.registerExpired(store)
+			stores.RegisterExpired(store)
 		} else {
-			stores.registerWorking(store)
+			stores.RegisterWorking(store)
 		}
 
 		for _, shard := range storeInfo.Shards {
@@ -53,44 +51,6 @@ func parseDnState(
 	}
 
 	return stores, shards
-}
-
-type StoreID string
-
-const (
-	NullStoreID = StoreID("")
-)
-
-// clusterStores collects dn stores by their status.
-type clusterStores struct {
-	working []*dnStore
-	expired []*dnStore
-}
-
-func newClusterStores() *clusterStores {
-	return &clusterStores{}
-}
-
-// registerWorking collects working dn store.
-func (cs *clusterStores) registerWorking(store *dnStore) {
-	cs.working = append(cs.working, store)
-}
-
-// registerExpired collects expired dn store.
-func (cs *clusterStores) registerExpired(store *dnStore) {
-	cs.expired = append(cs.expired, store)
-}
-
-// workingStores returns all recorded working dn stores.
-// NB: the returned order isn't deterministic.
-func (cs *clusterStores) workingStores() []*dnStore {
-	return cs.working
-}
-
-// expiredStores returns all recorded expired dn stores.
-// NB: the returned order isn't deterministic.
-func (cs *clusterStores) expiredStores() []*dnStore {
-	return cs.expired
 }
 
 // clusterShards collects all dn shards.
@@ -127,21 +87,6 @@ func (cs *clusterShards) getShard(shardID uint64) (*dnShard, error) {
 		return shard, nil
 	}
 	return nil, errShardNotExist
-}
-
-// dnStore records metadata for dn store.
-type dnStore struct {
-	id       StoreID
-	length   int
-	capacity int
-}
-
-func newDnStore(storeID string, length int, capacity int) *dnStore {
-	return &dnStore{
-		id:       StoreID(storeID),
-		length:   length,
-		capacity: capacity,
-	}
 }
 
 // dnShard records metadata for dn shard.
@@ -182,7 +127,7 @@ func (s *dnShard) expiredReplicas() []*dnReplica {
 type dnReplica struct {
 	replicaID uint64
 	shardID   uint64
-	storeID   StoreID
+	storeID   util.StoreID
 }
 
 func newReplica(
@@ -191,6 +136,6 @@ func newReplica(
 	return &dnReplica{
 		replicaID: replicaID,
 		shardID:   shardID,
-		storeID:   StoreID(storeID),
+		storeID:   util.StoreID(storeID),
 	}
 }

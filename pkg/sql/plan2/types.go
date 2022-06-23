@@ -21,6 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+const (
+	JoinSideNone       int8 = 0
+	JoinSideLeft            = 1 << iota
+	JoinSideRight           = 1 << iota
+	JoinSideBoth            = JoinSideLeft | JoinSideRight
+	JoinSideCorrelated      = 1 << iota
+)
+
 type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
@@ -104,10 +112,19 @@ type QueryBuilder struct {
 	nextTag    int32
 }
 
+type CTERef struct {
+	ast        *tree.CTE
+	maskedCTEs map[string]any
+}
+
 type BindContext struct {
 	binder Binder
 
-	cteTables map[string]*plan.TableDef
+	cteByName  map[string]*CTERef
+	maskedCTEs map[string]any
+
+	cteName  string
+	headings []string
 
 	groupTag     int32
 	aggregateTag int32
@@ -119,8 +136,6 @@ type BindContext struct {
 	aggregates []*plan.Expr
 	projects   []*plan.Expr
 	results    []*plan.Expr
-
-	headings []string
 
 	groupByAst     map[string]int32
 	aggregateByAst map[string]int32
@@ -136,7 +151,8 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
-	corrCols []*plan.CorrColRef
+	isCorrelated bool
+	hasSingleRow bool
 
 	parent     *BindContext
 	leftChild  *BindContext

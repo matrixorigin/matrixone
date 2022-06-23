@@ -181,7 +181,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.IsNull[string],
+			Fn:          operator.IsStringNull,
 		},
 		{
 			Index:  13,
@@ -192,7 +192,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.IsNull[string],
+			Fn:          operator.IsStringNull,
 		},
 		{
 			Index:  14,
@@ -370,7 +370,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.IsNotNull[string],
+			Fn:          operator.IsStringNotNull,
 		},
 		{
 			Index:  13,
@@ -381,7 +381,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.IsNotNull[string],
+			Fn:          operator.IsStringNotNull,
 		},
 		{
 			Index:  14,
@@ -4572,6 +4572,15 @@ var operators = map[int][]Function{
 			Fn:          operator.CaseWhenDecimal128,
 			TypeCheckFn: operator.CwTypeCheckFn,
 		},
+		{
+			Index:       17,
+			Volatile:    true,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_timestamp,
+			Fn:          operator.CaseWhenTimestamp,
+			TypeCheckFn: operator.CwTypeCheckFn,
+		},
 	},
 	IFF: {
 		{
@@ -4725,6 +4734,15 @@ var operators = map[int][]Function{
 			Layout:      STANDARD_FUNCTION,
 			ReturnTyp:   types.T_decimal128,
 			Fn:          operator.IfDecimal128,
+			TypeCheckFn: operator.IfTypeCheckFn,
+		},
+		{
+			Index:       17,
+			Volatile:    true,
+			Flag:        plan.Function_NONE,
+			Layout:      CASE_WHEN_EXPRESSION,
+			ReturnTyp:   types.T_timestamp,
+			Fn:          operator.IfTimestamp,
 			TypeCheckFn: operator.IfTypeCheckFn,
 		},
 	},

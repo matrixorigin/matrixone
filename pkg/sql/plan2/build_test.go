@@ -397,10 +397,11 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION", //test distinct
 		"select sum(n_nationkey) as s from nation order by s",
 		"select date_add(date '2001-01-01', interval 1 day) as a",
-		"select date_sub(date '2001-01-01', interval '1 day') as a",
-		"select date_add('2001-01-01', interval '1 day') as a",
+		"select date_sub(date '2001-01-01', interval '1' day) as a",
+		"select date_add('2001-01-01', interval '1' day) as a",
 		"select n_name, count(*) from nation group by n_name order by 2 asc",
 		"select count(distinct 12)",
+		"select nullif(n_name, n_comment), ifnull(n_comment, n_name) from nation",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
@@ -436,7 +437,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
-//test jion table plan building
+//test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 
@@ -490,6 +491,36 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 		"select c_custkey2222 from (select c_custkey from CUSTOMER group by c_custkey ) a",    //column not exist
 		"select col1 from (select c_custkey from CUSTOMER group by c_custkey ) a(col1, col2)", //column length not match
 		"select c_custkey from (select c_custkey from CUSTOMER group by c_custkey) a(col1)",   //column not exist
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+//test CTE plan building
+func TestCTESqlBuilder(t *testing.T) {
+	mock := NewMockOptimizer()
+
+	// should pass
+	sqls := []string{
+		"WITH qn AS (SELECT * FROM nation) SELECT * FROM qn;",
+		"WITH qn(a, b) AS (SELECT * FROM nation) SELECT * FROM qn;",
+		"with qn0 as (select 1), qn1 as (select * from qn0), qn2 as (select 1), qn3 as (select 1 from qn1, qn2) select 1 from qn3",
+
+		`WITH qn AS (select "outer" as a)
+		SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
+		qn.a
+		FROM qn`,
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		`with qn1 as (with qn3 as (select * from qn2) select * from qn3),
+		qn2 as (select 1)
+		select * from qn1`,
+
+		`WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0),
+		qn AS (SELECT b as a FROM qn2)
+		SELECT qn.a  FROM qn`,
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -564,6 +595,7 @@ func TestSubQuery(t *testing.T) {
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		`select
 		sum(l_extendedprice) / 7.0 as avg_yearly
@@ -589,7 +621,6 @@ func TestSubQuery(t *testing.T) {
 	sqls = []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
 	}
 	runTestShouldError(mock, t, sqls)
 }

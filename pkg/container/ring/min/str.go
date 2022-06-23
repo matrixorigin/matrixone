@@ -158,8 +158,11 @@ func (r *StrRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *StrRing) Add(a interface{}, x, y int64) {
 	ar := a.(*StrRing)
-	if r.Es[x] || bytes.Compare(ar.Vs[y], r.Vs[x]) < 0 {
+	if r.Es[x] && !ar.Es[y] {
 		r.Es[x] = false
+		r.Vs[x] = ar.Vs[y]
+	} else if !r.Es[x] && !ar.Es[y] && bytes.Compare(ar.Vs[y], r.Vs[x]) < 0 {
+		// r.Es[x] = false
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y]
@@ -169,8 +172,11 @@ func (r *StrRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64)
 	ar := a.(*StrRing)
 	for i := range os {
 		j := vps[i] - 1
-		if r.Es[j] || bytes.Compare(ar.Vs[int64(i)+start], r.Vs[j]) < 0 {
+		if r.Es[j] && !ar.Es[int64(i)+start] {
 			r.Es[j] = false
+			r.Vs[j] = ar.Vs[int64(i)+start]
+		} else if !r.Es[j] && !ar.Es[int64(i)+start] && bytes.Compare(ar.Vs[int64(i)+start], r.Vs[j]) < 0 {
+			// r.Es[j] = false
 			r.Vs[j] = ar.Vs[int64(i)+start]
 		}
 		r.Ns[j] += ar.Ns[int64(i)+start]
@@ -179,8 +185,11 @@ func (r *StrRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64)
 
 func (r *StrRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*StrRing)
-	if r.Es[x] || bytes.Compare(ar.Vs[y], r.Vs[x]) < 0 {
+	if r.Es[x] || !ar.Es[y] {
 		r.Es[x] = false
+		r.Vs[x] = ar.Vs[y]
+	} else if !r.Es[x] && !ar.Es[y] && bytes.Compare(ar.Vs[y], r.Vs[x]) < 0 {
+		// r.Es[x] = false
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y] * z
