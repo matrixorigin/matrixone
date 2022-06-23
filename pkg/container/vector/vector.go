@@ -369,6 +369,53 @@ func NewConst(typ types.Type) *Vector {
 	return v
 }
 
+func NewConstNull(typ types.Type) *Vector {
+	v := New(typ)
+	v.IsConst = true
+	switch typ.Oid {
+	case types.T_bool:
+		v.Col = []bool{false}
+	case types.T_int8:
+		v.Col = []int8{0}
+	case types.T_int16:
+		v.Col = []int16{0}
+	case types.T_int32:
+		v.Col = []int32{0}
+	case types.T_int64:
+		v.Col = []int64{0}
+	case types.T_uint8:
+		v.Col = []uint8{0}
+	case types.T_uint16:
+		v.Col = []uint16{0}
+	case types.T_uint32:
+		v.Col = []uint32{0}
+	case types.T_uint64:
+		v.Col = []uint64{0}
+	case types.T_float32:
+		v.Col = []float32{0}
+	case types.T_float64:
+		v.Col = []float64{0}
+	case types.T_date:
+		v.Col = make([]types.Date, 1)
+	case types.T_datetime:
+		v.Col = make([]types.Datetime, 1)
+	case types.T_timestamp:
+		v.Col = make([]types.Timestamp, 1)
+	case types.T_decimal64:
+		v.Col = make([]types.Decimal64, 1)
+	case types.T_decimal128:
+		v.Col = make([]types.Decimal128, 1)
+	case types.T_char, types.T_varchar, types.T_json:
+		v.Col = &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{0},
+			Data:    []byte{},
+		}
+	}
+	nulls.Add(v.Nsp, 0)
+	return v
+}
+
 // IsScalar return true if the vector means a scalar value.
 // e.g.
 // 		a + 1, and 1's vector will return true

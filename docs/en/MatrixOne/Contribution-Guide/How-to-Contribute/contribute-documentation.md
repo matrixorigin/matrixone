@@ -16,7 +16,7 @@ The MatrixOne documentation is managed in 3 repositories:
 
 * The images and unstructured data are located in the [artwork](https://github.com/matrixorigin/artwork) repo. 
 
-The `matrixorigin.io` repo contains a submodule that links to `matrixone` repo contents. The images are referred as web image links from `artwork` repo. The `matrixorigin.io` has implemented a CI&CD project, which will be triggered by a new code merge and manual launch. This CI&CD workflow publishes the documentation to [https://docs.matrixorigin.io/](https://docs.matrixorigin.io/).  
+The `matrixorigin.io` repo contains a submodule that links to `matrixone` repo contents. The images are referred to as web image links from `artwork` repo. The `matrixorigin.io` has implemented a CI&CD project, which will be triggered by a new code merge and manual launch. This CI&CD workflow publishes the documentation to [https://docs.matrixorigin.io/](https://docs.matrixorigin.io/).  
 
 The documentation project is based on the [mkdocs-material](https://github.com/squidfunk/mkdocs-material). You can find the corresponding syntax and commands with this project.
 
@@ -111,4 +111,4 @@ git push --force origin main:main
 
 ## **Contribute a blog article**
 
-If you would like to write an article for our blog, please [file an issue](https://github.com/matrixorigin/matrixone/issues/new/choose) or send it to [dengnan@matrixorigin.io](mailto:dengnan@matrixorigin.io). Feel free to submit either a completed draft or article ideas. All submissions will be reviewed as quickly as possible. If your article or idea seems like a good fit for the blog, we will reach out to you directly.
+If you would like to write an article for our blog, please [file an issue](https://github.com/matrixorigin/matrixone/issues/new/choose) or send it to [dengnan@matrixorigin.io](mailto:dengnan@matrixorigin.io). Feel free to submit either a completed draft or any article ideas. All submissions will be reviewed as quickly as possible. If your article or idea seems like a good fit for the blog, we will reach out to you directly.

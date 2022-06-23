@@ -134,6 +134,29 @@ func NewShowDatabases(l *ComparisonExpr, w *Where) *ShowDatabases {
 	}
 }
 
+type ShowTarget struct {
+	showImpl
+	Target string
+	Like   *ComparisonExpr
+	Where  *Where
+}
+
+func (node *ShowTarget) Format(ctx *FmtCtx) {
+	ctx.WriteString("show")
+	if node.Target != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Target)
+	}
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+
 //SHOW TABLES statement.
 type ShowTables struct {
 	showImpl

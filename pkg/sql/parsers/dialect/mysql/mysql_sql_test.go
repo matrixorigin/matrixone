@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
-		output: "create table t1 (datetime datetime(26, 6), timestamp timestamp(26, 6), date date)",
+		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 	}
 )
 
@@ -52,6 +52,30 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
+		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+	}, {
+		input: "select schema()",
+	}, {
+		input: "select last_insert_id()",
+	}, {
+		input:  "show char set where charset = 'utf8mb4'",
+		output: "show charset where charset = utf8mb4",
+	}, {
+		input:  "show charset where charset = 'utf8mb4'",
+		output: "show charset where charset = utf8mb4",
+	}, {
+		input:  "show character set where charset = 'utf8mb4'",
+		output: "show charset where charset = utf8mb4",
+	}, {
+		input: "show config where a > 1",
+	}, {
+		input:  "set @@a = b",
+		output: "set a = b",
+	}, {
+		input:  "set @a = b",
+		output: "set a = b",
+	}, {
 		input:  "CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date)",
 		output: "create table t1 (datetime datetime(26, 6), timestamp timestamp(26, 6), date date)",
 	}, {
@@ -279,7 +303,7 @@ var (
 		output: "set sql_mode = TRADITIONAL",
 	}, {
 		input:  "select @session.tx_isolation",
-		output: "select @tx_isolation",
+		output: "select @session.tx_isolation",
 	}, {
 		input:  "select @@session.tx_isolation",
 		output: "select @@tx_isolation",

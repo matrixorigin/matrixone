@@ -64,6 +64,8 @@ func (s *Scanner) Scan() (int, string) {
 			s.skip(1)
 		} else if s.cur() == '\'' || s.cur() == '"' {
 			return int('@'), ""
+		} else if s.cur() == ',' {
+			return tokenID, ""
 		}
 		var tID int
 		var tBytes string

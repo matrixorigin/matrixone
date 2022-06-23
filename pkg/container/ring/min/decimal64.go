@@ -17,13 +17,14 @@ package min
 import (
 	"fmt"
 
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"math"
 )
 
 var Decimal64Size = encoding.Decimal64Size
@@ -191,6 +192,9 @@ func (r *Decimal64Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *Decimal64Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if r.Es[x] || ar.Vs[y] < r.Vs[x] {
 		r.Es[x] = false
 		r.Vs[x] = ar.Vs[y]
@@ -200,6 +204,9 @@ func (r *Decimal64Ring) Add(a interface{}, x, y int64) {
 
 func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if r.Es[j] || ar.Vs[int64(i)+start] < r.Vs[j] {

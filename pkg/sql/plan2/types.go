@@ -21,6 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+const (
+	JoinSideNone       int8 = 0
+	JoinSideLeft            = 1 << iota
+	JoinSideRight           = 1 << iota
+	JoinSideBoth            = JoinSideLeft | JoinSideRight
+	JoinSideCorrelated      = 1 << iota
+)
+
 type TableDef = plan.TableDef
 type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
