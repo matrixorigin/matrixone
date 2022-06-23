@@ -39,8 +39,8 @@ var (
 
 type txnTable struct {
 	store        *txnStore
-	createEntry  txnif.TxnEntry
-	dropEntry    txnif.TxnEntry
+	createEntry  *catalog.TableEntry
+	dropEntry    *catalog.TableEntry
 	localSegment *localSegment
 	updateNodes  map[common.ID]txnif.UpdateNode
 	deleteNodes  map[common.ID]txnif.DeleteNode
@@ -90,6 +90,17 @@ func (tbl *txnTable) WaitSynced() {
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
+	if tbl.createEntry != nil {
+		csn := cmdMgr.GetCSN()
+		cmd, err := tbl.createEntry.MakeDDLCommand(csn, catalog.OpCreate)
+		if err != nil {
+			return err
+		}
+		if cmd == nil {
+			panic(tbl.dropEntry)
+		}
+		cmdMgr.AddCmd(cmd)
+	}
 	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
@@ -106,6 +117,17 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 		if err = tbl.localSegment.CollectCmd(cmdMgr); err != nil {
 			return
 		}
+	}
+	if tbl.dropEntry != nil {
+		csn := cmdMgr.GetCSN()
+		cmd, err := tbl.dropEntry.MakeDDLCommand(csn, catalog.OpSoftDelete)
+		if err != nil {
+			return err
+		}
+		if cmd == nil {
+			panic(tbl.dropEntry)
+		}
+		cmdMgr.AddCmd(cmd)
 	}
 	return
 }
@@ -242,23 +264,21 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 	return buildBlock(tbl, meta), err
 }
 
-func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
+func (tbl *txnTable) SetCreateEntry(e *catalog.TableEntry) {
 	if tbl.createEntry != nil {
 		panic("logic error")
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.createEntry = e
-	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }
 
-func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
+func (tbl *txnTable) SetDropEntry(e *catalog.TableEntry) error {
 	if tbl.dropEntry != nil {
 		panic("logic error")
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.dropEntry = e
-	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 	return nil
 }
@@ -634,9 +654,19 @@ func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
 }
 
 func (tbl *txnTable) PrepareRollback() (err error) {
+	if tbl.createEntry != nil {
+		if err = tbl.createEntry.PrepareRollback(); err != nil {
+			return
+		}
+	}
 	for _, txnEntry := range tbl.txnEntries {
 		if err = txnEntry.PrepareRollback(); err != nil {
-			break
+			return
+		}
+	}
+	if tbl.dropEntry != nil {
+		if err = tbl.dropEntry.PrepareRollback(); err != nil {
+			return
 		}
 	}
 	return
@@ -657,9 +687,19 @@ func (tbl *txnTable) PreCommit() (err error) {
 }
 
 func (tbl *txnTable) PrepareCommit() (err error) {
+	if tbl.createEntry != nil {
+		if err = tbl.createEntry.PrepareCommit(); err != nil {
+			return
+		}
+	}
 	for _, node := range tbl.txnEntries {
 		if err = node.PrepareCommit(); err != nil {
-			break
+			return
+		}
+	}
+	if tbl.dropEntry != nil {
+		if err = tbl.dropEntry.PrepareCommit(); err != nil {
+			return
 		}
 	}
 	return
@@ -679,9 +719,21 @@ func (tbl *txnTable) PreApplyCommit() (err error) {
 
 func (tbl *txnTable) ApplyCommit() (err error) {
 	csn := tbl.csnStart
+	if tbl.createEntry != nil {
+		if err = tbl.createEntry.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
+			return
+		}
+		csn++
+	}
 	for _, node := range tbl.txnEntries {
 		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
-			break
+			return
+		}
+		csn++
+	}
+	if tbl.dropEntry != nil {
+		if err = tbl.dropEntry.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
+			return
 		}
 		csn++
 	}
@@ -689,9 +741,19 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 }
 
 func (tbl *txnTable) ApplyRollback() (err error) {
+	if tbl.createEntry != nil {
+		if err = tbl.createEntry.ApplyRollback(); err != nil {
+			return
+		}
+	}
 	for _, node := range tbl.txnEntries {
 		if err = node.ApplyRollback(); err != nil {
-			break
+			return
+		}
+	}
+	if tbl.dropEntry != nil {
+		if err = tbl.dropEntry.ApplyRollback(); err != nil {
+			return
 		}
 	}
 	return

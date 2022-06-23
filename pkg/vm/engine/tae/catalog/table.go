@@ -156,6 +156,16 @@ func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dat
 	return
 }
 
+func (entry *TableEntry) MakeDDLCommand(id uint32, op OpT) (cmd txnif.TxnCmd, err error) {
+	cmdType := CmdCreateTable
+	entry.RLock()
+	defer entry.RUnlock()
+	if op == OpSoftDelete {
+		cmdType = CmdDropTable
+	}
+	return newTableCmd(id, cmdType, entry), nil
+}
+
 func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmdType := CmdCreateTable
 	entry.RLock()
