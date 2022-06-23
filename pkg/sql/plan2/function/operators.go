@@ -4379,6 +4379,24 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.Cast,
 		},
+		{
+			Index:       195,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal64, types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       196,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal128, types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
 	},
 	CASE: {
 		{
