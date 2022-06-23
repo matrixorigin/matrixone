@@ -27,11 +27,7 @@ func IsNotNull[T NormalType](vectors []*vector.Vector, proc *process.Process) (*
 	retType := types.T_bool.ToType()
 	if input.IsScalar() {
 		vec := proc.AllocScalarVector(retType)
-		if input.IsScalarNull() {
-			vector.SetCol(vec, []bool{false})
-		} else {
-			vector.SetCol(vec, []bool{!nulls.Contains(input.Nsp, uint64(0))})
-		}
+		vector.SetCol(vec, []bool{!input.IsScalarNull()})
 		return vec, nil
 	} else {
 		cols := vector.MustTCols[T](input)
