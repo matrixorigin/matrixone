@@ -1,21 +1,25 @@
 package containers
 
 import (
+	"bytes"
 	"io"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type vector[T any] struct {
-	stlvec stl.Vector[T]
-	impl   Vector
-	typ    types.Type
-	nulls  *roaring64.Bitmap
+	stlvec    stl.Vector[T]
+	impl      Vector
+	typ       types.Type
+	nulls     *roaring64.Bitmap
+	roStorage stl.MemNode
 }
 
 func NewVector[T any](typ types.Type, nullable bool, opts ...*Options) *vector[T] {
@@ -88,11 +92,25 @@ func (vec *vector[T]) GetType() types.Type        { return vec.typ }
 func (vec *vector[T]) String() string             { return vec.impl.String() }
 func (vec *vector[T]) Close()                     { vec.impl.Close() }
 
+func (vec *vector[T]) cow() {
+	vec.stlvec = vec.stlvec.Clone(0, vec.stlvec.Length())
+	vec.releaseRoStorage()
+}
+func (vec *vector[T]) releaseRoStorage() {
+	if vec.roStorage != nil {
+		vec.GetAllocator().Free(vec.roStorage)
+	}
+	vec.roStorage = nil
+}
+
 func (vec *vector[T]) Window() Vector { return nil }
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	if deletes == nil || deletes.IsEmpty() {
 		return
+	}
+	if vec.roStorage != nil {
+		vec.cow()
 	}
 	arr := deletes.ToArray()
 	for i := len(arr) - 1; i >= 0; i-- {
@@ -144,6 +162,7 @@ func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
+	vec.releaseRoStorage()
 	var tmpn int64
 	// 1. Vector type
 	typeBuf := make([]byte, types.TypeSize)
@@ -194,7 +213,62 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (vec *vector[T]) ReadVectorFromReader(r io.Reader) (created Vector, n int64, err error) {
+func (vec *vector[T]) ReadFromFile(f common.IVFile) (err error) {
+	vec.releaseRoStorage()
+	stat := f.Stat()
+	if stat.CompressAlgo() == compress.None {
+		_, err = vec.ReadFrom(f)
+		return
+	}
+
+	size := stat.Size()
+	tmpNode := vec.GetAllocator().Alloc(int(size))
+	defer vec.GetAllocator().Free(tmpNode)
+	srcBuf := tmpNode.GetBuf()[:size]
+	if _, err = f.Read(srcBuf); err != nil {
+		return
+	}
+	n := vec.GetAllocator().Alloc(int(stat.OriginSize()))
+	buf := n.GetBuf()[:stat.OriginSize()]
+	if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
+		vec.GetAllocator().Free(n)
+		return
+	}
+	vec.typ = types.DecodeType(buf[:types.TypeSize])
+	buf = buf[types.TypeSize:]
+
+	nullable := types.DecodeFixed[bool](buf[:1])
+	buf = buf[1:]
+
+	if nullable {
+		vec.impl = newNullableVecImpl(vec)
+	} else {
+		vec.impl = newVecImpl(vec)
+	}
+	var nr int64
+	if nr, err = vec.stlvec.InitFromSharedBuf(buf); err != nil {
+		vec.GetAllocator().Free(n)
+		return
+	}
+	buf = buf[nr:]
+	if !nullable {
+		vec.roStorage = n
+		return
+	}
+
+	nullSize := types.DecodeFixed[uint32](buf[:4])
+	buf = buf[4:]
+	if nullSize > 0 {
+		nullBuf := buf[:nullSize]
+		nulls := roaring64.New()
+		r := bytes.NewBuffer(nullBuf)
+		if _, err = nulls.ReadFrom(r); err != nil {
+			vec.GetAllocator().Free(n)
+			return
+		}
+		vec.nulls = nulls
+	}
+	vec.roStorage = n
 	return
 }
 
@@ -211,6 +285,7 @@ func (vec *vector[T]) GetView() (view VectorView) {
 }
 
 func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
+	vec.releaseRoStorage()
 	if vec.Nullable() {
 		vec.nulls = nulls
 	}

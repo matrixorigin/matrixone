@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -146,12 +148,27 @@ func TestVector3(t *testing.T) {
 func TestVector4(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	for _, vecType := range vecTypes {
-		vec := MockVector(vecType, 10, true, true, nil)
-		assert.Equal(t, 10, vec.Length())
-		t.Log(vec.String())
+		vec := MockVector(vecType, 1000, false, true, nil)
+		assert.Equal(t, 1000, vec.Length())
+		vec.Append(types.Null{})
+		w := new(bytes.Buffer)
+		_, err := vec.WriteTo(w)
+		assert.NoError(t, err)
+		srcBuf := w.Bytes()
+		srcSize := len(srcBuf)
+		destBuf := make([]byte, lz4.CompressBlockBound(srcSize))
+		destBuf, err = compress.Compress(srcBuf, destBuf, compress.Lz4)
+		assert.NoError(t, err)
+		f := MockCompressedFile(destBuf, srcSize, compress.Lz4)
+		vec2 := MakeVector(vecType, true)
+		err = vec2.ReadFromFile(f)
+		assert.NoError(t, err)
+		// t.Log(vec2.String())
+		vec.Close()
+		vec2.Close()
 	}
-	vec := MakeVector(types.Type_INT32.ToType(), false)
-	vec.Append(int32(1))
-	vec.Append(int32(2))
-	t.Log(vec.String())
+	// vec := MakeVector(types.Type_INT32.ToType(), false)
+	// vec.Append(int32(1))
+	// vec.Append(int32(2))
+	// t.Log(vec.String())
 }

@@ -43,7 +43,9 @@ func (impl *nullableVecImpl[T]) Get(i int) (v any) {
 	return impl.derived.stlvec.Get(i)
 }
 
+// Modification
 func (impl *nullableVecImpl[T]) Update(i int, v any) {
+	impl.tryCOW()
 	_, isNull := v.(types.Null)
 	if isNull {
 		if impl.derived.nulls == nil {
@@ -60,6 +62,7 @@ func (impl *nullableVecImpl[T]) Update(i int, v any) {
 }
 
 func (impl *nullableVecImpl[T]) Delete(i int) {
+	impl.tryCOW()
 	if impl.IsNull(i) {
 		impl.derived.nulls.Remove(uint64(i))
 	}
@@ -67,6 +70,7 @@ func (impl *nullableVecImpl[T]) Delete(i int) {
 }
 
 func (impl *nullableVecImpl[T]) Append(v any) {
+	impl.tryCOW()
 	offset := impl.derived.stlvec.Length()
 	_, isNull := v.(types.Null)
 	if isNull {
@@ -81,6 +85,7 @@ func (impl *nullableVecImpl[T]) Append(v any) {
 	}
 }
 func (impl *nullableVecImpl[T]) Extend(o Vector) {
+	impl.tryCOW()
 	if o.Nullable() {
 		ovec := o.(*vector[T])
 		if !ovec.HasNull() {

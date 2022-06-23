@@ -97,7 +97,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 		} else {
 			for i := 0; i < rows; i++ {
 				ival := rand.Intn(math.MaxInt64)
-				vec.Append(ival)
+				vec.Append(int64(ival))
 			}
 		}
 	case types.Type_UINT8:
@@ -294,4 +294,43 @@ func MockBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDat
 		bat.AddVector(attr, vec)
 	}
 	return bat
+}
+
+type compressedFileInfo struct {
+	size  int64
+	osize int64
+	algo  int
+}
+
+func (i *compressedFileInfo) Name() string      { return "" }
+func (i *compressedFileInfo) Size() int64       { return i.size }
+func (i *compressedFileInfo) OriginSize() int64 { return i.osize }
+func (i *compressedFileInfo) CompressAlgo() int { return i.algo }
+
+type mockCompressedFile struct {
+	stat compressedFileInfo
+	buf  []byte
+}
+
+func (f *mockCompressedFile) Read(p []byte) (n int, err error) {
+	copy(p, f.buf)
+	n = len(f.buf)
+	return
+}
+
+func (f *mockCompressedFile) Ref()                         {}
+func (f *mockCompressedFile) Unref()                       {}
+func (f *mockCompressedFile) RefCount() int64              { return 0 }
+func (f *mockCompressedFile) Stat() common.FileInfo        { return &f.stat }
+func (f *mockCompressedFile) GetFileType() common.FileType { return common.MemFile }
+
+func MockCompressedFile(buf []byte, osize int, algo int) common.IVFile {
+	return &mockCompressedFile{
+		stat: compressedFileInfo{
+			size:  int64(len(buf)),
+			osize: int64(osize),
+			algo:  algo,
+		},
+		buf: buf,
+	}
 }
