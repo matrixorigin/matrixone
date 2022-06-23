@@ -164,6 +164,8 @@ func (l *store) StartReplica(shardID uint64, replicaID uint64,
 }
 
 func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
+	// FIXME: stop the hakeeper ticker when the replica being stopped
+	// is a hakeeper replica
 	return l.nh.StopReplica(shardID, replicaID)
 }
 

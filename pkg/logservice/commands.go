@@ -15,9 +15,58 @@
 package logservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
-func (l *store) handleCommands(cmds []hapb.ScheduleCommand) {
+func (s *Service) handleCommands(cmds []hapb.ScheduleCommand) {
+	for _, cmd := range cmds {
+		switch cmd.ConfigChange.ChangeType {
+		case hapb.AddReplica:
+			s.handleAddReplica(cmd)
+		case hapb.RemoveReplica:
+			s.handleRemoveReplica(cmd)
+		case hapb.StartReplica:
+			s.handleStartReplica(cmd)
+		case hapb.StopReplica:
+			s.handleStopReplica(cmd)
+		default:
+			panic("unknown type")
+		}
+	}
+}
 
+func (s *Service) handleAddReplica(cmd hapb.ScheduleCommand) {
+	panic("not implemented due to the lack of target UUID in ScheduleCommand")
+}
+
+func (s *Service) handleRemoveReplica(cmd hapb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	epoch := cmd.ConfigChange.Replica.Epoch
+	if err := s.store.removeReplica(shardID, replicaID, epoch); err != nil {
+		plog.Errorf("failed to remove replica %v", err)
+	}
+}
+
+func (s *Service) handleStartReplica(cmd hapb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	if shardID == hakeeper.DefaultHAKeeperShardID {
+		if err := s.store.StartHAKeeperReplica(replicaID, nil, false); err != nil {
+			plog.Errorf("failed to start log replica %v", err)
+		}
+	} else {
+		if err := s.store.StartReplica(shardID, replicaID, nil, false); err != nil {
+			plog.Errorf("failed to start log replica %v", err)
+		}
+	}
+}
+
+func (s *Service) handleStopReplica(cmd hapb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	if err := s.store.stopReplica(shardID, replicaID); err != nil {
+		plog.Errorf("failed to stop replica %v", err)
+	}
 }

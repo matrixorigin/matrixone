@@ -333,7 +333,7 @@ func TestAddReplica(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
-func TestRemoveReplica(t *testing.T) {
+func getTestStores() (*store, *store, error) {
 	cfg1 := Config{
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
@@ -346,10 +346,9 @@ func TestRemoveReplica(t *testing.T) {
 	}
 	cfg1.Fill()
 	store1, err := newLogStore(cfg1)
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, store1.Close())
-	}()
+	if err != nil {
+		return nil, nil, err
+	}
 	cfg2 := Config{
 		FS:                  vfs.NewStrictMem(),
 		DeploymentID:        1,
@@ -362,34 +361,48 @@ func TestRemoveReplica(t *testing.T) {
 	}
 	cfg2.Fill()
 	store2, err := newLogStore(cfg2)
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, store2.Close())
-	}()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	peers1 := make(map[uint64]dragonboat.Target)
 	peers1[1] = store1.nh.ID()
 	peers1[2] = store2.nh.ID()
-	require.NoError(t, store1.StartReplica(1, 1, peers1, false))
+	if err := store1.StartReplica(1, 1, peers1, false); err != nil {
+		return nil, nil, err
+	}
 	peers2 := make(map[uint64]dragonboat.Target)
 	peers2[1] = store1.nh.ID()
 	peers2[2] = store2.nh.ID()
-	require.NoError(t, store2.StartReplica(1, 2, peers2, false))
+	if err := store2.StartReplica(1, 2, peers2, false); err != nil {
+		return nil, nil, err
+	}
 
 	for {
 		_, _, ok, err := store1.nh.GetLeaderID(1)
-		require.NoError(t, err)
+		if err != nil {
+			return nil, nil, err
+		}
 		if ok {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
+	return store1, store2, nil
+}
 
+func TestRemoveReplica(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.Close())
+		require.NoError(t, store2.Close())
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	m, err := store1.nh.SyncGetShardMembership(ctx, 1)
 	require.NoError(t, err)
 	require.NoError(t, store1.removeReplica(1, 2, m.ConfigChangeID))
-
 }
 
 func hasReplica(s *store, shardID uint64, replicaID uint64) bool {
