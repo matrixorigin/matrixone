@@ -215,7 +215,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				} else {
 					for k := 0; k < n; k++ {
 						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[i] = 0
+							ctr.zValues[k] = 0
 						} else {
 							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 						}
@@ -343,7 +343,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				} else {
 					for k := 0; k < n; k++ {
 						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[i] = 0
+							ctr.zValues[k] = 0
 						} else {
 							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 						}

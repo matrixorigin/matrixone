@@ -131,16 +131,22 @@ func Or(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vcols := vec.Col.([]bool)
 	for i := range vcols {
 		vcols[i] = col1[i] || col2[i]
-		ln, rn := nulls.Contains(v1.Nsp, uint64(i)), nulls.Contains(v2.Nsp, uint64(i))
-		if (ln && !rn) || (!ln && rn) {
-			if ln && !rn {
-				if col2[i] {
-					vec.Nsp.Np.Remove(uint64(i))
-				}
-			} else {
-				if col1[i] {
-					vec.Nsp.Np.Remove(uint64(i))
-				}
+	}
+	if nulls.Any(v1.Nsp) {
+		rows := v1.Nsp.Np.ToArray()
+		cols := v2.Col.([]bool)
+		for _, row := range rows {
+			if !nulls.Contains(v2.Nsp, row) && cols[row] {
+				vec.Nsp.Np.Remove(row)
+			}
+		}
+	}
+	if nulls.Any(v2.Nsp) {
+		rows := v2.Nsp.Np.ToArray()
+		cols := v1.Col.([]bool)
+		for _, row := range rows {
+			if !nulls.Contains(v1.Nsp, row) && cols[row] {
+				vec.Nsp.Np.Remove(row)
 			}
 		}
 	}

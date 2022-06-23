@@ -273,7 +273,7 @@ func LeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 	case c1 && c2:
 		vec := proc.AllocScalarVector(retType)
 		vec.Col = make([]bool, 1)
-		vec.Col.([]bool)[0] = isBytesLe(v1.Data, v2.Data)
+		vec.Col.([]bool)[0] = isBytesLe(col1.Get(0), col2.Get(0))
 		return vec, nil
 	case c1 && !c2:
 		return ScalarStringLeNotScalar(v1, v2, col1.Get(0), col2, proc)

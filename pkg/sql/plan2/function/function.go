@@ -81,8 +81,6 @@ var (
 		types.T_decimal64: {types.T_decimal128},
 		types.T_char:      {types.T_varchar},
 		types.T_varchar:   {types.T_char},
-
-		types.T_tuple: {types.T_float64},
 	}
 )
 
@@ -274,7 +272,19 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 		return false
 	}
 	for i := range args {
-		if args[i] != require[i] && isNotScalarNull(args[i]) {
+		if args[i] != require[i] && IsNotScalarNull(args[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func ConcatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) <= 1 {
+		return false
+	}
+	for _, arg := range args {
+		if arg != types.T_varchar && arg != types.T_char && IsNotScalarNull(arg) {
 			return false
 		}
 	}
@@ -296,22 +306,6 @@ func toDateTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	}
 	if args[1] == ScalarNull {
 		return false
-	}
-	return true
-}
-
-// todo(broccoli): change this to a general function
-func concatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
-	if len(args) <= 1 {
-		return false
-	}
-	for _, arg := range args {
-		if arg != types.T_varchar && arg != types.T_char {
-			return false
-		}
-		if isScalarNull(arg) {
-			return false
-		}
 	}
 	return true
 }
@@ -432,7 +426,7 @@ func compare(f1, f2 Function) (f Function, change bool) {
 	return f2, true
 }
 
-func isNotScalarNull(t types.T) bool {
+func IsNotScalarNull(t types.T) bool {
 	return t != ScalarNull
 }
 
