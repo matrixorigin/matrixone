@@ -43,7 +43,7 @@ type LogRecord = pb.LogRecord
 // be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config
-	store       *logStore
+	store       *store
 	stopper     *syncutil.Stopper
 	connStopper *syncutil.Stopper
 }

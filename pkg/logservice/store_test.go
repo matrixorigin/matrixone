@@ -75,7 +75,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	}()
 }
 
-func getTestStore(cfg Config) (*logStore, error) {
+func getTestStore(cfg Config) (*store, error) {
 	store, err := newLogStore(cfg)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func TestReplicaCanBeStopped(t *testing.T) {
 	assert.False(t, hasReplica(store, 1, 2))
 }
 
-func runStoreTest(t *testing.T, fn func(*testing.T, *logStore)) {
+func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -151,7 +151,7 @@ func getTestUserEntry() []byte {
 }
 
 func TestGetOrExtendLease(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -160,7 +160,7 @@ func TestGetOrExtendLease(t *testing.T) {
 }
 
 func TestAppendLog(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -173,7 +173,7 @@ func TestAppendLog(t *testing.T) {
 }
 
 func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -188,7 +188,7 @@ func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
 }
 
 func TestTruncateLog(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -203,7 +203,7 @@ func TestTruncateLog(t *testing.T) {
 }
 
 func TestGetTruncatedIndex(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		index, err := store.GetTruncatedIndex(ctx, 1)
@@ -222,7 +222,7 @@ func TestGetTruncatedIndex(t *testing.T) {
 }
 
 func TestQueryLog(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
 		defer cancel()
 		assert.NoError(t, store.GetOrExtendDNLease(ctx, 1, 100))
@@ -259,7 +259,7 @@ func TestQueryLog(t *testing.T) {
 }
 
 func TestHAKeeperTick(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.ID()
 		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
@@ -269,7 +269,7 @@ func TestHAKeeperTick(t *testing.T) {
 }
 
 func TestGetHeartbeatMessage(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.ID()
 		assert.NoError(t, store.StartReplica(10, 1, peers, false))
@@ -283,7 +283,7 @@ func TestGetHeartbeatMessage(t *testing.T) {
 }
 
 func TestAddHeartbeat(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.ID()
 		assert.NoError(t, store.StartHAKeeperReplica(1, peers, false))
@@ -304,7 +304,7 @@ func TestAddHeartbeat(t *testing.T) {
 }
 
 func TestAddReplicaRejectedForInvalidCCI(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		err := store.addReplica(1, 100, uuid.New().String(), 0)
 		assert.Equal(t, dragonboat.ErrRejected, err)
 	}
@@ -312,7 +312,7 @@ func TestAddReplicaRejectedForInvalidCCI(t *testing.T) {
 }
 
 func TestAddReplica(t *testing.T) {
-	fn := func(t *testing.T, store *logStore) {
+	fn := func(t *testing.T, store *store) {
 		for {
 			_, _, ok, err := store.nh.GetLeaderID(1)
 			require.NoError(t, err)
@@ -392,7 +392,7 @@ func TestRemoveReplica(t *testing.T) {
 
 }
 
-func hasReplica(s *logStore, shardID uint64, replicaID uint64) bool {
+func hasReplica(s *store, shardID uint64, replicaID uint64) bool {
 	hb := s.getHeartbeatMessage()
 	for _, info := range hb.Replicas {
 		if info.ShardID == shardID {
@@ -407,7 +407,7 @@ func hasReplica(s *logStore, shardID uint64, replicaID uint64) bool {
 }
 
 func mustHaveReplica(t *testing.T,
-	s *logStore, shardID uint64, replicaID uint64) {
+	s *store, shardID uint64, replicaID uint64) {
 	for i := 0; i < 100; i++ {
 		if hasReplica(s, shardID, replicaID) {
 			return
