@@ -278,17 +278,17 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
-        <a href="https://github.com/m-schen">
-            <img src="https://avatars.githubusercontent.com/u/59043531?v=4" width="30;" alt="m-schen"/>
-            <br />
-            <sub><b>Chenmingsong</b></sub>
-        </a>
-    </td>
-    <td align="center">
         <a href="https://github.com/broccoliSpicy">
             <img src="https://avatars.githubusercontent.com/u/93440049?v=4" width="30;" alt="broccoliSpicy"/>
             <br />
             <sub><b>BroccoliSpicy</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/m-schen">
+            <img src="https://avatars.githubusercontent.com/u/59043531?v=4" width="30;" alt="m-schen"/>
+            <br />
+            <sub><b>Chenmingsong</b></sub>
         </a>
     </td>
     <td align="center">
@@ -407,6 +407,13 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
+        <a href="https://github.com/dongdongyang33">
+            <img src="https://avatars.githubusercontent.com/u/47596332?v=4" width="30;" alt="dongdongyang33"/>
+            <br />
+            <sub><b>Dongdongyang</b></sub>
+        </a>
+    </td>
+    <td align="center">
         <a href="https://github.com/zhangxu19830126">
             <img src="https://avatars.githubusercontent.com/u/2995754?v=4" width="30;" alt="zhangxu19830126"/>
             <br />
@@ -425,13 +432,6 @@ Contributions to MatrixOne are welcome from everyone.
             <img src="https://avatars.githubusercontent.com/u/71327518?v=4" width="30;" alt="bbbearxyz"/>
             <br />
             <sub><b>Bbbearxyz</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/dongdongyang33">
-            <img src="https://avatars.githubusercontent.com/u/47596332?v=4" width="30;" alt="dongdongyang33"/>
-            <br />
-            <sub><b>Dongdongyang</b></sub>
         </a>
     </td>
     <td align="center">
@@ -572,6 +572,13 @@ Contributions to MatrixOne are welcome from everyone.
     </td></tr>
 <tr>
     <td align="center">
+        <a href="https://github.com/richelleguice">
+            <img src="https://avatars.githubusercontent.com/u/84093582?v=4" width="30;" alt="richelleguice"/>
+            <br />
+            <sub><b>Richelle Guice</b></sub>
+        </a>
+    </td>
+    <td align="center">
         <a href="https://github.com/RinChanNOWWW">
             <img src="https://avatars.githubusercontent.com/u/33975039?v=4" width="30;" alt="RinChanNOWWW"/>
             <br />
@@ -605,15 +612,15 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Ajian</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/bxiiiiii">
             <img src="https://avatars.githubusercontent.com/u/75570810?v=4" width="30;" alt="bxiiiiii"/>
             <br />
             <sub><b>Binxxi</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/coderzc">
             <img src="https://avatars.githubusercontent.com/u/26179648?v=4" width="30;" alt="coderzc"/>
@@ -648,15 +655,15 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Lyfer233</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/lacrimosaprinz">
             <img src="https://avatars.githubusercontent.com/u/43231571?v=4" width="30;" alt="lacrimosaprinz"/>
             <br />
             <sub><b>Prinz</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/sundy-li">
             <img src="https://avatars.githubusercontent.com/u/3325189?v=4" width="30;" alt="sundy-li"/>
@@ -691,15 +698,15 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Xiyuedong</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/yclchuxue">
             <img src="https://avatars.githubusercontent.com/u/75575291?v=4" width="30;" alt="yclchuxue"/>
             <br />
             <sub><b>Yclchuxue</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/ZtXavier">
             <img src="https://avatars.githubusercontent.com/u/75614614?v=4" width="30;" alt="ZtXavier"/>
