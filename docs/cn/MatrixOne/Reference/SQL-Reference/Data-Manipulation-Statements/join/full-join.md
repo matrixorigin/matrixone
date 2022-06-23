@@ -2,9 +2,11 @@
 
 ## **语法说明**
 
-``FULL JOIN`` 关键字只要左表（table1）和右表（table2）其中一个表中存在匹配，则返回行.
+``FULL JOIN`` 关键字只要左表（table1）和右表（table2）其中一个表中存在匹配，则返回行。
 
-``FULL JOI``N 关键字结合了 ``LEFT JOIN`` 和 ``RIGHT JOIN`` 的结果。
+``FULL JOIN`` 关键字结合了 ``LEFT JOIN`` 和 ``RIGHT JOIN`` 的结果。
+
+**说明**：在一些数据库中： ``FULL JOIN`` 等同于 ``FULL OUTER JOIN``。
 
 ## **语法结构**
 
