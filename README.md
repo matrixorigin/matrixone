@@ -400,17 +400,17 @@ Contributions to MatrixOne are welcome from everyone.
     </td></tr>
 <tr>
     <td align="center">
-        <a href="https://github.com/aptend">
-            <img src="https://avatars.githubusercontent.com/u/49832303?v=4" width="30;" alt="aptend"/>
-            <br />
-            <sub><b>Aptend</b></sub>
-        </a>
-    </td>
-    <td align="center">
         <a href="https://github.com/dongdongyang33">
             <img src="https://avatars.githubusercontent.com/u/47596332?v=4" width="30;" alt="dongdongyang33"/>
             <br />
             <sub><b>Dongdongyang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/aptend">
+            <img src="https://avatars.githubusercontent.com/u/49832303?v=4" width="30;" alt="aptend"/>
+            <br />
+            <sub><b>Aptend</b></sub>
         </a>
     </td>
     <td align="center">
