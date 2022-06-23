@@ -337,6 +337,7 @@ func TestTxn10(t *testing.T) {
 		err = tae.Delete(0, "tae", txn.GetCtx())
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
+		tdb.Close()
 	}
 	{
 		//Create DB -> Create Table -> Drop Table
@@ -362,6 +363,8 @@ func TestTxn10(t *testing.T) {
 		err = dbase.Delete(0, schema.Name, txn.GetCtx())
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
+		err = tdb.Catalog.Checkpoint(6)
+		assert.Nil(t, err)
 		tdb.Close()
 	}
 	{
@@ -432,6 +435,8 @@ func TestTxn10(t *testing.T) {
 		_, err = dbase.Relation(schema.Name, txn.GetCtx())
 		assert.NotNil(t, err)
 		assert.Nil(t, txn.Commit())
+		err = tdb.Catalog.Checkpoint(10)
+		assert.Nil(t, err)
 		tdb.Close()
 	}
 	{
