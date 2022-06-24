@@ -39,5 +39,5 @@ func TestUnaryMinusDecimal128(t *testing.T) {
 	require.NoError(t, err)
 	outputCol := vector.MustTCols[types.Decimal128](output)
 
-	require.Equal(t, []types.Decimal128{{-123, -1}, {-234, -1}, {-345, -1}, {0, 0}}, outputCol)
+	require.Equal(t, []types.Decimal128{{Lo: -123, Hi: -1}, {Lo: -234, Hi: -1}, {Lo: -345, Hi: -1}, {Lo: 0, Hi: 0}}, outputCol)
 }
