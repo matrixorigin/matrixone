@@ -1685,6 +1685,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 			}
 			err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
 			if handler.oneTxnPerBatch {
+				if err != nil {
+					goto handleError
+				}
 				err = txnHandler.CommitAfterAutocommitOnly()
 				if err != nil {
 					goto handleError
@@ -1828,6 +1831,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					}
 					err = tableHandler.Write(handler.timestamp, handler.batchData, txnHandler.GetTxn().GetCtx())
 					if handler.oneTxnPerBatch {
+						if err != nil {
+							goto handleError2
+						}
 						err = txnHandler.CommitAfterAutocommitOnly()
 						if err != nil {
 							goto handleError2

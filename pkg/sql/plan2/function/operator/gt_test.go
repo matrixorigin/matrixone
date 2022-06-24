@@ -30,10 +30,10 @@ var GtstringBool = []bool{false, false, false, false, true, false, false, false,
 type testGtFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 var testGtFuncVec = []testGtFunc{
-	GtDataValue[int8], GtDataValue[int16], GtDataValue[int32], GtDataValue[int64],
-	GtDataValue[uint8], GtDataValue[uint16], GtDataValue[uint32], GtDataValue[uint64],
-	GtDataValue[float32], GtDataValue[float64], GtDataValue[types.Date],
-	GtDataValue[types.Datetime], GtDataValue[types.Decimal64], GtDataValue[bool], GtDataValue[string],
+	GtGeneral[int8], GtGeneral[int16], GtGeneral[int32], GtGeneral[int64],
+	GtGeneral[uint8], GtGeneral[uint16], GtGeneral[uint32], GtGeneral[uint64],
+	GtGeneral[float32], GtGeneral[float64], GtGeneral[types.Date],
+	GtGeneral[types.Datetime], GtGeneral[types.Decimal64], GtBool, GtString,
 }
 
 var GtretVec = [][]bool{
@@ -43,7 +43,6 @@ var GtretVec = [][]bool{
 
 func Test_ColGtCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
-		InitFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {
