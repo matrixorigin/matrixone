@@ -400,9 +400,16 @@ func TestRemoveReplica(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	m, err := store1.nh.SyncGetShardMembership(ctx, 1)
-	require.NoError(t, err)
-	require.NoError(t, store1.removeReplica(1, 2, m.ConfigChangeID))
+	for {
+		m, err := store1.nh.SyncGetShardMembership(ctx, 1)
+		if err == dragonboat.ErrShardNotReady {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		require.NoError(t, err)
+		require.NoError(t, store1.removeReplica(1, 2, m.ConfigChangeID))
+		return
+	}
 }
 
 func hasReplica(s *store, shardID uint64, replicaID uint64) bool {
