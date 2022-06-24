@@ -168,7 +168,7 @@ func (f Function) isFunction() bool {
 // all the operator, built-function and aggregate function.
 //
 // For use in other packages, see GetFunctionByID and GetFunctionByName
-var functionRegister = [][]Function{nil}
+var functionRegister []Functions
 
 var functionRegister2 []Functions
 
@@ -205,7 +205,7 @@ func DecodeOverloadID(overloadID int64) (fid int32, index int32) {
 // GetFunctionByID get function structure by its index id.
 func GetFunctionByID(overloadID int64) (Function, error) {
 	fid, overloadIndex := DecodeOverloadID(overloadID)
-	fs := functionRegister[fid]
+	fs := functionRegister[fid].Overloads
 	return fs[overloadIndex], nil
 }
 
@@ -214,7 +214,7 @@ func GetFunctionIsAggregateByName(name string) bool {
 	if err != nil {
 		return false
 	}
-	fs := functionRegister[fid]
+	fs := functionRegister[fid].Overloads
 	return len(fs) > 0 && fs[0].IsAggregate()
 }
 
@@ -222,7 +222,7 @@ func GetFunctionIsAggregateByName(name string) bool {
 // if matches,
 // return function structure and encoded overload id
 // and final converted argument types(if it needs to do type level-up work, it will be nil if not).
-func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T, error) {
+func GetFunctionByName2(name string, args []types.T) (Function, int64, []types.T, error) {
 	levelUpFunction, get, minCost := emptyFunction, false, math.MaxInt32 // store the best function which can be matched by type level-up
 	matches := make([]Function, 0, 4)                                    // functions can be matched directly
 	finalLevelUpTypes := make([]types.T, len(args))                      // store the final argument types of levelUpFunction
@@ -232,7 +232,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 		return emptyFunction, -1, nil, err
 	}
 
-	fs := functionRegister[fid]
+	fs := functionRegister[fid].Overloads
 	b := false
 	for _, f := range fs {
 		if cost, finalParamTypes := f.typeCheckWithLevelUp(args); cost != matchFailed {
@@ -283,7 +283,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
 }
 
-func GetFunctionByName2(name string, args []types.T) (Function, int64, []types.T, error) {
+func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T, error) {
 	fid, err := fromNameToFunctionId(name)
 	if err != nil {
 		return emptyFunction, -1, nil, err
