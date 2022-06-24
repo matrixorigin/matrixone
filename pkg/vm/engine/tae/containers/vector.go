@@ -105,7 +105,7 @@ func (vec *vector[T]) CloneWindow(offset, length int) Vector {
 			cloned.nulls = roaring64.New()
 			for i := offset; i < offset+length; i++ {
 				if vec.nulls.ContainsInt(i) {
-					cloned.nulls.AddInt(i)
+					cloned.nulls.AddInt(i - offset)
 				}
 			}
 		}

@@ -34,6 +34,13 @@ func (bat *Batch) GetVectorByName(name string) Vector {
 	return bat.Vecs[pos]
 }
 
+func (bat *Batch) RangeDelete(start, end int) {
+	if bat.Deletes == nil {
+		bat.Deletes = roaring.New()
+	}
+	bat.Deletes.AddRange(uint64(start), uint64(end))
+}
+
 func (bat *Batch) Delete(i int) {
 	if bat.Deletes == nil {
 		bat.Deletes = roaring.BitmapOf(uint32(i))
