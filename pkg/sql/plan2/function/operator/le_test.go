@@ -30,10 +30,10 @@ var LestringBool = []bool{true, true, true, false, false, true, true, false, fal
 type testLeFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 var testLeFuncVec = []testLeFunc{
-	LeDataValue[int8], LeDataValue[int16], LeDataValue[int32], LeDataValue[int64],
-	LeDataValue[uint8], LeDataValue[uint16], LeDataValue[uint32], LeDataValue[uint64],
-	LeDataValue[float32], LeDataValue[float64], LeDataValue[types.Date],
-	LeDataValue[types.Datetime], LeDataValue[types.Decimal64], LeDataValue[bool], LeDataValue[string],
+	LeGeneral[int8], LeGeneral[int16], LeGeneral[int32], LeGeneral[int64],
+	LeGeneral[uint8], LeGeneral[uint16], LeGeneral[uint32], LeGeneral[uint64],
+	LeGeneral[float32], LeGeneral[float64], LeGeneral[types.Date],
+	LeGeneral[types.Datetime], LeGeneral[types.Decimal64], LeBool, LeString,
 }
 
 var LeretVec = [][]bool{
@@ -43,7 +43,6 @@ var LeretVec = [][]bool{
 
 func Test_ColLeCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
-		InitFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {

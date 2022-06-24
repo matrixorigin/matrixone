@@ -295,6 +295,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = binding.types[colPos]
+				table = binding.table
 			} else {
 				// return nil, errors.New("", fmt.Sprintf("column reference %q is ambiguous", name))
 				return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", name))
