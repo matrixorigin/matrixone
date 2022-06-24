@@ -2,7 +2,7 @@
 
 ## **Prerequisite**
 
-To develop a build-in function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to get some Golang basic concepts. 
+To develop a built-in function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to learn some basic Golang concepts. 
 
 ## **Preparation**
 
@@ -11,11 +11,11 @@ Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribu
 
 ## **What is a built-in function?**
 
-There are two types of functions in a database,  built-in functions are functions that are shipped with the database, in contrast, user-defined functions is customized by the users. Built-in functions can be categorized according to the data types that they operate on i.e. strings, date and numeric built-in functions. 
+There are two types of functions in a database,  built-in functions  and user-defined functions. Built-in functions are functions that are shipped with the database. In contrast, user-defined functions are customized by the users. Built-in functions can be categorized according to the data types that they operate on i.e. strings, date and numeric built-in functions. 
 
-An example of a built-in function is `abs()`, which when given a value calculates the absolute (non-negative) value of the number.
+An example of a built-in function is `abs()`, which calculates the absolute (non-negative) value of a given number.
 
-Some functions, such as `abs()` are used to perform calculations, others such as `getdate()` are used to obtain a system value, such as the current data, or others, like `left()`, are used to manipulate textual data.
+Some functions, such as `abs()` are used to perform calculations. Others such as `getdate()` are used to obtain a system value, such as the current data, or others, like `left()`, are used to manipulate textual data.
 
 Usually the built-in functions are categorized into major categories:  
 
@@ -74,11 +74,11 @@ func init() {
 }
 ```
 
-In MatrixOne, all letters in a function name will be lowercased during the parsing process, so register function names using only lowercase letters otherwise the function won't be recognized.
+In MatrixOne, all letters in a function name will be lowercased during the parsing process, so the register function names using only lowercase letters otherwise the function won't be recognized.
 
 **2.** declare function parameter types and return types.
 
-The function abs accepts all numeric types as its parameter(uint8, int8, float32...), we can return a 64bit value covering all different parameter types, or, to optimize the performance of our function, we can return different types with respect to the parameter type.
+The function abs accepts all numeric types as its parameter (uint8, int8, float32...), we can return a 64bit value covering all different parameter types. To optimize the performance of our function, we can also return different types with respect to the parameter type.
 
 Outside the init function, declare these variables for each pair of parameter type and return type.
 
@@ -188,7 +188,7 @@ since we need a float32 vector here, its size should be 4 * len(origVecCol), 4 b
 
 3.Vector.Nsp: MatrixOne uses bitmaps to store the NULL values in a column, Vector.Nsp is a wrap up struct for this bitmap.
 
-4.the boolean parameter of the Fn: this boolean value is usually used to indicate whether the vector passed in is a constant(it has length 1), sometimes we could make use of this situation for our function implementation, for example, pkg/sql/colexec/extend/overload/plus.go. 
+4.the boolean parameter of the Fn: this boolean value is usually used to indicate whether the vector passed in is a constant(it has length 1). Sometimes we could make use of this situation for our function implementation, for example, pkg/sql/colexec/extend/overload/plus.go. 
 
 Since the result vector has the same type as the original vector, we could use the original vector to store our result when we don't need our original vector anymore in our execution plan(i.e., the reference count of the original vector is 0 or 1).
 
@@ -301,7 +301,7 @@ func init() {
 
 Step 2: Implement Abs function
 
-In MatrixOne, We put all of our builtin function definition code in the `pkg/vectorize/` directory, to implement abs functions, first we need to create a subdirectory `abs` in this vectorize directory.
+In MatrixOne, We put all of our builtin function definition code in the `pkg/vectorize/` directory. To implement abs functions, first we need to create a subdirectory `abs` in this vectorized directory.
 In this fresh `abs` directory, create a file `abs.go`, the place where our abs function implementation code goes.
 For certain cpu architectures, we could utilize the cpu's intrinsic SIMD instruction to compute the absolute value and hence boost our function's performance, to differentiate function implementations for different cpu architectures, we declare our pure go version of abs function this way:
 
@@ -429,14 +429,14 @@ Bingo!
 
 ## **Write a unit Test for your function**
 
-We recommend you to also write a unit test for the new function. 
+We recommend that you also write a unit test for the new function. 
 Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal but complete testing experience. It automates execution of any function of the form.
 
 ```
 func TestXxx(*testing.T)
 ```
 
-To write a new test suite, create a file whose name ends `_test.go` that contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run. 
+To write a new test suite, create a file whose name ends `_test.go` and contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run. 
 
 Step1: Create a file named `abs_test.go` under `vectorize/abs/` directory. Import the `testing` framework and the `testify` framework we are going to use for testing mathematical `equal`. 
 
