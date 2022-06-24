@@ -109,8 +109,8 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 				continue
 			}
 			rts[i] = args[0]
-			flg := true
-			if args[0] == f.Args[0] {
+			flg := args[0] == f.Args[0]
+			if flg {
 				for j := 1; j < len(args); j++ {
 					if !castable[args[j]][f.Args[j]] {
 						flg = false
