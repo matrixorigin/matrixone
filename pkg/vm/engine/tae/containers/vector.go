@@ -101,6 +101,9 @@ func (vec *vector[T]) CloneWindow(offset, length int) Vector {
 	if vec.nulls != nil {
 		if offset == 0 || length == vec.Length() {
 			cloned.nulls = vec.nulls.Clone()
+			if length < vec.Length() {
+				cloned.nulls.RemoveRange(uint64(length), uint64(vec.Length()))
+			}
 		} else {
 			cloned.nulls = roaring64.New()
 			for i := offset; i < offset+length; i++ {
