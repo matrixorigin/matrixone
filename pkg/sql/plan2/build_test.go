@@ -409,6 +409,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		// "SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY IN (1, 2)",  //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY NOT IN (1)", //test more expr
+		"select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - 1) >10",
 
 		"SELECT -1",
 		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
