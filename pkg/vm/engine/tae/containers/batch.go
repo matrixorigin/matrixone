@@ -85,6 +85,25 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
+func (bat *Batch) CloneWindow(offset, length int) (cloned *Batch) {
+	cloned = NewEmptyBatch()
+	cloned.Attrs = bat.Attrs
+	cloned.nameidx = bat.nameidx
+	if bat.Deletes != nil {
+		cloned.Deletes = roaring.New()
+		for i := offset; i < offset+length; i++ {
+			if bat.Deletes.ContainsInt(i) {
+				cloned.Deletes.AddInt(i)
+			}
+		}
+	}
+	cloned.Vecs = make([]Vector, len(bat.Vecs))
+	for i := range cloned.Vecs {
+		cloned.Vecs[i] = bat.Vecs[i].CloneWindow(offset, length)
+	}
+	return
+}
+
 func (bat *Batch) Close() {
 	for _, vec := range bat.Vecs {
 		vec.Close()

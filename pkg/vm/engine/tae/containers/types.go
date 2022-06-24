@@ -29,6 +29,7 @@ type VectorView interface {
 
 	Data() []byte
 	Bytes() *Bytes
+	Slice() any
 	DataWindow(offset, length int) []byte
 	Get(i int) any
 
@@ -38,7 +39,6 @@ type VectorView interface {
 	GetAllocator() stl.MemAllocator
 	GetType() types.Type
 	String() string
-	Window() VectorView
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
@@ -67,6 +67,7 @@ type Vector interface {
 	AppendMany(vs ...any)
 	Extend(o Vector)
 	Compact(deletes *roaring.Bitmap)
+	CloneWindow(offset, length int) Vector
 
 	Equals(o Vector) bool
 	Length() int
@@ -75,7 +76,7 @@ type Vector interface {
 	GetAllocator() stl.MemAllocator
 	GetType() types.Type
 	String() string
-	Window() Vector
+	Window(offset, length int) VectorView
 
 	Foreach(op ItOp, sels *roaring.Bitmap) error
 	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error

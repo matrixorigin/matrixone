@@ -117,22 +117,26 @@ func (impl *nullableVecImpl[T]) String() string {
 }
 
 func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return impl.forEachWindowWithBias(offset, length, op, sels, 0)
+}
+
+func (impl *nullableVecImpl[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
 	if !impl.HasNull() {
-		return impl.vecBase.ForeachWindow(offset, length, op, sels)
+		return impl.vecBase.forEachWindowWithBias(offset, length, op, sels, bias)
 	}
 	var v T
 	if _, ok := any(v).([]byte); !ok {
 		slice := impl.derived.stlvec.Slice()
-		slice = slice[offset : offset+length]
+		slice = slice[offset+bias : offset+length+bias]
 		if sels == nil || sels.IsEmpty() {
 			for i, elem := range slice {
 				var v any
-				if impl.IsNull(i) {
+				if impl.IsNull(i + offset + bias) {
 					v = types.Null{}
 				} else {
 					v = elem
 				}
-				if err = op(v, i); err != nil {
+				if err = op(v, i+offset); err != nil {
 					break
 				}
 			}
@@ -146,7 +150,7 @@ func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels 
 					break
 				}
 				var v any
-				if impl.IsNull(int(idx)) {
+				if impl.IsNull(int(idx) + bias) {
 					v = types.Null{}
 				} else {
 					v = slice[int(idx)-offset]
@@ -161,7 +165,7 @@ func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels 
 
 	if sels == nil || sels.IsEmpty() {
 		for i := offset; i < offset+length; i++ {
-			elem := impl.Get(i)
+			elem := impl.Get(i + bias)
 			if err = op(elem, i); err != nil {
 				break
 			}
@@ -177,7 +181,7 @@ func (impl *nullableVecImpl[T]) ForeachWindow(offset, length int, op ItOp, sels 
 		} else if int(idx) >= end {
 			break
 		}
-		elem := impl.Get(int(idx))
+		elem := impl.Get(int(idx) + bias)
 		if err = op(elem, int(idx)); err != nil {
 			break
 		}

@@ -62,6 +62,7 @@ func (vec *vecView) GetAllocator() MemAllocator { return vec.impl.GetAllocator()
 func (vec *vecView) GetType() types.Type        { return vec.impl.GetType() }
 func (vec *vecView) String() string             { return vec.impl.String() }
 func (vec *vecView) Close()                     {}
+func (vec *vecView) Slice() any                 { return vec.impl.Slice() }
 
 func (vec *vecView) ResetWithData(_ *Bytes, _ *roaring64.Bitmap) { panic("not supported") }
 func (vec *vecView) Window() VectorView                          { panic("not implemented") }

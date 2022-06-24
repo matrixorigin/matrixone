@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -45,10 +44,13 @@ func TestBatch2(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	bat := MockBatch(vecTypes, 10, 3, nil)
 	assert.Equal(t, 10, bat.Length())
-	for _, vec := range bat.Vecs {
-		t.Log(vec.String())
-	}
-	t.Log(stl.DefaultAllocator.String())
+
+	cloned := bat.CloneWindow(0, 5)
+	assert.Equal(t, 5, cloned.Length())
+	t.Log(cloned.Allocated())
+	cloned.Close()
+	cloned = bat.CloneWindow(0, bat.Length())
+	assert.True(t, bat.Equals(cloned))
+	cloned.Close()
 	bat.Close()
-	t.Log(stl.DefaultAllocator.String())
 }

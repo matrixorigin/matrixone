@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -187,5 +188,131 @@ func TestVector4(t *testing.T) {
 		assert.True(t, vec.Equals(vec2))
 		vec.Close()
 		vec2.Close()
+	}
+}
+
+func TestVector5(t *testing.T) {
+	vecTypes := types.MockColTypes(17)
+	sels := roaring.BitmapOf(2, 6)
+	for _, vecType := range vecTypes {
+		vec := MockVector(vecType, 10, false, true, nil)
+		rows := make([]int, 0)
+		op := func(v any, row int) (err error) {
+			rows = append(rows, row)
+			assert.Equal(t, vec.Get(row), v)
+			return
+		}
+		_ = vec.Foreach(op, nil)
+		assert.Equal(t, 10, len(rows))
+		for i, e := range rows {
+			assert.Equal(t, i, e)
+		}
+
+		rows = rows[:0]
+		_ = vec.Foreach(op, sels)
+		assert.Equal(t, 2, len(rows))
+		assert.Equal(t, 2, rows[0])
+		assert.Equal(t, 6, rows[1])
+
+		rows = rows[:0]
+		_ = vec.ForeachWindow(2, 6, op, nil)
+		assert.Equal(t, []int{2, 3, 4, 5, 6, 7}, rows)
+		rows = rows[:0]
+		_ = vec.ForeachWindow(2, 6, op, sels)
+		assert.Equal(t, []int{2, 6}, rows)
+		rows = rows[:0]
+		_ = vec.ForeachWindow(3, 6, op, sels)
+		assert.Equal(t, []int{6}, rows)
+		rows = rows[:0]
+		_ = vec.ForeachWindow(3, 3, op, sels)
+		assert.Equal(t, []int{}, rows)
+
+		vec.Close()
+	}
+}
+
+func TestVector6(t *testing.T) {
+	vecTypes := types.MockColTypes(17)
+	sels := roaring.BitmapOf(2, 6)
+	f := func(vecType types.Type, nullable bool) {
+		vec := MockVector(vecType, 10, false, nullable, nil)
+		if nullable {
+			vec.Update(4, types.Null{})
+		}
+		bias := 0
+		win := vec.Window(bias, 8)
+		assert.Equal(t, 8, win.Length())
+		assert.Equal(t, 8, win.Capacity())
+		rows := make([]int, 0)
+		op := func(v any, row int) (err error) {
+			rows = append(rows, row)
+			assert.Equal(t, vec.Get(row+bias), v)
+			return
+		}
+		_ = win.Foreach(op, nil)
+		assert.Equal(t, 8, len(rows))
+		assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, rows)
+		rows = rows[:0]
+		_ = win.ForeachWindow(2, 3, op, nil)
+		assert.Equal(t, 3, len(rows))
+		assert.Equal(t, []int{2, 3, 4}, rows)
+
+		rows = rows[:0]
+		_ = win.Foreach(op, sels)
+		assert.Equal(t, 2, len(rows))
+		assert.Equal(t, 2, rows[0])
+		assert.Equal(t, 6, rows[1])
+
+		rows = rows[:0]
+		_ = win.ForeachWindow(2, 6, op, sels)
+		assert.Equal(t, []int{2, 6}, rows)
+		rows = rows[:0]
+		_ = win.ForeachWindow(3, 4, op, sels)
+		assert.Equal(t, []int{6}, rows)
+		rows = rows[:0]
+		_ = win.ForeachWindow(3, 3, op, sels)
+		assert.Equal(t, []int{}, rows)
+
+		bias = 1
+		win = vec.Window(bias, 8)
+
+		op2 := func(v any, row int) (err error) {
+			rows = append(rows, row)
+			// t.Logf("row=%d,v=%v", row, v)
+			// t.Logf("row=%d, winv=%v", row, win.Get(row))
+			// t.Logf("row+bias=%d, rawv=%v", row+bias, vec.Get(row+bias))
+			assert.Equal(t, vec.Get(row+bias), v)
+			assert.Equal(t, win.Get(row), v)
+			return
+		}
+		rows = rows[:0]
+		_ = win.Foreach(op2, nil)
+		assert.Equal(t, 8, len(rows))
+		assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, rows)
+		rows = rows[:0]
+		_ = win.ForeachWindow(2, 3, op, nil)
+		assert.Equal(t, 3, len(rows))
+		assert.Equal(t, []int{2, 3, 4}, rows)
+		rows = rows[:0]
+		_ = win.Foreach(op, sels)
+		assert.Equal(t, 2, len(rows))
+		assert.Equal(t, 2, rows[0])
+		assert.Equal(t, 6, rows[1])
+
+		rows = rows[:0]
+		_ = win.ForeachWindow(2, 6, op, sels)
+		assert.Equal(t, []int{2, 6}, rows)
+		rows = rows[:0]
+		_ = win.ForeachWindow(3, 4, op, sels)
+		assert.Equal(t, []int{6}, rows)
+		rows = rows[:0]
+		_ = win.ForeachWindow(3, 3, op, sels)
+		assert.Equal(t, []int{}, rows)
+
+		vec.Close()
+	}
+	for _, vecType := range vecTypes {
+		f(vecType, false)
+		f(vecType, true)
 	}
 }

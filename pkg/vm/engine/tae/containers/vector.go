@@ -14,9 +14,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
+type internalVector interface {
+	Vector
+	forEachWindowWithBias(offset, length int, op ItOp,
+		sels *roaring.Bitmap, bias int) (err error)
+}
+
 type vector[T any] struct {
 	stlvec    stl.Vector[T]
-	impl      Vector
+	impl      internalVector
 	typ       types.Type
 	nulls     *roaring64.Bitmap
 	roStorage stl.MemNode
@@ -88,6 +94,26 @@ func (vec *vector[T]) Data() []byte                { return vec.impl.Data() }
 func (vec *vector[T]) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
 }
+func (vec *vector[T]) CloneWindow(offset, length int) Vector {
+	opts := new(Options)
+	opts.Allocator = vec.GetAllocator()
+	cloned := NewVector[T](vec.typ, vec.Nullable(), opts)
+	if vec.nulls != nil {
+		if offset == 0 || length == vec.Length() {
+			cloned.nulls = vec.nulls.Clone()
+		} else {
+			cloned.nulls = roaring64.New()
+			for i := offset; i < offset+length; i++ {
+				if vec.nulls.ContainsInt(i) {
+					cloned.nulls.AddInt(i)
+				}
+			}
+		}
+	}
+	cloned.stlvec.Close()
+	cloned.stlvec = vec.stlvec.Clone(offset, length)
+	return cloned
+}
 func (vec *vector[T]) Slice() any {
 	var v T
 	if _, ok := any(v).([]byte); ok {
@@ -121,7 +147,15 @@ func (vec *vector[T]) releaseRoStorage() {
 	vec.roStorage = nil
 }
 
-func (vec *vector[T]) Window() Vector { return nil }
+func (vec *vector[T]) Window(offset, length int) VectorView {
+	return &vectorWindow[T]{
+		ref: vec,
+		windowBase: &windowBase{
+			offset: offset,
+			length: length,
+		},
+	}
+}
 
 func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	if deletes == nil || deletes.IsEmpty() {

@@ -20,6 +20,8 @@ func newVecBase[T any](derived *vector[T]) *vecBase[T] {
 	}
 }
 
+func (base *vecBase[T]) Window(offset, length int) VectorView        { panic("not supported") }
+func (base *vecBase[T]) CloneWindow(offset, length int) Vector       { panic("not supported") }
 func (base *vecBase[T]) ResetWithData(_ *Bytes, _ *roaring64.Bitmap) { panic("not supported") }
 func (base *vecBase[T]) Equals(o Vector) bool                        { panic("not supported") }
 func (base *vecBase[T]) IsView() bool                                { return false }
@@ -70,7 +72,6 @@ func (base *vecBase[T]) Allocated() int { return base.derived.stlvec.Allocated()
 func (base *vecBase[T]) GetAllocator() MemAllocator { return base.derived.stlvec.GetAllocator() }
 func (base *vecBase[T]) GetType() types.Type        { return base.derived.typ }
 func (base *vecBase[T]) String() string             { return base.derived.stlvec.String() }
-func (base *vecBase[T]) Window() Vector             { return nil }
 
 func (base *vecBase[T]) Close() {
 	base.derived.releaseRoStorage()
@@ -87,13 +88,17 @@ func (base *vecBase[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 }
 
 func (base *vecBase[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) (err error) {
+	return base.forEachWindowWithBias(offset, length, op, sels, 0)
+}
+
+func (base *vecBase[T]) forEachWindowWithBias(offset, length int, op ItOp, sels *roaring.Bitmap, bias int) (err error) {
 	var v T
 	if _, ok := any(v).([]byte); !ok {
 		slice := base.derived.stlvec.Slice()
-		slice = slice[offset : offset+length]
+		slice = slice[offset+bias : offset+length+bias]
 		if sels == nil || sels.IsEmpty() {
 			for i, elem := range slice {
-				if err = op(elem, i); err != nil {
+				if err = op(elem, i+offset); err != nil {
 					break
 				}
 			}
@@ -115,7 +120,7 @@ func (base *vecBase[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring
 	}
 	if sels == nil || sels.IsEmpty() {
 		for i := offset; i < offset+length; i++ {
-			elem := base.derived.stlvec.Get(i)
+			elem := base.derived.stlvec.Get(i + bias)
 			if err = op(elem, i); err != nil {
 				break
 			}
@@ -131,7 +136,7 @@ func (base *vecBase[T]) ForeachWindow(offset, length int, op ItOp, sels *roaring
 		} else if int(idx) >= end {
 			break
 		}
-		elem := base.derived.stlvec.Get(int(idx))
+		elem := base.derived.stlvec.Get(int(idx) + bias)
 		if err = op(elem, int(idx)); err != nil {
 			break
 		}
