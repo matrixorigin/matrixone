@@ -143,7 +143,7 @@ func (s *Driver) Mount() {
 	s.lastInode = 1
 	var seq uint64
 	seq = 0
-	s.nodes = make(map[string]*DriverFile, INODE_NUM)
+	s.nodes = make(map[string]*DriverFile)
 	logFile := &DriverFile{
 		snode:  s.super.lognode,
 		name:   "logfile",
@@ -176,6 +176,9 @@ func (s *Driver) Destroy() {
 		panic(any(err.Error()))
 	}
 	s.segFile = nil
+	s.allocator = nil
+	s.log.allocator = nil
+	s.nodes = nil
 }
 
 func (s *Driver) Replay(cache *bytes.Buffer) error {
