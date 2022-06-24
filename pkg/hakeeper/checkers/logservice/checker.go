@@ -166,13 +166,13 @@ func Check(alloc util.IDAllocator, cluster hapb.ClusterInfo, infos hapb.LogState
 
 	for _, toStart := range stats.toStart {
 		operators = append(operators, operator.NewOperator("", toStart.shardID, toStart.epoch,
-			operator.StartLogService{UUID: toStart.uuid, ShardID: toStart.shardID,
+			operator.StartLogService{StoreID: toStart.uuid, ShardID: toStart.shardID,
 				ReplicaID: toStart.replicaID}))
 	}
 
 	for _, toStop := range stats.toStop {
 		operators = append(operators, operator.NewOperator("", toStop.shardID, toStop.epoch,
-			operator.StopLogService{UUID: toStop.uuid, ShardID: toStop.shardID}))
+			operator.StopLogService{StoreID: toStop.uuid, ShardID: toStop.shardID}))
 	}
 
 	return operators

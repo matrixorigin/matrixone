@@ -117,9 +117,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 		switch st := step.(type) {
 		case AddLogService:
 			cmd = hakeeper.ScheduleCommand{
-				UUID: st.UUID,
+				Target: st.Target,
 				ConfigChange: hakeeper.ConfigChange{
 					Replica: hakeeper.Replica{
+						StoreID:   st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
@@ -130,9 +131,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 			}
 		case RemoveLogService:
 			cmd = hakeeper.ScheduleCommand{
-				UUID: st.UUID,
+				Target: st.Target,
 				ConfigChange: hakeeper.ConfigChange{
 					Replica: hakeeper.Replica{
+						StoreID:   st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
@@ -142,9 +144,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 			}
 		case StartLogService:
 			cmd = hakeeper.ScheduleCommand{
-				UUID: st.UUID,
+				Target: st.StoreID,
 				ConfigChange: hakeeper.ConfigChange{
 					Replica: hakeeper.Replica{
+						StoreID:   st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
@@ -154,18 +157,22 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 			}
 		case StopLogService:
 			cmd = hakeeper.ScheduleCommand{
-				UUID: st.UUID,
+				Target: st.StoreID,
 				ConfigChange: hakeeper.ConfigChange{
-					Replica:    hakeeper.Replica{ShardID: st.ShardID},
+					Replica: hakeeper.Replica{
+						StoreID: st.StoreID,
+						ShardID: st.ShardID,
+					},
 					ChangeType: hakeeper.StopReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
 		case AddDnReplica:
 			cmd = hakeeper.ScheduleCommand{
-				UUID: st.StoreID,
+				Target: st.StoreID,
 				ConfigChange: hakeeper.ConfigChange{
 					Replica: hakeeper.Replica{
+						StoreID:   st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
@@ -175,9 +182,10 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 			}
 		case RemoveDnReplica:
 			cmd = hakeeper.ScheduleCommand{
-				UUID: st.StoreID,
+				Target: st.StoreID,
 				ConfigChange: hakeeper.ConfigChange{
 					Replica: hakeeper.Replica{
+						StoreID:   st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},

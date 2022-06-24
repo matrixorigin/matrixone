@@ -141,9 +141,10 @@ func TestFixExpiredStore(t *testing.T) {
 			},
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{{
-				UUID: "a",
+				Target: "b",
 				ConfigChange: hapb.ConfigChange{
 					Replica: hapb.Replica{
+						StoreID:   "a",
 						ShardID:   1,
 						ReplicaID: 1,
 						Epoch:     0,
@@ -201,9 +202,10 @@ func TestFixExpiredStore(t *testing.T) {
 			},
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{{
-				UUID: "a",
+				Target: "b",
 				ConfigChange: hapb.ConfigChange{
 					Replica: hapb.Replica{
+						StoreID:   "a",
 						ShardID:   1,
 						ReplicaID: 4,
 						Epoch:     1,
@@ -260,18 +262,118 @@ func TestFixExpiredStore(t *testing.T) {
 				},
 			},
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
-			expected: []hapb.ScheduleCommand{{
-				UUID: "a",
-				ConfigChange: hapb.ConfigChange{
-					Replica: hapb.Replica{
-						ShardID:   1,
-						ReplicaID: 1,
-						Epoch:     0,
+			expected: []hapb.ScheduleCommand{
+				{
+					Target: "a",
+					ConfigChange: hapb.ConfigChange{
+						Replica: hapb.Replica{
+							StoreID:   "a",
+							ShardID:   1,
+							ReplicaID: 1,
+						},
+						ChangeType: hapb.StartReplica,
 					},
-					ChangeType: hapb.StartReplica,
+					ServiceType: hapb.LogService,
 				},
-				ServiceType: hapb.LogService,
-			}},
+			},
+		},
+	}
+
+	for i, c := range cases {
+		coordinator := NewCoordinator()
+		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
+		fmt.Printf("case %v: %s\n", i, c.desc)
+		assert.Equal(t, c.expected, output)
+	}
+}
+
+func TestFixZombie(t *testing.T) {
+	cases := []struct {
+		desc        string
+		idAlloc     *util.TestIDAllocator
+		cluster     hapb.ClusterInfo
+		dn          hapb.DNState
+		log         hapb.LogState
+		currentTick uint64
+		expected    []hapb.ScheduleCommand
+	}{
+		{
+			desc:    "replica on store c is a zombie",
+			idAlloc: util.NewTestIDAllocator(3),
+			cluster: hapb.ClusterInfo{
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3,
+					Name:             "shard1",
+				}},
+			},
+			log: hapb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
+					ShardID:  1,
+					Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+					Epoch:    2,
+					LeaderID: 1,
+				}},
+				Stores: map[string]hapb.LogStoreInfo{
+					"a": {
+						Tick: 12 * hakeeper.TickPerSecond * 60,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+								Epoch:    2,
+								LeaderID: 1},
+							ReplicaID: 1},
+						}},
+					"b": {
+						Tick: 13 * hakeeper.TickPerSecond * 60,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+								Epoch:    2,
+								LeaderID: 1},
+							ReplicaID: 2,
+						}},
+					},
+					"c": {
+						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
+								Epoch:    1,
+								LeaderID: 1},
+							ReplicaID: 3,
+						}},
+					},
+					"d": {
+						Tick: 14 * hakeeper.TickPerSecond * 60,
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
+								ShardID:  1,
+								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
+								Epoch:    2,
+								LeaderID: 1},
+							ReplicaID: 3,
+						}},
+					},
+				},
+			},
+			currentTick: 15 * hakeeper.TickPerSecond * 60,
+			expected: []hapb.ScheduleCommand{
+				{
+					Target: "c",
+					ConfigChange: hapb.ConfigChange{
+						Replica: hapb.Replica{
+							StoreID: "c",
+							ShardID: 1,
+						},
+						ChangeType: hapb.StopReplica,
+					},
+					ServiceType: hapb.LogService,
+				},
+			},
 		},
 	}
 

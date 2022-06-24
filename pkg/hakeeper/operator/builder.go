@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"sort"
 )
 
 // Builder is used to create operators. Usage:
@@ -151,15 +152,38 @@ func (b *Builder) prepareBuild() string {
 
 func (b *Builder) buildSteps() error {
 	for len(b.toRemove) > 0 {
+		var targets []string
+		for target := range b.targetPeers {
+			targets = append(targets, target)
+		}
+		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+
 		uuid, replicaID := b.toRemove.Get()
-		b.steps = append(b.steps, RemoveLogService{UUID: uuid, ShardID: b.shardID, ReplicaID: replicaID})
+		b.steps = append(b.steps, RemoveLogService{
+			Target:    targets[0],
+			StoreID:   uuid,
+			ShardID:   b.shardID,
+			ReplicaID: replicaID,
+		})
 		delete(b.toRemove, uuid)
 		continue
 	}
 
 	for len(b.toAdd) > 0 {
+		var targets []string
+		for target := range b.originPeers {
+			targets = append(targets, target)
+		}
+		sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
+
 		uuid, replicaID := b.toAdd.Get()
-		b.steps = append(b.steps, AddLogService{UUID: uuid, ShardID: b.shardID, ReplicaID: replicaID, Epoch: b.epoch})
+		b.steps = append(b.steps, AddLogService{
+			Target:    targets[0],
+			StoreID:   uuid,
+			ShardID:   b.shardID,
+			ReplicaID: replicaID,
+			Epoch:     b.epoch,
+		})
 		delete(b.toAdd, uuid)
 	}
 
