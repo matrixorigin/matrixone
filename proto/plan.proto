@@ -516,6 +516,21 @@ message Plan {
 		Query query 			= 1;
 		TransationControl tcl 	= 2;
 		DataDefinition ddl 		= 3;
+		DataControl	dcl			= 4;
+	}
+}
+
+message DataControl {
+	enum DclType {
+		SET_VARIABLES	= 0;
+		GRANT			= 1;
+		REVOKE			= 2;
+		DENY			= 3;
+	}
+	//DataDefinition type
+	DclType dcl_type = 1;
+	oneof control {		
+		SetVariables set_variables = 2;
 	}
 }
 
@@ -542,7 +557,6 @@ message DataDefinition {
 		SHOW_ERRORS			= 18;
 		SHOW_STATUS			= 19;
 		SHOW_PROCESSLIST	= 20;
-		SET_VARIABLES		= 21;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -564,7 +578,6 @@ message DataDefinition {
 		DropIndex drop_index 			= 11;
 		TruncateTable truncate_table	= 12;
 		ShowVariables show_variables 	= 13;
-		SetVariables set_variables      = 14;
 	}
 }
 
