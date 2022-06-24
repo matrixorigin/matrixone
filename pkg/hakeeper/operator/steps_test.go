@@ -18,7 +18,7 @@ func TestAddLogService(t *testing.T) {
 		{
 			desc: "add log service completed",
 			command: AddLogService{
-				UUID:      "a",
+				StoreID:   "a",
 				ShardID:   1,
 				ReplicaID: 1,
 			},
@@ -32,7 +32,7 @@ func TestAddLogService(t *testing.T) {
 		{
 			desc: "add log service not completed",
 			command: AddLogService{
-				UUID:      "a",
+				StoreID:   "a",
 				ShardID:   1,
 				ReplicaID: 1,
 			},
@@ -61,7 +61,7 @@ func TestRemoveLogService(t *testing.T) {
 		{
 			desc: "remove log service not completed",
 			command: RemoveLogService{
-				UUID:      "a",
+				StoreID:   "a",
 				ShardID:   1,
 				ReplicaID: 1,
 			},
@@ -75,7 +75,7 @@ func TestRemoveLogService(t *testing.T) {
 		{
 			desc: "remove log service completed",
 			command: RemoveLogService{
-				UUID:      "a",
+				StoreID:   "a",
 				ShardID:   1,
 				ReplicaID: 1,
 			},
@@ -104,7 +104,7 @@ func TestStartLogService(t *testing.T) {
 		{
 			desc: "start log service not completed",
 			command: StartLogService{
-				UUID:      "a",
+				StoreID:   "a",
 				ShardID:   1,
 				ReplicaID: 1,
 			},
@@ -118,7 +118,7 @@ func TestStartLogService(t *testing.T) {
 		{
 			desc: "start log service completed",
 			command: StartLogService{
-				UUID:      "a",
+				StoreID:   "a",
 				ShardID:   1,
 				ReplicaID: 1,
 			},
@@ -153,7 +153,7 @@ func TestStopLogService(t *testing.T) {
 		{
 			desc: "stop log service completed",
 			command: StopLogService{
-				UUID:    "a",
+				StoreID: "a",
 				ShardID: 1,
 			},
 			state: hapb.LogState{
@@ -166,7 +166,7 @@ func TestStopLogService(t *testing.T) {
 		{
 			desc: "stop log service not completed",
 			command: StopLogService{
-				UUID:    "a",
+				StoreID: "a",
 				ShardID: 1,
 			},
 			state: hapb.LogState{

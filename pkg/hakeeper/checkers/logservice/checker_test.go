@@ -245,7 +245,9 @@ func TestCollectStats(t *testing.T) {
 				},
 			}, tick: 10,
 			expected: stats{toRemove: map[uint64][]replica{1: {{"a", 1, 0, 1}}},
-				toAdd: map[uint64]int{}}},
+				toAdd: map[uint64]int{},
+			},
+		},
 		{
 			desc: "Store a is expired",
 			infos: hapb.LogState{
@@ -281,9 +283,12 @@ func TestCollectStats(t *testing.T) {
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}}},
-			}, tick: 999999999, expected: stats{
+			}, tick: 999999999,
+			expected: stats{
 				toRemove: map[uint64][]replica{1: {{"a", 1, 1, 1}}},
-				toAdd:    map[uint64]int{}}},
+				toAdd:    map[uint64]int{},
+			},
+		},
 	}
 
 	for i, c := range cases {
@@ -533,7 +538,8 @@ func TestCheck(t *testing.T) {
 			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
 			expected: []*operator.Operator{operator.NewOperator("rm peer: store [a]", 1,
 				1, operator.RemoveLogService{
-					UUID:      "a",
+					Target:    "b",
+					StoreID:   "a",
 					ShardID:   1,
 					ReplicaID: 1,
 				})},
@@ -585,7 +591,8 @@ func TestCheck(t *testing.T) {
 			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
 			expected: []*operator.Operator{operator.NewOperator("adding 1:4(at epoch 1) to c", 1,
 				1, operator.AddLogService{
-					UUID:      "c",
+					Target:    "a",
+					StoreID:   "c",
 					ShardID:   1,
 					ReplicaID: 4,
 					Epoch:     1,
@@ -638,7 +645,7 @@ func TestCheck(t *testing.T) {
 			currentTick: uint64(15 * hakeeper.TickPerSecond * 60),
 			expected: []*operator.Operator{operator.NewOperator("", 1,
 				1, operator.StartLogService{
-					UUID:      "c",
+					StoreID:   "c",
 					ShardID:   1,
 					ReplicaID: 3,
 				})},

@@ -40,8 +40,8 @@ func TestOperatorStep(t *testing.T) {
 
 	dnState := hakeeper.DNState{}
 
-	assert.False(t, AddLogService{UUID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
-	assert.True(t, AddLogService{UUID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
-	assert.False(t, RemoveLogService{UUID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
-	assert.True(t, RemoveLogService{UUID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
+	assert.False(t, AddLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
+	assert.True(t, AddLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
+	assert.False(t, RemoveLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))
+	assert.True(t, RemoveLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
 }
