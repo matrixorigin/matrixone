@@ -101,7 +101,7 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 }
 
 func (df *dataFile) upgradeFile() {
-	if len(df.file) < UPGRADE_FILE_NUM {
+	if df.GetFileCnt() < UPGRADE_FILE_NUM {
 		return
 	}
 	go func() {
@@ -116,6 +116,12 @@ func (df *dataFile) upgradeFile() {
 			file.driver.ReleaseFile(file)
 		}
 	}()
+}
+
+func (df *dataFile) GetFileCnt() int {
+	df.mutex.Lock()
+	defer df.mutex.Unlock()
+	return len(df.file)
 }
 
 func (df *dataFile) GetFileType() common.FileType {
