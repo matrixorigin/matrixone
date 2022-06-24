@@ -1264,16 +1264,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				}
 			}
 
-			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT {
-				turnInner = true
-				filters = append(node.OnList, filters...)
-				node.JoinType = plan.Node_INNER
-				node.OnList = nil
-
-				break
-			}
-
-			if joinSides[i]&JoinSideLeft != 0 && canTurnInner && node.JoinType == plan.Node_RIGHT {
+			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter) {
 				turnInner = true
 				filters = append(node.OnList, filters...)
 				node.JoinType = plan.Node_INNER
@@ -1318,22 +1309,19 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 					leftPushdown = append(leftPushdown, filter)
 
-				case plan.Node_RIGHT:
-					rightPushdown = append(rightPushdown, filter)
-
 				default:
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideLeft:
-				if node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_OUTER {
+				if node.JoinType != plan.Node_OUTER {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
+				if node.JoinType == plan.Node_INNER {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)

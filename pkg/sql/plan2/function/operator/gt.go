@@ -16,7 +16,6 @@ package operator
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,7 +40,6 @@ func ScalarGtNotScalar[T OrderedValue](sv, nsv *vector.Vector, col1, col2 []T, p
 }
 
 func NotScalarGtScalar[T OrderedValue](sv, nsv *vector.Vector, col1, col2 []T, proc *process.Process) (*vector.Vector, error) {
-	fmt.Println("wangjian sql0 is", col1, col2)
 	length := int64(vector.Length(nsv))
 	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
@@ -160,7 +158,6 @@ func isBytesGt(b1, b2 []byte) bool {
 func GtGeneral[T OrderedValue](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	v1, v2 := vs[0], vs[1]
 	col1, col2 := vector.MustTCols2[T](v1), vector.MustTCols2[T](v2)
-	fmt.Println("wangjian sql0 is", v1.Col, v2.Col, v1.Nsp, v2.Nsp)
 	if v1.IsScalarNull() || v2.IsScalarNull() {
 		return HandleWithNullCol(vs, proc)
 	}
