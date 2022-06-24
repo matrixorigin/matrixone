@@ -1700,7 +1700,7 @@ func CastDecimal128AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*v
 }
 
 func CastDecimal64ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := 8
+	rtl := 4
 	lvs := lv.Col.([]types.Decimal64)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
@@ -1727,7 +1727,7 @@ func CastDecimal64ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vect
 }
 
 func CastDecimal128ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := 8
+	rtl := 4
 	lvs := lv.Col.([]types.Decimal128)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
