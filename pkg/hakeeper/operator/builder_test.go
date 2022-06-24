@@ -56,6 +56,7 @@ func TestAddBuild(t *testing.T) {
 	assert.Equal(t, uint64(1), build.shardID)
 	assert.Equal(t, uint64(1), build.epoch)
 	assert.Equal(t, AddLogService{
+		Target:    "a",
 		StoreID:   "d",
 		ShardID:   1,
 		ReplicaID: 4,
@@ -81,6 +82,7 @@ func TestRemoveBuild(t *testing.T) {
 	assert.Equal(t, uint64(1), build.shardID)
 	assert.Equal(t, uint64(1), build.epoch)
 	assert.Equal(t, RemoveLogService{
+		Target:    "a",
 		StoreID:   "c",
 		ShardID:   1,
 		ReplicaID: 3,
