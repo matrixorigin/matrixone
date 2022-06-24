@@ -153,7 +153,7 @@ func (vec *vector[T]) releaseRoStorage() {
 	vec.roStorage = nil
 }
 
-func (vec *vector[T]) Window(offset, length int) VectorView {
+func (vec *vector[T]) Window(offset, length int) Vector {
 	return &vectorWindow[T]{
 		ref: vec,
 		windowBase: &windowBase{

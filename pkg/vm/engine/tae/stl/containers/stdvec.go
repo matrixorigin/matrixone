@@ -165,6 +165,9 @@ func (vec *StdVector[T]) RangeDelete(offset, length int) {
 }
 
 func (vec *StdVector[T]) AppendMany(vals ...T) {
+	if len(vals) == 0 {
+		return
+	}
 	predictSize := len(vals) + len(vec.slice)
 	if predictSize > vec.capacity {
 		vec.tryExpand(predictSize)

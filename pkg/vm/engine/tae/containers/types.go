@@ -47,20 +47,9 @@ type VectorView interface {
 }
 
 type Vector interface {
-	Nullable() bool
-	IsNull(i int) bool
-	HasNull() bool
-	NullMask() *roaring64.Bitmap
-
+	VectorView
 	ResetWithData(bs *Bytes, nulls *roaring64.Bitmap)
-
-	IsView() bool
 	GetView() VectorView
-	Data() []byte
-	Bytes() *Bytes
-	Slice() any
-	DataWindow(offset, length int) []byte
-	Get(i int) any
 	Update(i int, v any)
 	Delete(i int)
 	Append(v any)
@@ -71,17 +60,7 @@ type Vector interface {
 	CloneWindow(offset, length int) Vector
 
 	Equals(o Vector) bool
-	Length() int
-	Capacity() int
-	Allocated() int
-	GetAllocator() stl.MemAllocator
-	GetType() types.Type
-	String() string
-	Window(offset, length int) VectorView
-
-	Foreach(op ItOp, sels *roaring.Bitmap) error
-	ForeachWindow(offset, length int, op ItOp, sels *roaring.Bitmap) error
-
+	Window(offset, length int) Vector
 	WriteTo(w io.Writer) (int64, error)
 	ReadFrom(r io.Reader) (int64, error)
 

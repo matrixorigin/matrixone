@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -83,6 +84,20 @@ func (bat *Batch) Allocated() int {
 		allocated += vec.Allocated()
 	}
 	return allocated
+}
+
+func (bat *Batch) Window(offset, length int) *Batch {
+	win := NewEmptyBatch()
+	win.Attrs = bat.Attrs
+	win.nameidx = bat.nameidx
+	if bat.Deletes != nil && offset+length != bat.Length() {
+		win.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
+	}
+	win.Vecs = make([]Vector, len(bat.Vecs))
+	for i := range win.Vecs {
+		win.Vecs[i] = bat.Vecs[i].Window(offset, length)
+	}
+	return win
 }
 
 func (bat *Batch) CloneWindow(offset, length int) (cloned *Batch) {
