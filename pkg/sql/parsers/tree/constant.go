@@ -31,6 +31,7 @@ const (
 	P_hexnum
 	P_null
 	P_bool
+	P_int64
 	P_uint64
 	P_float64
 	P_char

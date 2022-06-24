@@ -442,7 +442,6 @@ import (
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
-%type <numVal> int_num_val
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
@@ -5015,9 +5014,14 @@ datetime_precision:
     {
         $$ = nil
     }
-|   '(' int_num_val ')'
+|   '(' INTEGRAL ')'
     {
-        $$ = $2
+        ival, errStr := util.GetInt64($1)
+        if errStr != "" {
+            yylex.Error(errStr)
+            return 1
+        }
+        $$ = tree.NewNumValWithType(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, false, ival)
     }
 
 name_datetime_precision:
@@ -5305,23 +5309,6 @@ keys:
         $$ = tree.NewAttributeKey()
     }
 
-int_num_val:
-    INTEGRAL
-    {
-        ival, errStr := util.GetInt64($1)
-        if errStr != "" {
-            yylex.Error(errStr)
-            return 1
-        }
-        if ival > 0 {
-            $$ = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, false, ival)
-            $$.ValType = tree.P_uint64
-        } else {
-            $$ = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, true, ival)
-            $$.ValType = tree.P_uint64
-        }
-    }
-
 literal:
     STRING
     {
@@ -5329,8 +5316,15 @@ literal:
     }
 |   INTEGRAL
     {
-        ival := util.GetUint64($1)
-        $$ = tree.NewNumValWithType(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
+    	swich v := $1.(type) {
+    	case uint64:
+    		$$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
+    	case int64:
+    		$$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+    	default:
+    		yylex.Error("parse integral fail")
+            return 1
+    	}
     }
 |   FLOAT
     {

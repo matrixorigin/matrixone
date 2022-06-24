@@ -869,6 +869,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
+	over_int64_err := errors.New("", "Constants over int64 will support in future version.")
+
 	getStringExpr := func(val string) *Expr {
 		return &Expr{
 			Expr: &plan.Expr_C{
@@ -935,16 +937,12 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 		if astExpr.ValType == tree.P_hexnum {
 			intValue, err = strconv.ParseInt(astExpr.String(), 0, 64)
 			if err != nil {
-				num, err := strconv.ParseUint(astExpr.String(), 0, 64)
-				if err != nil {
-					return nil, err
-				}
-				return returnDecimalExpr(strconv.FormatUint(num, 10))
+				return nil, over_int64_err
 			}
 		} else {
 			intValue, ok = constant.Int64Val(astExpr.Value)
 			if !ok {
-				return returnDecimalExpr(astExpr.String())
+				return nil, over_int64_err
 			}
 		}
 		if astExpr.Negative() {
@@ -992,7 +990,11 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 		stringValue := constant.StringVal(astExpr.Value)
 		return getStringExpr(stringValue), nil
 	default:
+<<<<<<< HEAD
 		return nil, errors.New("", fmt.Sprintf("unsupport value: %v", astExpr.Value))
+=======
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport constant: %v", astExpr.Value))
+>>>>>>> fbef51d3 (constants over int64 is not support now)
 	}
 }
 
