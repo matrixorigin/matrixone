@@ -37,7 +37,13 @@ func (s *Service) handleCommands(cmds []hapb.ScheduleCommand) {
 }
 
 func (s *Service) handleAddReplica(cmd hapb.ScheduleCommand) {
-	panic("not implemented due to the lack of target UUID in ScheduleCommand")
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	epoch := cmd.ConfigChange.Replica.Epoch
+	target := cmd.ConfigChange.Replica.UUID
+	if err := s.store.addReplica(shardID, replicaID, target, epoch); err != nil {
+		plog.Errorf("failed to add replica %v", err)
+	}
 }
 
 func (s *Service) handleRemoveReplica(cmd hapb.ScheduleCommand) {
@@ -54,7 +60,7 @@ func (s *Service) handleStartReplica(cmd hapb.ScheduleCommand) {
 	replicaID := cmd.ConfigChange.Replica.ReplicaID
 	if shardID == hakeeper.DefaultHAKeeperShardID {
 		if err := s.store.StartHAKeeperReplica(replicaID, nil, false); err != nil {
-			plog.Errorf("failed to start log replica %v", err)
+			plog.Errorf("failed to start HAKeeper replica %v", err)
 		}
 	} else {
 		if err := s.store.StartReplica(shardID, replicaID, nil, false); err != nil {

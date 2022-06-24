@@ -17,6 +17,7 @@ package logservice
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -69,6 +70,34 @@ func TestHandleStopReplica(t *testing.T) {
 	runServiceTest(t, fn)
 }
 
+func TestHandleAddReplica(t *testing.T) {
+	store1, store2, err := getTestStores()
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, store1.Close())
+		require.NoError(t, store2.Close())
+	}()
+
+	service1 := Service{
+		store: store1,
+	}
+	cmd := hapb.ScheduleCommand{
+		ConfigChange: hapb.ConfigChange{
+			ChangeType: hapb.AddReplica,
+			Replica: hapb.Replica{
+				UUID:      uuid.New().String(),
+				ShardID:   1,
+				ReplicaID: 3,
+				Epoch:     2,
+			},
+		},
+	}
+	service1.handleCommands([]hapb.ScheduleCommand{cmd})
+	count, ok := checkReplicaCount(store1, 1)
+	require.True(t, ok)
+	assert.Equal(t, 3, count)
+}
+
 func TestHandleRemoveReplica(t *testing.T) {
 	store1, store2, err := getTestStores()
 	require.NoError(t, err)
@@ -86,9 +115,22 @@ func TestHandleRemoveReplica(t *testing.T) {
 			Replica: hapb.Replica{
 				ShardID:   1,
 				ReplicaID: 2,
+				Epoch:     2,
 			},
 		},
 	}
-	// TODO: add some checks
 	service1.handleCommands([]hapb.ScheduleCommand{cmd})
+	count, ok := checkReplicaCount(store1, 1)
+	require.True(t, ok)
+	assert.Equal(t, 1, count)
+}
+
+func checkReplicaCount(s *store, shardID uint64) (int, bool) {
+	hb := s.getHeartbeatMessage()
+	for _, info := range hb.Replicas {
+		if info.ShardID == shardID {
+			return len(info.Replicas), true
+		}
+	}
+	return 0, false
 }
