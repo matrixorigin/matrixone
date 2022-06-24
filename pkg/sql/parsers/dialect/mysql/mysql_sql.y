@@ -1543,29 +1543,28 @@ explain_stmt:
     }
 |   explain_sym VERBOSE explainable_stmt
     {
-	explainStmt := tree.NewExplainStmt($3, "text")
-	optionElem := tree.MakeOptionElem("verbose", "NULL")
+		explainStmt := tree.NewExplainStmt($3, "text")
+		optionElem := tree.MakeOptionElem("verbose", "NULL")
         options := tree.MakeOptions(optionElem)
-	explainStmt.Options = options
-	$$ = explainStmt
-
+		explainStmt.Options = options
+		$$ = explainStmt
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-	explainStmt := tree.NewExplainStmt($3, "text")
-	optionElem := tree.MakeOptionElem("analyze", "NULL")
+		explainStmt := tree.NewExplainStmt($3, "text")
+		optionElem := tree.MakeOptionElem("analyze", "NULL")
         options := tree.MakeOptions(optionElem)
         explainStmt.Options = options
-	$$ = explainStmt
+		$$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
         explainStmt := tree.NewExplainStmt($4, "text")
         optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-	optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-	options := tree.MakeOptions(optionElem1)
-	options = append(options, optionElem2)
-	explainStmt.Options = options
+		optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+		options := tree.MakeOptions(optionElem1)
+		options = append(options, optionElem2)
+		explainStmt.Options = options
         $$ = explainStmt
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
@@ -1575,6 +1574,16 @@ explain_stmt:
         $$ = explainStmt
     }
 
+explain_option_key:
+    ANALYZE
+|   VERBOSE
+|   FORMAT
+
+explain_foramt_value:
+    JSON
+|   TEXT
+
+
 explain_sym:
     EXPLAIN
 |   DESCRIBE
@@ -1583,9 +1592,9 @@ explain_sym:
 utility_option_list:
     utility_option_elem
     {
-        $$ =  tree.MakeOptions($1)
+        $$ = tree.MakeOptions($1)
     }
-| utility_option_list ',' utility_option_elem
+| 	utility_option_list ',' utility_option_elem
     {
         $$ = append($1, $3);
     }
@@ -6160,7 +6169,6 @@ reserved_keyword:
 |   FOR
 |   FORCE
 |   FROM
-|   FORMAT
 |   GROUP
 |   HAVING
 |   HOUR
@@ -6303,6 +6311,7 @@ non_reserved_keyword:
 |   EXCEPT
 |   ERRORS
 |   ENFORCED
+|   FORMAT
 |   FLOAT_TYPE
 |   FULL
 |   FIXED
@@ -6472,16 +6481,6 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
-
-explain_option_key:
-    ANALYZE
-|   VERBOSE
-|   FORMAT
-
-explain_foramt_value:
-    JSON
-|   TEXT
-
 
 //mo_keywords:
 //	PROPERTIES
