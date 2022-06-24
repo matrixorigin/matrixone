@@ -5,8 +5,6 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
@@ -32,10 +30,9 @@ func initRelatedStructure() {
 }
 
 func initLevelUpRules() {
-	base := types.T_tuple + 10
-	levelUp = make([][]int, base)
+	levelUp = make([][]int, maxTypeNumber)
 	for i := range levelUp {
-		levelUp[i] = make([]int, base)
+		levelUp[i] = make([]int, maxTypeNumber)
 		for j := range levelUp[i] {
 			levelUp[i][j] = upFailed
 		}

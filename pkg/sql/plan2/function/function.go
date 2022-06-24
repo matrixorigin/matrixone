@@ -84,6 +84,23 @@ var (
 	}
 )
 
+// Functions records all overloads of the same function name
+// and its function-id and type-check-function
+type Functions struct {
+	Id          int
+	TypeCheckFn func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T, err error)
+	Overloads   []Function
+}
+
+// TypeCheck returns overload-index-number, target-type
+// just set target-type nil if there is no need to do implicit-type-conversion for parameters
+func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
+	if fs.TypeCheckFn == nil {
+		// general
+	}
+	return fs.TypeCheckFn(fs.Overloads, args)
+}
+
 // Function is an overload of
 // a built-in function or an aggregate function or an operator
 type Function struct {
@@ -152,6 +169,8 @@ func (f Function) isFunction() bool {
 //
 // For use in other packages, see GetFunctionByID and GetFunctionByName
 var functionRegister = [][]Function{nil}
+
+var functionRegister2 []Functions
 
 // levelUp records the convert rule for functions' arguments
 //
@@ -262,6 +281,19 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, args))
 	}
 	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
+}
+
+func GetFunctionByName2(name string, args []types.T) (Function, int64, []types.T, error) {
+	fid, err := fromNameToFunctionId(name)
+	if err != nil {
+		return emptyFunction, -1, nil, err
+	}
+	fs := functionRegister2[fid]
+	index, targetTypes, err2 := fs.TypeCheck(args)
+	if err2 != nil {
+		return emptyFunction, -1, nil, err
+	}
+	return fs.Overloads[index], EncodeOverloadID(fid, index), targetTypes, nil
 }
 
 // strictTypeCheck is a general type check method.
