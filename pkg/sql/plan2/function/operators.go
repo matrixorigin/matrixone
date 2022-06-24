@@ -1754,7 +1754,8 @@ var operators = map[int]Functions{
 	},
 
 	BETWEEN: {
-		Id: BETWEEN,
+		Id:          BETWEEN,
+		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
 		Overloads: []Function{
 			{
 				Index:  0,

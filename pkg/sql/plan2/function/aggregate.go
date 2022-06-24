@@ -619,135 +619,141 @@ var aggregates = map[int]Functions{
 	},
 	COUNT: {
 		Id: COUNT,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				return 0, nil
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_AGG,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_int64,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					return len(inputTypes) == 1
-				},
+				Index:         0,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_int64,
 				AggregateInfo: aggregate.Count,
 			},
 		},
 	},
 	STARCOUNT: {
 		Id: STARCOUNT,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				return 0, nil
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_AGG,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_int64,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					return len(inputTypes) == 1
-				},
+				Index:         0,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_int64,
 				AggregateInfo: aggregate.StarCount,
 			},
 		},
 	},
 	BIT_AND: {
 		Id: BIT_AND,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				_, err := aggregate.NewBitAnd(types.Type{Oid: inputs[0]})
+				if err == nil {
+					return 0, nil
+				}
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_AGG,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_uint64,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					if len(inputTypes) == 1 {
-						_, err := aggregate.NewBitAnd(types.Type{Oid: inputTypes[0]})
-						if err == nil {
-							return true
-						}
-					}
-					return false
-				},
+				Index:         0,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_uint64,
 				AggregateInfo: aggregate.BitAnd,
 			},
 		},
 	},
 	BIT_OR: {
 		Id: BIT_OR,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				_, err := aggregate.NewBitOr(types.Type{Oid: inputs[0]})
+				if err == nil {
+					return 0, nil
+				}
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_AGG,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_uint64,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					if len(inputTypes) == 1 {
-						_, err := aggregate.NewBitOr(types.Type{Oid: inputTypes[0]})
-						if err == nil {
-							return true
-						}
-					}
-					return false
-				},
+				Index:         0,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_uint64,
 				AggregateInfo: aggregate.BitOr,
 			},
 		},
 	},
 	BIT_XOR: {
 		Id: BIT_XOR,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				_, err := aggregate.NewBitXor(types.Type{Oid: inputs[0]})
+				if err == nil {
+					return 0, nil
+				}
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_AGG,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_uint64,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					if len(inputTypes) == 1 {
-						_, err := aggregate.NewBitXor(types.Type{Oid: inputTypes[0]})
-						if err == nil {
-							return true
-						}
-					}
-					return false
-				},
+				Index:         0,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_uint64,
 				AggregateInfo: aggregate.BitXor,
 			},
 		},
 	},
 	VAR_POP: {
 		Id: VAR_POP,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				_, err := variance.NewVarianceRingWithTypeCheck(types.Type{Oid: inputs[0]})
+				if err == nil {
+					return 0, nil
+				}
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_AGG,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_float64,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					if len(inputTypes) == 1 {
-						_, err := variance.NewVarianceRingWithTypeCheck(types.Type{Oid: inputTypes[0]})
-						if err == nil {
-							return true
-						}
-					}
-					return false
-				},
+				Index:         0,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_float64,
 				AggregateInfo: aggregate.Variance,
 			},
 		},
 	},
 	STDDEV_POP: {
 		Id: STDDEV_POP,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				_, err := stddevpop.NewStdDevPopRingWithTypeCheck(types.Type{Oid: inputs[0]})
+				if err == nil {
+					return 0, nil
+				}
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_AGG,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_float64,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					if len(inputTypes) == 1 {
-						_, err := stddevpop.NewStdDevPopRingWithTypeCheck(types.Type{Oid: inputTypes[0]})
-						if err == nil {
-							return true
-						}
-					}
-					return false
-				},
+				Index:         0,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_float64,
 				AggregateInfo: aggregate.StdDevPop,
 			},
 		},

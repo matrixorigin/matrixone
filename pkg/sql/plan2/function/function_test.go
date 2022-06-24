@@ -24,33 +24,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func mockFunctionRegister() [][]Function {
-	mockRegister := make([][]Function, 2)
+func mockFunctionRegister() []Functions {
+	mockRegister := make([]Functions, 2)
 	// function f1
-	mockRegister[0] = []Function{
-		{
-			Index:       0,
-			Args:        []types.T{types.T_int64, types.T_int64},
-			TypeCheckFn: strictTypeCheck,
-		},
-		{
-			Index:       1,
-			Args:        []types.T{types.T_int64, types.T_float64},
-			TypeCheckFn: strictTypeCheck,
+	mockRegister[0] = Functions{
+		Overloads: []Function{
+			{
+				Index:       0,
+				Args:        []types.T{types.T_int64, types.T_int64},
+				TypeCheckFn: strictTypeCheck,
+			},
+			{
+				Index:       1,
+				Args:        []types.T{types.T_int64, types.T_float64},
+				TypeCheckFn: strictTypeCheck,
+			},
 		},
 	}
 	// function f2
-	mockRegister[1] = []Function{
-		{
-			Index: 0,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) bool {
-				return len(inputTypes) < 3
+	mockRegister[1] = Functions{
+		Overloads: []Function{
+			{
+				Index: 0,
+				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) bool {
+					return len(inputTypes) < 3
+				},
 			},
-		},
-		{
-			Index: 1,
-			TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) bool {
-				return len(inputTypes) == 1
+			{
+				Index: 1,
+				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) bool {
+					return len(inputTypes) == 1
+				},
 			},
 		},
 	}
@@ -69,11 +73,11 @@ func TestFunctionEqual(t *testing.T) {
 	fs1 := fr[0]
 	fs2 := fr[1]
 
-	require.Equal(t, true, functionsEqual(fs1[0], fs1[0]))
-	require.Equal(t, false, functionsEqual(fs1[0], fs1[1]))
-	require.Equal(t, true, functionsEqual(fs2[0], fs2[0]))
-	require.Equal(t, false, functionsEqual(fs2[0], fs1[0]))
-	require.Equal(t, false, functionsEqual(fs2[0], fs2[1]))
+	require.Equal(t, true, functionsEqual(fs1.Overloads[0], fs1.Overloads[0]))
+	require.Equal(t, false, functionsEqual(fs1.Overloads[0], fs1.Overloads[1]))
+	require.Equal(t, true, functionsEqual(fs2.Overloads[0], fs2.Overloads[0]))
+	require.Equal(t, false, functionsEqual(fs2.Overloads[0], fs1.Overloads[0]))
+	require.Equal(t, false, functionsEqual(fs2.Overloads[0], fs2.Overloads[1]))
 }
 
 func TestFunctionRegister(t *testing.T) {
@@ -179,5 +183,17 @@ func TestFunctionOverloadID(t *testing.T) {
 		actualF, actualO := DecodeOverloadID(f)
 		require.Equal(t, tc.fid, actualF)
 		require.Equal(t, tc.overloadId, actualO)
+	}
+}
+
+func TestCms(t *testing.T) {
+	for i, rs := range binaryTable {
+		for j, r := range rs {
+			if r.convert {
+				println(fmt.Sprintf("%s + %s ===> %s + %s",
+					types.T(i).OidString(), types.T(j).OidString(),
+					r.left.OidString(), r.right.OidString()))
+			}
+		}
 	}
 }

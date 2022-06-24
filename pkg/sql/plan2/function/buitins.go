@@ -619,7 +619,7 @@ var builtins = map[int]Functions{
 				Index:       0,
 				Flag:        plan.Function_STRICT,
 				Layout:      STANDARD_FUNCTION,
-				Args:        []types.T{types.T_char}, // todo? check if there is implicit upcast for char/varchar, it not, register another type or add upcast
+				Args:        []types.T{types.T_char},
 				ReturnTyp:   types.T_varchar,
 				TypeCheckFn: strictTypeCheck,
 				Fn:          unary.Ltrim,

@@ -62,3 +62,7 @@ func appendFunction(fid int, newFunction Function) error {
 	registerMutex.Unlock()
 	return nil
 }
+
+func functionsEqual(f1, f2 Function) bool {
+	return f1.Index == f2.Index
+}

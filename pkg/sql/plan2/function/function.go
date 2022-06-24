@@ -88,20 +88,16 @@ var (
 // and its function-id and type-check-function
 type Functions struct {
 	Id          int
-	UseTable    bool
-	TypeCheckFn func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T, err error)
+	TypeCheckFn func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T)
 	Overloads   []Function
 }
 
 // TypeCheck returns overload-index-number, target-type
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
-func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
+func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 	if fs.TypeCheckFn == nil {
 		if len(args) == 0 {
-			return 0, nil, nil
-		}
-		if fs.UseTable {
-			// todo
+			return 0, nil
 		}
 		rts := make([]types.T, len(args))
 		for i, f := range fs.Overloads {
@@ -112,7 +108,7 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 			flg := args[0] == f.Args[0]
 			if flg {
 				for j := 1; j < len(args); j++ {
-					if !castable[args[j]][f.Args[j]] {
+					if !castTable[args[j]][f.Args[j]] {
 						flg = false
 						break
 					}
@@ -120,7 +116,7 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 				}
 			}
 			if flg {
-				return int32(i), rts, nil
+				return int32(i), rts
 			}
 		}
 		if len(args) == 1 {
@@ -128,13 +124,13 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 				if len(args) != len(f.Args) {
 					continue
 				}
-				if castable[args[0]][f.Args[0]] {
+				if castTable[args[0]][f.Args[0]] {
 					rts[0] = f.Args[0]
-					return int32(i), rts, nil
+					return int32(i), rts
 				}
 			}
 		}
-		return -1, nil, nil
+		return wrongFunctionParameters, nil
 	}
 	return fs.TypeCheckFn(fs.Overloads, args)
 }
@@ -326,11 +322,16 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	if err != nil {
 		return emptyFunction, -1, nil, err
 	}
-	fs := functionRegister2[fid]
+	fs := functionRegister[fid]
 
-	index, targetTypes, err2 := fs.TypeCheck(args)
-	if err2 != nil {
-		return emptyFunction, -1, nil, err
+	index, targetTypes := fs.TypeCheck(args)
+	if index == wrongFunctionParameters {
+		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
+			return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, args))
+		}
+		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
+	} else if index == tooManyFunctionsMatched {
+		return emptyFunction, -1, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many functions matched for '%s'", name))
 	}
 	return fs.Overloads[index], EncodeOverloadID(fid, index), targetTypes, nil
 }
