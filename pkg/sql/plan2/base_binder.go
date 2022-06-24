@@ -990,11 +990,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 		stringValue := constant.StringVal(astExpr.Value)
 		return getStringExpr(stringValue), nil
 	default:
-<<<<<<< HEAD
 		return nil, errors.New("", fmt.Sprintf("unsupport value: %v", astExpr.Value))
-=======
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport constant: %v", astExpr.Value))
->>>>>>> fbef51d3 (constants over int64 is not support now)
 	}
 }
 
