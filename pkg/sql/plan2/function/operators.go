@@ -2620,6 +2620,24 @@ var operators = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.UnaryMinus[float64],
 		},
+		{
+			Index:       6,
+			Flag:        plan.Function_STRICT,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
+			Args:        []types.T{types.T_decimal64},
+			ReturnTyp:   types.T_decimal64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.UnaryMinusDecimal64,
+		},
+		{
+			Index:       7,
+			Flag:        plan.Function_STRICT,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
+			Args:        []types.T{types.T_decimal128},
+			ReturnTyp:   types.T_decimal128,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.UnaryMinusDecimal128,
+		},
 	},
 	// others
 	CAST: {
