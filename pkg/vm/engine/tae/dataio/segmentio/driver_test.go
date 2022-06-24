@@ -68,8 +68,8 @@ func TestBitmapAllocator_Allocate(t *testing.T) {
 	seg.Mount()
 	file := seg.NewBlockFile("bitmap")
 	file.snode.algo = compress.None
-	level0 := seg.allocator.(*BitmapAllocator).level0
-	level1 := seg.allocator.(*BitmapAllocator).level1
+	level0 := &seg.allocator.(*BitmapAllocator).level0
+	level1 := &seg.allocator.(*BitmapAllocator).level1
 	for i := 0; i < 20; i++ {
 		buffer1 := mockData(1048576)
 		assert.NotNil(t, buffer1)
@@ -87,15 +87,15 @@ func TestBitmapAllocator_Allocate(t *testing.T) {
 	l0pos := uint32(file.snode.originSize) / seg.GetPageSize() / BITS_PER_UNIT
 	l1pos := l0pos / BITS_PER_UNITSET
 
-	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos-1]))
-	ret := 0xFFFFFFFFFFF00000 - level0[l0pos]
+	assert.Equal(t, ALL_UNIT_CLEAR, int((*level0)[l0pos-1]))
+	ret := 0xFFFFFFFFFFF00000 - (*level0)[l0pos]
 	assert.Equal(t, 0, int(ret))
-	ret = 0xF000000000000000 - level1[l1pos]
+	ret = 0xF000000000000000 - (*level1)[l1pos]
 	assert.Equal(t, 0, int(ret))
 
 	seg.allocator.Free(8192, 4096)
 	//ret = uint64(0x4) - level0[0]
-	assert.Equal(t, 4, int(level0[0]))
+	assert.Equal(t, 4, int((*level0)[0]))
 	//fmt.Printf(debugBitmap(driver.allocator.(*BitmapAllocator)))
 }
 
@@ -347,6 +347,17 @@ func TestSegment_Replay2(t *testing.T) {
 	err = seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
+	level0 := &seg.allocator.(*BitmapAllocator).level0
+	(*level0) = make([]uint64, DATA_SIZE/uint64(BLOCK_SIZE)/BITS_PER_UNIT)
+	for i := range *level0 {
+		(*level0)[i] = ALL_UNIT_SET
+	}
+
+	log_level0 := &seg.log.allocator.(*BitmapAllocator).level0
+	(*log_level0) = make([]uint64, DATA_SIZE/uint64(BLOCK_SIZE)/BITS_PER_UNIT)
+	for i := range *log_level0 {
+		(*log_level0)[i] = ALL_UNIT_SET
+	}
 	checkSegment(t, &seg, &seg1)
 }
 
@@ -357,8 +368,8 @@ func TestSegment_Replay(t *testing.T) {
 	err := seg.Init(name)
 	assert.Nil(t, err)
 	seg.Mount()
-	level0 := seg.allocator.(*BitmapAllocator).level0
-	level1 := seg.allocator.(*BitmapAllocator).level1
+	level0 := &seg.allocator.(*BitmapAllocator).level0
+	level1 := &seg.allocator.(*BitmapAllocator).level1
 	var file *DriverFile
 	file = seg.NewBlockFile("test_0.blk")
 	file.snode.algo = compress.None
@@ -388,22 +399,22 @@ func TestSegment_Replay(t *testing.T) {
 	l0pos := uint32(osize) / seg.GetPageSize() / BITS_PER_UNIT
 	l1pos := l0pos / BITS_PER_UNITSET
 
-	assert.Equal(t, ALL_UNIT_CLEAR, int(level0[l0pos-1]))
-	ret := 0xFFFFFFFFFFFFFFFC - level0[l0pos]
+	assert.Equal(t, ALL_UNIT_CLEAR, int((*level0)[l0pos-1]))
+	ret := 0xFFFFFFFFFFFFFFFC - (*level0)[l0pos]
 	assert.Equal(t, 0, int(ret))
-	ret = 0xFFFFFFFFFFFFFFF8 - level1[l1pos]
+	ret = 0xFFFFFFFFFFFFFFF8 - (*level1)[l1pos]
 	assert.Equal(t, 0, int(ret))
 	l0pos = 2048000 / seg.GetPageSize() / BITS_PER_UNIT
 	file = seg.nodes["test_1.blk"]
 	seg.ReleaseFile(file)
-	ret = 0xFFF0000000000000 - level0[l0pos]
+	ret = 0xFFF0000000000000 - (*level0)[l0pos]
 	assert.Equal(t, 0, int(ret))
-	ret = 0xFFFFFFFFFFFFFFF9 - level1[l1pos]
+	ret = 0xFFFFFFFFFFFFFFF9 - (*level1)[l1pos]
 	assert.Equal(t, 0, int(ret))
 	file = seg.nodes["test_2.blk"]
 	seg.ReleaseFile(file)
-	assert.Equal(t, 3, int(level0[l0pos+1]))
-	ret = 0xFFFFFFFFFFFFFFFB - level1[l1pos]
+	assert.Equal(t, 3, int((*level0)[l0pos+1]))
+	ret = 0xFFFFFFFFFFFFFFFB - (*level1)[l1pos]
 	assert.Equal(t, 0, int(ret))
 	file = seg.NewBlockFile("test_5.blk")
 	file.snode.algo = compress.None
@@ -411,8 +422,8 @@ func TestSegment_Replay(t *testing.T) {
 	assert.NotNil(t, buffer5)
 	err = file.driver.Append(file, buffer5)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, int(level0[l0pos+1]))
-	ret = 0xFFFFFFFFFFFFFFFA - level1[l1pos]
+	assert.Equal(t, 2, int((*level0)[l0pos+1]))
+	ret = 0xFFFFFFFFFFFFFFFA - (*level1)[l1pos]
 	assert.Equal(t, 0, int(ret))
 	seg1 := Driver{}
 	err = seg1.Open(name)

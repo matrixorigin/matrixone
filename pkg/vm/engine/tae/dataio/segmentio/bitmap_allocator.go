@@ -55,8 +55,9 @@ func (b *BitmapAllocator) Init(capacity uint64, pageSize uint32) {
 	b.pageSize = pageSize
 	l0granularity := pageSize
 	l1granularity := l0granularity * BITS_PER_UNITSET
-	l0UnitCount := capacity / uint64(l0granularity) / BITS_PER_UNIT
-	b.level0 = make([]uint64, l0UnitCount)
+	//l0UnitCount := capacity / uint64(l0granularity) / BITS_PER_UNIT
+	//b.level0 = make([]uint64, l0UnitCount)
+	b.level0 = make([]uint64, BITS_PER_UNITSET)
 	for i := range b.level0 {
 		b.level0[i] = ALL_UNIT_SET
 	}
@@ -196,11 +197,17 @@ func (b *BitmapAllocator) getBitPos(val uint64, start uint32) uint32 {
 	return start
 }
 
-func (b *BitmapAllocator) CheckAllocations(start uint32, len uint32) {
+func (b *BitmapAllocator) CheckAllocations(start uint32, length uint32) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	pos := start / b.pageSize
-	end := pos + len/b.pageSize
+	end := pos + length/b.pageSize
+	if (end / BITS_PER_UNIT) >= uint32(len(b.level0)-1) {
+		appendBitCnt := (end / BITS_PER_UNIT) - uint32(len(b.level0)) + 1
+		for i := 0; i < int(appendBitCnt); i++ {
+			b.level0 = append(b.level0, ALL_UNIT_SET)
+		}
+	}
 	b.markAllocFree0(uint64(pos), uint64(end), false)
 	l0start := p2align(uint64(pos), BITS_PER_UNITSET)
 	l0end := p2roundup(uint64(end), BITS_PER_UNITSET)
@@ -220,10 +227,10 @@ func (b *BitmapAllocator) Free(start uint32, len uint32) {
 	b.lastPos = uint64(start)
 }
 
-func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
+func (b *BitmapAllocator) Allocate(needLength uint64) (uint64, uint64) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	length := p2roundup(len, uint64(b.pageSize))
+	length := p2roundup(needLength, uint64(b.pageSize))
 	var allocated uint64 = 0
 	l1pos := b.lastPos / uint64(b.pageSize) / BITS_PER_UNITSET / BITS_PER_UNIT
 	l1end := cap(b.level1)
@@ -250,6 +257,9 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 			l0end := (l1freePos+1)*BITS_PER_UNITSET + uint32(l1pos*BITS_PER_UNITSET*BITS_PER_UNIT)
 			for idx := l0pos / BITS_PER_UNIT; idx < l0end/BITS_PER_UNIT &&
 				length > allocated; idx++ {
+				if idx >= uint32(len(b.level0)-1) {
+					b.level0 = append(b.level0, ALL_UNIT_SET)
+				}
 				val := &(b.level0[idx])
 				if *val == ALL_UNIT_CLEAR {
 					continue
