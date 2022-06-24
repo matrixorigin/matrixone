@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"bytes"
 	"sync/atomic"
 	"time"
 
@@ -25,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -99,52 +96,22 @@ func (node *appendableNode) CheckUnloadable() bool {
 	return !node.block.mvcc.HasActiveAppendNode()
 }
 
-func (node *appendableNode) GetColumnsView(maxRow uint32) (view batch.IBatch, err error) {
+func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batch, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
-	attrs := node.data.GetAttrs()
-	vecs := make([]vector.IVector, len(attrs))
-	for _, attrId := range attrs {
-		vec, err := node.GetVectorView(maxRow, attrId)
-		if err != nil {
-			return view, err
-		}
-		vecs[attrId] = vec
-	}
-	view, err = batch.NewBatch(attrs, vecs)
+	columns = node.data.CloneWindow(0, int(maxRow))
 	return
 }
 
-func (node *appendableNode) GetVectorView(maxRow uint32, colIdx int) (vec vector.IVector, err error) {
+func (node *appendableNode) GetColumnDataCopy(maxRow uint32, colIdx int) (vec containers.Vector, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
-	ivec, err := node.data.GetVectorByAttr(colIdx)
-	if err != nil {
-		return
-	}
-	vec = ivec.Window(0, maxRow)
+	vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow))
 	return
-}
-
-// TODO: Apply updates and txn sels
-func (node *appendableNode) GetVectorCopy(maxRow uint32, colIdx int, compressed, decompressed *bytes.Buffer) (vec containers.Vector, err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
-		err = exception.(error)
-		return
-	}
-	ro, err := node.GetVectorView(maxRow, colIdx)
-	if err != nil {
-		return
-	}
-	if decompressed == nil {
-		return ro.CopyToVector()
-	}
-	return ro.CopyToVectorWithBuffer(compressed, decompressed)
 }
 
 func (node *appendableNode) SetBlockMaxFlushTS(ts uint64) {
@@ -162,12 +129,12 @@ func (node *appendableNode) OnLoad() {
 	}
 	var err error
 	schema := node.block.meta.GetSchema()
-	if node.data, err = node.file.LoadIBatch(schema.AllTypes(), schema.BlockMaxRows); err != nil {
+	if node.data, err = node.file.LoadBatch(schema.AllTypes(), int(schema.BlockMaxRows)); err != nil {
 		node.exception.Store(err)
 	}
 }
 
-func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err error) {
+func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch) (err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Error("[Exception]", common.ExceptionField(exception))
 		err = exception.(error)
@@ -219,7 +186,7 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 		deletes = dnode.GetDeleteMaskLocked()
 	}
 	scope := node.block.meta.AsCommonID()
-	task, err := node.block.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, node.block.ABlkFlushDataClosure(ts, colData, masks, vals, deletes))
+	task, err := node.block.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, node.block.ABlkFlushDataClosure(ts, colsData, masks, vals, deletes))
 	if err != nil {
 		return
 	}
@@ -289,16 +256,13 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error) {
-	col, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
+	col, err := model.PrepareHiddenData(catalog.HiddenColumnType, node.block.prefix, startRow, length)
 	if err != nil {
 		return
 	}
-	defer closer()
-	vec, err := node.data.GetVectorByAttr(node.block.meta.GetSchema().HiddenKey.Idx)
-	if err != nil {
-		return
-	}
-	_, err = vec.AppendVector(col, 0)
+	defer col.Close()
+	vec := node.data.Vecs[node.block.meta.GetSchema().HiddenKey.Idx]
+	vec.Extend(col)
 	return
 }
 
@@ -309,23 +273,25 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, offset, length in
 		return
 	}
 	schema := node.block.meta.GetSchema()
-	from = node.rows
+	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		if def.IsHidden() {
 			continue
 		}
-		destVec, err := node.data.GetVectorByAttr(def.Idx)
-		if err != nil {
-			return from, err
-		}
-		if _, err = destVec.AppendVector(bat.Vecs[srcPos], int(offset)); err != nil {
-			return from, err
+		destVec := node.data.Vecs[def.Idx]
+		if offset == 0 && length == bat.Length() {
+			destVec.Extend(bat.Vecs[srcPos])
+		} else {
+			srcVec := bat.Vecs[srcPos]
+			for i := offset; i < offset+length; i++ {
+				destVec.Append(srcVec.Get(i))
+			}
 		}
 	}
-	if err = node.FillHiddenColumn(from, length); err != nil {
+	if err = node.FillHiddenColumn(uint32(from), uint32(length)); err != nil {
 		return
 	}
-	node.rows += length
+	node.rows += uint32(length)
 	return
 }

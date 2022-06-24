@@ -19,7 +19,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -48,10 +47,10 @@ type Block interface {
 	// WriteColumn(colIdx int, ts uint64, data []byte, updates []byte) (common.IVFile, error)
 
 	// TODO: Remove later
-	LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch.IBatch, err error)
-	WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
+	WriteSnapshot(bat *containers.Batch, ts uint64, masks map[uint16]*roaring.Bitmap,
+		vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
 	WriteBatch(bat *containers.Batch, ts uint64) error
-	LoadBatch(attrs []string, colTypes []types.Type) (bat *containers.Batch, err error)
+	LoadBatch([]types.Type, int) (bat *containers.Batch, err error)
 	WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) error
 
 	Destroy() error

@@ -21,9 +21,10 @@ import (
 )
 
 type BlockView struct {
-	Ts         uint64
-	Columns    map[int]*ColumnView
-	DeleteMask *roaring.Bitmap
+	Ts               uint64
+	Columns          map[int]*ColumnView
+	DeleteMask       *roaring.Bitmap
+	DeleteLogIndexes []*wal.Index
 }
 
 func NewBlockView(ts uint64) *BlockView {

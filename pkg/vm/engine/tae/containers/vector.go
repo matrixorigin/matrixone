@@ -127,9 +127,11 @@ func (vec *vector[T]) Delete(i int)         { vec.impl.Delete(i) }
 func (vec *vector[T]) Append(v any)         { vec.impl.Append(v) }
 func (vec *vector[T]) AppendMany(vs ...any) { vec.impl.AppendMany(vs...) }
 func (vec *vector[T]) Extend(o Vector)      { vec.impl.Extend(o) }
-func (vec *vector[T]) Length() int          { return vec.impl.Length() }
-func (vec *vector[T]) Capacity() int        { return vec.impl.Capacity() }
-func (vec *vector[T]) Allocated() int       { return vec.impl.Allocated() }
+
+// func (vec *vector[T]) ExtendView(o VectorView) { vec.impl.ExtendView(o) }
+func (vec *vector[T]) Length() int    { return vec.impl.Length() }
+func (vec *vector[T]) Capacity() int  { return vec.impl.Capacity() }
+func (vec *vector[T]) Allocated() int { return vec.impl.Allocated() }
 
 func (vec *vector[T]) GetAllocator() MemAllocator { return vec.stlvec.GetAllocator() }
 func (vec *vector[T]) GetType() types.Type        { return vec.typ }

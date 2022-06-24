@@ -65,6 +65,12 @@ func (base *vecBase[T]) Extend(o Vector) {
 	base.derived.stlvec.AppendMany(ovec.stlvec.Slice()...)
 }
 
+// func (base *vecBase[T]) ExtendView(o VectorView) {
+// 	base.tryCOW()
+// 	ovec := o.(*vector[T])
+// 	base.derived.stlvec.AppendMany(ovec.Slice()...)
+// }
+
 func (base *vecBase[T]) Length() int    { return base.derived.stlvec.Length() }
 func (base *vecBase[T]) Capacity() int  { return base.derived.stlvec.Capacity() }
 func (base *vecBase[T]) Allocated() int { return base.derived.stlvec.Allocated() }

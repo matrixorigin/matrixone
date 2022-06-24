@@ -20,7 +20,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -44,7 +43,12 @@ func (blk *dataBlock) FlushColumnDataClosure(ts uint64, colIdx int, colData cont
 	}
 }
 
-func (blk *dataBlock) ABlkFlushDataClosure(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) tasks.FuncT {
+func (blk *dataBlock) ABlkFlushDataClosure(
+	ts uint64,
+	bat *containers.Batch,
+	masks map[uint16]*roaring.Bitmap,
+	vals map[uint16]map[uint32]any,
+	deletes *roaring.Bitmap) tasks.FuncT {
 	return func() error {
 		return blk.ABlkFlushData(ts, bat, masks, vals, deletes)
 	}
@@ -77,7 +81,8 @@ func (blk *dataBlock) BlkCheckpointWAL(currTs uint64) (err error) {
 		return
 	}
 	cnt := 0
-	for _, idxes := range view.ColLogIndexes {
+	for _, column := range view.Columns {
+		idxes := column.LogIndexes
 		cnt += len(idxes)
 		if err = blk.scheduler.Checkpoint(idxes); err != nil {
 			return
@@ -117,7 +122,8 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs uint64) (err error) {
 	if err != nil {
 		return
 	}
-	for _, idxes := range view.ColLogIndexes {
+	for _, column := range view.Columns {
+		idxes := column.LogIndexes
 		if err = blk.scheduler.Checkpoint(idxes); err != nil {
 			return
 		}
@@ -187,12 +193,12 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	if err != nil {
 		return
 	}
-	view, err := blk.node.GetColumnsView(maxRow)
+	bat, err := blk.node.GetDataCopy(maxRow)
 	if err != nil {
 		return
 	}
 	needCkp := true
-	if err = blk.node.flushData(ts, view); err != nil {
+	if err = blk.node.flushData(ts, bat); err != nil {
 		if err == data.ErrStaleRequest {
 			err = nil
 			needCkp = false
@@ -206,7 +212,12 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	return
 }
 
-func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) (err error) {
+func (blk *dataBlock) ABlkFlushData(
+	ts uint64,
+	bat *containers.Batch,
+	masks map[uint16]*roaring.Bitmap,
+	vals map[uint16]map[uint32]any,
+	deletes *roaring.Bitmap) (err error) {
 	flushTs := blk.node.GetBlockMaxFlushTS()
 	if ts <= flushTs {
 		logutil.Info("[Cancelled]",
@@ -224,7 +235,7 @@ func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint1
 		return data.ErrStaleRequest
 	}
 
-	if err := blk.file.WriteIBatch(bat, ts, masks, vals, nil); err != nil {
+	if err := blk.file.WriteSnapshot(bat, ts, masks, vals, nil); err != nil {
 		return err
 	}
 	if deletes != nil {

@@ -16,7 +16,6 @@ package model
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -29,7 +28,6 @@ type ColumnView struct {
 	UpdateMask *roaring.Bitmap
 	UpdateVals map[uint32]any
 	DeleteMask *roaring.Bitmap
-	MemNode    *common.MemNode
 	LogIndexes []*wal.Index
 }
 
@@ -82,6 +80,9 @@ func (view *ColumnView) Eval(clear bool) (err error) {
 func (view *ColumnView) GetDataView() containers.VectorView {
 	return view.dataView
 }
+func (view *ColumnView) GetData() containers.Vector {
+	return view.data
+}
 
 func (view *ColumnView) Length() int {
 	return view.data.Length()
@@ -96,10 +97,6 @@ func (view *ColumnView) GetValue(row int) any {
 }
 
 func (view *ColumnView) Close() {
-	if view.MemNode != nil {
-		common.GPool.Free(view.MemNode)
-		view.MemNode = nil
-	}
 	if view.data != nil {
 		view.data.Close()
 	}
