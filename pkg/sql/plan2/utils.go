@@ -15,7 +15,11 @@
 package plan2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -44,23 +48,6 @@ func doGetBindings(expr *plan.Expr) map[int32]any {
 	}
 
 	return res
-}
-
-func hasSubquery(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Sub:
-		return true
-
-	case *plan.Expr_F:
-		ret := false
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || hasSubquery(arg)
-		}
-		return ret
-
-	default:
-		return false
-	}
 }
 
 func hasCorrCol(expr *plan.Expr) bool {
@@ -403,4 +390,48 @@ func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
 	}
 
 	return
+}
+
+func rejectsNull(filter *plan.Expr) bool {
+	filter = replaceColRefWithNull(DeepCopyExpr(filter))
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	vec, err := colexec.EvalExpr(bat, nil, filter)
+	if err != nil {
+		return false
+	}
+
+	if nulls.Any(vec.Nsp) {
+		return true
+	}
+
+	switch vec.Typ.Oid {
+	case types.T_bool:
+		return !vec.Col.([]bool)[0]
+
+	default:
+		return false
+	}
+}
+
+func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		expr = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: true,
+				},
+			},
+		}
+
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefWithNull(arg)
+		}
+	}
+
+	return expr
 }
