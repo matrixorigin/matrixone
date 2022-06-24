@@ -1,0 +1,72 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package logservice
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+)
+
+func (s *Service) handleCommands(cmds []hapb.ScheduleCommand) {
+	for _, cmd := range cmds {
+		switch cmd.ConfigChange.ChangeType {
+		case hapb.AddReplica:
+			s.handleAddReplica(cmd)
+		case hapb.RemoveReplica:
+			s.handleRemoveReplica(cmd)
+		case hapb.StartReplica:
+			s.handleStartReplica(cmd)
+		case hapb.StopReplica:
+			s.handleStopReplica(cmd)
+		default:
+			panic("unknown type")
+		}
+	}
+}
+
+func (s *Service) handleAddReplica(cmd hapb.ScheduleCommand) {
+	panic("not implemented due to the lack of target UUID in ScheduleCommand")
+}
+
+func (s *Service) handleRemoveReplica(cmd hapb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	epoch := cmd.ConfigChange.Replica.Epoch
+	if err := s.store.removeReplica(shardID, replicaID, epoch); err != nil {
+		plog.Errorf("failed to remove replica %v", err)
+	}
+}
+
+func (s *Service) handleStartReplica(cmd hapb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	if shardID == hakeeper.DefaultHAKeeperShardID {
+		if err := s.store.StartHAKeeperReplica(replicaID, nil, false); err != nil {
+			plog.Errorf("failed to start log replica %v", err)
+		}
+	} else {
+		if err := s.store.StartReplica(shardID, replicaID, nil, false); err != nil {
+			plog.Errorf("failed to start log replica %v", err)
+		}
+	}
+}
+
+func (s *Service) handleStopReplica(cmd hapb.ScheduleCommand) {
+	shardID := cmd.ConfigChange.Replica.ShardID
+	replicaID := cmd.ConfigChange.Replica.ReplicaID
+	if err := s.store.stopReplica(shardID, replicaID); err != nil {
+		plog.Errorf("failed to stop replica %v", err)
+	}
+}

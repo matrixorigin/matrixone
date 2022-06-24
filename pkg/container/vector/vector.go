@@ -2025,7 +2025,7 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 	return nil
 }
 
-func UnionNull(v, w *Vector, m *mheap.Mheap) error {
+func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 	if v.Or {
 		return errors.New("UnionNull operation cannot be performed for origin vector")
 	}
@@ -2042,7 +2042,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeBoolSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2068,7 +2067,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt8Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2095,7 +2093,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt16Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2122,7 +2119,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt32Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2149,7 +2145,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2176,7 +2171,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint8Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2203,7 +2197,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint16Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2230,7 +2223,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint32Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2257,7 +2249,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2284,7 +2275,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeFloat32Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2311,7 +2301,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeFloat64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2343,7 +2332,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDateSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2370,7 +2358,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDatetimeSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2397,7 +2384,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeTimestampSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2424,7 +2410,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDecimal64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2451,7 +2436,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDecimal128Slice(data)
 			v.Col = vs[:1]
 			v.Data = data

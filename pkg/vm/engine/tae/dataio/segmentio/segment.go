@@ -283,6 +283,7 @@ func (sf *segmentFile) Destroy() {
 	}
 	sf.driver.Unmount()
 	sf.driver.Destroy()
+	sf.driver = nil
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
