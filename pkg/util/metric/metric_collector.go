@@ -194,6 +194,8 @@ func (c *metricCollector) mergeWorker(ctx context.Context) {
 		case name := <-reminder.C:
 			if entryMfs := mfByNames[name]; entryMfs != nil && entryMfs.rows > 0 {
 				doFlush(name, entryMfs)
+			} else {
+				reminder.Reset(name, c.opts.flushInterval)
 			}
 		}
 	}
@@ -297,7 +299,7 @@ func (s *mfset) reset() {
 }
 
 // getSql extracts a insert sql from a set of MetricFamily. the bytes.Buffer is
-// used to mitigate memory allocation
+// used to mitigate memory allocation. getSql assume there is at least one row in mfset
 func (s *mfset) getSql(buf *bytes.Buffer) string {
 	buf.Reset()
 	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", METRIC_DB, s.mfs[0].GetName()))
