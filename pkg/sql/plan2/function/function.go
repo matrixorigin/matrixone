@@ -96,6 +96,14 @@ type Functions struct {
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
 func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 	if fs.TypeCheckFn == nil {
+		if len(args) == 1 { // unary function
+			for i, f := range fs.Overloads {
+				if castable[args[0]][f.Args[0]] {
+					return int32(i), []types.T{f.Args[0]}, nil
+				}
+			}
+			// return error
+		}
 		// general
 	}
 	return fs.TypeCheckFn(fs.Overloads, args)
@@ -289,6 +297,7 @@ func GetFunctionByName2(name string, args []types.T) (Function, int64, []types.T
 		return emptyFunction, -1, nil, err
 	}
 	fs := functionRegister2[fid]
+
 	index, targetTypes, err2 := fs.TypeCheck(args)
 	if err2 != nil {
 		return emptyFunction, -1, nil, err
