@@ -66,7 +66,7 @@ type Vector interface {
 	Append(v any)
 	AppendMany(vs ...any)
 	Extend(o Vector)
-	// ExtendView(o VectorView)
+	ExtendWithOffset(src Vector, srcOff, srcLen int)
 	Compact(deletes *roaring.Bitmap)
 	CloneWindow(offset, length int) Vector
 

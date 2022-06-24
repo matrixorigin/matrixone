@@ -60,16 +60,28 @@ func (base *vecBase[T]) AppendMany(vs ...any) {
 	}
 }
 func (base *vecBase[T]) Extend(o Vector) {
-	base.tryCOW()
-	ovec := o.(*vector[T])
-	base.derived.stlvec.AppendMany(ovec.stlvec.Slice()...)
+	base.ExtendWithOffset(o, 0, o.Length())
 }
 
-// func (base *vecBase[T]) ExtendView(o VectorView) {
-// 	base.tryCOW()
-// 	ovec := o.(*vector[T])
-// 	base.derived.stlvec.AppendMany(ovec.Slice()...)
-// }
+func (base *vecBase[T]) extendData(src Vector, srcOff, srcLen int) {
+	var v T
+	if _, ok := any(v).([]byte); ok {
+		bs := src.Bytes()
+		for i := srcOff; i < srcOff+srcLen; i++ {
+			base.derived.stlvec.Append(any(bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]).(T))
+		}
+		return
+	}
+	base.derived.stlvec.AppendMany(src.Slice().([]T)[srcOff : srcOff+srcLen]...)
+}
+
+func (base *vecBase[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
+	if srcLen <= 0 {
+		return
+	}
+	base.tryCOW()
+	base.extendData(src, srcOff, srcLen)
+}
 
 func (base *vecBase[T]) Length() int    { return base.derived.stlvec.Length() }
 func (base *vecBase[T]) Capacity() int  { return base.derived.stlvec.Capacity() }

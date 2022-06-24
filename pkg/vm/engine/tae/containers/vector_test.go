@@ -316,3 +316,47 @@ func TestVector6(t *testing.T) {
 		f(vecType, true)
 	}
 }
+
+func TestVector7(t *testing.T) {
+	vecTypes := types.MockColTypes(17)
+	testF := func(typ types.Type, nullable bool) {
+		vec := MockVector(typ, 10, false, nullable, nil)
+		if nullable {
+			vec.Append(types.Null{})
+		}
+		vec2 := MockVector(typ, 10, false, nullable, nil)
+		vec3 := MakeVector(typ, nullable)
+		vec3.Extend(vec)
+		assert.Equal(t, vec.Length(), vec3.Length())
+		vec3.Extend(vec2)
+		assert.Equal(t, vec.Length()+vec2.Length(), vec3.Length())
+		for i := 0; i < vec3.Length(); i++ {
+			if i >= vec.Length() {
+				assert.Equal(t, vec2.Get(i-vec.Length()), vec3.Get(i))
+			} else {
+				assert.Equal(t, vec.Get(i), vec3.Get(i))
+			}
+		}
+
+		vec4 := MakeVector(typ, nullable)
+		cnt := 5
+		if nullable {
+			cnt = 6
+		}
+		vec4.ExtendWithOffset(vec, 5, cnt)
+		assert.Equal(t, cnt, vec4.Length())
+		// t.Log(vec4.String())
+		// t.Log(vec.String())
+		for i := 0; i < cnt; i++ {
+			assert.Equal(t, vec.Get(i+5), vec4.Get(i))
+		}
+
+		vec.Close()
+		vec2.Close()
+		vec3.Close()
+	}
+	for _, typ := range vecTypes {
+		testF(typ, true)
+		testF(typ, false)
+	}
+}

@@ -85,11 +85,15 @@ func (impl *nullableVecImpl[T]) Append(v any) {
 	}
 }
 func (impl *nullableVecImpl[T]) Extend(o Vector) {
+	impl.ExtendWithOffset(o, 0, o.Length())
+}
+
+func (impl *nullableVecImpl[T]) ExtendWithOffset(o Vector, srcOff, srcLen int) {
 	impl.tryCOW()
 	if o.Nullable() {
 		ovec := o.(*vector[T])
 		if !ovec.HasNull() {
-			impl.derived.stlvec.AppendMany(ovec.stlvec.Slice()...)
+			impl.extendData(o, srcOff, srcLen)
 			return
 		} else {
 			if impl.derived.nulls == nil {
@@ -99,14 +103,13 @@ func (impl *nullableVecImpl[T]) Extend(o Vector) {
 			offset := impl.derived.stlvec.Length()
 			for it.HasNext() {
 				pos := it.Next()
-				impl.derived.nulls.Add(uint64(offset) + pos)
+				impl.derived.nulls.Add(uint64(offset) + pos - uint64(srcOff))
 			}
-			impl.derived.stlvec.AppendMany(ovec.stlvec.Slice()...)
+			impl.extendData(o, srcOff, srcLen)
 			return
 		}
 	}
-	ovec := o.(*vector[T])
-	impl.derived.stlvec.AppendMany(ovec.stlvec.Slice()...)
+	impl.extendData(o, srcOff, srcLen)
 }
 func (impl *nullableVecImpl[T]) String() string {
 	s := impl.derived.stlvec.String()
