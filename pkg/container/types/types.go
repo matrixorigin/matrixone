@@ -364,6 +364,7 @@ func (t T) TypeLen() int {
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }
 
+// dangerous code, use TypeLen() if you don't want -8, -16, -24
 func (t T) FixedLength() int {
 	switch t {
 	case T_int8, T_uint8, T_bool:

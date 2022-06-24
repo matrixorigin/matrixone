@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+		input: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
 	}
 )
 
@@ -52,6 +51,18 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select date,format,to_date(date, format) as to_date from t1;",
+		output: "select date, format, to_date(date, format) as to_date from t1",
+	}, {
+		input:  "select date,format,concat_ws(',',to_date(date, format)) as con from t1;",
+		output: "select date, format, concat_ws(,, to_date(date, format)) as con from t1",
+	}, {
+		input:  "select date,format,to_date(date, format) as to_date from t1;",
+		output: "select date, format, to_date(date, format) as to_date from t1",
+	}, {
+		input:  "select date,format,concat_ws(\" \",to_date(date, format),'') as con from t1;",
+		output: "select date, format, concat_ws( , to_date(date, format), ) as con from t1",
+	}, {
 		input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
 		output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
 	}, {
