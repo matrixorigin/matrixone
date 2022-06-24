@@ -105,6 +105,9 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 		}
 		rts := make([]types.T, len(args))
 		for i, f := range fs.Overloads {
+			if len(args) != len(f.Args) {
+				continue
+			}
 			rts[i] = args[0]
 			flg := true
 			if args[0] == f.Args[0] {
@@ -122,6 +125,9 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 		}
 		if len(args) == 1 {
 			for i, f := range fs.Overloads {
+				if len(args) != len(f.Args) {
+					continue
+				}
 				if castable[args[0]][f.Args[0]] {
 					rts[0] = f.Args[0]
 					return int32(i), rts, nil
