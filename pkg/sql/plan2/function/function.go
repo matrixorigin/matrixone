@@ -88,6 +88,7 @@ var (
 // and its function-id and type-check-function
 type Functions struct {
 	Id          int
+	UseTable    bool
 	TypeCheckFn func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T, err error)
 	Overloads   []Function
 }
@@ -96,7 +97,44 @@ type Functions struct {
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
 func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T, error) {
 	if fs.TypeCheckFn == nil {
-		// general
+		if len(args) == 0 {
+			return 0, nil, nil
+		}
+		if fs.UseTable {
+			// todo
+		}
+		rts := make([]types.T, len(args))
+		for i, f := range fs.Overloads {
+			if len(args) != len(f.Args) {
+				continue
+			}
+			rts[i] = args[0]
+			flg := args[0] == f.Args[0]
+			if flg {
+				for j := 1; j < len(args); j++ {
+					if !castable[args[j]][f.Args[j]] {
+						flg = false
+						break
+					}
+					rts[j] = f.Args[j]
+				}
+			}
+			if flg {
+				return int32(i), rts, nil
+			}
+		}
+		if len(args) == 1 {
+			for i, f := range fs.Overloads {
+				if len(args) != len(f.Args) {
+					continue
+				}
+				if castable[args[0]][f.Args[0]] {
+					rts[0] = f.Args[0]
+					return int32(i), rts, nil
+				}
+			}
+		}
+		return -1, nil, nil
 	}
 	return fs.TypeCheckFn(fs.Overloads, args)
 }
@@ -289,6 +327,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 		return emptyFunction, -1, nil, err
 	}
 	fs := functionRegister2[fid]
+
 	index, targetTypes, err2 := fs.TypeCheck(args)
 	if err2 != nil {
 		return emptyFunction, -1, nil, err
