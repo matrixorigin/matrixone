@@ -255,3 +255,43 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 
 	return
 }
+
+func (bat *Batch) Split(cnt int) []*Batch {
+	if cnt == 1 {
+		return []*Batch{bat}
+	}
+	length := bat.Length()
+	rows := length / cnt
+	if length%cnt == 0 {
+		bats := make([]*Batch, 0, cnt)
+		for i := 0; i < cnt; i++ {
+			newBat := bat.Window(i*rows, rows)
+			bats = append(bats, newBat)
+		}
+		return bats
+	}
+	rowArray := make([]int, 0)
+	if length/cnt == 0 {
+		for i := 0; i < length; i++ {
+			rowArray = append(rowArray, 1)
+		}
+	} else {
+		left := length
+		for i := 0; i < cnt; i++ {
+			if left >= rows && i < cnt-1 {
+				rowArray = append(rowArray, rows)
+			} else {
+				rowArray = append(rowArray, left)
+			}
+			left -= rows
+		}
+	}
+	start := 0
+	bats := make([]*Batch, 0, cnt)
+	for _, row := range rowArray {
+		newBat := bat.Window(start, row)
+		start += row
+		bats = append(bats, newBat)
+	}
+	return bats
+}
