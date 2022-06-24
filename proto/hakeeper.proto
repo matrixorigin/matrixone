@@ -32,10 +32,10 @@ message Replica {
 
 // ConfigChangeType indicates config change command type.
 enum ConfigChangeType {
-  AddNode    = 0;
-  RemoveNode = 1;
-  StartNode  = 2;
-  StopNode   = 3;
+  AddReplica    = 0;
+  RemoveReplica = 1;
+  StartReplica  = 2;
+  StopReplica   = 3;
 }
 
 // ConfigChange is the detail of a config change.

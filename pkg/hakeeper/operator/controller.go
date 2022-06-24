@@ -49,12 +49,14 @@ func (c *Controller) RemoveOperator(op *Operator) bool {
 }
 
 func (c *Controller) removeOperatorLocked(op *Operator) bool {
-	curOps := c.operators[op.shardID]
-	for _, curOp := range curOps {
+	for i, curOp := range c.operators[op.shardID] {
 		if curOp == op {
-			delete(c.operators, op.shardID)
+			c.operators[op.shardID] = append(c.operators[op.shardID][:i], c.operators[op.shardID][i+1:]...)
+			if len(c.operators[op.shardID]) == 0 {
+				delete(c.operators, op.shardID)
+			}
+			return true
 		}
-		return true
 	}
 	return false
 }
@@ -122,7 +124,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
 					},
-					ChangeType: hakeeper.AddNode,
+					ChangeType: hakeeper.AddReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -134,7 +136,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.RemoveNode,
+					ChangeType: hakeeper.RemoveReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -146,7 +148,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.StartNode,
+					ChangeType: hakeeper.StartReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -155,7 +157,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 				UUID: st.UUID,
 				ConfigChange: hakeeper.ConfigChange{
 					Replica:    hakeeper.Replica{ShardID: st.ShardID},
-					ChangeType: hakeeper.StopNode,
+					ChangeType: hakeeper.StopReplica,
 				},
 				ServiceType: hakeeper.LogService,
 			}
@@ -167,7 +169,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.AddNode,
+					ChangeType: hakeeper.AddReplica,
 				},
 				ServiceType: hakeeper.DnService,
 			}
@@ -179,7 +181,7 @@ func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnSta
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.RemoveNode,
+					ChangeType: hakeeper.RemoveReplica,
 				},
 				ServiceType: hakeeper.DnService,
 			}
