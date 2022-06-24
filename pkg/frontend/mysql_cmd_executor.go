@@ -1064,26 +1064,26 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 }
 
 // this function is temporary, it should be removed when mo support sql like selct const_expr
-func (mce *MysqlCmdExecutor) handleSelect1(nv *tree.NumVal) error {
-	ses := mce.GetSession()
-	proto := ses.protocol
+// func (mce *MysqlCmdExecutor) handleSelect1(nv *tree.NumVal) error {
+// 	ses := mce.GetSession()
+// 	proto := ses.protocol
 
-	v_str := nv.Value.String()
-	col := new(MysqlColumn)
-	col.SetName(v_str)
-	col.SetColumnType(defines.MYSQL_TYPE_LONG)
-	ses.Mrs.AddColumn(col)
-	v, _ := strconv.Atoi(v_str)
-	ses.Mrs.AddRow([]interface{}{v})
+// 	v_str := nv.Value.String()
+// 	col := new(MysqlColumn)
+// 	col.SetName(v_str)
+// 	col.SetColumnType(defines.MYSQL_TYPE_LONG)
+// 	ses.Mrs.AddColumn(col)
+// 	v, _ := strconv.Atoi(v_str)
+// 	ses.Mrs.AddRow([]interface{}{v})
 
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+// 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+// 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
-	if err := proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return nil
-}
+// 	if err := proto.SendResponse(resp); err != nil {
+// 		return fmt.Errorf("routine send response failed. error:%v ", err)
+// 	}
+// 	return nil
+// }
 
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
@@ -1947,13 +1947,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 						//next statement
 						goto handleSucceeded
-					} else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok && nv.Value.String() == "1" {
-						err = mce.handleSelect1(nv)
-						if err != nil {
-							goto handleFailed
-						}
-						goto handleSucceeded
 					}
+					// else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok && nv.Value.String() == "1" {
+					// err = mce.handleSelect1(nv)
+					// if err != nil {
+					// 	goto handleFailed
+					// }
+					// goto handleSucceeded
+					// }
 				}
 			}
 		}
