@@ -149,7 +149,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 	if err != nil {
 		return nil, err
 	}
-	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.FixedLength())
+	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
 	rs.Col = rs.Col.([]T)[:l]
 	rscols := rs.Col.([]T)
 
