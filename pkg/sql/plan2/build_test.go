@@ -404,9 +404,9 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select count(distinct 12)",
 		"select nullif(n_name, n_comment), ifnull(n_comment, n_name) from nation",
 
-		//"select 18446744073709551500",
-		//"select 0xffffffffffffffff",
-		//"select 0xffff",
+		"select 18446744073709551500",
+		"select 0xffffffffffffffff",
+		"select 0xffff",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
@@ -443,8 +443,8 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SET @var = avg(2)", // can't use agg function
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
-		"select 18446744073709551500",                             //over int64
-		"select 0xffffffffffffffff",                               //over int64
+		//"select 18446744073709551500",                             //over int64
+		//"select 0xffffffffffffffff",                               //over int64
 	}
 	runTestShouldError(mock, t, sqls)
 }

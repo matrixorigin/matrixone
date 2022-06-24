@@ -16,6 +16,7 @@
 package mysql
     
 import (
+	"fmt"
     "strings"
     "go/constant"
 
@@ -176,7 +177,7 @@ import (
 %left <str> '(' ',' ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
-%token <item> INTEGRAL HEX HEXNUM BIT_LITERAL FLOAT
+%token <item> INTEGRAL HEX BIT_LITERAL FLOAT HEXNUM
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -4746,7 +4747,7 @@ function_call_generic:
 |   EXTRACT '(' time_unit FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
-        timeUinit := tree.SetUnresolvedName(strings.ToLower($3))
+        timeUinit := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{timeUinit, $5},
@@ -5016,12 +5017,13 @@ datetime_precision:
     }
 |   '(' INTEGRAL ')'
     {
-        ival, errStr := util.GetInt64($1)
+        ival, errStr := util.GetInt64($2)
         if errStr != "" {
             yylex.Error(errStr)
             return 1
         }
-        $$ = tree.NewNumValWithType(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, false, ival)
+        str := fmt.Sprintf("%v", $2)
+        $$ = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
     }
 
 name_datetime_precision:
@@ -5316,11 +5318,12 @@ literal:
     }
 |   INTEGRAL
     {
-    	swich v := $1.(type) {
+    	str := fmt.Sprintf("%v", $1)
+    	switch v := $1.(type) {
     	case uint64:
-    		$$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
+    		$$ = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
     	case int64:
-    		$$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+    		$$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
     	default:
     		yylex.Error("parse integral fail")
             return 1
@@ -5333,20 +5336,29 @@ literal:
     }
 |   TRUE
     {
-        $$ = tree.NewNumValWithType(constant.MakeBool(true), "", false, tree.P_bool)
+        $$ = tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
     }
 |   FALSE
     {
-        $$ = tree.NewNumValWithType(constant.MakeBool(false), "", false, tree.P_bool)
+        $$ = tree.NewNumValWithType(constant.MakeBool(false), "false", false, tree.P_bool)
     }
 |   NULL
     {
-        $$ = tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null)
+        $$ = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
     }
 |   HEXNUM
 	{
-		ival := util.GetUint64($1)
-		$$ = tree.NewNumValWithType(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false, tree.P_hexnum)
+        switch v := $1.(type) {
+        case uint64:
+            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
+        case int64:
+            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+        case string:
+        	$$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_hexnum)
+        default:
+            yylex.Error("parse integral fail")
+            return 1
+        }
 	}
 |   DECIMAL_VALUE
     {

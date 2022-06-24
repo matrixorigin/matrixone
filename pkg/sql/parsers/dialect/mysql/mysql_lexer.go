@@ -122,7 +122,7 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 	if err != nil {
 		// TODO: toDecimal()
 		//l.scanner.LastError = err
-		lval.str = str
+		lval.item = str
 		return HEXNUM
 	}
 	switch {
