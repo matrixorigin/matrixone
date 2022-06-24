@@ -279,6 +279,11 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 	exprs := make([]*plan.Expr, len(conds))
 
 	for i, cond := range conds {
+		cond, err := ctx.qualifyColumnNames(cond, nil, false)
+		if err != nil {
+			return nil, err
+		}
+
 		expr, err := ctx.binder.BindExpr(cond, 0, true)
 		if err != nil {
 			return nil, err

@@ -28,7 +28,7 @@ import (
 const INODE_NUM = 4096
 const INODE_SIZE = 512
 const BLOCK_SIZE = 4096
-const SIZE = 4 * 1024 * 1024 * 1024
+const SIZE = 2 * 1024 * 1024 * 1024
 const LOG_START = 2 * BLOCK_SIZE
 const DATA_START = LOG_START + INODE_SIZE*INODE_NUM
 const DATA_SIZE = SIZE - DATA_START
@@ -143,7 +143,7 @@ func (s *Driver) Mount() {
 	s.lastInode = 1
 	var seq uint64
 	seq = 0
-	s.nodes = make(map[string]*DriverFile, INODE_NUM)
+	s.nodes = make(map[string]*DriverFile)
 	logFile := &DriverFile{
 		snode:  s.super.lognode,
 		name:   "logfile",
@@ -176,6 +176,9 @@ func (s *Driver) Destroy() {
 		panic(any(err.Error()))
 	}
 	s.segFile = nil
+	s.allocator = nil
+	s.log.allocator = nil
+	s.nodes = nil
 }
 
 func (s *Driver) Replay(cache *bytes.Buffer) error {

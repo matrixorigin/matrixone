@@ -449,13 +449,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 			}
 
-			expr, err = ctx.qualifyColumnNames(expr, nil, false)
+			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
 			if err != nil {
 				return 0, err
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
-				Expr: expr,
+				Expr: newExpr,
 				As:   selectExpr.As,
 			})
 		}
@@ -508,7 +508,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	if clause.GroupBy != nil {
 		groupBinder := NewGroupBinder(builder, ctx)
 		for _, group := range clause.GroupBy {
-			_, err := groupBinder.BindExpr(group, 0, true)
+			group, err = ctx.qualifyColumnNames(group, nil, false)
+			if err != nil {
+				return 0, err
+			}
+
+			_, err = groupBinder.BindExpr(group, 0, true)
 			if err != nil {
 				return 0, err
 			}
@@ -530,11 +535,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 	ctx.binder = projectionBinder
 	for _, selectExpr := range selectList {
-		selectExpr.Expr, err = ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
-		if err != nil {
-			return 0, err
-		}
-
 		expr, err := projectionBinder.BindExpr(selectExpr.Expr, 0, true)
 		if err != nil {
 			return 0, err
