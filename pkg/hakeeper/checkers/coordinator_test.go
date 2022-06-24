@@ -141,10 +141,10 @@ func TestFixExpiredStore(t *testing.T) {
 			},
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{{
-				Target: "b",
+				UUID: "b",
 				ConfigChange: hapb.ConfigChange{
 					Replica: hapb.Replica{
-						StoreID:   "a",
+						UUID:      "a",
 						ShardID:   1,
 						ReplicaID: 1,
 						Epoch:     0,
@@ -202,10 +202,10 @@ func TestFixExpiredStore(t *testing.T) {
 			},
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{{
-				Target: "b",
+				UUID: "b",
 				ConfigChange: hapb.ConfigChange{
 					Replica: hapb.Replica{
-						StoreID:   "a",
+						UUID:      "a",
 						ShardID:   1,
 						ReplicaID: 4,
 						Epoch:     1,
@@ -264,10 +264,10 @@ func TestFixExpiredStore(t *testing.T) {
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{
 				{
-					Target: "a",
+					UUID: "a",
 					ConfigChange: hapb.ConfigChange{
 						Replica: hapb.Replica{
-							StoreID:   "a",
+							UUID:      "a",
 							ShardID:   1,
 							ReplicaID: 1,
 						},
@@ -363,10 +363,10 @@ func TestFixZombie(t *testing.T) {
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{
 				{
-					Target: "c",
+					UUID: "c",
 					ConfigChange: hapb.ConfigChange{
 						Replica: hapb.Replica{
-							StoreID: "c",
+							UUID:    "c",
 							ShardID: 1,
 						},
 						ChangeType: hapb.StopReplica,

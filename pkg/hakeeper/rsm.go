@@ -203,14 +203,14 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	s.state.Term = b.Term
 	s.state.ScheduleCommands = make(map[string]hapb.CommandBatch)
 	for _, c := range b.Commands {
-		l, ok := s.state.ScheduleCommands[c.Target]
+		l, ok := s.state.ScheduleCommands[c.UUID]
 		if !ok {
 			l = hapb.CommandBatch{
 				Commands: make([]hapb.ScheduleCommand, 0),
 			}
 		}
 		l.Commands = append(l.Commands, c)
-		s.state.ScheduleCommands[c.Target] = l
+		s.state.ScheduleCommands[c.UUID] = l
 	}
 
 	return sm.Result{}

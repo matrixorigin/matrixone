@@ -25,10 +25,12 @@ option (gogoproto.goproto_enum_prefix_all) = false;
 
 // Replica of the shard
 message Replica {
-  string StoreID = 1;
+  // UUID which store the Replica is located in
+  string UUID      = 1;
+
   uint64 ShardID   = 2;
   uint64 ReplicaID = 3;
-  uint64 Epoch = 4;
+  uint64 Epoch     = 4;
 }
 
 // ConfigChangeType indicates config change command type.
@@ -53,7 +55,9 @@ enum ServiceType {
 
 // ScheduleCommand contains a shard schedule command.
 message ScheduleCommand {
-  string Target             = 1;
+  // UUID which store the ScheduleCommand is sent to
+  string UUID               = 1;
+
   ConfigChange ConfigChange = 2 [(gogoproto.nullable) = false];
   ServiceType ServiceType   = 3;
 }
