@@ -199,10 +199,10 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 func MockBatch(schema *Schema, rows int) *containers.Batch {
 	if schema.IsSingleSortKey() {
 		sortKey := schema.GetSingleSortKey()
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, sortKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, sortKey.Idx, nil)
 	} else if schema.IsCompoundSortKey() {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
 	} else {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), rows, schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
 	}
 }

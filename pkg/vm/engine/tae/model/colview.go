@@ -53,7 +53,7 @@ func (view *ColumnView) ApplyDeletes() containers.VectorView {
 	if view.DeleteMask == nil {
 		return view.dataView
 	}
-	it := view.DeleteMask.Iterator()
+	it := view.DeleteMask.ReverseIterator()
 	for it.HasNext() {
 		row := it.Next()
 		view.data.Delete(int(row))

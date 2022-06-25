@@ -535,6 +535,7 @@ func TestCompactBlock1(t *testing.T) {
 }
 
 func TestCompactBlock2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -545,6 +546,7 @@ func TestCompactBlock2(t *testing.T) {
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
 	createRelationAndAppend(t, db, "db", schema, bat, true)
 	var newBlockFp *common.ID
 	{
@@ -566,6 +568,10 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
+		view, err := blk.GetColumnDataById(3, nil, nil)
+		defer view.Close()
+		assert.NoError(t, err)
+		assert.True(t, view.GetData().Equals(bat.Vecs[3]))
 		err = blk.RangeDelete(1, 2)
 		assert.Nil(t, err)
 		err = blk.Update(3, 3, int64(999))
@@ -591,15 +597,17 @@ func TestCompactBlock2(t *testing.T) {
 	{
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 		txn, rel := getDefaultRelation(t, db, schema.Name)
-		t.Log(rel.SimplePPString(common.PPL1))
 		seg, err := rel.GetSegment(newBlockFp.SegmentID)
 		assert.Nil(t, err)
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
 		view, err := blk.GetColumnDataById(3, nil, nil)
+		defer view.Close()
 		assert.Nil(t, err)
 		assert.Nil(t, view.DeleteMask)
 		v := view.GetDataView().Get(1)
+		// t.Logf("view: %v", view.GetData().String())
+		// t.Logf("raw : %v", bat.Vecs[3].String())
 		assert.Equal(t, int64(999), v)
 		assert.Equal(t, bat.Vecs[0].Length()-2, view.Length())
 
@@ -639,6 +647,7 @@ func TestCompactBlock2(t *testing.T) {
 		blk, err := seg.GetBlock(newBlockFp.BlockID)
 		assert.Nil(t, err)
 		view, err := blk.GetColumnDataById(3, nil, nil)
+		defer view.Close()
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(4))
 		assert.True(t, view.DeleteMask.Contains(5))

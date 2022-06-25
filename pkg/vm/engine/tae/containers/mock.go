@@ -278,10 +278,21 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 	return vec
 }
 
-func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
-	bat = MockBatch(vecTypes, rows, uniqueIdx, provider)
+func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, nullables []bool, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
+	bat = MockNullableBatch(vecTypes, nullables, rows, uniqueIdx, provider)
 	bat.Attrs = attrs
 	return
+}
+
+func MockNullableBatch(vecTypes []types.Type, nullables []bool, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
+	bat = NewEmptyBatch()
+	for idx := range vecTypes {
+		attr := "mock_" + strconv.Itoa(idx)
+		unique := uniqueIdx == idx
+		vec := MockVector(vecTypes[idx], rows, unique, nullables[idx], provider.GetColumnProvider(idx))
+		bat.AddVector(attr, vec)
+	}
+	return bat
 }
 
 func MockBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {

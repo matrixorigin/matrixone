@@ -2,6 +2,7 @@ package containers
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -89,13 +90,24 @@ func (base *vecBase[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	base.extendData(src, srcOff, srcLen)
 }
 
-func (base *vecBase[T]) Length() int    { return base.derived.stlvec.Length() }
-func (base *vecBase[T]) Capacity() int  { return base.derived.stlvec.Capacity() }
-func (base *vecBase[T]) Allocated() int { return base.derived.stlvec.Allocated() }
+func (base *vecBase[T]) Length() int   { return base.derived.stlvec.Length() }
+func (base *vecBase[T]) Capacity() int { return base.derived.stlvec.Capacity() }
+func (base *vecBase[T]) Allocated() int {
+	if base.derived.roStorage != nil {
+		return base.derived.roStorage.Size()
+	}
+	return base.derived.stlvec.Allocated()
+}
 
 func (base *vecBase[T]) GetAllocator() MemAllocator { return base.derived.stlvec.GetAllocator() }
 func (base *vecBase[T]) GetType() types.Type        { return base.derived.typ }
-func (base *vecBase[T]) String() string             { return base.derived.stlvec.String() }
+func (base *vecBase[T]) String() string {
+	s := base.derived.stlvec.String()
+	if base.derived.roStorage != nil {
+		s = fmt.Sprintf("%s;[RoAlloc=%d]", s, base.derived.roStorage.Size())
+	}
+	return s
+}
 
 func (base *vecBase[T]) Close() {
 	base.derived.releaseRoStorage()

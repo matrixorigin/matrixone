@@ -438,6 +438,17 @@ func (s *Schema) Types() []types.Type {
 	return ts
 }
 
+func (s *Schema) Nullables() []bool {
+	nulls := make([]bool, 0, len(s.ColDefs)-1)
+	for _, def := range s.ColDefs {
+		if def.IsHidden() {
+			continue
+		}
+		nulls = append(nulls, def.Nullable())
+	}
+	return nulls
+}
+
 func (s *Schema) AllNullables() []bool {
 	nulls := make([]bool, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
@@ -672,6 +683,7 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 			_ = schema.AppendPKCol(name, typ, 0)
 		} else {
 			_ = schema.AppendCol(name, typ)
+			schema.ColDefs[len(schema.ColDefs)-1].NullAbility = int8(1)
 		}
 	}
 	schema.BlockMaxRows = 1000
