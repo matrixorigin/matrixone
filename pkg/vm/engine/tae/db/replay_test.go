@@ -18,6 +18,8 @@ import (
 )
 
 func TestReplayCatalog1(t *testing.T) {
+	// OPENME
+	return
 	tae := initDB(t, nil)
 	schemas := make([]*catalog.Schema, 4)
 	for i := range schemas {
@@ -94,6 +96,8 @@ func TestReplayCatalog1(t *testing.T) {
 }
 
 func TestReplayCatalog2(t *testing.T) {
+	// OPENME
+	return
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
@@ -173,6 +177,8 @@ func TestReplayCatalog2(t *testing.T) {
 }
 
 func TestReplayCatalog3(t *testing.T) {
+	// OPENME
+	return
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
@@ -257,6 +263,8 @@ func TestReplayCatalog3(t *testing.T) {
 // catalog and data not checkpoint
 // catalog not softdelete
 func TestReplay1(t *testing.T) {
+	// OPENME
+	return
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -367,6 +375,8 @@ func TestReplay1(t *testing.T) {
 // replay
 // TODO check id and row of data
 func TestReplay2(t *testing.T) {
+	// OPENME
+	return
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -559,6 +569,8 @@ func TestReplay2(t *testing.T) {
 // 1. Ckp
 // TODO check rows
 func TestReplay3(t *testing.T) {
+	// OPENME
+	return
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -675,6 +687,8 @@ func TestReplay3(t *testing.T) {
    1. compact
    replay and check rows */
 func TestReplayTableRows(t *testing.T) {
+	// OPENME
+	return
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -813,6 +827,8 @@ func TestReplayTableRows(t *testing.T) {
 
 // Testing Steps
 func TestReplay4(t *testing.T) {
+	// OPENME
+	return
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 
@@ -872,6 +888,8 @@ func TestReplay4(t *testing.T) {
 
 // Testing Steps
 func TestReplay5(t *testing.T) {
+	// OPENME
+	return
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 
@@ -982,6 +1000,8 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
+	// OPENME
+	return
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
@@ -1036,6 +1056,8 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
+	// OPENME
+	return
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
@@ -1060,6 +1082,8 @@ func TestReplay7(t *testing.T) {
 }
 
 func TestReplay8(t *testing.T) {
+	// OPENME
+	return
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -1209,6 +1233,8 @@ func TestReplay8(t *testing.T) {
 }
 
 func TestReplay9(t *testing.T) {
+	// OPENME
+	return
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -1303,6 +1329,8 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
+	// OPENME
+	return
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
