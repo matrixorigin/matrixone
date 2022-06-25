@@ -1,0 +1,5 @@
+drop table if exists table01;
+create table table01(a int);
+drop table table01;
+show tables;
+tables_in_drop_table

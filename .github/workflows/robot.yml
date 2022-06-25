@@ -3,7 +3,7 @@ name: WeWork Robot
 # Controls when the workflow will run
 on:
   issues:
-    types: [opened, reopened, assigned]
+    types: [reopened, assigned]
   schedule:
     - cron: '30 8 * * *'
   workflow_dispatch:
