@@ -111,15 +111,14 @@ func (impl *nullableVecImpl[T]) Extend(o Vector) {
 func (impl *nullableVecImpl[T]) ExtendWithOffset(o Vector, srcOff, srcLen int) {
 	impl.tryCOW()
 	if o.Nullable() {
-		ovec := o.(*vector[T])
-		if !ovec.HasNull() {
+		if !o.HasNull() {
 			impl.extendData(o, srcOff, srcLen)
 			return
 		} else {
 			if impl.derived.nulls == nil {
 				impl.derived.nulls = roaring64.New()
 			}
-			it := ovec.nulls.Iterator()
+			it := o.NullMask().Iterator()
 			offset := impl.derived.stlvec.Length()
 			for it.HasNext() {
 				pos := it.Next()

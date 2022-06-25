@@ -783,6 +783,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 }
 
 func TestCompactABlk(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
@@ -791,6 +792,7 @@ func TestCompactABlk(t *testing.T) {
 
 	totalRows := schema.BlockMaxRows / 5
 	bat := catalog.MockBatch(schema, int(totalRows))
+	defer bat.Close()
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
@@ -814,6 +816,7 @@ func TestCompactABlk(t *testing.T) {
 }
 
 func TestRollback1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 	schema := catalog.MockSchema(2, 0)
@@ -879,6 +882,7 @@ func TestRollback1(t *testing.T) {
 }
 
 func TestMVCC1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -936,6 +940,7 @@ func TestMVCC1(t *testing.T) {
 			var comp bytes.Buffer
 			var decomp bytes.Buffer
 			view, err := block.GetColumnDataById(schema.GetSingleSortKeyIdx(), &comp, &decomp)
+			defer view.Close()
 			assert.Nil(t, err)
 			assert.Nil(t, view.DeleteMask)
 			assert.NotNil(t, view.GetData())
