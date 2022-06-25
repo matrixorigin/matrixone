@@ -14,13 +14,15 @@
 // highest-priority item from the queue. The Examples include such an
 // implementation; the file example_pq_test.go has the complete source.
 //
-package int16s
+package numerics
+
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 // Init establishes the heap invariants required by the other routines in this package.
 // Init is idempotent with respect to the heap invariants
 // and may be called whenever the heap invariants may have been invalidated.
 // The complexity is Operator(n) where n = len(h).
-func heapInit(h heapSlice) {
+func heapInit[T types.OrderedT](h heapSlice[T]) {
 	// heapify
 	n := len(h)
 	for i := n/2 - 1; i >= 0; i-- {
@@ -30,7 +32,7 @@ func heapInit(h heapSlice) {
 
 // Push pushes the element x onto the heap.
 // The complexity is Operator(log n) where n = len(h).
-func heapPush(h *heapSlice, x heapElem) {
+func heapPush[T types.OrderedT](h *heapSlice[T], x heapElem[T]) {
 	*h = append(*h, x)
 	up(*h, len(*h)-1)
 }
@@ -38,7 +40,7 @@ func heapPush(h *heapSlice, x heapElem) {
 // Pop removes and returns the minimum element (according to Less) from the heap.
 // The complexity is Operator(log n) where n = len(h).
 // Pop is equivalent to Remove(h, 0).
-func heapPop(h *heapSlice) heapElem {
+func heapPop[T types.OrderedT](h *heapSlice[T]) heapElem[T] {
 	n := len(*h) - 1
 	(*h)[0], (*h)[n] = (*h)[n], (*h)[0]
 	down(*h, 0, n)
@@ -47,7 +49,7 @@ func heapPop(h *heapSlice) heapElem {
 	return res
 }
 
-func up(h heapSlice, j int) {
+func up[T types.OrderedT](h heapSlice[T], j int) {
 	for {
 		i := (j - 1) / 2 // parent
 		if i == j || !h.Less(j, i) {
@@ -58,7 +60,7 @@ func up(h heapSlice, j int) {
 	}
 }
 
-func down(h heapSlice, i0, n int) bool {
+func down[T types.OrderedT](h heapSlice[T], i0, n int) bool {
 	i := i0
 	for {
 		j1 := 2*i + 1

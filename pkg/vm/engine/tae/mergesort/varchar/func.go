@@ -46,16 +46,6 @@ func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
 	return
 }
 
-func Shuffle(col containers.Vector, idx []uint32) {
-	ret := containers.MakeVector(col.GetType(), col.Nullable())
-	for _, j := range idx {
-		ret.Append(col.Get(int(j)))
-	}
-
-	col.ResetWithData(ret.Bytes(), ret.NullMask())
-	ret.Close()
-}
-
 func Merge(col []containers.Vector, src *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
 	ret = make([]containers.Vector, len(toLayout))
 	mapping = make([]uint32, len(*src))
@@ -90,62 +80,6 @@ func Merge(col []containers.Vector, src *[]uint32, fromLayout, toLayout []uint32
 				heapPush(&heap, heapElem{data: col[top.src].Get(int(top.next)).([]byte), src: top.src, next: top.next + 1})
 			}
 		}
-	}
-	return
-}
-
-func Reshape(col []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector) {
-	ret = make([]containers.Vector, len(toLayout))
-	fromIdx := 0
-	fromOffset := 0
-	for i := 0; i < len(toLayout); i++ {
-		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
-		toOffset := 0
-		for toOffset < int(toLayout[i]) {
-			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)
-			if fromLeft == 0 {
-				fromIdx++
-				fromOffset = 0
-				fromLeft = fromLayout[fromIdx]
-			}
-			length := 0
-			if fromLeft < toLayout[i]-uint32(toOffset) {
-				length = int(fromLeft)
-			} else {
-				length = int(toLayout[i]) - toOffset
-			}
-			ret[i].Extend(col[fromIdx].CloneWindow(fromOffset, length))
-			fromOffset += length
-			toOffset += length
-		}
-	}
-	for _, v := range col {
-		v.Close()
-	}
-	return
-}
-
-func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []containers.Vector) {
-	ret = make([]containers.Vector, len(toLayout))
-	to := len(toLayout)
-	cursors := make([]int, len(fromLayout))
-
-	for i := 0; i < to; i++ {
-		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
-	}
-
-	k := 0
-	for i := 0; i < to; i++ {
-		for j := 0; j < int(toLayout[i]); j++ {
-			s := src[k]
-			ret[i].Append(col[s].Get(cursors[s]))
-			cursors[s]++
-			k++
-		}
-	}
-
-	for _, v := range col {
-		v.Close()
 	}
 	return
 }

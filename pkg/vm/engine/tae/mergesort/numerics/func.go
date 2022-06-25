@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bools
+package numerics
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-func Sort(col containers.Vector, idx []uint32) {
+func Sort[T types.OrderedT](col containers.Vector, idx []uint32) (ret containers.Vector) {
 	n := len(idx)
-	dataWithIdx := make(sortSlice, n)
+	dataWithIdx := make(sortSlice[T], n)
 
 	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: col.Get(i).(bool), idx: uint32(i)}
+		dataWithIdx[i] = sortElem[T]{data: col.Get(i).(T), idx: uint32(i)}
 	}
 
 	sortUnstable(dataWithIdx)
@@ -32,9 +33,11 @@ func Sort(col containers.Vector, idx []uint32) {
 		idx[i] = v.idx
 		col.Update(i, v.data)
 	}
+	ret = col
+	return
 }
 
-func Merge(col []containers.Vector, src *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
+func Merge[T types.OrderedT](col []containers.Vector, src *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
 	ret = make([]containers.Vector, len(toLayout))
 	mapping = make([]uint32, len(*src))
 
@@ -49,10 +52,10 @@ func Merge(col []containers.Vector, src *[]uint32, fromLayout, toLayout []uint32
 	}
 
 	nBlk := len(col)
-	heap := make(heapSlice, nBlk)
+	heap := make(heapSlice[T], nBlk)
 
 	for i := 0; i < nBlk; i++ {
-		heap[i] = heapElem{data: col[i].Get(0).(bool), src: uint32(i), next: 1}
+		heap[i] = heapElem[T]{data: col[i].Get(0).(T), src: uint32(i), next: 1}
 	}
 	heapInit(heap)
 
@@ -65,12 +68,9 @@ func Merge(col []containers.Vector, src *[]uint32, fromLayout, toLayout []uint32
 			mapping[offset[top.src]+top.next-1] = uint32(k)
 			k++
 			if int(top.next) < int(fromLayout[top.src]) {
-				heapPush(&heap, heapElem{data: col[top.src].Get(int(top.next)).(bool), src: top.src, next: top.next + 1})
+				heapPush(&heap, heapElem[T]{data: col[top.src].Get(int(top.next)).(T), src: top.src, next: top.next + 1})
 			}
 		}
-	}
-	for _, v := range col {
-		v.Close()
 	}
 	return
 }

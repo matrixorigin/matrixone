@@ -12,25 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package int8s
+package numerics
 
-type sortElem struct {
-	data int8
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+
+type sortElem[T types.OrderedT] struct {
+	data T
 	idx  uint32
 }
 
-type sortSlice []sortElem
+type sortSlice[T types.OrderedT] []sortElem[T]
 
-func (x sortSlice) Less(i, j int) bool { return x[i].data < x[j].data }
-func (x sortSlice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+func (x sortSlice[T]) Less(i, j int) bool { return x[i].data < x[j].data }
+func (x sortSlice[T]) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
 
-type heapElem struct {
-	data int8
+type heapElem[T types.OrderedT] struct {
+	data T
 	src  uint32
 	next uint32
 }
 
-type heapSlice []heapElem
+type heapSlice[T types.OrderedT] []heapElem[T]
 
-func (x heapSlice) Less(i, j int) bool { return x[i].data < x[j].data }
-func (x heapSlice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
+func (x heapSlice[T]) Less(i, j int) bool { return x[i].data < x[j].data }
+func (x heapSlice[T]) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
