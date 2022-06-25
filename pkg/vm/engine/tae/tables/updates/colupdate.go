@@ -204,6 +204,7 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	typ := types.DecodeType(buf)
 	var tmpn int64
 	vec := containers.MakeVector(typ, true)
+	defer vec.Close()
 	if tmpn, err = vec.ReadFrom(r); err != nil {
 		return
 	}
@@ -250,6 +251,7 @@ func (node *ColumnUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	n += int64(cn)
 
 	col := containers.MakeVector(def.Type, def.Nullable())
+	defer col.Close()
 	it := node.mask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
