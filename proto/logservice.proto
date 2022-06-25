@@ -17,6 +17,8 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
+option (gogoproto.goproto_enum_prefix_all) = false;
+
 // LogShardInfo contains information a log shard.
 message LogShardInfo {
   // ShardID is the ID of a Log shard.
@@ -99,9 +101,18 @@ enum MethodType {
   CONNECT_RO   = 7;
 };
 
+enum RecordType {
+  UserRecord    = 0;
+  Internal      = 1;
+  LeaseUpdate   = 2;
+  LeaseRejected = 3;
+}
+
+// LogRecord is what we store into the LogService.
 message LogRecord {
-  uint64 Index = 1;
-  bytes Data   = 2;
+  uint64 Index    = 1;
+  RecordType Type = 2;
+  bytes Data      = 3;
 };
 
 message Request {

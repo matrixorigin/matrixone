@@ -302,13 +302,13 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, selectList tree.Sel
 			if expandAlias {
 				if colPos, ok := bc.aliasMap[col]; ok {
 					astExpr = selectList[colPos].Expr
+					break
 				}
-
-				break
 			}
 
 			if binding, ok := bc.bindingByCol[col]; ok {
 				if binding != nil {
+					exprImpl.NumParts = 2
 					exprImpl.Parts[1] = binding.table
 				} else {
 					// return nil, errors.New("", fmt.Sprintf("column reference %q is ambiguous", col))

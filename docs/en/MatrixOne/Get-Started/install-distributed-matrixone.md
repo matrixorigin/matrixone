@@ -7,7 +7,7 @@ MatrixOne supports distributed deloyment. At least 3 stores (same as Nodes) are 
 There are two types of stores in a MatrixOne cluster: prophet stores and pure storage stores. The first three stores are prophet stores. The others are pure storage stores. 
 
 For example, if there're three stores in the cluster, all the stores are prophet stores.
-If there're five nodes in the cluster, three are prophet stores, two are pure storage stores.
+If there are five nodes in the cluster, three are prophet stores, and two are pure storage stores.
 
 ### Installation
 

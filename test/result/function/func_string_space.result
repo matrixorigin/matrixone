@@ -1,0 +1,115 @@
+drop table if exists t1;
+create table t1 (
+name varchar(10),
+level smallint unsigned);
+insert into t1 values ('string',1);
+select reverse("123"+space(level)+"456") from t1;
+reverse("123"+space(level)+"456")
+975
+select concat_ws("abc", name,space(level)), concat_ws("abc",name, space(level)) from t1;
+concat_ws("abc", name,space(level))	concat_ws("abc",name, space(level))
+stringabc 	stringabc
+drop table t1;
+create table t1 (a varchar(16383));
+insert into t1 select space(50000);
+select length(a) from t1;
+length(a)
+16383
+drop table t1;
+select space(5),concat_ws('*',space(5),'*');
+space(5)	concat_ws('*',space(5),'*')
+     	     **
+select space(-1);
+space(-1)
+select space(-4294967295);
+space(-4294967295)
+select space(4294967295);
+space(4294967295)
+null
+select space(-4294967296);
+space(-4294967296)
+select space(4294967296);
+space(4294967296)
+null
+select space(-4294967297);
+space(-4294967297)
+select space(4294967297);
+space(4294967297)
+null
+select space(-18446744073709551615);
+space(-18446744073709551615)
+select space(18446744073709551615);
+space(18446744073709551615)
+null
+select space(-18446744073709551616);
+space(-18446744073709551616)
+select space(18446744073709551616);
+space(18446744073709551616)
+null
+select space(-18446744073709551617);
+space(-18446744073709551617)
+select space(18446744073709551617);
+space(18446744073709551617)
+null
+SELECT space(9223372036854775808);
+space(9223372036854775808)
+null
+SELECT length(space(9223372036854775809));
+length(space(9223372036854775809))
+null
+SELECT SPACE(NULL);
+SPACE(NULL)
+null
+SELECT SPACE(12)+"123";
+SPACE(12)+"123"
+123.0
+SELECT SPACE(12314.14123)+"123";
+SPACE(12314.14123)+"123"
+123.0
+SELECT SPACE("1231")+"123";
+SPACE("1231")+"123"
+123.0
+SELECT SPACE("2012-03-12")+"123";
+SPACE("2012-03-12")+"123"
+123.0
+CREATE TABLE t(i BIGINT UNSIGNED);
+INSERT INTO t values(9223372036854775808);
+SELECT space(i) FROM t;
+space(i)
+null
+DROP TABLE t;
+SELECT space(1073741824);
+space(1073741824)
+null
+SELECT TO_DATE(SPACE(2),'1');
+invalid inputs for function 'to_date()'   1
+drop table if exists t1;
+create table t1(a INT);
+insert into t1 values(1),(1),(2),(3);
+select a from t1 group by a having space(a)="   ";
+a
+3
+drop table t1;
+drop table if exists t1;
+create table t1(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+select * from t1 where space(a)=" ";
+a	b
+1	2012-10-12
+drop table t1;
+drop table if exists t1;
+drop table if exists t2;
+create table t1(a INT,  b date);
+create table t2(a INT,  b date);
+insert into t1 values(1, "2012-10-12"),(1, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
+insert into t2 values(1, "2013-04-30"),(1, "1994-10-04"),(3, "2018-06-04"),(4, "2012-10-12");
+SELECT distinct t1.a, t2.a FROM t1 JOIN t2 ON (space(t1.a) = space(t2.a));
+a	a
+1	1
+3	3
+4	4
+drop table t1;
+drop table t2;
+SELECT space("你好")+"你好";
+space("你好")+"你好"
+0.0

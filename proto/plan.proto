@@ -516,6 +516,21 @@ message Plan {
 		Query query 			= 1;
 		TransationControl tcl 	= 2;
 		DataDefinition ddl 		= 3;
+		DataControl	dcl			= 4;
+	}
+}
+
+message DataControl {
+	enum DclType {
+		SET_VARIABLES	= 0;
+		GRANT			= 1;
+		REVOKE			= 2;
+		DENY			= 3;
+	}
+	//DataDefinition type
+	DclType dcl_type = 1;
+	oneof control {		
+		SetVariables set_variables = 2;
 	}
 }
 
@@ -620,4 +635,16 @@ message TruncateTable {
 message ShowVariables {
 	bool global 			= 1;
 	repeated Expr where 	= 2; 
+}
+
+message SetVariables {
+	repeated SetVariablesItem items	= 1; 
+}
+
+message SetVariablesItem {
+	bool system     = 1;
+	bool global     = 2;
+	string name     = 3;
+	Expr   value    = 4;
+	Expr   reserved = 5;
 }

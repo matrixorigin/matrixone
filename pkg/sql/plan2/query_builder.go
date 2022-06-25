@@ -449,13 +449,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				ctx.headings = append(ctx.headings, tree.String(expr, dialect.MYSQL))
 			}
 
-			expr, err = ctx.qualifyColumnNames(expr, nil, false)
+			newExpr, err := ctx.qualifyColumnNames(expr, nil, false)
 			if err != nil {
 				return 0, err
 			}
 
 			selectList = append(selectList, tree.SelectExpr{
-				Expr: expr,
+				Expr: newExpr,
 				As:   selectExpr.As,
 			})
 		}
@@ -508,7 +508,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	if clause.GroupBy != nil {
 		groupBinder := NewGroupBinder(builder, ctx)
 		for _, group := range clause.GroupBy {
-			_, err := groupBinder.BindExpr(group, 0, true)
+			group, err = ctx.qualifyColumnNames(group, nil, false)
+			if err != nil {
+				return 0, err
+			}
+
+			_, err = groupBinder.BindExpr(group, 0, true)
 			if err != nil {
 				return 0, err
 			}
@@ -530,11 +535,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	projectionBinder := NewProjectionBinder(builder, ctx, havingBinder)
 	ctx.binder = projectionBinder
 	for _, selectExpr := range selectList {
-		selectExpr.Expr, err = ctx.qualifyColumnNames(selectExpr.Expr, nil, false)
-		if err != nil {
-			return 0, err
-		}
-
 		expr, err := projectionBinder.BindExpr(selectExpr.Expr, 0, true)
 		if err != nil {
 			return 0, err
@@ -1264,16 +1264,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				}
 			}
 
-			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT {
-				turnInner = true
-				filters = append(node.OnList, filters...)
-				node.JoinType = plan.Node_INNER
-				node.OnList = nil
-
-				break
-			}
-
-			if joinSides[i]&JoinSideLeft != 0 && canTurnInner && node.JoinType == plan.Node_RIGHT {
+			if joinSides[i]&JoinSideRight != 0 && canTurnInner && node.JoinType == plan.Node_LEFT && rejectsNull(filter) {
 				turnInner = true
 				filters = append(node.OnList, filters...)
 				node.JoinType = plan.Node_INNER
@@ -1318,22 +1309,19 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 					leftPushdown = append(leftPushdown, filter)
 
-				case plan.Node_RIGHT:
-					rightPushdown = append(rightPushdown, filter)
-
 				default:
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideLeft:
-				if node.JoinType != plan.Node_RIGHT && node.JoinType != plan.Node_OUTER {
+				if node.JoinType != plan.Node_OUTER {
 					leftPushdown = append(leftPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)
 				}
 
 			case JoinSideRight:
-				if node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_RIGHT {
+				if node.JoinType == plan.Node_INNER {
 					rightPushdown = append(rightPushdown, filter)
 				} else {
 					cantPushdown = append(cantPushdown, filter)

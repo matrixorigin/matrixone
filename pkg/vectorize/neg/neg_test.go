@@ -16,6 +16,8 @@ package neg
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -47,4 +49,33 @@ func TestI64Sum(t *testing.T) {
 	rs := make([]int64, 100)
 	fmt.Printf("int neg: %v\n", Int64Neg(xs, rs))
 	fmt.Printf("pure int neg: %v\n", NumericNeg(xs, rs))
+}
+
+func TestDecimal64Neg(t *testing.T) {
+	xs := []types.Decimal64{123, 234, 345, 0, -234}
+	rs := make([]types.Decimal64, len(xs))
+	rs = Decimal64Neg(xs, rs)
+	expectedResult := []types.Decimal64{-123, -234, -345, 0, 234}
+	require.Equal(t, expectedResult, rs)
+}
+
+func TestDecimal128Neg(t *testing.T) {
+	xs := make([]types.Decimal128, 5)
+	xs[0], _ = types.ParseStringToDecimal128("123456.789", 20, 5)
+	xs[1], _ = types.ParseStringToDecimal128("120000.789", 20, 5)
+	xs[2], _ = types.ParseStringToDecimal128("-123456.789", 20, 5)
+	xs[3], _ = types.ParseStringToDecimal128("0", 20, 5)
+	xs[4], _ = types.ParseStringToDecimal128("-123", 20, 5)
+	rs := make([]types.Decimal128, 5)
+	rs = Decimal128Neg(xs, rs)
+
+	require.Equal(t, "-123456.78900", string(rs[0].Decimal128ToString(5)))
+
+	require.Equal(t, "-120000.78900", string(rs[1].Decimal128ToString(5)))
+
+	require.Equal(t, "123456.78900", string(rs[2].Decimal128ToString(5)))
+
+	require.Equal(t, "0", string(rs[3].Decimal128ToString(5)))
+
+	require.Equal(t, "123.00000", string(rs[4].Decimal128ToString(5)))
 }

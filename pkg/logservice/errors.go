@@ -38,25 +38,25 @@ var errorToCodeMappings = getErrorToCodeMapping()
 
 func getErrorToCodeMapping() []errorToCode {
 	return []errorToCode{
-		{dragonboat.ErrTimeout, pb.ErrorCode_Timeout, true},
-		{dragonboat.ErrShardNotFound, pb.ErrorCode_InvalidShard, true},
+		{dragonboat.ErrTimeout, pb.Timeout, true},
+		{dragonboat.ErrShardNotFound, pb.InvalidShard, true},
 		// TODO: why ErrTimeoutTooSmall is possible
-		{dragonboat.ErrTimeoutTooSmall, pb.ErrorCode_Timeout, false},
-		{dragonboat.ErrPayloadTooBig, pb.ErrorCode_InvalidPayloadSize, true},
-		{dragonboat.ErrRejected, pb.ErrorCode_Rejected, true},
-		{dragonboat.ErrShardNotReady, pb.ErrorCode_ShardNotReady, true},
-		{dragonboat.ErrSystemBusy, pb.ErrorCode_ShardNotReady, false},
-		{dragonboat.ErrClosed, pb.ErrorCode_SystemClosed, true},
-		{dragonboat.ErrInvalidRange, pb.ErrorCode_OutOfRange, true},
+		{dragonboat.ErrTimeoutTooSmall, pb.Timeout, false},
+		{dragonboat.ErrPayloadTooBig, pb.InvalidPayloadSize, true},
+		{dragonboat.ErrRejected, pb.Rejected, true},
+		{dragonboat.ErrShardNotReady, pb.ShardNotReady, true},
+		{dragonboat.ErrSystemBusy, pb.ShardNotReady, false},
+		{dragonboat.ErrClosed, pb.SystemClosed, true},
+		{dragonboat.ErrInvalidRange, pb.OutOfRange, true},
 
-		{ErrInvalidTruncateIndex, pb.ErrorCode_IndexAlreadyTruncated, true},
-		{ErrNotLeaseHolder, pb.ErrorCode_NotLeaseHolder, true},
+		{ErrInvalidTruncateIndex, pb.IndexAlreadyTruncated, true},
+		{ErrNotLeaseHolder, pb.NotLeaseHolder, true},
 	}
 }
 
 func toErrorCode(err error) (pb.ErrorCode, string) {
 	if err == nil {
-		return pb.ErrorCode_NoError, ""
+		return pb.NoError, ""
 	}
 	for _, rec := range errorToCodeMappings {
 		if errors.Is(err, rec.err) {
@@ -65,14 +65,14 @@ func toErrorCode(err error) (pb.ErrorCode, string) {
 		}
 	}
 	plog.Errorf("unrecognized error %v, converted to %d", err,
-		pb.ErrorCode_OtherSystemError)
-	return pb.ErrorCode_OtherSystemError, err.Error()
+		pb.OtherSystemError)
+	return pb.OtherSystemError, err.Error()
 }
 
 func toError(resp pb.Response) error {
-	if resp.ErrorCode == pb.ErrorCode_NoError {
+	if resp.ErrorCode == pb.NoError {
 		return nil
-	} else if resp.ErrorCode == pb.ErrorCode_OtherSystemError {
+	} else if resp.ErrorCode == pb.OtherSystemError {
 		return errors.Wrapf(ErrUnknownError, resp.ErrorMessage)
 	}
 

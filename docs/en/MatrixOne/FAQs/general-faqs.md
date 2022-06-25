@@ -4,25 +4,25 @@
 
 * <font size=4>**What is MatrixOne?**</font>
     
-  MatrixOne is a future-oriented hyperconverged cloud & edge native DBMS that supports transactional, analytical, and streaming workload with a simplified and distributed database engine, across multiple datacenters, clouds, edges and other heterogenous infrastructures. The all-in-one architecture of MatrixOne will significantly simplify database management and maintenance, single database can serve multiple data applications. 
+  MatrixOne is a future-oriented hyperconverged cloud & edge native DBMS that supports transactional, analytical, and streaming workload with a simplified and distributed database engine, across multiple datacenters, clouds, edges and other heterogenous infrastructures. The all-in-one architecture of MatrixOne will significantly simplify database management and maintenance, creating a single database that can serve multiple data applications. 
   For information about MatrixOne, you can see [MatrixOne Introduction](../Overview/matrixone-introduction.md).
 
 <br>
 
 * <font size=4>**Where can I apply MatrxOne?**</font>
     
-  MatrixOne provides users with HTAP services to support hybrid workloads, it can be used to build data warehouse or data platform. 
+  MatrixOne provides users with HTAP services to support hybrid workloads. It can be used to build data warehouse or data platforms. 
 <br>
 
 * <font size=4>**Is MatrixOne based on MySQL or some other database?**</font>
     
-  MatrixOne is a totally redesigned database. It's compatible with part of MySQL syntax and semantics, and we are working to support more database semantics such as PostgreSQL, Hive, Clickhouse, as we intend to develop MatrixOne as a hyperconverged database.  
-  About the compatibility with MySQL, you can see [MySQL-Compatibility](../Overview/mysql-compatibility.md).
+  MatrixOne is a completely redesigned database. It's compatible with part of MySQL syntax and semantics. We are currently working to support more database semantics such as PostgreSQL, Hive, Clickhouse, since we intend to develop MatrixOne as a hyperconverged database.  
+  To learn more about the compatibility with MySQL, you can visit [MySQL-Compatibility](../Overview/mysql-compatibility.md).
 <br>
 
 * <font size=4>**What's the relationship between MatrixOne and MatrixCube?**</font>
     
-  MatrixOne is the main database project, including query parser layer, compute layer, and storage layer, it could work as a standalone database system.
+  MatrixOne is the main database project, including a query parser layer, compute layer, and storage layer. It can also work as a standalone database system.
   MatrixCube is a independant library who doesn't work alone, it's a distributed system framework. It gives MatrixOne the ability to extend as a distributed database. It also supports to be mounted with other storage engines. 
   For information about MatrixCube, you can see [MatrixCube Introduction](../Overview/matrixcube/matrixcube-introduction.md).
 <br>
@@ -34,7 +34,7 @@
 
 * <font size=4>**Which programming language is MatrixOne developed with ?**</font>
     
-  Currently, the primary programming language used for our codes is **Golang**.
+  Currently, the primary programming language used for our programming is **Golang**.
 <br>
 
 * <font size=4>**What operating system does MatrixOne support?**</font>
