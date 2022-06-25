@@ -20,84 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
-
-func TestUpdateVector(t *testing.T) {
-	colTypes := types.MockColTypes(17)
-	check := func(typ types.Type) {
-		vec := MockVec(typ, 10, 0)
-		mask := roaring.BitmapOf(4)
-		vals := map[uint32]any{4: types.Null{}}
-		vec = ApplyUpdateToVector(vec, mask, vals)
-		assert.Equal(t, 10, LengthOfMoVector(vec))
-		assert.True(t, vec.Nsp.Np.Contains(uint64(4)))
-		t.Log(vec.String())
-
-		v := GetValue(vec, 8)
-		vals[4] = v
-		vec = ApplyUpdateToVector(vec, mask, vals)
-		assert.Equal(t, 10, LengthOfMoVector(vec))
-		assert.True(t, vec.Nsp.Np.IsEmpty())
-		t.Log(vec.String())
-	}
-	for _, typ := range colTypes {
-		check(typ)
-	}
-}
-
-func TestApplyUpdateToIVector(t *testing.T) {
-	typ := types.Type_INT32.ToType()
-	vec := vector.MockVector(typ, 10)
-
-	mask := roaring.NewBitmap()
-	vals := make(map[uint32]any)
-	mask.Add(3)
-	vals[3] = int32(87)
-	mask.Add(9)
-	vals[9] = int32(99)
-	vec2 := ApplyUpdateToIVector(vec, mask, vals)
-
-	val, err := vec2.GetValue(3)
-	assert.Nil(t, err)
-	assert.Equal(t, int32(87), val)
-	val, err = vec2.GetValue(4)
-	assert.Nil(t, err)
-	assert.Equal(t, int32(4), val)
-	val, err = vec2.GetValue(9)
-	assert.Nil(t, err)
-	assert.Equal(t, int32(99), val)
-}
-func TestApplyUpdateToIVector2(t *testing.T) {
-	typ := types.Type{
-		Oid:   types.Type_VARCHAR,
-		Size:  24,
-		Width: 100,
-	}
-	vec := vector.MockVector(typ, 10)
-
-	mask := roaring.NewBitmap()
-	vals := make(map[uint32]any)
-	mask.Add(3)
-	vals[3] = []byte("TestApplyUpdateToIVector3")
-	mask.Add(9)
-	vals[9] = []byte("TestApplyUpdateToIVector9")
-	vec2 := ApplyUpdateToIVector(vec, mask, vals)
-
-	val, err := vec2.GetValue(3)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("TestApplyUpdateToIVector3"), val)
-	val, err = vec2.GetValue(4)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("str4"), val)
-	val, err = vec2.GetValue(9)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("TestApplyUpdateToIVector9"), val)
-	t.Logf("%v", vec2)
-}
 
 func TestShuffleByDeletes(t *testing.T) {
 	origMask := roaring.New()
@@ -152,39 +78,14 @@ func TestCheckRowExists(t *testing.T) {
 func TestAppendNull(t *testing.T) {
 	colTypes := types.MockColTypes(17)
 	check := func(typ types.Type) {
-		vec := MockVec(typ, 10, 0)
-		AppendValue(vec, types.Null{})
-		assert.Equal(t, 11, LengthOfMoVector(vec))
-		assert.True(t, vec.Nsp.Np.Contains(uint64(10)))
+		vec := containers.MockVector2(typ, 10, 0)
+		defer vec.Close()
+		vec.Append(types.Null{})
+		assert.Equal(t, 11, vec.Length())
+		assert.True(t, vec.IsNull(10))
 		t.Log(vec.String())
 	}
 	for _, typ := range colTypes {
 		check(typ)
-	}
-}
-
-func TestCopy1(t *testing.T) {
-	t1 := types.Type_VARCHAR.ToType()
-	v1 := containers.MockVector(t1, 10, false, true, nil)
-	defer v1.Close()
-	v1.Update(5, types.Null{})
-	mv1 := CopyToMoVector(v1)
-	for i := 0; i < v1.Length(); i++ {
-		assert.Equal(t, v1.Get(i), GetValue(mv1, uint32(i)))
-	}
-
-	t2 := types.Type_DATE.ToType()
-	v2 := containers.MockVector(t2, 20, false, true, nil)
-	defer v2.Close()
-	v2.Update(6, types.Null{})
-	mv2 := CopyToMoVector(v2)
-	for i := 0; i < v2.Length(); i++ {
-		assert.Equal(t, v2.Get(i), GetValue(mv2, uint32(i)))
-	}
-
-	v3 := MOToVector(mv2, true)
-	t.Log(v3.String())
-	for i := 0; i < v3.Length(); i++ {
-		assert.Equal(t, v2.Get(i), v3.Get(i))
 	}
 }

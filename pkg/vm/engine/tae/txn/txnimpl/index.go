@@ -15,10 +15,10 @@
 package txnimpl
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -205,7 +205,7 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 			row++
 		}
 	default:
-		return vector.ErrVecTypeNotSupport
+		panic(fmt.Errorf("%s not supported", col.GetType().String()))
 	}
 	return nil
 }
@@ -258,7 +258,7 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 			}
 		}
 	default:
-		return vector.ErrVecTypeNotSupport
+		panic(fmt.Errorf("%s not supported", col.GetType().String()))
 	}
 	return nil
 }

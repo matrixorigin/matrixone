@@ -17,8 +17,6 @@ package catalog
 import (
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -196,17 +194,6 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 	}
 	txn.Store.AddTxnEntry(0, entry)
 	return newMockDBHandle(txn.catalog, txn, entry), nil
-}
-
-func MockData(schema *Schema, rows uint32) *batch.Batch {
-	if schema.IsSingleSortKey() {
-		sortKey := schema.GetSingleSortKey()
-		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), sortKey.Idx, nil)
-	} else if schema.IsCompoundSortKey() {
-		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
-	} else {
-		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
-	}
 }
 
 func MockBatch(schema *Schema, rows int) *containers.Batch {

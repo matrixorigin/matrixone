@@ -1,9 +1,12 @@
 package moengine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -296,4 +299,30 @@ func TestTxnRelation_Update(t *testing.T) {
 	err = rel.Update(0, updatePK, nil)
 	assert.NotNil(t, err)
 	assert.Equal(t, data.ErrUpdateUniqueKey, err)
+}
+
+func TestCopy1(t *testing.T) {
+	t1 := types.Type_VARCHAR.ToType()
+	v1 := containers.MockVector(t1, 10, false, true, nil)
+	defer v1.Close()
+	v1.Update(5, types.Null{})
+	mv1 := CopyToMoVector(v1)
+	for i := 0; i < v1.Length(); i++ {
+		assert.Equal(t, v1.Get(i), GetValue(mv1, uint32(i)))
+	}
+
+	t2 := types.Type_DATE.ToType()
+	v2 := containers.MockVector(t2, 20, false, true, nil)
+	defer v2.Close()
+	v2.Update(6, types.Null{})
+	mv2 := CopyToMoVector(v2)
+	for i := 0; i < v2.Length(); i++ {
+		assert.Equal(t, v2.Get(i), GetValue(mv2, uint32(i)))
+	}
+
+	v3 := MOToVector(mv2, true)
+	t.Log(v3.String())
+	for i := 0; i < v3.Length(); i++ {
+		assert.Equal(t, v2.Get(i), v3.Get(i))
+	}
 }

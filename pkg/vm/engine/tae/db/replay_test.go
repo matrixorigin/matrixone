@@ -1048,9 +1048,6 @@ func TestReplay7(t *testing.T) {
 	compactBlocks(t, tae, defaultTestDB, schema, true)
 	mergeBlocks(t, tae, defaultTestDB, schema, true)
 	time.Sleep(time.Millisecond * 100)
-	// txn, rel := getDefaultRelation(t, tae, schema.Name)
-	// checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
-	// assert.NoError(t, txn.Commit())
 
 	_ = tae.Close()
 	tae, err := Open(tae.Dir, opts)
