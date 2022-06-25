@@ -123,7 +123,7 @@ func init() {
 		rules = append(rules, [4]types.T{types.T_datetime, types.T_date, types.T_datetime, types.T_datetime})
 		for _, t1 := range strings {
 			for _, t2 := range all {
-				if t2 == types.T_char || t2 == types.T_varchar || t2 == types.T_any {
+				if t1 == t2 || t2 == types.T_any {
 					continue
 				}
 				rules = append(rules, [4]types.T{t1, t2, t2, t2})
@@ -150,7 +150,6 @@ func init() {
 		for i := range numbers {
 			for j := range numbers {
 				rules2 = append(rules2, [4]types.T{numbers[i], numbers[j], types.T_float64, types.T_float64})
-				rules2 = append(rules2, [4]types.T{numbers[j], numbers[i], types.T_float64, types.T_float64})
 			}
 			for j := range decimals {
 				rules2 = append(rules2, [4]types.T{numbers[i], decimals[j], types.T_float64, types.T_float64})
@@ -186,10 +185,10 @@ func init() {
 	}
 
 	binaryTable2 = make([][]binaryTargetTypes, maxTypes)
-	for i := range binaryTable {
+	for i := range binaryTable2 {
 		binaryTable2[i] = make([]binaryTargetTypes, maxTypes)
 	}
-	for _, r := range rules {
+	for _, r := range rules2 {
 		binaryTable2[r[0]][r[1]] = binaryTargetTypes{
 			convert: true,
 			left:    r[2],
