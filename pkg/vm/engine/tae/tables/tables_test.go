@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,6 +29,7 @@ const (
 )
 
 func TestInsertInfo(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	ts := common.NextGlobalSeqNum()
 	capacity := uint32(10000)
 	info := newInsertInfo(nil, ts, capacity)
