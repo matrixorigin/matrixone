@@ -394,6 +394,7 @@ func TestNodeCommand(t *testing.T) {
 }
 
 func TestApplyToColumn1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	deletes := roaring.BitmapOf(1)
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
@@ -404,6 +405,7 @@ func TestApplyToColumn1(t *testing.T) {
 	deletes.AddRange(3, 4)
 
 	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
+	defer vec.Close()
 	for i := 0; i < 5; i++ {
 		data := "val" + strconv.Itoa(i)
 		vec.Append([]byte(data))
@@ -411,11 +413,20 @@ func TestApplyToColumn1(t *testing.T) {
 	vec.Update(2, types.Null{})
 	vec.Update(4, types.Null{})
 
-	res := node.ApplyToColumn(vec, deletes)
-	t.Log(res.String())
+	// Nulls {2, 4}
+	// Deletes {1,3}
+	// Length 5
+	assert.True(t, types.IsNull(vec.Get(2)))
+	assert.True(t, types.IsNull(vec.Get(4)))
+	node.ApplyToColumn(vec, deletes)
+	assert.Equal(t, 3, vec.Length())
+	assert.True(t, types.IsNull(vec.Get(1)))
+	assert.Equal(t, uint64(1), vec.NullMask().GetCardinality())
+	t.Log(vec.String())
 }
 
 func TestApplyToColumn2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	deletes := roaring.BitmapOf(1)
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
@@ -426,18 +437,25 @@ func TestApplyToColumn2(t *testing.T) {
 	deletes.AddRange(2, 4)
 
 	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
-	vec.AppendMany(1, 2, 3, 4)
+	defer vec.Close()
+	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
 
 	vec.Update(2, types.Null{})
 	vec.Update(1, types.Null{})
 	vec.Update(3, types.Null{})
 	vec.Update(0, types.Null{})
 
-	res := node.ApplyToColumn(vec, deletes)
-	t.Log(res.String())
+	assert.Equal(t, 4, vec.Length())
+	assert.Equal(t, uint64(4), vec.NullMask().GetCardinality())
+	// deletes: {1,2,3}
+	node.ApplyToColumn(vec, deletes)
+	assert.Equal(t, 1, vec.Length())
+	assert.False(t, vec.HasNull())
+	assert.Equal(t, any(int32(8)), vec.Get(0))
 }
 
 func TestApplyToColumn3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
@@ -446,18 +464,25 @@ func TestApplyToColumn3(t *testing.T) {
 	assert.Nil(t, err)
 
 	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
+	defer vec.Close()
 	for i := 0; i < 5; i++ {
 		data := "val" + strconv.Itoa(i)
 		vec.Append([]byte(data))
 	}
 
-	deletes := roaring.New()
-	deletes.Add(1)
-	res := node.ApplyToColumn(vec, deletes)
-	t.Log(res.String())
+	deletes := roaring.BitmapOf(1)
+
+	assert.Equal(t, 5, vec.Length())
+	t.Log(vec.String())
+	node.ApplyToColumn(vec, deletes)
+	t.Log(vec.String())
+
+	assert.Equal(t, 4, vec.Length())
+	assert.Equal(t, "update", string(vec.Get(2).([]byte)))
 }
 
 func TestApplyToColumn4(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
@@ -466,10 +491,13 @@ func TestApplyToColumn4(t *testing.T) {
 	assert.Nil(t, err)
 
 	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
-	vec.AppendMany(1, 2, 3, 4)
+	defer vec.Close()
+	vec.AppendMany(int32(1), int32(2), int32(3), int32(4))
 
-	res := node.ApplyToColumn(vec, nil)
-	t.Log(res.String())
+	t.Log(vec.String())
+	node.ApplyToColumn(vec, nil)
+	t.Log(vec.String())
+	assert.Equal(t, any(int32(8)), vec.Get(3))
 }
 
 func TestTxnManager1(t *testing.T) {
