@@ -105,6 +105,7 @@ type remoteBackend struct {
 	resetConnC chan struct{}
 	stopper    *stop.Stopper
 	closeOnce  sync.Once
+	futurePool sync.Pool
 
 	options struct {
 		connect        bool
@@ -147,6 +148,11 @@ func NewRemoteBackend(
 	}
 	rb.adjust()
 
+	rb.futurePool = sync.Pool{
+		New: func() interface{} {
+			return newFuture(rb.releaseFuture)
+		},
+	}
 	rb.writeC = make(chan *Future, rb.options.bufferSize)
 	rb.mu.futures = make(map[string]*Future, rb.options.bufferSize)
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
@@ -197,19 +203,25 @@ func (rb *remoteBackend) adjust() {
 		goetty.WithLogger(rb.logger))
 }
 
-func (rb *remoteBackend) Send(future *Future) error {
+func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
+	var f *Future
 	added := false
 	for {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {
 			rb.stateMu.RUnlock()
-			return errBackendClosed
+			if f != nil {
+				f.unRef()
+				f.Close()
+			}
+			return nil, errBackendClosed
 		}
 
 		if !added {
-			if !rb.addFuture(future) {
-				return nil
-			}
+			f = rb.newFuture()
+			f.init(ctx, request, opts)
+			rb.addFuture(f)
+			f.ref()
 			added = true
 		}
 
@@ -217,12 +229,14 @@ func (rb *remoteBackend) Send(future *Future) error {
 		// The write loop may reset the backend's network link and may not be able to
 		// process writeC for a long time, causing the writeC buffer to reach its limit.
 		select {
-		case rb.writeC <- future:
+		case rb.writeC <- f:
 			rb.stateMu.RUnlock()
-			return nil
-		case <-future.ctx.Done():
+			return f, nil
+		case <-ctx.Done():
 			rb.stateMu.RUnlock()
-			return nil
+			f.unRef()
+			f.Close()
+			return nil, ctx.Err()
 		default:
 			rb.stateMu.RUnlock()
 		}
@@ -319,6 +333,12 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						retry = true
 					}
 				}
+
+				if !retry {
+					for _, f := range futures {
+						f.unRef()
+					}
+				}
 			}
 		}
 	}
@@ -377,29 +397,25 @@ func (rb *remoteBackend) requestDone(response Message) {
 	id := hack.SliceToString(response.ID())
 	if f, ok := rb.mu.futures[id]; ok {
 		delete(rb.mu.futures, id)
-		f.done(response, nil)
+		f.done(response)
 	}
 }
 
-func (rb *remoteBackend) addFuture(future *Future) bool {
-	id := hack.SliceToString(future.request.ID())
+func (rb *remoteBackend) addFuture(f *Future) {
+	id := hack.SliceToString(f.request.ID())
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
-	d := future.timeoutDuration()
-	if d <= 0 {
-		return false
-	}
 
-	future.setContextDoneCallback(rb.onTimeout)
-	rb.mu.futures[id] = future
-	return true
+	rb.mu.futures[id] = f
 }
 
-func (bc *remoteBackend) onTimeout(request Message) {
-	bc.mu.Lock()
-	defer bc.mu.Unlock()
+func (rb *remoteBackend) releaseFuture(f *Future) {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
 
-	delete(bc.mu.futures, hack.SliceToString(request.ID()))
+	delete(rb.mu.futures, hack.SliceToString(f.request.ID()))
+	f.reset()
+	rb.futurePool.Put(f)
 }
 
 func (rb *remoteBackend) resetConn() error {
@@ -456,6 +472,10 @@ func (rb *remoteBackend) closeConn() {
 		rb.logger.Error("close remote conn failed",
 			zap.Error(err))
 	}
+}
+
+func (rb *remoteBackend) newFuture() *Future {
+	return rb.futurePool.Get().(*Future)
 }
 
 type goettyBasedBackendFactory struct {

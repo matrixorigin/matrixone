@@ -41,9 +41,9 @@ func TestSend(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := &testMessage{id: []byte("id1")}
-			f := acquireFuture(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
 			defer f.Close()
-			assert.NoError(t, b.Send(f))
 
 			resp, err := f.Get()
 			assert.NoError(t, err)
@@ -62,9 +62,9 @@ func TestSendWithResetConnAndRetry(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := &testMessage{id: []byte("id1")}
-			f := acquireFuture(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
 			defer f.Close()
-			assert.NoError(t, b.Send(f))
 
 			resp, err := f.Get()
 			assert.NoError(t, err)
@@ -86,9 +86,9 @@ func TestSendWithTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
 			req := &testMessage{id: []byte("id1")}
-			f := acquireFuture(ctx, req, SendOptions{})
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
 			defer f.Close()
-			assert.NoError(t, b.Send(f))
 
 			resp, err := f.Get()
 			assert.Error(t, err)
@@ -110,13 +110,13 @@ func TestBusy(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
 			req := &testMessage{id: []byte("id1")}
-			f1 := acquireFuture(ctx, req, SendOptions{})
+			f1, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
 			defer f1.Close()
-			assert.NoError(t, b.Send(f1))
 
-			f2 := acquireFuture(ctx, req, SendOptions{})
+			f2, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
 			defer f2.Close()
-			assert.NoError(t, b.Send(f2))
 
 			assert.True(t, b.Busy())
 			c <- struct{}{}
@@ -189,9 +189,13 @@ type testBackend struct {
 	busy bool
 }
 
-func (b *testBackend) Send(*Future) error { return nil }
-func (b *testBackend) Close()             {}
-func (b *testBackend) Busy() bool         { return b.busy }
+func (b *testBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
+	f := newFuture(nil)
+	f.init(ctx, request, opts)
+	return f, nil
+}
+func (b *testBackend) Close()     {}
+func (b *testBackend) Busy() bool { return b.busy }
 
 type testMessage struct {
 	id      []byte

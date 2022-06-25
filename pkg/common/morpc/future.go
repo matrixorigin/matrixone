@@ -19,53 +19,46 @@ import (
 	"context"
 	"runtime"
 	"sync"
-	"time"
 )
 
-var (
-	futurePool = sync.Pool{
-		New: func() interface{} {
-			f := &Future{
-				c: make(chan struct{}, 1),
-			}
-			f.setFinalizer()
-			return f
-		},
+func newFuture(releaseFunc func(f *Future)) *Future {
+	f := &Future{
+		c:           make(chan struct{}, 1),
+		releaseFunc: releaseFunc,
 	}
-)
-
-func acquireFuture(ctx context.Context, request Message, opts SendOptions) *Future {
-	if _, ok := ctx.Deadline(); !ok {
-		panic("context deadline not set")
-	}
-
-	f := futurePool.Get().(*Future)
-	f.mu.closed = false
-	f.ctx = ctx
-	f.request = request
-	f.opts = opts
+	f.setFinalizer()
 	return f
-}
-
-func releaseFuture(f *Future) {
-	f.reset()
-	futurePool.Put(f)
 }
 
 // Future is used to obtain response data synchronously.
 type Future struct {
-	response        Message
-	request         Message
-	opts            SendOptions
-	err             error
-	ctx             context.Context
-	ctxDoneCallback func(Message)
-	c               chan struct{}
+	ctx         context.Context
+	opts        SendOptions
+	response    Message
+	request     Message
+	c           chan struct{}
+	releaseFunc func(*Future)
 
 	mu struct {
 		sync.Mutex
 		closed bool
+		ref    int
 	}
+}
+
+func (f *Future) init(ctx context.Context, request Message, opts SendOptions) *Future {
+	if _, ok := ctx.Deadline(); !ok {
+		panic("context deadline not set")
+	}
+
+	f.ctx = ctx
+	f.request = request
+	f.opts = opts
+
+	f.mu.Lock()
+	f.mu.closed = false
+	f.mu.Unlock()
+	return f
 }
 
 // Get get the response data synchronously, blocking until `context.Done` or the response is received.
@@ -74,12 +67,9 @@ type Future struct {
 func (f *Future) Get() (Message, error) {
 	select {
 	case <-f.ctx.Done():
-		if f.ctxDoneCallback != nil {
-			f.ctxDoneCallback(f.request)
-		}
 		return nil, f.ctx.Err()
 	case <-f.c:
-		return f.response, f.err
+		return f.response, nil
 	}
 }
 
@@ -89,10 +79,16 @@ func (f *Future) Close() {
 	defer f.mu.Unlock()
 
 	f.mu.closed = true
-	releaseFuture(f)
+	f.maybeReleaseLocked()
 }
 
-func (f *Future) done(response Message, err error) {
+func (f *Future) maybeReleaseLocked() {
+	if f.mu.closed && f.mu.ref == 0 && f.releaseFunc != nil {
+		f.releaseFunc(f)
+	}
+}
+
+func (f *Future) done(response Message) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -103,7 +99,6 @@ func (f *Future) done(response Message, err error) {
 		}
 
 		f.response = response
-		f.err = err
 		select {
 		case f.c <- struct{}{}:
 		default:
@@ -112,20 +107,33 @@ func (f *Future) done(response Message, err error) {
 	}
 }
 
+func (f *Future) ref() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.mu.ref++
+}
+
+func (f *Future) unRef() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.mu.ref--
+	if f.mu.ref < 0 {
+		panic("BUG")
+	}
+	f.maybeReleaseLocked()
+}
+
 func (f *Future) reset() {
 	f.request = nil
 	f.response = nil
-	f.err = nil
 	f.ctx = nil
+	f.opts = SendOptions{}
 	select {
 	case <-f.c:
 	default:
 	}
-}
-
-func (f *Future) timeoutDuration() time.Duration {
-	timeoutAt, _ := f.ctx.Deadline()
-	return time.Until(timeoutAt)
 }
 
 func (f *Future) timeout() bool {
@@ -144,8 +152,4 @@ func (f *Future) setFinalizer() {
 	runtime.SetFinalizer(f, func(f *Future) {
 		close(f.c)
 	})
-}
-
-func (f *Future) setContextDoneCallback(ctxDoneCallback func(Message)) {
-	f.ctxDoneCallback = ctxDoneCallback
 }

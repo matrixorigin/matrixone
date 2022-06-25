@@ -126,7 +126,7 @@ type BackendFactory interface {
 type Backend interface {
 	// Send send the request for future to the corresponding backend.
 	// moerr.ErrBackendClosed returned if backend is closed.
-	Send(*Future) error
+	Send(ctx context.Context, request Message, opts SendOptions) (*Future, error)
 	// Close close the backend.
 	Close()
 	// Busy the backend receives a lot of requests concurrently during

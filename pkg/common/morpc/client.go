@@ -150,9 +150,9 @@ func (c *client) Send(ctx context.Context, backend string, request Message, opts
 	if err != nil {
 		return nil, err
 	}
-	f := acquireFuture(ctx, request, opts)
-	if err := b.Send(f); err != nil {
-		f.Close()
+
+	f, err := b.Send(ctx, request, opts)
+	if err != nil {
 		return nil, err
 	}
 	return f, nil

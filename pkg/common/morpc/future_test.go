@@ -16,7 +16,6 @@ package morpc
 
 import (
 	"context"
-	"errors"
 	"runtime/debug"
 	"testing"
 	"time"
@@ -24,13 +23,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAcquireFutureWillPanic(t *testing.T) {
+func TestNewFutureWillPanic(t *testing.T) {
 	defer func() {
 		if err := recover(); err == nil {
 			assert.Fail(t, "must panic")
 		}
 	}()
-	acquireFuture(context.Background(), nil, SendOptions{})
+	f := newFuture(nil)
+	f.init(context.Background(), nil, SendOptions{})
 }
 
 func TestCloseChanAfterGC(t *testing.T) {
@@ -52,12 +52,13 @@ func TestCloseChanAfterGC(t *testing.T) {
 	}
 }
 
-func TestAcquireFuture(t *testing.T) {
+func TestNewFuture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
+	f := newFuture(nil)
+	f.init(ctx, req, SendOptions{})
 	defer f.Close()
 
 	assert.NotNil(t, f)
@@ -73,9 +74,9 @@ func TestReleaseFuture(t *testing.T) {
 	defer cancel()
 
 	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
+	f := newFuture(func(f *Future) { f.reset() })
+	f.init(ctx, req, SendOptions{})
 	f.c <- struct{}{}
-	f.err = errors.New("error")
 	f.response = req
 	f.Close()
 	assert.True(t, f.mu.closed)
@@ -90,29 +91,14 @@ func TestGet(t *testing.T) {
 	defer cancel()
 
 	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
+	f := newFuture(func(f *Future) { f.reset() })
+	f.init(ctx, req, SendOptions{})
 	defer f.Close()
 
-	f.done(req, nil)
+	f.done(req)
 	resp, err := f.Get()
 	assert.Nil(t, err)
 	assert.Equal(t, req, resp)
-}
-
-func TestGetWithError(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
-	defer f.Close()
-
-	e := errors.New("error")
-	f.done(nil, e)
-	resp, err := f.Get()
-	assert.NotNil(t, err)
-	assert.Nil(t, resp)
-	assert.Equal(t, err, e)
 }
 
 func TestGetWithTimeout(t *testing.T) {
@@ -120,7 +106,8 @@ func TestGetWithTimeout(t *testing.T) {
 	defer cancel()
 
 	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
+	f := newFuture(func(f *Future) { f.reset() })
+	f.init(ctx, req, SendOptions{})
 	defer f.Close()
 
 	resp, err := f.Get()
@@ -134,30 +121,19 @@ func TestGetWithInvalidResponse(t *testing.T) {
 	defer cancel()
 
 	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
+	f := newFuture(func(f *Future) { f.reset() })
+	f.init(ctx, req, SendOptions{})
 	defer f.Close()
 
-	f.done(newTestMessage([]byte("id2")), nil)
+	f.done(newTestMessage([]byte("id2")))
 	assert.Equal(t, 0, len(f.c))
-}
-
-func TestTimeoutDuration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
-	defer f.Close()
-
-	d := f.timeoutDuration()
-	assert.True(t, d > 0)
-	assert.True(t, d <= time.Second)
 }
 
 func TestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	req := newTestMessage([]byte("id"))
-	f := acquireFuture(ctx, req, SendOptions{})
+	f := newFuture(func(f *Future) { f.reset() })
+	f.init(ctx, req, SendOptions{})
 	defer f.Close()
 
 	assert.False(t, f.timeout())
