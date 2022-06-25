@@ -3,7 +3,6 @@ package db
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -20,11 +19,14 @@ func TestCompoundPK1(t *testing.T) {
 	assert.Equal(t, 2, schema.SortKey.Defs[0].Idx)
 	assert.Equal(t, 0, schema.SortKey.Defs[1].Idx)
 	schema.BlockMaxRows = 5
-	bat := catalog.MockData(schema, 8)
+	bat := catalog.MockBatch(schema, 8)
+	defer bat.Close()
 	c2 := []int32{1, 2, 1, 2, 1, 2, 1, 2}
 	c0 := []int32{2, 3, 4, 5, 1, 2, 3, 2}
-	vector.SetCol(bat.Vecs[2], c2)
-	vector.SetCol(bat.Vecs[0], c0)
+	bat.Vecs[2].Reset()
+	bat.Vecs[2].AppendNoNulls(any(c2))
+	bat.Vecs[0].Reset()
+	bat.Vecs[0].AppendNoNulls(any(c0))
 
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -107,11 +109,11 @@ func TestCompoundPK1(t *testing.T) {
 	}
 	assert.Equal(t, 7, rows)
 
-	bat2 := catalog.MockData(schema, 5)
-	c2_1 := []int32{3, 4, 3, 4, 3}
-	c0_1 := []int32{1, 2, 3, 1, 2}
-	vector.SetCol(bat2.Vecs[2], c2_1)
-	vector.SetCol(bat2.Vecs[0], c0_1)
+	bat2 := catalog.MockBatch(schema, 5)
+	bat2.Vecs[2].Reset()
+	bat2.Vecs[2].AppendNoNulls([]int32{3, 4, 3, 4, 3})
+	bat2.Vecs[0].Reset()
+	bat2.Vecs[0].AppendNoNulls([]int32{1, 2, 3, 1, 2})
 	err = rel.Append(bat2)
 	assert.NoError(t, err)
 

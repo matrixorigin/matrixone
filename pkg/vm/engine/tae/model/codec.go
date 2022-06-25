@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -109,10 +107,10 @@ func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
 	return w.Bytes()
 }
 
-func EncodeTuple(w *bytes.Buffer, row uint32, cols ...*movec.Vector) []byte {
+func EncodeTuple(w *bytes.Buffer, row uint32, cols ...containers.Vector) []byte {
 	vs := make([]any, len(cols))
 	for i := range vs {
-		vs[i] = compute.GetValue(cols[i], row)
+		vs[i] = cols[i].Get(int(row))
 	}
 	return EncodeTypedVals(w, vs...)
 }

@@ -8,13 +8,10 @@ import (
 	"path"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -246,14 +243,11 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 }
 
 func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
-	var data batch.IBatch
-	var deletes *roaring.Bitmap
+	var data *containers.Batch
 	for _, subTxnCmd := range cmd.Cmds {
 		switch subCmd := subTxnCmd.(type) {
 		case *txnbase.BatchCmd:
 			data = subCmd.Bat
-		case *txnbase.DeleteBitmapCmd:
-			deletes = subCmd.Bitmap
 		case *txnbase.PointerCmd:
 			batEntry, err := db.Wal.LoadEntry(subCmd.Group, subCmd.Lsn)
 			if err != nil {
@@ -289,45 +283,21 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		}
 		start := info.GetSrcOff()
 		end := start + info.GetSrcLen() - 1
-		bat, err := db.window(blk.GetSchema(), data, deletes, start, end)
-		if err != nil {
-			panic(err)
-		}
-		len := info.GetDestLen()
+		bat := data.CloneWindow(int(start), int(end-start))
+		defer bat.Close()
+		bat.Compact()
+		length := info.GetDestLen()
 		// off := info.GetDestOff()
 		datablk := blk.GetBlockData()
 		appender, err := datablk.MakeAppender()
 		if err != nil {
 			panic(err)
 		}
-		_, _, err = appender.OnReplayInsertNode(bat, 0, len, nil)
+		_, _, err = appender.OnReplayInsertNode(bat, 0, int(length), nil)
 		if err != nil {
 			panic(err)
 		}
 	}
-}
-
-func (db *DB) window(schema *catalog.Schema, data batch.IBatch, deletes *roaring.Bitmap, start, end uint32) (*gbat.Batch, error) {
-	ret := gbat.New(true, []string{})
-	for _, attrId := range data.GetAttrs() {
-		def := schema.ColDefs[attrId]
-		if def.IsHidden() {
-			continue
-		}
-		src, err := data.GetVectorByAttr(attrId)
-		if err != nil {
-			return nil, err
-		}
-		srcVec, err := src.Window(start, end+1).CopyToVector()
-		if err != nil {
-			return nil, err
-		}
-		deletes := common.BM32Window(deletes, int(start), int(end))
-		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
-		ret.Vecs = append(ret.Vecs, srcVec)
-		ret.Attrs = append(ret.Attrs, def.Name)
-	}
-	return ret, nil
 }
 
 func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) (err error) {

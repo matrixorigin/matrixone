@@ -9,7 +9,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -285,7 +284,7 @@ func TestReplay1(t *testing.T) {
 	c := tae2.Catalog
 	t.Log(c.SimplePPString(common.PPL1))
 
-	bat := catalog.MockData(schema, 10000)
+	bat := catalog.MockBatch(schema, 10000)
 	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
@@ -372,8 +371,9 @@ func TestReplay2(t *testing.T) {
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, 10000)
-	bats := compute.SplitBatch(bat, 2)
+	bat := catalog.MockBatch(schema, 10000)
+	defer bat.Close()
+	bats := bat.Split(2)
 
 	txn, err := tae.StartTxn(nil)
 	assert.Nil(t, err)
@@ -563,8 +563,8 @@ func TestReplay3(t *testing.T) {
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, 1)
-	v := compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], 0)
+	bat := catalog.MockBatch(schema, 1)
+	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 	filter := handle.NewEQFilter(v)
 
 	txn, err := tae.StartTxn(nil)
@@ -679,8 +679,9 @@ func TestReplayTableRows(t *testing.T) {
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, 4800)
-	bats := compute.SplitBatch(bat, 3)
+	bat := catalog.MockBatch(schema, 4800)
+	defer bat.Close()
+	bats := bat.Split(3)
 	rows := uint64(0)
 
 	txn, err := tae.StartTxn(nil)
@@ -818,12 +819,13 @@ func TestReplay4(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1)
-	bats := compute.SplitBatch(bat, 4)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1))
+	defer bat.Close()
+	bats := bat.Split(4)
 
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], true)
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
 
 	_ = tae.Close()
@@ -832,34 +834,32 @@ func TestReplay4(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	err = rel.Append(bats[1])
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
 	assert.NoError(t, txn.Commit())
 
 	compactBlocks(t, tae2, defaultTestDB, schema, false)
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
 	err = rel.Append(bats[2])
 	checkAllColRowsByScan(t, rel,
-		compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1])+compute.LengthOfBatch(bats[2]), false)
+		bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
 	assert.NoError(t, txn.Commit())
 
 	compactBlocks(t, tae2, defaultTestDB, schema, false)
 
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
-	checkAllColRowsByScan(t, rel,
-		compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1])+compute.LengthOfBatch(bats[2]), false)
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:3]), false)
 	assert.NoError(t, txn.Commit())
 
 	mergeBlocks(t, tae2, defaultTestDB, schema, false)
 
 	txn, rel = getDefaultRelation(t, tae2, schema.Name)
-	checkAllColRowsByScan(t, rel,
-		compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1])+compute.LengthOfBatch(bats[2]), false)
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:3]), false)
 	err = rel.Append(bats[3])
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
 	t.Log(tae2.Catalog.SimplePPString(common.PPL1))
 
@@ -878,12 +878,12 @@ func TestReplay5(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1)
-	bats := compute.SplitBatch(bat, 8)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1))
+	bats := bat.Split(8)
 
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], true)
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
 	forceCompactABlocks(t, tae, defaultTestDB, schema, false)
 
@@ -892,11 +892,11 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	err = rel.Append(bats[0])
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	err = rel.Append(bats[1])
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
 	assert.NoError(t, txn.Commit())
 	t.Logf("LSN=%d", txn.GetLSN())
 
@@ -907,7 +907,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])+compute.LengthOfBatch(bats[1]), false)
+	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
 	err = rel.Append(bats[0])
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	err = rel.Append(bats[1])
@@ -987,8 +987,9 @@ func TestReplay6(t *testing.T) {
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, schema.BlockMaxRows*10-1)
-	bats := compute.SplitBatch(bat, 4)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*10-1))
+	defer bat.Close()
+	bats := bat.Split(4)
 
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], true)
 
@@ -1041,7 +1042,8 @@ func TestReplay7(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 5
 
-	bat := catalog.MockData(schema, schema.BlockMaxRows*15+1)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*15+1))
+	defer bat.Close()
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bat, true)
 	compactBlocks(t, tae, defaultTestDB, schema, true)
 	mergeBlocks(t, tae, defaultTestDB, schema, true)
@@ -1056,7 +1058,7 @@ func TestReplay7(t *testing.T) {
 	defer tae.Close()
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
 }
 
@@ -1069,8 +1071,8 @@ func TestReplay8(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 
-	bat := catalog.MockData(schema, schema.BlockMaxRows*3+1)
-	bats := compute.SplitBatch(bat, 4)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
+	bats := bat.Split(4)
 
 	tae.createRelAndAppend(bats[0], true)
 	txn, rel := tae.getRelation()
@@ -1081,7 +1083,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
-	window := compute.BatchWindow(bats[0], 2, 3)
+	window := bats[0].Window(2, 1)
 	err = rel.Append(window)
 	assert.NoError(t, err)
 	_ = txn.Rollback()
@@ -1090,7 +1092,7 @@ func TestReplay8(t *testing.T) {
 
 	// Check the total rows by scan
 	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	err = rel.Append(bats[0])
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	assert.NoError(t, txn.Commit())
@@ -1105,7 +1107,7 @@ func TestReplay8(t *testing.T) {
 	forceCompactABlocks(t, tae.DB, defaultTestDB, schema, false)
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
@@ -1116,25 +1118,25 @@ func TestReplay8(t *testing.T) {
 	tae.restart()
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0])-1, true)
+	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	err = rel.Append(window)
 	assert.NoError(t, err)
-	tuple3 := compute.BatchWindow(bat, 3, 4)
+	tuple3 := bat.Window(3, 1)
 	err = rel.Append(tuple3)
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), true)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	assert.NoError(t, txn.Commit())
 
 	tae.restart()
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), true)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	err = rel.Append(window)
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	err = rel.Append(bats[1])
@@ -1149,7 +1151,7 @@ func TestReplay8(t *testing.T) {
 	tae.restart()
 
 	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
+	checkAllColRowsByScan(t, rel, bat.Length(), true)
 	err = rel.Append(window)
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 
@@ -1175,20 +1177,20 @@ func TestReplay8(t *testing.T) {
 	tae.restart()
 
 	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-4, true)
-	tuple0_5 := compute.BatchWindow(bats[0], 5, 6)
+	checkAllColRowsByScan(t, rel, bat.Length()-4, true)
+	tuple0_5 := bats[0].Window(5, 1)
 	err = rel.Append(tuple0_5)
 	assert.NoError(t, err)
-	tuple1_5 := compute.BatchWindow(bats[1], 5, 6)
+	tuple1_5 := bats[1].Window(5, 1)
 	err = rel.Append(tuple1_5)
 	assert.NoError(t, err)
-	tuple2_5 := compute.BatchWindow(bats[2], 5, 6)
+	tuple2_5 := bats[2].Window(5, 1)
 	err = rel.Append(tuple2_5)
 	assert.NoError(t, err)
-	tuple3_2 := compute.BatchWindow(bats[3], 2, 3)
+	tuple3_2 := bats[3].Window(2, 1)
 	err = rel.Append(tuple3_2)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
+	checkAllColRowsByScan(t, rel, bat.Length(), true)
 	_ = txn.Rollback()
 
 	tae.compactABlocks(false)
@@ -1196,7 +1198,7 @@ func TestReplay8(t *testing.T) {
 	tae.restart()
 
 	txn, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat)-4, true)
+	checkAllColRowsByScan(t, rel, bat.Length()-4, true)
 	err = rel.Append(tuple0_5)
 	assert.NoError(t, err)
 	err = rel.Append(tuple1_5)
@@ -1205,7 +1207,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(tuple3_2)
 	assert.NoError(t, err)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), true)
+	checkAllColRowsByScan(t, rel, bat.Length(), true)
 	_ = txn.Rollback()
 }
 
@@ -1217,12 +1219,13 @@ func TestReplay9(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
-	bat := catalog.MockData(schema, schema.BlockMaxRows*3+2)
-	bats := compute.SplitBatch(bat, 4)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+2))
+	defer bat.Close()
+	bats := bat.Split(4)
 
 	tae.createRelAndAppend(bats[0], true)
 	txn, rel := tae.getRelation()
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := getSingleSortKeyValue(bats[0], schema, 2)
 	filter := handle.NewEQFilter(v)
 	err := rel.UpdateByFilter(filter, 2, int32(999))
@@ -1234,7 +1237,7 @@ func TestReplay9(t *testing.T) {
 	actv, err := rel.GetValueByFilter(filter, 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(999), actv)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
 
 	tae.compactABlocks(false)
@@ -1246,7 +1249,7 @@ func TestReplay9(t *testing.T) {
 	actv, err = rel.GetValueByFilter(filter, 2)
 	assert.NoError(t, err)
 	assert.Equal(t, int32(999), actv)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bats[0]), false)
+	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
@@ -1317,7 +1320,7 @@ func TestReplay10(t *testing.T) {
 		Null: true,
 	}
 
-	bat := catalog.MockData(schema, schema.BlockMaxRows)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bat, true)
 	time.Sleep(time.Millisecond * 100)
 
@@ -1327,7 +1330,7 @@ func TestReplay10(t *testing.T) {
 	defer tae.Close()
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
-	checkAllColRowsByScan(t, rel, compute.LengthOfBatch(bat), false)
+	checkAllColRowsByScan(t, rel, bat.Length(), false)
 	assert.NoError(t, txn.Commit())
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
 	assert.Equal(t, int16(3), schema1.ColDefs[1].Default.Value.(int16))

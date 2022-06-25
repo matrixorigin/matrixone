@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -100,7 +99,8 @@ func TestCheckpoint1(t *testing.T) {
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, schema.BlockMaxRows)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -158,8 +158,9 @@ func TestCheckpoint2(t *testing.T) {
 	schema2 := catalog.MockSchema(4, 2)
 	schema2.BlockMaxRows = 10
 	schema2.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema1, schema1.BlockMaxRows*2)
-	bats := compute.SplitBatch(bat, 10)
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*2))
+	defer bat.Close()
+	bats := bat.Split(10)
 	var (
 		meta1 *catalog.TableEntry
 		meta2 *catalog.TableEntry
@@ -234,7 +235,8 @@ func TestSchedule1(t *testing.T) {
 	schema := catalog.MockSchema(13, 12)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockData(schema, schema.BlockMaxRows)
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
