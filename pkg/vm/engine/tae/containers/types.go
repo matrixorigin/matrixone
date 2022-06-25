@@ -16,6 +16,8 @@ type MemAllocator = stl.MemAllocator
 type Options = containers.Options
 type Bytes = stl.Bytes
 
+var DefaultAllocator = stl.DefaultAllocator
+
 var NewBytes = stl.NewBytes
 
 type ItOp = func(v any, row int) error

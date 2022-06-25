@@ -21,9 +21,8 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 const (
@@ -75,8 +74,7 @@ type DeleteBitmapCmd struct {
 
 type BatchCmd struct {
 	BaseCmd
-	Bat   batch.IBatch
-	Types []types.Type
+	Bat *containers.Batch
 }
 
 type ComposedCmd struct {
@@ -103,10 +101,9 @@ func NewDeleteBitmapCmd(bitmap *roaring.Bitmap) *DeleteBitmapCmd {
 	}
 }
 
-func NewBatchCmd(bat batch.IBatch, colTypes []types.Type) *BatchCmd {
+func NewBatchCmd(bat *containers.Batch) *BatchCmd {
 	return &BatchCmd{
-		Bat:   bat,
-		Types: colTypes,
+		Bat: bat,
 	}
 }
 
@@ -247,7 +244,8 @@ func (e *BatchCmd) Unmarshal(buf []byte) error {
 }
 
 func (e *BatchCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	e.Types, e.Bat, n, err = UnmarshalBatchFrom(r)
+	e.Bat = containers.NewBatch()
+	n, err = e.Bat.ReadFrom(r)
 	return
 }
 
@@ -255,12 +253,10 @@ func (e *BatchCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
 		return
 	}
-	colsBuf, err := MarshalBatch(e.Types, e.Bat)
-	if err != nil {
+	if n, err = e.Bat.WriteTo(w); err != nil {
 		return
 	}
-	in, err := w.Write(colsBuf)
-	n = int64(in) + 2
+	n += 2
 	return
 }
 

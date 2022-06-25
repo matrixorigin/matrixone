@@ -174,8 +174,27 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 	return
 }
 
-func (bf *blockFile) LoadBatch(colTypes []types.Type, capacity int) (bat *containers.Batch, err error) {
-	panic("not implemented")
+func (bf *blockFile) LoadBatch(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	opts *containers.Options) (bat *containers.Batch, err error) {
+	bat = containers.NewBatch()
+	var f common.IRWFile
+	for i, colBlk := range bf.columns {
+		if f, err = colBlk.OpenDataFile(); err != nil {
+			return
+		}
+		defer f.Unref()
+		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
+		bat.AddVector(colNames[i], vec)
+		if f.Stat().Size() > 0 {
+			if err = vec.ReadFromFile(f, nil); err != nil {
+				return
+			}
+		}
+	}
+	return
 }
 
 func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) (err error) {

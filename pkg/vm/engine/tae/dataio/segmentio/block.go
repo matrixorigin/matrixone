@@ -240,9 +240,11 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 	return
 }
 
-func (bf *blockFile) LoadBatch(colTypes []types.Type, capacity int) (bat *containers.Batch, err error) {
-	opts := new(containers.Options)
-	opts.Capacity = capacity
+func (bf *blockFile) LoadBatch(
+	colTypes []types.Type,
+	colNames []string,
+	nullables []bool,
+	opts *containers.Options) (bat *containers.Batch, err error) {
 	bat = containers.NewBatch()
 	var f common.IRWFile
 	for i, colBlk := range bf.columns {
@@ -250,12 +252,16 @@ func (bf *blockFile) LoadBatch(colTypes []types.Type, capacity int) (bat *contai
 			return
 		}
 		defer f.Unref()
+		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
+		bat.AddVector(colNames[i], vec)
 		size := f.Stat().Size()
+		if size == 0 {
+			continue
+		}
 		buf := make([]byte, size)
 		if _, err = f.Read(buf); err != nil {
 			return
 		}
-		vec := containers.MakeVector(colTypes[i], true, opts)
 		if colBlk.data.stat.CompressAlgo() == compress.Lz4 {
 			decompress := make([]byte, colBlk.data.stat.OriginSize())
 			decompress, err = compress.Decompress(buf, decompress, compress.Lz4)

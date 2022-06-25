@@ -129,7 +129,14 @@ func (node *appendableNode) OnLoad() {
 	}
 	var err error
 	schema := node.block.meta.GetSchema()
-	if node.data, err = node.file.LoadBatch(schema.AllTypes(), int(schema.BlockMaxRows)); err != nil {
+	opts := new(containers.Options)
+	opts.Capacity = int(schema.BlockMaxRows)
+	opts.Allocator = ImmutMemAllocator
+	if node.data, err = node.file.LoadBatch(
+		schema.AllTypes(),
+		schema.AllNames(),
+		schema.AllNullables(),
+		opts); err != nil {
 		node.exception.Store(err)
 	}
 }
@@ -185,8 +192,16 @@ func (node *appendableNode) flushData(ts uint64, colsData *containers.Batch) (er
 	if dnode != nil {
 		deletes = dnode.GetDeleteMaskLocked()
 	}
+	if node.block.scheduler == nil {
+		err = node.block.ABlkFlushDataClosure(ts, colsData, masks, vals, deletes)()
+		return
+	}
 	scope := node.block.meta.AsCommonID()
-	task, err := node.block.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, node.block.ABlkFlushDataClosure(ts, colsData, masks, vals, deletes))
+	task, err := node.block.scheduler.ScheduleScopedFn(
+		tasks.WaitableCtx,
+		tasks.IOTask,
+		scope,
+		node.block.ABlkFlushDataClosure(ts, colsData, masks, vals, deletes))
 	if err != nil {
 		return
 	}

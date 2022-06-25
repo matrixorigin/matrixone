@@ -20,7 +20,6 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
@@ -84,10 +83,8 @@ func TestComposedCmd(t *testing.T) {
 
 	schema := catalog.MockSchema(4, 0)
 	for i := 0; i < batCnt; i++ {
-		data := catalog.MockData(schema, uint32((i+1)*5))
-		bat, err := compute.CopyToIBatch(data, uint64(txnbase.MaxNodeRows))
-		assert.Nil(t, err)
-		batCmd := txnbase.NewBatchCmd(bat, schema.Types())
+		bat := catalog.MockBatch(schema, (i+1)*5)
+		batCmd := txnbase.NewBatchCmd(bat)
 		del := roaring.NewBitmap()
 		del.Add(uint32(i))
 		delCmd := txnbase.NewDeleteBitmapCmd(del)
@@ -131,8 +128,7 @@ func TestComposedCmd(t *testing.T) {
 				case txnbase.CmdBatch:
 					b1 := cc1.(*txnbase.BatchCmd)
 					b2 := cc2.(*txnbase.BatchCmd)
-					assert.Equal(t, b1.Types, b2.Types)
-					assert.Equal(t, b1.Bat.Length(), b2.Bat.Length())
+					assert.True(t, b1.Bat.Equals(b2.Bat))
 				}
 			}
 		}

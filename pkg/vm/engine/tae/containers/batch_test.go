@@ -66,4 +66,9 @@ func TestBatch3(t *testing.T) {
 		row += b.Length()
 	}
 	assert.Equal(t, bat.Length(), row)
+
+	bat2 := MockBatch(vecTypes, 20, 3, nil)
+	bats = bat2.Split(2)
+	t.Log(bats[0].Vecs[3].Length())
+	t.Log(bats[1].Vecs[3].Length())
 }

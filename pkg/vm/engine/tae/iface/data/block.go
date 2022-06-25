@@ -85,4 +85,5 @@ type Block interface {
 	Destroy() error
 	ReplayIndex() error
 	Flush()
+	Close()
 }

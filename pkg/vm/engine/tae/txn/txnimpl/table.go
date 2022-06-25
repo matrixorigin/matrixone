@@ -19,12 +19,11 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -321,8 +320,8 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	return nil
 }
 
-func (tbl *txnTable) GetSortColumns(data *batch.Batch) []*vector.Vector {
-	vs := make([]*vector.Vector, tbl.schema.GetSortKeyCnt())
+func (tbl *txnTable) GetSortColumns(data *containers.Batch) []containers.Vector {
+	vs := make([]containers.Vector, tbl.schema.GetSortKeyCnt())
 	for i := range vs {
 		vs[i] = data.Vecs[tbl.schema.SortKey.Defs[i].Idx]
 	}
@@ -331,7 +330,7 @@ func (tbl *txnTable) GetSortColumns(data *batch.Batch) []*vector.Vector {
 
 // func (tbl *txnTable)
 
-func (tbl *txnTable) Append(data *batch.Batch) (err error) {
+func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 	if tbl.schema.IsSinglePK() {
 		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
 			return
@@ -463,7 +462,7 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v any, err
 		panic(err)
 	}
 	block := meta.GetBlockData()
-	return block.GetValue(tbl.store.txn, row, col)
+	return block.GetValue(tbl.store.txn, int(row), int(col))
 }
 
 func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTxn, row uint32, v any) (err error) {
@@ -546,7 +545,7 @@ func (tbl *txnTable) PreCommitDedup() (err error) {
 	return
 }
 
-func (tbl *txnTable) DoDedup(pks *vector.Vector, preCommit bool) (err error) {
+func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
 		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
@@ -607,10 +606,10 @@ func (tbl *txnTable) DoDedup(pks *vector.Vector, preCommit bool) (err error) {
 	return
 }
 
-func (tbl *txnTable) DoBatchDedup(keys ...*vector.Vector) (err error) {
+func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
 	key := model.EncodeCompoundColumn(keys...)
-	if err = index.BatchInsert(key, 0, vector.Length(key), 0, true); err != nil {
+	if err = index.BatchInsert(key, 0, key.Length(), 0, true); err != nil {
 		return
 	}
 
@@ -624,7 +623,7 @@ func (tbl *txnTable) DoBatchDedup(keys ...*vector.Vector) (err error) {
 	return
 }
 
-func (tbl *txnTable) BatchDedupLocal(bat *batch.Batch) (err error) {
+func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
 	if tbl.localSegment == nil {
 		return
 	}

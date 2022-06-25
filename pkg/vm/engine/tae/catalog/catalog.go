@@ -888,3 +888,16 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 	logutil.Infof("Max LogIndex: %s", entry.MaxIndex.String())
 	return
 }
+
+func (catalog *Catalog) CloseData() {
+	processor := new(LoopProcessor)
+	processor.BlockFn = func(entry *BlockEntry) (err error) {
+		data := entry.GetBlockData()
+		if data != nil {
+			data.Close()
+		}
+		return
+	}
+	_ = catalog.RecurLoop(processor)
+	return
+}

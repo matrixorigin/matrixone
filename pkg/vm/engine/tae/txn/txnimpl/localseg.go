@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -83,7 +82,7 @@ func (seg *localSegment) registerInsertNode() {
 
 func (seg *localSegment) ApplyAppend() (err error) {
 	var (
-		destOff      uint32
+		destOff      int
 		anode        txnif.AppendNode
 		prev         txnif.AppendNode
 		prevAppender data.BlockAppender
@@ -104,13 +103,13 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		if anode, destOff, err = ctx.driver.ApplyAppend(
 			bat,
 			0,
-			uint32(compute.LengthOfBatch(bat)),
+			bat.Length(),
 			seg.table.store.txn,
 			prev); err != nil {
 			return
 		}
 		id := ctx.driver.GetID()
-		ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, seg.table.entry.GetDB().ID, id)
+		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
 	}
 	if anode != nil {
 		seg.table.store.IncreateWriteCnt()
@@ -177,13 +176,13 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	return
 }
 
-func (seg *localSegment) Append(data *batch.Batch) (err error) {
+func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	if seg.appendable == nil {
 		seg.registerInsertNode()
 	}
 	appended := uint32(0)
 	offset := uint32(0)
-	length := uint32(vector.Length(data.Vecs[0]))
+	length := uint32(data.Length())
 	for {
 		h := seg.appendable
 		n := h.GetNode().(*insertNode)
@@ -230,7 +229,7 @@ func (seg *localSegment) Append(data *batch.Batch) (err error) {
 
 func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (err error) {
 	for i := from; i <= to; i++ {
-		v, _ := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
+		v := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
 		if err = seg.index.Delete(v); err != nil {
 			break
 		}
@@ -244,7 +243,7 @@ func (seg *localSegment) DeleteCompoundIndex(from, to uint32, node InsertNode) (
 	for i := from; i <= to; i++ {
 		buf.Reset()
 		for j := range vs {
-			v, _ := node.GetValue(seg.table.schema.SortKey.Defs[j].Idx, i)
+			v := node.GetValue(seg.table.schema.SortKey.Defs[j].Idx, i)
 			vs[j] = v
 		}
 		key := model.EncodeTypedVals(&buf, vs...)
@@ -349,10 +348,11 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	}
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]
-	window, err := n.Window(uint32(noffset), uint32(noffset))
+	window, err := n.Window(uint32(noffset), uint32(noffset)+1)
 	if err != nil {
 		return err
 	}
+	defer window.Close()
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
 	}
@@ -360,8 +360,10 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 		return err
 	}
 
-	vec := vector.New(window.Vecs[col].Typ)
-	compute.AppendValue(vec, value)
+	orig := window.Vecs[col]
+	vec := containers.MakeVector(orig.GetType(), orig.Nullable())
+	defer vec.Close()
+	vec.Append(value)
 	window.Vecs[col] = vec
 
 	err = seg.Append(window)
@@ -394,12 +396,12 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 	return
 }
 
-func (seg *localSegment) GetPKColumn() *vector.Vector {
+func (seg *localSegment) GetPKColumn() containers.Vector {
 	schema := seg.table.entry.GetSchema()
 	return seg.index.KeyToVector(schema.GetSortKeyType())
 }
 
-func (seg *localSegment) BatchDedup(key *vector.Vector) error {
+func (seg *localSegment) BatchDedup(key containers.Vector) error {
 	return seg.index.BatchDedup(key)
 }
 
@@ -414,7 +416,7 @@ func (seg *localSegment) GetColumnDataById(
 	if err != nil {
 		return
 	}
-	err = n.FillColumnView(view, compressed, decompressed)
+	err = n.FillColumnView(view, decompressed)
 	h.Close()
 	if err != nil {
 		return
@@ -437,7 +439,8 @@ func (seg *localSegment) GetValue(row uint32, col uint16) (any, error) {
 		return nil, err
 	}
 	defer h.Close()
-	return n.GetValue(int(col), noffset)
+	v := n.GetValue(int(col), noffset)
+	return v, nil
 }
 
 func (seg *localSegment) Close() (err error) {

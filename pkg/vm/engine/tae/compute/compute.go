@@ -411,10 +411,10 @@ func SplitBatch(bat *gbat.Batch, cnt int) []*gbat.Batch {
 	return bats
 }
 
-func EstimateSize(bat *gbat.Batch, offset, length uint32) uint64 {
+func EstimateSize(bat *containers.Batch, offset, length uint32) uint64 {
 	size := uint64(0)
 	for _, vec := range bat.Vecs {
-		colSize := length * uint32(vec.Typ.Size)
+		colSize := length * uint32(vec.GetType().Size)
 		size += uint64(colSize)
 	}
 	return size

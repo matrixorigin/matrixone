@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -41,6 +42,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
+
+var ImmutMemAllocator stl.MemAllocator
+
+func init() {
+	ImmutMemAllocator = stl.NewSimpleAllocator()
+}
 
 type dataBlock struct {
 	*sync.RWMutex
@@ -213,6 +220,17 @@ func (blk *dataBlock) GetMaxCheckpointTS() uint64 {
 
 func (blk *dataBlock) GetMaxVisibleTS() uint64 {
 	return blk.mvcc.LoadMaxVisible()
+}
+
+func (blk *dataBlock) Close() {
+	if blk.node != nil {
+		_ = blk.node.Close()
+		blk.node = nil
+	}
+	if blk.file != nil {
+		_ = blk.file.Close()
+		blk.file = nil
+	}
 }
 
 func (blk *dataBlock) Destroy() (err error) {

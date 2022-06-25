@@ -50,7 +50,7 @@ type Block interface {
 	WriteSnapshot(bat *containers.Batch, ts uint64, masks map[uint16]*roaring.Bitmap,
 		vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
 	WriteBatch(bat *containers.Batch, ts uint64) error
-	LoadBatch([]types.Type, int) (bat *containers.Batch, err error)
+	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	WriteColumnVec(ts uint64, colIdx int, vec containers.Vector) error
 
 	Destroy() error

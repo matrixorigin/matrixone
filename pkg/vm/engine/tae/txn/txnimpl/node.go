@@ -21,19 +21,13 @@ import (
 	"io"
 	"sync/atomic"
 
-	"github.com/RoaringBitmap/roaring"
-
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -53,16 +47,16 @@ const (
 
 type InsertNode interface {
 	base.INode
-	PrepareAppend(data *gbat.Batch, offset uint32) (toAppend uint32)
-	Append(data *gbat.Batch, offset uint32) (appended uint32, err error)
+	PrepareAppend(data *containers.Batch, offset uint32) (toAppend uint32)
+	Append(data *containers.Batch, offset uint32) (appended uint32, err error)
 	RangeDelete(start, end uint32) error
 	IsRowDeleted(row uint32) bool
 	PrintDeletes() string
-	FillColumnView(*model.ColumnView, *bytes.Buffer, *bytes.Buffer) error
-	Window(start, end uint32) (*gbat.Batch, error)
+	FillColumnView(*model.ColumnView, *bytes.Buffer) error
+	Window(start, end uint32) (*containers.Batch, error)
 	GetSpace() uint32
 	Rows() uint32
-	GetValue(col int, row uint32) (any, error)
+	GetValue(col int, row uint32) any
 	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
 	ToTransient()
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dbid uint64, dest *common.ID) *appendInfo
@@ -188,10 +182,9 @@ func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 type insertNode struct {
 	*buffer.Node
 	driver  wal.Driver
-	data    batch.IBatch
+	data    *containers.Batch
 	lsn     uint64
 	typ     txnbase.NodeState
-	deletes *roaring.Bitmap
 	rows    uint32
 	table   *txnTable
 	appends []*appendInfo
@@ -243,7 +236,7 @@ func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, 
 		entry = n.execUnload()
 	}
 	if n.lsn == 0 {
-		batCmd := txnbase.NewBatchCmd(n.data, n.table.GetSchema().AllTypes())
+		batCmd := txnbase.NewBatchCmd(n.data)
 		composedCmd.AddCmd(batCmd)
 	} else {
 		ptrCmd := new(txnbase.PointerCmd)
@@ -251,17 +244,13 @@ func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, 
 		ptrCmd.Group = wal.GroupUC
 		composedCmd.AddCmd(ptrCmd)
 	}
-	if n.deletes != nil {
-		delCmd := txnbase.NewDeleteBitmapCmd(n.deletes)
-		composedCmd.AddCmd(delCmd)
-	}
 	return composedCmd, entry, nil
 }
 
 func (n *insertNode) Type() txnbase.NodeType { return NTInsert }
 
 func (n *insertNode) makeLogEntry() wal.LogEntry {
-	cmd := txnbase.NewBatchCmd(n.data, n.table.GetSchema().AllTypes())
+	cmd := txnbase.NewBatchCmd(n.data)
 	buf, err := cmd.Marshal()
 	e := entry.GetBase()
 	e.SetType(ETInsertNode)
@@ -355,9 +344,8 @@ func (n *insertNode) execUnload() (en wal.LogEntry) {
 	return
 }
 
-func (n *insertNode) PrepareAppend(data *gbat.Batch, offset uint32) uint32 {
-	length := gvec.Length(data.Vecs[0])
-	left := uint32(length) - offset
+func (n *insertNode) PrepareAppend(data *containers.Batch, offset uint32) uint32 {
+	left := uint32(data.Length()) - offset
 	nodeLeft := txnbase.MaxNodeRows - n.rows
 	if left <= nodeLeft {
 		return left
@@ -365,69 +353,44 @@ func (n *insertNode) PrepareAppend(data *gbat.Batch, offset uint32) uint32 {
 	return nodeLeft
 }
 
-func (n *insertNode) Append(data *gbat.Batch, offset uint32) (an uint32, err error) {
+func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, err error) {
 	schema := n.table.entry.GetSchema()
 	if n.data == nil {
-		vecs := make([]vector.IVector, len(schema.ColDefs))
-		attrIds := make([]int, len(schema.ColDefs))
-		for i, def := range schema.ColDefs {
-			attrIds[i] = def.Idx
-			vecs[i] = vector.NewVector(def.Type, uint64(txnbase.MaxNodeRows))
-		}
-		if n.data, err = batch.NewBatch(attrIds, vecs); err != nil {
-			return
-		}
+		n.data = containers.BuildBatch(
+			schema.AllNames(),
+			schema.AllTypes(),
+			schema.AllNullables(),
+			int(txnbase.MaxNodeRows))
 	}
 
-	var cnt int
 	from := uint32(n.data.Length())
-	for i, attr := range data.Attrs {
+	an = n.PrepareAppend(data, offset)
+	for _, attr := range data.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
-		destVec, err := n.data.GetVectorByAttr(def.Idx)
-		if err != nil {
-			return an, err
-		}
-		if cnt, err = destVec.AppendVector(data.Vecs[i], int(offset)); err != nil {
-			return an, err
-		}
-		n.rows = uint32(destVec.Length())
+		destVec := n.data.Vecs[def.Idx]
+		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
+		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
-	an = uint32(cnt)
-	err = n.FillHiddenColumn(from, uint32(compute.LengthOfBatch(data))-offset)
+	n.rows = uint32(n.data.Length())
+	err = n.FillHiddenColumn(from, uint32(data.Length())-offset)
 	return
 }
 
 func (n *insertNode) FillHiddenColumn(startRow, length uint32) (err error) {
-	col, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, n.prefix, startRow, length)
+	col, err := model.PrepareHiddenData(catalog.HiddenColumnType, n.prefix, startRow, length)
 	if err != nil {
 		return
 	}
-	defer closer()
-	vec, err := n.data.GetVectorByAttr(n.table.entry.GetSchema().HiddenKey.Idx)
-	if err != nil {
-		return
-	}
-	_, err = vec.AppendVector(col, 0)
-	if err != nil {
-		panic(err)
-	}
+	defer col.Close()
+	vec := n.data.Vecs[n.table.entry.GetSchema().HiddenKey.Idx]
+	vec.Extend(col)
 	return
 }
 
-func (n *insertNode) FillColumnView(view *model.ColumnView, compressed, decompressed *bytes.Buffer) (err error) {
-	ivec, err := n.data.GetVectorByAttr(view.ColIdx)
-	if err != nil {
-		return
-	}
-	ivec = ivec.GetLatestView()
-	if decompressed == nil || compressed == nil {
-		view.AppliedVec, err = ivec.CopyToVector()
-	} else {
-		decompressed.Reset()
-		compressed.Reset()
-		view.AppliedVec, err = ivec.CopyToVectorWithBuffer(compressed, decompressed)
-	}
-	view.DeleteMask = n.deletes
+func (n *insertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
+	orig := n.data.Vecs[view.ColIdx]
+	view.SetData(orig.CloneWindow(0, orig.Length()))
+	view.DeleteMask = n.data.Deletes
 	return
 }
 
@@ -441,14 +404,14 @@ func (n *insertNode) Rows() uint32 {
 
 func (n *insertNode) RowsWithoutDeletes() uint32 {
 	deletes := uint32(0)
-	if n.deletes != nil {
-		deletes = uint32(n.deletes.GetCardinality())
+	if n.data.Deletes != nil {
+		deletes = uint32(n.data.DeleteCnt())
 	}
 	return n.rows - deletes
 }
 
 func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if n.deletes == nil || n.deletes.IsEmpty() {
+	if !n.data.HasDelete() {
 		return toAppend
 	}
 	appendedOffset := n.OffsetWithDeletes(appended)
@@ -458,12 +421,12 @@ func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 }
 
 func (n *insertNode) OffsetWithDeletes(count uint32) uint32 {
-	if n.deletes == nil || n.deletes.IsEmpty() {
+	if !n.data.HasDelete() {
 		return count
 	}
 	offset := count
 	for offset < n.rows {
-		deletes := n.deletes.Rank(offset)
+		deletes := n.data.Deletes.Rank(offset)
 		if offset == count+uint32(deletes) {
 			break
 		}
@@ -472,57 +435,26 @@ func (n *insertNode) OffsetWithDeletes(count uint32) uint32 {
 	return offset
 }
 
-func (n *insertNode) GetValue(col int, row uint32) (any, error) {
-	vec, err := n.data.GetVectorByAttr(col)
-	if err != nil {
-		return nil, err
-	}
-	v, err := vec.GetValue(int(row))
-	return v, err
+func (n *insertNode) GetValue(col int, row uint32) any {
+	return n.data.Vecs[col].Get(int(row))
 }
 
 func (n *insertNode) RangeDelete(start, end uint32) error {
-	if n.deletes == nil {
-		n.deletes = roaring.New()
-	}
-	n.deletes.AddRange(uint64(start), uint64(end)+1)
+	n.data.RangeDelete(int(start), int(end+1))
 	return nil
 }
 
 func (n *insertNode) IsRowDeleted(row uint32) bool {
-	if n.deletes == nil {
-		return false
-	}
-	return n.deletes.Contains(row)
+	return n.data.IsDeleted(int(row))
 }
 
 func (n *insertNode) PrintDeletes() string {
-	if n.deletes == nil {
+	if !n.data.HasDelete() {
 		return "NoDeletes"
 	}
-	return n.deletes.String()
+	return n.data.Deletes.String()
 }
 
-// TODO: Rewrite later
-func (n *insertNode) Window(start, end uint32) (bat *gbat.Batch, err error) {
-	bat = gbat.New(true, []string{})
-	for _, attrId := range n.data.GetAttrs() {
-		def := n.table.entry.GetSchema().ColDefs[attrId]
-		if def.IsHidden() {
-			continue
-		}
-		src, err := n.data.GetVectorByAttr(def.Idx)
-		if err != nil {
-			return nil, err
-		}
-		srcVec, err2 := src.Window(start, end+1).CopyToVector()
-		if err2 != nil {
-			panic(err2)
-		}
-		deletes := common.BM32Window(n.deletes, int(start), int(end))
-		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
-		bat.Vecs = append(bat.Vecs, srcVec)
-		bat.Attrs = append(bat.Attrs, def.Name)
-	}
-	return
+func (n *insertNode) Window(start, end uint32) (bat *containers.Batch, err error) {
+	return n.data.Window(int(start), int(end-start)), nil
 }

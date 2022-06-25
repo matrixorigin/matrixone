@@ -24,15 +24,14 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/RoaringBitmap/roaring/roaring64"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -83,10 +82,12 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 }
 
 func TestInsertNode(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	tbl := makeTable(t, dir, 2, 1, common.K*6)
 	defer tbl.store.driver.Close()
-	bat := catalog.MockData(tbl.GetSchema(), uint32(common.K))
+	bat := catalog.MockBatch(tbl.GetSchema(), int(common.K))
+	defer bat.Close()
 	p, _ := ants.NewPool(5)
 
 	var wg sync.WaitGroup
@@ -139,10 +140,12 @@ func TestInsertNode(t *testing.T) {
 	wg.Wait()
 	t.Log(all)
 	t.Log(tbl.store.nodesMgr.String())
-	t.Log(common.GPool.String())
 }
 
 func TestTable(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	t.Log(stl.DefaultAllocator.String())
+	t.Log(tables.ImmutMemAllocator.String())
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -157,8 +160,9 @@ func TestTable(t *testing.T) {
 		db, err := txn.CreateDatabase("db")
 		assert.Nil(t, err)
 		rel, _ := db.CreateRelation(schema)
-		bat := catalog.MockData(schema, uint32(common.K*100))
-		bats := compute.SplitBatch(bat, 100)
+		bat := catalog.MockBatch(schema, int(common.K)*100)
+		defer bat.Close()
+		bats := bat.Split(100)
 		for _, data := range bats {
 			err := rel.Append(data)
 			assert.Nil(t, err)
@@ -179,6 +183,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestUpdateUncommitted(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -189,8 +194,9 @@ func TestUpdateUncommitted(t *testing.T) {
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
 
-	bat := catalog.MockData(schema, 1000)
-	bats := compute.SplitBatch(bat, 2)
+	bat := catalog.MockBatch(schema, 1000)
+	defer bat.Close()
+	bats := bat.Split(2)
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -205,13 +211,15 @@ func TestUpdateUncommitted(t *testing.T) {
 	row := uint32(9)
 	assert.False(t, tbl.IsLocalDeleted(row))
 	rows := tbl.UncommittedRows()
-	err := tbl.UpdateLocalValue(row, 1, int16(999))
+	err := tbl.UpdateLocalValue(row, 1, int16(1999))
 	assert.Nil(t, err)
 	assert.True(t, tbl.IsLocalDeleted(row))
 	assert.Equal(t, rows+1, tbl.UncommittedRows())
+	assert.NoError(t, txn.Commit())
 }
 
 func TestAppend(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -229,9 +237,10 @@ func TestAppend(t *testing.T) {
 	tbl, _ := tDB.getOrSetTable(rel.ID())
 	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
 	brows := rows / 3
-	bat := catalog.MockData(tbl.GetSchema(), uint32(rows))
 
-	bats := compute.SplitBatch(bat, 3)
+	bat := catalog.MockBatch(tbl.GetSchema(), int(rows))
+	defer bat.Close()
+	bats := bat.Split(3)
 
 	err := tbl.BatchDedupLocal(bats[0])
 	assert.Nil(t, err)
@@ -256,9 +265,11 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3*int(brows), int(tbl.UncommittedRows()))
 	assert.Equal(t, 3*int(brows), int(tbl.localSegment.index.Count()))
+	assert.NoError(t, txn.Commit())
 }
 
 func TestIndex(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	index := NewSimpleTableIndex()
 	err := index.Insert(1, 10)
 	assert.Nil(t, err)
@@ -273,41 +284,42 @@ func TestIndex(t *testing.T) {
 	assert.NotNil(t, err)
 
 	schema := catalog.MockSchemaAll(14, 1)
-	bat := catalog.MockData(schema, 500)
+	bat := catalog.MockBatch(schema, 500)
+	defer bat.Close()
 
 	idx := NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[0])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[0], 0, gvec.Length(bat.Vecs[0]), 0, false)
+	err = idx.BatchInsert(bat.Vecs[0], 0, bat.Vecs[0].Length(), 0, false)
 	assert.NotNil(t, err)
 
 	err = idx.BatchDedup(bat.Vecs[1])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[1], 0, gvec.Length(bat.Vecs[1]), 0, false)
+	err = idx.BatchInsert(bat.Vecs[1], 0, bat.Vecs[1].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window := gvec.New(bat.Vecs[1].Typ)
-	gvec.Window(bat.Vecs[1], 20, 22, window)
-	assert.Equal(t, 2, gvec.Length(window))
+	window := bat.Vecs[1].Window(20, 2)
+	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(window)
 	assert.NotNil(t, err)
 
 	schema = catalog.MockSchemaAll(14, 12)
-	bat = catalog.MockData(schema, 500)
+	bat = catalog.MockBatch(schema, 500)
+	defer bat.Close()
 	idx = NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[12])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[12], 0, gvec.Length(bat.Vecs[12]), 0, false)
+	err = idx.BatchInsert(bat.Vecs[12], 0, bat.Vecs[12].Length(), 0, false)
 	assert.Nil(t, err)
 
-	window = gvec.New(bat.Vecs[12].Typ)
-	gvec.Window(bat.Vecs[12], 20, 22, window)
-	assert.Equal(t, 2, gvec.Length(window))
+	window = bat.Vecs[12].Window(20, 2)
+	assert.Equal(t, 2, window.Length())
 	err = idx.BatchDedup(window)
-	assert.NotNil(t, err)
+	assert.Error(t, err)
 }
 
 func TestLoad(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -318,8 +330,9 @@ func TestLoad(t *testing.T) {
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
 
-	bat := catalog.MockData(schema, 60000)
-	bats := compute.SplitBatch(bat, 5)
+	bat := catalog.MockBatch(schema, 60000)
+	defer bat.Close()
+	bats := bat.Split(5)
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -328,13 +341,14 @@ func TestLoad(t *testing.T) {
 	tbl, _ := tDB.getOrSetTable(rel.ID())
 
 	err := tbl.Append(bats[0])
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	t.Log(tbl.store.nodesMgr.String())
 	v, err := tbl.GetLocalValue(100, 0)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 	t.Log(tbl.store.nodesMgr.String())
 	t.Logf("Row %d, Col %d, Val %v", 100, 0, v)
+	assert.NoError(t, txn.Commit())
 }
 
 func TestNodeCommand(t *testing.T) {
@@ -348,7 +362,7 @@ func TestNodeCommand(t *testing.T) {
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 10
 
-	bat := catalog.MockData(schema, 15000)
+	bat := catalog.MockBatch(schema, 15000)
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -381,8 +395,7 @@ func TestNodeCommand(t *testing.T) {
 }
 
 func TestApplyToColumn1(t *testing.T) {
-	deletes := &roaring.Bitmap{}
-	deletes.Add(1)
+	deletes := roaring.BitmapOf(1)
 	ts := common.NextGlobalSeqNum()
 	chain := updates.MockColumnUpdateChain()
 	node := updates.NewCommittedColumnUpdateNode(ts, ts, nil, nil)
@@ -391,25 +404,16 @@ func TestApplyToColumn1(t *testing.T) {
 	assert.Nil(t, err)
 	deletes.AddRange(3, 4)
 
-	vec := gvec.New(types.Type_VARCHAR.ToType())
-	col := &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 0),
-		Lengths: make([]uint32, 0),
-	}
+	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
 	for i := 0; i < 5; i++ {
-		col.Offsets = append(col.Offsets, uint32(len(col.Data)))
 		data := "val" + strconv.Itoa(i)
-		col.Data = append(col.Data, []byte(data)...)
-		col.Lengths = append(col.Lengths, uint32(len(data)))
+		vec.Append([]byte(data))
 	}
-	vec.Col = col
+	vec.Update(2, types.Null{})
+	vec.Update(4, types.Null{})
 
-	vec.Nsp.Np = roaring64.BitmapOf(2, 4)
-
-	fmt.Printf("%s\n%v\n->\n", vec.Col, vec.Nsp.Np)
 	res := node.ApplyToColumn(vec, deletes)
-	fmt.Printf("%s\n%v\n", res.Col, res.Nsp.Np)
+	t.Log(res.String())
 }
 
 func TestApplyToColumn2(t *testing.T) {
@@ -422,14 +426,16 @@ func TestApplyToColumn2(t *testing.T) {
 	assert.Nil(t, err)
 	deletes.AddRange(2, 4)
 
-	vec := gvec.New(types.Type_INT32.ToType())
-	vec.Col = []int32{1, 2, 3, 4}
+	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
+	vec.AppendMany(1, 2, 3, 4)
 
-	vec.Nsp.Np = roaring64.BitmapOf(2, 1, 3, 0)
+	vec.Update(2, types.Null{})
+	vec.Update(1, types.Null{})
+	vec.Update(3, types.Null{})
+	vec.Update(0, types.Null{})
 
-	fmt.Printf("%v\n%v\n->\n", vec.Col, vec.Nsp.Np)
 	res := node.ApplyToColumn(vec, deletes)
-	fmt.Printf("%v\n%v\n", res.Col, res.Nsp.Np)
+	t.Log(res.String())
 }
 
 func TestApplyToColumn3(t *testing.T) {
@@ -440,25 +446,16 @@ func TestApplyToColumn3(t *testing.T) {
 	err := node.UpdateLocked(3, []byte("update"))
 	assert.Nil(t, err)
 
-	vec := gvec.New(types.Type_VARCHAR.ToType())
-	col := &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 0),
-		Lengths: make([]uint32, 0),
-	}
+	vec := containers.MakeVector(types.Type_VARCHAR.ToType(), true)
 	for i := 0; i < 5; i++ {
-		col.Offsets = append(col.Offsets, uint32(len(col.Data)))
 		data := "val" + strconv.Itoa(i)
-		col.Data = append(col.Data, []byte(data)...)
-		col.Lengths = append(col.Lengths, uint32(len(data)))
+		vec.Append([]byte(data))
 	}
-	vec.Col = col
 
 	deletes := roaring.New()
 	deletes.Add(1)
-	fmt.Printf("%s\n->\n", vec.Col)
 	res := node.ApplyToColumn(vec, deletes)
-	fmt.Printf("%s\n", res.Col)
+	t.Log(res.String())
 }
 
 func TestApplyToColumn4(t *testing.T) {
@@ -469,12 +466,11 @@ func TestApplyToColumn4(t *testing.T) {
 	err := node.UpdateLocked(3, int32(8))
 	assert.Nil(t, err)
 
-	vec := gvec.New(types.Type_INT32.ToType())
-	vec.Col = []int32{1, 2, 3, 4}
+	vec := containers.MakeVector(types.Type_INT32.ToType(), true)
+	vec.AppendMany(1, 2, 3, 4)
 
-	fmt.Printf("%v\n->\n", vec.Col)
 	res := node.ApplyToColumn(vec, nil)
-	fmt.Printf("%v\n", res.Col)
+	t.Log(res.String())
 }
 
 func TestTxnManager1(t *testing.T) {
@@ -537,7 +533,6 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
 	factory := tables.NewDataFactory(mockio.SegmentFactory, mutBufMgr, nil, dir)
-	// factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
 	mgr.Start()
 	return c, mgr, driver
@@ -838,8 +833,8 @@ func TestDedup1(t *testing.T) {
 	schema.SegmentMaxBlocks = 4
 	cnt := uint64(10)
 	rows := uint64(schema.BlockMaxRows) / 2 * cnt
-	bat := catalog.MockData(schema, uint32(rows))
-	bats := compute.SplitBatch(bat, int(cnt))
+	bat := catalog.MockBatch(schema, int(rows))
+	bats := bat.Split(int(cnt))
 	{
 		txn, _ := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")

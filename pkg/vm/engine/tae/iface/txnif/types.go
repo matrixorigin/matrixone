@@ -19,9 +19,8 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -174,11 +173,11 @@ type TxnStore interface {
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
-	BatchDedup(dbId, id uint64, pks ...*vector.Vector) error
+	BatchDedup(dbId, id uint64, pks ...containers.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)
 	LogBlockID(dbId, tid, bid uint64)
 
-	Append(dbId, id uint64, data *batch.Batch) error
+	Append(dbId, id uint64, data *containers.Batch) error
 
 	RangeDelete(dbId uint64, id *common.ID, start, end uint32) error
 	Update(dbId uint64, id *common.ID, row uint32, col uint16, v any) error

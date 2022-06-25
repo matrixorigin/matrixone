@@ -54,5 +54,5 @@ func InitTestEnv(module string, t *testing.T) string {
 }
 
 func EnsureNoLeak(t *testing.T) {
-	assert.Zero(t, stl.DefaultAllocator.Usage())
+	assert.Zerof(t, stl.DefaultAllocator.Usage(), stl.DefaultAllocator.String())
 }

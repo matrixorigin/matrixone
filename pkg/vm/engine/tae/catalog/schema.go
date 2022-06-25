@@ -438,6 +438,14 @@ func (s *Schema) Types() []types.Type {
 	return ts
 }
 
+func (s *Schema) AllNullables() []bool {
+	nulls := make([]bool, 0, len(s.ColDefs))
+	for _, def := range s.ColDefs {
+		nulls = append(nulls, def.Nullable())
+	}
+	return nulls
+}
+
 func (s *Schema) AllTypes() []types.Type {
 	ts := make([]types.Type, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
