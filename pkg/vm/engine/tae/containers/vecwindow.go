@@ -21,6 +21,7 @@ func (win *windowBase) Delete(i int)                          { panic("cannot mo
 func (win *windowBase) Append(v any)                          { panic("cannot modify window") }
 func (win *windowBase) Compact(*roaring.Bitmap)               { panic("cannot modify window") }
 func (win *windowBase) AppendMany(vs ...any)                  { panic("cannot modify window") }
+func (win *windowBase) AppendNoNulls(s any)                   { panic("cannot modify window") }
 func (win *windowBase) Extend(o Vector)                       { panic("cannot modify window") }
 func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int)   { panic("cannot modify window") }
 func (win *windowBase) Length() int                           { return win.length }
@@ -35,6 +36,7 @@ func (win *windowBase) Equals(o Vector) bool                  { panic("implement
 func (win *windowBase) ReadFrom(io.Reader) (int64, error)     { panic("not implemented") }
 
 func (win *windowBase) ReadFromFile(common.IVFile, *bytes.Buffer) error { panic("not implemented") }
+func (win *windowBase) Reset()                                          { panic("cannot modify window") }
 func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap)         { panic("not implemented") }
 
 type vectorWindow[T any] struct {

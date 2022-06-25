@@ -23,6 +23,7 @@ func newVecBase[T any](derived *vector[T]) *vecBase[T] {
 func (base *vecBase[T]) Window(offset, length int) Vector            { panic("not supported") }
 func (base *vecBase[T]) CloneWindow(offset, length int) Vector       { panic("not supported") }
 func (base *vecBase[T]) ResetWithData(_ *Bytes, _ *roaring64.Bitmap) { panic("not supported") }
+func (base *vecBase[T]) Reset()                                      { panic("not supported") }
 func (base *vecBase[T]) Equals(o Vector) bool                        { panic("not supported") }
 func (base *vecBase[T]) IsView() bool                                { return false }
 func (base *vecBase[T]) Nullable() bool                              { return false }
@@ -58,6 +59,11 @@ func (base *vecBase[T]) AppendMany(vs ...any) {
 	for _, v := range vs {
 		base.Append(v)
 	}
+}
+func (base *vecBase[T]) AppendNoNulls(s any) {
+	base.tryCOW()
+	slice := s.([]T)
+	base.derived.stlvec.AppendMany(slice...)
 }
 func (base *vecBase[T]) Extend(o Vector) {
 	base.ExtendWithOffset(o, 0, o.Length())

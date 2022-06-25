@@ -50,12 +50,14 @@ type VectorView interface {
 
 type Vector interface {
 	VectorView
+	Reset()
 	ResetWithData(bs *Bytes, nulls *roaring64.Bitmap)
 	GetView() VectorView
 	Update(i int, v any)
 	Delete(i int)
 	Append(v any)
 	AppendMany(vs ...any)
+	AppendNoNulls(s any)
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
 	Compact(deletes *roaring.Bitmap)

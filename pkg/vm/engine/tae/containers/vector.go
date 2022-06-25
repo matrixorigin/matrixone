@@ -130,6 +130,7 @@ func (vec *vector[T]) Update(i int, v any)  { vec.impl.Update(i, v) }
 func (vec *vector[T]) Delete(i int)         { vec.impl.Delete(i) }
 func (vec *vector[T]) Append(v any)         { vec.impl.Append(v) }
 func (vec *vector[T]) AppendMany(vs ...any) { vec.impl.AppendMany(vs...) }
+func (vec *vector[T]) AppendNoNulls(s any)  { vec.impl.AppendNoNulls(s) }
 func (vec *vector[T]) Extend(o Vector)      { vec.impl.Extend(o) }
 func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	vec.impl.ExtendWithOffset(src, srcOff, srcLen)
@@ -363,4 +364,9 @@ func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 		vec.nulls = nulls
 	}
 	vec.stlvec.ReadBytes(bs, true)
+}
+
+func (vec *vector[T]) Reset() {
+	vec.releaseRoStorage()
+	vec.nulls = nil
 }
