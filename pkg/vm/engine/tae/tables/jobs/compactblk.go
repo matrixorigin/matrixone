@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -99,7 +98,6 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 	// Sort only if sort key is defined
 	if schema.HasSortKey() {
 		var idx int
-		vecs := compute.CopyToMoVectors(preparer.Columns.Vecs)
 		if schema.IsSingleSortKey() {
 			idx = schema.SortKey.Defs[0].Idx
 			preparer.SortKey = preparer.Columns.Vecs[idx]
@@ -109,17 +107,12 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 				cols[i] = preparer.Columns.Vecs[schema.SortKey.Defs[i].Idx]
 			}
 			preparer.SortKey = model.EncodeCompoundColumn(cols...)
-			idx = len(vecs)
-			vecs = append(vecs, compute.CopyToMoVector(preparer.SortKey))
+			idx = len(preparer.Columns.Vecs)
+			preparer.Columns.AddVector(catalog.SortKeyNamePrefx, preparer.SortKey)
 		}
-		if err = mergesort.SortBlockColumns(vecs, idx); err != nil {
+		if err = mergesort.SortBlockColumns(preparer.Columns.Vecs, idx); err != nil {
 			return
 		}
-		nullables := make([]bool, len(vecs))
-		for i := range vecs {
-			nullables[i] = preparer.Columns.Vecs[i].Nullable()
-		}
-		preparer.Columns.Vecs = compute.MOToVectors(vecs, nullables)
 	}
 	// Prepare hidden column data
 	hidden, err := model.PrepareHiddenData(

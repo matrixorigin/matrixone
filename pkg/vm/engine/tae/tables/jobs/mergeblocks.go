@@ -18,11 +18,9 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -103,7 +101,7 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []*vector.Vector, mapping []uint32) {
+func (task *mergeBlocksTask) mergeColumn(vecs []containers.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []containers.Vector, mapping []uint32) {
 	if sort {
 		if isPrimary {
 			column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
@@ -116,7 +114,7 @@ func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uin
 	return
 }
 
-func (task *mergeBlocksTask) mergeColumnWithOutSort(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
+func (task *mergeBlocksTask) mergeColumnWithOutSort(column []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
 	totalLength := uint32(0)
 	for _, i := range toLayout {
 		totalLength += i
@@ -221,13 +219,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	buf := node.Buf[:length]
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
-	movecs := compute.CopyToMoVectors(vecs)
-	movecs, mapping := task.mergeColumn(movecs, &sortedIdx, true, rows, to, schema.HasSortKey())
-	nullables := make([]bool, len(vecs))
-	for i := range vecs {
-		nullables[i] = vecs[i].Nullable()
-	}
-	vecs = compute.MOToVectors(movecs, nullables)
+	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 
@@ -302,18 +294,14 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			continue
 		}
 		vecs = vecs[:0]
-		nullables = nullables[:0]
-		for i, block := range task.compacted {
+		for _, block := range task.compacted {
 			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
 			view.ApplyDeletes()
 			vecs = append(vecs, view.Orhpan())
-			nullables = append(nullables, vecs[i].Nullable())
 		}
-		movecs = compute.CopyToMoVectors(vecs)
-		movecs, _ = task.mergeColumn(movecs, &sortedIdx, false, rows, to, schema.HasSortKey())
-		vecs = compute.MOToVectors(movecs, nullables)
+		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
 		for pos, vec := range vecs {
 			blk := task.createdBlks[pos]
 			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
