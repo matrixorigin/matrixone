@@ -456,5 +456,7 @@ func (n *insertNode) PrintDeletes() string {
 }
 
 func (n *insertNode) Window(start, end uint32) (bat *containers.Batch, err error) {
-	return n.data.Window(int(start), int(end-start)), nil
+	bat = n.data.CloneWindow(int(start), int(end-start))
+	bat.Compact()
+	return
 }

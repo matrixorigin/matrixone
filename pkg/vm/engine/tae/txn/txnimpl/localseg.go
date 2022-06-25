@@ -89,6 +89,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 	)
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
+		defer bat.Close()
 		if prevAppender != nil && prevAppender.GetID().BlockID == ctx.driver.GetID().BlockID {
 			prev = anode
 		} else {
@@ -361,6 +362,7 @@ func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	}
 
 	orig := window.Vecs[col]
+	defer orig.Close()
 	vec := containers.MakeVector(orig.GetType(), orig.Nullable())
 	defer vec.Close()
 	vec.Append(value)
