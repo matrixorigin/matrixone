@@ -19,32 +19,13 @@ func init() {
 	initBuiltIns()
 	initAggregateFunction()
 
-	initLevelUpRules()
+	initTypeCheckRelated()
 }
 
 var registerMutex sync.RWMutex
 
 func initRelatedStructure() {
 	functionRegister = make([]Functions, FUNCTION_END_NUMBER)
-}
-
-func initLevelUpRules() {
-	levelUp = make([][]int, maxTypeNumber)
-	for i := range levelUp {
-		levelUp[i] = make([]int, maxTypeNumber)
-		for j := range levelUp[i] {
-			levelUp[i][j] = upFailed
-		}
-	}
-	// convert map levelUpRules to be a group
-	for i := range levelUp {
-		levelUp[i][i] = 0
-	}
-	for k, v := range levelUpRules {
-		for i, t := range v {
-			levelUp[k][t] = i + 1
-		}
-	}
 }
 
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.
@@ -62,8 +43,4 @@ func appendFunction(fid int, newFunctions Functions) error {
 		functionRegister[fid].Overloads = append(functionRegister[fid].Overloads, newFunction)
 	}
 	return nil
-}
-
-func functionsEqual(f1, f2 Function) bool {
-	return f1.Index == f2.Index
 }

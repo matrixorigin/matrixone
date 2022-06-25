@@ -16,10 +16,6 @@ package function
 
 import (
 	"fmt"
-	"reflect"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -35,52 +31,15 @@ const (
 	// if we input a SQL `select built_in_function(columnA, NULL);`, and columnA is int64 column.
 	// it will use [types.T_int64, ScalarNull] to match function when we were building the query plan.
 	ScalarNull = types.T_any
-
-	// argument type implicit convert related const
-	matchDirectly = 0
-	matchFailed   = -1
-
-	upFailed = -1 // it means type1 can not up to type2
 )
 
 var (
 	// an empty function structure just for return when we couldn't meet any function.
 	emptyFunction = Function{}
 
-	// levelUpRules records the implicit convert rule for function's argument.
-	// key is the original type, and value is the convertible type
-	levelUpRules = map[types.T][]types.T{
-		types.T_uint8: {
-			types.T_uint16, types.T_uint32, types.T_uint64,
-			types.T_int16, types.T_int32, types.T_int64,
-			types.T_float64, types.T_decimal64, types.T_decimal128,
-		},
-		types.T_uint16: {
-			types.T_uint32, types.T_uint64,
-			types.T_int32, types.T_int64,
-			types.T_float64, types.T_decimal64, types.T_decimal128,
-		},
-		types.T_uint32: {
-			types.T_uint64,
-			types.T_int64,
-			types.T_float64, types.T_decimal64, types.T_decimal128,
-		},
-		types.T_uint64: {types.T_float64, types.T_decimal64, types.T_decimal128},
-		types.T_int8: {
-			types.T_int16, types.T_int32, types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
-		},
-		types.T_int16: {
-			types.T_int32, types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
-		},
-		types.T_int32: {
-			types.T_int64, types.T_float64, types.T_decimal64, types.T_decimal128,
-		},
-		types.T_int64:     {types.T_float64, types.T_decimal64, types.T_decimal128},
-		types.T_float32:   {types.T_float64},
-		types.T_decimal64: {types.T_decimal128},
-		types.T_char:      {types.T_varchar},
-		types.T_varchar:   {types.T_char},
-	}
+	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
+	// used to make an AndExpr
+	AndFunctionEncodedID = EncodeOverloadID(AND, 0)
 )
 
 // Functions records all overloads of the same function name
@@ -91,7 +50,9 @@ type Functions struct {
 	Overloads   []Function
 }
 
-// TypeCheck returns overload-index-number, target-type
+// TypeCheck do type check work for a function,
+// if the input params matched one of function's overloads.
+// returns overload-index-number, target-type
 // just set target-type nil if there is no need to do implicit-type-conversion for parameters
 func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 	if fs.TypeCheckFn == nil {
@@ -149,20 +110,11 @@ type Function struct {
 	// it received vector list, and return result vector.
 	Fn func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
-	// TypeCheckFn is function's own argument type check function.
-	// return true if inputTypes meet the type requirement.
-	TypeCheckFn func(inputTypes []types.T, requiredTypes []types.T, returnType types.T) (match bool)
-
 	// AggregateInfo is related information about aggregate function.
 	AggregateInfo int
 
 	// Info records information about the function overload used to print
 	Info string
-}
-
-// TypeCheck returns true if input arguments meets function's type requirement.
-func (f Function) TypeCheck(args []types.T) bool {
-	return f.TypeCheckFn(args, f.Args, f.ReturnTyp)
 }
 
 // ReturnType return result-type of function, and the result is nullable
@@ -191,11 +143,6 @@ func (f Function) isFunction() bool {
 //
 // For use in other packages, see GetFunctionByID and GetFunctionByName
 var functionRegister []Functions
-
-// levelUp records the convert rule for functions' arguments
-//
-// it will be filled by initLevelUpRules according to levelUpRules
-var levelUp [][]int
 
 // get function id from map functionIdRegister, see functionIds.go
 func fromNameToFunctionId(name string) (int32, error) {
@@ -260,165 +207,3 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 	}
 	return fs.Overloads[index], EncodeOverloadID(fid, index), targetTypes, nil
 }
-
-// strictTypeCheck is a general type check method.
-// it returns true only when each input type meets requirement.
-// Watch that : ScalarNull can match each requirement at this function.
-func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
-	if len(args) != len(require) {
-		return false
-	}
-	for i := range args {
-		if args[i] != require[i] && IsNotScalarNull(args[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func ConcatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
-	if len(args) <= 1 {
-		return false
-	}
-	for _, arg := range args {
-		if arg != types.T_varchar && arg != types.T_char && IsNotScalarNull(arg) {
-			return false
-		}
-	}
-	return true
-}
-
-func toDateTypeCheck(args []types.T, require []types.T, _ types.T) bool {
-	if len(args) != 2 {
-		return false
-	}
-	if args[0] != types.T_char && args[0] != types.T_varchar {
-		return false
-	}
-	if args[0] == ScalarNull {
-		return false
-	}
-	if args[1] != types.T_char && args[1] != types.T_varchar {
-		return false
-	}
-	if args[1] == ScalarNull {
-		return false
-	}
-	return true
-}
-
-// returns the cost if t1 can level up to t2
-func up(t1, t2 types.T) int {
-	return levelUp[t1][t2]
-}
-
-var (
-	strictTypeCheckPointer   = reflect.ValueOf(strictTypeCheck).Pointer()
-	caseWhenTypeCheckPointer = reflect.ValueOf(operator.CwTypeCheckFn).Pointer()
-	ifTypeCheckPointer       = reflect.ValueOf(operator.IfTypeCheckFn).Pointer()
-)
-
-// typeCheckWithLevelUp check if the input parameters meet the function requirements.
-// If the level-up by parameter type can meet successfully, return the cost.
-// Else, just return matchDirectly or matchFailed.
-func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
-	if f.TypeCheck(sources) {
-		return matchDirectly, nil
-	}
-	switch reflect.ValueOf(f.TypeCheckFn).Pointer() {
-	case strictTypeCheckPointer:
-		// types of function's arguments are clear and not confused.
-		if len(f.Args) != len(sources) {
-			return matchFailed, nil
-		}
-		cost := 0
-		for i := range sources {
-			if sources[i] == ScalarNull {
-				continue
-			}
-			c := up(sources[i], f.Args[i])
-			if c == upFailed {
-				return matchFailed, nil
-			}
-			cost += c
-		}
-		return cost, f.Args
-	case caseWhenTypeCheckPointer:
-		// special type up rule for case-when operator
-		rt, _ := f.ReturnType()
-		l := len(sources)
-		cost := 0
-		finalTypes := make([]types.T, l)
-		if l >= 2 {
-			for i := 0; i < l-1; i += 2 {
-				if sources[i] != types.T_bool {
-					return matchFailed, nil
-				}
-				finalTypes[i] = types.T_bool
-			}
-
-			if l%2 == 1 {
-				if sources[l-1] != ScalarNull {
-					c := up(sources[l-1], rt)
-					if c == upFailed {
-						return matchFailed, nil
-					}
-					cost += c
-					finalTypes[l-1] = rt
-				} else {
-					finalTypes[l-1] = ScalarNull
-				}
-			}
-
-			for i := 1; i < l; i += 2 {
-				if sources[i] != ScalarNull {
-					c := up(sources[i], rt)
-					if c == upFailed {
-						return matchFailed, nil
-					}
-					cost += c
-					finalTypes[i] = rt
-				} else {
-					finalTypes[i] = ScalarNull
-				}
-			}
-			return cost, finalTypes
-		}
-	case ifTypeCheckPointer:
-		// special type up rule for if operator
-		if len(sources) == 3 && sources[0] == types.T_bool {
-			cost := 0
-			rt, _ := f.ReturnType()
-			finalTypes := make([]types.T, 3)
-			finalTypes[0] = types.T_bool
-			if sources[1] != ScalarNull {
-				c := up(sources[1], rt)
-				if c == upFailed {
-					return matchFailed, nil
-				}
-				cost += c
-				finalTypes[1] = rt
-			}
-			if sources[2] != ScalarNull {
-				c := up(sources[2], rt)
-				if c == upFailed {
-					return matchFailed, nil
-				}
-				cost += c
-				finalTypes[1] = rt
-			}
-			return cost, finalTypes
-		}
-	}
-	return matchFailed, nil
-}
-
-func IsNotScalarNull(t types.T) bool {
-	return t != ScalarNull
-}
-
-var (
-	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
-	// used to make an AndExpr
-	AndFunctionEncodedID = EncodeOverloadID(AND, 0)
-)

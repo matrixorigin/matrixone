@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	maxTypeNumber = types.T_tuple + 10
+	maxTypes = 255
 
 	tooManyFunctionsMatched = -2
 	wrongFunctionParameters = -1
@@ -47,7 +47,7 @@ var binaryTable [][]binaryTargetTypes
 var binaryTable2 [][]binaryTargetTypes
 
 // init binaryTable and castTable
-func init() {
+func initTypeCheckRelated() {
 	all := []types.T{
 		types.T_any,
 		types.T_bool,
@@ -67,8 +67,6 @@ func init() {
 	floats := []types.T{types.T_float32, types.T_float64}
 	strings := []types.T{types.T_char, types.T_varchar}
 	decimals := []types.T{types.T_decimal64, types.T_decimal128}
-
-	maxTypes := 255
 
 	// init binaryTable
 	var rules [][4]types.T // left-input, right-input, left-target, right-target
@@ -351,7 +349,7 @@ func tryToMatch(inputs, requires []types.T) int {
 			} else if castTable[t1][t2] {
 				convNumber++
 			} else {
-				return matchFailed
+				return matchedFailed
 			}
 		}
 		if matchNumber == len(inputs) {
