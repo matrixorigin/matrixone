@@ -378,32 +378,48 @@ func isRaftInternalEntry(e raftpb.Entry) bool {
 	return e.Type == raftpb.ConfigChangeEntry || e.Type == raftpb.MetadataEntry
 }
 
-func (l *store) filterEntries(ctx context.Context,
-	shardID uint64, entries []raftpb.Entry) ([]LogRecord, error) {
+func (l *store) markEntries(ctx context.Context,
+	shardID uint64, entries []raftpb.Entry) ([]pb.LogRecord, error) {
 	if len(entries) == 0 {
-		return []LogRecord{}, nil
+		return []pb.LogRecord{}, nil
 	}
 	leaseHolderID, err := l.getLeaseHolderID(ctx, shardID, entries)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]LogRecord, 0)
+	result := make([]pb.LogRecord, 0)
 	for _, e := range entries {
 		if isRaftInternalEntry(e) {
 			// raft internal stuff
+			result = append(result, LogRecord{
+				Type:  pb.Internal,
+				Index: e.Index,
+			})
 			continue
 		}
 		cmd := l.decodeCmd(e)
 		if isSetLeaseHolderUpdate(cmd) {
 			leaseHolderID = parseLeaseHolderID(cmd)
+			result = append(result, LogRecord{
+				Type:  pb.LeaseUpdate,
+				Index: e.Index,
+			})
 			continue
 		}
 		if isUserUpdate(cmd) {
 			if parseLeaseHolderID(cmd) != leaseHolderID {
 				// lease not match, skip
+				result = append(result, LogRecord{
+					Type:  pb.LeaseUpdate,
+					Index: e.Index,
+				})
 				continue
 			}
-			result = append(result, LogRecord{Data: cmd, Index: e.Index})
+			result = append(result, LogRecord{
+				Data:  cmd,
+				Type:  pb.UserRecord,
+				Index: e.Index,
+			})
 		}
 	}
 	return result, nil
@@ -438,9 +454,9 @@ func (l *store) QueryLog(ctx context.Context, shardID uint64,
 		if v.Completed() {
 			entries, logRange := v.RaftLogs()
 			next := getNextIndex(entries, firstIndex, logRange.LastIndex)
-			results, err := l.filterEntries(ctx, shardID, entries)
+			results, err := l.markEntries(ctx, shardID, entries)
 			if err != nil {
-				plog.Errorf("filterEntries failed, %v", err)
+				plog.Errorf("markEntries failed, %v", err)
 				return nil, 0, err
 			}
 			return results, next, nil

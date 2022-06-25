@@ -42,7 +42,7 @@ func TestErrorConversion(t *testing.T) {
 func TestUnknownErrorIsHandled(t *testing.T) {
 	err := errors.New("test error")
 	code, str := toErrorCode(err)
-	assert.Equal(t, pb.ErrorCode_OtherSystemError, code)
+	assert.Equal(t, pb.OtherSystemError, code)
 	assert.Equal(t, err.Error(), str)
 }
 

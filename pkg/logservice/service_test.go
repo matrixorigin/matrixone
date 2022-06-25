@@ -69,13 +69,13 @@ func TestNewService(t *testing.T) {
 func TestServiceConnect(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
-			Method:  pb.MethodType_CONNECT,
+			Method:  pb.CONNECT,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)
@@ -84,13 +84,13 @@ func TestServiceConnect(t *testing.T) {
 func TestServiceConnectTimeout(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
-			Method:  pb.MethodType_CONNECT,
+			Method:  pb.CONNECT,
 			ShardID: 1,
 			Timeout: 50 * int64(time.Millisecond),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, pb.ErrorCode_Timeout, resp.ErrorCode)
+		assert.Equal(t, pb.Timeout, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)
@@ -99,13 +99,13 @@ func TestServiceConnectTimeout(t *testing.T) {
 func TestServiceConnectRO(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
-			Method:  pb.MethodType_CONNECT_RO,
+			Method:  pb.CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)
@@ -122,24 +122,24 @@ func getTestAppendCmd(id uint64, data []byte) []byte {
 func TestServiceHandleAppend(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
-			Method:  pb.MethodType_CONNECT_RO,
+			Method:  pb.CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.DNID, data)
 		req = pb.Request{
-			Method:  pb.MethodType_APPEND,
+			Method:  pb.APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, cmd)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 	}
@@ -149,24 +149,24 @@ func TestServiceHandleAppend(t *testing.T) {
 func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
-			Method:  pb.MethodType_CONNECT_RO,
+			Method:  pb.CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.DNID+1, data)
 		req = pb.Request{
-			Method:  pb.MethodType_APPEND,
+			Method:  pb.APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, cmd)
-		assert.Equal(t, pb.ErrorCode_NotLeaseHolder, resp.ErrorCode)
+		assert.Equal(t, pb.NotLeaseHolder, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.Index)
 	}
@@ -176,40 +176,44 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 func TestServiceHandleRead(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
-			Method:  pb.MethodType_CONNECT_RO,
+			Method:  pb.CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.DNID, data)
 		req = pb.Request{
-			Method:  pb.MethodType_APPEND,
+			Method:  pb.APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, cmd)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 
 		req = pb.Request{
-			Method:  pb.MethodType_READ,
+			Method:  pb.READ,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			Index:   1,
 			MaxSize: 1024 * 32,
 		}
 		resp, records := s.handleRead(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(1), resp.LastIndex)
-		require.Equal(t, 1, len(records.Records))
-		assert.Equal(t, cmd, records.Records[0].Data)
+		require.Equal(t, 4, len(records.Records))
+		assert.Equal(t, pb.Internal, records.Records[0].Type)
+		assert.Equal(t, pb.Internal, records.Records[1].Type)
+		assert.Equal(t, pb.LeaseUpdate, records.Records[2].Type)
+		assert.Equal(t, pb.UserRecord, records.Records[3].Type)
+		assert.Equal(t, cmd, records.Records[3].Data)
 	}
 	runServiceTest(t, fn)
 }
@@ -217,56 +221,56 @@ func TestServiceHandleRead(t *testing.T) {
 func TestServiceTruncate(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		req := pb.Request{
-			Method:  pb.MethodType_CONNECT_RO,
+			Method:  pb.CONNECT_RO,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			DNID:    100,
 		}
 		resp := s.handleConnect(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.DNID, data)
 		req = pb.Request{
-			Method:  pb.MethodType_APPEND,
+			Method:  pb.APPEND,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleAppend(req, cmd)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 
 		req = pb.Request{
-			Method:  pb.MethodType_TRUNCATE,
+			Method:  pb.TRUNCATE,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			Index:   4,
 		}
 		resp = s.handleTruncate(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(0), resp.Index)
 
 		req = pb.Request{
-			Method:  pb.MethodType_GET_TRUNCATE,
+			Method:  pb.GET_TRUNCATE,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 		}
 		resp = s.handleGetTruncatedIndex(req)
-		assert.Equal(t, pb.ErrorCode_NoError, resp.ErrorCode)
+		assert.Equal(t, pb.NoError, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 		assert.Equal(t, uint64(4), resp.Index)
 
 		req = pb.Request{
-			Method:  pb.MethodType_TRUNCATE,
+			Method:  pb.TRUNCATE,
 			ShardID: 1,
 			Timeout: int64(time.Second),
 			Index:   3,
 		}
 		resp = s.handleTruncate(req)
-		assert.Equal(t, pb.ErrorCode_IndexAlreadyTruncated, resp.ErrorCode)
+		assert.Equal(t, pb.IndexAlreadyTruncated, resp.ErrorCode)
 		assert.Equal(t, "", resp.ErrorMessage)
 	}
 	runServiceTest(t, fn)
