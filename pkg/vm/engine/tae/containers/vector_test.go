@@ -388,3 +388,21 @@ func TestVector8(t *testing.T) {
 	assert.True(t, types.IsNull(vec.Get(2)))
 	t.Log(vec.String())
 }
+
+func TestVector9(t *testing.T) {
+	opts := withAllocator(nil)
+	vec := MakeVector(types.Type_VARCHAR.ToType(), true, opts)
+	vec.Append([]byte("h1"))
+	vec.Append([]byte("h22"))
+	vec.Append([]byte("h333"))
+	vec.Append(types.Null{})
+	vec.Append([]byte("h4444"))
+
+	cloned := vec.CloneWindow(2, 2)
+	assert.Equal(t, 2, cloned.Length())
+	assert.Equal(t, vec.Get(2), cloned.Get(0))
+	assert.Equal(t, vec.Get(3), cloned.Get(1))
+	cloned.Close()
+	vec.Close()
+	assert.Zero(t, opts.Allocator.Usage())
+}

@@ -99,6 +99,8 @@ func (bat *Batch) Window(offset, length int) *Batch {
 	win.nameidx = bat.nameidx
 	if bat.Deletes != nil && offset+length != bat.Length() {
 		win.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
+	} else {
+		win.Deletes = bat.Deletes
 	}
 	win.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range win.Vecs {
@@ -112,12 +114,7 @@ func (bat *Batch) CloneWindow(offset, length int) (cloned *Batch) {
 	cloned.Attrs = bat.Attrs
 	cloned.nameidx = bat.nameidx
 	if bat.Deletes != nil {
-		cloned.Deletes = roaring.New()
-		for i := offset; i < offset+length; i++ {
-			if bat.Deletes.ContainsInt(i) {
-				cloned.Deletes.AddInt(i)
-			}
-		}
+		cloned.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
 	}
 	cloned.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range cloned.Vecs {
