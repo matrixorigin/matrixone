@@ -501,6 +501,7 @@ func TestApplyToColumn4(t *testing.T) {
 }
 
 func TestTxnManager1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil), TxnFactory(nil))
 	mgr.Start()
 	txn, _ := mgr.StartTxn(nil)
@@ -571,7 +572,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 // 4. Txn2 commit
 // 5. Txn3 commit
 func TestTransaction1(t *testing.T) {
-	// dir := initTestPath(t)
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -616,6 +617,7 @@ func TestTransaction1(t *testing.T) {
 }
 
 func TestTransaction2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -665,6 +667,7 @@ func TestTransaction2(t *testing.T) {
 }
 
 func TestTransaction3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -699,6 +702,7 @@ func TestTransaction3(t *testing.T) {
 }
 
 func TestSegment1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -773,6 +777,7 @@ func TestSegment1(t *testing.T) {
 }
 
 func TestSegment2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -803,6 +808,7 @@ func TestSegment2(t *testing.T) {
 }
 
 func TestBlock1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -849,6 +855,7 @@ func TestBlock1(t *testing.T) {
 }
 
 func TestDedup1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -861,6 +868,7 @@ func TestDedup1(t *testing.T) {
 	cnt := uint64(10)
 	rows := uint64(schema.BlockMaxRows) / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
+	defer bat.Close()
 	bats := bat.Split(int(cnt))
 	{
 		txn, _ := mgr.StartTxn(nil)

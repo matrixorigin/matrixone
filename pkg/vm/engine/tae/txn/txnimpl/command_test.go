@@ -20,15 +20,15 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestPointerCmd(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	groups := uint32(10)
 	maxLsn := uint64(10)
-	// cmds := make([]TxnCmd, int(groups)*int(maxLsn))
-	// mashalled := make([][]byte, int(groups)*int(maxLsn))
 	for group := uint32(1); group <= groups; group++ {
 		for lsn := uint64(1); lsn <= maxLsn; lsn++ {
 			cmd := new(txnbase.PointerCmd)
@@ -45,38 +45,18 @@ func TestPointerCmd(t *testing.T) {
 	}
 }
 
-// func TestDeletesCmd(t *testing.T) {
-// 	deletes := make(map[uint32]*roaring.Bitmap)
-// 	for i := 0; i < 10; i++ {
-// 		deletes[uint32(i)] = roaring.NewBitmap()
-// 		deletes[uint32(i)].Add(uint64(i)*2 + 1)
-// 	}
-// 	cmd := MakeDeletesCmd(deletes)
-// 	var w bytes.Buffer
-// 	err := cmd.WriteTo(&w)
-// 	assert.Nil(t, err)
-
-// 	buf := w.Bytes()
-// 	r := bytes.NewBuffer(buf)
-// 	cmd2, err := BuildCommandFrom(r)
-// 	assert.Nil(t, err)
-// 	for k, v := range cmd2.(*LocalDeletesCmd).Deletes {
-// 		assert.True(t, v.Contains(2*uint64(k)+1))
-// 	}
-// }
-
 func TestComposedCmd(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	composed := txnbase.NewComposedCmd()
+	defer composed.Close()
 	groups := uint32(10)
 	maxLsn := uint64(10)
-	// pts := make([]TxnCmd, int(groups)*int(maxLsn))
 	for group := uint32(1); group <= groups; group++ {
 		for lsn := uint64(1); lsn <= maxLsn; lsn++ {
 			cmd := new(txnbase.PointerCmd)
 			cmd.Group = group
 			cmd.Lsn = lsn
 			composed.AddCmd(cmd)
-			// pts = append(pts, cmd)
 		}
 	}
 	batCnt := 5
@@ -84,6 +64,7 @@ func TestComposedCmd(t *testing.T) {
 	schema := catalog.MockSchema(4, 0)
 	for i := 0; i < batCnt; i++ {
 		bat := catalog.MockBatch(schema, (i+1)*5)
+		defer bat.Close()
 		batCmd := txnbase.NewBatchCmd(bat)
 		del := roaring.NewBitmap()
 		del.Add(uint32(i))
@@ -101,6 +82,7 @@ func TestComposedCmd(t *testing.T) {
 
 	r := bytes.NewBuffer(buf)
 	composed2, _, err := txnbase.BuildCommandFrom(r)
+	defer composed2.Close()
 	assert.Nil(t, err)
 	cmd1 := composed.Cmds
 	cmd2 := composed2.(*txnbase.ComposedCmd).Cmds

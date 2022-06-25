@@ -61,6 +61,9 @@ func IsCustomizedCmd(cmd txnif.TxnCmd) bool {
 }
 
 type BaseCmd struct{}
+
+func (base *BaseCmd) Close() {}
+
 type PointerCmd struct {
 	BaseCmd
 	Group uint32
@@ -84,6 +87,7 @@ type ComposedCmd struct {
 }
 
 type BaseCustomizedCmd struct {
+	BaseCmd
 	ID   uint32
 	Impl txnif.TxnCmd
 }
@@ -228,6 +232,13 @@ func (e *BatchCmd) GetType() int16 {
 	return CmdBatch
 }
 
+func (e *BatchCmd) Close() {
+	if e.Bat != nil {
+		e.Bat.Close()
+		e.Bat = nil
+	}
+}
+
 func (e *BatchCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = e.WriteTo(&bbuf); err != nil {
@@ -275,6 +286,12 @@ func (e *BatchCmd) String() string {
 func (e *BatchCmd) VerboseString() string {
 	s := fmt.Sprintf("CmdName=BAT;Rows=%d;Data=%v", e.Bat.Length(), e.Bat)
 	return s
+}
+
+func (e *ComposedCmd) Close() {
+	for _, cmd := range e.Cmds {
+		cmd.Close()
+	}
 }
 func (e *ComposedCmd) GetType() int16 {
 	return CmdComposed
