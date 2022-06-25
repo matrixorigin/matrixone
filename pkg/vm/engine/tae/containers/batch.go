@@ -123,6 +123,10 @@ func (bat *Batch) CloneWindow(offset, length int, allocator ...MemAllocator) (cl
 	return
 }
 
+func (bat *Batch) String() string {
+	return ""
+}
+
 func (bat *Batch) Close() {
 	for _, vec := range bat.Vecs {
 		vec.Close()

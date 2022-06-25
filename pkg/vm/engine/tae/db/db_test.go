@@ -269,6 +269,7 @@ func TestCRUD(t *testing.T) {
 }
 
 func TestTableHandle(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -291,6 +292,7 @@ func TestTableHandle(t *testing.T) {
 }
 
 func TestCreateBlock(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -317,6 +319,7 @@ func TestCreateBlock(t *testing.T) {
 }
 
 func TestNonAppendableBlock(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 1)
@@ -324,6 +327,7 @@ func TestNonAppendableBlock(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 
 	bat := catalog.MockBatch(schema, 8)
+	defer bat.Close()
 
 	createRelation(t, db, "db", schema, true)
 
@@ -350,6 +354,7 @@ func TestNonAppendableBlock(t *testing.T) {
 
 		view, err := dataBlk.GetColumnDataById(txn, 2, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 
@@ -358,6 +363,7 @@ func TestNonAppendableBlock(t *testing.T) {
 
 		view, err = dataBlk.GetColumnDataById(txn, 2, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(1))
 		assert.True(t, view.DeleteMask.Contains(2))
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
@@ -367,17 +373,19 @@ func TestNonAppendableBlock(t *testing.T) {
 
 		view, err = dataBlk.GetColumnDataById(txn, 2, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(1))
 		assert.True(t, view.DeleteMask.Contains(2))
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
 		v = view.GetDataView().Get(3)
 		assert.Equal(t, int32(999), v)
 
-		// assert.Nil(t, txn.Commit())
+		assert.Nil(t, txn.Commit())
 	}
 }
 
 func TestCreateSegment(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, 0)
@@ -391,6 +399,7 @@ func TestCreateSegment(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 
 	bat := catalog.MockBatch(schema, 5)
+	defer bat.Close()
 
 	appendClosure(t, bat, schema.Name, tae, nil)()
 
@@ -407,6 +416,7 @@ func TestCreateSegment(t *testing.T) {
 }
 
 func TestCompactBlock1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	db := initDB(t, opts)
 	defer db.Close()
@@ -414,6 +424,7 @@ func TestCompactBlock1(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 4
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
 	createRelationAndAppend(t, db, "db", schema, bat, true)
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 

@@ -14,16 +14,17 @@
 
 package mergesort
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+)
 
-func Shuffle(col containers.Vector, idx []uint32) {
+func Shuffle(col containers.Vector, idx []uint32) containers.Vector {
 	ret := containers.MakeVector(col.GetType(), col.Nullable())
 	for _, j := range idx {
 		ret.Append(col.Get(int(j)))
 	}
-
-	col.ResetWithData(ret.Bytes(), ret.NullMask())
-	ret.Close()
+	col.Close()
+	return ret
 }
 
 func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []containers.Vector) {

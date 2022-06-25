@@ -598,10 +598,17 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
 // pkIdx == -1 means no pk defined
-func MockSchemaAll(colCnt int, pkIdx int) *Schema {
+func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	schema := NewEmptySchema(time.Now().String())
 	prefix := "mock_"
+	start := 0
+	if len(from) > 0 {
+		start = from[0]
+	}
 	for i := 0; i < colCnt; i++ {
+		if i < start {
+			continue
+		}
 		name := fmt.Sprintf("%s%d", prefix, i)
 		var typ types.Type
 		switch i % 18 {

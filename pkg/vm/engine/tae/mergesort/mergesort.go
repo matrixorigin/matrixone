@@ -71,9 +71,8 @@ func SortBlockColumns(cols []containers.Vector, pk int) error {
 		if i == pk {
 			continue
 		}
-		Shuffle(cols[i], sortedIdx)
+		cols[i] = Shuffle(cols[i], sortedIdx)
 	}
-
 	return nil
 }
 
