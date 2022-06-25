@@ -283,6 +283,7 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
 		view, err := blk.GetColumnDataById(colIdx, nil, nil)
+		defer view.Close()
 		if err != nil {
 			return
 		}

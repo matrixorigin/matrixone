@@ -88,7 +88,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		prevAppender data.BlockAppender
 	)
 	for _, ctx := range seg.appends {
-		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
+		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
 		if prevAppender != nil && prevAppender.GetID().BlockID == ctx.driver.GetID().BlockID {
 			prev = anode

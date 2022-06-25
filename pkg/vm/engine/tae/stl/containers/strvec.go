@@ -174,10 +174,14 @@ func (vec *StrVector[T]) AppendMany(vals ...T) {
 	}
 }
 
-func (vec *StrVector[T]) Clone(offset, length int) stl.Vector[T] {
+func (vec *StrVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator) stl.Vector[T] {
 	opts := &Options{
-		Capacity:  length,
-		Allocator: vec.GetAllocator(),
+		Capacity: length,
+	}
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
 	}
 	cloned := NewStrVector[T](opts)
 	if offset == 0 {

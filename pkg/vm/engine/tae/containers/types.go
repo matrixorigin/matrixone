@@ -61,7 +61,7 @@ type Vector interface {
 	Extend(o Vector)
 	ExtendWithOffset(src Vector, srcOff, srcLen int)
 	Compact(deletes *roaring.Bitmap)
-	CloneWindow(offset, length int) Vector
+	CloneWindow(offset, length int, allocator ...MemAllocator) Vector
 
 	Equals(o Vector) bool
 	Window(offset, length int) Vector

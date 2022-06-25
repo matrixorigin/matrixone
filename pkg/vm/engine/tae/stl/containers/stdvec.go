@@ -176,10 +176,15 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 	vec.buf = unsafe.Slice((*byte)(unsafe.Pointer(&vec.slice[0])), stl.SizeOfMany[T](predictSize))
 }
 
-func (vec *StdVector[T]) Clone(offset, length int) stl.Vector[T] {
+func (vec *StdVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator) stl.Vector[T] {
 	opts := &Options{
-		Capacity:  length,
-		Allocator: vec.GetAllocator(),
+		Capacity: length,
+	}
+
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
 	}
 	cloned := NewStdVector[T](opts)
 	cloned.AppendMany(vec.slice[offset : offset+length]...)

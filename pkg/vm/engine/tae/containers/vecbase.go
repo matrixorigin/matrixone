@@ -20,18 +20,18 @@ func newVecBase[T any](derived *vector[T]) *vecBase[T] {
 	}
 }
 
-func (base *vecBase[T]) Window(offset, length int) Vector            { panic("not supported") }
-func (base *vecBase[T]) CloneWindow(offset, length int) Vector       { panic("not supported") }
-func (base *vecBase[T]) ResetWithData(_ *Bytes, _ *roaring64.Bitmap) { panic("not supported") }
-func (base *vecBase[T]) Reset()                                      { panic("not supported") }
-func (base *vecBase[T]) Equals(o Vector) bool                        { panic("not supported") }
-func (base *vecBase[T]) IsView() bool                                { return false }
-func (base *vecBase[T]) Nullable() bool                              { return false }
-func (base *vecBase[T]) IsNull(i int) bool                           { return false }
-func (base *vecBase[T]) HasNull() bool                               { return false }
-func (base *vecBase[T]) NullMask() *roaring64.Bitmap                 { return base.derived.nulls }
-func (base *vecBase[T]) Slice() any                                  { panic("not supported") }
-func (base *vecBase[T]) Data() []byte                                { return base.derived.stlvec.Data() }
+func (base *vecBase[T]) Window(offset, length int) Vector               { panic("not supported") }
+func (base *vecBase[T]) CloneWindow(_, _ int, _ ...MemAllocator) Vector { panic("not supported") }
+func (base *vecBase[T]) ResetWithData(_ *Bytes, _ *roaring64.Bitmap)    { panic("not supported") }
+func (base *vecBase[T]) Reset()                                         { panic("not supported") }
+func (base *vecBase[T]) Equals(o Vector) bool                           { panic("not supported") }
+func (base *vecBase[T]) IsView() bool                                   { return false }
+func (base *vecBase[T]) Nullable() bool                                 { return false }
+func (base *vecBase[T]) IsNull(i int) bool                              { return false }
+func (base *vecBase[T]) HasNull() bool                                  { return false }
+func (base *vecBase[T]) NullMask() *roaring64.Bitmap                    { return base.derived.nulls }
+func (base *vecBase[T]) Slice() any                                     { panic("not supported") }
+func (base *vecBase[T]) Data() []byte                                   { return base.derived.stlvec.Data() }
 func (base *vecBase[T]) DataWindow(offset, length int) []byte {
 	return base.derived.stlvec.DataWindow(offset, length)
 }

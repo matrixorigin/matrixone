@@ -27,7 +27,7 @@ type Vector[T any] interface {
 	Close()
 
 	// Clone deep copy data from offset to offset+length and create a new vector
-	Clone(offset, length int) Vector[T]
+	Clone(offset, length int, allocator ...MemAllocator) Vector[T]
 
 	// ReadBytes reads a serialized buffer and initializes the vector using the buf
 	// as its initial contents.

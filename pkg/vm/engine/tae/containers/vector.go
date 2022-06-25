@@ -94,9 +94,13 @@ func (vec *vector[T]) Data() []byte                { return vec.impl.Data() }
 func (vec *vector[T]) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
 }
-func (vec *vector[T]) CloneWindow(offset, length int) Vector {
+func (vec *vector[T]) CloneWindow(offset, length int, allocator ...MemAllocator) Vector {
 	opts := new(Options)
-	opts.Allocator = vec.GetAllocator()
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
+	}
 	cloned := NewVector[T](vec.typ, vec.Nullable(), opts)
 	if vec.nulls != nil {
 		if offset == 0 || length == vec.Length() {
@@ -114,7 +118,7 @@ func (vec *vector[T]) CloneWindow(offset, length int) Vector {
 		}
 	}
 	cloned.stlvec.Close()
-	cloned.stlvec = vec.stlvec.Clone(offset, length)
+	cloned.stlvec = vec.stlvec.Clone(offset, length, allocator...)
 	return cloned
 }
 func (vec *vector[T]) Slice() any {

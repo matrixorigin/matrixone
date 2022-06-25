@@ -140,6 +140,7 @@ func TestAppend3(t *testing.T) {
 }
 
 func TestAppend4(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()

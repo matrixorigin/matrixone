@@ -101,7 +101,7 @@ func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batc
 		err = exception.(error)
 		return
 	}
-	columns = node.data.CloneWindow(0, int(maxRow))
+	columns = node.data.CloneWindow(0, int(maxRow), containers.DefaultAllocator)
 	return
 }
 
@@ -110,7 +110,7 @@ func (node *appendableNode) GetColumnDataCopy(maxRow uint32, colIdx int) (vec co
 		err = exception.(error)
 		return
 	}
-	vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow))
+	vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
 	return
 }
 

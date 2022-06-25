@@ -109,7 +109,7 @@ func (bat *Batch) Window(offset, length int) *Batch {
 	return win
 }
 
-func (bat *Batch) CloneWindow(offset, length int) (cloned *Batch) {
+func (bat *Batch) CloneWindow(offset, length int, allocator ...MemAllocator) (cloned *Batch) {
 	cloned = NewEmptyBatch()
 	cloned.Attrs = bat.Attrs
 	cloned.nameidx = bat.nameidx
@@ -118,7 +118,7 @@ func (bat *Batch) CloneWindow(offset, length int) (cloned *Batch) {
 	}
 	cloned.Vecs = make([]Vector, len(bat.Vecs))
 	for i := range cloned.Vecs {
-		cloned.Vecs[i] = bat.Vecs[i].CloneWindow(offset, length)
+		cloned.Vecs[i] = bat.Vecs[i].CloneWindow(offset, length, allocator...)
 	}
 	return
 }
