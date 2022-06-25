@@ -181,21 +181,21 @@ func (s *Service) serve(conn net.Conn) {
 func (s *Service) handle(req pb.Request,
 	payload []byte) (pb.Response, pb.LogRecordResponse) {
 	switch req.Method {
-	case pb.MethodType_CREATE:
+	case pb.CREATE:
 		panic("not implemented")
-	case pb.MethodType_DESTROY:
+	case pb.DESTROY:
 		panic("not implemented")
-	case pb.MethodType_APPEND:
+	case pb.APPEND:
 		return s.handleAppend(req, payload), pb.LogRecordResponse{}
-	case pb.MethodType_READ:
+	case pb.READ:
 		return s.handleRead(req)
-	case pb.MethodType_TRUNCATE:
+	case pb.TRUNCATE:
 		return s.handleTruncate(req), pb.LogRecordResponse{}
-	case pb.MethodType_GET_TRUNCATE:
+	case pb.GET_TRUNCATE:
 		return s.handleGetTruncatedIndex(req), pb.LogRecordResponse{}
-	case pb.MethodType_CONNECT:
+	case pb.CONNECT:
 		return s.handleConnect(req), pb.LogRecordResponse{}
-	case pb.MethodType_CONNECT_RO:
+	case pb.CONNECT_RO:
 		return s.handleConnectRO(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown method type")

@@ -97,7 +97,7 @@ func TestReadSize(t *testing.T) {
 func TestWriteRequest(t *testing.T) {
 	conn := newTestConn()
 	req := pb.Request{
-		Method:      pb.MethodType_APPEND,
+		Method:      pb.APPEND,
 		Name:        "test",
 		DNID:        1234567890,
 		PayloadSize: 32,
@@ -123,7 +123,7 @@ func TestWriteRequest(t *testing.T) {
 func TestReadRequest(t *testing.T) {
 	conn := newTestConn()
 	req := pb.Request{
-		Method:      pb.MethodType_APPEND,
+		Method:      pb.APPEND,
 		Name:        "test",
 		PayloadSize: 32,
 	}
@@ -155,7 +155,7 @@ func TestWriteResponse(t *testing.T) {
 func testWriteResponse(t *testing.T, sz int) {
 	conn := newTestConn()
 	resp := pb.Response{
-		Method:    pb.MethodType_APPEND,
+		Method:    pb.APPEND,
 		ShardID:   1234567890,
 		LastIndex: 234567890,
 	}
@@ -206,7 +206,7 @@ func TestReadResponse(t *testing.T) {
 func testReadResponse(t *testing.T, sz int) {
 	conn := newTestConn()
 	resp := pb.Response{
-		Method:    pb.MethodType_APPEND,
+		Method:    pb.APPEND,
 		ShardID:   1234567890,
 		LastIndex: 234567890,
 	}

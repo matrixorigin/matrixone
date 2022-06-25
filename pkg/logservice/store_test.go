@@ -237,9 +237,12 @@ func TestQueryLog(t *testing.T) {
 		// lease holder ID update cmd at entry index 3
 		entries, lsn, err = store.QueryLog(ctx, 1, 3, math.MaxUint64)
 		assert.NoError(t, err)
-		assert.Equal(t, 1, len(entries))
+		assert.Equal(t, 2, len(entries))
 		assert.Equal(t, uint64(3), lsn)
-		assert.Equal(t, entries[0].Data, cmd)
+		assert.Equal(t, cmd, entries[1].Data)
+		assert.Equal(t, pb.LeaseUpdate, entries[0].Type)
+		assert.Equal(t, pb.UserRecord, entries[1].Type)
+
 		// size limited
 		_, err = store.Append(ctx, 1, cmd)
 		assert.NoError(t, err)
