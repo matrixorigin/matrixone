@@ -138,7 +138,9 @@ func Reshape(column []containers.Vector, fromLayout, toLayout []uint32) (ret []c
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-			ret[i].Extend(column[fromIdx].CloneWindow(fromOffset, length))
+			cloned := column[fromIdx].CloneWindow(fromOffset, length)
+			defer cloned.Close()
+			ret[i].Extend(cloned)
 			fromOffset += length
 			toOffset += length
 		}

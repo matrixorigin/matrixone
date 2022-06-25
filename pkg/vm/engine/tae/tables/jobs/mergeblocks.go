@@ -159,7 +159,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 
 	schema := task.mergedBlks[0].GetSchema()
 	var view *model.ColumnView
-	defer view.Close()
 	vecs := make([]containers.Vector, 0)
 	rows := make([]uint32, len(task.compacted))
 	length := 0
@@ -175,13 +174,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 				return
 			}
 			view.ApplyDeletes()
-			vec = view.Orhpan()
+			vec = view.Orphan()
 		} else if schema.SortKey.Size() == 1 {
 			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil, nil); err != nil {
 				return
 			}
 			view.ApplyDeletes()
-			vec = view.Orhpan()
+			vec = view.Orphan()
 		} else {
 			cols := make([]containers.Vector, schema.SortKey.Size())
 			for idx := range cols {
@@ -189,11 +188,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 					return
 				}
 				view.ApplyDeletes()
-				cols[idx] = view.Orhpan()
+				cols[idx] = view.Orphan()
 				defer cols[idx].Close()
 			}
 			vec = model.EncodeCompoundColumn(cols...)
 		}
+		defer view.Close()
 		defer vec.Close()
 		vecs = append(vecs, vec)
 		rows[i] = uint32(vec.Length())
@@ -220,6 +220,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
 	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
+	for _, vec := range vecs {
+		defer vec.Close()
+	}
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 
@@ -298,11 +301,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
+			defer view.Close()
 			view.ApplyDeletes()
-			vecs = append(vecs, view.Orhpan())
+			vecs = append(vecs, view.GetData())
 		}
 		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
 		for pos, vec := range vecs {
+			defer vec.Close()
 			blk := task.createdBlks[pos]
 			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
 			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
@@ -352,6 +357,5 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return
 	}
-
 	return
 }

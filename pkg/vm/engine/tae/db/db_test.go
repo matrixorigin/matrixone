@@ -680,8 +680,7 @@ func TestCompactBlock2(t *testing.T) {
 }
 
 func TestAutoCompactABlk1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
@@ -691,6 +690,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 
 	totalRows := schema.BlockMaxRows / 5
 	bat := catalog.MockBatch(schema, int(totalRows))
+	defer bat.Close()
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
 	err := tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
 	assert.Nil(t, err)
@@ -2001,15 +2001,15 @@ func TestSnapshotIsolation2(t *testing.T) {
 // 1. Append 3 blocks and delete last 5 rows of the 1st block
 // 2. Merge blocks
 // 3. Check rows and col[0]
-func TestMergeBlockes(t *testing.T) {
-	// OPENME
-	return
+func TestMergeBlocks(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 3
 	bat := catalog.MockBatch(schema, 30)
+	defer bat.Close()
 
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
 
@@ -2028,9 +2028,11 @@ func TestMergeBlockes(t *testing.T) {
 	txn, err = tae.StartTxn(nil)
 	assert.Nil(t, err)
 	for it.Valid() {
+		checkAllColRowsByScan(t, rel, bat.Length(), false)
 		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
+		assert.NoError(t, err)
+		defer col.Close()
 		t.Log(col)
-		assert.Nil(t, err)
 		it.Next()
 	}
 	assert.Nil(t, txn.Commit())
@@ -2046,9 +2048,11 @@ func TestMergeBlockes(t *testing.T) {
 	assert.Equal(t, uint64(25), rel.GetMeta().(*catalog.TableEntry).GetRows())
 	it = rel.MakeBlockIt()
 	for it.Valid() {
+		checkAllColRowsByScan(t, rel, bat.Length()-5, false)
 		col, err := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetColumnDataById(txn, 0, nil, nil)
-		t.Log(col)
 		assert.Nil(t, err)
+		t.Log(col)
+		defer col.Close()
 		it.Next()
 	}
 	assert.Nil(t, txn.Commit())

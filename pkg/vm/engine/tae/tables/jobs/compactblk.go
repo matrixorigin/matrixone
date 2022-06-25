@@ -92,7 +92,7 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 			return
 		}
 		view.ApplyDeletes()
-		vec := view.Orhpan()
+		vec := view.Orphan()
 		preparer.Columns.AddVector(def.Name, vec)
 	}
 	// Sort only if sort key is defined

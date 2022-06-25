@@ -34,9 +34,9 @@ func NewBlockView(ts uint64) *BlockView {
 	}
 }
 
-func (view *BlockView) Orhpan(i int) containers.Vector {
+func (view *BlockView) Orphan(i int) containers.Vector {
 	col := view.Columns[i]
-	return col.Orhpan()
+	return col.Orphan()
 }
 
 func (view *BlockView) SetBatch(bat *containers.Batch) {

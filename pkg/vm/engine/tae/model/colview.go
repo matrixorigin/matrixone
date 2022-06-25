@@ -38,9 +38,10 @@ func NewColumnView(ts uint64, colIdx int) *ColumnView {
 	}
 }
 
-func (view *ColumnView) Orhpan() containers.Vector {
+func (view *ColumnView) Orphan() containers.Vector {
 	data := view.data
 	view.data = nil
+	view.dataView = nil
 	return data
 }
 
@@ -89,7 +90,10 @@ func (view *ColumnView) Length() int {
 }
 
 func (view *ColumnView) String() string {
-	return view.data.String()
+	if view.data != nil {
+		return view.data.String()
+	}
+	return "empty"
 }
 
 func (view *ColumnView) GetValue(row int) any {
