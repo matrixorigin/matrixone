@@ -77,13 +77,7 @@ func (win *vectorWindow[T]) Bytes() *Bytes {
 	var v T
 	if _, ok := any(v).([]byte); ok {
 		base := win.ref.Slice().(*Bytes)
-		bs := NewBytes()
-		bs.Offset = base.Offset[win.offset : win.offset+win.length]
-		bs.Length = base.Length[win.offset : win.offset+win.length]
-		start := bs.Offset[win.offset]
-		end := bs.Offset[win.offset+win.length-1] + bs.Length[win.offset+win.length-1]
-		bs.Data = base.Data[start:end]
-		return bs
+		return base.Window(win.offset, win.length)
 	} else {
 		bs := win.ref.Bytes()
 		bs.Data = bs.Data[win.offset*stl.Sizeof[T]() : (win.offset+win.length)*stl.Sizeof[T]()]
