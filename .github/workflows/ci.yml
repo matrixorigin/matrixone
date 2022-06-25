@@ -122,7 +122,7 @@ jobs:
         run: |
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
-          ./run.sh -n -g $GITHUB_WORKSPACE/head/test/cases 2>&1
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check MO-Server Status
         run: |
