@@ -1,0 +1,249 @@
+package unary
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/smartystreets/goconvey/convey"
+	"testing"
+)
+
+func TestRtrim(t *testing.T) {
+	convey.Convey("right cases", t, func() {
+		type kase struct {
+			s    string
+			want string
+		}
+
+		kases := []kase{
+			{
+				"barbar   ",
+				"barbar",
+			},
+			{
+				"MySQL",
+				"MySQL",
+			},
+			{
+				"a",
+				"a",
+			},
+			{
+				"  20.06 ",
+				"  20.06",
+			},
+			{
+				"  right  ",
+				"  right",
+			},
+			{
+				"你好  ",
+				"你好",
+			},
+			{
+				"2017-06-15   ",
+				"2017-06-15",
+			},
+			{
+				"2017-06-15        ",
+				"2017-06-15",
+			},
+		}
+
+		var inStrs []string
+		var outStrs []string
+		for _, k := range kases {
+			inStrs = append(inStrs, k.s)
+			outStrs = append(outStrs, k.want)
+		}
+
+		extraInStrs := []string{
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ ",
+			"ｱｲｳｴｵ  ",
+			"ｱｲｳｴｵ   ",
+			"ｱｲｳｴｵ　",
+			"ｱｲｳｴｵ　　",
+			"ｱｲｳｴｵ　　　",
+			"あいうえお",
+			"あいうえお ",
+			"あいうえお  ",
+			"あいうえお   ",
+			"あいうえお　",
+			"あいうえお　　",
+			"あいうえお　　　",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡 ",
+			"龔龖龗龞龡  ",
+			"龔龖龗龞龡   ",
+			"龔龖龗龞龡　",
+			"龔龖龗龞龡　　",
+			"龔龖龗龞龡　　　",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ ",
+			"ｱｲｳｴｵ  ",
+			"ｱｲｳｴｵ   ",
+			"ｱｲｳｴｵ　",
+			"ｱｲｳｴｵ　　",
+			"ｱｲｳｴｵ　　　",
+			"あいうえお",
+			"あいうえお ",
+			"あいうえお  ",
+			"あいうえお   ",
+			"あいうえお　",
+			"あいうえお　　",
+			"あいうえお　　　",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡 ",
+			"龔龖龗龞龡  ",
+			"龔龖龗龞龡   ",
+			"龔龖龗龞龡　",
+			"龔龖龗龞龡　　",
+			"龔龖龗龞龡　　　",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ ",
+			"ｱｲｳｴｵ  ",
+			"ｱｲｳｴｵ   ",
+			"ｱｲｳｴｵ　",
+			"ｱｲｳｴｵ　　",
+			"ｱｲｳｴｵ　　　",
+			"あいうえお",
+			"あいうえお ",
+			"あいうえお  ",
+			"あいうえお   ",
+			"あいうえお　",
+			"あいうえお　　",
+			"あいうえお　　　",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡 ",
+			"龔龖龗龞龡  ",
+			"龔龖龗龞龡   ",
+			"龔龖龗龞龡　",
+			"龔龖龗龞龡　　",
+			"龔龖龗龞龡　　　",
+			"2017-06-15    ",
+			"2019-06-25    ",
+			"    2019-06-25  ",
+			"   2019-06-25   ",
+			"    2012-10-12   ",
+			"   2004-04-24.   ",
+			"   2008-12-04.  ",
+			"    2012-03-23.   ",
+			"    2013-04-30  ",
+			"  1994-10-04  ",
+			"   2018-06-04  ",
+			" 2012-10-12  ",
+			"1241241^&@%#^*^!@#&*(!&    ",
+			" 123 ",
+		}
+		extraOutStrs := []string{
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"ｱｲｳｴｵ",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"あいうえお",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"龔龖龗龞龡",
+			"2017-06-15",
+			"2019-06-25",
+			"    2019-06-25",
+			"   2019-06-25",
+			"    2012-10-12",
+			"   2004-04-24.",
+			"   2008-12-04.",
+			"    2012-03-23.",
+			"    2013-04-30",
+			"  1994-10-04",
+			"   2018-06-04",
+			" 2012-10-12",
+			"1241241^&@%#^*^!@#&*(!&",
+			" 123",
+		}
+
+		inStrs = append(inStrs, extraInStrs...)
+		outStrs = append(outStrs, extraOutStrs...)
+
+		ivec := testutil.MakeVarcharVector(inStrs, nil)
+		wantVec := testutil.MakeVarcharVector(outStrs, nil)
+		proc := testutil.NewProc()
+		retVec, err := Rtrim([]*vector.Vector{ivec}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantVec, retVec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+	convey.Convey("null", t, func() {
+		ivec := testutil.MakeScalarNull(10)
+		wantvec := testutil.MakeScalarNull(10)
+		proc := testutil.NewProc()
+		ovec, err := Rtrim([]*vector.Vector{ivec}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantvec, ovec)
+		convey.So(ret, convey.ShouldBeTrue)
+
+	})
+
+	convey.Convey("scalar", t, func() {
+		ivec := testutil.MakeScalarVarchar("abc   ", 5)
+		wantvec := testutil.MakeScalarVarchar("abc", 5)
+		proc := testutil.NewProc()
+		ovec, err := Rtrim([]*vector.Vector{ivec}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantvec, ovec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+}

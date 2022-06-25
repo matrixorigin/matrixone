@@ -1,0 +1,162 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package logservice;
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/logservice";
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+option (gogoproto.goproto_enum_prefix_all) = false;
+
+// LogShardInfo contains information a log shard.
+message LogShardInfo {
+  // ShardID is the ID of a Log shard.
+  uint64 ShardID               = 1;
+  // Replicas is a map of ReplicaID to LogStore UUID, it describe the member
+  // replicas of the shard at the given Epoch. 
+  map<uint64, string> Replicas = 2;
+  // Epoch is the epoch value of the Shard, member replicas of the Shard can
+  // change across epochs. 
+  uint64 Epoch                 = 3;
+  // LeaderID is the ReplicaID of the leader replica at the given term. When
+  // LeaderID is 0, it means there is no leader or the leader is unknown.
+  uint64 LeaderID              = 4;
+  // Term is the Raft term value. 
+  uint64 Term                  = 5;
+
+  // TODO: per shard stats like CPU/memory/network usage can be added here
+};
+
+// LogReplicaInfo contains information of a log replica.
+message LogReplicaInfo {
+  LogShardInfo LogShardInfo = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
+  // ReplciaID is the ID of a replica within the Log shard. 
+  uint64 ReplicaID = 2;
+}
+
+// LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
+message LogStoreHeartbeat {
+  // UUID is the uuid of the Log Store.
+  string UUID = 1;
+  
+  string RaftAddress    = 2;
+  string ServiceAddress = 3;
+  string GossipAddress  = 4;
+
+  // Replicas is a list of LogReplicaInfo instances collected on the specified
+  // LogStore. Details in Shards are based on the local knowledge of each
+  // replica running on the current LogStore, it may not be accurate or
+  // update to date due to various reasons. 
+  repeated LogReplicaInfo Replicas = 5 [(gogoproto.nullable) = false];
+};
+
+// DNShardInfo contains information of a launched DN shard. 
+message DNShardInfo {
+  // ShardID uniquely identifies a DN shard. Each DN shard manages a Primary
+  // Key range or hashed Primary Key value range. 
+  uint64 ShardID                 = 1;
+  // ReplicaID uniquely identifies a DN shard instance. After repairing a
+  // failed DN shard, a new DN shard instance is created with a new ReplicaID
+  // value.
+  uint64 ReplicaID               = 2;
+
+  // TODO: per shard stats like CPU/memory/network usage can be added here
+};
+
+// DNStoreHeartbeat is the periodic message sent to the HAKeeper by DN stores.
+message DNStoreHeartbeat {
+  // UUID is the uuid of the DN Store.
+  string UUID = 1;
+  // Shards is a list of DNShardInfo instances collected on the specified
+  // DN store. 
+  repeated DNShardInfo Shards = 2 [(gogoproto.nullable) = false];
+};
+
+message RSMState {
+  uint64 Index = 1;
+  uint64 LeaseHolderID = 2;
+  uint64 TruncatedIndex = 3;
+  map<uint64, uint64> LeaseHistory = 4; // log index -> truncate index
+}
+
+enum MethodType {
+  CREATE       = 0;
+  DESTROY      = 1;
+  APPEND       = 2;
+  READ         = 3;
+  TRUNCATE     = 4;
+  GET_TRUNCATE = 5;
+  CONNECT      = 6;
+  CONNECT_RO   = 7;
+};
+
+enum RecordType {
+  UserRecord    = 0;
+  Internal      = 1;
+  LeaseUpdate   = 2;
+  LeaseRejected = 3;
+}
+
+// LogRecord is what we store into the LogService.
+message LogRecord {
+  uint64 Index    = 1;
+  RecordType Type = 2;
+  bytes Data      = 3;
+};
+
+message Request {
+  MethodType Method   = 1;
+  string Name         = 2;
+  uint64 ShardID      = 3;
+  uint64 Index        = 4;
+  uint64 MaxSize      = 5;
+  int64 Timeout       = 6;
+
+  uint64 DNShardID    = 7;
+  uint64 DNID         = 8;
+  uint64 PayloadSize  = 9;
+};
+
+enum ErrorCode {
+  NoError               = 0;
+  Timeout               = 1;
+  Canceled              = 2;
+  InvalidShard          = 3;
+  InvalidTimeout        = 4;
+  InvalidPayload        = 5;
+  InvalidPayloadSize    = 6;
+  Rejected              = 7;
+  ShardNotReady         = 8;
+  SystemClosed          = 9;
+
+  IndexAlreadyTruncated = 100;
+  OutOfRange            = 101;
+  NotLeaseHolder        = 102;
+
+  OtherSystemError      = 1000;
+};
+
+message Response {
+  MethodType Method   = 1;
+  ErrorCode ErrorCode = 2;
+  string ErrorMessage = 3;
+  uint64 ShardID      = 4;
+  uint64 Index        = 5;
+  uint64 LastIndex    = 6;
+  uint64 PayloadSize  = 7;
+};
+
+message LogRecordResponse {
+  repeated LogRecord Records = 1 [(gogoproto.nullable) = false];
+};
