@@ -17,8 +17,6 @@ package mockio
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
@@ -148,31 +146,6 @@ func (bf *blockFile) Destroy() error {
 }
 
 func (bf *blockFile) Sync() error { return nil }
-
-func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch.IBatch, err error) {
-	attrs := make([]int, len(bf.columns))
-	vecs := make([]vector.IVector, len(attrs))
-	var f common.IRWFile
-	for i, colBlk := range bf.columns {
-		if f, err = colBlk.OpenDataFile(); err != nil {
-			return
-		}
-		defer f.Unref()
-		size := f.Stat().Size()
-		buf := make([]byte, size)
-		if _, err = f.Read(buf); err != nil {
-			return
-		}
-		vec := vector.NewVector(colTypes[i], uint64(maxRow))
-		if err = vec.Unmarshal(buf); err != nil {
-			return
-		}
-		vecs[i] = vec
-		attrs[i] = i
-	}
-	bat, err = batch.NewBatch(attrs, vecs)
-	return
-}
 
 func (bf *blockFile) LoadBatch(
 	colTypes []types.Type,
