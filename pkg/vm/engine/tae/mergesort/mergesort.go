@@ -17,7 +17,7 @@ package mergesort
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/bools"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/dates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/datetimes"
@@ -38,10 +38,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-func SortBlockColumns(cols []*vector.Vector, pk int) error {
-	sortedIdx := make([]uint32, vector.Length(cols[pk]))
+func SortBlockColumns(cols []containers.Vector, pk int) error {
+	sortedIdx := make([]uint32, cols[pk].Length())
 
-	switch cols[pk].Typ.Oid {
+	switch cols[pk].GetType().Oid {
 	case types.Type_BOOL:
 		bools.Sort(cols[pk], sortedIdx)
 	case types.Type_INT8:
@@ -77,14 +77,14 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 	case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
 		varchar.Sort(cols[pk], sortedIdx)
 	default:
-		panic(fmt.Sprintf("%s not supported", cols[pk].Typ.String()))
+		panic(fmt.Sprintf("%s not supported", cols[pk].GetType().String()))
 	}
 
 	for i := 0; i < len(cols); i++ {
 		if i == pk {
 			continue
 		}
-		switch cols[i].Typ.Oid {
+		switch cols[i].GetType().Oid {
 		case types.Type_BOOL:
 			bools.Shuffle(cols[i], sortedIdx)
 		case types.Type_INT8:
@@ -120,15 +120,15 @@ func SortBlockColumns(cols []*vector.Vector, pk int) error {
 		case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
 			varchar.Shuffle(cols[i], sortedIdx)
 		default:
-			panic(fmt.Sprintf("%s not supported", cols[i].Typ.String()))
+			panic(fmt.Sprintf("%s not supported", cols[i].GetType().String()))
 		}
 	}
 
 	return nil
 }
 
-func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
-	switch column[0].Typ.Oid {
+func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
+	switch column[0].GetType().Oid {
 	case types.Type_BOOL:
 		ret, mapping = bools.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.Type_INT8:
@@ -164,13 +164,13 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint32, fromLayout,
 	case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
 	default:
-		panic(fmt.Sprintf("%s not supported", column[0].Typ.String()))
+		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))
 	}
 	return
 }
 
-func Reshape(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
-	switch column[0].Typ.Oid {
+func Reshape(column []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector) {
+	switch column[0].GetType().Oid {
 	case types.Type_BOOL:
 		ret = bools.Reshape(column, fromLayout, toLayout)
 	case types.Type_INT8:
@@ -209,8 +209,8 @@ func Reshape(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vec
 	return
 }
 
-func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
-	switch column[0].Typ.Oid {
+func ShuffleColumn(column []containers.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32) (ret []containers.Vector) {
+	switch column[0].GetType().Oid {
 	case types.Type_BOOL:
 		ret = bools.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	case types.Type_INT8:
@@ -246,7 +246,7 @@ func ShuffleColumn(column []*vector.Vector, sortedIdx []uint32, fromLayout, toLa
 	case types.Type_CHAR, types.Type_JSON, types.Type_VARCHAR:
 		ret = varchar.Multiplex(column, sortedIdx, fromLayout, toLayout)
 	default:
-		panic(fmt.Sprintf("%s not supported", column[0].Typ.String()))
+		panic(fmt.Sprintf("%s not supported", column[0].GetType().String()))
 	}
 	return
 }

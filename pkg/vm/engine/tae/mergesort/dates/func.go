@@ -15,69 +15,40 @@
 package dates
 
 import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-func Sort(col *vector.Vector, idx []uint32) {
-	data := col.Col.([]types.Date)
+func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
 	n := len(idx)
 	dataWithIdx := make(sortSlice, n)
 
 	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: data[i], idx: uint32(i)}
+		dataWithIdx[i] = sortElem{data: col.Get(i).(types.Date), idx: uint32(i)}
 	}
 
 	sortUnstable(dataWithIdx)
 
 	for i, v := range dataWithIdx {
-		data[i], idx[i] = v.data, v.idx
+		idx[i] = v.idx
+		col.Update(i, v.data)
 	}
+	ret = col
+	return
 }
 
-func Shuffle(col *vector.Vector, idx []uint32) {
-	if !nulls.Any(col.Nsp) {
-		shuffleBlock(col, idx)
-	} else {
-		shuffleNullableBlock(col, idx)
-	}
-}
-
-func shuffleBlock(col *vector.Vector, idx []uint32) {
-	data := col.Col.([]types.Date)
-	newData := make([]types.Date, len(idx))
-
-	for i, j := range idx {
-		newData[i] = data[j]
+func Shuffle(col containers.Vector, idx []uint32) {
+	ret := containers.MakeVector(col.GetType(), col.Nullable())
+	for _, j := range idx {
+		ret.Append(col.Get(int(j)))
 	}
 
-	col.Col = newData
+	col.ResetWithData(ret.Bytes(), ret.NullMask())
+	ret.Close()
 }
 
-func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
-	data := col.Col.([]types.Date)
-	nulls := col.Nsp.Np
-	newData := make([]types.Date, len(idx))
-	newNulls := roaring.New()
-
-	for i, j := range idx {
-		if nulls.Contains(uint64(j)) {
-			newNulls.AddInt(i)
-		} else {
-			newData[i] = data[j]
-		}
-	}
-
-	col.Col = newData
-	newNulls.RunOptimize()
-	col.Nsp.Np = newNulls
-}
-
-func Merge(col []*vector.Vector, src *[]uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
-	data := make([][]types.Date, len(col))
-	ret = make([]*vector.Vector, len(toLayout))
+func Merge(col []containers.Vector, src *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
+	ret = make([]containers.Vector, len(toLayout))
 	mapping = make([]uint32, len(*src))
 
 	offset := make([]uint32, len(fromLayout))
@@ -86,17 +57,15 @@ func Merge(col []*vector.Vector, src *[]uint32, fromLayout, toLayout []uint32) (
 		offset[i] = offset[i-1] + fromLayout[i-1]
 	}
 
-	for i, v := range col {
-		data[i] = v.Col.([]types.Date)
+	for i := range toLayout {
+		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
 	}
 
-	nBlk := len(data)
+	nBlk := len(col)
 	heap := make(heapSlice, nBlk)
-	merged := make([][]types.Date, len(toLayout))
 
 	for i := 0; i < nBlk; i++ {
-		heap[i] = heapElem{data: data[i][0], src: uint32(i), next: 1}
-		merged[i] = make([]types.Date, toLayout[i])
+		heap[i] = heapElem{data: col[i].Get(0).(types.Date), src: uint32(i), next: 1}
 	}
 	heapInit(heap)
 
@@ -104,28 +73,24 @@ func Merge(col []*vector.Vector, src *[]uint32, fromLayout, toLayout []uint32) (
 	for i := 0; i < len(toLayout); i++ {
 		for j := 0; j < int(toLayout[i]); j++ {
 			top := heapPop(&heap)
-			merged[i][j], (*src)[k] = top.data, top.src
+			(*src)[k] = top.src
+			ret[i].Append(top.data)
 			mapping[offset[top.src]+top.next-1] = uint32(k)
 			k++
 			if int(top.next) < int(fromLayout[top.src]) {
-				heapPush(&heap, heapElem{data: data[top.src][top.next], src: top.src, next: top.next + 1})
+				heapPush(&heap, heapElem{data: col[top.src].Get(int(top.next)).(types.Date), src: top.src, next: top.next + 1})
 			}
 		}
-	}
-	for i := 0; i < len(toLayout); i++ {
-		ret[i] = vector.New(col[0].Typ)
-		ret[i].Col = merged[i]
 	}
 	return
 }
 
-func Reshape(col []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
-	ret = make([]*vector.Vector, len(toLayout))
+func Reshape(col []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector) {
+	ret = make([]containers.Vector, len(toLayout))
 	fromIdx := 0
 	fromOffset := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = vector.New(col[0].Typ)
-		merged := make([]types.Date, toLayout[i])
+		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
 			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)
@@ -140,140 +105,38 @@ func Reshape(col []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-			copy(merged[toOffset:toOffset+length], col[fromIdx].Col.([]types.Date)[fromOffset:fromOffset+length])
-			if col[fromIdx].Nsp.Np != nil {
-				if ret[i].Nsp.Np == nil {
-					ret[i].Nsp.Np = roaring.New()
-				}
-				iterator := col[fromIdx].Nsp.Np.Iterator()
-				for iterator.HasNext() {
-					row := iterator.Next()
-					if row < uint64(fromOffset) {
-						continue
-					}
-					if row >= uint64(fromOffset)+uint64(length) {
-						break
-					}
-					ret[i].Nsp.Np.Add(row + uint64(toOffset) - uint64(fromOffset))
-				}
-			}
+			ret[i].Extend(col[fromIdx].CloneWindow(fromOffset, length))
 			fromOffset += length
 			toOffset += length
 		}
-		ret[i].Col = merged
+	}
+	for _, v := range col {
+		v.Close()
 	}
 	return
 }
 
-func Multiplex(col []*vector.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
-	for i := range col {
-		if nulls.Any(col[i].Nsp) {
-			ret = multiplexNullableBlocks(col, src, fromLayout, toLayout)
-			return
-		}
-	}
-	ret = multiplexBlocks(col, src, fromLayout, toLayout)
-	return
-}
-
-func multiplexBlocks(col []*vector.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
-	data := make([][]types.Date, len(col))
-	ret = make([]*vector.Vector, len(toLayout))
-
-	for i, v := range col {
-		data[i] = v.Col.([]types.Date)
-	}
-
-	from := len(data)
+func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []containers.Vector) {
+	ret = make([]containers.Vector, len(toLayout))
 	to := len(toLayout)
-	cursors := make([]int, from)
-	merged := make([][]types.Date, to)
+	cursors := make([]int, len(fromLayout))
 
 	for i := 0; i < to; i++ {
-		merged[i] = make([]types.Date, toLayout[i])
+		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
 	}
 
 	k := 0
 	for i := 0; i < to; i++ {
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
-			merged[i][j] = data[s][cursors[s]]
+			ret[i].Append(col[s].Get(cursors[s]))
 			cursors[s]++
 			k++
 		}
 	}
 
-	for i := 0; i < to; i++ {
-		ret[i] = vector.New(col[0].Typ)
-		ret[i].Col = merged[i]
-	}
-	return
-}
-
-func multiplexNullableBlocks(col []*vector.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
-	data := make([][]types.Date, len(col))
-	for i, v := range col {
-		data[i] = v.Col.([]types.Date)
-	}
-	from := len(fromLayout)
-	to := len(toLayout)
-
-	nulls := make([]*roaring.Bitmap, from)
-	nullIters := make([]roaring.IntIterable64, from)
-	nextNulls := make([]int, from)
-
-	for i, v := range col {
-		data[i] = v.Col.([]types.Date)
-		if v.Nsp.Np == nil {
-			nextNulls[i] = -1
-			continue
-		}
-		nulls[i] = v.Nsp.Np
-		nullIters[i] = nulls[i].Iterator()
-
-		if nullIters[i].HasNext() {
-			nextNulls[i] = int(nullIters[i].Next())
-		} else {
-			nextNulls[i] = -1
-		}
-	}
-
-	cursors := make([]int, from)
-	merged := make([][]types.Date, to)
-	newNulls := make([]*roaring.Bitmap, to)
-	ret = make([]*vector.Vector, to)
-
-	for i := 0; i < to; i++ {
-		merged[i] = make([]types.Date, toLayout[i])
-	}
-
-	k := 0
-	for i := 0; i < to; i++ {
-		newNulls[i] = roaring.New()
-		for j := 0; j < int(toLayout[i]); j++ {
-			s := src[k]
-			if cursors[s] == nextNulls[s] {
-				newNulls[i].AddInt(j)
-
-				if nullIters[s].HasNext() {
-					nextNulls[s] = int(nullIters[s].Next())
-				} else {
-					nextNulls[s] = -1
-				}
-			} else {
-				merged[i][j] = data[s][cursors[s]]
-			}
-
-			cursors[s]++
-			k++
-		}
-	}
-
-	for i := 0; i < to; i++ {
-		ret[i] = vector.New(col[0].Typ)
-		ret[i].Col = merged[i]
-		ret[i].Nsp.Np = newNulls[i]
-		ret[i].Nsp.Np.RunOptimize()
+	for _, v := range col {
+		v.Close()
 	}
 	return
 }
