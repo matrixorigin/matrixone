@@ -43,6 +43,7 @@ import (
 )
 
 func TestAppend(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(14, 3)
@@ -115,6 +116,7 @@ func TestAppend2(t *testing.T) {
 }
 
 func TestAppend3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
@@ -123,6 +125,7 @@ func TestAppend3(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	createRelation(t, tae, "db", schema, true)
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	appendClosure(t, bat, schema.Name, tae, &wg)()

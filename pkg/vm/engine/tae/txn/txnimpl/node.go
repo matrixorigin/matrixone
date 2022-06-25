@@ -298,7 +298,6 @@ func (n *insertNode) OnLoad() {
 		panic(err)
 	}
 	n.data = cmd.(*txnbase.BatchCmd).Bat
-	// v, err := n.GetValue(n.table.GetSchema().PrimaryKey, 10)
 }
 
 func (n *insertNode) Close() error {
@@ -404,7 +403,7 @@ func (n *insertNode) Rows() uint32 {
 
 func (n *insertNode) RowsWithoutDeletes() uint32 {
 	deletes := uint32(0)
-	if n.data.Deletes != nil {
+	if n.data != nil && n.data.Deletes != nil {
 		deletes = uint32(n.data.DeleteCnt())
 	}
 	return n.rows - deletes
