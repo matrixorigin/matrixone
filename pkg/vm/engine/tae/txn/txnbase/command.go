@@ -262,12 +262,14 @@ func (e *BatchCmd) WriteTo(w io.Writer) (n int64, err error) {
 
 func (e *BatchCmd) Desc() string {
 	s := fmt.Sprintf("CmdName=BAT;Rows=%d", e.Bat.Length())
+	if e.Bat.HasDelete() {
+		s = fmt.Sprintf("%s;DelCnt=%d", s, e.Bat.DeleteCnt())
+	}
 	return s
 }
 
 func (e *BatchCmd) String() string {
-	s := fmt.Sprintf("CmdName=BAT;Rows=%d", e.Bat.Length())
-	return s
+	return e.Desc()
 }
 
 func (e *BatchCmd) VerboseString() string {

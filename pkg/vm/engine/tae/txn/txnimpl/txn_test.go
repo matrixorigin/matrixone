@@ -352,6 +352,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestNodeCommand(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
@@ -363,6 +364,7 @@ func TestNodeCommand(t *testing.T) {
 	schema.SegmentMaxBlocks = 10
 
 	bat := catalog.MockBatch(schema, 15000)
+	defer bat.Close()
 
 	txn, _ := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
@@ -374,16 +376,12 @@ func TestNodeCommand(t *testing.T) {
 	assert.Nil(t, err)
 
 	err = tbl.RangeDeleteLocalRows(100, 200)
-	assert.Nil(t, err)
+	assert.NoError(t, err)
 
 	for i, inode := range tbl.localSegment.nodes {
 		cmd, entry, err := inode.MakeCommand(uint32(i), false)
-		assert.Nil(t, err)
-		if i == 0 {
-			assert.Equal(t, 2, len(cmd.(*AppendCmd).Cmds))
-		} else {
-			assert.Equal(t, 1, len(cmd.(*AppendCmd).Cmds))
-		}
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(cmd.(*AppendCmd).Cmds))
 		if entry != nil {
 			_ = entry.WaitDone()
 			entry.Free()
@@ -392,6 +390,7 @@ func TestNodeCommand(t *testing.T) {
 			t.Log(cmd.String())
 		}
 	}
+	assert.NoError(t, txn.Commit())
 }
 
 func TestApplyToColumn1(t *testing.T) {
