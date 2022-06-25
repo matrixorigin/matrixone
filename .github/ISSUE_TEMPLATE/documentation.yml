@@ -1,0 +1,29 @@
+name: Documentation issue
+description: Raise a problem or suggest new content for MatrixOne documentation
+title: "[Docs]: "
+labels: [kind/docs, needs-triage]
+assignees:
+  - dengn
+body:
+  - type: checkboxes
+    attributes:
+      label: Is there an existing issue about documentation?
+      description: Please check if an issue already exists for the documentation problem you encountered.
+      options:
+        - label: I have checked the existing issues.
+          required: true
+  - type: textarea
+    attributes:
+      label: Describe the issue
+      description: |
+        A clear and concise description of what's wrong in documentation.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional information
+      description: |
+        Add any other context or screenshots about the problem here.
+    validations:
+      required: false

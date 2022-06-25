@@ -1,0 +1,10 @@
+pull_request_rules:
+  - name: Reviewed for pull request
+    conditions:
+      - base=main
+      - "status-success=Build on CentOS/x64"
+      - "#approved-reviews-by>=1"
+    actions:
+      label:
+        add:
+          - reviewed

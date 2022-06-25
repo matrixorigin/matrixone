@@ -1,0 +1,35 @@
+name: Enhancement
+description: As a developer, I want to make an enhancement for MatrixOne.
+title: "[Enhancement]: "
+labels: [kind/enhancement, needs-triage]
+assignees:
+  - m-schen
+body:
+  - type: checkboxes
+    attributes:
+      label: Is there an existing issue for enhancement?
+      description: Please check if an issue already exists for the enhancement issue.
+      options:
+        - label: I have checked the existing issues.
+          required: true
+  - type: textarea
+    attributes:
+      label: What would you like to be added ? 
+      description: |
+        A concise description of what you're expecting/suggesting.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Why is this needed ?
+      description: A concise description of the reason/motivation.
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Additional information
+      description: |
+        Add any other context or screenshots about the request here.
+    validations:
+      required: false
