@@ -23,6 +23,10 @@ const (
 
 	tooManyFunctionsMatched = -2
 	wrongFunctionParameters = -1
+
+	matchedDirectly = iota
+	matchedByConvert
+	matchedFailed
 )
 
 type binaryTargetTypes struct {
@@ -37,6 +41,10 @@ var castTable [][]bool
 // e.g. PLUS, MINUS, GT and so on.
 // Format is `binaryTable[LeftInput][RightInput] = {LeftTarget, RightTarget}`
 var binaryTable [][]binaryTargetTypes
+
+// binaryTable2 is a cast rule table for DIV and INTEGER_DIV
+// Format is `binaryTable[LeftInput][RightInput] = {LeftTarget, RightTarget}`
+var binaryTable2 [][]binaryTargetTypes
 
 // init binaryTable and castTable
 func init() {
@@ -97,16 +105,31 @@ func init() {
 				rules = append(rules, [4]types.T{typ2, typ1, types.T_float64, types.T_float64})
 			}
 		}
-		for i := len(ints) - 1; i > 0; i-- {
-			for j := i - 1; j >= 0; j-- {
-				rules = append(rules, [4]types.T{ints[i-1], uints[j], ints[i], ints[i]})
-				rules = append(rules, [4]types.T{uints[j], ints[i-1], ints[i], ints[i]})
+		for i := 0; i < len(ints)-1; i++ {
+			for j := 0; j < len(uints)-1; j++ {
+				rules = append(rules, [4]types.T{ints[i], uints[j], ints[i+1], ints[i+1]})
+				rules = append(rules, [4]types.T{uints[j], ints[i], ints[i+1], ints[i+1]})
 			}
 		}
-		rules = append(rules, [4]types.T{types.T_int64, types.T_uint64, types.T_int64, types.T_int64})
-		rules = append(rules, [4]types.T{types.T_uint64, types.T_int64, types.T_int64, types.T_int64})
+		for i := range ints {
+			rules = append(rules, [4]types.T{ints[i], types.T_uint64, types.T_int64, types.T_int64})
+			rules = append(rules, [4]types.T{types.T_uint64, ints[i], types.T_int64, types.T_int64})
+		}
+		for i := range uints {
+			rules = append(rules, [4]types.T{uints[i], types.T_int64, types.T_int64, types.T_int64})
+			rules = append(rules, [4]types.T{types.T_int64, uints[i], types.T_int64, types.T_int64})
+		}
 		rules = append(rules, [4]types.T{types.T_date, types.T_datetime, types.T_datetime, types.T_datetime})
 		rules = append(rules, [4]types.T{types.T_datetime, types.T_date, types.T_datetime, types.T_datetime})
+		for _, t1 := range strings {
+			for _, t2 := range all {
+				if t2 == types.T_char || t2 == types.T_varchar || t2 == types.T_any {
+					continue
+				}
+				rules = append(rules, [4]types.T{t1, t2, t2, t2})
+				rules = append(rules, [4]types.T{t2, t1, t2, t2})
+			}
+		}
 	}
 
 	binaryTable = make([][]binaryTargetTypes, maxTypes)
@@ -115,6 +138,59 @@ func init() {
 	}
 	for _, r := range rules {
 		binaryTable[r[0]][r[1]] = binaryTargetTypes{
+			convert: true,
+			left:    r[2],
+			right:   r[3],
+		}
+	}
+
+	// init binaryTable2
+	var rules2 [][4]types.T
+	{
+		for i := range numbers {
+			for j := range numbers {
+				rules2 = append(rules2, [4]types.T{numbers[i], numbers[j], types.T_float64, types.T_float64})
+				rules2 = append(rules2, [4]types.T{numbers[j], numbers[i], types.T_float64, types.T_float64})
+			}
+			for j := range decimals {
+				rules2 = append(rules2, [4]types.T{numbers[i], decimals[j], types.T_float64, types.T_float64})
+				rules2 = append(rules2, [4]types.T{decimals[j], numbers[i], types.T_float64, types.T_float64})
+			}
+			for j := range floats {
+				rules2 = append(rules2, [4]types.T{numbers[i], floats[j], types.T_float64, types.T_float64})
+				rules2 = append(rules2, [4]types.T{floats[j], numbers[i], types.T_float64, types.T_float64})
+			}
+			for j := range strings {
+				rules2 = append(rules2, [4]types.T{numbers[i], strings[j], types.T_float64, types.T_float64})
+				rules2 = append(rules2, [4]types.T{strings[j], numbers[i], types.T_float64, types.T_float64})
+			}
+		}
+		for i := range floats {
+			for j := range decimals {
+				rules2 = append(rules2, [4]types.T{floats[i], decimals[j], types.T_float64, types.T_float64})
+				rules2 = append(rules2, [4]types.T{decimals[j], floats[i], types.T_float64, types.T_float64})
+			}
+			for j := range strings {
+				rules2 = append(rules2, [4]types.T{floats[i], strings[j], types.T_float64, types.T_float64})
+				rules2 = append(rules2, [4]types.T{strings[j], floats[i], types.T_float64, types.T_float64})
+			}
+		}
+		rules2 = append(rules2, [4]types.T{types.T_decimal64, types.T_decimal128, types.T_decimal128, types.T_decimal128})
+		rules2 = append(rules2, [4]types.T{types.T_decimal128, types.T_decimal64, types.T_decimal128, types.T_decimal128})
+		for i := range decimals {
+			for j := range strings {
+				rules2 = append(rules2, [4]types.T{strings[j], decimals[i], decimals[i], decimals[i]})
+				rules2 = append(rules2, [4]types.T{decimals[i], strings[j], decimals[i], decimals[i]})
+			}
+		}
+	}
+
+	binaryTable2 = make([][]binaryTargetTypes, maxTypes)
+	for i := range binaryTable {
+		binaryTable2[i] = make([]binaryTargetTypes, maxTypes)
+	}
+	for _, r := range rules {
+		binaryTable2[r[0]][r[1]] = binaryTargetTypes{
 			convert: true,
 			left:    r[2],
 			right:   r[3],
@@ -211,28 +287,78 @@ func init() {
 	}
 }
 
-func generalBinaryOperatorTypeCheckFn(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+var (
+	// GeneralBinaryOperatorTypeCheckFn1 will check if params of the binary operators need type convert work
+	GeneralBinaryOperatorTypeCheckFn1 = func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+		return generalBinaryOperatorTypeCheckFn(overloads, inputs, generalBinaryParamsConvert)
+	}
+
+	// GeneralBinaryOperatorTypeCheckFn2 will check if params of the DIV and INTEGER_DIV need type convert work
+	GeneralBinaryOperatorTypeCheckFn2 = func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+		return generalBinaryOperatorTypeCheckFn(overloads, inputs, generalDivParamsConvert)
+	}
+)
+
+func generalBinaryOperatorTypeCheckFn(overloads []Function, inputs []types.T, convertRule func(types.T, types.T) (types.T, types.T, bool)) (overloadIndex int32, ts []types.T) {
 	if len(inputs) == 2 {
 		matched := make([]int32, 0, 4)
-		inputs[0], inputs[1] = generalBinaryParamsConvert(inputs[0], inputs[1])
+		t1, t2, convert := convertRule(inputs[0], inputs[1])
+		targets := []types.T{t1, t2}
 		for _, o := range overloads {
-			if strictTypeCheck(inputs, o.Args, o.ReturnTyp) {
+			if tryToMatch(targets, o.Args) == matchedDirectly {
 				matched = append(matched, o.Index)
 			}
 		}
 		if len(matched) == 1 {
-			return matched[0], inputs
+			if convert {
+				return matched[0], targets
+			}
+			return matched[0], nil
 		} else if len(matched) > 1 {
+			for j := range inputs {
+				if inputs[j] == ScalarNull {
+					return matched[0], nil
+				}
+			}
 			return tooManyFunctionsMatched, nil
 		}
 	}
 	return wrongFunctionParameters, nil
 }
 
-func generalBinaryParamsConvert(l, r types.T) (types.T, types.T) {
+func generalBinaryParamsConvert(l, r types.T) (types.T, types.T, bool) {
 	ts := binaryTable[l][r] // targets
 	if ts.convert {
-		return ts.left, ts.right
+		return ts.left, ts.right, true
 	}
-	return l, r
+	return l, r, false
+}
+
+func generalDivParamsConvert(l, r types.T) (types.T, types.T, bool) {
+	ts := binaryTable2[l][r]
+	if ts.convert {
+		return ts.left, ts.right, true
+	}
+	return l, r, false
+}
+
+func tryToMatch(inputs, requires []types.T) int {
+	if len(inputs) == len(requires) {
+		matchNumber, convNumber := 0, 0
+		for i := 0; i < len(inputs); i++ {
+			t1, t2 := inputs[i], requires[i]
+			if t1 == t2 || t1 == ScalarNull {
+				matchNumber++
+			} else if castTable[t1][t2] {
+				convNumber++
+			} else {
+				return matchFailed
+			}
+		}
+		if matchNumber == len(inputs) {
+			return matchedDirectly
+		}
+		return matchedByConvert
+	}
+	return matchedFailed
 }

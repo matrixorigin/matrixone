@@ -49,17 +49,18 @@ func initLevelUpRules() {
 
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.
 // Ensure that no duplicate functions will be added.
-func appendFunction(fid int, newFunction Function) error {
-	fs := functionRegister[fid]
-
-	requiredIndex := len(fs.Overloads)
-	if int(newFunction.Index) != requiredIndex {
-		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex))
-	}
-
+func appendFunction(fid int, newFunctions Functions) error {
+	functionRegister[fid].TypeCheckFn = newFunctions.TypeCheckFn
+	functionRegister[fid].Id = newFunctions.Id
 	registerMutex.Lock()
-	functionRegister[fid].Overloads = append(functionRegister[fid].Overloads, newFunction)
-	registerMutex.Unlock()
+	defer registerMutex.Unlock()
+	for _, newFunction := range newFunctions.Overloads {
+		requiredIndex := len(functionRegister[fid].Overloads)
+		if int(newFunction.Index) != requiredIndex {
+			return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex))
+		}
+		functionRegister[fid].Overloads = append(functionRegister[fid].Overloads, newFunction)
+	}
 	return nil
 }
 

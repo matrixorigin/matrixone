@@ -26,7 +26,7 @@ import (
 func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
 	srcValues := vector.MustTCols[T](srcVector)
-	resultElementSize := srcVector.Typ.Oid.FixedLength()
+	resultElementSize := srcVector.Typ.Oid.TypeLen()
 
 	if srcVector.IsScalar() {
 		if srcVector.IsScalarNull() {

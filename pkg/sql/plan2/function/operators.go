@@ -26,11 +26,9 @@ func initOperators() {
 	var err error
 
 	for fid, fs := range operators {
-		for _, f := range fs.Overloads {
-			err = appendFunction(fid, f)
-			if err != nil {
-				panic(err)
-			}
+		err = appendFunction(fid, fs)
+		if err != nil {
+			panic(err)
 		}
 	}
 }
@@ -462,7 +460,7 @@ var operators = map[int]Functions{
 
 	EQUAL: {
 		Id:          EQUAL,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:  0,
@@ -673,7 +671,7 @@ var operators = map[int]Functions{
 
 	GREAT_THAN: {
 		Id:          EQUAL,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:  0,
@@ -884,7 +882,7 @@ var operators = map[int]Functions{
 
 	GREAT_EQUAL: {
 		Id:          GREAT_EQUAL,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:  0,
@@ -1095,7 +1093,7 @@ var operators = map[int]Functions{
 
 	LESS_THAN: {
 		Id:          LESS_THAN,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:  0,
@@ -1306,7 +1304,7 @@ var operators = map[int]Functions{
 
 	LESS_EQUAL: {
 		Id:          LESS_EQUAL,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:  0,
@@ -1517,7 +1515,7 @@ var operators = map[int]Functions{
 
 	NOT_EQUAL: {
 		Id:          NOT_EQUAL,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:  0,
@@ -1728,6 +1726,19 @@ var operators = map[int]Functions{
 
 	LIKE: {
 		Id: LIKE,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) != 2 {
+				return wrongFunctionParameters, nil
+			}
+			typ1, typ2 := inputs[0], inputs[1]
+			if typ1 != types.T_char && typ1 != types.T_varchar {
+				return wrongFunctionParameters, nil
+			}
+			if typ2 != types.T_char && typ2 != types.T_varchar {
+				return wrongFunctionParameters, nil
+			}
+			return 0, nil
+		},
 		Overloads: []Function{
 			{
 				Index:     0,
@@ -1736,26 +1747,13 @@ var operators = map[int]Functions{
 				Args:      nil,
 				ReturnTyp: types.T_bool,
 				Fn:        operator.Like,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					if len(inputTypes) != 2 {
-						return false
-					}
-					typ1, typ2 := inputTypes[0], inputTypes[1]
-					if typ1 != types.T_char && typ1 != types.T_varchar {
-						return false
-					}
-					if typ2 != types.T_char && typ2 != types.T_varchar {
-						return false
-					}
-					return true
-				},
 			},
 		},
 	},
 
 	BETWEEN: {
 		Id:          BETWEEN,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:  0,
@@ -1906,34 +1904,36 @@ var operators = map[int]Functions{
 
 	IN: {
 		Id: IN,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 2 && inputs[1] == types.T_tuple {
+				return 0, nil
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
 				Index:     0,
 				Flag:      plan.Function_STRICT,
 				Layout:    IN_PREDICATE,
 				ReturnTyp: types.T_bool,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					if len(inputTypes) == 2 && inputTypes[1] == types.T_tuple {
-						return true
-					}
-					return false
-				},
-				Fn: nil,
 			},
 		},
 	},
 
 	EXISTS: {
 		Id: EXISTS,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			if len(inputs) == 1 {
+				return 0, nil
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
 				Index:     0,
 				Flag:      plan.Function_STRICT,
 				Layout:    EXISTS_ANY_PREDICATE,
 				ReturnTyp: types.T_bool,
-				TypeCheckFn: func(inputTypes []types.T, _ []types.T, _ types.T) (match bool) {
-					return len(inputTypes) == 1
-				},
 			},
 		},
 	},
@@ -2013,7 +2013,7 @@ var operators = map[int]Functions{
 	// arithmetic operator
 	PLUS: {
 		Id:          PLUS,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:       0,
@@ -2022,7 +2022,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp:   types.T_uint8,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[uint8],
+				Fn:          operator.PlusUint8,
 			},
 			{
 				Index:       1,
@@ -2031,7 +2031,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp:   types.T_uint16,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[uint16],
+				Fn:          operator.PlusUint16,
 			},
 			{
 				Index:       2,
@@ -2040,7 +2040,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp:   types.T_uint32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[uint32],
+				Fn:          operator.PlusUint32,
 			},
 			{
 				Index:       3,
@@ -2049,7 +2049,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp:   types.T_uint64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[uint64],
+				Fn:          operator.PlusUint64,
 			},
 			{
 				Index:       4,
@@ -2058,7 +2058,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int8, types.T_int8},
 				ReturnTyp:   types.T_int8,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[int8],
+				Fn:          operator.PlusInt8,
 			},
 			{
 				Index:       5,
@@ -2067,7 +2067,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int16, types.T_int16},
 				ReturnTyp:   types.T_int16,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[int16],
+				Fn:          operator.PlusInt16,
 			},
 			{
 				Index:       6,
@@ -2076,7 +2076,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int32, types.T_int32},
 				ReturnTyp:   types.T_int32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[int32],
+				Fn:          operator.PlusInt32,
 			},
 			{
 				Index:       7,
@@ -2085,7 +2085,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int64, types.T_int64},
 				ReturnTyp:   types.T_int64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[int64],
+				Fn:          operator.PlusInt64,
 			},
 			{
 				Index:       8,
@@ -2094,7 +2094,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float32, types.T_float32},
 				ReturnTyp:   types.T_float32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[float32],
+				Fn:          operator.PlusFloat32,
 			},
 			{
 				Index:       9,
@@ -2103,7 +2103,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float64, types.T_float64},
 				ReturnTyp:   types.T_float64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Plus[float64],
+				Fn:          operator.PlusFloat64,
 			},
 			{
 				Index:       10,
@@ -2137,7 +2137,7 @@ var operators = map[int]Functions{
 
 	MINUS: {
 		Id:          MINUS,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:       0,
@@ -2146,7 +2146,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp:   types.T_uint8,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[uint8],
+				Fn:          operator.MinusUint8,
 			},
 			{
 				Index:       1,
@@ -2155,7 +2155,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp:   types.T_uint16,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[uint16],
+				Fn:          operator.MinusUint16,
 			},
 			{
 				Index:       2,
@@ -2164,7 +2164,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp:   types.T_uint32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[uint32],
+				Fn:          operator.MinusUint32,
 			},
 			{
 				Index:       3,
@@ -2173,7 +2173,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp:   types.T_uint64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[uint64],
+				Fn:          operator.MinusUint64,
 			},
 			{
 				Index:       4,
@@ -2182,7 +2182,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int8, types.T_int8},
 				ReturnTyp:   types.T_int8,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[int8],
+				Fn:          operator.MinusInt8,
 			},
 			{
 				Index:       5,
@@ -2191,7 +2191,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int16, types.T_int16},
 				ReturnTyp:   types.T_int16,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[int16],
+				Fn:          operator.MinusInt16,
 			},
 			{
 				Index:       6,
@@ -2200,7 +2200,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int32, types.T_int32},
 				ReturnTyp:   types.T_int32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[int32],
+				Fn:          operator.MinusInt32,
 			},
 			{
 				Index:       7,
@@ -2209,7 +2209,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int64, types.T_int64},
 				ReturnTyp:   types.T_int64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[int64],
+				Fn:          operator.MinusInt64,
 			},
 			{
 				Index:       8,
@@ -2218,7 +2218,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float32, types.T_float32},
 				ReturnTyp:   types.T_float32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[float32],
+				Fn:          operator.MinusFloat32,
 			},
 			{
 				Index:       9,
@@ -2227,7 +2227,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float64, types.T_float64},
 				ReturnTyp:   types.T_float64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Minus[float64],
+				Fn:          operator.MinusFloat64,
 			},
 			{
 				Index:       10,
@@ -2261,7 +2261,7 @@ var operators = map[int]Functions{
 
 	MULTI: {
 		Id:          MULTI,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:       0,
@@ -2270,7 +2270,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint8, types.T_uint8},
 				ReturnTyp:   types.T_uint8,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[uint8],
+				Fn:          operator.MultUint8,
 			},
 			{
 				Index:       1,
@@ -2279,7 +2279,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint16, types.T_uint16},
 				ReturnTyp:   types.T_uint16,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[uint16],
+				Fn:          operator.MultUint16,
 			},
 			{
 				Index:       2,
@@ -2288,7 +2288,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint32, types.T_uint32},
 				ReturnTyp:   types.T_uint32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[uint32],
+				Fn:          operator.MultUint32,
 			},
 			{
 				Index:       3,
@@ -2297,7 +2297,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_uint64, types.T_uint64},
 				ReturnTyp:   types.T_uint64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[uint64],
+				Fn:          operator.MultUint64,
 			},
 			{
 				Index:       4,
@@ -2306,7 +2306,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int8, types.T_int8},
 				ReturnTyp:   types.T_int8,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[int8],
+				Fn:          operator.MultInt8,
 			},
 			{
 				Index:       5,
@@ -2315,7 +2315,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int16, types.T_int16},
 				ReturnTyp:   types.T_int16,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[int16],
+				Fn:          operator.MultInt16,
 			},
 			{
 				Index:       6,
@@ -2324,7 +2324,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int32, types.T_int32},
 				ReturnTyp:   types.T_int32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[int32],
+				Fn:          operator.MultInt32,
 			},
 			{
 				Index:       7,
@@ -2333,7 +2333,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_int64, types.T_int64},
 				ReturnTyp:   types.T_int64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[int64],
+				Fn:          operator.MultInt64,
 			},
 			{
 				Index:       8,
@@ -2342,7 +2342,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float32, types.T_float32},
 				ReturnTyp:   types.T_float32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[float32],
+				Fn:          operator.MultFloat32,
 			},
 			{
 				Index:       9,
@@ -2351,7 +2351,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float64, types.T_float64},
 				ReturnTyp:   types.T_float64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Mult[float64],
+				Fn:          operator.MultFloat64,
 			},
 			{
 				Index:       10,
@@ -2375,7 +2375,8 @@ var operators = map[int]Functions{
 	},
 
 	DIV: {
-		Id: DIV,
+		Id:          DIV,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn2,
 		Overloads: []Function{
 			{
 				Index:       0,
@@ -2384,7 +2385,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float32, types.T_float32},
 				ReturnTyp:   types.T_float32,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Div[float32],
+				Fn:          operator.Float32Div,
 			},
 			{
 				Index:       1,
@@ -2393,7 +2394,7 @@ var operators = map[int]Functions{
 				Args:        []types.T{types.T_float64, types.T_float64},
 				ReturnTyp:   types.T_float64,
 				TypeCheckFn: strictTypeCheck,
-				Fn:          operator.Div[float64],
+				Fn:          operator.Float64Div,
 			},
 			{
 				Index:       2,
@@ -2417,7 +2418,8 @@ var operators = map[int]Functions{
 	},
 
 	INTEGER_DIV: {
-		Id: INTEGER_DIV,
+		Id:          INTEGER_DIV,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn2,
 		Overloads: []Function{
 			{
 				Index:       0,
@@ -2442,7 +2444,7 @@ var operators = map[int]Functions{
 
 	MOD: {
 		Id:          MOD,
-		TypeCheckFn: generalBinaryOperatorTypeCheckFn,
+		TypeCheckFn: GeneralBinaryOperatorTypeCheckFn1,
 		Overloads: []Function{
 			{
 				Index:       0,
@@ -4498,8 +4500,52 @@ var operators = map[int]Functions{
 
 	CASE: {
 		Id: CASE,
-		// TODO(cms): need type check fn.
-		TypeCheckFn: nil,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			for i, o := range overloads {
+				if operator.CwTypeCheckFn(inputs, nil, o.ReturnTyp) {
+					return int32(i), nil
+				}
+				l := len(inputs)
+				finalTypes := make([]types.T, l)
+				if l >= 2 {
+					flag := true
+					for i := 0; i < l-1; i += 2 {
+						if inputs[i] != types.T_bool {
+							flag = false
+							break
+						}
+						finalTypes[i] = types.T_bool
+					}
+					if l%2 == 1 {
+						if inputs[l-1] != ScalarNull {
+							if castTable[inputs[l-1]][o.ReturnTyp] {
+								finalTypes[l-1] = o.ReturnTyp
+							} else {
+								flag = false
+							}
+						} else {
+							finalTypes[l-1] = ScalarNull
+						}
+					}
+					for i := 1; i < l; i += 2 {
+						if inputs[i] != ScalarNull {
+							if castTable[inputs[i]][o.ReturnTyp] {
+								finalTypes[i] = o.ReturnTyp
+							} else {
+								flag = false
+								break
+							}
+						} else {
+							finalTypes[i] = ScalarNull
+						}
+					}
+					if flag {
+						return int32(i), finalTypes
+					}
+				}
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
 				Index:       0,
@@ -4667,8 +4713,40 @@ var operators = map[int]Functions{
 	},
 
 	IFF: {
-		Id:          IFF,
-		TypeCheckFn: nil,
+		Id: IFF,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			for i, o := range overloads {
+				if operator.IfTypeCheckFn(inputs, nil, o.ReturnTyp) {
+					return int32(i), nil
+				}
+				finalTypes := make([]types.T, 3)
+				if len(inputs) == 3 && inputs[0] == types.T_bool {
+					flag := true
+					finalTypes[0] = types.T_bool
+					if inputs[1] != ScalarNull {
+						if !castTable[inputs[1]][o.ReturnTyp] {
+							flag = false
+						}
+						finalTypes[1] = o.ReturnTyp
+					} else {
+						finalTypes[1] = ScalarNull
+					}
+					if inputs[2] != ScalarNull {
+						if !castTable[inputs[2]][o.ReturnTyp] {
+							flag = false
+						}
+						finalTypes[2] = o.ReturnTyp
+					} else {
+						finalTypes[2] = ScalarNull
+					}
+					if flag {
+						return int32(i), finalTypes
+					}
+				}
+				return wrongFunctionParameters, nil
+			}
+			return wrongFunctionParameters, nil
+		},
 		Overloads: []Function{
 			{
 				Index:       0,

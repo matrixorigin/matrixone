@@ -26,11 +26,9 @@ func initBuiltIns() {
 	var err error
 
 	for fid, fs := range builtins {
-		for _, f := range fs.Overloads {
-			err = appendFunction(fid, f)
-			if err != nil {
-				panic(err)
-			}
+		err = appendFunction(fid, fs)
+		if err != nil {
+			panic(err)
 		}
 	}
 }

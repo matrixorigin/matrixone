@@ -16,7 +16,6 @@ package function
 
 import (
 	"fmt"
-	"math"
 	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
@@ -99,36 +98,30 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 		if len(args) == 0 {
 			return 0, nil
 		}
-		rts := make([]types.T, len(args))
+		matched := make([]int32, 0, 4) // function overload which can be matched directly
+		byCast := make([]int32, 0, 4)  // function overload which can be matched according to type cast
 		for i, f := range fs.Overloads {
-			if len(args) != len(f.Args) {
+			switch tryToMatch(args, f.Args) {
+			case matchedDirectly:
+				matched = append(matched, int32(i))
+			case matchedByConvert:
+				byCast = append(byCast, int32(i))
+			case matchedFailed:
 				continue
 			}
-			rts[0] = args[0]
-			flg := args[0] == f.Args[0]
-			if flg {
-				for j := 1; j < len(args); j++ {
-					if !castTable[args[j]][f.Args[j]] {
-						flg = false
-						break
-					}
-					rts[j] = f.Args[j]
-				}
-			}
-			if flg {
-				return int32(i), rts
-			}
 		}
-		if len(args) == 1 {
-			for i, f := range fs.Overloads {
-				if len(args) != len(f.Args) {
-					continue
-				}
-				if castTable[args[0]][f.Args[0]] {
-					rts[0] = f.Args[0]
-					return int32(i), rts
+		if len(matched) == 1 {
+			return matched[0], nil
+		} else if len(matched) == 0 && len(byCast) > 0 {
+			return byCast[0], fs.Overloads[byCast[0]].Args
+		} else if len(matched) > 1 {
+			// if contains any scalar null as param, just return the first matched.
+			for j := range args {
+				if args[j] == ScalarNull {
+					return matched[0], nil
 				}
 			}
+			return tooManyFunctionsMatched, nil
 		}
 		return wrongFunctionParameters, nil
 	}
@@ -146,8 +139,7 @@ type Function struct {
 
 	Flag plan.Function_FuncFlag
 
-	// Layout adapt to plan2/function.go, used for explaining.
-	// TODO: combine Layout with SQLFn, or just make a map (from function_id to Layout) outside ?
+	// Layout adapt to plan2/function.go, used for `explain SQL`.
 	Layout FuncExplainLayout
 
 	Args      []types.T
@@ -163,10 +155,6 @@ type Function struct {
 
 	// AggregateInfo is related information about aggregate function.
 	AggregateInfo int
-
-	// SQLFn returns the sql string of the function. Maybe useful.
-	// TODO(cms): if useless, just remove it.
-	SQLFn func(argNames []string) (string, error)
 
 	// Info records information about the function overload used to print
 	Info string
@@ -203,8 +191,6 @@ func (f Function) isFunction() bool {
 //
 // For use in other packages, see GetFunctionByID and GetFunctionByName
 var functionRegister []Functions
-
-var functionRegister2 []Functions
 
 // levelUp records the convert rule for functions' arguments
 //
@@ -256,67 +242,6 @@ func GetFunctionIsAggregateByName(name string) bool {
 // if matches,
 // return function structure and encoded overload id
 // and final converted argument types(if it needs to do type level-up work, it will be nil if not).
-func GetFunctionByName2(name string, args []types.T) (Function, int64, []types.T, error) {
-	levelUpFunction, get, minCost := emptyFunction, false, math.MaxInt32 // store the best function which can be matched by type level-up
-	matches := make([]Function, 0, 4)                                    // functions can be matched directly
-	finalLevelUpTypes := make([]types.T, len(args))                      // store the final argument types of levelUpFunction
-
-	fid, err := fromNameToFunctionId(name)
-	if err != nil {
-		return emptyFunction, -1, nil, err
-	}
-
-	fs := functionRegister[fid].Overloads
-	b := false
-	for _, f := range fs {
-		if cost, finalParamTypes := f.typeCheckWithLevelUp(args); cost != matchFailed {
-			if cost == matchDirectly {
-				matches = append(matches, f)
-			} else {
-				if cost < minCost {
-					levelUpFunction = f
-					get = true
-					minCost = cost
-					copy(finalLevelUpTypes, finalParamTypes)
-				} else if cost == minCost {
-					levelUpFunction, b = compare(levelUpFunction, f)
-					if b {
-						copy(finalLevelUpTypes, finalParamTypes)
-					}
-					get = true
-				}
-			}
-		}
-	}
-
-	if len(matches) == 1 {
-		return matches[0], EncodeOverloadID(fid, matches[0].Index), nil, nil
-	} else if len(matches) > 1 {
-		// if contains any ScalarNull as param, just return the first one.
-		for i := range args {
-			if args[i] == ScalarNull {
-				return matches[0], EncodeOverloadID(fid, matches[0].Index), nil, nil
-			}
-		}
-		errMessage := "too many functions matched:"
-		for i := range matches {
-			errMessage += "\n"
-			errMessage += name
-			errMessage += fmt.Sprintf("%v", matches[i].Args)
-		}
-		return emptyFunction, -1, nil, errors.New(errno.SyntaxError, errMessage)
-	} else {
-		// no function matched directly, but get the best function can be matched by level-up for params
-		if get {
-			return levelUpFunction, EncodeOverloadID(fid, levelUpFunction.Index), finalLevelUpTypes, nil
-		}
-	}
-	if len(fs) > 0 && fs[0].isFunction() {
-		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, args))
-	}
-	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
-}
-
 func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T, error) {
 	fid, err := fromNameToFunctionId(name)
 	if err != nil {
@@ -331,7 +256,7 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 		}
 		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
 	} else if index == tooManyFunctionsMatched {
-		return emptyFunction, -1, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many functions matched for '%s'", name))
+		return emptyFunction, -1, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
 	}
 	return fs.Overloads[index], EncodeOverloadID(fid, index), targetTypes, nil
 }
@@ -488,48 +413,12 @@ func (f *Function) typeCheckWithLevelUp(sources []types.T) (int, []types.T) {
 	return matchFailed, nil
 }
 
-// choose a function when convert cost is equal
-// and just return the small-index one.
-// if right is smaller, return true.
-func compare(f1, f2 Function) (f Function, change bool) {
-	if f1.Index < f2.Index {
-		return f1, false
-	}
-	return f2, true
-}
-
 func IsNotScalarNull(t types.T) bool {
 	return t != ScalarNull
-}
-
-func isScalarNull(t types.T) bool {
-	return t == ScalarNull
 }
 
 var (
 	// AndFunctionEncodedID is the encoded overload id of And(bool, bool)
 	// used to make an AndExpr
 	AndFunctionEncodedID = EncodeOverloadID(AND, 0)
-
-	anyNumbers = map[types.T]struct{}{
-		types.T_uint8:      {},
-		types.T_uint16:     {},
-		types.T_uint32:     {},
-		types.T_uint64:     {},
-		types.T_int8:       {},
-		types.T_int16:      {},
-		types.T_int32:      {},
-		types.T_int64:      {},
-		types.T_float32:    {},
-		types.T_float64:    {},
-		types.T_decimal64:  {},
-		types.T_decimal128: {},
-	}
 )
-
-func isNumberType(t types.T) bool {
-	if _, ok := anyNumbers[t]; ok {
-		return true
-	}
-	return false
-}
