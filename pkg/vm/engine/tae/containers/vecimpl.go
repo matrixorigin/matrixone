@@ -63,8 +63,28 @@ func (impl *nullableVecImpl[T]) Update(i int, v any) {
 
 func (impl *nullableVecImpl[T]) Delete(i int) {
 	impl.tryCOW()
-	if impl.IsNull(i) {
-		impl.derived.nulls.Remove(uint64(i))
+	if !impl.HasNull() {
+		impl.vecBase.Delete(i)
+		return
+	}
+	nulls := impl.derived.nulls
+	max := nulls.Maximum()
+	if max < uint64(i) {
+		impl.vecBase.Delete(i)
+		return
+	} else if max == uint64(i) {
+		nulls.Remove(uint64(i))
+		impl.vecBase.Delete(i)
+		return
+	}
+	nulls.Remove(uint64(i))
+	dels := impl.derived.nulls.ToArray()
+	for pos := len(dels) - 1; pos >= 0; pos-- {
+		if dels[pos] < uint64(i) {
+			break
+		}
+		nulls.Remove(dels[pos])
+		nulls.Add(dels[pos] - 1)
 	}
 	impl.derived.stlvec.Delete(i)
 }

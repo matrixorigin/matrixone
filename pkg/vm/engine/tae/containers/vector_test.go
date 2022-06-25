@@ -360,3 +360,31 @@ func TestVector7(t *testing.T) {
 		testF(typ, false)
 	}
 }
+
+func TestVector8(t *testing.T) {
+	vec := MakeVector(types.Type_INT32.ToType(), true)
+	defer vec.Close()
+	vec.Append(int32(0))
+	vec.Append(int32(1))
+	vec.Append(int32(2))
+	vec.Append(types.Null{})
+	vec.Append(int32(4))
+	vec.Append(int32(5))
+	assert.True(t, types.IsNull(vec.Get(3)))
+	vec.Delete(1)
+	assert.True(t, types.IsNull(vec.Get(2)))
+	vec.Delete(3)
+	assert.True(t, types.IsNull(vec.Get(2)))
+	vec.Update(1, types.Null{})
+	assert.True(t, types.IsNull(vec.Get(1)))
+	assert.True(t, types.IsNull(vec.Get(2)))
+	vec.Append(types.Null{})
+	assert.True(t, types.IsNull(vec.Get(1)))
+	assert.True(t, types.IsNull(vec.Get(2)))
+	assert.True(t, types.IsNull(vec.Get(4)))
+	vec.Compact(roaring.BitmapOf(0, 2))
+	assert.Equal(t, 3, vec.Length())
+	assert.True(t, types.IsNull(vec.Get(0)))
+	assert.True(t, types.IsNull(vec.Get(2)))
+	t.Log(vec.String())
+}
