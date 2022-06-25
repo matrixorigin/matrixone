@@ -15,10 +15,6 @@
 package txnbase
 
 import (
-	"bytes"
-
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -120,13 +116,6 @@ func (blk *TxnBlock) String() string                                        { re
 func (blk *TxnBlock) Close() error                                          { return nil }
 func (blk *TxnBlock) GetMeta() any                                          { return nil }
 func (blk *TxnBlock) GetByFilter(*handle.Filter) (offset uint32, err error) { return }
-
-func (blk *TxnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
-	return
-}
-func (blk *TxnBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
-	return
-}
 
 func (blk *TxnBlock) GetSegment() (seg handle.Segment) { return }
 
