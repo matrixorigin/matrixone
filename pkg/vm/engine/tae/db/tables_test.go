@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -656,18 +657,9 @@ func TestMergeBlocks1(t *testing.T) {
 }
 
 func TestMergeBlocks2(t *testing.T) {
-	// OPENME: one memory node not released
-	return
-	// testutils.EnsureNoLeak(t)
-	opts := new(options.Options)
-	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 3
-	opts.CheckpointCfg.ExecutionLevels = 2
-	opts.CheckpointCfg.ExecutionInterval = 1
-	opts.CheckpointCfg.CatalogCkpInterval = 2
-	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
-	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 5
 	schema.SegmentMaxBlocks = 2
@@ -676,9 +668,7 @@ func TestMergeBlocks2(t *testing.T) {
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 
 	pk := containers.MakeVector(schema.GetSingleSortKey().Type, schema.GetSingleSortKey().Nullable())
-	defer pk.Close()
 	col3 := containers.MakeVector(schema.ColDefs[3].Type, schema.ColDefs[3].Nullable())
-	defer col3.Close()
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
 		pk.Append(v)
@@ -690,7 +680,6 @@ func TestMergeBlocks2(t *testing.T) {
 	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
 	bat := containers.MockBatch(schema.Types(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
-	defer bat.Close()
 	{
 		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -699,8 +688,9 @@ func TestMergeBlocks2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-
-	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	pk.Close()
+	col3.Close()
+	bat.Close()
 	start := time.Now()
 	testutils.WaitExpect(2000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 0
@@ -709,4 +699,5 @@ func TestMergeBlocks2(t *testing.T) {
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 	t.Logf("Checkpointed: %d", tae.Wal.GetCheckpointed())
 	t.Logf("PendingCnt: %d", tae.Wal.GetPenddingCnt())
+	tae.Close()
 }

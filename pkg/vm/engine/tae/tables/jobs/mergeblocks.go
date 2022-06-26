@@ -296,17 +296,20 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if def.IsHidden() || (schema.IsSingleSortKey() && def.IsSortKey()) {
 			continue
 		}
-		vecs = vecs[:0]
+		vecs2 := make([]containers.Vector, 0)
 		for _, block := range task.compacted {
 			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
 			defer view.Close()
 			view.ApplyDeletes()
-			vecs = append(vecs, view.GetData())
+			vecs2 = append(vecs2, view.Orphan())
 		}
-		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
-		for pos, vec := range vecs {
+		vecs3, _ := task.mergeColumn(vecs2, &sortedIdx, false, rows, to, schema.HasSortKey())
+		for _, vec := range vecs2 {
+			vec.Close()
+		}
+		for pos, vec := range vecs3 {
 			defer vec.Close()
 			blk := task.createdBlks[pos]
 			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)

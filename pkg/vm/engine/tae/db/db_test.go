@@ -712,8 +712,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 }
 
 func TestAutoCompactABlk2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.InsertCapacity = common.K * 5
