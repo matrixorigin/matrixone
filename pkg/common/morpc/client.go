@@ -182,6 +182,7 @@ func (c *client) getBackend(backend string) (Backend, error) {
 	c.mu.RLock()
 	b, err := c.getBackendLocked(backend)
 	if err != nil {
+		c.mu.RUnlock()
 		return nil, err
 	}
 	if b != nil {
