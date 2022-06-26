@@ -4132,6 +4132,8 @@ var operators = map[int]Functions{
 				if operator.CwTypeCheckFn(inputs, nil, o.ReturnTyp) {
 					return int32(i), nil
 				}
+			}
+			for i, o := range overloads {
 				l := len(inputs)
 				finalTypes := make([]types.T, l)
 				if l >= 2 {
@@ -4154,16 +4156,16 @@ var operators = map[int]Functions{
 							finalTypes[l-1] = ScalarNull
 						}
 					}
-					for i := 1; i < l; i += 2 {
-						if inputs[i] != ScalarNull {
-							if castTable[inputs[i]][o.ReturnTyp] {
-								finalTypes[i] = o.ReturnTyp
+					for j := 1; j < l; j += 2 {
+						if inputs[j] != ScalarNull {
+							if castTable[inputs[j]][o.ReturnTyp] {
+								finalTypes[j] = o.ReturnTyp
 							} else {
 								flag = false
 								break
 							}
 						} else {
-							finalTypes[i] = ScalarNull
+							finalTypes[j] = ScalarNull
 						}
 					}
 					if flag {
@@ -4328,6 +4330,8 @@ var operators = map[int]Functions{
 				if operator.IfTypeCheckFn(inputs, nil, o.ReturnTyp) {
 					return int32(i), nil
 				}
+			}
+			for i, o := range overloads {
 				finalTypes := make([]types.T, 3)
 				if len(inputs) == 3 && inputs[0] == types.T_bool {
 					flag := true
@@ -4352,7 +4356,6 @@ var operators = map[int]Functions{
 						return int32(i), finalTypes
 					}
 				}
-				return wrongFunctionParameters, nil
 			}
 			return wrongFunctionParameters, nil
 		},
