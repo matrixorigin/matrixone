@@ -28,7 +28,6 @@ func (win *windowBase) ExtendWithOffset(_ Vector, _, _ int)            { panic("
 func (win *windowBase) Length() int                                    { return win.length }
 func (win *windowBase) Capacity() int                                  { return win.length }
 func (win *windowBase) Allocated() int                                 { return 0 }
-func (win *windowBase) Window(offset, length int) Vector               { panic("cannot window a window") }
 func (win *windowBase) DataWindow(offset, length int) []byte           { panic("cannot window a window") }
 func (win *windowBase) CloneWindow(_, _ int, _ ...MemAllocator) Vector { panic("not implemented") }
 func (win *windowBase) GetView() VectorView                            { panic("not implemented") }
@@ -100,3 +99,15 @@ func (win *vectorWindow[T]) ForeachWindow(offset, length int, op ItOp, sels *roa
 	return win.ref.impl.forEachWindowWithBias(offset, length, op, sels, win.offset)
 }
 func (win *vectorWindow[T]) WriteTo(w io.Writer) (n int64, err error) { panic("implement me") }
+func (win *vectorWindow[T]) Window(offset, length int) Vector {
+	if offset+length > win.length {
+		panic("bad window param")
+	}
+	return &vectorWindow[T]{
+		ref: win.ref,
+		windowBase: &windowBase{
+			offset: offset + win.offset,
+			length: length,
+		},
+	}
+}

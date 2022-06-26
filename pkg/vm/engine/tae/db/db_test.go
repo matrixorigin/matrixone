@@ -2090,8 +2090,7 @@ func TestDelete2(t *testing.T) {
 }
 
 func TestNull1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -2103,13 +2102,14 @@ func TestNull1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
 	defer bat.Close()
 	bats := bat.Split(4)
-	bats[0].Vecs[3].Update(2, types.Null{})
+	bat.Vecs[3].Update(2, types.Null{})
 	tae.createRelAndAppend(bats[0], true)
 
 	txn, rel := tae.getRelation()
 	blk := getOneBlock(rel)
 	view, err := blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
+	defer view.Close()
 	v := view.GetData().Get(2)
 	assert.True(t, types.IsNull(v))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
@@ -2120,6 +2120,7 @@ func TestNull1(t *testing.T) {
 	blk = getOneBlock(rel)
 	view, err = blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
+	defer view.Close()
 	v = view.GetData().Get(2)
 	assert.True(t, types.IsNull(v))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
@@ -2206,8 +2207,7 @@ func TestNull1(t *testing.T) {
 }
 
 func TestNull2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -2215,6 +2215,7 @@ func TestNull2(t *testing.T) {
 	schema.BlockMaxRows = 10
 	tae.bindSchema(schema)
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows-1))
+	defer bat.Close()
 	tae.createRelAndAppend(bat, true)
 
 	txn, rel := tae.getRelation()

@@ -994,8 +994,7 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
@@ -1050,8 +1049,7 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
@@ -1076,8 +1074,7 @@ func TestReplay7(t *testing.T) {
 }
 
 func TestReplay8(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -1099,7 +1096,8 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
-	window := bats[0].Window(2, 1)
+	window := bat.CloneWindow(2, 1)
+	defer window.Close()
 	err = rel.Append(window)
 	assert.NoError(t, err)
 	_ = txn.Rollback()
@@ -1194,7 +1192,7 @@ func TestReplay8(t *testing.T) {
 
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length()-4, true)
-	tuple0_5 := bats[0].Window(5, 1)
+	tuple0_5 := bat.Window(5, 1)
 	err = rel.Append(tuple0_5)
 	assert.NoError(t, err)
 	tuple1_5 := bats[1].Window(5, 1)
@@ -1228,8 +1226,7 @@ func TestReplay8(t *testing.T) {
 }
 
 func TestReplay9(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -1324,8 +1321,7 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
@@ -1356,5 +1352,4 @@ func TestReplay10(t *testing.T) {
 	schema1 := rel.GetMeta().(*catalog.TableEntry).GetSchema()
 	assert.Equal(t, int16(3), schema1.ColDefs[1].Default.Value.(int16))
 	assert.Equal(t, true, schema1.ColDefs[2].Default.Null)
-
 }
