@@ -113,11 +113,9 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs = ts
 	if ts > 0 {
-		logutil.Infof(containers.DefaultAllocator.String())
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
-		logutil.Infof(containers.DefaultAllocator.String())
 		if err := block.ReplayDelta(); err != nil {
 			panic(err)
 		}

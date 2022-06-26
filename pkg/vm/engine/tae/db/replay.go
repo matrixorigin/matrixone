@@ -261,6 +261,9 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 			data = txnCmd.(*txnbase.BatchCmd).Bat
 		}
 	}
+	if data != nil {
+		defer data.Close()
+	}
 
 	for _, info := range cmd.Infos {
 		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
@@ -283,15 +286,9 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		}
 		start := info.GetSrcOff()
 		end := start + info.GetSrcLen()
-		var bat *containers.Batch
-		if data.HasDelete() {
-			bat = data.CloneWindow(int(start), int(end-start))
-		} else {
-			bat = data.Window(int(start), int(end-start))
-		}
+		bat := data.CloneWindow(int(start), int(end-start))
 		bat.Compact()
 		defer bat.Close()
-		defer data.Close()
 		length := info.GetDestLen()
 		datablk := blk.GetBlockData()
 		appender, err := datablk.MakeAppender()

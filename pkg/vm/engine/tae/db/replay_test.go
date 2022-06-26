@@ -683,8 +683,7 @@ func TestReplay3(t *testing.T) {
    1. compact
    replay and check rows */
 func TestReplayTableRows(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -823,8 +822,7 @@ func TestReplayTableRows(t *testing.T) {
 
 // Testing Steps
 func TestReplay4(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 
@@ -884,8 +882,7 @@ func TestReplay4(t *testing.T) {
 
 // Testing Steps
 func TestReplay5(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 
@@ -893,6 +890,7 @@ func TestReplay5(t *testing.T) {
 	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1))
+	defer bat.Close()
 	bats := bat.Split(8)
 
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bats[0], true)
@@ -1089,6 +1087,7 @@ func TestReplay8(t *testing.T) {
 	tae.bindSchema(schema)
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
+	defer bat.Close()
 	bats := bat.Split(4)
 
 	tae.createRelAndAppend(bats[0], true)
@@ -1342,6 +1341,7 @@ func TestReplay10(t *testing.T) {
 	}
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
 	createRelationAndAppend(t, tae, defaultTestDB, schema, bat, true)
 	time.Sleep(time.Millisecond * 100)
 
