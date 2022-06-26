@@ -1631,12 +1631,12 @@ func TestScan2(t *testing.T) {
 }
 
 func TestUpdatePrimaryKey(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	bat := catalog.MockBatch(schema, 100)
+	defer bat.Close()
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
@@ -1650,13 +1650,13 @@ func TestUpdatePrimaryKey(t *testing.T) {
 }
 
 func TestADA(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 1000
 	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
 
 	// Append to a block
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
@@ -1743,6 +1743,7 @@ func TestADA(t *testing.T) {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		assert.Equal(t, 4, view.Length())
 		assert.Equal(t, uint64(3), view.DeleteMask.GetCardinality())
 		it.Next()
@@ -1751,12 +1752,12 @@ func TestADA(t *testing.T) {
 }
 
 func TestUpdateByFilter(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
 	bat := catalog.MockBatch(schema, 100)
+	defer bat.Close()
 
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
 
@@ -1774,6 +1775,7 @@ func TestUpdateByFilter(t *testing.T) {
 
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)
+
 	err = rel.UpdateByFilter(filter, uint16(schema.GetSingleSortKeyIdx()), int64(333333))
 	assert.NoError(t, err)
 
@@ -1787,12 +1789,12 @@ func TestUpdateByFilter(t *testing.T) {
 // 4. Start Txn2. Delete row 2. Commit.
 // 5. Txn1 call GetByFilter and should return PASS
 func TestGetByFilter(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
 
 	// Step 1
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
@@ -1914,13 +1916,13 @@ func TestChaos1(t *testing.T) {
 // 5. Txn1 try to delete the 3rd row. W-W Conflict. Rollback
 // 6. Start txn3 and try to update th3 3rd row 3rd col to int64(3333). -- PASS
 func TestSnapshotIsolation1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
 	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter := handle.NewEQFilter(v)
 
@@ -1971,13 +1973,13 @@ func TestSnapshotIsolation1(t *testing.T) {
 // 4. Txn1 try to append the row. (W-W). Rollback
 // 5. Start txn4 and append the row.
 func TestSnapshotIsolation2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
 	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 	filter := handle.NewEQFilter(v)
 
@@ -2066,8 +2068,7 @@ func TestMergeBlocks(t *testing.T) {
 }
 
 func TestDelete2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
@@ -2076,6 +2077,7 @@ func TestDelete2(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 	bat := catalog.MockBatch(schema, 5)
+	defer bat.Close()
 	tae.createRelAndAppend(bat, true)
 
 	txn, rel := tae.getRelation()
@@ -2266,8 +2268,7 @@ func TestNull2(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()

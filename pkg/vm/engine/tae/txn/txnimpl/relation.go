@@ -214,6 +214,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 		return
 	}
 	bat := containers.NewBatch()
+	defer bat.Close()
 	for _, def := range schema.ColDefs {
 		if def.IsHidden() {
 			continue
