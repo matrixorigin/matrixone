@@ -45,9 +45,14 @@ var (
 // Functions records all overloads of the same function name
 // and its function-id and type-check-function
 type Functions struct {
-	Id          int
+	Id int
+
+	// TypeCheckFn checks if the input parameters can satisfy one of the overloads
+	// and returns its index id.
+	// if type convert should happen, return the target-types at the same time.
 	TypeCheckFn func(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T)
-	Overloads   []Function
+
+	Overloads []Function
 }
 
 // TypeCheck do type check work for a function,

@@ -2529,6 +2529,17 @@ var operators = map[int]Functions{
 	// others
 	CAST: {
 		Id: CAST,
+		TypeCheckFn: func(overloads []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
+			// cast-operator should check param types strictly
+			if len(inputs) == 2 {
+				for i, o := range overloads {
+					if o.Args[0] == inputs[0] && o.Args[1] == inputs[1] {
+						return int32(i), nil
+					}
+				}
+			}
+			return wrongFunctionParameters, -1
+		},
 		Overloads: []Function{
 			{
 				Index:     0,
