@@ -70,8 +70,7 @@ func TestAppend(t *testing.T) {
 }
 
 func TestAppend2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
 	defer db.Close()
