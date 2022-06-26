@@ -30,8 +30,7 @@ import (
 )
 
 func TestGCBlock1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
@@ -70,8 +69,7 @@ func TestGCBlock1(t *testing.T) {
 }
 
 func TestAutoGC1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
@@ -118,8 +116,7 @@ func TestAutoGC1(t *testing.T) {
 // 3. Create a table w one appendable block data and commit
 // 4. Drop the table and commit
 func TestGCTable(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
@@ -194,6 +191,7 @@ func TestGCTable(t *testing.T) {
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(5)
 	bat = catalog.MockBatch(schema, int(schema.BlockMaxRows*10))
+	defer bat.Close()
 	bats = bat.Split(20)
 	for i := range bats[:10] {
 		wg.Add(1)
@@ -224,8 +222,7 @@ func TestGCTable(t *testing.T) {
 // 1. Create a db with 2 tables w/o data
 // 2. Drop the db
 func TestGCDB(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
@@ -251,6 +248,8 @@ func TestGCDB(t *testing.T) {
 
 	bat1 := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*3-1))
 	bat2 := catalog.MockBatch(schema2, int(schema2.BlockMaxRows*3-1))
+	defer bat1.Close()
+	defer bat2.Close()
 
 	createRelation(t, tae, "db", schema1, true)
 	createRelation(t, tae, "db", schema2, false)
