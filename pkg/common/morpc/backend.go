@@ -252,9 +252,8 @@ func (rb *remoteBackend) Close() {
 	rb.stateMu.state = stateStopped
 	rb.stateMu.Unlock()
 
-	rb.closeConn()
-	rb.stopper.Stop()
 	rb.doClose()
+	rb.stopper.Stop()
 }
 
 func (rb *remoteBackend) Busy() bool {
@@ -274,13 +273,20 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 		futures = futures[:0]
 
 		for i := 0; i < rb.options.batchSendSize; i++ {
-			select {
-			case f, ok := <-rb.writeC:
-				if ok {
-					futures = append(futures, f)
+			if len(futures) == 0 {
+				f, ok := <-rb.writeC
+				if !ok {
+					return
 				}
-			default:
-				if len(futures) > 0 {
+				futures = append(futures, f)
+			} else {
+				select {
+				case f, ok := <-rb.writeC:
+					if !ok {
+						return
+					}
+					futures = append(futures, f)
+				default:
 					return
 				}
 			}
