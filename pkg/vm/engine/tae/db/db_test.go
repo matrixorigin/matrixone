@@ -1014,8 +1014,7 @@ func TestMVCC2(t *testing.T) {
 }
 
 func TestUnload1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.InsertCapacity = common.K
@@ -1048,6 +1047,7 @@ func TestUnload1(t *testing.T) {
 				blk := it.GetBlock()
 				view, err := blk.GetColumnDataByName(schema.GetSingleSortKey().Name, nil, nil)
 				assert.Nil(t, err)
+				defer view.Close()
 				assert.Equal(t, int(schema.BlockMaxRows), view.Length())
 				it.Next()
 			}
@@ -1058,8 +1058,7 @@ func TestUnload1(t *testing.T) {
 }
 
 func TestUnload2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
 	opts.CacheCfg.InsertCapacity = common.K*4 - common.K/2
@@ -1130,14 +1129,14 @@ func TestUnload2(t *testing.T) {
 }
 
 func TestDelete1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
 	createRelationAndAppend(t, tae, "db", schema, bat, true)
 	var id *common.ID
 	var row uint32
@@ -1181,6 +1180,7 @@ func TestDelete1(t *testing.T) {
 		blk := getOneBlock(rel)
 		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		assert.Nil(t, view.DeleteMask)
 		assert.Equal(t, bat.Vecs[0].Length()-1, view.Length())
 
@@ -1188,6 +1188,7 @@ func TestDelete1(t *testing.T) {
 		assert.NoError(t, err)
 		view, err = blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(0))
 		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 		filter := handle.NewEQFilter(v)
@@ -1196,24 +1197,25 @@ func TestDelete1(t *testing.T) {
 		assert.NoError(t, txn.Commit())
 	}
 	{
-		_, rel := getDefaultRelation(t, tae, schema.Name)
+		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		assert.Equal(t, bat.Length()-2, int(rel.Rows()))
 		blk := getOneBlock(rel)
 		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(0))
 		assert.Equal(t, bat.Vecs[0].Length()-1, view.Length())
 		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
 		assert.ErrorIs(t, err, data.ErrNotFound)
+		_ = txn.Rollback()
 	}
 	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
 func TestLogIndex1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 0)
@@ -1249,7 +1251,7 @@ func TestLogIndex1(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	{
-		_, rel := getDefaultRelation(t, tae, schema.Name)
+		txn, rel := getDefaultRelation(t, tae, schema.Name)
 		meta := getOneBlockMeta(rel)
 		indexes, err := meta.GetBlockData().CollectAppendLogIndexes(txns[0].GetStartTS(), txns[len(txns)-1].GetCommitTS())
 		assert.NoError(t, err)
@@ -1263,6 +1265,7 @@ func TestLogIndex1(t *testing.T) {
 		indexes, err = meta.GetBlockData().CollectAppendLogIndexes(txns[3].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
 		assert.NoError(t, err)
 		assert.Equal(t, len(txns)-3, len(indexes))
+		assert.NoError(t, txn.Commit())
 	}
 	{
 		txn, rel := getDefaultRelation(t, tae, schema.Name)
@@ -1276,6 +1279,7 @@ func TestLogIndex1(t *testing.T) {
 
 		view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.True(t, view.DeleteMask.Contains(offset))
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
 		assert.Nil(t, err)
@@ -1286,8 +1290,7 @@ func TestLogIndex1(t *testing.T) {
 }
 
 func TestCrossDBTxn(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 
@@ -1311,6 +1314,8 @@ func TestCrossDBTxn(t *testing.T) {
 	rows2 := schema1.BlockMaxRows * 3 / 2
 	bat1 := catalog.MockBatch(schema1, int(rows1))
 	bat2 := catalog.MockBatch(schema2, int(rows2))
+	defer bat1.Close()
+	defer bat2.Close()
 
 	txn, _ = tae.StartTxn(nil)
 	db1, err = txn.GetDatabase("db1")
@@ -1345,8 +1350,7 @@ func TestCrossDBTxn(t *testing.T) {
 }
 
 func TestSystemDB1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 0)
@@ -1374,12 +1378,15 @@ func TestSystemDB1(t *testing.T) {
 		rows += blk.Rows()
 		view, err := blk.GetColumnDataByName(catalog.SystemDBAttr_Name, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.Equal(t, 3, view.Length())
 		view, err = blk.GetColumnDataByName(catalog.SystemDBAttr_CatalogName, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.Equal(t, 3, view.Length())
 		view, err = blk.GetColumnDataByName(catalog.SystemDBAttr_CreateSQL, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.Equal(t, 3, view.Length())
 		it.Next()
 	}
@@ -1394,11 +1401,14 @@ func TestSystemDB1(t *testing.T) {
 		rows += blk.Rows()
 		view, err := blk.GetColumnDataByName(catalog.SystemRelAttr_Name, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.Equal(t, 4, view.Length())
 		view, err = blk.GetColumnDataByName(catalog.SystemRelAttr_Persistence, nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		view, err = blk.GetColumnDataByName(catalog.SystemRelAttr_Kind, nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		it.Next()
 	}
 	assert.Equal(t, 4, rows)
@@ -1407,6 +1417,7 @@ func TestSystemDB1(t *testing.T) {
 	assert.Nil(t, err)
 
 	bat := containers.NewBatch()
+	defer bat.Close()
 	// schema2 := table.GetMeta().(*catalog.TableEntry).GetSchema()
 	// bat := containers.BuildBatch(schema2.AllNames(), schema2.AllTypes(), schema2.AllNullables(), 0)
 	it = table.MakeBlockIt()
@@ -1416,26 +1427,32 @@ func TestSystemDB1(t *testing.T) {
 		rows += blk.Rows()
 		view, err := blk.GetColumnDataByName(catalog.SystemColAttr_DBName, nil, nil)
 		assert.NoError(t, err)
-		bat.AddVector(catalog.SystemColAttr_DBName, view.GetData())
+		defer view.Close()
+		bat.AddVector(catalog.SystemColAttr_DBName, view.Orphan())
 
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_RelName, nil, nil)
 		assert.Nil(t, err)
-		bat.AddVector(catalog.SystemColAttr_RelName, view.GetData())
+		defer view.Close()
+		bat.AddVector(catalog.SystemColAttr_RelName, view.Orphan())
 
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Name, nil, nil)
 		assert.Nil(t, err)
-		bat.AddVector(catalog.SystemColAttr_Name, view.GetData())
+		defer view.Close()
+		bat.AddVector(catalog.SystemColAttr_Name, view.Orphan())
 
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_ConstraintType, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		t.Log(view.GetData().String())
-		bat.AddVector(catalog.SystemColAttr_ConstraintType, view.GetData())
+		bat.AddVector(catalog.SystemColAttr_ConstraintType, view.Orphan())
 
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Type, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		t.Log(view.GetData().String())
 		view, err = blk.GetColumnDataByName(catalog.SystemColAttr_Num, nil, nil)
 		assert.Nil(t, err)
+		defer view.Close()
 		t.Log(view.GetData().String())
 		it.Next()
 	}
