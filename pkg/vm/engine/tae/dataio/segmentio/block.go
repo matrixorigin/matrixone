@@ -212,13 +212,13 @@ func (bf *blockFile) LoadBatch(
 		if _, err = f.Read(buf); err != nil {
 			return
 		}
-		if colBlk.data.stat.CompressAlgo() == compress.Lz4 {
-			decompress := make([]byte, colBlk.data.stat.OriginSize())
+		if f.Stat().CompressAlgo() == compress.Lz4 {
+			decompress := make([]byte, f.Stat().OriginSize())
 			decompress, err = compress.Decompress(buf, decompress, compress.Lz4)
 			if err != nil {
 				return nil, err
 			}
-			if len(decompress) != int(colBlk.data.stat.OriginSize()) {
+			if len(decompress) != int(f.Stat().OriginSize()) {
 				panic(any(fmt.Sprintf("invalid decompressed size: %d, %d is expected",
 					len(decompress), colBlk.data.stat.OriginSize())))
 			}

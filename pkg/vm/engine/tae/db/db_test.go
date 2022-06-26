@@ -751,20 +751,17 @@ func TestAutoCompactABlk2(t *testing.T) {
 	doSearch := func(name string) func() {
 		return func() {
 			defer wg.Done()
-			txn, _ := db.StartTxn(nil)
-			database, err := txn.GetDatabase("db")
-			assert.Nil(t, err)
-			rel, err := database.GetRelationByName(name)
-			assert.Nil(t, err)
+			txn, rel := getDefaultRelation(t, db, name)
 			it := rel.MakeBlockIt()
 			for it.Valid() {
 				blk := it.GetBlock()
-				_, err := blk.GetColumnDataById(schema1.GetSingleSortKeyIdx(), nil, nil)
+				view, err := blk.GetColumnDataById(schema1.GetSingleSortKeyIdx(), nil, nil)
 				assert.Nil(t, err)
+				view.Close()
 				it.Next()
 			}
-			err = txn.Commit()
-			assert.Nil(t, err)
+			err := txn.Commit()
+			assert.NoError(t, err)
 		}
 	}
 
@@ -780,7 +777,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return db.Scheduler.GetPenddingLSNCnt() == 0
 	})
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
@@ -791,8 +788,6 @@ func TestAutoCompactABlk2(t *testing.T) {
 }
 
 func TestCompactABlk(t *testing.T) {
-	// OPENME
-	return
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -826,8 +821,6 @@ func TestCompactABlk(t *testing.T) {
 }
 
 func TestRollback1(t *testing.T) {
-	// OPENME
-	return
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -894,8 +887,6 @@ func TestRollback1(t *testing.T) {
 }
 
 func TestMVCC1(t *testing.T) {
-	// OPENME
-	return
 	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
@@ -970,8 +961,7 @@ func TestMVCC1(t *testing.T) {
 // 3. Txn2 delete the 5th row value in uncommitted state -- PASS
 // 4. Txn2 get the 5th row value -- NotFound
 func TestMVCC2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -1013,6 +1003,7 @@ func TestMVCC2(t *testing.T) {
 			block := it.GetBlock()
 			view, err := block.GetColumnDataByName(schema.GetSingleSortKey().Name, &comp, &decomp)
 			assert.Nil(t, err)
+			defer view.Close()
 			assert.Nil(t, view.DeleteMask)
 			// TODO: exclude deleted rows when apply appends
 			assert.Equal(t, bats[1].Vecs[0].Length()*2-1, view.Length())

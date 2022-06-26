@@ -101,7 +101,9 @@ func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batc
 		err = exception.(error)
 		return
 	}
+	node.block.RLock()
 	columns = node.data.CloneWindow(0, int(maxRow), containers.DefaultAllocator)
+	node.block.RUnlock()
 	return
 }
 
@@ -110,7 +112,10 @@ func (node *appendableNode) GetColumnDataCopy(maxRow uint32, colIdx int) (vec co
 		err = exception.(error)
 		return
 	}
+	node.block.RLock()
+	// logutil.Infof("src-length: %d, to copy-[0->%d]: %s", node.data.Vecs[colIdx].Length(), maxRow, node.block.meta.String())
 	vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
+	node.block.RUnlock()
 	return
 }
 
@@ -138,6 +143,9 @@ func (node *appendableNode) OnLoad() {
 		schema.AllNullables(),
 		opts); err != nil {
 		node.exception.Store(err)
+	}
+	if node.data.Length() != int(node.rows) {
+		logutil.Fatalf("Load %d rows but %d expected: %s", node.data.Length(), node.rows, node.block.meta.String())
 	}
 }
 
@@ -277,7 +285,9 @@ func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error
 	}
 	defer col.Close()
 	vec := node.data.Vecs[node.block.meta.GetSchema().HiddenKey.Idx]
+	node.block.Lock()
 	vec.Extend(col)
+	node.block.Unlock()
 	return
 }
 
@@ -296,12 +306,16 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, offset, length in
 		}
 		destVec := node.data.Vecs[def.Idx]
 		if offset == 0 && length == bat.Length() {
+			node.block.Lock()
 			destVec.Extend(bat.Vecs[srcPos])
+			node.block.Unlock()
 		} else {
 			srcVec := bat.Vecs[srcPos]
+			node.block.Lock()
 			for i := offset; i < offset+length; i++ {
 				destVec.Append(srcVec.Get(i))
 			}
+			node.block.Unlock()
 		}
 	}
 	if err = node.FillHiddenColumn(uint32(from), uint32(length)); err != nil {

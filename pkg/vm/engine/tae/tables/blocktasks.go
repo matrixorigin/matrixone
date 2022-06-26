@@ -227,14 +227,14 @@ func (blk *dataBlock) ABlkFlushData(
 			common.ReasonField("State Request: Already Flushed"))
 		return data.ErrStaleRequest
 	}
-	ckpTs := blk.GetMaxCheckpointTS()
-	if ts <= ckpTs {
-		logutil.Info("[Cancelled]",
-			common.ReprerField("blk", blk.meta),
-			common.OperationField("flush"),
-			common.ReasonField("State Request: Already Flushed"))
-		return data.ErrStaleRequest
-	}
+	// ckpTs := blk.GetMaxCheckpointTS()
+	// if ts <= ckpTs {
+	// 	logutil.Info("[Cancelled]",
+	// 		common.ReprerField("blk", blk.meta),
+	// 		common.OperationField("flush"),
+	// 		common.ReasonField("State Request: Already Flushed"))
+	// 	return data.ErrStaleRequest
+	// }
 
 	if err := blk.file.WriteSnapshot(bat, ts, masks, vals, nil); err != nil {
 		return err
