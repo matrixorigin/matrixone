@@ -26,6 +26,11 @@ func NewPreparedCompactedBlockData() *PreparedCompactedBlockData {
 }
 
 func (preparer *PreparedCompactedBlockData) Close() {
+	if preparer.Columns != nil {
+		preparer.Columns.Close()
+	}
 	preparer.Columns.Close()
-	preparer.SortKey.Close()
+	if preparer.SortKey != nil {
+		preparer.SortKey.Close()
+	}
 }

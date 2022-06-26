@@ -9,6 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -20,8 +21,7 @@ import (
 // 5. Append data and the total rows is more than a segment. Commit and then merge sort the full segment.
 // 6. Scan hidden column and check.
 func TestHiddenWithPK1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -40,6 +40,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			blk := it.GetBlock()
 			view, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
 			assert.NoError(t, err)
+			defer view.Close()
 			fp := blk.Fingerprint()
 			_ = view.GetData().Foreach(func(v any, _ int) (err error) {
 				sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
@@ -62,6 +63,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		blk := getOneBlock(rel)
 		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		offsets := make([]uint32, 0)
 		fp := blk.Fingerprint()
 		t.Log(fp.String())
@@ -103,6 +105,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			blk := it.GetBlock()
 			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 			assert.NoError(t, err)
+			defer view.Close()
 			offsets := make([]uint32, 0)
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
@@ -143,6 +146,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			blk := it.GetBlock()
 			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
 			assert.NoError(t, err)
+			defer view.Close()
 			offsets := make([]uint32, 0)
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
@@ -171,8 +175,7 @@ func TestHiddenWithPK1(t *testing.T) {
 }
 
 func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
@@ -187,6 +190,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	assert.NoError(t, err)
 	blk := getOneBlock(rel)
 	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
+	defer view.Close()
 	assert.NoError(t, err)
 	_ = view.GetData().Foreach(func(v any, _ int) (err error) {
 		sid, bid, offset := model.DecodeHiddenKeyFromValue(v)
@@ -214,6 +218,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	assert.Equal(t, bats[0].Length()-1, int(rel.Rows()))
 	view, err = blk.GetColumnDataById(3, nil, nil)
 	assert.NoError(t, err)
+	defer view.Close()
 	assert.Equal(t, bats[0].Length()-1, view.Length())
 	_ = view.GetData().Foreach(func(v any, _ int) (err error) {
 		assert.Equal(t, int64(9999), v)
@@ -226,8 +231,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 // 1. Mock schema w/o primary key
 // 2. Append data (append rows less than a block)
 func TestHidden2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
@@ -245,6 +249,7 @@ func TestHidden2(t *testing.T) {
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
 			assert.NoError(t, err)
+			defer view.Close()
 			assert.Equal(t, bats[0].Length(), view.Length())
 			if def.IsHidden() {
 				hidden = view
@@ -265,6 +270,7 @@ func TestHidden2(t *testing.T) {
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
 			assert.NoError(t, err)
+			defer view.Close()
 			view.ApplyDeletes()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
 		}
@@ -279,6 +285,7 @@ func TestHidden2(t *testing.T) {
 		for _, def := range schema.ColDefs {
 			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
 			assert.NoError(t, err)
+			defer view.Close()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
 			if def.IsHidden() {
 				hidden = view
@@ -376,6 +383,7 @@ func TestHidden2(t *testing.T) {
 			// hidden, err := blk.GetColumnDataById(0, nil, nil)
 			hidden, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
 			assert.NoError(t, err)
+			defer hidden.Close()
 			hidden.ApplyDeletes()
 			rows += hidden.Length()
 			it.Next()
