@@ -964,6 +964,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 // --- util functions ----
 
 func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
+	if expr.Typ.Id == plan.Type_ANY {
+		return expr, nil
+	}
 	argsType := []types.T{
 		types.T(expr.Typ.Id),
 		types.T(toType.Id),

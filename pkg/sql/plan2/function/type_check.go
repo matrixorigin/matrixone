@@ -302,7 +302,7 @@ func generalBinaryOperatorTypeCheckFn(overloads []Function, inputs []types.T, co
 		t1, t2, convert := convertRule(inputs[0], inputs[1])
 		targets := []types.T{t1, t2}
 		for _, o := range overloads {
-			if tryToMatch(targets, o.Args) == matchedDirectly {
+			if ok, _ := tryToMatch(targets, o.Args); ok == matchedDirectly {
 				matched = append(matched, o.Index)
 			}
 		}
@@ -339,7 +339,11 @@ func generalDivParamsConvert(l, r types.T) (types.T, types.T, bool) {
 	return l, r, false
 }
 
-func tryToMatch(inputs, requires []types.T) int {
+// tryToMatch checks whether the types of the two input parameters match directly
+// or can be matched by implicit type conversion.
+// If the match is successful,
+// it returns the match code and the number of parameters to be converted.
+func tryToMatch(inputs, requires []types.T) (int, int) {
 	if len(inputs) == len(requires) {
 		matchNumber, convNumber := 0, 0
 		for i := 0; i < len(inputs); i++ {
@@ -349,13 +353,13 @@ func tryToMatch(inputs, requires []types.T) int {
 			} else if castTable[t1][t2] {
 				convNumber++
 			} else {
-				return matchedFailed
+				return matchedFailed, 0
 			}
 		}
 		if matchNumber == len(inputs) {
-			return matchedDirectly
+			return matchedDirectly, 0
 		}
-		return matchedByConvert
+		return matchedByConvert, convNumber
 	}
-	return matchedFailed
+	return matchedFailed, 0
 }
