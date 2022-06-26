@@ -565,13 +565,13 @@ func TestReplay2(t *testing.T) {
 // 1. Ckp
 // TODO check rows
 func TestReplay3(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
 	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 	filter := handle.NewEQFilter(v)
 
