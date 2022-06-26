@@ -270,6 +270,7 @@ func (bf *blockFile) WriteBatch(bat *containers.Batch, ts uint64) (err error) {
 
 func (bf *blockFile) PrepareUpdates(
 	tool *containers.CodecTool,
+	buffer *bytes.Buffer,
 	typ types.Type,
 	nullable bool,
 	mask *roaring.Bitmap,
@@ -281,15 +282,18 @@ func (bf *blockFile) PrepareUpdates(
 		return
 	}
 	_, _ = tool.Write(buf)
-	vec := containers.MakeVector(typ, nullable)
-	defer vec.Close()
+	tmp := containers.MakeVector(typ, nullable)
+	defer tmp.Close()
 	it := mask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
 		v := vals[row]
-		vec.Append(v)
+		tmp.Append(v)
 	}
-	_, err = vec.WriteTo(tool)
+	if _, err = tmp.WriteTo(buffer); err != nil {
+		return
+	}
+	_, _ = tool.Write(buffer.Bytes())
 	return
 }
 
@@ -311,8 +315,9 @@ func (bf *blockFile) WriteSnapshot(
 	if err = bf.WriteRows(uint32(bat.Length())); err != nil {
 		return err
 	}
-	buffer := adaptors.NewBuffer(nil)
-	defer buffer.Close()
+	// buffer := adaptors.NewBuffer(nil)
+	// defer buffer.Close()
+	buffer := new(bytes.Buffer)
 	tool := containers.NewCodecTool()
 	defer tool.Close()
 	for colIdx := range bat.Attrs {
@@ -336,10 +341,15 @@ func (bf *blockFile) WriteSnapshot(
 			}
 			defer uf.Unref()
 			mask := masks[uint16(colIdx)]
-			if err = bf.PrepareUpdates(tool, vec.GetType(), true, mask, updates); err != nil {
+			buffer.Reset()
+			if err = bf.PrepareUpdates(tool, buffer, vec.GetType(), vec.Nullable(), mask, updates); err != nil {
 				return
 			}
-			if _, err = tool.WriteTo(uf); err != nil {
+			buffer.Reset()
+			if _, err = tool.WriteTo(buffer); err != nil {
+				return
+			}
+			if _, err = uf.Write(buffer.Bytes()); err != nil {
 				return
 			}
 		}
@@ -379,6 +389,7 @@ func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) {
 
 func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any) {
 	tool := containers.NewCodecTool()
+	defer tool.Close()
 	for i, cb := range bf.columns {
 		tool.Reset()
 		uf, err := cb.OpenUpdateFile()
@@ -386,6 +397,9 @@ func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[u
 			panic(err)
 		}
 		defer uf.Unref()
+		if uf.Stat().OriginSize() == 0 {
+			continue
+		}
 		if err := tool.ReadFromFile(uf, nil); err != nil {
 			panic(err)
 		}
@@ -397,7 +411,7 @@ func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[u
 		if err = mask.UnmarshalBinary(buf); err != nil {
 			panic(err)
 		}
-		buf = tool.Get(1)
+		buf = tool.Get(3)
 		r := bytes.NewBuffer(buf)
 		vec := containers.MakeVector(typ, nullable)
 		if _, err = vec.ReadFrom(r); err != nil {

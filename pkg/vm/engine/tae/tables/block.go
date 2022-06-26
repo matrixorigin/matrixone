@@ -113,9 +113,11 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs = ts
 	if ts > 0 {
+		logutil.Infof(containers.DefaultAllocator.String())
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
+		logutil.Infof(containers.DefaultAllocator.String())
 		if err := block.ReplayDelta(); err != nil {
 			panic(err)
 		}
@@ -188,6 +190,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 					}
 					// TODO: apply deletes
 					vs[i] = vec
+					defer vs[i].Close()
 				}
 				keysCtx.Keys = model.EncodeCompoundColumn(vs...)
 			}
@@ -198,6 +201,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 		}
 		keysCtx.Start = 0
 		keysCtx.Count = keysCtx.Keys.Length()
+		defer keysCtx.Keys.Close()
 		err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}

@@ -372,8 +372,7 @@ func TestReplay1(t *testing.T) {
 // replay
 // TODO check id and row of data
 func TestReplay2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
