@@ -951,7 +951,25 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 			},
 		}, nil
 	case tree.P_uint64:
-		return returnDecimalExpr(astExpr.String())
+		val, ok := constant.Uint64Val(astExpr.Value)
+		if !ok {
+			return nil, errors.New("", "Parser error")
+		}
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Uval{
+						Uval: val,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_UINT64,
+				Nullable: false,
+				Size:     8,
+			},
+		}, nil
 	case tree.P_decimal:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_float64:
