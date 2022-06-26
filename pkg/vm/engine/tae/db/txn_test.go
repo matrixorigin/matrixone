@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/panjf2000/ants/v2"
@@ -252,6 +253,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 		if err != nil {
 			return
 		}
+		defer view.Close()
 		_ = view.GetData().Foreach(func(v any, row int) (err error) {
 			pk := v.(uint64)
 			if pk != goodId {
@@ -336,6 +338,7 @@ func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 		}
 	}
 	bat := catalog.MockBatch(wareHouse, int(num))
+	defer bat.Close()
 	err = rel.Append(bat)
 	return
 }
@@ -407,6 +410,7 @@ func (app1 *APP1) Init(factor int) {
 		panic(err)
 	}
 	balanceData := catalog.MockBatch(balance, int(conf.Users))
+	defer balanceData.Close()
 	if err = balanceRel.Append(balanceData); err != nil {
 		panic(err)
 	}
@@ -417,8 +421,14 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider := containers.NewMockDataProvider()
 	provider.AddColumnProvider(4, balanceData.Vecs[0])
-	userData := containers.MockBatch(user.Types(), conf.Users, user.GetSingleSortKeyIdx(), provider)
-	userData.Attrs = user.Attrs()
+	userData := containers.MockBatchWithAttrs(
+		user.Types(),
+		user.Attrs(),
+		user.Nullables(),
+		conf.Users,
+		user.GetSingleSortKeyIdx(),
+		provider)
+	defer userData.Close()
 
 	for i := 0; i < conf.Users; i++ {
 		uid := userData.Vecs[0].Get(i)
@@ -432,6 +442,7 @@ func (app1 *APP1) Init(factor int) {
 		panic(err)
 	}
 	price := containers.MakeVector(goods.ColDefs[2].Type, goods.ColDefs[2].Nullable())
+	defer price.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodPrice := float64(rand.Intn(1000)+20) / float64(rand.Intn(10)+1) / float64(20)
 		price.Append(goodPrice)
@@ -442,13 +453,21 @@ func (app1 *APP1) Init(factor int) {
 	}
 	provider.Reset()
 	provider.AddColumnProvider(2, price)
-	goodsData := containers.MockBatch(goods.Types(), conf.GoodKinds, goods.GetSingleSortKeyIdx(), provider)
+	goodsData := containers.MockBatchWithAttrs(
+		goods.Types(),
+		goods.Attrs(),
+		goods.Nullables(),
+		conf.GoodKinds,
+		goods.GetSingleSortKeyIdx(),
+		provider)
+	defer goodsData.Close()
 	if err = goodsRel.Append(goodsData); err != nil {
 		panic(err)
 	}
 
 	goodIds := goodsData.Vecs[0]
-	count := containers.MakeVector(goods.ColDefs[2].Type, repertory.ColDefs[2].Nullable())
+	count := containers.MakeVector(repertory.ColDefs[2].Type, repertory.ColDefs[2].Nullable())
+	defer count.Close()
 	for i := 0; i < conf.GoodKinds; i++ {
 		goodCount := rand.Intn(1000) + 100
 		count.Append(uint64(goodCount))
@@ -462,7 +481,14 @@ func (app1 *APP1) Init(factor int) {
 	provider.Reset()
 	provider.AddColumnProvider(1, goodIds)
 	provider.AddColumnProvider(2, count)
-	repertoryData := containers.MockBatch(repertory.Types(), int(conf.GoodKinds), repertory.GetSingleSortKeyIdx(), provider)
+	repertoryData := containers.MockBatchWithAttrs(
+		repertory.Types(),
+		repertory.Attrs(),
+		repertory.Nullables(),
+		int(conf.GoodKinds),
+		repertory.GetSingleSortKeyIdx(),
+		provider)
+	defer repertoryData.Close()
 	repertoryRel, err := db.GetRelationByName(repertory.Name)
 	if err != nil {
 		panic(err)
@@ -473,8 +499,7 @@ func (app1 *APP1) Init(factor int) {
 }
 
 func TestApp1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	option := new(options.Options)
 	option.CacheCfg = new(options.CacheCfg)
 	option.CacheCfg.IndexCapacity = common.G
@@ -527,8 +552,7 @@ func TestApp1(t *testing.T) {
 }
 
 func TestWarehouse(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -548,13 +572,14 @@ func TestWarehouse(t *testing.T) {
 		var decomp bytes.Buffer
 		view, _ := blk.GetColumnDataById(1, &comp, &decomp)
 		t.Log(view.GetData().String())
+		defer view.Close()
+		checkAllColRowsByScan(t, rel, 20, false)
+		_ = txn.Commit()
 	}
-
 }
 
 func TestTxn7(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
@@ -562,6 +587,7 @@ func TestTxn7(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 
 	bat := catalog.MockBatch(schema, 20)
+	defer bat.Close()
 
 	txn, _ := tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db")
@@ -590,8 +616,7 @@ func TestTxn7(t *testing.T) {
 }
 
 func TestTxn8(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
@@ -638,8 +663,7 @@ func TestTxn8(t *testing.T) {
 
 // Test wait committing
 func TestTxn9(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 
@@ -686,6 +710,7 @@ func TestTxn9(t *testing.T) {
 			blk := it.GetBlock()
 			view, err := blk.GetColumnDataById(2, nil, nil)
 			assert.NoError(t, err)
+			defer view.Close()
 			t.Log(view.GetData().String())
 			rows += blk.Rows()
 			it.Next()
