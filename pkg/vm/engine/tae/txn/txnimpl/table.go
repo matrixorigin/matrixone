@@ -610,7 +610,13 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 
 func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	key := model.EncodeCompoundColumn(keys...)
+	var key containers.Vector
+	if len(keys) == 1 {
+		key = keys[0]
+	} else {
+		key = model.EncodeCompoundColumn(keys...)
+		defer key.Close()
+	}
 	if err = index.BatchInsert(key, 0, key.Length(), 0, true); err != nil {
 		return
 	}

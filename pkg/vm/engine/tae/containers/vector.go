@@ -372,5 +372,6 @@ func (vec *vector[T]) ResetWithData(bs *Bytes, nulls *roaring64.Bitmap) {
 
 func (vec *vector[T]) Reset() {
 	vec.releaseRoStorage()
+	vec.stlvec.Reset()
 	vec.nulls = nil
 }

@@ -98,19 +98,23 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 	// Sort only if sort key is defined
 	if schema.HasSortKey() {
 		var idx int
+		var vecs []containers.Vector
 		if schema.IsSingleSortKey() {
 			idx = schema.SortKey.Defs[0].Idx
 			preparer.SortKey = preparer.Columns.Vecs[idx]
+			vecs = preparer.Columns.Vecs
 		} else {
+			vecs = preparer.Columns.Vecs
 			cols := make([]containers.Vector, schema.SortKey.Size())
 			for i := range cols {
 				cols[i] = preparer.Columns.Vecs[schema.SortKey.Defs[i].Idx]
 			}
 			preparer.SortKey = model.EncodeCompoundColumn(cols...)
 			idx = len(preparer.Columns.Vecs)
-			preparer.Columns.AddVector(catalog.SortKeyNamePrefx, preparer.SortKey)
+			vecs = append(vecs, preparer.SortKey)
+			// preparer.Columns.AddVector(catalog.SortKeyNamePrefx, preparer.SortKey)
 		}
-		if err = mergesort.SortBlockColumns(preparer.Columns.Vecs, idx); err != nil {
+		if err = mergesort.SortBlockColumns(vecs, idx); err != nil {
 			return
 		}
 	}

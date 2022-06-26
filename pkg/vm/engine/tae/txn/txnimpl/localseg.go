@@ -212,6 +212,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		} else if seg.table.schema.IsCompoundPK() {
 			cols := seg.table.GetSortColumns(data)
 			key := model.EncodeCompoundColumn(cols...)
+			defer key.Close()
 			if err = seg.index.BatchInsert(key, int(offset), int(appended), seg.rows, false); err != nil {
 				break
 			}

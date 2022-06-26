@@ -80,6 +80,7 @@ func (appender *blockAppender) OnReplayInsertNode(bat *containers.Batch, offset,
 			} else {
 				cols := appender.node.block.GetSortColumns(schema, bat)
 				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+				defer keysCtx.Keys.Close()
 			}
 			keysCtx.Start = offset
 			keysCtx.Count = length
@@ -118,6 +119,7 @@ func (appender *blockAppender) ApplyAppend(
 			} else {
 				cols := appender.node.block.GetSortColumns(schema, bat)
 				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+				defer keysCtx.Keys.Close()
 			}
 			keysCtx.Start = offset
 			keysCtx.Count = length

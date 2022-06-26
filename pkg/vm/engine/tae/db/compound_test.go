@@ -8,12 +8,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCompoundPK1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockCompoundSchema(3, 2, 0)
@@ -26,8 +26,10 @@ func TestCompoundPK1(t *testing.T) {
 	c2 := []int32{1, 2, 1, 2, 1, 2, 1, 2}
 	c0 := []int32{2, 3, 4, 5, 1, 2, 3, 2}
 	bat.Vecs[2].Reset()
-	bat.Vecs[2].AppendNoNulls(any(c2))
 	bat.Vecs[0].Reset()
+	t.Log(bat.Vecs[2].String())
+	t.Log(bat.Vecs[0].String())
+	bat.Vecs[2].AppendNoNulls(any(c2))
 	bat.Vecs[0].AppendNoNulls(any(c0))
 
 	txn, _ := tae.StartTxn(nil)
@@ -40,12 +42,15 @@ func TestCompoundPK1(t *testing.T) {
 	for it.Valid() {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(2, nil, nil)
+		defer view.Close()
 		assert.NoError(t, err)
 		rows += view.Length()
 		it.Next()
 	}
 	assert.Equal(t, 0, rows)
-	c0[7] = 4
+	bat.Vecs[0].Update(7, int32(4))
+	t.Log(bat.Vecs[2].String())
+	t.Log(bat.Vecs[0].String())
 	err = rel.Append(bat)
 	assert.NoError(t, err)
 	rows = 0
@@ -54,6 +59,7 @@ func TestCompoundPK1(t *testing.T) {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(2, nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		rows += view.Length()
 		it.Next()
 	}
@@ -83,6 +89,7 @@ func TestCompoundPK1(t *testing.T) {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(0, nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		view.ApplyDeletes()
 		rows += view.Length()
 		it.Next()
@@ -105,6 +112,7 @@ func TestCompoundPK1(t *testing.T) {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(0, nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		view.ApplyDeletes()
 		rows += view.Length()
 		it.Next()
@@ -112,6 +120,7 @@ func TestCompoundPK1(t *testing.T) {
 	assert.Equal(t, 7, rows)
 
 	bat2 := catalog.MockBatch(schema, 5)
+	defer bat2.Close()
 	bat2.Vecs[2].Reset()
 	bat2.Vecs[2].AppendNoNulls([]int32{3, 4, 3, 4, 3})
 	bat2.Vecs[0].Reset()
@@ -125,6 +134,7 @@ func TestCompoundPK1(t *testing.T) {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(0, nil, nil)
 		assert.NoError(t, err)
+		defer view.Close()
 		view.ApplyDeletes()
 		rows += view.Length()
 		it.Next()
