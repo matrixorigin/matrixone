@@ -262,8 +262,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 }
 
 func TestCRUD(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
 	defer tae.Close()
@@ -1835,14 +1834,14 @@ func TestGetByFilter(t *testing.T) {
 //        3.5.2 If error, should always be w-w conflict
 // 4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
 func TestChaos1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100000
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 1)
+	defer bat.Close()
 
 	createRelation(t, tae, "db", schema, true)
 
@@ -1900,6 +1899,7 @@ func TestChaos1(t *testing.T) {
 	blk := getOneBlock(rel)
 	view, err := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
 	assert.NoError(t, err)
+	defer view.Close()
 	assert.Equal(t, int(appendCnt), view.Length())
 	view.ApplyDeletes()
 	t.Log(view.DeleteMask.String())
