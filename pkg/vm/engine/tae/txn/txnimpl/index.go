@@ -81,7 +81,6 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 
 func (idx *simpleTableIndex) KeyToVector(kType types.Type) containers.Vector {
 	vec := containers.MakeVector(kType, false)
-	defer vec.Close()
 	switch kType.Oid {
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
 		for k := range idx.tree {

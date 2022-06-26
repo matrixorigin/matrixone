@@ -362,8 +362,7 @@ func TestTxn4(t *testing.T) {
 }
 
 func TestTxn5(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -373,6 +372,7 @@ func TestTxn5(t *testing.T) {
 	cnt := uint32(10)
 	rows := schema.BlockMaxRows / 2 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
+	defer bat.Close()
 	bats := bat.Split(int(cnt))
 	{
 		txn, _ := db.StartTxn(nil)
@@ -432,8 +432,7 @@ func TestTxn5(t *testing.T) {
 }
 
 func TestTxn6(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -535,6 +534,7 @@ func TestTxn6(t *testing.T) {
 				blk := it.GetBlock()
 				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &comp, &decomp)
 				assert.Nil(t, err)
+				defer view.Close()
 				assert.Equal(t, bats[0].Length(), view.Length())
 				assert.True(t, view.DeleteMask.Contains(row+1))
 				t.Log(view.DeleteMask.String())
@@ -547,15 +547,8 @@ func TestTxn6(t *testing.T) {
 }
 
 func TestMergeBlocks1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
-	// opts.CheckpointCfg = new(options.CheckpointCfg)
-	// opts.CheckpointCfg.ScannerInterval = 5
-	// opts.CheckpointCfg.ExecutionLevels = 2
-	// opts.CheckpointCfg.ExecutionInterval = 1
-	// opts.CheckpointCfg.CatalogCkpInterval = 5
-	// opts.CheckpointCfg.CatalogUnCkpLimit = 1
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13, 2)
@@ -565,7 +558,9 @@ func TestMergeBlocks1(t *testing.T) {
 	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 	pk := containers.MakeVector(schema.GetSingleSortKey().Type, schema.GetSingleSortKey().Nullable())
+	defer pk.Close()
 	col3 := containers.MakeVector(schema.ColDefs[3].Type, schema.ColDefs[3].Nullable())
+	defer col3.Close()
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
 		pk.Append(v)
@@ -577,6 +572,7 @@ func TestMergeBlocks1(t *testing.T) {
 	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
 	bat := containers.MockBatch(schema.Types(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
+	defer bat.Close()
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -636,10 +632,12 @@ func TestMergeBlocks1(t *testing.T) {
 			blk := it.GetBlock()
 			view, _ := blk.GetColumnDataById(3, nil, nil)
 			assert.NotNil(t, view)
+			defer view.Close()
 			if view.DeleteMask != nil {
 				t.Log(view.DeleteMask.String())
 			}
 			pkView, _ := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
+			defer pkView.Close()
 			for i := 0; i < pkView.Length(); i++ {
 				pkv := pkView.GetValue(i)
 				colv := view.GetValue(i)
@@ -657,8 +655,9 @@ func TestMergeBlocks1(t *testing.T) {
 }
 
 func TestMergeBlocks2(t *testing.T) {
-	// OPENME
+	// OPENME: one memory node not released
 	return
+	// testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
 	opts.CheckpointCfg.ScannerInterval = 3
@@ -676,7 +675,9 @@ func TestMergeBlocks2(t *testing.T) {
 	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
 
 	pk := containers.MakeVector(schema.GetSingleSortKey().Type, schema.GetSingleSortKey().Nullable())
+	defer pk.Close()
 	col3 := containers.MakeVector(schema.ColDefs[3].Type, schema.ColDefs[3].Nullable())
+	defer col3.Close()
 	mapping := make(map[int32]int64)
 	for i, v := range pkData {
 		pk.Append(v)
@@ -688,6 +689,7 @@ func TestMergeBlocks2(t *testing.T) {
 	provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 	provider.AddColumnProvider(3, col3)
 	bat := containers.MockBatch(schema.Types(), int(schema.BlockMaxRows*3), schema.GetSingleSortKeyIdx(), provider)
+	defer bat.Close()
 	{
 		txn, _ := tae.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -697,13 +699,6 @@ func TestMergeBlocks2(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 
-	// {
-	// 	txn := db.StartTxn(nil)
-	// 	database, _ := txn.GetDatabase("db")
-	// 	rel, _ := database.GetRelationByName(schema.Name)
-	// 	blks := make([]*catalog.BlockEntry, 0)
-	// 	it := rel.MakeBlockIt()
-	// }
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	start := time.Now()
 	testutils.WaitExpect(2000, func() bool {

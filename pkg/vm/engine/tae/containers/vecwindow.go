@@ -2,6 +2,7 @@ package containers
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -65,7 +66,10 @@ func (win *vectorWindow[T]) IsNull(i int) bool {
 }
 func (win *vectorWindow[T]) GetAllocator() MemAllocator { return win.ref.GetAllocator() }
 func (win *vectorWindow[T]) GetType() types.Type        { return win.ref.GetType() }
-func (win *vectorWindow[T]) String() string             { return win.ref.String() }
+func (win *vectorWindow[T]) String() string {
+	s := fmt.Sprintf("[Window[%d,%d)];%s", win.offset, win.offset+win.length, win.ref.String())
+	return s
+}
 func (win *vectorWindow[T]) Slice() any {
 	var v T
 	if _, ok := any(v).([]byte); ok {
