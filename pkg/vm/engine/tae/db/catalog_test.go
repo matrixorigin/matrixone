@@ -29,8 +29,7 @@ import (
 )
 
 func TestCatalog1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -72,8 +71,7 @@ func TestCatalog1(t *testing.T) {
 }
 
 func TestShowDatabaseNames(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 
@@ -141,8 +139,7 @@ func TestShowDatabaseNames(t *testing.T) {
 }
 
 func TestLogBlock(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 0)
@@ -175,8 +172,7 @@ func TestLogBlock(t *testing.T) {
 }
 
 func TestLogSegment(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(2, 0)
@@ -208,8 +204,7 @@ func TestLogSegment(t *testing.T) {
 }
 
 func TestLogTable(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 3)
@@ -245,8 +240,7 @@ func TestLogTable(t *testing.T) {
 }
 
 func TestLogDatabase(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
@@ -276,8 +270,7 @@ func TestLogDatabase(t *testing.T) {
 }
 
 func TestCheckpointCatalog2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
@@ -336,8 +329,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 }
 
 func TestCheckpointCatalog(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
