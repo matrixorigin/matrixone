@@ -134,11 +134,11 @@ func (c *client) connectReadWrite(ctx context.Context) error {
 	if c.readOnly() {
 		panic(ErrIncompatibleClient)
 	}
-	return c.connect(ctx, pb.MethodType_CONNECT)
+	return c.connect(ctx, pb.CONNECT)
 }
 
 func (c *client) connectReadOnly(ctx context.Context) error {
-	return c.connect(ctx, pb.MethodType_CONNECT_RO)
+	return c.connect(ctx, pb.CONNECT_RO)
 }
 
 func (c *client) request(ctx context.Context,
@@ -177,7 +177,7 @@ func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
 }
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
-	resp, _, err := c.request(ctx, pb.MethodType_APPEND, rec.Data, 0, 0)
+	resp, _, err := c.request(ctx, pb.APPEND, rec.Data, 0, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -186,7 +186,7 @@ func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 
 func (c *client) read(ctx context.Context,
 	firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
-	resp, recs, err := c.request(ctx, pb.MethodType_READ, nil, firstIndex, maxSize)
+	resp, recs, err := c.request(ctx, pb.READ, nil, firstIndex, maxSize)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -194,12 +194,12 @@ func (c *client) read(ctx context.Context,
 }
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
-	_, _, err := c.request(ctx, pb.MethodType_TRUNCATE, nil, lsn, 0)
+	_, _, err := c.request(ctx, pb.TRUNCATE, nil, lsn, 0)
 	return err
 }
 
 func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
-	resp, _, err := c.request(ctx, pb.MethodType_GET_TRUNCATE, nil, 0, 0)
+	resp, _, err := c.request(ctx, pb.GET_TRUNCATE, nil, 0, 0)
 	if err != nil {
 		return 0, err
 	}

@@ -1,0 +1,47 @@
+drop table if exists names;
+create table names(id int PRIMARY KEY,name VARCHAR(255),age int);
+insert into names(id, name, age) values(1,"Abby", 24);
+insert into names(id, name, age) values(2,"Bob", 25);
+insert into names(id, name, age) values(3,"Carol", 23);
+insert into names(id, name, age) values(4,"Dora", 29);
+select id,name,age from names;
+id	name	age
+1	Abby	24
+2	Bob	25
+3	Carol	23
+4	Dora	29
+drop table if exists weights;
+create table weights(a int unique);
+insert into weights values(1);
+select * from weights;
+a
+1
+drop table if exists test;
+create table test(id int primary key, name varchar(10), age int);
+insert into test values(1, 'Abby', 20);
+insert into test values(2, 'Bob', 21);
+select id,name,age from test;
+id	name	age
+1	Abby	20
+2	Bob	21
+drop table if exists pet;
+create table pet(name char(10),owner char(10), species char(10), gender char(1), weight float,age int);
+insert into pet values ('Sunsweet01','Dsant01','otter','f',30.11,2),
+('Sunsweet02','Dsant02','otter','m',30.11,3);
+insert into pet(name, owner, species, gender, weight, age) values ('Sunsweet03','Dsant01','otter','f',30.11,2),
+('Sunsweet04','Dsant02','otter','m',30.11,3);
+select * from pet;
+name	owner	species	gender	weight	age
+Sunsweet01	Dsant01	otter	f	30.11	2
+Sunsweet02	Dsant02	otter	m	30.11	3
+Sunsweet03	Dsant01	otter	f	30.11	2
+Sunsweet04	Dsant02	otter	m	30.11	3
+drop table if exists t1;
+create table t1 (a bigint unsigned not null, primary key(a));
+insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612);
+select * from t1;
+a
+18446744073709551612
+18446744073709551613
+18446744073709551614
+18446744073709551615

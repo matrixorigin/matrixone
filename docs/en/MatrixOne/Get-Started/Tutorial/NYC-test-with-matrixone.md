@@ -1,10 +1,10 @@
 # **Complete a NYC Test with MatrixOne**
 
-**New York City (NYC) Taxi** data set captures detailed information on billions of individual taxi trips in New York City, including pick-up and drop-off dates/times, pick-up and drop-off locations, trip distances, itemized fares, rate types, payment types, and driver-reported passenger counts(Most of the raw data comes from the NYC Taxi & Limousine Commission).  
+**New York City (NYC) Taxi** data set captures detailed information on billions of individual taxi trips in New York City. The data includes pick-up and drop-off dates/times, pick-up and drop-off locations, trip distances, itemized fares, rate types, payment types, and driver-reported passenger counts(Most of the raw data comes from the NYC Taxi & Limousine Commission).  
 
 By going through this tutorial, you’ll learn how to complete some queries on NYC Taxi data with MatrixOne.
 
-For detail description and instructions for downloading about **NYC Taxi Data**, you can see:  
+For detailed descriptions and instructions for downloading **NYC Taxi Data**, you can visit:  
 
 * [https://github.com/toddwschneider/nyc-taxi-data](https://github.com/toddwschneider/nyc-taxi-data)  
 
@@ -18,7 +18,7 @@ Make sure you have already [installed MatrixOne](../install-standalone-matrixone
 
 This section of the tutorial references [here](https://github.com/toddwschneider/nyc-taxi-data), and you can get original information about how to download and import raw data there.
 
-The data set has 1.7 billion rows data and takes up 450 GB of space, so make sure there are enough space to hold the data.  
+The data set has 1.7 billion rows of data and takes up 450 GB of space, so make sure have enough space to hold the data.  
 
 * <font size=4>**Install PostgreSQL and PostGIS**</font>  
 

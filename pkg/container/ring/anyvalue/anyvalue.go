@@ -535,6 +535,9 @@ func (r *AnyVRing2) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *AnyVRing1[T]) Add(a interface{}, x, y int64) {
 	ar := a.(*AnyVRing1[T])
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Set[y] && shouldSet(r.Set[x]) {
 		r.Vs[x] = ar.Vs[y]
 		r.Set[x] = true
@@ -544,6 +547,9 @@ func (r *AnyVRing1[T]) Add(a interface{}, x, y int64) {
 
 func (r *AnyVRing2) Add(a interface{}, x, y int64) {
 	ar := a.(*AnyVRing2)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Set[y] && shouldSet(r.Set[x]) {
 		r.Vs[x] = ar.Vs[y]
 		r.Set[x] = true
@@ -553,6 +559,9 @@ func (r *AnyVRing2) Add(a interface{}, x, y int64) {
 
 func (r *AnyVRing1[T]) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*AnyVRing1[T])
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if ar.Set[int64(i)+start] && shouldSet(r.Set[j]) {
@@ -565,6 +574,9 @@ func (r *AnyVRing1[T]) BatchAdd(a interface{}, start int64, os []uint8, vps []ui
 
 func (r *AnyVRing2) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*AnyVRing2)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if ar.Set[int64(i)+start] && shouldSet(r.Set[j]) {

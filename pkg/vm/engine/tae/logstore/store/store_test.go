@@ -970,14 +970,7 @@ func TestReplay1(t *testing.T) {
 					}
 					pre = end
 					e.SetInfo(checkpointInfo)
-					str := checkpointInfo.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					_, err = s.AppendEntry(entry.GTCKp, e)
+					_, err := s.AppendEntry(entry.GTCKp, e)
 					assert.Nil(t, err)
 				case 20, 21, 22, 23: //txn entry
 					e.SetType(entry.ETTxn)
@@ -1152,14 +1145,7 @@ func TestLoad(t *testing.T) {
 					}
 					pre = ckp
 					e.SetInfo(checkpointInfo)
-					str := checkpointInfo.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					lsn, err = s.AppendEntry(entry.GTCKp, e)
+					lsn, err := s.AppendEntry(entry.GTCKp, e)
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,

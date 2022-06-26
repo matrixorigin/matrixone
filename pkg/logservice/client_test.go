@@ -42,7 +42,7 @@ func runClientTest(t *testing.T,
 
 	init := make(map[uint64]string)
 	init[2] = service.ID()
-	assert.NoError(t, service.store.StartReplica(1, 2, init))
+	assert.NoError(t, service.store.StartReplica(1, 2, init, false))
 
 	scfg := LogServiceClientConfig{
 		ReadOnly:         readOnly,

@@ -17,10 +17,13 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
+
+const LogStoreCapacity int = 32
 
 type replica struct {
 	uuid    string
@@ -37,10 +40,24 @@ type stats struct {
 	toAdd    map[uint64]int
 }
 
-func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, tick uint64) stats {
-	s := stats{
+func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, currentTick uint64) (*util.ClusterStores, stats) {
+	collect := stats{
 		toRemove: make(map[uint64][]replica),
 		toAdd:    make(map[uint64]int),
+	}
+
+	stores := util.NewClusterStores()
+	for uuid, storeInfo := range infos.Stores {
+		expired := false
+		store := util.NewStore(uuid, len(storeInfo.Replicas), LogStoreCapacity)
+		if currentTick > hakeeper.ExpiredTick(storeInfo.Tick, hakeeper.LogStoreTimeout) {
+			expired = true
+		}
+		if expired {
+			stores.RegisterExpired(store)
+		} else {
+			stores.RegisterWorking(store)
+		}
 	}
 
 	for _, shardInfo := range infos.Shards {
@@ -53,7 +70,7 @@ func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, tick uint64) st
 
 		// Check lacks
 		if record.ShardID != 0 && len(shardInfo.Replicas) < int(record.NumberOfReplicas) {
-			s.toAdd[shardInfo.ShardID] += int(record.NumberOfReplicas) - len(shardInfo.Replicas)
+			collect.toAdd[shardInfo.ShardID] += int(record.NumberOfReplicas) - len(shardInfo.Replicas)
 		}
 
 		// Check redundant
@@ -65,7 +82,7 @@ func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, tick uint64) st
 			sort.Slice(replicaSlice, func(i, j int) bool { return replicaSlice[i] < replicaSlice[j] })
 
 			for i := 0; i < len(shardInfo.Replicas)-int(record.NumberOfReplicas); i++ {
-				s.toRemove[shardInfo.ShardID] = append(s.toRemove[shardInfo.ShardID],
+				collect.toRemove[shardInfo.ShardID] = append(collect.toRemove[shardInfo.ShardID],
 					replica{uuid: shardInfo.Replicas[replicaSlice[i]],
 						shardID: shardInfo.ShardID, replicaID: replicaSlice[i]})
 			}
@@ -80,13 +97,13 @@ func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, tick uint64) st
 				}
 			}
 			if !started {
-				s.toStart = append(s.toStart, replica{uuid: uuid,
+				collect.toStart = append(collect.toStart, replica{uuid: uuid,
 					shardID: shardInfo.ShardID, replicaID: replicaID})
 			}
 
 			// Check expired
-			if hakeeper.ExpiredTick(infos.Stores[uuid].Tick, hakeeper.LogStoreTimeout) < tick {
-				s.toRemove[shardInfo.ShardID] = append(s.toRemove[shardInfo.ShardID],
+			if hakeeper.ExpiredTick(infos.Stores[uuid].Tick, hakeeper.LogStoreTimeout) < currentTick {
+				collect.toRemove[shardInfo.ShardID] = append(collect.toRemove[shardInfo.ShardID],
 					replica{uuid: uuid, shardID: shardInfo.ShardID,
 						epoch: shardInfo.Epoch, replicaID: replicaID})
 			}
@@ -97,26 +114,28 @@ func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, tick uint64) st
 	for uuid, storeInfo := range infos.Stores {
 		for _, replicaInfo := range storeInfo.Replicas {
 			if replicaInfo.Epoch < infos.Shards[replicaInfo.ShardID].Epoch {
-				s.toStop = append(s.toStop, replica{uuid: uuid, shardID: replicaInfo.ShardID})
+				collect.toStop = append(collect.toStop, replica{uuid: uuid, shardID: replicaInfo.ShardID})
 			}
 		}
 	}
 
-	return s
+	return stores, collect
 }
 
-func Check(cluster hapb.ClusterInfo, infos hapb.LogState, removing map[uint64][]uint64, adding map[uint64][]uint64, tick uint64) (operators []*operator.Operator, err error) {
-	stats := collectStats(cluster, infos, tick)
+func Check(alloc util.IDAllocator, cluster hapb.ClusterInfo, infos hapb.LogState,
+	removing map[uint64][]uint64, adding map[uint64][]uint64, currentTick uint64) (operators []*operator.Operator) {
+	stores, stats := collectStats(cluster, infos, currentTick)
 
 	for shardID, toAdd := range stats.toAdd {
 		for toAdd-len(adding[shardID]) > 0 {
-			var bestStore string
-			var newReplicaID uint64
-			//bestStore := selectStore()
-			//newReplicaID, ok := GenerateNewReplicaID()
-			op, err := operator.NewBuilder("", infos.Shards[shardID]).AddPeer(bestStore, newReplicaID).Build()
+			bestStore := selector(infos.Shards[shardID], stores)
+			newReplicaID, ok := alloc.Next()
+			if !ok {
+				return nil
+			}
+			op, err := operator.NewBuilder("", infos.Shards[shardID]).AddPeer(string(bestStore), newReplicaID).Build()
 			if err != nil {
-				return nil, err
+				return operators
 			}
 			operators = append(operators, op)
 			toAdd--
@@ -139,7 +158,7 @@ func Check(cluster hapb.ClusterInfo, infos hapb.LogState, removing map[uint64][]
 			op, err := operator.NewBuilder("", infos.Shards[toRemoveReplica.shardID]).
 				RemovePeer(toRemoveReplica.uuid).Build()
 			if err != nil {
-				return nil, err
+				return operators
 			}
 			operators = append(operators, op)
 		}
@@ -147,14 +166,14 @@ func Check(cluster hapb.ClusterInfo, infos hapb.LogState, removing map[uint64][]
 
 	for _, toStart := range stats.toStart {
 		operators = append(operators, operator.NewOperator("", toStart.shardID, toStart.epoch,
-			operator.StartLogService{UUID: toStart.uuid, ShardID: toStart.shardID,
+			operator.StartLogService{StoreID: toStart.uuid, ShardID: toStart.shardID,
 				ReplicaID: toStart.replicaID}))
 	}
 
 	for _, toStop := range stats.toStop {
 		operators = append(operators, operator.NewOperator("", toStop.shardID, toStop.epoch,
-			operator.StopLogService{UUID: toStop.uuid, ShardID: toStop.shardID}))
+			operator.StopLogService{StoreID: toStop.uuid, ShardID: toStop.shardID}))
 	}
 
-	return operators, nil
+	return operators
 }

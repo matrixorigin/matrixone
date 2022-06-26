@@ -33,7 +33,6 @@ func initOperators() {
 			}
 		}
 	}
-	operator.InitFuncMap()
 }
 
 // operators contains the operator function indexed by function id.
@@ -457,7 +456,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[uint8],
+			Fn:          operator.EqGeneral[uint8],
 		},
 		{
 			Index:  1,
@@ -469,7 +468,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[uint16],
+			Fn:          operator.EqGeneral[uint16],
 		},
 		{
 			Index:  2,
@@ -481,7 +480,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[uint32],
+			Fn:          operator.EqGeneral[uint32],
 		},
 		{
 			Index:  3,
@@ -493,7 +492,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[uint64],
+			Fn:          operator.EqGeneral[uint64],
 		},
 		{
 			Index:  4,
@@ -505,7 +504,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[int8],
+			Fn:          operator.EqGeneral[int8],
 		},
 		{
 			Index:  5,
@@ -517,7 +516,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[int16],
+			Fn:          operator.EqGeneral[int16],
 		},
 		{
 			Index:  6,
@@ -529,7 +528,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[int32],
+			Fn:          operator.EqGeneral[int32],
 		},
 		{
 			Index:  7,
@@ -541,7 +540,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[int64],
+			Fn:          operator.EqGeneral[int64],
 		},
 		{
 			Index:  8,
@@ -553,7 +552,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[float32],
+			Fn:          operator.EqGeneral[float32],
 		},
 		{
 			Index:  9,
@@ -565,7 +564,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[float64],
+			Fn:          operator.EqGeneral[float64],
 		},
 		{
 			Index:  10,
@@ -577,7 +576,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[types.Decimal64],
+			Fn:          operator.EqGeneral[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -589,7 +588,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[types.Decimal128],
+			Fn:          operator.EqGeneral[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -601,7 +600,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[string],
+			Fn:          operator.EqString,
 		},
 		{
 			Index:  13,
@@ -613,7 +612,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[string],
+			Fn:          operator.EqString,
 		},
 		{
 			Index:  14,
@@ -625,7 +624,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[types.Date],
+			Fn:          operator.EqGeneral[types.Date],
 		},
 		{
 			Index:  15,
@@ -637,7 +636,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[types.Datetime],
+			Fn:          operator.EqGeneral[types.Datetime],
 		},
 		{
 			Index:  16,
@@ -649,7 +648,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.EqDataValue[bool],
+			Fn:          operator.EqGeneral[bool],
 		},
 	},
 	GREAT_THAN: {
@@ -663,7 +662,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[uint8],
+			Fn:          operator.GtGeneral[uint8],
 		},
 		{
 			Index:  1,
@@ -675,7 +674,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[uint16],
+			Fn:          operator.GtGeneral[uint16],
 		},
 		{
 			Index:  2,
@@ -687,7 +686,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[uint32],
+			Fn:          operator.GtGeneral[uint32],
 		},
 		{
 			Index:  3,
@@ -699,7 +698,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[uint64],
+			Fn:          operator.GtGeneral[uint64],
 		},
 		{
 			Index:  4,
@@ -711,7 +710,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[int8],
+			Fn:          operator.GtGeneral[int8],
 		},
 		{
 			Index:  5,
@@ -723,7 +722,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[int16],
+			Fn:          operator.GtGeneral[int16],
 		},
 		{
 			Index:  6,
@@ -735,7 +734,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[int32],
+			Fn:          operator.GtGeneral[int32],
 		},
 		{
 			Index:  7,
@@ -747,7 +746,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[int64],
+			Fn:          operator.GtGeneral[int64],
 		},
 		{
 			Index:  8,
@@ -759,7 +758,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[float32],
+			Fn:          operator.GtGeneral[float32],
 		},
 		{
 			Index:  9,
@@ -771,7 +770,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[float64],
+			Fn:          operator.GtGeneral[float64],
 		},
 		{
 			Index:  10,
@@ -783,7 +782,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[types.Decimal64],
+			Fn:          operator.GtGeneral[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -795,7 +794,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[types.Decimal128],
+			Fn:          operator.GtDecimal128,
 		},
 		{
 			Index:  12,
@@ -807,7 +806,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[string],
+			Fn:          operator.GtString,
 		},
 		{
 			Index:  13,
@@ -819,7 +818,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[string],
+			Fn:          operator.GtString,
 		},
 		{
 			Index:  14,
@@ -831,7 +830,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[types.Date],
+			Fn:          operator.GtGeneral[types.Date],
 		},
 		{
 			Index:  15,
@@ -843,7 +842,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[types.Datetime],
+			Fn:          operator.GtGeneral[types.Datetime],
 		},
 		{
 			Index:  16,
@@ -855,7 +854,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GtDataValue[bool],
+			Fn:          operator.GtBool,
 		},
 	},
 	GREAT_EQUAL: {
@@ -869,7 +868,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[uint8],
+			Fn:          operator.GeGeneral[uint8],
 		},
 		{
 			Index:  1,
@@ -881,7 +880,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[uint16],
+			Fn:          operator.GeGeneral[uint16],
 		},
 		{
 			Index:  2,
@@ -893,7 +892,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[uint32],
+			Fn:          operator.GeGeneral[uint32],
 		},
 		{
 			Index:  3,
@@ -905,7 +904,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[uint64],
+			Fn:          operator.GeGeneral[uint64],
 		},
 		{
 			Index:  4,
@@ -917,7 +916,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[int8],
+			Fn:          operator.GeGeneral[int8],
 		},
 		{
 			Index:  5,
@@ -929,7 +928,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[int16],
+			Fn:          operator.GeGeneral[int16],
 		},
 		{
 			Index:  6,
@@ -941,7 +940,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[int32],
+			Fn:          operator.GeGeneral[int32],
 		},
 		{
 			Index:  7,
@@ -953,7 +952,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[int64],
+			Fn:          operator.GeGeneral[int64],
 		},
 		{
 			Index:  8,
@@ -965,7 +964,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[float32],
+			Fn:          operator.GeGeneral[float32],
 		},
 		{
 			Index:  9,
@@ -977,7 +976,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[float64],
+			Fn:          operator.GeGeneral[float64],
 		},
 		{
 			Index:  10,
@@ -989,7 +988,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[types.Decimal64],
+			Fn:          operator.GeGeneral[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -1001,7 +1000,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[types.Decimal128],
+			Fn:          operator.GeDecimal128,
 		},
 		{
 			Index:  12,
@@ -1013,7 +1012,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[string],
+			Fn:          operator.GeString,
 		},
 		{
 			Index:  13,
@@ -1025,7 +1024,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[string],
+			Fn:          operator.GeString,
 		},
 		{
 			Index:  14,
@@ -1037,7 +1036,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[types.Date],
+			Fn:          operator.GeGeneral[types.Date],
 		},
 		{
 			Index:  15,
@@ -1049,7 +1048,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[types.Datetime],
+			Fn:          operator.GeGeneral[types.Datetime],
 		},
 		{
 			Index:  16,
@@ -1061,7 +1060,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.GeDataValue[bool],
+			Fn:          operator.GeBool,
 		},
 	},
 	LESS_THAN: {
@@ -1075,7 +1074,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[uint8],
+			Fn:          operator.LtGeneral[uint8],
 		},
 		{
 			Index:  1,
@@ -1087,7 +1086,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[uint16],
+			Fn:          operator.LtGeneral[uint16],
 		},
 		{
 			Index:  2,
@@ -1099,7 +1098,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[uint32],
+			Fn:          operator.LtGeneral[uint32],
 		},
 		{
 			Index:  3,
@@ -1111,7 +1110,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[uint64],
+			Fn:          operator.LtGeneral[uint64],
 		},
 		{
 			Index:  4,
@@ -1123,7 +1122,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[int8],
+			Fn:          operator.LtGeneral[int8],
 		},
 		{
 			Index:  5,
@@ -1135,7 +1134,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[int16],
+			Fn:          operator.LtGeneral[int16],
 		},
 		{
 			Index:  6,
@@ -1147,7 +1146,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[int32],
+			Fn:          operator.LtGeneral[int32],
 		},
 		{
 			Index:  7,
@@ -1159,7 +1158,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[int64],
+			Fn:          operator.LtGeneral[int64],
 		},
 		{
 			Index:  8,
@@ -1171,7 +1170,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[float32],
+			Fn:          operator.LtGeneral[float32],
 		},
 		{
 			Index:  9,
@@ -1183,7 +1182,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[float64],
+			Fn:          operator.LtGeneral[float64],
 		},
 		{
 			Index:  10,
@@ -1195,7 +1194,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[types.Decimal64],
+			Fn:          operator.LtGeneral[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -1207,7 +1206,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[types.Decimal128],
+			Fn:          operator.LtDecimal128,
 		},
 		{
 			Index:  12,
@@ -1219,7 +1218,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[string],
+			Fn:          operator.LtString,
 		},
 		{
 			Index:  13,
@@ -1231,7 +1230,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[string],
+			Fn:          operator.LtString,
 		},
 		{
 			Index:  14,
@@ -1243,7 +1242,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[types.Date],
+			Fn:          operator.LtGeneral[types.Date],
 		},
 		{
 			Index:  15,
@@ -1255,7 +1254,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[types.Datetime],
+			Fn:          operator.LtGeneral[types.Datetime],
 		},
 		{
 			Index:  16,
@@ -1267,7 +1266,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LtDataValue[bool],
+			Fn:          operator.LtBool,
 		},
 	},
 	LESS_EQUAL: {
@@ -1281,7 +1280,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[uint8],
+			Fn:          operator.LeGeneral[uint8],
 		},
 		{
 			Index:  1,
@@ -1293,7 +1292,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[uint16],
+			Fn:          operator.LeGeneral[uint16],
 		},
 		{
 			Index:  2,
@@ -1305,7 +1304,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[uint32],
+			Fn:          operator.LeGeneral[uint32],
 		},
 		{
 			Index:  3,
@@ -1317,7 +1316,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[uint64],
+			Fn:          operator.LeGeneral[uint64],
 		},
 		{
 			Index:  4,
@@ -1329,7 +1328,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[int8],
+			Fn:          operator.LeGeneral[int8],
 		},
 		{
 			Index:  5,
@@ -1341,7 +1340,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[int16],
+			Fn:          operator.LeGeneral[int16],
 		},
 		{
 			Index:  6,
@@ -1353,7 +1352,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[int32],
+			Fn:          operator.LeGeneral[int32],
 		},
 		{
 			Index:  7,
@@ -1365,7 +1364,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[int64],
+			Fn:          operator.LeGeneral[int64],
 		},
 		{
 			Index:  8,
@@ -1377,7 +1376,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[float32],
+			Fn:          operator.LeGeneral[float32],
 		},
 		{
 			Index:  9,
@@ -1389,7 +1388,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[float64],
+			Fn:          operator.LeGeneral[float64],
 		},
 		{
 			Index:  10,
@@ -1401,7 +1400,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[types.Decimal64],
+			Fn:          operator.LeGeneral[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -1413,7 +1412,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[types.Decimal128],
+			Fn:          operator.LeDecimal128,
 		},
 		{
 			Index:  12,
@@ -1425,7 +1424,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[string],
+			Fn:          operator.LeString,
 		},
 		{
 			Index:  13,
@@ -1437,7 +1436,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[string],
+			Fn:          operator.LeString,
 		},
 		{
 			Index:  14,
@@ -1449,7 +1448,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[types.Date],
+			Fn:          operator.LeGeneral[types.Date],
 		},
 		{
 			Index:  15,
@@ -1461,7 +1460,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[types.Datetime],
+			Fn:          operator.LeGeneral[types.Datetime],
 		},
 		{
 			Index:  16,
@@ -1473,7 +1472,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.LeDataValue[bool],
+			Fn:          operator.LeBool,
 		},
 	},
 	NOT_EQUAL: {
@@ -1487,7 +1486,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint8],
+			Fn:          operator.NeGeneral[uint8],
 		},
 		{
 			Index:  1,
@@ -1499,7 +1498,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint16],
+			Fn:          operator.NeGeneral[uint16],
 		},
 		{
 			Index:  2,
@@ -1511,7 +1510,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint16],
+			Fn:          operator.NeGeneral[uint16],
 		},
 		{
 			Index:  3,
@@ -1523,7 +1522,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[uint64],
+			Fn:          operator.NeGeneral[uint64],
 		},
 		{
 			Index:  4,
@@ -1535,7 +1534,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int8],
+			Fn:          operator.NeGeneral[int8],
 		},
 		{
 			Index:  5,
@@ -1547,7 +1546,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int16],
+			Fn:          operator.NeGeneral[int16],
 		},
 		{
 			Index:  6,
@@ -1559,7 +1558,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int32],
+			Fn:          operator.NeGeneral[int32],
 		},
 		{
 			Index:  7,
@@ -1571,7 +1570,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[int64],
+			Fn:          operator.NeGeneral[int64],
 		},
 		{
 			Index:  8,
@@ -1583,7 +1582,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[float32],
+			Fn:          operator.NeGeneral[float32],
 		},
 		{
 			Index:  9,
@@ -1595,7 +1594,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[float64],
+			Fn:          operator.NeGeneral[float64],
 		},
 		{
 			Index:  10,
@@ -1607,7 +1606,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Decimal64],
+			Fn:          operator.NeGeneral[types.Decimal64],
 		},
 		{
 			Index:  11,
@@ -1619,7 +1618,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Decimal128],
+			Fn:          operator.NeGeneral[types.Decimal128],
 		},
 		{
 			Index:  12,
@@ -1631,7 +1630,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[string],
+			Fn:          operator.NeString,
 		},
 		{
 			Index:  13,
@@ -1643,7 +1642,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[string],
+			Fn:          operator.NeString,
 		},
 		{
 			Index:  14,
@@ -1655,7 +1654,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Date],
+			Fn:          operator.NeGeneral[types.Date],
 		},
 		{
 			Index:  15,
@@ -1667,7 +1666,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[types.Datetime],
+			Fn:          operator.NeGeneral[types.Datetime],
 		},
 		{
 			Index:  16,
@@ -1679,7 +1678,7 @@ var operators = map[int][]Function{
 			},
 			ReturnTyp:   types.T_bool,
 			TypeCheckFn: strictTypeCheck,
-			Fn:          operator.NeDataValue[bool],
+			Fn:          operator.NeGeneral[bool],
 		},
 	},
 	LIKE: {
@@ -2268,7 +2267,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_STRICT,
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
-			ReturnTyp:   types.T_decimal64,
+			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.MultDecimal64,
 		},
@@ -2306,7 +2305,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_STRICT,
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal64, types.T_decimal64},
-			ReturnTyp:   types.T_decimal64,
+			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.DivDecimal64,
 		},
@@ -2315,7 +2314,7 @@ var operators = map[int][]Function{
 			Flag:        plan.Function_STRICT,
 			Layout:      BINARY_ARITHMETIC_OPERATOR,
 			Args:        []types.T{types.T_decimal128, types.T_decimal128},
-			ReturnTyp:   types.T_decimal64,
+			ReturnTyp:   types.T_decimal128,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.DivDecimal128,
 		},
@@ -2620,6 +2619,24 @@ var operators = map[int][]Function{
 			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.UnaryMinus[float64],
+		},
+		{
+			Index:       6,
+			Flag:        plan.Function_STRICT,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
+			Args:        []types.T{types.T_decimal64},
+			ReturnTyp:   types.T_decimal64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.UnaryMinusDecimal64,
+		},
+		{
+			Index:       7,
+			Flag:        plan.Function_STRICT,
+			Layout:      UNARY_ARITHMETIC_OPERATOR,
+			Args:        []types.T{types.T_decimal128},
+			ReturnTyp:   types.T_decimal128,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.UnaryMinusDecimal128,
 		},
 	},
 	// others
@@ -4376,6 +4393,44 @@ var operators = map[int][]Function{
 			Layout:      CAST_EXPRESSION,
 			Args:        []types.T{types.T_decimal128, types.T_timestamp},
 			ReturnTyp:   types.T_timestamp,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       195,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal64, types.T_float32},
+			ReturnTyp:   types.T_float32,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+
+		{
+			Index:       196,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal128, types.T_float32},
+			ReturnTyp:   types.T_float32,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+
+		{
+			Index:       197,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal64, types.T_float64},
+			ReturnTyp:   types.T_float64,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          operator.Cast,
+		},
+		{
+			Index:       198,
+			Flag:        plan.Function_STRICT,
+			Layout:      CAST_EXPRESSION,
+			Args:        []types.T{types.T_decimal128, types.T_float64},
+			ReturnTyp:   types.T_float64,
 			TypeCheckFn: strictTypeCheck,
 			Fn:          operator.Cast,
 		},

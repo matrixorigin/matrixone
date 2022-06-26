@@ -259,6 +259,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 				panic(err)
 			}
 			data = txnCmd.(*txnbase.BatchCmd).Bat
+			batEntry.Free()
 		}
 	}
 	if data != nil {

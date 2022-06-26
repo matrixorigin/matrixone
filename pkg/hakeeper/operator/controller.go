@@ -49,12 +49,14 @@ func (c *Controller) RemoveOperator(op *Operator) bool {
 }
 
 func (c *Controller) removeOperatorLocked(op *Operator) bool {
-	curOps := c.operators[op.shardID]
-	for _, curOp := range curOps {
+	for i, curOp := range c.operators[op.shardID] {
 		if curOp == op {
-			delete(c.operators, op.shardID)
+			c.operators[op.shardID] = append(c.operators[op.shardID][:i], c.operators[op.shardID][i+1:]...)
+			if len(c.operators[op.shardID]) == 0 {
+				delete(c.operators, op.shardID)
+			}
+			return true
 		}
-		return true
 	}
 	return false
 }
@@ -105,4 +107,95 @@ func (c *Controller) RemoveFinishedOperator(dnState hakeeper.DNState, state hake
 			}
 		}
 	}
+}
+
+func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnState hakeeper.DNState) (commands []hakeeper.ScheduleCommand) {
+	for _, op := range ops {
+		c.operators[op.shardID] = append(c.operators[op.shardID], op)
+		step := op.Check(logState, dnState)
+		var cmd hakeeper.ScheduleCommand
+		switch st := step.(type) {
+		case AddLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.Target,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						UUID:      st.StoreID,
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+						Epoch:     st.Epoch,
+					},
+					ChangeType: hakeeper.AddReplica,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case RemoveLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.Target,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						UUID:      st.StoreID,
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.RemoveReplica,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case StartLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.StoreID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						UUID:      st.StoreID,
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.StartReplica,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case StopLogService:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.StoreID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						UUID:    st.StoreID,
+						ShardID: st.ShardID,
+					},
+					ChangeType: hakeeper.StopReplica,
+				},
+				ServiceType: hakeeper.LogService,
+			}
+		case AddDnReplica:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.StoreID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						UUID:      st.StoreID,
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.AddReplica,
+				},
+				ServiceType: hakeeper.DnService,
+			}
+		case RemoveDnReplica:
+			cmd = hakeeper.ScheduleCommand{
+				UUID: st.StoreID,
+				ConfigChange: hakeeper.ConfigChange{
+					Replica: hakeeper.Replica{
+						UUID:      st.StoreID,
+						ShardID:   st.ShardID,
+						ReplicaID: st.ReplicaID,
+					},
+					ChangeType: hakeeper.RemoveReplica,
+				},
+				ServiceType: hakeeper.DnService,
+			}
+		}
+		commands = append(commands, cmd)
+	}
+
+	return
 }

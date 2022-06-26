@@ -292,6 +292,7 @@ func (n *insertNode) OnLoad() {
 	}
 	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
 	buf := e.GetPayload()
+	e.Free()
 	r := bytes.NewBuffer(buf)
 	cmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {

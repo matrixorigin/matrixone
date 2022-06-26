@@ -167,7 +167,7 @@ import (
 %left <str> UNION
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT SET LOCK KEYS
-%token <str> VALUES LAST_INSERT_ID
+%token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
 %left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE
@@ -178,7 +178,6 @@ import (
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
 %token <item> INTEGRAL HEX HEXNUM BIT_LITERAL FLOAT
 %token <str> NULL TRUE FALSE
-%left EMPTY_FROM_CLAUSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
@@ -283,7 +282,7 @@ import (
 %token <str> SQL_TSI_SECOND SQL_TSI_MINUTE
 
 // With
-%token <str> RECURSIVE
+%token <str> RECURSIVE CONFIG
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION
@@ -307,7 +306,7 @@ import (
 %type <statement> drop_role_stmt drop_user_stmt
 %type <statement> create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_user_stmt update_stmt use_stmt
@@ -416,7 +415,7 @@ import (
 %type <updateExpr> update_expression
 %type <updateExprs> update_list
 %type <completionType> completion_type
-%type <str> id_prefix_at password_opt
+%type <str> password_opt
 %type <boolVal> grant_option_opt enforce enforce_opt
 
 %type <varAssignmentExpr> var_assignment
@@ -684,18 +683,18 @@ system_variable:
 user_variable:
     AT_ID
     {
-        vs := strings.Split($1, ".")
-        var r string
-        if len(vs) == 2 {
-           r = vs[1]
-        } else if len(vs) == 1 {
-           r = vs[0]
-        } else {
-        	yylex.Error("variable syntax error")
-            return 1
-        }
+//        vs := strings.Split($1, ".")
+//        var r string
+//        if len(vs) == 2 {
+//           r = vs[1]
+//        } else if len(vs) == 1 {
+//           r = vs[0]
+//        } else {
+//        	yylex.Error("variable syntax error")
+//            return 1
+//        }
         $$ = &tree.VarExpr{
-            Name: r,
+            Name: $1,
             System: false,
             Global: false,
         }
@@ -1272,7 +1271,30 @@ var_assignment:
             Value: $4,
         }
     }
-|   id_prefix_at equal_or_assignment set_expr
+|   AT_ID equal_or_assignment set_expr
+    {
+    	vs := strings.Split($1, ".")
+        var isGlobal bool
+        if strings.ToLower(vs[0]) == "global" {
+            isGlobal = true
+        }
+        var r string
+        if len(vs) == 2 {
+        	r = vs[1]
+        } else if len(vs) == 1{
+        	r = vs[0]
+        } else {
+        	yylex.Error("variable syntax error")
+            return 1
+        }
+        $$ = &tree.VarAssignmentExpr{
+            System: false,
+            Global: isGlobal,
+            Name: r,
+            Value: $3,
+        }
+    }
+|   AT_AT_ID equal_or_assignment set_expr
     {
     	vs := strings.Split($1, ".")
         var isGlobal bool
@@ -1338,10 +1360,6 @@ var_assignment:
             Value: &tree.DefaultVal{},
         }
     }
-
-id_prefix_at:
-    AT_ID
-|   AT_AT_ID
 
 set_expr:
     ON
@@ -1525,29 +1543,28 @@ explain_stmt:
     }
 |   explain_sym VERBOSE explainable_stmt
     {
-	explainStmt := tree.NewExplainStmt($3, "text")
-	optionElem := tree.MakeOptionElem("verbose", "NULL")
+		explainStmt := tree.NewExplainStmt($3, "text")
+		optionElem := tree.MakeOptionElem("verbose", "NULL")
         options := tree.MakeOptions(optionElem)
-	explainStmt.Options = options
-	$$ = explainStmt
-
+		explainStmt.Options = options
+		$$ = explainStmt
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-	explainStmt := tree.NewExplainStmt($3, "text")
-	optionElem := tree.MakeOptionElem("analyze", "NULL")
+		explainStmt := tree.NewExplainStmt($3, "text")
+		optionElem := tree.MakeOptionElem("analyze", "NULL")
         options := tree.MakeOptions(optionElem)
         explainStmt.Options = options
-	$$ = explainStmt
+		$$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
         explainStmt := tree.NewExplainStmt($4, "text")
         optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-	optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-	options := tree.MakeOptions(optionElem1)
-	options = append(options, optionElem2)
-	explainStmt.Options = options
+		optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+		options := tree.MakeOptions(optionElem1)
+		options = append(options, optionElem2)
+		explainStmt.Options = options
         $$ = explainStmt
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
@@ -1557,6 +1574,16 @@ explain_stmt:
         $$ = explainStmt
     }
 
+explain_option_key:
+    ANALYZE
+|   VERBOSE
+|   FORMAT
+
+explain_foramt_value:
+    JSON
+|   TEXT
+
+
 explain_sym:
     EXPLAIN
 |   DESCRIBE
@@ -1565,9 +1592,9 @@ explain_sym:
 utility_option_list:
     utility_option_elem
     {
-        $$ =  tree.MakeOptions($1)
+        $$ = tree.MakeOptions($1)
     }
-| utility_option_list ',' utility_option_elem
+| 	utility_option_list ',' utility_option_elem
     {
         $$ = append($1, $3);
     }
@@ -1704,6 +1731,17 @@ show_stmt:
 |   show_variables_stmt
 |   show_status_stmt
 |   show_index_stmt
+|	show_target_filter_stmt
+
+show_target_filter_stmt:
+	SHOW CONFIG like_opt where_expression_opt
+    {
+        $$ = &tree.ShowTarget{Target: $2, Like: $3, Where: $4}
+    }
+|	SHOW charset_keyword like_opt where_expression_opt
+	{
+		$$ = &tree.ShowTarget{Target: "charset", Like: $3, Where: $4}
+	}
 
 show_index_stmt:
     SHOW index_kwd from_or_in table_name where_expression_opt
@@ -2603,10 +2641,9 @@ select_expression:
     }
 
 from_opt:
-    %prec EMPTY_FROM_CLAUSE
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        tn := tree.NewTableName(tree.Identifier("dual"), prefix)
+    	prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        tn := tree.NewTableName(tree.Identifier(""), prefix)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
         }
@@ -3755,13 +3792,11 @@ row_format_options:
     }
 
 charset_name:
-    id_or_var
-|   STRING
+	name_string
 |   BINARY
 
 collate_name:
-    id_or_var
-|   STRING
+	name_string
 |   BINARY
 
 table_name_list:
@@ -4861,6 +4896,13 @@ function_call_keyword:
     }
 |   name_braces braces_opt
     {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+        }
+    }
+|	SCHEMA '('')'
+	{
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -6099,7 +6141,6 @@ reserved_keyword:
 |   COALESCE
 |   CREATE
 |   CROSS
-|   CHARSET
 |   CURRENT_DATE
 |   CURRENT_ROLE
 |   CURRENT_USER
@@ -6128,7 +6169,6 @@ reserved_keyword:
 |   FOR
 |   FORCE
 |   FROM
-|   FORMAT
 |   GROUP
 |   HAVING
 |   HOUR
@@ -6226,6 +6266,7 @@ reserved_keyword:
 |	SQL_BIG_RESULT
 |	LEADING
 |	TRAILING
+|   CHARACTER
 
 non_reserved_keyword:
     AGAINST
@@ -6238,13 +6279,13 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
-|   CHARACTER
 |   CHAIN
 |   CHECKSUM
 |   COMPRESSION
 |   COMMENT_KEYWORD
 |   COMMIT
 |   COMMITTED
+|   CHARSET
 |   COLUMNS
 |   CONNECTION
 |   CONSISTENT
@@ -6270,6 +6311,7 @@ non_reserved_keyword:
 |   EXCEPT
 |   ERRORS
 |   ENFORCED
+|   FORMAT
 |   FLOAT_TYPE
 |   FULL
 |   FIXED
@@ -6286,7 +6328,6 @@ non_reserved_keyword:
 |   KEY_BLOCK_SIZE
 |   KEYS
 |   LANGUAGE
-|   LAST_INSERT_ID
 |   LESS
 |   LEVEL
 |   LINESTRING
@@ -6440,16 +6481,6 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
-
-explain_option_key:
-    ANALYZE
-|   VERBOSE
-|   FORMAT
-
-explain_foramt_value:
-    JSON
-|   TEXT
-
 
 //mo_keywords:
 //	PROPERTIES

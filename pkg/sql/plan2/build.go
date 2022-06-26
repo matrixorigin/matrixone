@@ -104,6 +104,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowStatus(stmt, ctx)
 	case *tree.ShowProcessList:
 		return buildShowProcessList(stmt, ctx)
+	case *tree.SetVar:
+		return buildSetVariables(stmt, ctx)
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}

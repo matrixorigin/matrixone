@@ -15,164 +15,141 @@
 package operator
 
 import (
-	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func ColOrCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
-	rvs, ok := rv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the right vec col is not []bool type")
-	}
-	n := len(lvs)
-	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
-	if err != nil {
-		return nil, err
-	}
-	col := make([]bool, len(lvs))
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	for i := 0; i < len(lvs); i++ {
-		col[i] = lvs[i] || rvs[i]
-		ln, rn := nulls.Contains(lv.Nsp, uint64(i)), nulls.Contains(rv.Nsp, uint64(i))
-		if (ln && !rn) || (!ln && rn) {
-			if ln && !rn {
-				if rvs[i] {
-					vec.Nsp.Np.Remove(uint64(i))
-				}
+func HandleOrNullCol(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	if v1.IsScalarNull() {
+		if v2.IsScalarNull() {
+			return proc.AllocScalarNullVector(retType), nil
+		} else if v2.IsScalar() {
+			vec := proc.AllocScalarVector(retType)
+			vec.Col = make([]bool, 1)
+			value := v2.Col.([]bool)[0]
+			if value {
+				vec.Col.([]bool)[0] = true
 			} else {
-				if lvs[i] {
-					vec.Nsp.Np.Remove(uint64(i))
+				nulls.Add(vec.Nsp, 0)
+			}
+			return vec, nil
+		} else {
+			length := int64(vector.Length(v2))
+			vec, err := allocateBoolVector(length, proc)
+			if err != nil {
+				return nil, err
+			}
+			value := v2.Col.([]bool)
+			vcols := vec.Col.([]bool)
+			for i := 0; i < int(length); i++ {
+				if value[i] {
+					vcols[i] = true
+				} else {
+					nulls.Add(vec.Nsp, uint64(i))
 				}
 			}
+			return vec, nil
+		}
+	} else {
+		if v1.IsScalar() {
+			vec := proc.AllocScalarVector(retType)
+			vec.Col = make([]bool, 1)
+			value := v1.Col.([]bool)[0]
+			if value {
+				vec.Col.([]bool)[0] = true
+			} else {
+				nulls.Add(vec.Nsp, 0)
+			}
+			return vec, nil
+		} else {
+			length := int64(vector.Length(v1))
+			vec, err := allocateBoolVector(length, proc)
+			if err != nil {
+				return nil, err
+			}
+			value := v1.Col.([]bool)
+			vcols := vec.Col.([]bool)
+			for i := 0; i < int(length); i++ {
+				if value[i] {
+					vcols[i] = true
+				} else {
+					nulls.Add(vec.Nsp, uint64(i))
+				}
+			}
+			return vec, nil
 		}
 	}
-	vector.SetCol(vec, col)
-	return vec, nil
 }
 
-func ColOrConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
-	rvs, ok := rv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the right vec col is not []bool type")
-	}
-	n := len(lvs)
-	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
+func ScalarOrNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	rb := rvs[0]
-	col := make([]bool, len(lvs))
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	for i := 0; i < len(lvs); i++ {
-		col[i] = lvs[i] || rb
-		if nulls.Contains(lv.Nsp, uint64(i)) && rb {
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	vcols := vec.Col.([]bool)
+	value := col1[0]
+	for i := range vcols {
+		vcols[i] = value || col2[i]
+		if nulls.Contains(nsv.Nsp, uint64(i)) && value {
 			vec.Nsp.Np.Remove(uint64(i))
 		}
 	}
-	vector.SetCol(vec, col)
+	FillNullPos(vec)
 	return vec, nil
 }
 
-func ColOrNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
+func Or(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustTCols[bool](v1), vector.MustTCols[bool](v2)
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleOrNullCol(vs, proc)
 	}
-	n := len(lvs)
-	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
+
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = col1[0] || col2[0]
+		return vec, nil
+	case c1 && !c2:
+		return ScalarOrNotScalar(v1, v2, col1, col2, proc)
+	case !c1 && c2:
+		return ScalarOrNotScalar(v2, v1, col2, col1, proc)
+	}
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	col := make([]bool, len(lvs))
-	for i := 0; i < len(lvs); i++ {
-		if nulls.Contains(lv.Nsp, uint64(i)) || !lvs[i] {
-			nulls.Add(vec.Nsp, uint64(i))
-		} else {
-			col[i] = true
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		vcols[i] = col1[i] || col2[i]
+	}
+	if nulls.Any(v1.Nsp) {
+		rows := v1.Nsp.Np.ToArray()
+		cols := v2.Col.([]bool)
+		for _, row := range rows {
+			if !nulls.Contains(v2.Nsp, row) && cols[row] {
+				vec.Nsp.Np.Remove(row)
+			}
 		}
 	}
-	vector.SetCol(vec, col)
-	return vec, nil
-}
-
-func ConstOrCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return ColOrConst(rv, lv, proc)
-}
-
-func ConstOrConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
+	if nulls.Any(v2.Nsp) {
+		rows := v2.Nsp.Np.ToArray()
+		cols := v1.Col.([]bool)
+		for _, row := range rows {
+			if !nulls.Contains(v1.Nsp, row) && cols[row] {
+				vec.Nsp.Np.Remove(row)
+			}
+		}
 	}
-	rvs, ok := rv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the right vec col is not []bool type")
-	}
-	vec := proc.AllocScalarVector(lv.Typ)
-	vector.SetCol(vec, []bool{lvs[0] || rvs[0]})
-	return vec, nil
-}
-
-func ConstOrNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
-	if !lvs[0] {
-		return proc.AllocScalarNullVector(lv.Typ), nil
-	} else {
-		vec := proc.AllocScalarVector(lv.Typ)
-		vector.SetCol(vec, []bool{true})
-		return vec, nil
-	}
-}
-
-func NullOrCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return ColOrNull(rv, lv, proc)
-}
-
-func NullOrConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return ConstOrNull(rv, lv, proc)
-}
-
-func NullOrNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(lv.Typ), nil
-}
-
-type OrFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
-
-var OrFuncMap = map[int]OrFunc{}
-
-var OrFuncVec = []OrFunc{
-	ColOrCol, ColOrConst, ColOrNull,
-	ConstOrCol, ConstOrConst, ConstOrNull,
-	NullOrCol, NullOrConst, NullOrNull,
-}
-
-func InitOrFuncMap() {
-	for i := 0; i < len(OrFuncVec); i++ {
-		OrFuncMap[i] = OrFuncVec[i]
-	}
-}
-
-func Or(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv := vectors[0]
-	rv := vectors[1]
-	lt, rt := GetTypeID(lv), GetTypeID(rv)
-	vec, err := OrFuncMap[lt*3+rt](lv, rv, proc)
-	if err != nil {
-		return nil, errors.New("Or function: " + err.Error())
-	}
+	FillNullPos(vec)
 	return vec, nil
 }

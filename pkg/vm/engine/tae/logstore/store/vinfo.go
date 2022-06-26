@@ -291,6 +291,12 @@ func (info *vInfo) UnmarshalMeta(buf []byte) error {
 	if e.GetType() != entry.ETMeta {
 		return ErrReadMetaFailed
 	}
+	if e.TotalSize() != len(buf) {
+		return ErrReadMetaFailed
+	}
+	if e.GetInfoSize() != 0 {
+		return ErrReadMetaFailed
+	}
 	_, err = e.ReadFrom(bbuf)
 	if err != nil {
 		return err

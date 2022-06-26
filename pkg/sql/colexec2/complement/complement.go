@@ -97,14 +97,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp)
-				continue
-			}
-			if err := ctr.probe(bat, ap, proc); err != nil {
-				ctr.state = End
-				bat.Clean(proc.Mp)
-				proc.Reg.InputBatch = nil
-				return true, err
+				if err := ctr.emptyProbe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
+			} else {
+				if err := ctr.probe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
 			}
 			return false, nil
 		default:
@@ -212,7 +215,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				} else {
 					for k := 0; k < n; k++ {
 						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[i] = 0
+							ctr.zValues[k] = 0
 						} else {
 							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 						}
@@ -240,6 +243,32 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 			ctr.keys[k] = ctr.keys[k][:0]
 		}
 	}
+	return nil
+}
+
+func (ctr *Container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	defer bat.Clean(proc.Mp)
+	rbat := batch.NewWithSize(len(ap.Result))
+	for i, pos := range ap.Result {
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+	}
+	count := len(bat.Zs)
+	for i := 0; i < count; i += UnitLimit {
+		n := count - i
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		for k := 0; k < n; k++ {
+			for j, pos := range ap.Result {
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
+					rbat.Clean(proc.Mp)
+					return err
+				}
+			}
+			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+		}
+	}
+	proc.Reg.InputBatch = rbat
 	return nil
 }
 
@@ -314,7 +343,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				} else {
 					for k := 0; k < n; k++ {
 						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[i] = 0
+							ctr.zValues[k] = 0
 						} else {
 							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 						}

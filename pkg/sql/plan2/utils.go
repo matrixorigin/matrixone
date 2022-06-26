@@ -15,7 +15,11 @@
 package plan2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -44,23 +48,6 @@ func doGetBindings(expr *plan.Expr) map[int32]any {
 	}
 
 	return res
-}
-
-func hasSubquery(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Sub:
-		return true
-
-	case *plan.Expr_F:
-		ret := false
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || hasSubquery(arg)
-		}
-		return ret
-
-	default:
-		return false
-	}
 }
 
 func hasCorrCol(expr *plan.Expr) bool {
@@ -229,13 +216,13 @@ func getJoinSide(expr *plan.Expr, leftTags map[int32]*Binding) (side int8) {
 
 	case *plan.Expr_Col:
 		if _, ok := leftTags[exprImpl.Col.RelPos]; ok {
-			side = 0b01
+			side = JoinSideLeft
 		} else {
-			side = 0b10
+			side = JoinSideRight
 		}
 
 	case *plan.Expr_Corr:
-		side = 0b100
+		side = JoinSideCorrelated
 	}
 
 	return
@@ -279,6 +266,11 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 	exprs := make([]*plan.Expr, len(conds))
 
 	for i, cond := range conds {
+		cond, err := ctx.qualifyColumnNames(cond, nil, false)
+		if err != nil {
+			return nil, err
+		}
+
 		expr, err := ctx.binder.BindExpr(cond, 0, true)
 		if err != nil {
 			return nil, err
@@ -324,7 +316,7 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 		condMap := make(map[string]int)
 
 		for _, cond := range rightConds {
-			condMap[cond.String()] = 0b10
+			condMap[cond.String()] = JoinSideRight
 		}
 
 		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
@@ -332,17 +324,17 @@ func applyDistributivity(expr *plan.Expr) *plan.Expr {
 		for _, cond := range leftConds {
 			exprStr := cond.String()
 
-			if condMap[exprStr] == 0b10 {
+			if condMap[exprStr] == JoinSideRight {
 				commonConds = append(commonConds, cond)
-				condMap[exprStr] = 0b11
+				condMap[exprStr] = JoinSideBoth
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
-				condMap[exprStr] = 0b01
+				condMap[exprStr] = JoinSideLeft
 			}
 		}
 
 		for _, cond := range rightConds {
-			if condMap[cond.String()] == 0b10 {
+			if condMap[cond.String()] == JoinSideRight {
 				rightOnlyConds = append(rightOnlyConds, cond)
 			}
 		}
@@ -398,4 +390,48 @@ func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
 	}
 
 	return
+}
+
+func rejectsNull(filter *plan.Expr) bool {
+	filter = replaceColRefWithNull(DeepCopyExpr(filter))
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	vec, err := colexec.EvalExpr(bat, nil, filter)
+	if err != nil {
+		return false
+	}
+
+	if nulls.Any(vec.Nsp) {
+		return true
+	}
+
+	switch vec.Typ.Oid {
+	case types.T_bool:
+		return !vec.Col.([]bool)[0]
+
+	default:
+		return false
+	}
+}
+
+func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		expr = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: true,
+				},
+			},
+		}
+
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefWithNull(arg)
+		}
+	}
+
+	return expr
 }

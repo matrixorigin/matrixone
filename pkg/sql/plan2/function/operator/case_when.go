@@ -131,6 +131,10 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 	return false
 }
 
+type OrderedValue interface {
+	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Decimal64
+}
+
 type NormalType interface {
 	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
 		types.Decimal64 | types.Decimal128 | types.Timestamp
@@ -145,7 +149,7 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 	if err != nil {
 		return nil, err
 	}
-	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.FixedLength())
+	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
 	rs.Col = rs.Col.([]T)[:l]
 	rscols := rs.Col.([]T)
 
