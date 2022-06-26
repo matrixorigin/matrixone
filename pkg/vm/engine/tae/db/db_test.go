@@ -1493,8 +1493,7 @@ func TestSystemDB1(t *testing.T) {
 }
 
 func TestSystemDB2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 
@@ -1512,6 +1511,7 @@ func TestSystemDB2(t *testing.T) {
 	schema.BlockMaxRows = 100
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 1000)
+	defer bat.Close()
 
 	rel, err := sysDB.CreateRelation(schema)
 	assert.NoError(t, err)
@@ -1530,8 +1530,7 @@ func TestSystemDB2(t *testing.T) {
 }
 
 func TestSystemDB3(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	txn, _ := tae.StartTxn(nil)
@@ -1539,6 +1538,7 @@ func TestSystemDB3(t *testing.T) {
 	schema.BlockMaxRows = 100
 	schema.SegmentMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 20)
+	defer bat.Close()
 	db, err := txn.GetDatabase(catalog.SystemDBName)
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
@@ -1549,8 +1549,7 @@ func TestSystemDB3(t *testing.T) {
 }
 
 func TestScan1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 
@@ -1559,6 +1558,7 @@ func TestScan1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows-1))
+	defer bat.Close()
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bat)
 	assert.NoError(t, err)
@@ -1567,8 +1567,7 @@ func TestScan1(t *testing.T) {
 }
 
 func TestDedup(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 
@@ -1577,6 +1576,7 @@ func TestDedup(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 
 	bat := catalog.MockBatch(schema, 10)
+	defer bat.Close()
 	txn, _, rel := createRelationNoCommit(t, tae, defaultTestDB, schema, true)
 	err := rel.Append(bat)
 	assert.NoError(t, err)
@@ -1589,12 +1589,11 @@ func TestDedup(t *testing.T) {
 }
 
 func TestScan2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
-	schema.BlockMaxRows = 20
+	schema.BlockMaxRows = 10
 	schema.SegmentMaxBlocks = 10
 	rows := schema.BlockMaxRows * 5 / 2
 	bat := catalog.MockBatch(schema, int(rows))

@@ -365,6 +365,9 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 	from := uint32(n.data.Length())
 	an = n.PrepareAppend(data, offset)
 	for _, attr := range data.Attrs {
+		if attr == catalog.HiddenColumnName {
+			continue
+		}
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := n.data.Vecs[def.Idx]
 		// logutil.Infof("destVec: %s, %d, %d", destVec.String(), cnt, data.Length())
