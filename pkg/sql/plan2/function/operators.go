@@ -2538,7 +2538,7 @@ var operators = map[int]Functions{
 					}
 				}
 			}
-			return wrongFunctionParameters, -1
+			return wrongFunctionParameters, nil
 		},
 		Overloads: []Function{
 			{
