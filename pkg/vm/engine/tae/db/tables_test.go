@@ -35,8 +35,7 @@ import (
 )
 
 func TestTables1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 	txn, _ := db.StartTxn(nil)
@@ -99,8 +98,7 @@ func TestTables1(t *testing.T) {
 }
 
 func TestTxn1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -110,6 +108,7 @@ func TestTxn1(t *testing.T) {
 	batchRows := schema.BlockMaxRows * 2 / 5
 	cnt := uint32(20)
 	bat := catalog.MockBatch(schema, int(batchRows*cnt))
+	defer bat.Close()
 	bats := bat.Split(20)
 	{
 		txn, _ := db.StartTxn(nil)
@@ -183,8 +182,7 @@ func TestTxn1(t *testing.T) {
 }
 
 func TestTxn2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -207,8 +205,7 @@ func TestTxn2(t *testing.T) {
 }
 
 func TestTxn3(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -222,6 +219,7 @@ func TestTxn3(t *testing.T) {
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
 		bat := catalog.MockBatch(schema, int(rows))
+		defer bat.Close()
 		for i := 0; i < 1; i++ {
 			err := rel.Append(bat)
 			assert.Nil(t, err)
@@ -261,6 +259,7 @@ func TestTxn3(t *testing.T) {
 		var decomp bytes.Buffer
 		view, err := blk.GetColumnDataById(0, &comp, &decomp)
 		assert.Nil(t, err)
+		defer view.Close()
 		assert.Equal(t, int(rows), view.Length())
 		assert.Equal(t, 3, int(view.DeleteMask.GetCardinality()))
 		assert.Equal(t, int8(100), view.GetData().Get(5))
@@ -320,8 +319,9 @@ func TestTxn3(t *testing.T) {
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
 		view, err := it2.GetBlock().GetColumnDataByName(schema.ColDefs[0].Name, &comp, &decomp)
-		vec := view.GetData()
 		assert.Nil(t, err)
+		vec := view.GetData()
+		defer view.Close()
 		assert.Equal(t, int(rows), vec.Length())
 		assert.Equal(t, 3, int(view.DeleteMask.GetCardinality()))
 		assert.Equal(t, int8(100), vec.Get(5))
@@ -330,14 +330,14 @@ func TestTxn3(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 		view, err = it2.GetBlock().GetColumnDataByName(schema.ColDefs[colIdx].Name, &comp, &decomp)
 		assert.Nil(t, err)
+		defer view.Close()
 		// chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
 		// t.Log(chain.StringLocked())
 	}
 }
 
 func TestTxn4(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	db := initDB(t, nil)
 	defer db.Close()
 
@@ -354,6 +354,7 @@ func TestTxn4(t *testing.T) {
 		provider := containers.NewMockDataProvider()
 		provider.AddColumnProvider(schema.GetSingleSortKeyIdx(), pk)
 		bat := containers.MockBatch(schema.Types(), 3, schema.GetSingleSortKeyIdx(), provider)
+		defer bat.Close()
 		err := rel.Append(bat)
 		t.Log(err)
 		assert.NotNil(t, err)
