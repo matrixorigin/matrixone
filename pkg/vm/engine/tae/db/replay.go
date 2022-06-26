@@ -282,12 +282,12 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 			continue
 		}
 		start := info.GetSrcOff()
-		end := start + info.GetSrcLen() - 1
-		bat := data.CloneWindow(int(start), int(end-start))
+		end := start + info.GetSrcLen()
+		bat := data.Window(int(start), int(end-start))
 		defer bat.Close()
+		defer data.Close()
 		bat.Compact()
 		length := info.GetDestLen()
-		// off := info.GetDestOff()
 		datablk := blk.GetBlockData()
 		appender, err := datablk.MakeAppender()
 		if err != nil {

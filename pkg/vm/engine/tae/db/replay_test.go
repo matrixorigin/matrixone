@@ -18,8 +18,7 @@ import (
 )
 
 func TestReplayCatalog1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schemas := make([]*catalog.Schema, 4)
 	for i := range schemas {
@@ -96,8 +95,7 @@ func TestReplayCatalog1(t *testing.T) {
 }
 
 func TestReplayCatalog2(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
@@ -177,8 +175,7 @@ func TestReplayCatalog2(t *testing.T) {
 }
 
 func TestReplayCatalog3(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 0)
 	schema2 := catalog.MockSchema(2, 0)
@@ -263,8 +260,7 @@ func TestReplayCatalog3(t *testing.T) {
 // catalog and data not checkpoint
 // catalog not softdelete
 func TestReplay1(t *testing.T) {
-	// OPENME
-	return
+	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
@@ -293,6 +289,7 @@ func TestReplay1(t *testing.T) {
 	t.Log(c.SimplePPString(common.PPL1))
 
 	bat := catalog.MockBatch(schema, 10000)
+	defer bat.Close()
 	txn, _ = tae2.StartTxn(nil)
 	db, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
