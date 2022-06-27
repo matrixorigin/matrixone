@@ -21,7 +21,5 @@ show tables from test01;
 -- @case
 -- @desc:test for show columns from
 -- @label:bvt
--- @bvt:issue#3350
 show columns from t1;
--- @bvt:issue
 drop database if exists test01;
