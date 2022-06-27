@@ -2312,13 +2312,61 @@ func TestTruncate(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 }
 
-// func TestBatch(t *testing.T) {
-// 	schema := catalog.MockSchemaAll(18, 13)
-// 	bat := adaptor.BuildBatch(schema.AllNames(), schema.AllTypes(), 10)
-// 	bat.Vecs[3].Append(int64(100))
-// 	bat.Vecs[12].Append([]byte("hello"))
-// 	t.Log(bat.Vecs[3].String())
-// 	t.Log(bat.Vecs[12].String())
-// 	t.Log(stl.DefaultAllocator.String())
-// 	bat.Close()
-// }
+func TestGetColumnData(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(18, 13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 39)
+	bats := bat.Split(4)
+	defer bat.Close()
+	tae.createRelAndAppend(bats[0], true)
+	txn, rel := tae.getRelation()
+	blk := getOneBlock(rel)
+	view, _ := blk.GetColumnDataById(2, nil, nil)
+	defer view.Close()
+	assert.Equal(t, bats[0].Length(), view.Length())
+	assert.NotZero(t, view.GetData().Allocated())
+
+	buffer := new(bytes.Buffer)
+	view, _ = blk.GetColumnDataById(2, nil, buffer)
+	defer view.Close()
+	assert.Equal(t, bats[0].Length(), view.Length())
+	assert.Zero(t, view.GetData().Allocated())
+	txn.Commit()
+
+	tae.compactBlocks(false)
+	txn, rel = tae.getRelation()
+	blk = getOneBlock(rel)
+	view, _ = blk.GetColumnDataById(2, nil, nil)
+	defer view.Close()
+	assert.Equal(t, bats[0].Length(), view.Length())
+	assert.NotZero(t, view.GetData().Allocated())
+
+	buffer.Reset()
+	view, _ = blk.GetColumnDataById(2, nil, buffer)
+	defer view.Close()
+	assert.Equal(t, bats[0].Length(), view.Length())
+	assert.Zero(t, view.GetData().Allocated())
+	assert.NoError(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	err := rel.Append(bats[1])
+	assert.NoError(t, err)
+	blk = getOneBlock(rel)
+	view, err = blk.GetColumnDataById(2, nil, nil)
+	defer view.Close()
+	assert.True(t, view.GetData().Equals(bats[1].Vecs[2]))
+	assert.NotZero(t, view.GetData().Allocated())
+	buffer.Reset()
+	view, err = blk.GetColumnDataById(2, nil, buffer)
+	defer view.Close()
+	assert.True(t, view.GetData().Equals(bats[1].Vecs[2]))
+	assert.Zero(t, view.GetData().Allocated())
+
+	assert.NoError(t, txn.Commit())
+}
