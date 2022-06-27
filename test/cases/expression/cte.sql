@@ -13,10 +13,8 @@ SELECT * FROM qn;
 WITH qn AS (SELECT a FROM t1), qn2 as (select b from t1)
 SELECT * FROM qn2;
 -- error
--- @bvt:issue#3299
 WITH qn AS (SELECT a FROM t1), qn as (select b from t1)
 SELECT 1 FROM qn;
--- @bvt:issue
 -- error parser
 with test.qn as (select "with") select * from test.qn;
 with qn as (select "with" as a)

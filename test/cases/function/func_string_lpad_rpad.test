@@ -97,7 +97,7 @@ SELECT RPAD('a', -1, 'x');
 SELECT (rpad(1.0,2048,1)) IS NOT FALSE;
 -- @bvt:issue
 
--- @bvt:issue#3156
+-- @bvt:issue#3408
 SELECT ((+0) IN
 ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)),
 (32767.1)));

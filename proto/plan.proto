@@ -1,5 +1,5 @@
 syntax = "proto3";
-package plan; 
+package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
@@ -15,8 +15,8 @@ message Type {
 		BOOL    = 10;
 
 		// INTs
-		INT8    = 20; 
-		INT16   = 21; 
+		INT8    = 20;
+		INT16   = 21;
 		INT32   = 22;
 		INT64   = 23;
 		INT128  = 24;
@@ -38,12 +38,12 @@ message Type {
 		// Some special small (<= 32 bytes) fixed len types that worth optimize
 		UUID      = 40;		// 16 bytes,
 		UB160     = 41;     // 20 bytes, SHA-1
-		UB184     = 42;     // 23 bytes,  
-		UB192     = 43;		// 24 bytes, for example, BLAKE3 output of 24 bytes. 
+		UB184     = 42;     // 23 bytes,
+		UB192     = 43;		// 24 bytes, for example, BLAKE3 output of 24 bytes.
 		UB224	  = 44;		// 28 bytes, for example, SHA-224, BLAKE3-224
 		UB256	  = 45;		// 32 bytes, for example, SHA-256, BLAKE3-256
 
-		// Time 
+		// Time
 		DATE		= 50;
 		TIME        = 51;
 		DATETIME	= 52;
@@ -58,7 +58,7 @@ message Type {
 		BINARY      = 70;
 		VARBINARY   = 71;
 
-		// Special 
+		// Special
 		ARRAY       = 90;
 		FLEXBUFFER  = 91;
 
@@ -67,7 +67,7 @@ message Type {
 		BYTEA16     = 101;
 		BYTEA       = 102;
 
-		// MO Special, not sure if we really need these. 
+		// MO Special, not sure if we really need these.
 		SEL         = 200;
 		TUPLE       = 201;
 	}
@@ -104,7 +104,7 @@ message ParamRef {
 	int32 pos	= 1;
 }
 
-// Session variable ref, compiler should fold. 
+// Session variable ref, compiler should fold.
 message VarRef {
 	string name = 1;
 }
@@ -440,6 +440,8 @@ message Node {
 	RowsetData rowset_data = 19;
 	string extra_options = 20;
 	string useDeleteKey = 21;
+
+	repeated int32 binding_tags = 22;
 }
 
 message Query {
@@ -460,11 +462,11 @@ message Query {
 	// we can plug the value in the optmizer and the newly available
 	// value may generate better plan.
 
-	// Each step is simply a root node.  Root node refers to other 
+	// Each step is simply a root node.  Root node refers to other
 	// node as children and the whole step is a DAG.
 	repeated int32 steps	= 2;
 
-	// All the nodes.  It is OK to have dangle nodes, we only excute nodes 
+	// All the nodes.  It is OK to have dangle nodes, we only excute nodes
 	// reachable from step roots.
 	repeated Node nodes		= 3;
 
@@ -529,7 +531,7 @@ message DataControl {
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
-	oneof control {		
+	oneof control {
 		SetVariables set_variables = 2;
 	}
 }
@@ -634,11 +636,11 @@ message TruncateTable {
 
 message ShowVariables {
 	bool global 			= 1;
-	repeated Expr where 	= 2; 
+	repeated Expr where 	= 2;
 }
 
 message SetVariables {
-	repeated SetVariablesItem items	= 1; 
+	repeated SetVariablesItem items	= 1;
 }
 
 message SetVariablesItem {

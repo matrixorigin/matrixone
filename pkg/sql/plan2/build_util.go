@@ -445,34 +445,6 @@ func getResolveTable(dbName string, tableName string, ctx CompilerContext, binde
 	return nil, nil, false
 }
 
-//getLastTableDef get insert/update/delete tableDef
-// FIXME
-func getLastTableDef(query *Query) (*ObjectRef, *TableDef) {
-	node := query.Nodes[query.Steps[len(query.Steps)-1]]
-	for {
-		if node.TableDef != nil {
-			return node.ObjRef, node.TableDef
-		}
-		if len(node.Children) == 0 {
-			break
-		}
-		node = query.Nodes[node.Children[0]]
-	}
-	return nil, nil
-}
-
-func newQueryAndSelectCtx(typ plan.Query_StatementType) (*Query, *BinderContext) {
-	binderCtx := &BinderContext{
-		columnAlias: make(map[string]*Expr),
-		cteTables:   make(map[string]*TableDef),
-		usingCols:   make(map[string]string),
-	}
-	query := &Query{
-		StmtType: typ,
-	}
-	return query, binderCtx
-}
-
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch uint8(n.InternalType.Oid) {
@@ -501,15 +473,25 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_DOUBLE:
 			return &plan.Type{Id: plan.Type_FLOAT64, Width: n.InternalType.Width, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_STRING:
-			if n.InternalType.DisplayWith == -1 { // type char
-				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
+			width := n.InternalType.DisplayWith
+			if width == -1 {
+				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
+				width = 1
 			}
-			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
+			if n.InternalType.FamilyString == "char" { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: width}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
-			if n.InternalType.DisplayWith == -1 { // type char
-				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
+			width := n.InternalType.DisplayWith
+			if width == -1 {
+				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
+				width = 1
 			}
-			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
+			if n.InternalType.FamilyString == "char" { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: width}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
