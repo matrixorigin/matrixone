@@ -361,6 +361,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 	if len(s) >= 50 {
 		s = s[:50] // to prevent attack,
 	}
+	s = strings.TrimSpace(s)
 	exponent := 0
 	if strings.Contains(s, "e") {
 		s2 := strings.Split(s, "e")
