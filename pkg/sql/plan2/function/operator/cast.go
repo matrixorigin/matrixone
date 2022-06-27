@@ -901,19 +901,33 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // varchar -> char
 // varchar -> varhcar
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	l := vector.Length(lv)
-	vec, err := proc.AllocVector(rv.Typ, int64(len(lv.Data)))
+	source := vector.MustBytesCols(lv)
+	if lv.IsScalar() {
+		if lv.IsScalarNull() {
+			return proc.AllocScalarNullVector(rv.Typ), nil
+		}
+		vec := proc.AllocScalarVector(rv.Typ)
+		vec.Col = &types.Bytes{
+			Data:    make([]byte, len(source.Data)),
+			Offsets: []uint32{source.Offsets[0]},
+			Lengths: []uint32{source.Lengths[0]},
+		}
+		target := vector.MustBytesCols(vec)
+		copy(target.Data, source.Data)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(source.Data)))
 	if err != nil {
 		return nil, err
 	}
 	b := vec.Col.(*types.Bytes)
 	b.Data = vec.Data
-	b.Offsets = make([]uint32, l)
-	b.Lengths = make([]uint32, l)
-	copy(b.Data, lv.Data)
-	copy(b.Offsets, lv.Col.(*types.Bytes).Offsets)
-	copy(b.Lengths, lv.Col.(*types.Bytes).Lengths)
-	vec.Nsp.Or(lv.Nsp)
+	b.Offsets = make([]uint32, len(source.Offsets))
+	b.Lengths = make([]uint32, len(source.Lengths))
+	copy(b.Data, source.Data)
+	copy(b.Offsets, source.Offsets)
+	copy(b.Lengths, source.Lengths)
+	nulls.Set(vec.Nsp, lv.Nsp)
 	return vec, nil
 }
 
