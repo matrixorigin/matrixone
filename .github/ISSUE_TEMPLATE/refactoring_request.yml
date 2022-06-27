@@ -1,23 +1,24 @@
 name: Refactoring request
 description: Make a refactoring request to MatrixOne
 title: "[Refactoring]: "
-labels: [kind/refactoring, needs-triage]
-assignees:
-  - m-schen
+# labels: [kind/refactoring, needs-triage]
+labels: [kind/refactoring]
+# assignees:
+#   - m-schen
 body:
-  - type: checkboxes
-    attributes:
-      label: Is there an existing issue for the refactoring request?
-      description: Please check if an issue already exists for the issue you encountered.
-      options:
-        - label: I have checked the existing issues.
-          required: true
+  # - type: checkboxes
+  #   attributes:
+  #     label: Is there an existing issue for the refactoring request?
+  #     description: Please check if an issue already exists for the issue you encountered.
+  #     options:
+  #       - label: I have checked the existing issues.
+  #         required: true
   - type: textarea
     attributes:
-      label: Is your refactoring request related to a problem?
+      label: Why do you want to refactor this code?
       description: |
         A clear and concise description of the refactoring you want to.
-      render: markdown
+      render: Markdown
     validations:
       required: true
   - type: textarea
