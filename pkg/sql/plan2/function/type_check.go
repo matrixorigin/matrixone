@@ -297,6 +297,8 @@ func initTypeCheckRelated() {
 		types.T_uint32:  {types.T_uint64, types.T_float64},
 		types.T_uint64:  {types.T_float64},
 		types.T_float32: {types.T_float64},
+		types.T_char:    {types.T_varchar},
+		types.T_varchar: {types.T_char},
 	}
 	preferredTypeConvert = make([][]bool, maxTypes)
 	for i := range preferredTypeConvert {

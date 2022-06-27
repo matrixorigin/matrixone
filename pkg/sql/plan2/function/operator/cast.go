@@ -437,15 +437,15 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return CastDecimal128AsDecimal128(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_varchar && rv.Typ.Oid == types.T_date {
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_date {
 		return CastVarcharAsDate(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_varchar && rv.Typ.Oid == types.T_datetime {
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_datetime {
 		return CastVarcharAsDatetime(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_varchar && rv.Typ.Oid == types.T_timestamp {
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
 		return CastVarcharAsTimestamp(lv, rv, proc)
 	}
 	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_decimal128 {
