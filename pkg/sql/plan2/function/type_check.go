@@ -199,15 +199,16 @@ func initTypeCheckRelated() {
 
 	// init castTable
 	castTable = make([][]bool, maxTypes)
+	for i := range castTable {
+		castTable[i] = make([]bool, maxTypes)
+	}
 	{ // bool
-		castTable[types.T_bool] = make([]bool, maxTypes)
 		castTable[types.T_bool][types.T_bool] = true
 		for _, typ := range strings {
 			castTable[types.T_bool][typ] = true
 		}
 	}
 	{ // date
-		castTable[types.T_date] = make([]bool, maxTypes)
 		castTable[types.T_date][types.T_date] = true
 		castTable[types.T_date][types.T_timestamp] = true
 		castTable[types.T_date][types.T_datetime] = true
@@ -216,7 +217,6 @@ func initTypeCheckRelated() {
 		}
 	}
 	{ // datetime
-		castTable[types.T_datetime] = make([]bool, maxTypes)
 		castTable[types.T_datetime][types.T_datetime] = true
 		castTable[types.T_datetime][types.T_date] = true
 		castTable[types.T_datetime][types.T_timestamp] = true
@@ -226,7 +226,6 @@ func initTypeCheckRelated() {
 	}
 	{ //  float
 		for _, t := range floats {
-			castTable[t] = make([]bool, maxTypes)
 			for _, typ := range floats {
 				castTable[t][typ] = true
 			}
@@ -240,7 +239,6 @@ func initTypeCheckRelated() {
 	}
 	{ //  number
 		for _, t := range numbers {
-			castTable[t] = make([]bool, maxTypes)
 			castTable[t][t] = true
 			for _, typ := range floats {
 				castTable[t][typ] = true
@@ -269,7 +267,6 @@ func initTypeCheckRelated() {
 		}
 	}
 	{ // timestamp
-		castTable[types.T_timestamp] = make([]bool, maxTypes)
 		castTable[types.T_timestamp][types.T_timestamp] = true
 		castTable[types.T_timestamp][types.T_date] = true
 		castTable[types.T_timestamp][types.T_datetime] = true
@@ -279,7 +276,6 @@ func initTypeCheckRelated() {
 	}
 	{ // string
 		for _, t := range strings {
-			castTable[t] = make([]bool, maxTypes)
 			for _, typ := range all {
 				castTable[t][typ] = true
 			}
