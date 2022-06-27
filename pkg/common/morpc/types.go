@@ -26,12 +26,14 @@ var (
 	errClientClosed       = moerr.NewError(moerr.ErrClientClosed, "client closed")
 	errBackendClosed      = moerr.NewError(moerr.ErrBackendClosed, "backend closed")
 	errNoAvailableBackend = moerr.NewError(moerr.ErrNoAvailableBackend, "no available backend")
+	errStreamClosed       = moerr.NewError(moerr.ErrStreamClosed, "stream closed")
 )
 
 // Message morpc is not a normal remote method call, rather it is a message-based asynchronous
 // driven framework.
 type Message interface {
-	// ID each message has a unique ID.
+	// ID each message has a unique ID. If it is a message transmitted in stream, the ID must
+	// be set to Stream.ID
 	ID() []byte
 	// DebugString return debug string
 	DebugString() string
@@ -75,6 +77,10 @@ type RPCClient interface {
 	// Send send a request message to the corresponding server and return a Future to get the
 	// response message.
 	Send(ctx context.Context, backend string, request Message, opts SendOptions) (*Future, error)
+	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
+	// If the underlying connection is reset during the duration of the stream, then the stream will
+	// be closed.
+	NewStream(backend string, receiveChanBuffer int) (Stream, error)
 	// Close close the client
 	Close() error
 }
@@ -82,15 +88,8 @@ type RPCClient interface {
 // ClientSession client session, which is used to send the response message.
 // Note that it is not thread-safe.
 type ClientSession interface {
-	// ID client session id
-	ID() uint64
-	// Close the client session
-	Close() error
-	// Write writing the response message to the buffer, when flush is true, will trigger a
-	// real write.
-	Write(response Message, flush bool) error
-	// Flush flush the buffer, all messages will be written to the client immediately.
-	Flush() error
+	// Write writing the response message to the client.
+	Write(response Message) error
 }
 
 // RPCServer RPC server implementation corresponding to RPCClient.
@@ -102,11 +101,10 @@ type RPCServer interface {
 	// Close close the rpc server
 	Close() error
 	// RegisterRequestHandler register the request handler. The request handler is processed in the
-	// read goroutine of the current client connection and returns the response synchronously. When
-	// the response is received, it will immediately reply to the client. Sequence is the sequence
-	// of message received by the current client connection. If error returned by handler, client
-	// connection will closed.
-	RegisterRequestHandler(func(request Message, sequence uint64) (Message, error))
+	// read goroutine of the current client connection. Sequence is the sequence of message received
+	// by the current client connection. If error returned by handler, client connection will closed.
+	// Handler can use the ClientSession to write response, both synchronous and asynchronous.
+	RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error)
 }
 
 // Codec codec
@@ -127,12 +125,29 @@ type Backend interface {
 	// Send send the request for future to the corresponding backend.
 	// moerr.ErrBackendClosed returned if backend is closed.
 	Send(ctx context.Context, request Message, opts SendOptions) (*Future, error)
+	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
+	// If the underlying connection is reset during the duration of the stream, then the stream will
+	// be closed.
+	NewStream(receiveChanBuffer int) (Stream, error)
 	// Close close the backend.
 	Close()
-	// Busy the backend receives a lot of requests concurrently during
-	// operation, but when the number of requests waiting to be sent reaches
-	// some threshold, the current backend is busy.
+	// Busy the backend receives a lot of requests concurrently during operation, but when the number
+	// of requests waiting to be sent reaches some threshold, the current backend is busy.
 	Busy() bool
+}
+
+// Stream used to asynchronous stream of sending and receiving messages
+type Stream interface {
+	// ID returns the stream ID. All messages transmitted on the current stream need to use the
+	// stream ID as the message ID
+	ID() []byte
+	// Send send message to stream
+	Send(request Message, opts SendOptions) error
+	// Receive returns a channel to read message from server. The channel will be closed after stream
+	// closed.
+	Receive() (chan Message, error)
+	// Close close the stream.
+	Close() error
 }
 
 // ClientOption client options for create client

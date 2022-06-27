@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/stop"
@@ -26,7 +27,7 @@ import (
 )
 
 const (
-	attrChannel = "wc"
+	attrClientSession = "cs"
 )
 
 // WithServerLogger set rpc server logger
@@ -66,7 +67,7 @@ type server struct {
 	logger      *zap.Logger
 	application goetty.NetApplication
 	stopper     *stop.Stopper
-	handler     func(request Message, sequence uint64) (Message, error)
+	handler     func(request Message, sequence uint64, cs ClientSession) error
 
 	options struct {
 		bufferSize    int
@@ -127,7 +128,7 @@ func (s *server) Close() error {
 	return err
 }
 
-func (s *server) RegisterRequestHandler(handler func(request Message, sequence uint64) (Message, error)) {
+func (s *server) RegisterRequestHandler(handler func(request Message, sequence uint64, cs ClientSession) error) {
 	s.handler = handler
 }
 
@@ -147,16 +148,16 @@ func (s *server) adjust() {
 }
 
 func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint64) error {
-	var c chan Message
+	var cs *clientSession
 	if sequence == 1 {
-		c = make(chan Message, 16)
-		rs.SetAttr(attrChannel, c)
-		if err := s.startWriteLoop(rs, c); err != nil {
-			close(c)
+		cs = newClientSession()
+		rs.SetAttr(attrClientSession, cs)
+		if err := s.startWriteLoop(rs, cs); err != nil {
+			cs.close()
 			return err
 		}
 	} else {
-		c = rs.GetAttr(attrChannel).(chan Message)
+		cs = rs.GetAttr(attrClientSession).(*clientSession)
 	}
 
 	request := value.(Message)
@@ -167,7 +168,7 @@ func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint
 			zap.String("request", request.DebugString()))
 	}
 
-	response, err := s.handler(request, sequence)
+	err := s.handler(request, sequence, cs)
 	if err != nil {
 		s.logger.Error("handle request failed",
 			zap.Uint64("sequence", sequence),
@@ -175,27 +176,18 @@ func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint
 			zap.Error(err))
 		return err
 	}
+
 	if ce := s.logger.Check(zap.DebugLevel, "handle request completed"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddr()),
-			zap.String("request-id", hex.EncodeToString(request.ID())),
-			zap.String("response", response.DebugString()))
-	}
-
-	c <- response
-
-	if ce := s.logger.Check(zap.DebugLevel, "add response to write channel"); ce != nil {
-		ce.Write(zap.Uint64("sequence", sequence),
-			zap.String("client", rs.RemoteAddr()),
-			zap.String("request-id", hex.EncodeToString(request.ID())),
-			zap.String("response", response.DebugString()))
+			zap.String("request-id", hex.EncodeToString(request.ID())))
 	}
 	return nil
 }
 
-func (s *server) startWriteLoop(rs goetty.IOSession, c chan Message) error {
+func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
-		defer close(c)
+		defer cs.close()
 
 		responses := make([]Message, 0, s.options.batchSendSize)
 		fetch := func() {
@@ -205,16 +197,22 @@ func (s *server) startWriteLoop(rs goetty.IOSession, c chan Message) error {
 			responses = responses[:0]
 
 			for i := 0; i < s.options.batchSendSize; i++ {
-				select {
-				case <-ctx.Done():
-					responses = nil
-					return
-				case resp, ok := <-c:
-					if ok {
+				if len(responses) == 0 {
+					select {
+					case <-ctx.Done():
+						responses = nil
+						return
+					case resp := <-cs.c:
 						responses = append(responses, resp)
 					}
-				default:
-					if len(responses) > 0 {
+				} else {
+					select {
+					case <-ctx.Done():
+						responses = nil
+						return
+					case resp := <-cs.c:
+						responses = append(responses, resp)
+					default:
 						return
 					}
 				}
@@ -250,10 +248,59 @@ func (s *server) startWriteLoop(rs goetty.IOSession, c chan Message) error {
 							}
 							return
 						}
+						if ce := s.logger.Check(zap.DebugLevel, "write responses"); ce != nil {
+							var fields []zap.Field
+							fields = append(fields, zap.String("client", rs.RemoteAddr()))
+							for _, r := range sendResponses {
+								fields = append(fields, zap.String("request-id",
+									hex.EncodeToString(r.ID())))
+								fields = append(fields, zap.String("response",
+									r.DebugString()))
+							}
+
+							ce.Write(fields...)
+						}
 					}
 				}
 
 			}
 		}
 	})
+}
+
+type clientSession struct {
+	c chan Message
+
+	mu struct {
+		sync.RWMutex
+		closed bool
+	}
+}
+
+func newClientSession() *clientSession {
+	return &clientSession{
+		c: make(chan Message, 16),
+	}
+}
+
+func (cs *clientSession) close() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.mu.closed {
+		return
+	}
+
+	cs.mu.closed = true
+}
+
+func (cs *clientSession) Write(msg Message) error {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	if cs.mu.closed {
+		return errClientClosed
+	}
+
+	cs.c <- msg
+	return nil
 }

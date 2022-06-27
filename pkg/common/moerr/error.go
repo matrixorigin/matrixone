@@ -49,6 +49,8 @@ const (
 	ErrClientClosed
 	// ErrBackendClosed backend closed
 	ErrBackendClosed
+	// ErrStreamClosed rpc stream closed
+	ErrStreamClosed
 	// ErrNoAvailableBackend no available backend
 	ErrNoAvailableBackend
 

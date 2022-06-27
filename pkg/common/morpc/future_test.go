@@ -30,14 +30,13 @@ func TestNewFutureWillPanic(t *testing.T) {
 		}
 	}()
 	f := newFuture(nil)
-	f.init(context.Background(), nil, SendOptions{})
+	f.init(context.Background(), nil, SendOptions{}, false)
 }
 
 func TestCloseChanAfterGC(t *testing.T) {
-	f := &Future{c: make(chan struct{}, 1)}
+	f := newFuture(nil)
 	c := f.c
-	c <- struct{}{}
-	f.setFinalizer()
+	c <- &testMessage{}
 	f = nil
 	debug.FreeOSMemory()
 	for {
@@ -58,7 +57,7 @@ func TestNewFuture(t *testing.T) {
 
 	req := newTestMessage([]byte("id"))
 	f := newFuture(nil)
-	f.init(ctx, req, SendOptions{})
+	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
 
 	assert.NotNil(t, f)
@@ -75,14 +74,12 @@ func TestReleaseFuture(t *testing.T) {
 
 	req := newTestMessage([]byte("id"))
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{})
-	f.c <- struct{}{}
-	f.response = req
+	f.init(ctx, req, SendOptions{}, false)
+	f.c <- req
 	f.Close()
 	assert.True(t, f.mu.closed)
 	assert.Equal(t, 0, len(f.c))
 	assert.Nil(t, f.request)
-	assert.Nil(t, f.response)
 	assert.Nil(t, f.ctx)
 }
 
@@ -92,7 +89,7 @@ func TestGet(t *testing.T) {
 
 	req := newTestMessage([]byte("id"))
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{})
+	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
 
 	f.done(req)
@@ -107,7 +104,7 @@ func TestGetWithTimeout(t *testing.T) {
 
 	req := newTestMessage([]byte("id"))
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{})
+	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
 
 	resp, err := f.Get()
@@ -122,7 +119,7 @@ func TestGetWithInvalidResponse(t *testing.T) {
 
 	req := newTestMessage([]byte("id"))
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{})
+	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
 
 	f.done(newTestMessage([]byte("id2")))
@@ -133,7 +130,7 @@ func TestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	req := newTestMessage([]byte("id"))
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(ctx, req, SendOptions{})
+	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
 
 	assert.False(t, f.timeout())

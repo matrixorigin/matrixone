@@ -23,21 +23,28 @@ import (
 
 func newFuture(releaseFunc func(f *Future)) *Future {
 	f := &Future{
-		c:           make(chan struct{}, 1),
+		c:           make(chan Message, 1),
 		releaseFunc: releaseFunc,
 	}
 	f.setFinalizer()
 	return f
 }
 
+func newFutureWithChan(c chan Message) *Future {
+	return &Future{c: c}
+}
+
 // Future is used to obtain response data synchronously.
 type Future struct {
-	ctx         context.Context
-	opts        SendOptions
-	response    Message
-	request     Message
-	c           chan struct{}
+	id          []byte
+	c           chan Message
 	releaseFunc func(*Future)
+	stream      bool
+
+	// for request-response mode
+	ctx     context.Context
+	opts    SendOptions
+	request Message
 
 	mu struct {
 		sync.Mutex
@@ -46,19 +53,22 @@ type Future struct {
 	}
 }
 
-func (f *Future) init(ctx context.Context, request Message, opts SendOptions) *Future {
-	if _, ok := ctx.Deadline(); !ok {
-		panic("context deadline not set")
+func (f *Future) init(ctx context.Context, request Message, opts SendOptions, stream bool) {
+	if !stream {
+		if _, ok := ctx.Deadline(); !ok {
+			panic("context deadline not set")
+		}
 	}
 
+	f.id = request.ID()
 	f.ctx = ctx
 	f.request = request
 	f.opts = opts
+	f.stream = stream
 
 	f.mu.Lock()
 	f.mu.closed = false
 	f.mu.Unlock()
-	return f
 }
 
 // Get get the response data synchronously, blocking until `context.Done` or the response is received.
@@ -68,8 +78,8 @@ func (f *Future) Get() (Message, error) {
 	select {
 	case <-f.ctx.Done():
 		return nil, f.ctx.Err()
-	case <-f.c:
-		return f.response, nil
+	case resp := <-f.c:
+		return resp, nil
 	}
 }
 
@@ -92,18 +102,12 @@ func (f *Future) done(response Message) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if !f.mu.closed {
-		if response != nil &&
-			(f.request == nil || !bytes.Equal(response.ID(), f.request.ID())) {
+	if !f.mu.closed && !f.timeout() {
+		if !bytes.Equal(response.ID(), f.id) {
 			return
 		}
 
-		f.response = response
-		select {
-		case f.c <- struct{}{}:
-		default:
-			panic("BUG")
-		}
+		f.c <- response
 	}
 }
 
@@ -127,9 +131,10 @@ func (f *Future) unRef() {
 
 func (f *Future) reset() {
 	f.request = nil
-	f.response = nil
+	f.id = nil
 	f.ctx = nil
 	f.opts = SendOptions{}
+	f.stream = false
 	select {
 	case <-f.c:
 	default:

@@ -17,6 +17,7 @@ package morpc
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,8 +33,8 @@ func TestHandleServer(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		rs.RegisterRequestHandler(func(request Message, sequence uint64) (Message, error) {
-			return request, nil
+		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
+			return cs.Write(request)
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -57,8 +58,8 @@ func TestHandleServerWithPayloadMessage(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 
-		rs.RegisterRequestHandler(func(request Message, sequence uint64) (Message, error) {
-			return request, nil
+		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
+			return cs.Write(request)
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -81,10 +82,10 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 
 	testRPCServer(t, func(rs *server) {
 		c := newTestClient(t)
-		rs.RegisterRequestHandler(func(request Message, sequence uint64) (Message, error) {
+		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
 			wc <- struct{}{}
-			return request, nil
+			return cs.Write(request)
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -104,6 +105,45 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 	}))
 }
 
+func TestStreamServer(t *testing.T) {
+	testRPCServer(t, func(rs *server) {
+		c := newTestClient(t)
+		defer func() {
+			assert.NoError(t, c.Close())
+		}()
+
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		n := 10
+		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
+			go func() {
+				defer wg.Done()
+				for i := 0; i < n; i++ {
+					assert.NoError(t, cs.Write(request))
+				}
+			}()
+			return nil
+		})
+
+		st, err := c.NewStream(testAddr, 1)
+		assert.NoError(t, err)
+		defer func() {
+			assert.NoError(t, st.Close())
+		}()
+
+		req := newTestMessage(st.ID())
+		assert.NoError(t, st.Send(req, SendOptions{}))
+
+		rc, err := st.Receive()
+		assert.NoError(t, err)
+		for i := 0; i < n; i++ {
+			assert.Equal(t, req, <-rc)
+		}
+
+		wg.Wait()
+	})
+}
+
 func testRPCServer(t *testing.T, testFunc func(*server), options ...ServerOption) {
 	assert.NoError(t, os.RemoveAll(testUnixFile))
 
@@ -120,7 +160,7 @@ func testRPCServer(t *testing.T, testFunc func(*server), options ...ServerOption
 }
 
 func newTestClient(t *testing.T) RPCClient {
-	bf := NewGoettyBasedBackendFactory(newTestCodec())
+	bf := NewGoettyBasedBackendFactory(newTestCodec(), WithBackendConnectWhenCreate())
 	c, err := NewClient(bf)
 	assert.NoError(t, err)
 	return c
