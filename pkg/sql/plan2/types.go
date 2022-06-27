@@ -107,9 +107,8 @@ type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
 
-	ctxByNode  []*BindContext
-	tagsByNode [][]int32
-	nextTag    int32
+	ctxByNode []*BindContext
+	nextTag   int32
 }
 
 type CTERef struct {
