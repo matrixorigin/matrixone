@@ -1,5 +1,5 @@
 #SELECT
--- @bvt:issue#3324
+-- @bvt:issue#3329
 select unix_timestamp(utc_timestamp());
 -- @bvt:issue
 #select unix_timestamp(current_timestamp());
