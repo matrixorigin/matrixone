@@ -31,9 +31,10 @@ type messageCodec struct {
 	deocder codec.Decoder
 }
 
-// NewMessageCodec create a message codec
-func NewMessageCodec(messageFactory func() Message, payloadBufSize int) Codec {
-	bc := &baseCodec{messageFactory: messageFactory, payloadBufSize: payloadBufSize}
+// NewMessageCodec create a message codec. If the message is a PayloadMessage, payloadCopyBufSize
+// determines how much data is copied from the payload to the socket each time.
+func NewMessageCodec(messageFactory func() Message, payloadCopyBufSize int) Codec {
+	bc := &baseCodec{messageFactory: messageFactory, payloadBufSize: payloadCopyBufSize}
 	_, decoder := length.New(bc, bc)
 	return &messageCodec{encoder: bc, deocder: decoder}
 }
