@@ -17,7 +17,7 @@ null
 3
 WITH qn AS (SELECT a FROM t1), qn as (select b from t1)
 SELECT 1 FROM qn;
-Not unique table/alias: 'qn'
+WITH query name "qn" specified more than once
 with test.qn as (select "with") select * from test.qn;
 You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 11;
 with qn as (select "with" as a)
