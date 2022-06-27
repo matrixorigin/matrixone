@@ -95,8 +95,8 @@ func initTypeCheckRelated() {
 		rules = append(rules, [4]types.T{types.T_decimal128, types.T_decimal64, types.T_decimal128, types.T_decimal128})
 		for _, typ1 := range decimals {
 			for _, typ2 := range numbers {
-				rules = append(rules, [4]types.T{typ1, typ2, typ1, typ1})
-				rules = append(rules, [4]types.T{typ2, typ1, typ1, typ1})
+				rules = append(rules, [4]types.T{typ1, typ2, types.T_decimal128, types.T_decimal128})
+				rules = append(rules, [4]types.T{typ2, typ1, types.T_decimal128, types.T_decimal128})
 			}
 			for _, typ2 := range floats {
 				rules = append(rules, [4]types.T{typ1, typ2, types.T_float64, types.T_float64})
