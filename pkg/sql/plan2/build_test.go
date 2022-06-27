@@ -32,6 +32,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
 	sql := "select @str_var, @int_var, @bool_var, @@global.float_var, @@session.null_var"
+	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -403,6 +404,10 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select count(distinct 12)",
 		"select nullif(n_name, n_comment), ifnull(n_comment, n_name) from nation",
 
+		"select 18446744073709551500",
+		"select 0xffffffffffffffff",
+		"select 0xffff",
+
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY between 2 and 2 OR N_NATIONKEY not between 3 and 10",                                                            //test more expr
@@ -438,6 +443,8 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SET @var = avg(2)", // can't use agg function
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
+		//"select 18446744073709551500",                             //over int64
+		//"select 0xffffffffffffffff",                               //over int64
 	}
 	runTestShouldError(mock, t, sqls)
 }

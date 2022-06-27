@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
+		input:  "SELECT t1.a, t2.a FROM t1 JOIN t2 ON (extract(year from t1.b) = extract(year from t2.b))",
+		output: "select t1.a, t2.a from t1 inner join t2 on (extract(year, t1.b) = extract(year, t2.b))",
 	}
 )
 

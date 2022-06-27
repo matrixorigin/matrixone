@@ -1710,6 +1710,24 @@ var builtins = map[int][]Function{
 			TypeCheckFn: strictTypeCheck,
 			Fn:          multi.FromUnixTime,
 		},
+		{
+			Index:       1,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_uint64},
+			ReturnTyp:   types.T_datetime,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FromUnixTimeUint64,
+		},
+		{
+			Index:       2,
+			Flag:        plan.Function_STRICT,
+			Layout:      STANDARD_FUNCTION,
+			Args:        []types.T{types.T_float64},
+			ReturnTyp:   types.T_datetime,
+			TypeCheckFn: strictTypeCheck,
+			Fn:          multi.FromUnixTimeFloat64,
+		},
 	},
 	UNIX_TIMESTAMP: {
 		{

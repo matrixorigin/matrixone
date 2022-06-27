@@ -16,7 +16,6 @@ package plan2
 
 import (
 	"fmt"
-	"go/constant"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -150,10 +149,10 @@ func getFunctionExprByNameAndAstExprs(name string, distinct bool, astExprs []tre
 	args := make([]*Expr, len(astExprs))
 	// deal with special function [rewrite some ast function expr]
 	switch name {
-	case "extract":
-		// rewrite args[0]
-		kindExpr := astExprs[0].(*tree.UnresolvedName)
-		astExprs[0] = tree.NewNumVal(constant.MakeString(kindExpr.Parts[0]), kindExpr.Parts[0], false)
+	//case "extract":
+	//	// rewrite args[0]
+	//	kindExpr := astExprs[0].(*tree.UnresolvedName)
+	//	astExprs[0] = tree.NewNumValWithType(constant.MakeString(kindExpr.Parts[0]), kindExpr.Parts[0], false, tree.P_char)
 	case "count":
 		// count(*) : astExprs[0].(type) is *tree.NumVal
 		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
