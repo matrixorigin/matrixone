@@ -15,6 +15,8 @@
 package function
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -39,28 +41,37 @@ func TestFunctionOverloadID(t *testing.T) {
 	}
 }
 
-//func TestToPrintCastTable(t *testing.T) {
-//	for i, rs := range binaryTable {
-//		for j, r := range rs {
-//			if r.convert {
-//				println(fmt.Sprintf("%s + %s ===> %s + %s",
-//					types.T(i).OidString(), types.T(j).OidString(),
-//					r.left.OidString(), r.right.OidString()))
-//			}
-//		}
-//	}
-//
-//	for i := 0; i < 5; i++ {
-//		fmt.Println()
-//	}
-//
-//	for i, rs := range binaryTable2 {
-//		for j, r := range rs {
-//			if r.convert {
-//				println(fmt.Sprintf("%s / %s ===> %s / %s",
-//					types.T(i).OidString(), types.T(j).OidString(),
-//					r.left.OidString(), r.right.OidString()))
-//			}
-//		}
-//	}
-//}
+func TestToPrintCastTable(t *testing.T) {
+	//for i, rs := range binaryTable {
+	//	for j, r := range rs {
+	//		if r.convert {
+	//			println(fmt.Sprintf("%s + %s ===> %s + %s",
+	//				types.T(i).OidString(), types.T(j).OidString(),
+	//				r.left.OidString(), r.right.OidString()))
+	//		}
+	//	}
+	//}
+	//
+	//for i := 0; i < 5; i++ {
+	//	fmt.Println()
+	//}
+	//
+	//for i, rs := range binaryTable2 {
+	//	for j, r := range rs {
+	//		if r.convert {
+	//			println(fmt.Sprintf("%s / %s ===> %s / %s",
+	//				types.T(i).OidString(), types.T(j).OidString(),
+	//				r.left.OidString(), r.right.OidString()))
+	//		}
+	//	}
+	//}
+
+	for t1, t := range castTable {
+		for t2, k := range t {
+			if k {
+				println(fmt.Sprintf("%s ==> %s",
+					types.T(t1).OidString(), types.T(t2).OidString()))
+			}
+		}
+	}
+}

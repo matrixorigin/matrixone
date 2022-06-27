@@ -65,17 +65,17 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 		if len(args) == 0 {
 			return 0, nil
 		}
-		matched := make([]int32, 0, 4)    // function overload which can be matched directly
-		byCast := make([]int32, 0, 4)     // function overload which can be matched according to type cast
-		convertTimes := make([]int, 0, 4) // records the number of conversion for byCast
+		matched := make([]int32, 0, 4)   // function overload which can be matched directly
+		byCast := make([]int32, 0, 4)    // function overload which can be matched according to type cast
+		convertCost := make([]int, 0, 4) // records the cost of conversion for byCast
 		for i, f := range fs.Overloads {
-			c, n := tryToMatch(args, f.Args)
+			c, cost := tryToMatch(args, f.Args)
 			switch c {
 			case matchedDirectly:
 				matched = append(matched, int32(i))
 			case matchedByConvert:
 				byCast = append(byCast, int32(i))
-				convertTimes = append(convertTimes, n)
+				convertCost = append(convertCost, cost)
 			case matchedFailed:
 				continue
 			}
@@ -85,10 +85,10 @@ func (fs *Functions) TypeCheck(args []types.T) (int32, []types.T) {
 		} else if len(matched) == 0 && len(byCast) > 0 {
 			// choose the overload with the least number of conversions
 			min, index := math.MaxInt32, 0
-			for j := range convertTimes {
-				if convertTimes[j] < min {
+			for j := range convertCost {
+				if convertCost[j] < min {
 					index = j
-					min = convertTimes[j]
+					min = convertCost[j]
 				}
 			}
 			return byCast[index], fs.Overloads[byCast[index]].Args
