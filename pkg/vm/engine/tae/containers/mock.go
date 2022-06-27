@@ -162,7 +162,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 	case types.Type_VARCHAR, types.Type_CHAR:
 		if unique {
 			for i := 0; i < rows; i++ {
-				s := fmt.Sprintf("%d-%d", i, rand.Intn(10000000))
+				s := fmt.Sprintf("%d-%d", i, 0)
 				vec.Append([]byte(s))
 			}
 		} else {

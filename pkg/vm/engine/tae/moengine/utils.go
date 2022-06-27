@@ -17,6 +17,7 @@ package moengine
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"strconv"
 
 	"github.com/RoaringBitmap/roaring"
@@ -143,7 +144,7 @@ func MockVec(typ types.Type, rows int, offset int) *vector.Vector {
 	return vec
 }
 
-func BatchWindow(bat *batch.Batch, start, end int) *batch.Batch {
+/*func BatchWindow(bat *batch.Batch, start, end int) *batch.Batch {
 	window := batch.New(true, bat.Attrs)
 	window.Vecs = make([]*vector.Vector, len(bat.Vecs))
 	for i := range window.Vecs {
@@ -202,7 +203,7 @@ func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
 		bats = append(bats, newBat)
 	}
 	return bats
-}
+}*/
 
 func GenericUpdateFixedValue[T any](vec *vector.Vector, row uint32, v any) {
 	_, isNull := v.(types.Null)
@@ -355,7 +356,8 @@ func GetValue(col *vector.Vector, row uint32) any {
 		// return string(data.Data[s : e+s])
 		return data.Data[s : e+s]
 	default:
-		return vector.ErrVecTypeNotSupport
+		//return vector.ErrVecTypeNotSupport
+		panic(any("No Support"))
 	}
 }
 
@@ -518,7 +520,7 @@ func ApplyDeleteToVector(vec *vector.Vector, deletes *roaring.Bitmap) *vector.Ve
 		types.Type_UINT8, types.Type_UINT16, types.Type_UINT32, types.Type_UINT64,
 		types.Type_DECIMAL64, types.Type_DECIMAL128, types.Type_FLOAT32, types.Type_FLOAT64,
 		types.Type_DATE, types.Type_DATETIME, types.Type_TIMESTAMP:
-		vec.Col = InplaceDeleteRows(vec.Col, deletesIterator)
+		vec.Col = compute.InplaceDeleteRows(vec.Col, deletesIterator)
 		deletesIterator = deletes.Iterator()
 		for deletesIterator.HasNext() {
 			row := deletesIterator.Next()
@@ -702,8 +704,9 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 		bs.Data = vbs.Data
 		bs.Offset = vbs.Offsets
 		bs.Length = vbs.Lengths
+		vec.ResetWithData(bs, v.Nsp.Np)
 	default:
-		panic(fmt.Errorf("%s not supported", v.Typ.String()))
+		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 	}
 	return vec
 }
@@ -734,6 +737,72 @@ func CopyToMoVector(vec containers.Vector) *vector.Vector {
 	}
 	if err := mov.Read(w.Bytes()); err != nil {
 		panic(err)
+	}
+	return mov
+}
+
+func VectorsToMO(vec containers.Vector) *vector.Vector {
+	mov := vector.New(vec.GetType())
+	data := vec.Data()
+	typ := vec.GetType()
+	mov.Typ = typ
+	mov.Or = true
+	if vec.HasNull() {
+		mov.Nsp.Np = vec.NullMask()
+	}
+	mov.Data = data
+	switch vec.GetType().Oid {
+	case types.Type_BOOL:
+		mov.Col = encoding.DecodeBoolSlice(data)
+	case types.Type_INT8:
+		mov.Col = encoding.DecodeInt8Slice(data)
+	case types.Type_INT16:
+		mov.Col = encoding.DecodeInt16Slice(data)
+	case types.Type_INT32:
+		mov.Col = encoding.DecodeInt32Slice(data)
+	case types.Type_INT64:
+		mov.Col = encoding.DecodeInt64Slice(data)
+	case types.Type_UINT8:
+		mov.Col = encoding.DecodeUint8Slice(data)
+	case types.Type_UINT16:
+		mov.Col = encoding.DecodeUint16Slice(data)
+	case types.Type_UINT32:
+		mov.Col = encoding.DecodeUint32Slice(data)
+	case types.Type_UINT64:
+		mov.Col = encoding.DecodeUint64Slice(data)
+	case types.Type_FLOAT32:
+		mov.Col = encoding.DecodeFloat32Slice(data)
+	case types.Type_FLOAT64:
+		mov.Col = encoding.DecodeFloat64Slice(data)
+	case types.Type_DATE:
+		mov.Col = encoding.DecodeDateSlice(data)
+	case types.Type_DATETIME:
+		mov.Col = encoding.DecodeDatetimeSlice(data)
+	case types.Type_TIMESTAMP:
+		mov.Col = encoding.DecodeTimestampSlice(data)
+	case types.Type_DECIMAL64:
+		mov.Col = encoding.DecodeDecimal64Slice(data)
+	case types.Type_DECIMAL128:
+		mov.Col = encoding.DecodeDecimal128Slice(data)
+	case types.Type_TUPLE:
+		cnt := encoding.DecodeInt32(data)
+		if cnt == 0 {
+			break
+		}
+		if err := encoding.Decode(data, &mov.Col); err != nil {
+			panic(any(err))
+		}
+	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
+		Col := mov.Col.(*types.Bytes)
+		Col.Reset()
+		bs := vec.Bytes()
+		Col.Offsets = make([]uint32, vec.Length())
+		if vec.Length() > 0 {
+			Col.Lengths = encoding.DecodeUint32Slice(bs.LengthBuf())
+			Col.Data = bs.DataBuf()
+		}
+	default:
+		panic(any(fmt.Errorf("%s not supported", vec.GetType().String())))
 	}
 	return mov
 }
