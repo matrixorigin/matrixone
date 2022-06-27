@@ -501,15 +501,25 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_DOUBLE:
 			return &plan.Type{Id: plan.Type_FLOAT64, Width: n.InternalType.Width, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_STRING:
-			if n.InternalType.DisplayWith == -1 { // type char
-				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
+			width := n.InternalType.DisplayWith
+			if width == -1 {
+				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
+				width = 1
 			}
-			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
+			if n.InternalType.FamilyString == "char" { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: width}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
-			if n.InternalType.DisplayWith == -1 { // type char
-				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: 1}, nil
+			width := n.InternalType.DisplayWith
+			if width == -1 {
+				// create table t1(a char) -> DisplayWith = -1；but get width=1 in MySQL and PgSQL
+				width = 1
 			}
-			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: n.InternalType.DisplayWith}, nil
+			if n.InternalType.FamilyString == "char" { // type char
+				return &plan.Type{Id: plan.Type_CHAR, Size: 24, Width: width}, nil
+			}
+			return &plan.Type{Id: plan.Type_VARCHAR, Size: 24, Width: width}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &plan.Type{Id: plan.Type_DATE, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
