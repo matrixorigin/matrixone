@@ -21,6 +21,7 @@ DROP TABLE t;
 -- @bvt:issue
 
 #特殊字符集
+-- @bvt:issue#3187
 drop table if exists `Ｔ１`;
 drop table if exists `Ｔ２`;
 drop table if exists `Ｔ３`;
@@ -129,7 +130,7 @@ drop table if exists `Ｔ６`;
 drop table if exists `Ｔ７`;
 drop table if exists `Ｔ８`;
 drop table if exists `Ｔ９`;
-
+-- @bvt:issue
 
 #NULL
 SELECT RTRIM(NULL);

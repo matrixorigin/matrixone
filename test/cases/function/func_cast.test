@@ -489,8 +489,8 @@ CREATE TABLE `CC` ( `pk` int, `col_datetime_key` datetime);
 INSERT INTO `BB` VALUES ('X');
 INSERT INTO `CC` VALUES (1,'2027-03-17 00:10:00'), (2,'2004-11-14 12:46:43');
 #skip_if_hypergraph  # Different warnings.
--- @bvt:issue#3363
-SELECT COUNT(table1.pk) FROM CC table1 JOIN BB table3 JOIN CC table2
+-- @bvt:issue#3254
+SELECT COUNT(table1.pk) FROM `CC` table1 JOIN `BB` table3 JOIN `CC` table2
 WHERE (table3.col_char_key < table2.col_datetime_key);
 -- @bvt:issue
 DROP TABLE `BB`;
