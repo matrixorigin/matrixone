@@ -15,6 +15,7 @@
 package add
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,42 +23,42 @@ import (
 )
 
 var (
-	Int8Add              = NumericAdd[int8]
-	Int8AddScalar        = NumericAddScalar[int8]
-	Int16Add             = NumericAdd[int16]
-	Int16AddScalar       = NumericAddScalar[int16]
-	Int32Add             = NumericAdd[int32]
-	Int32AddScalar       = NumericAddScalar[int32]
-	Int64Add             = NumericAdd[int64]
-	Int64AddScalar       = NumericAddScalar[int64]
-	Uint8Add             = NumericAdd[uint8]
-	Uint8AddScalar       = NumericAddScalar[uint8]
-	Uint16Add            = NumericAdd[uint16]
-	Uint16AddScalar      = NumericAddScalar[uint16]
-	Uint32Add            = NumericAdd[uint32]
-	Uint32AddScalar      = NumericAddScalar[uint32]
-	Uint64Add            = NumericAdd[uint64]
-	Uint64AddScalar      = NumericAddScalar[uint64]
+	Int8Add              = NumericAddSigned[int8]
+	Int8AddScalar        = NumericAddScalarSigned[int8]
+	Int16Add             = NumericAddSigned[int16]
+	Int16AddScalar       = NumericAddScalarSigned[int16]
+	Int32Add             = NumericAddSigned[int32]
+	Int32AddScalar       = NumericAddScalarSigned[int32]
+	Int64Add             = NumericAddSigned[int64]
+	Int64AddScalar       = NumericAddScalarSigned[int64]
+	Uint8Add             = NumericAddUnsigned[uint8]
+	Uint8AddScalar       = NumericAddScalarUnsigned[uint8]
+	Uint16Add            = NumericAddUnsigned[uint16]
+	Uint16AddScalar      = NumericAddScalarUnsigned[uint16]
+	Uint32Add            = NumericAddUnsigned[uint32]
+	Uint32AddScalar      = NumericAddScalarUnsigned[uint32]
+	Uint64Add            = NumericAddUnsigned[uint64]
+	Uint64AddScalar      = NumericAddScalarUnsigned[uint64]
 	Float32Add           = NumericAdd[float32]
 	Float32AddScalar     = NumericAddScalar[float32]
 	Float64Add           = NumericAdd[float64]
 	Float64AddScalar     = NumericAddScalar[float64]
-	Int8AddSels          = NumericAddSels[int8]
-	Int8AddScalarSels    = NumericAddScalarSels[int8]
-	Int16AddSels         = NumericAddSels[int16]
-	Int16AddScalarSels   = NumericAddScalarSels[int16]
-	Int32AddSels         = NumericAddSels[int32]
-	Int32AddScalarSels   = NumericAddScalarSels[int32]
-	Int64AddSels         = NumericAddSels[int64]
-	Int64AddScalarSels   = NumericAddScalarSels[int64]
-	Uint8AddSels         = NumericAddSels[uint8]
-	Uint8AddScalarSels   = NumericAddScalarSels[uint8]
-	Uint16AddSels        = NumericAddSels[uint16]
-	Uint16AddScalarSels  = NumericAddScalarSels[uint16]
-	Uint32AddSels        = NumericAddSels[uint32]
-	Uint32AddScalarSels  = NumericAddScalarSels[uint32]
-	Uint64AddSels        = NumericAddSels[uint64]
-	Uint64AddScalarSels  = NumericAddScalarSels[uint64]
+	Int8AddSels          = NumericAddSelsSigned[int8]
+	Int8AddScalarSels    = NumericAddScalarSelsSigned[int8]
+	Int16AddSels         = NumericAddSelsSigned[int16]
+	Int16AddScalarSels   = NumericAddScalarSelsSigned[int16]
+	Int32AddSels         = NumericAddSelsSigned[int32]
+	Int32AddScalarSels   = NumericAddScalarSelsSigned[int32]
+	Int64AddSels         = NumericAddSelsSigned[int64]
+	Int64AddScalarSels   = NumericAddScalarSelsSigned[int64]
+	Uint8AddSels         = NumericAddSelsUnsigned[uint8]
+	Uint8AddScalarSels   = NumericAddScalarSelsUnsigned[uint8]
+	Uint16AddSels        = NumericAddSelsUnsigned[uint16]
+	Uint16AddScalarSels  = NumericAddScalarSelsUnsigned[uint16]
+	Uint32AddSels        = NumericAddSelsUnsigned[uint32]
+	Uint32AddScalarSels  = NumericAddScalarSelsUnsigned[uint32]
+	Uint64AddSels        = NumericAddSelsUnsigned[uint64]
+	Uint64AddScalarSels  = NumericAddScalarSelsUnsigned[uint64]
 	Float32AddSels       = NumericAddSels[float32]
 	Float32AddScalarSels = NumericAddScalarSels[float32]
 	Float64AddSels       = NumericAddSels[float64]
@@ -125,6 +126,93 @@ var (
 	Decimal128AddScalar     = decimal128AddScalar
 	Decimal128AddScalarSels = decimal128AddScalarSels
 )
+
+// this is the slowest overflow check
+func NumericAddSigned[T constraints.Signed](xs, ys, rs []T) []T {
+	for i, x := range xs {
+		rs[i] = x + ys[i]
+		if x > 0 && ys[i] > 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericAddSelsSigned[T constraints.Signed](xs, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = xs[sel] + ys[sel]
+		if xs[sel] > 0 && ys[i] > 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericAddScalarSigned[T constraints.Signed](x T, ys, rs []T) []T {
+	for i, y := range ys {
+		rs[i] = x + y
+		if x > 0 && y > 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+		if x < 0 && y < 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericAddScalarSelsSigned[T constraints.Signed](x T, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = x + ys[sel]
+		if x > 0 && ys[sel] > 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+		if x < 0 && ys[sel] < 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericAddUnsigned[T constraints.Unsigned](xs, ys, rs []T) []T {
+	for i, x := range xs {
+		rs[i] = x + ys[i]
+		if rs[i] < x {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericAddSelsUnsigned[T constraints.Unsigned](xs, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = xs[sel] + ys[sel]
+		if rs[i] < xs[sel] {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericAddScalarUnsigned[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
+	for i, y := range ys {
+		rs[i] = x + y
+		if rs[i] < x {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericAddScalarSelsUnsigned[T constraints.Unsigned](x T, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = x + ys[sel]
+		if rs[i] < x {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		}
+	}
+	return rs
+}
 
 func NumericAdd[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {
