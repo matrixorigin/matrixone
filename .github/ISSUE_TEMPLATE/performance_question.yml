@@ -28,9 +28,12 @@ body:
       required: false
   - type: textarea
     attributes:
-      label: Performance Detail
+      label: Details of Performance
       description: |
-        Describe the performance detail what you expected.
+        Please describe the details of your desired performance requirements.
+      value: |
+        For example:Do you want to improve the response time? 
+        Or the number of concurrent requests? Or is the throughput?
     validations:
       required: true
   # - type: textarea

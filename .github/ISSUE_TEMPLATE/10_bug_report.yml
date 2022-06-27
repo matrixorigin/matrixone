@@ -22,7 +22,7 @@ body:
         - Hardware parameters:
         - OS type:
         - Others:
-      render: markdown
+      render: Markdown
     validations:
       required: false
   - type: textarea
@@ -41,7 +41,7 @@ body:
     attributes:
       label: Steps to Reproduce
       description: Steps to reproduce what you encountered.
-      render: markdown
+      render: Markdown
     validations:
       required: false
   - type: textarea

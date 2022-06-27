@@ -18,7 +18,7 @@ body:
       label: Describe the issue
       description: |
         A clear and concise description of what's wrong in documentation.
-      render: markdown
+      render: Markdown
     validations:
       required: true
   - type: textarea

@@ -15,10 +15,10 @@ body:
           required: true
   - type: textarea
     attributes:
-      label: Is your feature request related to a problem? 
+      label: Is your feature request related to a problem?
       description: |
         A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
-      render: markdown
+      render: Markdown
     validations:
       required: false
   - type: textarea
@@ -36,8 +36,8 @@ body:
   - type: textarea
     attributes:
       label: Documentation, Adoption, Use Case, Migration Strategy
-      description: If you can, explain some scenarios how users might use this, situations it would be helpful in. Any API designs, mockups, or diagrams are also helpful. 
-      render: markdown
+      description: If you can, explain some scenarios how users might use this, situations it would be helpful in. Any API designs, mockups, or diagrams are also helpful.
+      render: Markdown
     validations:
       required: false
   - type: textarea
