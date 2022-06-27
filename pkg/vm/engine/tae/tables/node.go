@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"bytes"
 	"sync/atomic"
 	"time"
 
@@ -107,14 +108,22 @@ func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batc
 	return
 }
 
-func (node *appendableNode) GetColumnDataCopy(maxRow uint32, colIdx int) (vec containers.Vector, err error) {
+func (node *appendableNode) GetColumnDataCopy(maxRow uint32, colIdx int, buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
 	node.block.RLock()
+	if buffer != nil {
+		win := node.data.Vecs[colIdx]
+		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
+			win = win.Window(0, int(maxRow))
+		}
+		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
+	} else {
+		vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
+	}
 	// logutil.Infof("src-length: %d, to copy-[0->%d]: %s", node.data.Vecs[colIdx].Length(), maxRow, node.block.meta.String())
-	vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
 	node.block.RUnlock()
 	return
 }

@@ -172,7 +172,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 			var vec containers.Vector
 			if blk.meta.GetSchema().IsSinglePK() {
 				// TODO: use mempool
-				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx())
+				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
 				if err != nil {
 					return
 				}
@@ -182,7 +182,7 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 				sortKeys := blk.meta.GetSchema().SortKey
 				vs := make([]containers.Vector, sortKeys.Size())
 				for i := range vs {
-					vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx)
+					vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil)
 					if err != nil {
 						return
 					}
@@ -555,7 +555,7 @@ func (blk *dataBlock) getVectorCopy(
 		view = model.NewColumnView(ts, colIdx)
 		if raw {
 			var data containers.Vector
-			data, err = blk.node.GetColumnDataCopy(maxRow, colIdx)
+			data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
 			if err != nil {
 				return
 			}
@@ -563,7 +563,7 @@ func (blk *dataBlock) getVectorCopy(
 			return
 		}
 
-		vec, err := blk.node.GetColumnDataCopy(maxRow, colIdx)
+		vec, err := blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
 		if err != nil {
 			return
 		}

@@ -392,7 +392,12 @@ func (n *insertNode) FillHiddenColumn(startRow, length uint32) (err error) {
 
 func (n *insertNode) FillColumnView(view *model.ColumnView, buffer *bytes.Buffer) (err error) {
 	orig := n.data.Vecs[view.ColIdx]
-	view.SetData(orig.CloneWindow(0, orig.Length()))
+	if buffer != nil {
+		buffer.Reset()
+		view.SetData(containers.CloneWithBuffer(orig, buffer))
+	} else {
+		view.SetData(orig.CloneWindow(0, orig.Length()))
+	}
 	view.DeleteMask = n.data.Deletes
 	return
 }
