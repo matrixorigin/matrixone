@@ -901,8 +901,20 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // varchar -> char
 // varchar -> varhcar
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv.Typ = rv.Typ
-	return lv, nil
+	l := vector.Length(lv)
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lv.Data)))
+	if err != nil {
+		return nil, err
+	}
+	b := vec.Col.(*types.Bytes)
+	b.Data = vec.Data
+	b.Offsets = make([]uint32, l)
+	b.Lengths = make([]uint32, l)
+	copy(b.Data, lv.Data)
+	copy(b.Offsets, lv.Col.(*types.Bytes).Offsets)
+	copy(b.Lengths, lv.Col.(*types.Bytes).Lengths)
+	vec.Nsp.Or(lv.Nsp)
+	return vec, nil
 }
 
 func CastSpecialIntToDecimal[T constraints.Integer](
