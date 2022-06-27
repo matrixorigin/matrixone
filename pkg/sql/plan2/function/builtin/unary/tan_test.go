@@ -40,8 +40,8 @@ func TestTan(t *testing.T) {
 	tanIntAndFloat[float32](t, types.T_float32, 0.001, 0.0010000003808309655)
 	tanIntAndFloat[float32](t, types.T_float32, -0.001, -0.0010000003808309655)
 
-	tanIntAndFloat[float64](t, types.T_float64, 0.001, 0.0010000003333334668)
-	tanIntAndFloat[float64](t, types.T_float64, -0.001, -0.0010000003333334668)
+	tanIntAndFloat(t, types.T_float64, 0.001, 0.0010000003333334668)
+	tanIntAndFloat(t, types.T_float64, -0.001, -0.0010000003333334668)
 }
 
 func tanIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -55,7 +55,7 @@ func tanIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ
 	}{
 		{
 			name:       "TEST01",
-			vecs:       maketanVectors[T](src, true, typ),
+			vecs:       maketanVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,
