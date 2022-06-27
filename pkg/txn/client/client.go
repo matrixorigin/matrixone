@@ -86,6 +86,10 @@ func (client *txnClient) New(options ...TxnOption) TxnOperator {
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
-	options = append(options, WithTxnLogger(client.logger))
+	options = append(options, WithTxnLogger(client.logger), WithTxnCNCoordinator())
 	return newTxnOperator(client.sender, txnMeta, options...)
+}
+
+func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
+	return newTxnOperatorWithSnapshot(client.sender, snapshot, client.logger)
 }
