@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -77,16 +78,14 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	var priKey string
 	var priKeyIdx int32 = -1
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
-	if priKeys != nil {
-		for _, key := range priKeys {
-			for _, updateName := range updateAttrs {
-				if key.Name == updateName {
-					e, _ := tree.NewUnresolvedName(key.Name)
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-					priKey = key.Name
-					priKeyIdx = 0
-					break
-				}
+	for _, key := range priKeys {
+		for _, updateName := range updateAttrs {
+			if key.Name == updateName {
+				e, _ := tree.NewUnresolvedName(key.Name)
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+				priKey = key.Name
+				priKeyIdx = 0
+				break
 			}
 		}
 	}

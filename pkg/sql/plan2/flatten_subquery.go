@@ -279,13 +279,13 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeId int32, ctx *BindC
 
 	switch node.NodeType {
 	case plan.Node_AGG:
-		groupTag := builder.tagsByNode[node.NodeId][0]
+		groupTag := node.BindingTags[0]
 		for _, pred := range preds {
 			builder.pullupThroughAgg(ctx, node, groupTag, pred)
 		}
 
 	case plan.Node_PROJECT:
-		projectTag := builder.tagsByNode[node.NodeId][0]
+		projectTag := node.BindingTags[0]
 		for _, pred := range preds {
 			builder.pullupThroughProj(ctx, node, projectTag, pred)
 		}
