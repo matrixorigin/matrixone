@@ -1,7 +1,8 @@
 name: Documentation issue
 description: Raise a problem or suggest new content for MatrixOne documentation
 title: "[Docs]: "
-labels: [kind/docs, needs-triage]
+# labels: [kind/docs, needs-triage]
+labels: [kind/docs]
 assignees:
   - dengn
 body:
