@@ -20,6 +20,7 @@ select a,reverse(a) from t1 where reverse(a)="olleh";
 drop table t1;
 
 #字符集
+-- @bvt:issue#3187
 drop table if exists `Ｔ１`;
 drop table if exists `Ｔ２`;
 drop table if exists `Ｔ３`;
@@ -65,7 +66,7 @@ DROP TABLE `Ｔ６`;
 DROP TABLE `Ｔ７`;
 DROP TABLE `Ｔ８`;
 DROP TABLE `Ｔ９`;
-
+-- @bvt:issue
 
 #中文
 SELECT REVERSE("你好");
