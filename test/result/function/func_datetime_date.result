@@ -284,7 +284,7 @@ YEAR(c1)
 DROP TABLE t3;
 SELECT date("2022-12-22 02:34:23") = date("2022-12-22 03:34:23");
 date("2022-12-22 02:34:23") = date("2022-12-22 03:34:23")
-1
+true
 drop table if exists t1;
 create table t1(a date);
 insert into t1 SELECT DATE("2017-06-15 09:34:21");

@@ -1,7 +1,7 @@
 #SELECT, 嵌套
--- @bvt:issue#3269
+
 SELECT weekday(date('2007-02-03 03:42:24'));
--- @bvt:issue
+
 
 #NULL
 SELECT weekday(NULL);
