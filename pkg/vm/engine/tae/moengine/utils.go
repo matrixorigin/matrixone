@@ -719,7 +719,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 	bs := containers.NewBytes()
 	switch v.Typ.Oid {
 	case types.Type_BOOL:
-		if len(v.Col.([]bool)) == 0 {
+		if v.Col == nil || len(v.Col.([]bool)) == 0 {
 			bs.Data = make([]byte, v.Length)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -727,7 +727,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]bool), 1)
 		}
 	case types.Type_INT8:
-		if len(v.Col.([]int8)) == 0 {
+		if v.Col == nil || len(v.Col.([]int8)) == 0 {
 			bs.Data = make([]byte, v.Length)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -735,7 +735,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]int8), 1)
 		}
 	case types.Type_INT16:
-		if len(v.Col.([]int16)) == 0 {
+		if v.Col == nil || len(v.Col.([]int16)) == 0 {
 			bs.Data = make([]byte, v.Length*2)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -743,7 +743,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]int16), 2)
 		}
 	case types.Type_INT32:
-		if len(v.Col.([]int32)) == 0 {
+		if v.Col == nil || len(v.Col.([]int32)) == 0 {
 			bs.Data = make([]byte, v.Length*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -751,7 +751,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]int32), 4)
 		}
 	case types.Type_INT64:
-		if len(v.Col.([]int64)) == 0 {
+		if v.Col == nil || len(v.Col.([]int64)) == 0 {
 			bs.Data = make([]byte, v.Length*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -760,7 +760,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 		}
 		vec.ResetWithData(bs, v.Nsp.Np)
 	case types.Type_UINT8:
-		if len(v.Col.([]uint8)) == 0 {
+		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
 			bs.Data = make([]byte, v.Length)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -768,7 +768,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint8), 1)
 		}
 	case types.Type_UINT16:
-		if len(v.Col.([]uint16)) == 0 {
+		if v.Col == nil || len(v.Col.([]uint16)) == 0 {
 			bs.Data = make([]byte, v.Length*2)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -776,7 +776,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint16), 2)
 		}
 	case types.Type_UINT32:
-		if len(v.Col.([]uint32)) == 0 {
+		if v.Col == nil || len(v.Col.([]uint32)) == 0 {
 			bs.Data = make([]byte, v.Length*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -784,7 +784,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint32), 4)
 		}
 	case types.Type_UINT64:
-		if len(v.Col.([]uint64)) == 0 {
+		if v.Col == nil || len(v.Col.([]uint64)) == 0 {
 			bs.Data = make([]byte, v.Length*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -792,7 +792,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]uint64), 8)
 		}
 	case types.Type_FLOAT32:
-		if len(v.Col.([]float32)) == 0 {
+		if v.Col == nil || len(v.Col.([]float32)) == 0 {
 			bs.Data = make([]byte, v.Length*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -800,7 +800,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]float32), 4)
 		}
 	case types.Type_FLOAT64:
-		if len(v.Col.([]float64)) == 0 {
+		if v.Col == nil || len(v.Col.([]float64)) == 0 {
 			bs.Data = make([]byte, v.Length*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -808,7 +808,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]float64), 8)
 		}
 	case types.Type_DATE:
-		if len(v.Col.([]types.Date)) == 0 {
+		if v.Col == nil || len(v.Col.([]types.Date)) == 0 {
 			bs.Data = make([]byte, v.Length*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -816,7 +816,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Date), 4)
 		}
 	case types.Type_DATETIME:
-		if len(v.Col.([]types.Datetime)) == 0 {
+		if v.Col == nil || len(v.Col.([]types.Datetime)) == 0 {
 			bs.Data = make([]byte, v.Length*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -824,7 +824,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
 		}
 	case types.Type_TIMESTAMP:
-		if len(v.Col.([]types.Timestamp)) == 0 {
+		if v.Col == nil || len(v.Col.([]types.Timestamp)) == 0 {
 			bs.Data = make([]byte, v.Length*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -832,7 +832,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
 		}
 	case types.Type_DECIMAL64:
-		if len(v.Col.([]types.Decimal64)) == 0 {
+		if v.Col == nil || len(v.Col.([]types.Decimal64)) == 0 {
 			bs.Data = make([]byte, v.Length*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -840,7 +840,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
 		}
 	case types.Type_DECIMAL128:
-		if len(v.Col.([]types.Decimal128)) == 0 {
+		if v.Col == nil || len(v.Col.([]types.Decimal128)) == 0 {
 			bs.Data = make([]byte, v.Length*16)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
@@ -852,6 +852,8 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 		bs.Data = vbs.Data
 		bs.Offset = vbs.Offsets
 		bs.Length = vbs.Lengths
+	case types.Type_ANY:
+		bs.Data = make([]byte, 0)
 	default:
 		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 	}
