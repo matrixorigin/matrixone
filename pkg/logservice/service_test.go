@@ -321,9 +321,10 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	nhID2 := service2.ID()
 
 	done := false
-	for i := 0; i < 3000; i++ {
+	for i := 0; i < 6000; i++ {
 		si1, ok := service1.GetShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
+			plog.Errorf("shard 1 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -336,6 +337,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok := service1.GetShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
+			plog.Errorf("shard 2 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -348,6 +350,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si1, ok = service2.GetShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
+			plog.Errorf("shard 1 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -360,6 +363,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok = service2.GetShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
+			plog.Errorf("shard 2 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -371,6 +375,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
 
 		done = true
+		break
 	}
 	assert.True(t, done)
 }
