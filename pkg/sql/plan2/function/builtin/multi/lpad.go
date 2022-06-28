@@ -125,10 +125,7 @@ func getSpaceLengthOfLpad(sourceStr *types.Bytes, lengths []int64, padStr *types
 			targetLength = lengths[i]
 		}
 
-		if targetLength > MaxSpacePerRowOfLpad {
-			targetLength = MaxSpacePerRowOfLpad
-		}
-		if targetLength < 0 {
+		if targetLength < 0 || targetLength > MaxSpacePerRowOfLpad {
 			//NULL
 		} else if targetLength == 0 {
 			//empty string
@@ -194,7 +191,8 @@ func fillLpad(sourceStr *types.Bytes, lengths []int64, padStr *types.Bytes, rowC
 		} else {
 			targetLength = lengths[i]
 		}
-		if targetLength < 0 {
+
+		if targetLength < 0 || targetLength > MaxSpacePerRowOfLpad {
 			//NULL
 			nulls.Add(resultNUll, uint64(i))
 			results.Offsets[i] = target
