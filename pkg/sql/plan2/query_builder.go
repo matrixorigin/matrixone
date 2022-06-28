@@ -334,7 +334,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
-		builder.qry.Steps[i], _ = builder.pushdownFilters(rootId, nil)
+		rootId = builder.pushdownSemiAntiJoins(rootId)
+		rootId, _ = builder.pushdownFilters(rootId, nil)
+		builder.qry.Steps[i] = rootId
 		_, err := builder.remapAllColRefs(rootId)
 		if err != nil {
 			return nil, err
@@ -1164,6 +1166,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 			leftTags[tag] = nil
 		}
 
+		rightTags := make(map[int32]*Binding)
+		for _, tag := range builder.enumerateTags(node.Children[1]) {
+			rightTags[tag] = nil
+		}
+
 		if node.JoinType == plan.Node_INNER {
 			for _, cond := range node.OnList {
 				filters = append(filters, splitPlanConjunction(applyDistributivity(cond))...)
@@ -1173,18 +1180,17 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 		}
 
 		var leftPushdown, rightPushdown []*plan.Expr
+		var turnInner bool
 
 		joinSides := make([]int8, len(filters))
-
-		var turnInner bool
 
 		for i, filter := range filters {
 			canTurnInner := true
 
-			joinSides[i] = getJoinSide(filter, leftTags)
+			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
 			if f, ok := filter.Expr.(*plan.Expr_F); ok {
 				for _, arg := range f.F.Args {
-					if getJoinSide(arg, leftTags) == JoinSideBoth {
+					if getJoinSide(arg, leftTags, rightTags) == JoinSideBoth {
 						canTurnInner = false
 						break
 					}
@@ -1211,14 +1217,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 			joinSides = make([]int8, len(filters))
 
 			for i, filter := range filters {
-				joinSides[i] = getJoinSide(filter, leftTags)
+				joinSides[i] = getJoinSide(filter, leftTags, rightTags)
 			}
 		} else if node.JoinType == plan.Node_LEFT {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
 				conj := splitPlanConjunction(applyDistributivity(cond))
 				for _, conjElem := range conj {
-					side := getJoinSide(conjElem, leftTags)
+					side := getJoinSide(conjElem, leftTags, rightTags)
 					if side&JoinSideLeft == 0 {
 						rightPushdown = append(rightPushdown, conjElem)
 					} else {
@@ -1271,9 +1277,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 				if node.JoinType == plan.Node_INNER {
 					if f, ok := filter.Expr.(*plan.Expr_F); ok {
 						if f.F.Func.ObjName == "=" {
-							if (getJoinSide(f.F.Args[0], leftTags) != JoinSideBoth) && (getJoinSide(f.F.Args[1], leftTags) != JoinSideBoth) {
-								node.OnList = append(node.OnList, filter)
-								break
+							if getJoinSide(f.F.Args[0], leftTags, rightTags) != JoinSideBoth {
+								if getJoinSide(f.F.Args[1], leftTags, rightTags) != JoinSideBoth {
+									node.OnList = append(node.OnList, filter)
+									break
+								}
 							}
 						}
 					}
@@ -1354,6 +1362,72 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 	}
 
 	return nodeId, cantPushdown
+}
+
+func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeId int32) int32 {
+	node := builder.qry.Nodes[nodeId]
+
+	for i, childId := range node.Children {
+		node.Children[i] = builder.pushdownSemiAntiJoins(childId)
+	}
+
+	if node.NodeType != plan.Node_JOIN {
+		return nodeId
+	}
+
+	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
+		return nodeId
+	}
+
+	var targetNode *plan.Node
+	var targetSide int32
+
+	joinNode := builder.qry.Nodes[node.Children[0]]
+
+	for {
+		if joinNode.NodeType != plan.Node_JOIN {
+			break
+		}
+
+		if joinNode.JoinType != plan.Node_INNER && joinNode.JoinType != plan.Node_LEFT {
+			break
+		}
+
+		leftTags := make(map[int32]*Binding)
+		for _, tag := range builder.enumerateTags(joinNode.Children[0]) {
+			leftTags[tag] = nil
+		}
+
+		rightTags := make(map[int32]*Binding)
+		for _, tag := range builder.enumerateTags(joinNode.Children[1]) {
+			rightTags[tag] = nil
+		}
+
+		var joinSide int8
+		for _, cond := range node.OnList {
+			joinSide |= getJoinSide(cond, leftTags, rightTags)
+		}
+
+		if joinSide == JoinSideLeft {
+			targetNode = joinNode
+			targetSide = 0
+			joinNode = builder.qry.Nodes[joinNode.Children[0]]
+		} else if joinNode.JoinType == plan.Node_INNER && joinSide == JoinSideRight {
+			targetNode = joinNode
+			targetSide = 1
+			joinNode = builder.qry.Nodes[joinNode.Children[1]]
+		} else {
+			break
+		}
+	}
+
+	if targetNode != nil {
+		nodeId = node.Children[0]
+		node.Children[0] = targetNode.Children[targetSide]
+		targetNode.Children[targetSide] = node.NodeId
+	}
+
+	return nodeId
 }
 
 func (builder *QueryBuilder) enumerateTags(nodeId int32) []int32 {
