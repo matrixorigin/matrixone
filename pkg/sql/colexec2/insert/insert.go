@@ -70,7 +70,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
 			if bat.Vecs[i].IsScalarNull() {
-				if bat.Vecs[i].Typ.Oid != types.T_any {
+				if bat.Vecs[i].Typ.Oid == types.T_any {
 					bat.Vecs[i].Typ.Oid = types.T(n.TargetColDefs[i].Typ.GetId())
 				}
 				vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
