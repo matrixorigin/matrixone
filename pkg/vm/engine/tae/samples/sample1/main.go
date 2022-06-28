@@ -100,7 +100,6 @@ func main() {
 	wg.Wait()
 	stopProfile()
 	logutil.Infof("Append takes: %s", time.Since(now))
-	return
 	waitTime := time.Millisecond * time.Duration(batchCnt/200+1) * 300
 	for i := 0; i < 5; i++ {
 		time.Sleep(waitTime)

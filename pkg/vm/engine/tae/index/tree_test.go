@@ -140,7 +140,6 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.BatchInsert(ctx, uint32(0), false)
 	require.NoError(t, err)
 	t.Log(idx.String())
-	return
 
 	row, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
