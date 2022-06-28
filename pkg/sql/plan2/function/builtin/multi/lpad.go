@@ -210,6 +210,7 @@ func fillLpad(sourceStr *types.Bytes, lengths []int64, padStr *types.Bytes, rowC
 			sourcePartLen := len(sourcePartSlice)
 			copy(results.Data[target:], sourcePartSlice)
 			results.Offsets[i] = target
+			results.Lengths[i] = uint32(sourcePartLen)
 			target += uint32(sourcePartLen)
 		} else if targetLength >= sourceCharCnt {
 			//calculate the space count

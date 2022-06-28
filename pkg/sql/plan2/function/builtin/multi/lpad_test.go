@@ -163,6 +163,12 @@ func TestLpadVarchar(t *testing.T) {
 			proc:      process.New(mheap.New(nil)),
 			wantBytes: []byte("见aaaa见aaaa你aaaa"),
 		},
+		{
+			name:      "tx6",
+			vecs:      makeLpadVectors("aaaaaaaa", 4, "bbb", []int{1, 1, 1}),
+			proc:      process.New(mheap.New(nil)),
+			wantBytes: []byte("aaaa"),
+		},
 	}
 
 	for _, c := range cases {
