@@ -154,7 +154,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			case types.T_uint32:
 				return CastLeftToRight[int64, uint32](lv, rv, proc)
 			case types.T_uint64:
-				return CastLeftToRight[int64, uint64](lv, rv, proc)
+				return CastInt64ToUint64(lv, rv, proc)
 			case types.T_float32:
 				return CastLeftToRight[int64, float32](lv, rv, proc)
 			case types.T_float64:
@@ -673,7 +673,7 @@ func CastDecimal128ToString(lv, rv *vector.Vector, proc *process.Process) (*vect
 // float32 -> float32,
 // float64 -> float64,
 func CastSameType[T constraints.Integer | constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := lv.Typ.Oid.FixedLength()
+	rtl := lv.Typ.Oid.TypeLen()
 	lvs := vector.MustTCols[T](lv)
 
 	if lv.IsScalar() {
@@ -701,7 +701,7 @@ func CastSameType[T constraints.Integer | constraints.Float](lv, rv *vector.Vect
 // datetime -> datetime
 // timestamp -> timestamp
 func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
+	rtl := rv.Typ.Oid.TypeLen()
 	lvs := vector.MustTCols[T](lv)
 
 	if lv.IsScalar() {
@@ -766,7 +766,7 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 
 // CastUint64ToInt64 : cast uint64 to int64
 func CastUint64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
+	rtl := rv.Typ.Oid.TypeLen()
 	lvs := vector.MustTCols[uint64](lv)
 
 	if lv.IsScalar() {
@@ -786,6 +786,35 @@ func CastUint64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 	}
 	rs := encoding.DecodeInt64Slice(vec.Data)
 	if _, err := typecast.Uint64ToInt64(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// CastInt64ToUint64 : cast int64 to uint64
+func CastInt64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[int64](lv)
+
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]uint64, 1)
+		if _, err := typecast.Int64ToUint64(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeUint64Slice(vec.Data)
+	if _, err := typecast.Int64ToUint64(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -1136,7 +1165,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 		return vec, nil
 	}
 
-	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)))
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.TypeLen()*len(vs.Lengths)))
 	if err != nil {
 		return nil, err
 	}
@@ -1176,7 +1205,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 		return vec, nil
 	}
 
-	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)))
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.TypeLen()*len(vs.Lengths)))
 	if err != nil {
 		return nil, err
 	}
@@ -1216,7 +1245,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 		return scalarVector, nil
 	}
 
-	allocVector, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)))
+	allocVector, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.TypeLen()*len(vs.Lengths)))
 	if err != nil {
 		return nil, err
 	}

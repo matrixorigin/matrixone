@@ -4393,31 +4393,27 @@ var operators = map[int]Functions{
 					return int32(i), nil
 				}
 			}
+			minCost, minIndex := math.MaxInt32, -1
+			convertTypes := make([]types.T, 3)
+			targetTypes := make([]types.T, 3)
 			for i, o := range overloads {
-				finalTypes := make([]types.T, 3)
-				if len(inputs) == 3 && inputs[0] == types.T_bool {
-					flag := true
-					finalTypes[0] = types.T_bool
-					if inputs[1] != ScalarNull {
-						if !castTable[inputs[1]][o.ReturnTyp] {
-							flag = false
-						}
-						finalTypes[1] = o.ReturnTyp
-					} else {
-						finalTypes[1] = ScalarNull
+				if len(inputs) == 3 {
+					if inputs[0] != types.T_bool {
+						continue
 					}
-					if inputs[2] != ScalarNull {
-						if !castTable[inputs[2]][o.ReturnTyp] {
-							flag = false
+					targetTypes[0] = types.T_bool
+					targetTypes[1], targetTypes[2] = o.ReturnTyp, o.ReturnTyp
+					if code, c := tryToMatch(inputs, targetTypes); code == matchedByConvert {
+						if c < minCost {
+							minCost = c
+							copy(convertTypes, targetTypes)
+							minIndex = i
 						}
-						finalTypes[2] = o.ReturnTyp
-					} else {
-						finalTypes[2] = ScalarNull
-					}
-					if flag {
-						return int32(i), finalTypes
 					}
 				}
+			}
+			if minIndex != -1 {
+				return int32(minIndex), convertTypes
 			}
 			return wrongFunctionParameters, nil
 		},

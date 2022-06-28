@@ -99,7 +99,7 @@ var (
 	Int8ToUint64    = NumericToNumeric[int8, uint64]
 	Int16ToUint64   = NumericToNumeric[int16, uint64]
 	Int32ToUint64   = NumericToNumeric[int32, uint64]
-	Int64ToUint64   = NumericToNumeric[int64, uint64]
+	Int64ToUint64   = int64ToUint64
 	Uint8ToUint64   = NumericToNumeric[uint8, uint64]
 	Uint16ToUint64  = NumericToNumeric[uint16, uint64]
 	Uint32ToUint64  = NumericToNumeric[uint32, uint64]
@@ -188,8 +188,16 @@ func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
 	return rs, nil
 }
 
-func int64ToUint64(xs []int64, rs []uint64) ([]int64, error) {
-	return nil, nil
+func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
+	overflowFlag := int64(0)
+	for i, x := range xs {
+		rs[i] = uint64(x)
+		overflowFlag |= x >> 63
+	}
+	if overflowFlag != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint to bigint unsigned"))
+	}
+	return rs, nil
 }
 
 func BytesToInt[T constraints.Integer](xs *types.Bytes, rs []T) ([]T, error) {

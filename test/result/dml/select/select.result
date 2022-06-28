@@ -262,11 +262,9 @@ a	big
 1	9223372036854775807
 1	18446744073709551615
 select min(big),max(big),max(big)-1 from t1;
-min(big)	max(big)	max(big)-1
-12345678901234567	18446744073709551615	18446744073709551614
+overflow from bigint unsigned to bigint
 select min(big),max(big),max(big)-1 from t1 group by a;
-min(big)	max(big)	max(big)-1
-12345678901234567	18446744073709551615	18446744073709551614
+overflow from bigint unsigned to bigint
 drop table if exists t1;
 create table t1 (
 value64 bigint unsigned not null,
