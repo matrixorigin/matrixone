@@ -33,6 +33,7 @@ var (
 const (
 	HiddenColumnName    = "PADDR"
 	HiddenColumnComment = "Physical address"
+	SortKeyNamePrefx    = "_SORT_"
 
 	SystemDBID               = uint64(1)
 	SystemDBName             = "mo_catalog"

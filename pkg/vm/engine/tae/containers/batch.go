@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
@@ -31,6 +32,13 @@ func (bat *Batch) AddVector(attr string, vec Vector) {
 func (bat *Batch) GetVectorByName(name string) Vector {
 	pos := bat.nameidx[name]
 	return bat.Vecs[pos]
+}
+
+func (bat *Batch) RangeDelete(start, end int) {
+	if bat.Deletes == nil {
+		bat.Deletes = roaring.New()
+	}
+	bat.Deletes.AddRange(uint64(start), uint64(end))
 }
 
 func (bat *Batch) Delete(i int) {
@@ -85,10 +93,67 @@ func (bat *Batch) Allocated() int {
 	return allocated
 }
 
+func (bat *Batch) Window(offset, length int) *Batch {
+	win := NewEmptyBatch()
+	win.Attrs = bat.Attrs
+	win.nameidx = bat.nameidx
+	if bat.Deletes != nil && offset+length != bat.Length() {
+		win.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
+	} else {
+		win.Deletes = bat.Deletes
+	}
+	win.Vecs = make([]Vector, len(bat.Vecs))
+	for i := range win.Vecs {
+		win.Vecs[i] = bat.Vecs[i].Window(offset, length)
+	}
+	return win
+}
+
+func (bat *Batch) CloneWindow(offset, length int, allocator ...MemAllocator) (cloned *Batch) {
+	cloned = NewEmptyBatch()
+	cloned.Attrs = bat.Attrs
+	cloned.nameidx = bat.nameidx
+	if bat.Deletes != nil {
+		cloned.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
+	}
+	cloned.Vecs = make([]Vector, len(bat.Vecs))
+	for i := range cloned.Vecs {
+		cloned.Vecs[i] = bat.Vecs[i].CloneWindow(offset, length, allocator...)
+	}
+	return
+}
+
+func (bat *Batch) String() string {
+	return ""
+}
+
 func (bat *Batch) Close() {
 	for _, vec := range bat.Vecs {
 		vec.Close()
 	}
+}
+
+func (bat *Batch) Equals(o *Batch) bool {
+	if bat.Length() != o.Length() {
+		return false
+	}
+	if bat.DeleteCnt() != o.DeleteCnt() {
+		return false
+	}
+	if bat.HasDelete() {
+		if !bat.Deletes.Equals(o.Deletes) {
+			return false
+		}
+	}
+	for i := range bat.Vecs {
+		if bat.Attrs[i] != o.Attrs[i] {
+			return false
+		}
+		if !bat.Vecs[i].Equals(o.Vecs[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (bat *Batch) WriteTo(w io.Writer) (n int64, err error) {
@@ -190,4 +255,44 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	n += tmpn
 
 	return
+}
+
+func (bat *Batch) Split(cnt int) []*Batch {
+	if cnt == 1 {
+		return []*Batch{bat}
+	}
+	length := bat.Length()
+	rows := length / cnt
+	if length%cnt == 0 {
+		bats := make([]*Batch, 0, cnt)
+		for i := 0; i < cnt; i++ {
+			newBat := bat.Window(i*rows, rows)
+			bats = append(bats, newBat)
+		}
+		return bats
+	}
+	rowArray := make([]int, 0)
+	if length/cnt == 0 {
+		for i := 0; i < length; i++ {
+			rowArray = append(rowArray, 1)
+		}
+	} else {
+		left := length
+		for i := 0; i < cnt; i++ {
+			if left >= rows && i < cnt-1 {
+				rowArray = append(rowArray, rows)
+			} else {
+				rowArray = append(rowArray, left)
+			}
+			left -= rows
+		}
+	}
+	start := 0
+	bats := make([]*Batch, 0, cnt)
+	for _, row := range rowArray {
+		newBat := bat.Window(start, row)
+		start += row
+		bats = append(bats, newBat)
+	}
+	return bats
 }

@@ -21,12 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/panjf2000/ants/v2"
 )
@@ -71,10 +69,11 @@ func main() {
 			panic(err)
 		}
 	}
-	bat := catalog.MockData(schema, batchRows)
-	bats := compute.SplitBatch(bat, int(batchCnt))
+	bat := catalog.MockBatch(schema, int(batchRows))
+	defer bat.Close()
+	bats := bat.Split(int(batchCnt))
 	var wg sync.WaitGroup
-	doAppend := func(b *batch.Batch) func() {
+	doAppend := func(b *containers.Batch) func() {
 		return func() {
 			defer wg.Done()
 			txn, _ := tae.StartTxn(nil)
@@ -128,10 +127,11 @@ func main() {
 				compressed.Reset()
 				decompressed.Reset()
 				view, err := blk.GetColumnDataById(0, &compressed, &decompressed)
-				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), vector.Length(view.AppliedVec))
+				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), view.Length())
 				if err != nil {
 					panic(err)
 				}
+				defer view.Close()
 				blkIt.Next()
 			}
 			segIt.Next()

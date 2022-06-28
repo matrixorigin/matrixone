@@ -82,16 +82,18 @@ func (entry *compactBlockEntry) PrepareCommit() (err error) {
 		return
 	}
 	deletes := view.DeleteMask
-	for colIdx, mask := range view.UpdateMasks {
-		vals := view.UpdateVals[colIdx]
-		view.UpdateMasks[colIdx], view.UpdateVals[colIdx], view.DeleteMask = compute.ShuffleByDeletes(mask, vals, deletes)
-		for row, v := range view.UpdateVals[colIdx] {
-			if err = entry.to.Update(row, colIdx, v); err != nil {
+	for colIdx, column := range view.Columns {
+		column.UpdateMask, column.UpdateVals, column.DeleteMask = compute.ShuffleByDeletes(
+			column.UpdateMask,
+			column.UpdateVals,
+			deletes)
+		for row, v := range column.UpdateVals {
+			if err = entry.to.Update(row, uint16(colIdx), v); err != nil {
 				return
 			}
 		}
 	}
-	if len(view.UpdateMasks) == 0 {
+	if len(view.Columns) == 0 {
 		_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask)
 	}
 	if view.DeleteMask != nil {

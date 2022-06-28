@@ -19,14 +19,17 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStaticFilterNumeric(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.Type_INT32}
-	data := compute.MockVec(typ, 40000, 0)
+	data := containers.MockVector2(typ, 40000, 0)
+	defer data.Close()
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
 	var positive *roaring.Bitmap
@@ -49,7 +52,8 @@ func TestStaticFilterNumeric(t *testing.T) {
 		res, err = sf.MayContainsKey(int16(0))
 	})
 
-	query := compute.MockVec(typ, 2000, 1000)
+	query := containers.MockVector2(typ, 2000, 1000)
+	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
@@ -62,7 +66,8 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.Equal(t, uint64(1000), positive.GetCardinality())
 	require.True(t, exist)
 
-	query = compute.MockVec(typ, 20000, 40000)
+	query = containers.MockVector2(typ, 20000, 40000)
+	defer query.Close()
 	_, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
@@ -72,12 +77,15 @@ func TestStaticFilterNumeric(t *testing.T) {
 	buf, err = sf.Marshal()
 	require.NoError(t, err)
 
-	sf1, err := NewBinaryFuseFilter(compute.MockVec(typ, 0, 0))
+	vec := containers.MockVector2(typ, 0, 0)
+	defer vec.Close()
+	sf1, err := NewBinaryFuseFilter(vec)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
 
-	query = compute.MockVec(typ, 40000, 0)
+	query = containers.MockVector2(typ, 40000, 0)
+	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
@@ -85,8 +93,10 @@ func TestStaticFilterNumeric(t *testing.T) {
 }
 
 func TestStaticFilterString(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.Type_VARCHAR}
-	data := compute.MockVec(typ, 40000, 0)
+	data := containers.MockVector2(typ, 40000, 0)
+	defer data.Close()
 	sf, err := NewBinaryFuseFilter(data)
 	require.NoError(t, err)
 	var positive *roaring.Bitmap
@@ -101,13 +111,15 @@ func TestStaticFilterString(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res)
 
-	query := compute.MockVec(typ, 2000, 1000)
+	query := containers.MockVector2(typ, 2000, 1000)
+	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
 	require.True(t, exist)
 
-	query = compute.MockVec(typ, 20000, 40000)
+	query = containers.MockVector2(typ, 20000, 40000)
+	defer query.Close()
 	_, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
@@ -117,12 +129,15 @@ func TestStaticFilterString(t *testing.T) {
 	buf, err = sf.Marshal()
 	require.NoError(t, err)
 
-	sf1, err := NewBinaryFuseFilter(compute.MockVec(typ, 0, 0))
+	query = containers.MockVector2(typ, 0, 0)
+	defer query.Close()
+	sf1, err := NewBinaryFuseFilter(query)
 	require.NoError(t, err)
 	err = sf1.Unmarshal(buf)
 	require.NoError(t, err)
 
-	query = compute.MockVec(typ, 40000, 0)
+	query = containers.MockVector2(typ, 40000, 0)
+	defer query.Close()
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())

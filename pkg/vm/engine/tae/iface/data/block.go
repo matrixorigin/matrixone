@@ -18,10 +18,9 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -41,8 +40,8 @@ type BlockAppender interface {
 	GetID() *common.ID
 	GetMeta() any
 	PrepareAppend(rows uint32) (n uint32, err error)
-	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn, anode txnif.AppendNode) (txnif.AppendNode, uint32, error)
-	OnReplayInsertNode(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error)
+	ApplyAppend(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn, anode txnif.AppendNode) (txnif.AppendNode, int, error)
+	OnReplayInsertNode(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn) (node txnif.AppendNode, from int, err error)
 	IsAppendable() bool
 	OnReplayAppendNode(an txnif.AppendNode)
 }
@@ -69,9 +68,9 @@ type Block interface {
 	CollectChangesInRange(startTs, endTs uint64) (*model.BlockView, error)
 	CollectAppendLogIndexes(startTs, endTs uint64) ([]*wal.Index, error)
 
-	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector, rowmask *roaring.Bitmap) error
+	BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
-	GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (any, error)
+	GetValue(txn txnif.AsyncTxn, row, col int) (any, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 	GetBlockFile() file.Block
 
@@ -81,9 +80,10 @@ type Block interface {
 
 	CheckpointWALClosure(endTs uint64) tasks.FuncT
 	SyncBlockDataClosure(ts uint64, rows uint32) tasks.FuncT
-	FlushColumnDataClosure(ts uint64, colIdx int, colData *vector.Vector, sync bool) tasks.FuncT
+	FlushColumnDataClosure(ts uint64, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
 	ForceCompact() error
 	Destroy() error
 	ReplayIndex() error
 	Flush()
+	Close()
 }
