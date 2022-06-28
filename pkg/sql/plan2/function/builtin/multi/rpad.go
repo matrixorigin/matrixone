@@ -33,11 +33,12 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
 
 	// gets a new vector to store our result
+	rowCount := vector.Length(origVecs[0])
 
 	if origVecs[0].IsScalar() && origVecs[1].IsScalar() && origVecs[2].IsScalar() {
 		//evaluate the result
 		resultVec := proc.AllocScalarVector(origVecs[0].Typ)
-		result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+		result, nsp, err := rpad.Rpad(rowCount, strs, sizes, padstrs, isConst, oriNsps)
 		if err != nil {
 			return nil, err
 		}
@@ -51,7 +52,7 @@ func Rpad(origVecs []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		return nil, err
 	}
 
-	result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+	result, nsp, err := rpad.Rpad(rowCount, strs, sizes, padstrs, isConst, oriNsps)
 	if err != nil {
 		return nil, err
 	}
