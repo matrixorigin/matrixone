@@ -56,10 +56,8 @@ select distinct t.a from (select * from t1) t where a not in (2) order by t.a as
 select a and b from t1 where exists (select a from t1 where a is null) order by a desc;
 
 #Test cases of update and delete
--- @bvt:issue#3244
 update t1 set a=false where b is null;
 delete from t1 where a=false;
 select * from t1;
 delete from t1 where b=true;
 select * from t1;
--- @bvt:issue#3244
