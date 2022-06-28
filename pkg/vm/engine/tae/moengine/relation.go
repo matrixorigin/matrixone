@@ -21,8 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 var (
@@ -152,6 +154,11 @@ func (rel *txnRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) e
 	defer bat.Close()
 	for i, vec := range data.Vecs {
 		idx := catalog.GetAttrIdx(schema.AllNames(), data.Attrs[i])
+		if vec.Typ.Oid == types.Type_ANY {
+			vec.Typ = schema.ColDefs[idx].Type
+			logutil.Warn("[Moengine]", common.OperationField("Update"),
+				common.OperandField("Col type is any"))
+		}
 		v := MOToVectorTmp(vec, allNullables[idx])
 		bat.AddVector(data.Attrs[i], v)
 	}
@@ -177,6 +184,11 @@ func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engi
 	logutil.Debugf("Delete col: %v", col)
 	allNullables := schema.AllNullables()
 	idx := catalog.GetAttrIdx(schema.AllNames(), col)
+	if data.Typ.Oid == types.Type_ANY {
+		data.Typ = schema.ColDefs[idx].Type
+		logutil.Warn("[Moengine]", common.OperationField("Delete"),
+			common.OperandField("Col type is any"))
+	}
 	vec := MOToVectorTmp(data, allNullables[idx])
 	defer vec.Close()
 	if schema.HiddenKey.Name == col {

@@ -848,12 +848,14 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = encoding.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
 		}
 	case types.Type_CHAR, types.Type_VARCHAR, types.Type_JSON:
-		vbs := v.Col.(*types.Bytes)
-		bs.Data = vbs.Data
-		bs.Offset = vbs.Offsets
-		bs.Length = vbs.Lengths
-	case types.Type_ANY:
-		bs.Data = make([]byte, 0)
+		if v.Col == nil {
+			bs.Data = make([]byte, 0)
+		} else {
+			vbs := v.Col.(*types.Bytes)
+			bs.Data = vbs.Data
+			bs.Offset = vbs.Offsets
+			bs.Length = vbs.Lengths
+		}
 	default:
 		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 	}
