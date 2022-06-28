@@ -22,15 +22,15 @@ SELECT MONTH(10) as MONTH;
 SELECT MONTH(1=1) as MONTH;
 -- @bvt:issue
 
--- @bvt:issue#3326
+
 SELECT MONTH('2015-09.30') as MONTH;
--- @bvt:issue
+
 
 SELECT MONTH('2015-0') as MONTH;
 
--- @bvt:issue#3326
+
 SELECT MONTH('2015-09.30 12') as MONTH;
--- @bvt:issue
+
 
 SELECT MONTH('2015-09-26 08:09:22') AS MONTH;
 

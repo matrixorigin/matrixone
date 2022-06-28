@@ -1155,7 +1155,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Date, 1)
 		varcharValue := vs.Get(0)
-		data, err2 := types.ParseDate(string(varcharValue))
+		data, err2 := types.ParseDateCast(string(varcharValue))
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1176,7 +1176,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 			continue
 		}
 		varcharValue := vs.Get(int64(i))
-		data, err2 := types.ParseDate(string(varcharValue))
+		data, err2 := types.ParseDateCast(string(varcharValue))
 		if err2 != nil {
 			return nil, err2
 		}

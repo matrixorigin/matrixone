@@ -14,6 +14,7 @@
 package unary
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -24,26 +25,33 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+func myCot(x float64) float64 {
+	// Yes, div 0 golang will return Inf
+	return math.Cos(x) / math.Sin(x)
+}
+
 func TestCot(t *testing.T) {
-	cotIntAndFloat[int8](t, types.T_int8, 1, 0.6420926159343308)
-	cotIntAndFloat[int16](t, types.T_int16, 1, 0.6420926159343308)
-	cotIntAndFloat[int32](t, types.T_int32, 1, 0.6420926159343308)
-	cotIntAndFloat[int64](t, types.T_int64, 1, 0.6420926159343308)
+	cotIntAndFloat[int8](t, types.T_int8, 1, myCot(1))
+	cotIntAndFloat[int16](t, types.T_int16, 1, myCot(1))
+	cotIntAndFloat[int32](t, types.T_int32, 1, myCot(1))
+	cotIntAndFloat[int64](t, types.T_int64, 1, myCot(1))
 
-	cotIntAndFloat[int64](t, types.T_int64, -2, 0.45765755436028577)
+	cotIntAndFloat[int64](t, types.T_int64, -2, myCot(-2))
 
-	cotIntAndFloat[uint8](t, types.T_uint8, 1, 0.6420926159343308)
-	cotIntAndFloat[uint16](t, types.T_uint16, 1, 0.6420926159343308)
-	cotIntAndFloat[uint32](t, types.T_uint32, 1, 0.6420926159343308)
-	cotIntAndFloat[uint64](t, types.T_uint64, 1, 0.6420926159343308)
+	cotIntAndFloat[uint8](t, types.T_uint8, 1, myCot(1))
+	cotIntAndFloat[uint16](t, types.T_uint16, 1, myCot(1))
+	cotIntAndFloat[uint32](t, types.T_uint32, 1, myCot(1))
+	cotIntAndFloat[uint64](t, types.T_uint64, 1, myCot(1))
 
-	cotIntAndFloat[float32](t, types.T_float32, 7.5, 0.3695472563090164)
-	cotIntAndFloat[float32](t, types.T_float32, -123425, -0.33291933430046317)
+	cotIntAndFloat[float32](t, types.T_float32, 7.5, myCot(7.5))
+	cotIntAndFloat[float32](t, types.T_float32, -123425, myCot(-123425))
 
-	cotIntAndFloat[float64](t, types.T_float64, 0.141241241241313, 7.032941899028284)
-	cotIntAndFloat[float64](t, types.T_float64, -124314124124.12412341, 25.61189361602173)
-	cotIntAndFloat[float64](t, types.T_float64, 0.0000000001, 16331239353195392.0000)
-	cotIntAndFloat[float64](t, types.T_float64, -0.0000000001, -16331239353195392.0000)
+	cotIntAndFloat(t, types.T_float64, 0.1234, myCot(0.1234))
+	cotIntAndFloat(t, types.T_float64, -1243, myCot(-1243))
+
+	var small float64 = 0.000000000001
+	cotIntAndFloat(t, types.T_float64, small, myCot(small))
+	cotIntAndFloat(t, types.T_float64, -small, myCot(-small))
 }
 
 func cotIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -57,7 +65,7 @@ func cotIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makecotVectors[T](src, true, typ),
+			vecs:       makecotVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,
@@ -70,7 +78,7 @@ func cotIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, plus.Col)
+			require.InEpsilonSlice(t, c.wantBytes, plus.Col, 0.001)
 			require.Equal(t, c.wantScalar, plus.IsScalar())
 		})
 	}
@@ -88,10 +96,3 @@ func makecotVectors[T constraints.Integer | constraints.Float](src T, srcScalar 
 	}
 	return vectors
 }
-
-// NULL return not a value
-// func MakeScalarNullSlice(length int) []*vector.Vector {
-// 	vectors := make([]*vector.Vector, 1)
-// 	vectors[0] = testutil.MakeScalarNull(4)
-// 	return vectors
-// }

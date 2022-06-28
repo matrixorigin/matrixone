@@ -549,6 +549,12 @@ func isEquiJoin(exprs []*plan.Expr) bool {
 			if !supportedJoinCondition(e.F.Func.GetObj()) {
 				return false
 			}
+			if !hasColExpr(e.F.Args[0]) {
+				return false
+			}
+			if !hasColExpr(e.F.Args[1]) {
+				return false
+			}
 		}
 	}
 	return true
@@ -557,6 +563,22 @@ func isEquiJoin(exprs []*plan.Expr) bool {
 func supportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL
+}
+
+func hasColExpr(expr *plan.Expr) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return true
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			if hasColExpr(e.F.Args[i]) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 func exprRelPos(expr *plan.Expr) int32 {

@@ -62,9 +62,9 @@ func (op BinaryOp) ToString() string {
 	case INTEGER_DIV:
 		return "div"
 	case BIT_OR:
-		return "or"
+		return "|"
 	case BIT_AND:
-		return "and"
+		return "&"
 	case BIT_XOR:
 		return "^"
 	case LEFT_SHIFT:

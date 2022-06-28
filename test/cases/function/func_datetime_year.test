@@ -21,26 +21,26 @@ SELECT YEAR(1340124) as year;
 SELECT YEAR(0.45133) as year;
 SELECT YEAR(1=1) as year;
 -- @bvt:issue
--- @bvt:issue#3332
+
 SELECT YEAR('2015-09.30') as year;
--- @bvt:issue
+
 
 SELECT YEAR('2015-0') as year;
 
--- @bvt:issue#3332
+
 SELECT YEAR('2015-09.30 12') as year;
--- @bvt:issue
+
 
 SELECT YEAR('2015-09-26 08:09:22') AS Year ;
 
 #算术操作
--- @bvt:issue#3332
+
 SELECT YEAR("2015-09-10")- YEAR("2016-04-24");
--- @bvt:issue
+
 SELECT YEAR("2015-09-10")+ YEAR("2016-04-24");
--- @bvt:issue#3332
+
 SELECT YEAR("2015-09-10")*YEAR("2016-04-24");
--- @bvt:issue
+
 SELECT YEAR("2015-09-10")/YEAR("2016-04-24");
 
 #比较操作

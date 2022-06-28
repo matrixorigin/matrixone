@@ -139,9 +139,7 @@ insert into t1 values (10,'','');
 -- @desc:test for ltrim,rtrim
 -- @label:bvt
 
--- @bvt:issue#3243
 select ltrim(c),ltrim(vc) from t1;
--- @bvt:issue
 
 select rtrim(c),rtrim(vc) from t1;
 select ltrim(rtrim(c)),rtrim(ltrim(vc)) from t1;

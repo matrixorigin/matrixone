@@ -36,7 +36,7 @@ func Ln[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pro
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 
-		lnResult := ln.Ln[T](inputValues, resultValues)
+		lnResult := ln.Ln(inputValues, resultValues)
 		if nulls.Any(lnResult.Nsp) {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -49,7 +49,7 @@ func Ln[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pro
 		}
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
-		lnResult := ln.Ln[T](inputValues, resultValues)
+		lnResult := ln.Ln(inputValues, resultValues)
 		nulls.Or(inputVector.Nsp, lnResult.Nsp, resultVector.Nsp)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
