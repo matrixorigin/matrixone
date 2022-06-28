@@ -1019,14 +1019,12 @@ CREATE TABLE t1 (
   varchar_nokey VARCHAR(5)
 );
 INSERT INTO t1 VALUES (9, 7,NULL,NULL), (10,8,'p' ,'p');
--- @bvt:issue#3324
 SELECT varchar_nokey FROM t1
 WHERE NULL NOT IN (
  SELECT INNR.pk FROM t1 AS INNR2
    LEFT JOIN t1 AS INNR ON ( INNR2.int_key = INNR.int_key )
    WHERE INNR.varchar_key > 'n{'
 );
--- @bvt:issue
 DROP TABLE IF EXISTS t1;
 
 drop table if exists t1;

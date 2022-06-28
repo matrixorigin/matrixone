@@ -20,14 +20,12 @@ with test.qn as (select "with") select * from test.qn;
 with qn as (select "with" as a)
 with qn2 as (select "with" as a)
 select a from qn;
--- @bvt:issue#3302
 with qne as (select a from t1),
      qnm as (select a from t1),
      qnea as (select a from t1),
      qnma as (select a from t1)
 select qne.a,qnm.a,alias1.a,alias2.a
 from qne, qnm, qnea as alias1, qnma as alias2 limit 2;
--- @bvt:issue
 
 -- @case
 -- @desc:test for with multiple refs

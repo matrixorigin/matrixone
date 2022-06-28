@@ -1,29 +1,29 @@
 # **Auto-Rebalance & Scheduling**
 
-MatrixCube is a framework to implement distributed system. For a distributed system, data are stored across many machines. When the number of machines changes, with cluster scaling out or machine crash for example, data need to be moved across machines. 
+MatrixCube is a framework used to implement distributed systems. For a distributed system, data is stored across many machines. When the number of machines changes, with cluster scaling out or machine crash for example, the data needs to be moved across machines. 
 
  `Prophet` is the key component of MatrixCube for Auto-Rebalance and Scheduling. An `Etcd Server` is embedded inside `Prophet` for storing the metadata of the cluster.
 
-It has three main objectives to reach:
+It has three main objectives:
 
 * Keep the storage level of each `Store` balanced.
 * Keep the write/read requests balanced. 
 * Keep the logical table distribution balanced. 
 
-We designed a mechanism of `Heartbeat` and `Event Notify` to achieve these objectives. Each `Store` and `Leader Replica` will send `Hearbeat` information to `Prophet`, `Prophet` will make scheduling decision based on the information. We need to configure certain `Store`s to take the duty of `Prophet`.
+We designed a mechanism called `Heartbeat` and `Event Notify` to achieve these objectives. Each `Store` and `Leader Replica` will send `Hearbeat` information to `Prophet`. `Prophet` will make scheduling decision based on the information. We need to configure certain `Store`s to take over the duty of `Prophet`.
 
 ## **Store Hearbeat**
 
 Each `Store` sends `Heartbeat` periodically to `Prophet`, the `Heartbeat` includes: 
 
 * At the moment, how many `Replicas` are in this `Store`.
-* At the moment, how much storage space does this `Store` have, how much space is already used, how much space remaining. 
+* At the moment, how much storage space does this `Store` have, how much space is already used, and how much space is remaining. 
 
-`Prophet` collects all `Heartbeats`, and `Prophet` will understand a global `Replica` mapping and the storage space of each `Store`. Based on this information, `Prophet` sends scheduling orders, moving some `Replica`s to proper `Store`s, in order to balance the `Replica` numbers for each `Store`. Since each `Replica` of a `Shard` is the same size, the storage space is thus equalized.
+The `Prophet` collects all `Heartbeats`, and the `Prophet` will understand a global `Replica` mapping and the storage space of each `Store`. Based on this information, the `Prophet` sends scheduling orders, moving some `Replica`s to proper `Store`s in order to balance the `Replica` numbers for each `Store`. Since each `Replica` of a `Shard` is the same size, the storage space is thus equalized.
 
 ## **Replica Hearbeat**
 
-For each `Shard`, it has several `Replicas` distributed in several `Stores`. These `Replica`s form a `Raft-Group` and a `Leader` is elected. This `Leader` sends periodically `Heartbeats` to `Prophet`. This `Heartbeat` has information as:
+For each `Shard`, it has several `Replicas` distributed in several `Stores`. These `Replica`s form a `Raft-Group` and a `Leader` is elected. This `Leader` sends periodic `Heartbeats` to `Prophet`. This `Heartbeat` has information such as:
 
 * At the moment, how many `Replicas` a `Shard` has, and the latest active time of each `Replica`.
 * At the moment, who is the `Leader Replica`. 
