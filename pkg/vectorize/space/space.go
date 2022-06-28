@@ -20,10 +20,11 @@ package space
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"golang.org/x/exp/constraints"
 	"math"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sum"

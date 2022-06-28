@@ -29,9 +29,7 @@ select space(-4294967297);
 select space(4294967297);
 select space(-18446744073709551615);
 
--- @bvt:issue#3242
 select space(18446744073709551615);
--- @bvt:issue
 
 -- @bvt:issue#3155
 select space(-18446744073709551616);
@@ -40,10 +38,8 @@ select space(-18446744073709551617);
 select space(18446744073709551617);
 -- @bvt:issue
 
--- @bvt:issue#3242
 SELECT space(9223372036854775808);
 SELECT length(space(9223372036854775809));
--- @bvt:issue
 #NULL
 SELECT SPACE(NULL);
 

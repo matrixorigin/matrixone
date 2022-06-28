@@ -372,7 +372,6 @@ func buildUnresolvedName(query *Query, node *Node, colName string, tableName str
 			return corrExpr, nil
 		}
 	}
-
 	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", colName))
 }
 
