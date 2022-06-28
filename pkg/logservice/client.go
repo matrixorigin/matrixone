@@ -16,9 +16,9 @@ package logservice
 
 import (
 	"context"
-	"net"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -53,9 +53,10 @@ type Client interface {
 }
 
 type client struct {
-	conn net.Conn
-	cfg  LogServiceClientConfig
-	buf  []byte
+	cfg    LogServiceClientConfig
+	client morpc.RPCClient
+	addr   string
+	buf    []byte
 }
 
 var _ Client = (*client)(nil)
@@ -68,12 +69,13 @@ func CreateClient(ctx context.Context,
 	}
 	var e error
 	for _, addr := range cfg.ServiceAddresses {
-		conn, err := getConnection(ctx, addr)
+		cc, err := getRPCClient(ctx, addr)
 		if err != nil {
 			e = err
 			continue
 		}
-		c.conn = conn
+		c.addr = addr
+		c.client = cc
 		if cfg.ReadOnly {
 			if err := c.connectReadOnly(ctx); err == nil {
 				return c, nil
@@ -92,10 +94,7 @@ func CreateClient(ctx context.Context,
 }
 
 func (c *client) Close() error {
-	if err := sendPoison(c.conn, poisonNumber[:]); err != nil {
-		return err
-	}
-	return waitPoisonAck(c.conn)
+	return c.client.Close()
 }
 
 func (c *client) Config() LogServiceClientConfig {
@@ -157,18 +156,33 @@ func (c *client) request(ctx context.Context,
 		MaxSize:     maxSize,
 		PayloadSize: uint64(len(payload)),
 	}
-	if err := writeRequest(c.conn, req, c.buf, payload); err != nil {
-		return pb.Response{}, nil, err
+	rr := &RPCRequest{
+		Request: req,
+		payload: payload,
 	}
-	resp, recs, err := readResponse(c.conn, c.buf)
+	// FIXME: fix SendOption
+	// FIXME: how to avoid allocation here?
+	future, err := c.client.Send(ctx, c.addr, rr, morpc.SendOptions{})
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
-	err = toError(resp)
+	msg, err := future.Get()
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
-	return resp, recs.Records, nil
+	response, ok := msg.(*RPCResponse)
+	if !ok {
+		panic("unexpected response type")
+	}
+	var recs pb.LogRecordResponse
+	if response.PayloadSize > 0 {
+		MustUnmarshal(&recs, response.payload)
+	}
+	err = toError(response.Response)
+	if err != nil {
+		return pb.Response{}, nil, err
+	}
+	return response.Response, recs.Records, nil
 }
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
@@ -204,4 +218,14 @@ func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
 		return 0, err
 	}
 	return resp.Index, nil
+}
+
+func getRPCClient(ctx context.Context, target string) (morpc.RPCClient, error) {
+	mf := func() morpc.Message {
+		return &RPCRequest{}
+	}
+	codec := morpc.NewMessageCodec(mf, 16*1024)
+	// FIXME: set options
+	bf := morpc.NewGoettyBasedBackendFactory(codec)
+	return morpc.NewClient(bf, morpc.WithClientInitBackends([]string{target}, []int{1}))
 }
