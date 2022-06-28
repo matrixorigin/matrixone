@@ -76,6 +76,12 @@ func (vec *vector[T]) Equals(o Vector) bool {
 			if !bytes.Equal(vec.Get(i).([]byte), o.Get(i).([]byte)) {
 				return false
 			}
+		} else if _, ok := any(v).(types.Decimal128); ok {
+			d := vec.Get(i).(types.Decimal128)
+			od := vec.Get(i).(types.Decimal128)
+			if d.Hi != od.Hi || d.Lo != od.Lo {
+				return false
+			}
 		} else {
 			if vec.Get(i) != o.Get(i) {
 				return false
@@ -129,13 +135,14 @@ func (vec *vector[T]) Slice() any {
 	return vec.stlvec.Slice()
 }
 
-func (vec *vector[T]) Get(i int) (v any)    { return vec.impl.Get(i) }
-func (vec *vector[T]) Update(i int, v any)  { vec.impl.Update(i, v) }
-func (vec *vector[T]) Delete(i int)         { vec.impl.Delete(i) }
-func (vec *vector[T]) Append(v any)         { vec.impl.Append(v) }
-func (vec *vector[T]) AppendMany(vs ...any) { vec.impl.AppendMany(vs...) }
-func (vec *vector[T]) AppendNoNulls(s any)  { vec.impl.AppendNoNulls(s) }
-func (vec *vector[T]) Extend(o Vector)      { vec.impl.Extend(o) }
+func (vec *vector[T]) Get(i int) (v any)                   { return vec.impl.Get(i) }
+func (vec *vector[T]) Update(i int, v any)                 { vec.impl.Update(i, v) }
+func (vec *vector[T]) Delete(i int)                        { vec.impl.Delete(i) }
+func (vec *vector[T]) DeleteBatch(deletes *roaring.Bitmap) { vec.impl.DeleteBatch(deletes) }
+func (vec *vector[T]) Append(v any)                        { vec.impl.Append(v) }
+func (vec *vector[T]) AppendMany(vs ...any)                { vec.impl.AppendMany(vs...) }
+func (vec *vector[T]) AppendNoNulls(s any)                 { vec.impl.AppendNoNulls(s) }
+func (vec *vector[T]) Extend(o Vector)                     { vec.impl.Extend(o) }
 func (vec *vector[T]) ExtendWithOffset(src Vector, srcOff, srcLen int) {
 	vec.impl.ExtendWithOffset(src, srcOff, srcLen)
 }
@@ -178,10 +185,7 @@ func (vec *vector[T]) Compact(deletes *roaring.Bitmap) {
 	if vec.roStorage != nil {
 		vec.cow()
 	}
-	arr := deletes.ToArray()
-	for i := len(arr) - 1; i >= 0; i-- {
-		vec.Delete(int(arr[i]))
-	}
+	vec.impl.DeleteBatch(deletes)
 }
 
 func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {

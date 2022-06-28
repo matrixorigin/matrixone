@@ -421,7 +421,8 @@ func TestApplyToColumn1(t *testing.T) {
 	node.ApplyToColumn(vec, deletes)
 	assert.Equal(t, 3, vec.Length())
 	assert.True(t, types.IsNull(vec.Get(1)))
-	assert.Equal(t, uint64(1), vec.NullMask().GetCardinality())
+	assert.True(t, types.IsNull(vec.Get(2)))
+	assert.Equal(t, uint64(2), vec.NullMask().GetCardinality())
 	t.Log(vec.String())
 }
 

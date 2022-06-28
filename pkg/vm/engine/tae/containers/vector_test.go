@@ -431,3 +431,39 @@ func TestCloneWithBuffer(t *testing.T) {
 		buf[len(bs.Data)+len(bs.OffsetBuf()):len(bs.Data)+len(bs.OffsetBuf())+len(bs.LengthBuf())])
 	assert.Zero(t, res)
 }
+
+func TestCompact(t *testing.T) {
+	opts := withAllocator(nil)
+	vec := MakeVector(types.Type_VARCHAR.ToType(), true, opts)
+
+	vec.Append(types.Null{})
+	deletes := roaring.BitmapOf(0)
+	//{null}
+	vec.Compact(deletes)
+	//{}
+	assert.Equal(t, 0, vec.Length())
+
+	vec.Append(types.Null{})
+	vec.Append(types.Null{})
+	vec.Append(types.Null{})
+	deletes = roaring.BitmapOf(0, 1)
+	//{n,n,n}
+	vec.Compact(deletes)
+	//{n}
+	assert.Equal(t, 1, vec.Length())
+	assert.True(t, types.IsNull(vec.Get(0)))
+
+	vec.Append([]byte("var"))
+	vec.Append(types.Null{})
+	vec.Append([]byte("var"))
+	vec.Append(types.Null{})
+	//{null,var,null,var,null}
+	deletes = roaring.BitmapOf(1, 3)
+	vec.Compact(deletes)
+	//{null,null,null}
+	assert.Equal(t, 3, vec.Length())
+	assert.True(t, types.IsNull(vec.Get(0)))
+	assert.True(t, types.IsNull(vec.Get(1)))
+	assert.True(t, types.IsNull(vec.Get(2)))
+	vec.Close()
+}

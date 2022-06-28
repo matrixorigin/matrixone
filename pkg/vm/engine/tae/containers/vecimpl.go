@@ -89,6 +89,56 @@ func (impl *nullableVecImpl[T]) Delete(i int) {
 	impl.derived.stlvec.Delete(i)
 }
 
+func (impl *nullableVecImpl[T]) DeleteBatch(deletes *roaring.Bitmap) {
+	impl.tryCOW()
+	if !impl.HasNull() {
+		arr := deletes.ToArray()
+		for i := len(arr) - 1; i >= 0; i-- {
+			impl.vecBase.Delete(int(arr[i]))
+		}
+		return
+	}
+	nulls := impl.derived.nulls
+	max := nulls.Maximum()
+	min := deletes.Minimum()
+	if max < uint64(min) {
+		arr := deletes.ToArray()
+		for i := len(arr) - 1; i >= 0; i-- {
+			impl.vecBase.Delete(int(arr[i]))
+		}
+		return
+	} else if max == uint64(min) {
+		arr := deletes.ToArray()
+		for i := len(arr) - 1; i >= 0; i-- {
+			impl.vecBase.Delete(int(arr[i]))
+		}
+		nulls.Remove(uint64(min))
+		return
+	}
+	nullsIt := nulls.Iterator()
+	arr := deletes.ToArray()
+	deleted := 0
+	arr = append(arr, uint32(impl.Length()))
+	newNulls := roaring64.New()
+	for _, idx := range arr {
+		for nullsIt.HasNext() {
+			null := nullsIt.PeekNext()
+			if null < uint64(idx) {
+				nullsIt.Next()
+				newNulls.Add(null - uint64(deleted))
+			} else {
+				if null == uint64(idx) {
+					nullsIt.Next()
+				}
+				break
+			}
+		}
+		deleted++
+	}
+	impl.derived.nulls = newNulls
+	impl.vecBase.DeleteBatch(deletes)
+}
+
 func (impl *nullableVecImpl[T]) Append(v any) {
 	impl.tryCOW()
 	offset := impl.derived.stlvec.Length()

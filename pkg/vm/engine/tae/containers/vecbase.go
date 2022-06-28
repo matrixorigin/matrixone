@@ -48,6 +48,12 @@ func (base *vecBase[T]) tryCOW() {
 // Modification
 func (base *vecBase[T]) Update(i int, v any) { base.derived.stlvec.Update(i, v.(T)) }
 func (base *vecBase[T]) Delete(i int)        { base.derived.stlvec.Delete(i) }
+func (base *vecBase[T]) DeleteBatch(deletes *roaring.Bitmap) {
+	arr := deletes.ToArray()
+	for i := len(arr) - 1; i >= 0; i-- {
+		base.derived.stlvec.Delete(int(arr[i]))
+	}
+}
 func (base *vecBase[T]) Append(v any) {
 	base.tryCOW()
 	base.derived.stlvec.Append(v.(T))
