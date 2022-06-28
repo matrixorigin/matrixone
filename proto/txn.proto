@@ -173,7 +173,7 @@ message TxnRequest {
     // TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
     TxnCommitDNShardRequest     CommitDNShardRequest     = 10;
     // TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
-    TxnRollbackDNShardRequest RollbackDNShardRequest     = 11;
+    TxnRollbackDNShardRequest   RollbackDNShardRequest   = 11;
 }
 
 // TxnResponse response of TxnRequest.

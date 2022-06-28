@@ -56,6 +56,10 @@ type testTxnSender struct {
 	manualFunc   func([]txn.TxnResponse, error) ([]txn.TxnResponse, error)
 }
 
+func (ts *testTxnSender) Close() error {
+	return nil
+}
+
 func (ts *testTxnSender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
 	ts.Lock()
 	defer ts.Unlock()
