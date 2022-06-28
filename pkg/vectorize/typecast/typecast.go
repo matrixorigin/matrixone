@@ -62,7 +62,7 @@ var (
 	Uint8ToInt64   = NumericToNumeric[uint8, int64]
 	Uint16ToInt64  = NumericToNumeric[uint16, int64]
 	Uint32ToInt64  = NumericToNumeric[uint32, int64]
-	Uint64ToInt64  = NumericToNumeric[uint64, int64]
+	Uint64ToInt64  = uint64ToInt64 // we handle overflow error in this function
 	Float32ToInt64 = NumericToNumeric[float32, int64]
 	Float64ToInt64 = NumericToNumeric[float64, int64]
 
@@ -172,6 +172,18 @@ var (
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
 	for i, x := range xs {
 		rs[i] = T2(x)
+	}
+	return rs, nil
+}
+
+func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
+	overflowFlag := uint64(0)
+	for i, x := range xs {
+		rs[i] = int64(x)
+		overflowFlag |= x >> 63
+	}
+	if overflowFlag != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
 	}
 	return rs, nil
 }
