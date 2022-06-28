@@ -17,8 +17,9 @@ package moengine
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -798,8 +799,9 @@ func VectorsToMO(vec containers.Vector) *vector.Vector {
 		bs := vec.Bytes()
 		Col.Offsets = make([]uint32, vec.Length())
 		if vec.Length() > 0 {
-			Col.Lengths = encoding.DecodeUint32Slice(bs.LengthBuf())
-			Col.Data = bs.DataBuf()
+			Col.Lengths = bs.Length
+			Col.Offsets = bs.Offset
+			Col.Data = bs.Data
 		}
 	default:
 		panic(any(fmt.Errorf("%s not supported", vec.GetType().String())))
