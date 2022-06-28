@@ -138,7 +138,8 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) err
 	taeBatch := containers.NewEmptyBatch()
 	defer taeBatch.Close()
 	for i, vec := range bat.Vecs {
-		v := MOToVector(vec, allNullables[i])
+		v := MOToVectorTmp(vec, allNullables[i])
+		//v := MOToVector(vec, allNullables[i])
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
 	return rel.handle.Append(taeBatch)
