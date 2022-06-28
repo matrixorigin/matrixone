@@ -296,25 +296,29 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if def.IsHidden() || (schema.IsSingleSortKey() && def.IsSortKey()) {
 			continue
 		}
-		vecs2 := make([]containers.Vector, 0)
+		vecs = vecs[:0]
 		for _, block := range task.compacted {
 			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
 				return
 			}
 			defer view.Close()
 			view.ApplyDeletes()
-			vecs2 = append(vecs2, view.Orphan())
-		}
-		vecs3, _ := task.mergeColumn(vecs2, &sortedIdx, false, rows, to, schema.HasSortKey())
-		for _, vec := range vecs2 {
-			vec.Close()
-		}
-		for pos, vec := range vecs3 {
+			vec := view.Orphan()
 			defer vec.Close()
-			blk := task.createdBlks[pos]
-			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
+			vecs = append(vecs, vec)
+		}
+		vecs, _ := task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
+		for i := range vecs {
+			defer vecs[i].Close()
+		}
+		for i := range vecs {
+			blk := task.createdBlks[i]
+			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vecs[i], false)
+			flushTask, err = task.scheduler.ScheduleScopedFn(
+				tasks.WaitableCtx,
+				tasks.IOTask,
+				blk.AsCommonID(),
+				closure)
 			if err != nil {
 				return
 			}

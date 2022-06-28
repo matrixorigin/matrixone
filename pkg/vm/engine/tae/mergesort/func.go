@@ -29,15 +29,11 @@ func Shuffle(col containers.Vector, idx []uint32) containers.Vector {
 
 func Multiplex(col []containers.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []containers.Vector) {
 	ret = make([]containers.Vector, len(toLayout))
-	to := len(toLayout)
 	cursors := make([]int, len(fromLayout))
 
-	for i := 0; i < to; i++ {
-		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
-	}
-
 	k := 0
-	for i := 0; i < to; i++ {
+	for i := 0; i < len(toLayout); i++ {
+		ret[i] = containers.MakeVector(col[0].GetType(), col[0].Nullable())
 		for j := 0; j < int(toLayout[i]); j++ {
 			s := src[k]
 			ret[i].Append(col[s].Get(cursors[s]))
