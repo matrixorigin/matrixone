@@ -4,7 +4,8 @@
 
 The ``FULL JOIN``  keyword returns all records when there is a match in left (table1) or right (table2) table records.
 
-Note: ``FULL OUTER JOIN`` and ``FULL JOIN`` are the same.
+!!! note  "<font size=4>note</font>"
+    <font size=3>``FULL OUTER JOIN`` and ``FULL JOIN`` are the same.</font>
 
 ## **Syntax**
 

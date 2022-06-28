@@ -20,14 +20,14 @@ In order to show the single-table query performance, we combine five tables into
 We use standalone service to execute flat table(`lineorder_flat`) queries with MatrixOne, and compared the results with ClickHouse in the same configuration.  
 The table `lineorder_flat` has 600 million rows data and takes up 220 GB of space.  
 
-!!! info 
+!!! info
     The following server was used:
     AMD EPYC™ Rome CPU 2.6GHz/3.3GHz, 16 physical cores total, 32 GiB Memory.
 
-|  Query ID  | MatrixOne v0.2.0  |  ClickHouse v21.11.4.14 
+|  Query ID  | MatrixOne v0.2.0  |  ClickHouse v21.11.4.14
 |  :----:  | :----:  |  :----:  
 | Q2  | 2.71 |3.82 	
-| Q3.1 | 4.23|5.01 
+| Q3.1 | 4.23|5.01
 | Q3.2  | 11.05|21.34
 | Q4.1  | 2.94|3.1
 | Q4.2  | 4.27|5.32
@@ -43,7 +43,7 @@ There are 600 million rows of data in all, and the main table takes up 67 GB of 
 
 |  Query ID  | MatrixOne v0.2.0   |  ClickHouse v21.11.4.14| Starrocks v1.19.3
 |  :----:  | :----:  |  :----:  |:----:
-| Q2  | 13.6|28.05 |15.83	
+| Q2  | 13.6|28.05 |15.83
 | Q3.1 | 12.94|27.81 |16.98
 | Q3.2  | 23.56|54.84 |29.25
 | Q4.1  | 13.96|27.2 |16.77
@@ -55,12 +55,12 @@ There are 600 million rows of data in all, and the main table takes up 67 GB of 
 
 ## **Cluster&Multiple tables**
 
-There are three nodes in the cluster, each of which is installed as standalone version, and process time is shorter than that of standclone node, demonstrating the overall performance will improve as the number of nodes increases. 
+There are three nodes in the cluster, each of which is installed as standalone version, and process time is shorter than that of standclone node, demonstrating the overall performance will improve as the number of nodes increases.
 
 |  Query ID  | MatrixOne v0.2.0  |  Starrocks v1.19.3
 |  :----:  | :----:  |  :----:  
 | Q2 | 4.94 |6.08 	
-| Q3.1 | 5.85|6.27 
+| Q3.1 | 5.85|6.27
 | Q3.2  | 9.67|9.79
 | Q4.1  | 6.05|6.87
 | Q4.2  | 6.87|9.51
