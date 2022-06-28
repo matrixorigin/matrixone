@@ -271,7 +271,13 @@ func (node *ColumnUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 
 func (node *ColumnUpdateNode) UpdateLocked(row uint32, v any) error {
 	node.mask.Add(row)
-	node.vals[row] = v
+	if src, ok := v.([]byte); ok {
+		dst := make([]byte, len(src))
+		copy(dst, src)
+		node.vals[row] = dst
+	} else {
+		node.vals[row] = v
+	}
 	return nil
 }
 

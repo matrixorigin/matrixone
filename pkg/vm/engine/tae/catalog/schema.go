@@ -519,6 +519,11 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 			}
 			s.HiddenKey = def
 		}
+		if def.IsSortKey() || def.IsHidden() {
+			def.NullAbility = 0
+		} else {
+			def.NullAbility = 1
+		}
 	}
 
 	if len(sortIdx) == 1 {
