@@ -14,8 +14,9 @@ DELETE [LOW_PRIORITY] [QUICK] [IGNORE] FROM tbl_name [[AS] tbl_alias]
     [WHERE where_condition]
     [ORDER BY ...]
     [LIMIT row_count]
-The DELETE statement deletes rows from tbl_name and returns the number of deleted rows. To check the number of deleted rows, call the ROW_COUNT() function described in Section 12.16, “Information Functions”.
 ```
+
+The DELETE statement deletes rows from tbl_name and returns the number of deleted rows.
 
 #### Explanations
 
@@ -32,12 +33,15 @@ DELETE [LOW_PRIORITY] [QUICK] [IGNORE]
     [WHERE where_condition]
 ```
 
+Or:
+
 ```
 DELETE [LOW_PRIORITY] [QUICK] [IGNORE]
     FROM tbl_name[.*] [, tbl_name[.*]] ...
     USING table_references
     [WHERE where_condition]
 ```
+
 #### Explanations
 
 - The conditions in the optional `WHERE` clause identify which rows to delete. With no `WHERE` clause, all rows are deleted.
@@ -57,6 +61,7 @@ DELETE [LOW_PRIORITY] [QUICK] [IGNORE]
 |    1 |    2 |
 +------+------+
 ```
+
 - **Multiple-Table Examples**
 
 ```sql

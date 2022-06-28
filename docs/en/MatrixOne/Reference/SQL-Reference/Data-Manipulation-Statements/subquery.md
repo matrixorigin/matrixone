@@ -18,7 +18,6 @@ The main advantages of subqueries are:
 
 - Many people find subqueries more readable than complex joins or unions.
 
-
 A subquery may occur in:
 
 - A SELECT clause

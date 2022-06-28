@@ -34,6 +34,8 @@
 1 row in set (0.01 sec)
 ```
 
+或：
+
 ```sql
 > create table t1 (id int not null, text varchar(20) not null default '', primary key (id));
 > insert into t1 (id, text) values (1, 'text1'), (2, 'text2'), (3, 'text3'), (4, 'text4'), (5, 'text5'), (6, 'text6'), (7, 'text7'), (8, 'text8'), (9, 'text9'), (10, 'text10'), (11, 'text11'), (12, 'text12');
@@ -50,6 +52,7 @@
 5 rows in set (0.00 sec)
 ```
 
+或：
 
 ```sql
 > CREATE TABLE t1 (a int);
@@ -67,7 +70,6 @@
 |    4 |
 +------+
 4 rows in set (0.01 sec)
-
 > SELECT * FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10;
 Empty set (0.01 sec)
 > SELECT * FROM t1 WHERE t1.a NOT IN (SELECT a FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10);

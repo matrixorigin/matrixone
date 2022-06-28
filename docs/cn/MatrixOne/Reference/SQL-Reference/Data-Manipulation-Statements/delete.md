@@ -14,14 +14,15 @@ DELETE [LOW_PRIORITY] [QUICK] [IGNORE] FROM tbl_name [[AS] tbl_alias]
     [WHERE where_condition]
     [ORDER BY ...]
     [LIMIT row_count]
-The DELETE statement deletes rows from tbl_name and returns the number of deleted rows. To check the number of deleted rows, call the ROW_COUNT() function described in Section 12.16, “Information Functions”.
 ```
+
+`DELETE` 语句从 `tbl_name` 中删除行，并返回已删除的行数。
 
 #### 参数释义
 
 - `WHERE` 从句用于指定用于标识要删除哪些行的条件。若无 `WHERE` 从句，则删除所有行。
 
-— `ORDER BY` 从句，指按照指定的顺序删除行。
+- `ORDER BY` 从句，指按照指定的顺序删除行。
 
 - `LIMIT` 从句用于限制可删除的行数。
 
@@ -40,6 +41,7 @@ DELETE [LOW_PRIORITY] [QUICK] [IGNORE]
     USING table_references
     [WHERE where_condition]
 ```
+
 #### 参数释义
 
 - `WHERE` 从句用于指定用于标识要删除哪些行的条件。若无 `WHERE` 从句，则删除所有行。

@@ -33,7 +33,6 @@ assignment_list:
 + If the `ORDER BY` clause is specified, the rows are updated in the order that is specified.
 + The `LIMIT` clause places a limit on the number of rows that can be updated.
 
-
 ## **Examples**
 
 - **Single-table Examples**

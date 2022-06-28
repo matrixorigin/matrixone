@@ -47,7 +47,6 @@ Use the `IN` clause for multiple-record, single-column subqueries. After the sub
 5 rows in set (0.00 sec)
 ```
 
-
 ```sql
 > CREATE TABLE t1 (a int);
 > CREATE TABLE t2 (a int, b int);

@@ -3,8 +3,6 @@
 Any problem is encouraged to be published when you participate in MatrixOne, and you can [report issues](https://github.com/matrixorigin/matrixone/issues/new/choose) about this problem in GitHub with templates and labels we suggest.  
 This page is intended to introduce templates, labels, and precautions you will follow when you report issues.
 
-
-
 ## **Avoid Duplicated Issues**
 
 Before reporting an issue, you should see whether the problem has already been reported. You can use the [search bar](https://docs.github.com/en/issues/tracking-your-work-with-issues/filtering-and-searching-issues-and-pull-requests) to search existing issues.
