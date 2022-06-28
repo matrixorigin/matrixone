@@ -38,10 +38,10 @@ func TestLog(t *testing.T) {
 	logIntAndFloat[float32](t, types.T_float32, 0.5, -0.6931471805599453)
 	logIntAndFloat[float32](t, types.T_float32, 1.5, 0.4054651081081644)
 
-	logIntAndFloat[float64](t, types.T_float64, 2.5, 0.9162907318741551)
-	logIntAndFloat[float64](t, types.T_float64, 3.5, 1.252762968495368)
-	logIntAndFloat[float64](t, types.T_float64, 4.5, 1.5040773967762742)
-	logIntAndFloat[float64](t, types.T_float64, 5.5, 1.7047480922384253)
+	logIntAndFloat(t, types.T_float64, 2.5, 0.9162907318741551)
+	logIntAndFloat(t, types.T_float64, 3.5, 1.252762968495368)
+	logIntAndFloat(t, types.T_float64, 4.5, 1.5040773967762742)
+	logIntAndFloat(t, types.T_float64, 5.5, 1.7047480922384253)
 }
 
 func logIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -55,7 +55,7 @@ func logIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeLogVectors[T](src, true, typ),
+			vecs:       makeLogVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,
