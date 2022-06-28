@@ -207,17 +207,17 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	return new_expr
 }
 
-func getJoinSide(expr *plan.Expr, leftTags map[int32]*Binding) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]*Binding) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			side |= getJoinSide(arg, leftTags)
+			side |= getJoinSide(arg, leftTags, rightTags)
 		}
 
 	case *plan.Expr_Col:
 		if _, ok := leftTags[exprImpl.Col.RelPos]; ok {
 			side = JoinSideLeft
-		} else {
+		} else if _, ok := rightTags[exprImpl.Col.RelPos]; ok {
 			side = JoinSideRight
 		}
 
