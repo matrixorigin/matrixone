@@ -42,35 +42,46 @@ func TestFunctionOverloadID(t *testing.T) {
 }
 
 func TestToPrintCastTable(t *testing.T) {
-	//for i, rs := range binaryTable {
-	//	for j, r := range rs {
-	//		if r.convert {
-	//			println(fmt.Sprintf("%s + %s ===> %s + %s",
-	//				types.T(i).OidString(), types.T(j).OidString(),
-	//				r.left.OidString(), r.right.OidString()))
-	//		}
-	//	}
-	//}
-	//
-	//for i := 0; i < 5; i++ {
-	//	fmt.Println()
-	//}
-	//
-	//for i, rs := range binaryTable2 {
-	//	for j, r := range rs {
-	//		if r.convert {
-	//			println(fmt.Sprintf("%s / %s ===> %s / %s",
-	//				types.T(i).OidString(), types.T(j).OidString(),
-	//				r.left.OidString(), r.right.OidString()))
-	//		}
-	//	}
-	//}
+	println("[Implicit Type Convert Rule for +, -, *, >, = and so on:]")
+	for i, rs := range binaryTable {
+		for j, r := range rs {
+			if r.convert {
+				println(fmt.Sprintf("%s + %s ===> %s + %s",
+					types.T(i).OidString(), types.T(j).OidString(),
+					r.left.OidString(), r.right.OidString()))
+			}
+		}
+	}
 
+	for i := 0; i < 5; i++ {
+		fmt.Println()
+	}
+
+	println("[Implicit Type Convert Rule for div and / :]")
+	for i, rs := range binaryTable2 {
+		for j, r := range rs {
+			if r.convert {
+				println(fmt.Sprintf("%s / %s ===> %s / %s",
+					types.T(i).OidString(), types.T(j).OidString(),
+					r.left.OidString(), r.right.OidString()))
+			}
+		}
+	}
+
+	for i := 0; i < 5; i++ {
+		fmt.Println()
+	}
+
+	println("[Implicit type conversions that we support :]")
 	for t1, t := range castTable {
 		for t2, k := range t {
 			if k {
-				println(fmt.Sprintf("%s ==> %s",
-					types.T(t1).OidString(), types.T(t2).OidString()))
+				str := fmt.Sprintf("%s ==> %s",
+					types.T(t1).OidString(), types.T(t2).OidString())
+				if preferredTypeConvert[t1][t2] {
+					str += " (preferred)"
+				}
+				println(str)
 			}
 		}
 	}
