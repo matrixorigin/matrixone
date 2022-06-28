@@ -32,12 +32,25 @@ type TxnClient interface {
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
 	New(options ...TxnOption) TxnOperator
+	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
+	// be from a CN coordinator txn operator.
+	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
 }
 
 // TxnOperator operator for transaction clients, handling read and write
 // requests for transactions, and handling distributed transactions across DN
 // nodes.
 type TxnOperator interface {
+	// Snapshot a snapshot of the transaction handle that can be passed around the
+	// network. In some scenarios, operations of a transaction are executed on multiple
+	// CN nodes for performance acceleration. But with only one CN coordinator, Snapshot
+	// can be used to recover the transaction operation handle at a non-CN coordinator
+	// node, or it can be used to pass information back to the transaction coordinator
+	// after the non-CN coordinator completes the transaction operation.
+	Snapshot() ([]byte, error)
+	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
+	// operation information.
+	ApplySnapshot(data []byte) error
 	// Read transaction read operation, the operator routes the message based
 	// on the given DN node information and waits for the read data synchronously.
 	// The transaction has been aborted if ErrTxnAborted returned.
