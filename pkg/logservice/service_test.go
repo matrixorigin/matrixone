@@ -321,6 +321,11 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	nhID2 := service2.ID()
 
 	done := false
+
+	// FIXME:
+	// as per #3478, this test is flaky, increased loop count to 6000 to
+	// see whether gossip can finish syncing in 6 seconds time. also added some
+	// logging to get collect more details
 	for i := 0; i < 6000; i++ {
 		si1, ok := service1.GetShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
