@@ -99,6 +99,52 @@ func TestBitmapAllocator_Allocate(t *testing.T) {
 	//fmt.Printf(debugBitmap(driver.allocator.(*BitmapAllocator)))
 }
 
+func TestBitmapAllocator_Allocate2(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	name := path.Join(dir, "init.driver")
+	seg := Driver{}
+	err := seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
+	level0 := seg.allocator.(*BitmapAllocator).level0
+	for i := 0; i < 8; i++ {
+		file := seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
+		file.snode.algo = compress.None
+		buffer1 := mockData(4096)
+		if i == 1 {
+			buffer1 = mockData(57344)
+		}
+		if i == 6 {
+			buffer1 = mockData(53248)
+		}
+		assert.NotNil(t, buffer1)
+		err = file.driver.Append(file, buffer1)
+		assert.Nil(t, err)
+	}
+
+	file := seg.nodes["test_0.blk"]
+	file.Unref()
+	ret := 0xFFFFFFFE00000001 - level0[0]
+	assert.Equal(t, 0, int(ret))
+	file1 := seg.NewBlockFile(fmt.Sprintf("test_%d.blk", 8))
+	file1.snode.algo = compress.None
+	buffer1 := mockData(135168)
+	err = file1.driver.Append(file1, buffer1)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, int(level0[0]))
+	ret = 0xFFFFFFFFFFFFFFFC - level0[1]
+	assert.Equal(t, 0, int(ret))
+	buffer1 = mockData(8192)
+	err = file1.driver.Append(file1, buffer1)
+	assert.Nil(t, err)
+	ret = 0xFFFFFFFFFFFFFFF0 - level0[1]
+	assert.Equal(t, 0, int(ret))
+	buffer1 = mockData(4096)
+	err = file1.driver.Append(file1, buffer1)
+	assert.Nil(t, err)
+	assert.Equal(t, 0, int(level0[0]))
+}
+
 func TestBitmapAllocator_Free(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	name := path.Join(dir, "free.driver")
@@ -273,7 +319,7 @@ func TestSegment_Replay2(t *testing.T) {
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
 		assert.Nil(t, err)
 	}
-	for i := INODE_NUM / 2; i < INODE_NUM; i++ {
+	for i := INODE_NUM / 2; i < INODE_NUM-1; i++ {
 		file = seg.NewBlockFile(fmt.Sprintf("test_%d.blk", i))
 		file.snode.algo = compress.None
 		err = seg.Append(file, []byte(fmt.Sprintf("this is tests %d", i)))
@@ -286,7 +332,21 @@ func TestSegment_Replay2(t *testing.T) {
 	cache := bytes.NewBuffer(make([]byte, 2*1024*1024))
 	err = seg1.Replay(cache)
 	assert.Nil(t, err)
-	assert.Equal(t, INODE_NUM+1, len(seg1.nodes))
+	assert.Equal(t, INODE_NUM, len(seg1.nodes))
+	checkSegment(t, &seg, &seg1)
+
+	for _, file := range seg1.nodes {
+		if file.name == "logfile" {
+			continue
+		}
+		file.Unref()
+	}
+	assert.Equal(t, 1, len(seg1.nodes))
+	name = path.Join(dir, "init2.driver")
+	seg = Driver{}
+	err = seg.Init(name)
+	assert.Nil(t, err)
+	seg.Mount()
 	checkSegment(t, &seg, &seg1)
 }
 

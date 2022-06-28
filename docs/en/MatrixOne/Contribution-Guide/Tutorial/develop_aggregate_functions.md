@@ -2,11 +2,11 @@
 
 ## **Prerequisite**
 
-To develop an aggregate function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to get some Golang basic concepts. 
+To develop an aggregate function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to learn some basic Golang concepts. 
 
 ## **Preparation**
 
-Before you start, please make sure that you have `Go` installed, cloned the `MatrixOne` code base.
+Before you start, please make sure that you have `Go` installed and have cloned the `MatrixOne` code base.
 Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribute Code](../How-to-Contribute/contribute-code.md) for more details.
 
 ## **What is an aggregation function?**
@@ -22,29 +22,29 @@ Common aggregate functions include:
 
 ## **Aggregate function in MatrixOne**
 
-As MatrixOne's one major key feature, via factorisation, the database `join` in MatrixOne is highly efficient and less redundant in comparison with
-other state-of-the-art databases. Therefore, many operations in MatrixOne need to be adapted to the factorisation method, in order
-to improve efficiency when performing `join`. Aggregate function is an important one among those operations. 
+The function `join` in MatrixOne's database is highly efficient and less redundant in comparison with
+other state-of-the-art databases via factorisation making it a key feature. Therefore, many operations in MatrixOne need to be adapted to the factorisation method, in order
+to improve efficiency when performing `join`. Aggregate functions are an example of an important feature among these operations. 
 
-To implement aggragate function in MatrixOne, we design a data structure named `Ring`. Every aggregate function needs to implement the `Ring` interface
-in order to be factorised when `join` occurs. 
+To implement aggragate functions in MatrixOne, we design a data structure named `Ring`. Every aggregate function needs to implement the `Ring` interface
+in order to be factorized when `join` occurs. 
 
-For the common aggregate function `AVG` as an example, we need to calculate the number of groups and their total numeric sum, then get an average result, which 
-is the common practice for any database design. But when a query with `join` occurs for two tables, the common method is to get a Cartesian product by joining tables first,
-then perform an `AVG` with that Cartesian product, which is an expensive computational cost as Cartesian product can be very large. 
-In MatrixOne's implementation, the factorisation method pushs down the calculation of group statistic and sum before the `join` operation is performed. This method helps to reduce
-a lot in computational and storage cost. This factorisation 
+For the common aggregate function `AVG` as an example, we need to calculate the number of groups and their total numeric sum, then get an average result.
+This is common practice for any database design. However, when a query with `join` occurs between two tables, the common method is to get a Cartesian product by joining tables first,
+then perform an `AVG` with that Cartesian product. This is an expensive computational cost as a Cartesian product can be very large. 
+In MatrixOne's implementation, the factorisation method pushs down the calculation of group statistics and sum before the `join` operation is performed. This method helps to reduce
+a lot in computational and storage cost. Factorisation 
 is realized by the `Ring` interface and its inner functions. 
 
-To checkout more about the factorisation theory and factorized database, please refer to [Principles of Factorised Databases](https://fdbresearch.github.io/principles.html).
+To checkout more about the factorisation theory and factorised database, please refer to [Principles of Factorised Databases](https://fdbresearch.github.io/principles.html).
 
 ## **What is a `Ring`**
 
-`Ring` is an important data structure for MatrixOne factorisation, as well as an mathematical algebraic concept with a clear [definition](https://en.wikipedia.org/wiki/Ring_(mathematics)).
+`Ring` is an important data structure for MatrixOne factorisation, as well as a mathematical algebraic concept with a clear [definition](https://en.wikipedia.org/wiki/Ring_(mathematics)).
 An algebraic `Ring` is a set equipped with two binary operations  `+` (addition) and `⋅` (multiplication) satisfying several axioms.
 
-A `Ring` in MatrixOne is an interface, with several functions similar to the algebraic `Ring` structure. We use `Ring` interface to implement aggragate functions,
-the `+`(addition) is defined as merging two `Ring`s groups, the `⋅`(multiplication) operation is defined as the computation of a grouped aggregate value combined with its grouping key frequency information.
+A `Ring` in MatrixOne is an interface with several functions similar to the algebraic `Ring` structure. We use `Ring` interface to implement aggragate functions.
+The `+`(addition) is defined as merging two `Ring`s groups and the `⋅`(multiplication) operation is defined as the computation of a grouped aggregate value combined with its grouping key frequency information.
 
 | Method of Ring Interface | Do What                                                |
 | ------------------------ | ------------------------------------------------------ |
@@ -79,7 +79,7 @@ There are two different scenarios for aggregation functions with `Ring`s.
 
 In the single table scenario, when we run the below query, it generates one or several `Ring`s, 
 depending on the storage blocks the `T1` table is stored. The number of blocks depends on the storage strategy. Each `Ring` will 
-store several groups of sums, the number of group depends how many duplicate rows are in this `Ring`. 
+store several groups of sums. The number of the group depends on how many duplicate rows are in this `Ring`. 
 
 ```sql
 T1 (id, class, age) 
@@ -163,25 +163,25 @@ Ts (id, age)
 select class, sum(age) from Tc join Ts on Tc.id = Ts.id group by class;
 ```
 
-When we run this query, it will firstly generate `Ring`s for the `Ts` table, as we are performing aggeration over `age` column.
-It might generate also one or several `Ring`s, same as the single table. For simplyfing, we imagine only one `Ring` is created for each table.
-The `Ring-Ts` will start to count sums for the group of `id`, as all `id`s are different, so it will maintain the same. Then a hashtable will be created
+When we run this query, it will firstly generate `Ring`s for the `Ts` table since we are performing an aggeration over the `age` column.
+It might also generate one or several `Ring`s same as the single table. For simplicity, we imagine only one `Ring` is created for each table.
+The `Ring-Ts` will start to count sums for the group of `id` as all `id`s are different, so it will maintain the same. Then a hashtable will be created
 for performing `join` operation.
 
 The `Ring-Tc` is created in the same time as `join` is performed. This `Ring-Tc` will count the appearing frequency `f` of id. Then the `Mul` method
-of `Ring-Ts` is called, to calculate the sum calculated from the `Ring-Ts` and frequency from `Ring-Tc`.
+of `Ring-Ts` is called to calculate the sum calculated from the `Ring-Ts` and frequency from `Ring-Tc`.
 
 ```
 sum[i] = sum[i] * f[i]
 ```
 
-Now we get values of `[class, sum(age)]`, then performing a group by with class will give us the final result.
+Now we get values of `[class, sum(age)]`, then perform a group by with class which will give us the final result.
 
 ## **The secret of factorisation**
 
 From the above example, you can see that the `Ring` performs some pre calculations and only the result(like `sum`) is stored in its structure. When performing operations like `join`,
 only simple `Add` or `Multiplication` is needed to get the result, which is called a push down calculation in `factorisation`. With the help of this push down, we no longer need to 
-deal with costly Cartesian product. As the joined table number increases, the factorisation allow us to take linear cost performing that, instead of exponential increase.
+deal with a costly Cartesian product. As the joined table number increases, the factorisation allows us to take linear cost of performing that instead of exponential increase.
 
 Take the implementation of `Variance` function as an example. 
 
@@ -194,13 +194,12 @@ Example: xi = 10,8,6,12,14, x̅ = 10
 Calculation: ((10-10)^2+(8-10)^2+(6-10)^2+(12-10)^2+(14-10)^2)/5 = 8
 ``` 
 
-If we proceed implementation with this formula, we have to record all values of each group, and keep maintaining these values 
-with `Add` and `Mul` operations of `Ring`. Eventual result is calculated in `Eval()` function. This implementation has a drawback of high memory cost,
-as we store all values during processing.
+If we proceed with implementing this formula, we have to record all values of each group, and also maintain these values 
+with `Add` and `Mul` operations of `Ring`. Eventually the result is calculated in an `Eval()` function. This implementation has a drawback of high memory cost since we have to store all the values during processing.
 
-But in the `Avg` implementation, it doesn't store all values in the `Ring`. Instead it stores only the `sum` of each group and the null numbers.  It returns the final result with a simple division. This method saves a lot of memory space.
+In the `Avg` implementation, it doesn't store all values in the `Ring`. Instead it stores only the `sum` of each group and the null numbers.  It returns the final result with a simple division. This method saves a lot of memory space.
 
-Now let's turn the `Variance` formula a bit to a different form:
+Now let's turn the `Variance` formula a bit into a different form:
 
 ```
 Variance = Σ (xi^2)/n-x̅^2
@@ -209,11 +208,11 @@ Example: xi = 10,8,6,12,14, x̅ = 10
 Calculation: (10^2+8^2+6^2+12^2+14^2)/5-10^2 = 8
 ``` 
 
-This formula's result is actually exactly the same as the previous one, but we only have to record the values sum of `xi^2` and the sum of `xi`. We can largely reduce the memory space 
+This formula's result is exactly the same as the previous one, but we only have to record the values sum of `xi^2` and the sum of `xi`. We can largely reduce the memory space 
 with this kind of reformulation.
 
 To conclude, every aggregate function needs to find a way to record as little values as possible in order to reduce memory cost.
-Below is two different implementation for `Variance` (the second one has a better performance):
+Below are two different implementations for `Variance` (the second one has a better performance):
 
 ```go
    //Implementation1
@@ -246,14 +245,14 @@ Below is two different implementation for `Variance` (the second one has a bette
 
 ## **Develop an var() function**
 
-In this tutorial, we walk you through the complete implementation of Variance (get the standard overall variance value) aggregate function as an example with two different methods. 
+In this tutorial, we will walk you through the complete implementation of the Variance (get the standard overall variance value) aggregate function as an example with two different methods. 
 
 Step 1: register function
 
 MatrixOne doesn't distinguish between operators and functions. 
-In our code repository, the file `pkg/sql/viewexec/transformer/types.go` register aggregate functions as operators 
+In our code repository, the file `pkg/sql/viewexec/transformer/types.go` registers aggregate functions as operators 
 and we assign each operator a distinct integer number. 
-To add a new function `var()`, add a new const `Variance` in the const declaration and `var` in the name declaration.
+To add a new function `var()`, first add a new const `Variance` in the const declaration and `var` in the name declaration.
 
 ```go
    const (
@@ -549,7 +548,7 @@ Here we go. Now we can fire up MatrixOne and try with our `var()` function.
 
 ## **Compile and run MatrixOne**
 
-Once the aggregation function is ready, we could compile and run MatrixOne to see the function behavior. 
+Once the aggregation function is ready, we can compile and run MatrixOne to see the function behavior. 
 
 Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file. 
 
@@ -559,7 +558,7 @@ make build
 ``` 
 
 !!! info 
-    `make config` generates a new configuration file, in this tutorial, you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
+    `make config` generates a new configuration file. In this tutorial you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
 
 Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting. 
 
@@ -642,8 +641,8 @@ Bingo!
 
 ## **Write unit Test for your function**
 
-We recommend you to also write a unit test for the new function. 
-Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal but complete testing experience. It automates execution of any function of the form.
+We recommend that you also write a unit test for the new function. 
+Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal yet complete testing experience. It automates execution of any function of the form.
 
 ```
 func TestXxx(*testing.T)
@@ -757,8 +756,8 @@ You code will be merged only if the `bvt` test pass.
 
 ## **Conduct a Performance Test**
 
-Aggregate function is an important feature of a database system, with queries on hundreds of millions of data rows, the time consumption of aggregate function is quite significant.
-So we recommend you to run a performance test. 
+Aggregate functions are an important feature of a database system, with queries on hundreds of millions of data rows, the time consumption of an aggregate function is quite significant.
+Thus, we recommend you to run a performance test. 
 
 Step1: Download the standard test dataset.
 

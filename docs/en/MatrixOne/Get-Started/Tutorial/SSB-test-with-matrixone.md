@@ -1,8 +1,8 @@
 # **Complete a SSB Test with MatrixOne**
 
-Star Schema Benchmark（SSB）Test is a popular scenario for OLAP database performance tests. By going through this tutorial, you’ll learn how to complete a SSB Test with MatrixOne.
+The Star Schema Benchmark（SSB）Test is a popular scenario for OLAP database performance tests. By going through this tutorial, you’ll learn how to complete a SSB Test with MatrixOne.
 
-In v0.1.0, only single table can work in MatrixOne. The following contents can be followed to data generation, data importing and querying.
+In v0.1.0, only single table can work in MatrixOne. The following contents can be followed for generating data, importing data, and querying data.
 
 ## **Before you begin**
 

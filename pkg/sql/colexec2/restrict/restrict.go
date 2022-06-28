@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
@@ -52,7 +51,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	defer vector.Clean(vec, proc.Mp)
 	bs, ok := vec.Col.([]bool)
 	if !ok {
-		return false, errors.New(errno.SyntaxError, "only support logic expression to be filter condition")
+		return false, errors.New("", "Only bool expression can be used as filter condition.")
 	}
 	if vec.IsScalar() {
 		if !bs[0] {

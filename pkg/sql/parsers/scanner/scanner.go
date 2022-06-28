@@ -64,6 +64,8 @@ func (s *Scanner) Scan() (int, string) {
 			s.skip(1)
 		} else if s.cur() == '\'' || s.cur() == '"' {
 			return int('@'), ""
+		} else if s.cur() == ',' {
+			return tokenID, ""
 		}
 		var tID int
 		var tBytes string
@@ -508,6 +510,11 @@ func (s *Scanner) scanNumber() (int, string) {
 			s.skip(1)
 			s.scanMantissa(16)
 			goto exit
+		} else if s.cur() == 'b' || s.cur() == 'B' {
+			token = BIT_LITERAL
+			s.skip(1)
+			s.scanMantissa(2)
+			goto exit
 		}
 	}
 
@@ -591,7 +598,7 @@ func (s *Scanner) scanHex() (int, string) {
 	if len(hex)%2 != 0 {
 		return LEX_ERROR, hex
 	}
-	return HEX, hex
+	return HEXNUM, hex
 }
 
 func (s *Scanner) scanMantissa(base int) {

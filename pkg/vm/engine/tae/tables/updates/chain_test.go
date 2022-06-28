@@ -73,7 +73,7 @@ func TestColumnChain1(t *testing.T) {
 	}
 	t.Log(chain.StringLocked())
 	assert.Equal(t, cnt1+cnt2+cnt3+cnt4, chain.DepthLocked())
-	t.Log(chain.GetHead().GetPayload().(*ColumnNode).StringLocked())
+	t.Log(chain.GetHead().GetPayload().(*ColumnUpdateNode).StringLocked())
 }
 
 func TestColumnChain2(t *testing.T) {
@@ -188,7 +188,7 @@ func TestColumnChain2(t *testing.T) {
 
 	// t.Log(chain.view.StringLocked())
 	// t.Log(chain.StringLocked())
-	// t.Log(chain.GetHead().GetPayload().(*ColumnNode).StringLocked())
+	// t.Log(chain.GetHead().GetPayload().(*ColumnUpdateNode).StringLocked())
 }
 
 func TestColumnChain3(t *testing.T) {
@@ -224,7 +224,7 @@ func TestColumnChain3(t *testing.T) {
 	// t.Log(chain.StringLocked())
 	assert.Equal(t, ncnt, chain.DepthLocked())
 
-	node := chain.GetHead().GetPayload().(*ColumnNode)
+	node := chain.GetHead().GetPayload().(*ColumnUpdateNode)
 	cmd, err := node.MakeCommand(1)
 	assert.Nil(t, err)
 
@@ -239,11 +239,11 @@ func TestColumnChain3(t *testing.T) {
 	updateCmd := cmd2.(*UpdateCmd)
 	assert.Equal(t, txnbase.CmdUpdate, updateCmd.GetType())
 	assert.Equal(t, *node.id, *updateCmd.update.id)
-	assert.True(t, node.txnMask.Equals(updateCmd.update.txnMask))
+	assert.True(t, node.mask.Equals(updateCmd.update.mask))
 	// t.Log(updateCmd.update.StringLocked())
-	// assert.Equal(t, node.txnVals, updateCmd.update.txnVals)
+	// assert.Equal(t, node.vals, updateCmd.update.vals)
 	// t.Log(updateCmd.update.id.BlockString())
-	// t.Log(updateCmd.update.txnMask.String())
+	// t.Log(updateCmd.update.mask.String())
 }
 
 func TestColumnChain4(t *testing.T) {

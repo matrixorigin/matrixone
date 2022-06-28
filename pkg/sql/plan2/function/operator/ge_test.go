@@ -30,10 +30,10 @@ var GestringBool = []bool{true, false, false, false, true, true, false, false, t
 type testGeFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 var testGeFuncVec = []testGeFunc{
-	GeDataValue[int8], GeDataValue[int16], GeDataValue[int32], GeDataValue[int64],
-	GeDataValue[uint8], GeDataValue[uint16], GeDataValue[uint32], GeDataValue[uint64],
-	GeDataValue[float32], GeDataValue[float64], GeDataValue[types.Date],
-	GeDataValue[types.Datetime], GeDataValue[types.Decimal64], GeDataValue[bool], GeDataValue[string],
+	GeGeneral[int8], GeGeneral[int16], GeGeneral[int32], GeGeneral[int64],
+	GeGeneral[uint8], GeGeneral[uint16], GeGeneral[uint32], GeGeneral[uint64],
+	GeGeneral[float32], GeGeneral[float64], GeGeneral[types.Date],
+	GeGeneral[types.Datetime], GeGeneral[types.Decimal64], GeBool, GeString,
 }
 
 var GeretVec = [][]bool{
@@ -43,7 +43,6 @@ var GeretVec = [][]bool{
 
 func Test_ColGeCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
-		InitFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {

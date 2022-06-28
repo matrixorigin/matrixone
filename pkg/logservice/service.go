@@ -36,9 +36,14 @@ type Lsn = uint64
 
 type LogRecord = pb.LogRecord
 
+// Service is the top layer component of a log service node. It manages the
+// underlying log store which in turn manages all log shards including the
+// HAKeeper shard. The Log Service component communicates with LogService
+// clients owned by DN nodes and the HAKeeper service via network, it can
+// be considered as the interface layer of the LogService.
 type Service struct {
 	cfg         Config
-	store       *logStore
+	store       *store
 	stopper     *syncutil.Stopper
 	connStopper *syncutil.Stopper
 }
@@ -48,12 +53,13 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, err
 	}
 	cfg.Fill()
-
+	plog.Infof("calling newLogStore")
 	store, err := newLogStore(cfg)
 	if err != nil {
 		plog.Errorf("failed to create log store %v", err)
 		return nil, err
 	}
+	plog.Infof("store created")
 	service := &Service{
 		cfg:         cfg,
 		store:       store,
@@ -69,6 +75,7 @@ func NewService(cfg Config) (*Service, error) {
 		}
 		return nil, err
 	}
+	plog.Infof("server started")
 	return service, nil
 }
 
@@ -174,21 +181,21 @@ func (s *Service) serve(conn net.Conn) {
 func (s *Service) handle(req pb.Request,
 	payload []byte) (pb.Response, pb.LogRecordResponse) {
 	switch req.Method {
-	case pb.MethodType_CREATE:
+	case pb.CREATE:
 		panic("not implemented")
-	case pb.MethodType_DESTROY:
+	case pb.DESTROY:
 		panic("not implemented")
-	case pb.MethodType_APPEND:
+	case pb.APPEND:
 		return s.handleAppend(req, payload), pb.LogRecordResponse{}
-	case pb.MethodType_READ:
+	case pb.READ:
 		return s.handleRead(req)
-	case pb.MethodType_TRUNCATE:
+	case pb.TRUNCATE:
 		return s.handleTruncate(req), pb.LogRecordResponse{}
-	case pb.MethodType_GET_TRUNCATE:
+	case pb.GET_TRUNCATE:
 		return s.handleGetTruncatedIndex(req), pb.LogRecordResponse{}
-	case pb.MethodType_CONNECT:
+	case pb.CONNECT:
 		return s.handleConnect(req), pb.LogRecordResponse{}
-	case pb.MethodType_CONNECT_RO:
+	case pb.CONNECT_RO:
 		return s.handleConnectRO(req), pb.LogRecordResponse{}
 	default:
 		panic("unknown method type")

@@ -23,6 +23,7 @@ import (
 	mrand "math/rand"
 	"path"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -213,6 +214,12 @@ func testFileService(t *testing.T, newFS func() FileService) {
 			for i := 0; i < 8; i++ {
 				err := fs.Write(ctx, IOVector{
 					FilePath: path.Join(dir, fmt.Sprintf("%d", i)),
+					Entries: []IOEntry{
+						{
+							Size: i,
+							Data: []byte(strings.Repeat(fmt.Sprintf("%d", i), i)),
+						},
+					},
 				})
 				assert.Nil(t, err)
 			}
@@ -239,8 +246,10 @@ func testFileService(t *testing.T, newFS func() FileService) {
 		assert.Equal(t, entries[2].Name, "qux")
 		assert.Equal(t, entries[3].IsDir, false)
 		assert.Equal(t, entries[3].Name, "0")
+		assert.Equal(t, entries[3].Size, 0)
 		assert.Equal(t, entries[10].IsDir, false)
 		assert.Equal(t, entries[10].Name, "7")
+		assert.Equal(t, entries[10].Size, 7)
 
 		entries, err = fs.List(ctx, "abc")
 		assert.Nil(t, err)

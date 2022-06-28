@@ -64,7 +64,7 @@ func (a *idAllocator) Capacity() uint64 {
 	return 0
 }
 
-func (l *logStore) updateIDAlloc(count uint64) error {
+func (l *store) updateIDAlloc(count uint64) error {
 	cmd := hakeeper.GetGetIDCmd(count)
 	ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 	defer cancel()
@@ -79,7 +79,7 @@ func (l *logStore) updateIDAlloc(count uint64) error {
 	return nil
 }
 
-func (l *logStore) healthCheck() {
+func (l *store) healthCheck() {
 	leaderID, term, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
 	if err != nil {
 		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
@@ -100,7 +100,7 @@ func (l *logStore) healthCheck() {
 			// TODO: check whether this is temp error
 			return
 		}
-		state := s.(*hakeeper.HAKeeperState)
+		state := s.(*hapb.HAKeeperState)
 		cmds := l.checker.Check(l.alloc,
 			state.ClusterInfo, state.DNState, state.LogState, state.Tick)
 		if len(cmds) > 0 {

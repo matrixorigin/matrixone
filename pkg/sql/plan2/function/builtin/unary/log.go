@@ -28,29 +28,28 @@ func Log[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pr
 	inputVector := vectors[0] // so these kinds of indexing are always guaranteed success because all the checks are done in the plan?
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.([]T)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 
-		logResult := log.Log[T](inputValues, resultValues)
+		logResult := log.Log(inputValues, resultValues)
 		if nulls.Any(logResult.Nsp) {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		vector.SetCol(resultVector, logResult.Result)
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]T)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
-		lnResult := log.Log[T](inputValues, resultValues)
+		lnResult := log.Log(inputValues, resultValues)
 		nulls.Or(inputVector.Nsp, lnResult.Nsp, resultVector.Nsp)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil

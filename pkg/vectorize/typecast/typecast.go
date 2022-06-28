@@ -15,6 +15,7 @@
 package typecast
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"math"
 	"strconv"
@@ -293,11 +294,10 @@ func dateToTimestamp(xs []types.Date, rs []types.Timestamp) ([]types.Timestamp, 
 	return types.DateToTimestamp(xs, rs)
 }
 
-func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes) (*types.Bytes, error) {
+func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes, precision int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for i, x := range xs {
-		//todo: pass precision arg?
-		rs.Data = append(rs.Data, []byte(x.String())...)
+		rs.Data = append(rs.Data, []byte(x.String2(precision))...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets[i] = oldLen
 		rs.Lengths[i] = newLen - oldLen
@@ -377,6 +377,54 @@ func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, 
 	div.Decimal128DivByScalar(bydel128, xs, 0, scale, tempdel128)
 	for i, x := range tempdel128 {
 		rs[i] = types.Timestamp(x.Lo)
+	}
+	return rs, nil
+}
+
+func Decimal64ToFloat32(xs []types.Decimal64, scale int32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal64ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 32)
+		if err != nil {
+			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = float32(result)
+	}
+	return rs, nil
+}
+
+func Decimal128ToFloat32(xs []types.Decimal128, scale int32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal128ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = float32(result)
+	}
+	return rs, nil
+}
+
+func Decimal64ToFloat64(xs []types.Decimal64, scale int32, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal64ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = result
+	}
+	return rs, nil
+}
+
+func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal128ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = result
 	}
 	return rs, nil
 }

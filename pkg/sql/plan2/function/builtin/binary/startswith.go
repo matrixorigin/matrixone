@@ -27,12 +27,12 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
+	leftValues, rightValues := vector.MustBytesCols(left), vector.MustBytesCols(right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, startswith.StartsWithAllConst(leftValues, rightValues, resultValues))
@@ -41,7 +41,6 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
 		if err != nil {
 			return nil, err
@@ -55,7 +54,6 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues.Lengths)))
 		if err != nil {
 			return nil, err
@@ -66,7 +64,6 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(resultVector, startswith.StartsWithRightConst(leftValues, rightValues, resultValues))
 		return resultVector, nil
 	}
-	leftValues, rightValues := left.Col.(*types.Bytes), right.Col.(*types.Bytes)
 	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
 	if err != nil {
 		return nil, err

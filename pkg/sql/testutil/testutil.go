@@ -235,7 +235,7 @@ func MakeDecimal64Vector(values []int64, nsp []uint64) *vector.Vector {
 	for _, n := range nsp {
 		nulls.Add(vec.Nsp, n)
 	}
-	vec.Col = (*types.Decimal64)(unsafe.Pointer(&values))
+	vec.Col = *(*[]types.Decimal64)(unsafe.Pointer(&values))
 	return vec
 }
 

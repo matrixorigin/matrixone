@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 
@@ -76,7 +77,8 @@ func (l *Lexer) Lex(lval *yySymType) int {
 }
 
 func (l *Lexer) Error(err string) {
-	l.scanner.LastError = scanner.PositionedErr{Err: err, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
+	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)
+	l.scanner.LastError = scanner.PositionedErr{Err: errMsg, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {
@@ -120,7 +122,7 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 	if err != nil {
 		// TODO: toDecimal()
 		//l.scanner.LastError = err
-		lval.str = str
+		lval.item = str
 		return HEXNUM
 	}
 	switch {
@@ -134,5 +136,19 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 }
 
 func (l *Lexer) toBit(lval *yySymType, str string) int {
+	ival, err := strconv.ParseUint(str[2:], 2, 64)
+	if err != nil {
+		// TODO: toDecimal()
+		//l.scanner.LastError = err
+		lval.item = str
+		return BIT_LITERAL
+	}
+	switch {
+	case ival <= math.MaxInt64:
+		lval.item = int64(ival)
+	default:
+		lval.item = ival
+	}
+	lval.str = str
 	return BIT_LITERAL
 }

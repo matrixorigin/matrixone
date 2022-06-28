@@ -130,11 +130,22 @@ func (v *StdVector) SetValue(idx int, val any) (err error) {
 	if v.IsReadonly() {
 		return ErrVecWriteRo
 	}
+	_, isNull := val.(types.Null)
+
 	v.Lock()
 	defer v.Unlock()
 
-	if v.VMask != nil && v.VMask.Np != nil && v.VMask.Np.Contains(uint64(idx)) {
-		v.VMask.Np.Flip(uint64(idx), uint64(idx))
+	if isNull {
+		if v.VMask.Np == nil {
+			v.VMask.Np = roaring64.BitmapOf(uint64(idx))
+		} else {
+			v.VMask.Np.Add(uint64(idx))
+		}
+		return
+	}
+
+	if v.VMask.Np != nil && v.VMask.Np.Contains(uint64(idx)) {
+		v.VMask.Np.Remove(uint64(idx))
 	}
 
 	start := idx * int(v.Type.Size)
@@ -431,13 +442,8 @@ func (v *StdVector) Window(start, end uint32) IVector {
 		Data: v.Data[startIdx:endIdx],
 	}
 	if mask&container.HasNullMask != 0 {
-		if mask&container.ReadonlyMask == 0 {
-			var np *roaring64.Bitmap
-			if v.VMask != nil {
-				np = common.BM64Window(v.VMask.Np, int(start), int(end))
-			}
-			vec.VMask = &nulls.Nulls{Np: np}
-		}
+		np := common.BM64Window(v.VMask.Np, int(start), int(end))
+		vec.VMask = &nulls.Nulls{Np: np}
 	} else {
 		vec.VMask = &nulls.Nulls{}
 	}
@@ -486,24 +492,20 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 }
 
 func (v *StdVector) Clone() *StdVector {
-	data := make([]byte, len(v.Data))
-	copy(data, v.Data)
-	vmask := &nulls.Nulls{}
+	var nullmask *roaring64.Bitmap
+	v.RLock()
+	size := len(v.Data)
 	if v.VMask.Np != nil {
-		vmask.Np = v.VMask.Np.Clone()
+		nullmask = v.VMask.Np.Clone()
 	}
-	return &StdVector{
-		Data: data,
-		BaseVector: BaseVector{
-			VMask:    vmask,
-			StatMask: v.StatMask,
-			Type: types.Type{
-				Oid:   v.Type.Oid,
-				Size:  v.Type.Size,
-				Width: v.Type.Width,
-			},
-		},
-	}
+	statmask := v.StatMask
+	v.RUnlock()
+	capacity := uint64(size) / uint64(v.Type.Size)
+	cloned := NewStdVector(v.Type, capacity)
+	cloned.Data = append(cloned.Data, v.Data[:size]...)
+	cloned.StatMask = statmask
+	cloned.VMask.Np = nullmask
+	return cloned
 }
 
 func (v *StdVector) CopyToVector() (*gvec.Vector, error) {

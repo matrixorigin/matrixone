@@ -113,9 +113,12 @@ func (info *appendInfo) GetDestOff() uint32 {
 func (info *appendInfo) GetDestLen() uint32 {
 	return info.destLen
 }
+func (info *appendInfo) Desc() string {
+	return info.dest.BlockString()
+}
 func (info *appendInfo) String() string {
-	s := fmt.Sprintf("[%d]: Append from [%d:%d] to blk %s[%d:%d]",
-		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.BlockString(), info.destOff, info.destLen+info.destOff)
+	s := fmt.Sprintf("[From=[%d:%d];To=%s[%d:%d]]",
+		info.srcOff, info.srcLen+info.srcOff, info.dest.BlockString(), info.destOff, info.destLen+info.destOff)
 	return s
 }
 func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
@@ -210,15 +213,6 @@ func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver w
 	return impl
 }
 
-func mockInsertNodeWithAppendInfo(infos []*appendInfo) *insertNode {
-	node := new(insertNode)
-	node.appends = infos
-	attrs := []int{0, 1}
-	vecs := make([]vector.IVector, 2)
-	node.data, _ = batch.NewBatch(attrs, vecs)
-	node.lsn = 1
-	return node
-}
 func (n *insertNode) GetTxn() txnif.AsyncTxn {
 	return n.table.store.txn
 }
@@ -309,6 +303,7 @@ func (n *insertNode) OnLoad() {
 	}
 	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
 	buf := e.GetPayload()
+	e.Free()
 	r := bytes.NewBuffer(buf)
 	cmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
@@ -454,7 +449,7 @@ func (n *insertNode) RowsWithoutDeletes() uint32 {
 }
 
 func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
-	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
+	if n.deletes == nil || n.deletes.IsEmpty() {
 		return toAppend
 	}
 	appendedOffset := n.OffsetWithDeletes(appended)
@@ -464,7 +459,7 @@ func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
 }
 
 func (n *insertNode) OffsetWithDeletes(count uint32) uint32 {
-	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
+	if n.deletes == nil || n.deletes.IsEmpty() {
 		return count
 	}
 	offset := count

@@ -264,16 +264,16 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) ([]string, 
 		lines = append(lines, temp)
 	}
 
-	if ndesc.Node.UpdateList != nil {
-		updateListDesc := &UpdateListDescribeImpl{
-			UpdateList: ndesc.Node.UpdateList,
-		}
-		updatedesc, err := updateListDesc.GetDescription(options)
-		if err != nil {
-			return nil, err
-		}
-		lines = append(lines, "Set columns with("+updatedesc+")")
-	}
+	//if ndesc.Node.UpdateList != nil {
+	//	updateListDesc := &UpdateListDescribeImpl{
+	//		UpdateList: ndesc.Node.UpdateList,
+	//	}
+	//	updatedesc, err := updateListDesc.GetDescription(options)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	lines = append(lines, "Set columns with("+updatedesc+")")
+	//}
 	return lines, nil
 }
 
@@ -310,7 +310,7 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (
 		var first bool = true
 		for _, v := range ndesc.Node.FilterList {
 			if !first {
-				result += " AND "
+				result += ", "
 			}
 			first = false
 			descV, err := describeExpr(v, options)
@@ -510,30 +510,30 @@ func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string
 }
 
 type UpdateListDescribeImpl struct {
-	UpdateList *plan.UpdateList
+	//UpdateList *plan.UpdateList
 }
 
 func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	// u.UpdateList.Columns
 	var result string
-	var first bool = true
-	if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {
-		panic("update node number of columns and values is not equal")
-	}
-	for i, columnExpr := range u.UpdateList.Columns {
-		if !first {
-			result += ", "
-		}
-		colstr, err := describeExpr(columnExpr, options)
-		if err != nil {
-			return result, err
-		}
-		valstr, err := describeExpr(u.UpdateList.Values[i], options)
-		if err != nil {
-			return result, err
-		}
-		result += colstr + " = " + valstr
-		first = false
-	}
+	//var first bool = true
+	//if len(u.UpdateList.Columns) != len(u.UpdateList.Values) {
+	//	panic("update node number of columns and values is not equal")
+	//}
+	//for i, columnExpr := range u.UpdateList.Columns {
+	//	if !first {
+	//		result += ", "
+	//	}
+	//	colstr, err := describeExpr(columnExpr, options)
+	//	if err != nil {
+	//		return result, err
+	//	}
+	//	valstr, err := describeExpr(u.UpdateList.Values[i], options)
+	//	if err != nil {
+	//		return result, err
+	//	}
+	//	result += colstr + " = " + valstr
+	//	first = false
+	//}
 	return result, nil
 }

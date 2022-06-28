@@ -26,7 +26,7 @@ import (
 
 func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	origVec := vs[0]
-	//Here we need to classfy it into three scenes
+	//Here we need to classify it into three scenes
 	//1. if it is a constant
 	//	1.1 if it's not a null value
 	//  1.2 if it's a null value
@@ -35,11 +35,11 @@ func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 		if origVec.IsScalarNull() {
 			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 		} else {
-			origVecCol := origVec.Col.([]T)
+			origVecCol := vector.MustTCols[T](origVec)
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
 			// nulls.Set(resultVector.Nsp, origVec.Nsp)
-			results := acos.Acos[T](origVecCol, resultValues)
+			results := acos.Acos(origVecCol, resultValues)
 			if nulls.Any(results.Nsp) {
 				return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
 			}
@@ -47,7 +47,7 @@ func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 			return resultVector, nil
 		}
 	} else {
-		origVecCol := origVec.Col.([]T)
+		origVecCol := vector.MustTCols[T](origVec)
 		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(origVecCol)))
 		if err != nil {
 			return nil, err
@@ -55,7 +55,7 @@ func Acos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *
 		results := encoding.DecodeFloat64Slice(resultVector.Data)
 		results = results[:len(origVecCol)]
 		resultVector.Col = results
-		res := acos.Acos[T](origVecCol, results)
+		res := acos.Acos(origVecCol, results)
 		nulls.Set(resultVector.Nsp, origVec.Nsp.Or(res.Nsp))
 		vector.SetCol(resultVector, res.Result)
 		return resultVector, nil

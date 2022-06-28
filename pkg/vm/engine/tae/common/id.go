@@ -59,6 +59,9 @@ func (id *ID) String() string {
 	return fmt.Sprintf("<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
 }
 
+func (id *ID) TableString() string {
+	return fmt.Sprintf("TBL<%d:%d>", id.Idx, id.TableID)
+}
 func (id *ID) SegmentString() string {
 	return fmt.Sprintf("SEG<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
 }

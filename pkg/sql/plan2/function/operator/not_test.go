@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -18,13 +19,13 @@ var NotboolVec = []bool{true, false, false}
 
 func Test_NotCol(t *testing.T) {
 	convey.Convey("Test not col operator succ", t, func() {
-		InitNotFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 1)
 		vec[0] = &vector.Vector{
 			Col: NotboolVec,
 			Nsp: &nulls.Nulls{},
 		}
+		vec[0].Typ.Oid = types.T_bool
 		nulls.Add(vec[0].Nsp, 2)
 		ret, err := Not(vec, proc)
 		if err != nil {
@@ -44,7 +45,6 @@ func Test_NotCol(t *testing.T) {
 
 func Test_NotConst(t *testing.T) {
 	convey.Convey("Test not const operator succ", t, func() {
-		InitNotFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 1)
 		vec[0] = InitConstVector()
@@ -78,7 +78,6 @@ func Test_NotConst(t *testing.T) {
 
 func Test_NotNull(t *testing.T) {
 	convey.Convey("Test not null operator succ", t, func() {
-		InitNotFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 		vec := make([]*vector.Vector, 1)
 		vec[0] = InitConstVector()
@@ -88,7 +87,6 @@ func Test_NotNull(t *testing.T) {
 			log.Fatal(err)
 		}
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
-		convey.So(ret.Col, convey.ShouldBeNil)
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
 	})
 }

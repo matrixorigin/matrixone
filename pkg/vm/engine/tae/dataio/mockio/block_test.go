@@ -33,7 +33,7 @@ func TestBlock1(t *testing.T) {
 	var block file.Block
 	block = newBlock(common.NextGlobalSeqNum(), nil, colCnt, indexCnt)
 	blockTs := common.NextGlobalSeqNum()
-	block.WriteTS(blockTs)
+	_ = block.WriteTS(blockTs)
 	readTs, _ := block.ReadTS()
 	assert.Equal(t, blockTs, readTs)
 

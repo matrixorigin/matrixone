@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -115,12 +116,13 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 type outputQueue struct {
-	proto   MysqlProtocol
-	mrs     *MysqlResultSet
-	rowIdx  uint64
-	length  uint64
-	ep      *tree.ExportParam
-	lineStr []byte
+	proto        MysqlProtocol
+	mrs          *MysqlResultSet
+	rowIdx       uint64
+	length       uint64
+	ep           *tree.ExportParam
+	lineStr      []byte
+	showStmtType ShowStatementType
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -130,13 +132,14 @@ func (oq *outputQueue) ResetLineStr() {
 	oq.lineStr = oq.lineStr[:0]
 }
 
-func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam) *outputQueue {
+func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam, showStatementType ShowStatementType) *outputQueue {
 	return &outputQueue{
-		proto:  proto,
-		mrs:    mrs,
-		rowIdx: 0,
-		length: length,
-		ep:     ep,
+		proto:        proto,
+		mrs:          mrs,
+		rowIdx:       0,
+		length:       length,
+		ep:           ep,
+		showStmtType: showStatementType,
 	}
 }
 
@@ -184,13 +187,143 @@ func (o *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
+		if o.showStmtType == ShowCreateTable || o.showStmtType == ShowCreateDatabase || o.showStmtType == ShowColumns {
+			o.rowIdx = 0
+			return nil
+		}
+
 		if err := o.proto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
-			//return err
 			logutil.Errorf("flush error %v \n", err)
 			return err
 		}
 	}
 	o.rowIdx = 0
+	return nil
+}
+
+const (
+	tableNamePos  = 1
+	attrNamePos   = 2
+	attrTypPos    = 3
+	charWidthPos  = 5
+	primaryKeyPos = 10
+)
+
+/*
+handle show create table in plan2 and tae
+*/
+func handleShowCreateTable2(ses *Session) error {
+	tableName := string(ses.Data[0][tableNamePos].([]byte))
+	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
+	rowCount := 0
+	var pkDefs []string
+	for _, d := range ses.Data {
+		colName := string(d[attrNamePos].([]byte))
+		if colName == "PADDR" {
+			continue
+		}
+		nullOrNot := ""
+		if d[7].(int8) != 0 {
+			nullOrNot = "NOT NULL"
+		} else {
+			nullOrNot = "DEFAULT NULL"
+		}
+		if rowCount == 0 {
+			createStr += "\n"
+		} else {
+			createStr += ",\n"
+		}
+		typ := types.Type{Oid: types.T(d[attrTypPos].(int32))}
+		typeStr := typ.String()
+		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
+			typeStr += fmt.Sprintf("(%d)", d[charWidthPos].(int32))
+		}
+		createStr += fmt.Sprintf("`%s` %s %s", colName, typeStr, nullOrNot)
+		rowCount++
+		if string(d[primaryKeyPos].([]byte)) == "p" {
+			pkDefs = append(pkDefs, colName)
+		}
+	}
+	if len(pkDefs) != 0 {
+		pkStr := "PRIMARY KEY ("
+		for _, def := range pkDefs {
+			pkStr += fmt.Sprintf("`%s`", def)
+		}
+		pkStr += ")"
+		if rowCount != 0 {
+			createStr += ",\n"
+		}
+		createStr += pkStr
+	}
+
+	if rowCount != 0 {
+		createStr += "\n"
+	}
+	createStr += ")"
+
+	row := make([]interface{}, 2)
+	row[0] = tableName
+	row[1] = createStr
+
+	ses.Mrs.AddRow(row)
+
+	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
+		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
+		return err
+	}
+	return nil
+}
+
+/*
+handle show create database in plan2 and tae
+*/
+func handleShowCreateDatabase2(ses *Session) error {
+	dbNameIndex := ses.Mrs.Name2Index["Database"]
+	dbsqlIndex := ses.Mrs.Name2Index["Create Database"]
+	firstRow := ses.Data[0]
+	dbName := firstRow[dbNameIndex]
+	createDBSql := fmt.Sprintf("CREATE DATABASE `%s`", dbName)
+	firstRow[dbsqlIndex] = createDBSql
+
+	row := make([]interface{}, 2)
+	row[0] = dbName
+	row[1] = createDBSql
+
+	ses.Mrs.AddRow(row)
+	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
+		logutil.Errorf("handleShowCreateDatabase2 error %v \n", err)
+		return err
+	}
+	return nil
+}
+
+/*
+handle show columns from table in plan2 and tae
+*/
+func handleShowColumns2(ses *Session) error {
+	for _, d := range ses.Data {
+		row := make([]interface{}, 6)
+		colName := string(d[0].([]byte))
+		if colName == "PADDR" {
+			continue
+		}
+		row[0] = colName
+		typ := types.Type{Oid: types.T(d[1].(int32))}
+		row[1] = typ.String()
+		if d[2].(int8) == 0 {
+			row[2] = "NO"
+		} else {
+			row[2] = "YES"
+		}
+		row[3] = d[3]
+		row[4] = "NULL"
+		row[5] = d[5]
+		ses.Mrs.AddRow(row)
+	}
+	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
+		logutil.Errorf("handleShowCreateTable2 error %v \n", err)
+		return err
+	}
 	return nil
 }
 
@@ -239,7 +372,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 	allocateOutBufferTime := time.Since(begin3)
 
-	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep)
+	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showStmtType)
 	oq.reset()
 
 	row2colTime := time.Duration(0)
@@ -513,7 +646,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			default:
 				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-				return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+				return fmt.Errorf("getDataFromPipeline : unsupported type %d", vec.Typ.Oid)
 			}
 			rowIndex = rowIndexBackup
 		}
@@ -527,6 +660,11 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			for l := 0; l < len(bat.Vecs); l++ {
 				erow[l] = row[l]
 			}
+		}
+		if oq.showStmtType == ShowCreateDatabase || oq.showStmtType == ShowCreateTable || oq.showStmtType == ShowColumns {
+			row2 := make([]interface{}, len(row))
+			copy(row2, row)
+			ses.Data = append(ses.Data, row2)
 		}
 	}
 
@@ -1047,26 +1185,26 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 }
 
 // this function is temporary, it should be removed when mo support sql like selct const_expr
-func (mce *MysqlCmdExecutor) handleSelect1(nv *tree.NumVal) error {
-	ses := mce.GetSession()
-	proto := ses.protocol
+// func (mce *MysqlCmdExecutor) handleSelect1(nv *tree.NumVal) error {
+// 	ses := mce.GetSession()
+// 	proto := ses.protocol
 
-	v_str := nv.Value.String()
-	col := new(MysqlColumn)
-	col.SetName(v_str)
-	col.SetColumnType(defines.MYSQL_TYPE_LONG)
-	ses.Mrs.AddColumn(col)
-	v, _ := strconv.Atoi(v_str)
-	ses.Mrs.AddRow([]interface{}{v})
+// 	v_str := nv.Value.String()
+// 	col := new(MysqlColumn)
+// 	col.SetName(v_str)
+// 	col.SetColumnType(defines.MYSQL_TYPE_LONG)
+// 	ses.Mrs.AddColumn(col)
+// 	v, _ := strconv.Atoi(v_str)
+// 	ses.Mrs.AddRow([]interface{}{v})
 
-	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+// 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+// 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
-	if err := proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return nil
-}
+// 	if err := proto.SendResponse(resp); err != nil {
+// 		return fmt.Errorf("routine send response failed. error:%v ", err)
+// 	}
+// 	return nil
+// }
 
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
@@ -1653,6 +1791,22 @@ func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
 func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	var err error
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	switch cwft.GetAst().(type) {
+	case *tree.ShowCreateTable:
+		cols = []*plan2.ColDef{
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Table"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Create Table"},
+		}
+	case *tree.ShowColumns:
+		cols = []*plan2.ColDef{
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Field"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Type"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Null"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Key"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Default"},
+			{Typ: &plan2.Type{Id: plan3.Type_TypeId(types.T_char)}, Name: "Comment"},
+		}
+	}
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
 		c := new(MysqlColumn)
@@ -1789,6 +1943,7 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	beginInstant := time.Now()
 	ses := mce.GetSession()
+	ses.showStmtType = NotShowStatement
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
 	statementCount := uint64(1)
@@ -1820,8 +1975,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		ses.Pu.StorageEngine,
 		proc, ses, usePlan2)
 	if err != nil {
-		return NewMysqlError(ER_PARSE_ERROR, err,
-			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use")
+		return NewMysqlError(ER_PARSE_ERROR, err, "")
 	}
 
 	defer func() {
@@ -1917,13 +2071,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 
 						//next statement
 						goto handleSucceeded
-					} else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok && nv.Value.String() == "1" {
-						err = mce.handleSelect1(nv)
-						if err != nil {
-							goto handleFailed
-						}
-						goto handleSucceeded
 					}
+					// else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok && nv.Value.String() == "1" {
+					// 	err = mce.handleSelect1(nv)
+					// 	if err != nil {
+					// 		goto handleFailed
+					// 	}
+					// 	goto handleSucceeded
+					// }
 				}
 			}
 		}
@@ -1986,12 +2141,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				proto.SetUserName("")
 			}
 		case *tree.Load:
+			fromLoadData = true
 			selfHandle = true
 			err = mce.handleLoadData(st)
 			if err != nil {
 				goto handleFailed
 			}
-			fromLoadData = true
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -2033,6 +2188,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				}
 			}
 		case *tree.ShowColumns:
+			ses.showStmtType = ShowColumns
+			ses.Data = nil
 			if usePlan2 && isAoe {
 				selfHandle = true
 				if err = mce.handleShowColumns(st); err != nil {
@@ -2040,6 +2197,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				}
 			}
 		case *tree.ShowCreateDatabase:
+			ses.showStmtType = ShowCreateDatabase
+			ses.Data = nil
 			if usePlan2 && isAoe {
 				selfHandle = true
 				if err = mce.handleShowCreateDatabase(st); err != nil {
@@ -2047,6 +2206,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 				}
 			}
 		case *tree.ShowCreateTable:
+			ses.showStmtType = ShowCreateTable
+			ses.Data = nil
 			if usePlan2 && isAoe {
 				selfHandle = true
 				if err = mce.handleShowCreateTable(st); err != nil {
@@ -2143,6 +2304,20 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			if err = runner.Run(epoch); err != nil {
 				goto handleFailed
 			}
+			if ses.showStmtType == ShowCreateTable {
+				if err = handleShowCreateTable2(ses); err != nil {
+					goto handleFailed
+				}
+			} else if ses.showStmtType == ShowCreateDatabase {
+				if err = handleShowCreateDatabase2(ses); err != nil {
+					goto handleFailed
+				}
+			} else if ses.showStmtType == ShowColumns {
+				if err = handleShowColumns2(ses); err != nil {
+					goto handleFailed
+				}
+			}
+
 			if ses.ep.Outfile {
 				if err = ses.ep.Writer.Flush(); err != nil {
 					goto handleFailed
@@ -2230,11 +2405,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		}
 		goto handleNext
 	handleFailed:
-		//the failures due to txn begin,commit,rollback do not need to be rollback.
-		if fromTxnCommand == TxnNoCommand {
-			txnErr = txnHandler.RollbackAfterAutocommitOnly()
-			if txnErr != nil {
-				return txnErr
+		if !fromLoadData {
+			//the failures due to txn begin,commit,rollback do not need to be rollback.
+			if fromTxnCommand == TxnNoCommand {
+				txnErr = txnHandler.RollbackAfterAutocommitOnly()
+				if txnErr != nil {
+					return txnErr
+				}
 			}
 		}
 		return err

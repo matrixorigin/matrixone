@@ -184,7 +184,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 					compute.AppendValue(colData, []byte(catalog.SystemColNoConstraint))
 				}
 			case catalog.SystemColAttr_Length:
-				compute.AppendValue(colData, int32(colDef.Type.Size))
+				compute.AppendValue(colData, int32(colDef.Type.Width))
 			case catalog.SystemColAttr_NullAbility:
 				compute.AppendValue(colData, colDef.NullAbility) // TODO
 			case catalog.SystemColAttr_HasExpr:

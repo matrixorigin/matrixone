@@ -42,7 +42,7 @@ func runClientTest(t *testing.T,
 
 	init := make(map[uint64]string)
 	init[2] = service.ID()
-	assert.NoError(t, service.store.StartReplica(1, 2, init))
+	assert.NoError(t, service.store.StartReplica(1, 2, init, false))
 
 	scfg := LogServiceClientConfig{
 		ReadOnly:         readOnly,
@@ -87,6 +87,22 @@ func TestClientAppend(t *testing.T) {
 		cmd = getAppendCmd(cmd, cfg.ReplicaID+1)
 		_, err = c.Append(ctx, pb.LogRecord{Data: cmd})
 		assert.Equal(t, ErrNotLeaseHolder, err)
+	}
+	runClientTest(t, false, fn)
+}
+
+func TestClientAppendAlloc(t *testing.T) {
+	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+		cmd := make([]byte, 16+headerSize+8)
+		cmd = getAppendCmd(cmd, cfg.ReplicaID)
+		rand.Read(cmd[headerSize+8:])
+		ac := testing.AllocsPerRun(1000, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+			require.NoError(t, err)
+		})
+		plog.Infof("ac: %f", ac)
 	}
 	runClientTest(t, false, fn)
 }

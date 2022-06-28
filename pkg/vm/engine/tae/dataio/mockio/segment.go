@@ -95,7 +95,7 @@ func (sf *segmentFile) Destroy() {
 	// }
 
 	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
-	mockFS.RemoveFile(sf.id.SegmentID)
+	_ = mockFS.RemoveFile(sf.id.SegmentID)
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {

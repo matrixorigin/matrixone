@@ -31,8 +31,8 @@ We will use **SSB Test** as an example to show you the overall operation process
 
 ### **Test Preperations**  
 
-This tutorial walks you through the most popular **Star Schema Benchmark（SSB）**Test SQL statements with MatrixOne. To better experience MatrixOne features and performance, test queries in this tutorial will run without filters.  
-Before you started, the test datasets have been pre-loaded in  database `ssb`. To list available tables in the database you can query :
+This tutorial walks you through the most popular **Star Schema Benchmark（SSB）**Test SQL statements with MatrixOne. To better experience MatrixOne's features and performance, test queries in this tutorial will run without filters.  
+Before you start, the test datasets have been pre-loaded in  database `ssb`. To list available tables in the database you can query :
 
 ```
 SHOW TABLES；

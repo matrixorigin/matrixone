@@ -15,135 +15,57 @@
 package operator
 
 import (
-	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func ColXorCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
-	rvs, ok := rv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the right vec col is not []bool type")
-	}
-	n := len(lvs)
-	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
+func ScalarXorNotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	col := make([]bool, len(lvs))
-	for i := 0; i < len(lvs); i++ {
-		col[i] = (lvs[i] || rvs[i]) && !(lvs[i] && rvs[i])
+	vcols := vec.Col.([]bool)
+	value := col1[0]
+	for i := range vcols {
+		vcols[i] = (col2[i] || value) && !(col2[i] && value)
 	}
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, col)
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }
 
-func ColXorConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
+func Xor(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustTCols[bool](v1), vector.MustTCols[bool](v2)
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleWithNullCol(vs, proc)
 	}
-	rvs, ok := rv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the right vec col is not []bool type")
+
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = (col1[0] || col2[0]) && !(col1[0] && col2[0])
+		return vec, nil
+	case c1 && !c2:
+		return ScalarXorNotScalar(v1, v2, col1, col2, proc)
+	case !c1 && c2:
+		return ScalarXorNotScalar(v2, v1, col2, col1, proc)
 	}
-	n := len(lvs)
-	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	rb := rvs[0]
-	col := make([]bool, len(lvs))
-	for i := 0; i < len(lvs); i++ {
-		col[i] = (lvs[i] || rb) && !(lvs[i] && rb)
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		vcols[i] = (col1[i] || col2[i]) && !(col1[i] && col2[i])
 	}
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	vector.SetCol(vec, col)
-	return vec, nil
-}
-
-func ColXorNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
-	n := len(lvs)
-	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
-	if err != nil {
-		return nil, err
-	}
-	col := make([]bool, len(lvs))
-	for i := 0; i < len(lvs); i++ {
-		nulls.Add(vec.Nsp, uint64(i))
-	}
-	vector.SetCol(vec, col)
-	return vec, nil
-}
-
-func ConstXorCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return ColXorConst(rv, lv, proc)
-}
-
-func ConstXorConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
-	rvs, ok := rv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the right vec col is not []bool type")
-	}
-	vec := proc.AllocScalarVector(lv.Typ)
-	vector.SetCol(vec, []bool{(lvs[0] || rvs[0]) && !(lvs[0] && rvs[0])})
-	return vec, nil
-}
-
-func ConstXorNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(lv.Typ), nil
-}
-
-func NullXorCol(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return ColXorNull(rv, lv, proc)
-}
-
-func NullXorConst(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return ConstXorNull(rv, lv, proc)
-}
-
-func NullXorNull(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(lv.Typ), nil
-}
-
-type XorFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
-
-var XorFuncMap = map[int]XorFunc{}
-
-var XorFuncVec = []XorFunc{
-	ColXorCol, ColXorConst, ColXorNull,
-	ConstXorCol, ConstXorConst, ConstXorNull,
-	NullXorCol, NullXorConst, NullXorNull,
-}
-
-func InitXorFuncMap() {
-	for i := 0; i < len(XorFuncVec); i++ {
-		XorFuncMap[i] = XorFuncVec[i]
-	}
-}
-
-func Xor(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv := vectors[0]
-	rv := vectors[1]
-	lt, rt := GetTypeID(lv), GetTypeID(rv)
-	vec, err := XorFuncMap[lt*3+rt](lv, rv, proc)
-	if err != nil {
-		return nil, errors.New("Xor function: " + err.Error())
-	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }

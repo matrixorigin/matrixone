@@ -41,7 +41,7 @@ func (c *compare) Set(idx int, v *vector.Vector) {
 
 // Compare method for decimal needs to know the decimal's scale, so we need to fill in the c.vs field before using this function
 func (c *compare) Compare(veci, vecj int, vi, vj int64) int {
-	return int(types.CompareDecimal128Decimal128(c.xs[veci][vi], c.xs[vecj][vj], c.vs[0].Typ.Scale, c.vs[1].Typ.Scale))
+	return int(types.CompareDecimal128Decimal128(c.xs[veci][vi], c.xs[vecj][vj], c.vs[veci].Typ.Scale, c.vs[vecj].Typ.Scale))
 }
 
 func (c *compare) Copy(vecSrc, vecDst int, src, dst int64, _ *process.Process) error {

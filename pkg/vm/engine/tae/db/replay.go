@@ -60,7 +60,6 @@ func (replayer *Replayer) PreReplayWal() {
 			return catalog.ErrStopCurrRecur
 		}
 		entry.InitData(replayer.DataFactory)
-		entry.ReplayFile(replayer.cache)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
@@ -215,7 +214,7 @@ func (replayer *Replayer) OnTimeStamp(ts uint64) {
 func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 	if idxCtx != nil && idxCtx.Size > 0 {
 		logutil.Info("", common.OperationField("replay-cmd"),
-			common.OperandField(txncmd.String()),
+			common.OperandField(txncmd.Desc()),
 			common.AnyField("index", idxCtx.String()))
 	}
 	var err error
@@ -266,6 +265,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 				panic(err)
 			}
 			data = txnCmd.(*txnbase.BatchCmd).Bat
+			batEntry.Free()
 		}
 	}
 

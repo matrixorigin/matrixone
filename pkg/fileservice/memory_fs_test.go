@@ -21,11 +21,15 @@ import (
 )
 
 func TestMemoryFS(t *testing.T) {
-	testFileService(t, func() FileService {
-		fs, err := NewMemoryFS()
-		assert.Nil(t, err)
-		return fs
+
+	t.Run("file service", func(t *testing.T) {
+		testFileService(t, func() FileService {
+			fs, err := NewMemoryFS()
+			assert.Nil(t, err)
+			return fs
+		})
 	})
+
 }
 
 func BenchmarkMemoryFS(b *testing.B) {

@@ -16,6 +16,7 @@ package aggregate
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/ring/anyvalue"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
@@ -189,6 +190,8 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 		return max.NewDate(typ), nil
 	case types.T_datetime:
 		return max.NewDatetime(typ), nil
+	case types.T_timestamp:
+		return max.NewTimestamp(typ), nil
 	case types.T_decimal64:
 		return max.NewDecimal64(typ), nil
 	case types.T_decimal128:
@@ -227,6 +230,8 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 		return min.NewDate(typ), nil
 	case types.T_datetime:
 		return min.NewDatetime(typ), nil
+	case types.T_timestamp:
+		return min.NewTimestamp(typ), nil
 	case types.T_decimal64:
 		return min.NewDecimal64(typ), nil
 	case types.T_decimal128:

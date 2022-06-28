@@ -81,8 +81,6 @@ var (
 		types.T_decimal64: {types.T_decimal128},
 		types.T_char:      {types.T_varchar},
 		types.T_varchar:   {types.T_char},
-
-		types.T_tuple: {types.T_float64},
 	}
 )
 
@@ -165,7 +163,7 @@ func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function or operator '%s' is not implemented", name))
+	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function or operator '%s' will be implemented in future version.", name))
 }
 
 // EncodeOverloadID convert function-id and overload-index to be an overloadID
@@ -261,9 +259,9 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 		}
 	}
 	if len(fs) > 0 && fs[0].isFunction() {
-		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("unsupported parameter types %v for function '%s'", args, name))
+		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, args))
 	}
-	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("unsupported parameter types %v for operator '%s'", args, name))
+	return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
 }
 
 // strictTypeCheck is a general type check method.
@@ -274,7 +272,19 @@ func strictTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 		return false
 	}
 	for i := range args {
-		if args[i] != require[i] && isNotScalarNull(args[i]) {
+		if args[i] != require[i] && IsNotScalarNull(args[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func ConcatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
+	if len(args) <= 1 {
+		return false
+	}
+	for _, arg := range args {
+		if arg != types.T_varchar && arg != types.T_char && IsNotScalarNull(arg) {
 			return false
 		}
 	}
@@ -296,22 +306,6 @@ func toDateTypeCheck(args []types.T, require []types.T, _ types.T) bool {
 	}
 	if args[1] == ScalarNull {
 		return false
-	}
-	return true
-}
-
-// todo(broccoli): change this to a general function
-func concatWsTypeCheck(args []types.T, require []types.T, _ types.T) bool {
-	if len(args) <= 1 {
-		return false
-	}
-	for _, arg := range args {
-		if arg != types.T_varchar && arg != types.T_char {
-			return false
-		}
-		if isScalarNull(arg) {
-			return false
-		}
 	}
 	return true
 }
@@ -432,7 +426,7 @@ func compare(f1, f2 Function) (f Function, change bool) {
 	return f2, true
 }
 
-func isNotScalarNull(t types.T) bool {
+func IsNotScalarNull(t types.T) bool {
 	return t != ScalarNull
 }
 

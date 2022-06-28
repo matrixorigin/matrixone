@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -52,13 +53,10 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*DriverFile, 1)
-	bf.deletes.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
-		fmt.Sprintf("%d_%d.del", colCnt, bf.id))
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
-	bf.indexMeta.file = make([]*DriverFile, 1)
-	bf.indexMeta.file[0] = bf.seg.GetSegmentFile().NewBlockFile(
-		fmt.Sprintf("%d_%d.idx", colCnt, bf.id))
+	bf.indexMeta.file = append(bf.indexMeta.file, bf.seg.GetSegmentFile().NewBlockFile(
+		fmt.Sprintf("%d_%d.idx", colCnt, bf.id)))
+	bf.indexMeta.file[0].SetCols(uint32(colCnt))
 	bf.indexMeta.file[0].snode.algo = compress.None
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -72,26 +70,13 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	return bf
 }
 
-func replayBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
-	bf := &blockFile{
-		seg:     seg,
-		id:      id,
-		columns: make([]*columnBlock, colCnt),
-	}
-	bf.deletes = newDeletes(bf)
-	bf.deletes.file = make([]*DriverFile, 1)
-	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
-	bf.indexMeta.file = make([]*DriverFile, 1)
-	bf.OnZeroCB = bf.close
-	for i := range bf.columns {
-		cnt := 0
-		if indexCnt != nil {
-			cnt = indexCnt[i]
+func (bf *blockFile) AddColumn(col int) {
+	colCnt := len(bf.columns)
+	if col > colCnt {
+		for i := colCnt; i < col; i++ {
+			bf.columns = append(bf.columns, getColumnBlock(i, bf))
 		}
-		bf.columns[i] = openColumnBlock(bf, cnt, i)
 	}
-	bf.Ref()
-	return bf
 }
 
 func (bf *blockFile) Fingerprint() *common.ID {
@@ -119,12 +104,10 @@ func (bf *blockFile) ReadRows() uint32 {
 
 func (bf *blockFile) WriteTS(ts uint64) (err error) {
 	bf.ts = ts
-	if bf.deletes.file != nil {
-		bf.deletes.mutex.Lock()
-		defer bf.deletes.mutex.Unlock()
-		bf.deletes.file = append(bf.deletes.file,
-			bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)))
-	}
+	bf.deletes.SetFile(
+		bf.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.del", len(bf.columns), bf.id, ts)),
+		uint32(len(bf.columns)),
+		uint32(len(bf.columns[0].indexes)))
 	return
 }
 
@@ -190,14 +173,20 @@ func (bf *blockFile) Destroy() error {
 		cb.Unref()
 	}
 	bf.columns = nil
-	if bf.deletes.file[0] != nil {
-		bf.deletes.file[0].driver.ReleaseFile(bf.deletes.file[0])
-		bf.deletes = nil
+	for _, del := range bf.deletes.file {
+		if del == nil {
+			continue
+		}
+		del.Unref()
 	}
-	if bf.indexMeta.file[0] != nil {
-		bf.indexMeta.file[0].driver.ReleaseFile(bf.indexMeta.file[0])
-		bf.indexMeta = nil
+	bf.deletes = nil
+	for _, idx := range bf.indexMeta.file {
+		if idx == nil {
+			continue
+		}
+		idx.Unref()
 	}
+	bf.indexMeta = nil
 	if bf.seg != nil {
 		bf.seg.RemoveBlock(bf.id)
 	}
@@ -430,6 +419,9 @@ func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[u
 		defer common.GPool.Free(onode)
 		obuf := onode.Buf[:osize]
 		obuf, err = compress.Decompress(buf, obuf, compress.Lz4)
+		if err != nil {
+			panic(err)
+		}
 		maskLen := binary.BigEndian.Uint32(obuf[:4])
 		obuf = obuf[4:]
 		mask := roaring.New()
@@ -437,7 +429,8 @@ func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[u
 			panic(err)
 		}
 		obuf = obuf[maskLen:]
-		vec := gvec.New(types.Type_ANY.ToType())
+		typ := encoding.DecodeType(obuf[:encoding.TypeSize])
+		vec := gvec.New(typ)
 		if err = vec.Read(obuf); err != nil {
 			panic(err)
 		}

@@ -67,7 +67,7 @@ func (view *ColumnView) GetValue(key uint32, startTs uint64) (v any, err error) 
 	}
 	head := link.GetHead()
 	for head != nil {
-		node := head.GetPayload().(*ColumnNode)
+		node := head.GetPayload().(*ColumnUpdateNode)
 		if node.GetStartTS() < startTs {
 			node.RLock()
 			//        |
@@ -133,7 +133,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
 		return
 	}
 
-	node := link.GetHead().GetPayload().(*ColumnNode)
+	node := link.GetHead().GetPayload().(*ColumnUpdateNode)
 	node.RLock()
 	// 1. The specified row has committed update
 	if node.txn == nil {
@@ -160,7 +160,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts uint64) (err error) {
 }
 
 func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
-	n := un.(*ColumnNode)
+	n := un.(*ColumnUpdateNode)
 	// First update to key
 	var link *common.Link
 	if link = view.links[key]; link == nil {
@@ -171,7 +171,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 		return
 	}
 
-	node := link.GetHead().GetPayload().(*ColumnNode)
+	node := link.GetHead().GetPayload().(*ColumnUpdateNode)
 	node.RLock()
 	// 1. The specified row has committed update
 	if node.txn == nil {
@@ -199,11 +199,11 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	return
 }
 
-func (view *ColumnView) Delete(key uint32, n *ColumnNode) (err error) {
+func (view *ColumnView) Delete(key uint32, n *ColumnUpdateNode) (err error) {
 	link := view.links[key]
 	var target *common.DLNode
 	link.Loop(func(dlnode *common.DLNode) bool {
-		node := dlnode.GetPayload().(*ColumnNode)
+		node := dlnode.GetPayload().(*ColumnUpdateNode)
 		if node.GetStartTS() == n.GetStartTS() {
 			target = dlnode
 			return false
@@ -223,7 +223,7 @@ func (view *ColumnView) Delete(key uint32, n *ColumnNode) (err error) {
 func (view *ColumnView) RowStringLocked(row uint32, link *common.Link) string {
 	s := fmt.Sprintf("[ROW=%d]:", row)
 	link.Loop(func(dlnode *common.DLNode) bool {
-		n := dlnode.GetPayload().(*ColumnNode)
+		n := dlnode.GetPayload().(*ColumnUpdateNode)
 		n.RLock()
 		s = fmt.Sprintf("%s\n%s", s, n.StringLocked())
 		n.RUnlock()

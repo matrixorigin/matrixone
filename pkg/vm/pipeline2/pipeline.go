@@ -70,6 +70,9 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		if bat, err = r.Read(refCnts, p.attrs); err != nil {
 			return false, err
 		}
+		if bat != nil {
+			bat.Cnt = 1
+		}
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
 		if end, err = overload.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
@@ -92,6 +95,7 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	if err = overload.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
+	bat.Cnt = 1
 	// processing the batch according to the instructions
 	proc.Reg.InputBatch = bat
 	end, err = overload.Run(p.instructions, proc)

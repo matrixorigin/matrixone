@@ -99,6 +99,7 @@ func (r *BoolRing) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeBoolSlice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n + 1)]
 	r.Vs[n] = true
 	r.Ns = append(r.Ns, 0)
 	return nil
@@ -125,6 +126,7 @@ func (r *BoolRing) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeBoolSlice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n + size)]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Vs[i+n] = true

@@ -31,7 +31,7 @@ import (
 
 type ts1 interface {
 	constraints.Integer | bool | types.Date | types.Datetime |
-		constraints.Float | types.Decimal64 | types.Decimal128
+		constraints.Float | types.Decimal64 | types.Decimal128 | types.Timestamp
 }
 
 // AnyVRing1 for bool / int / uint / float / date / datetime
@@ -176,6 +176,8 @@ func DecodeAnyRing2(data []byte) (*AnyVRing2, []byte, error) {
 
 func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
+	case types.T_bool:
+		return &AnyVRing1[bool]{Typ: typ}, nil
 	case types.T_uint8:
 		return &AnyVRing1[uint8]{Typ: typ}, nil
 	case types.T_uint16:
@@ -192,6 +194,10 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 		return &AnyVRing1[int32]{Typ: typ}, nil
 	case types.T_int64:
 		return &AnyVRing1[int64]{Typ: typ}, nil
+	case types.T_float32:
+		return &AnyVRing1[float32]{Typ: typ}, nil
+	case types.T_float64:
+		return &AnyVRing1[float64]{Typ: typ}, nil
 	case types.T_char:
 		return &AnyVRing2{Typ: typ}, nil
 	case types.T_varchar:
@@ -204,8 +210,10 @@ func NewAnyValueRingWithTypeCheck(typ types.Type) (ring.Ring, error) {
 		return &AnyVRing1[types.Decimal64]{Typ: typ}, nil
 	case types.T_decimal128:
 		return &AnyVRing1[types.Decimal128]{Typ: typ}, nil
+	case types.T_timestamp:
+		return &AnyVRing1[types.Timestamp]{Typ: typ}, nil
 	}
-	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("'%v' not support Any_Value", typ.Oid))
+	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Any_Value do not support '%v'", typ.Oid))
 }
 
 // shouldSet returns true means we should assign the value
@@ -338,6 +346,7 @@ func (r *AnyVRing1[T]) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeFixedSlice[T](data, itemSize)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*itemSize]
 	r.Set = append(r.Set, false)
 	r.Ns = append(r.Ns, 0)
 	return nil
@@ -381,6 +390,7 @@ func (r *AnyVRing1[T]) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeFixedSlice[T](data, itemSize)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*itemSize]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Set = append(r.Set, false)
@@ -525,6 +535,9 @@ func (r *AnyVRing2) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *AnyVRing1[T]) Add(a interface{}, x, y int64) {
 	ar := a.(*AnyVRing1[T])
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Set[y] && shouldSet(r.Set[x]) {
 		r.Vs[x] = ar.Vs[y]
 		r.Set[x] = true
@@ -534,6 +547,9 @@ func (r *AnyVRing1[T]) Add(a interface{}, x, y int64) {
 
 func (r *AnyVRing2) Add(a interface{}, x, y int64) {
 	ar := a.(*AnyVRing2)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Set[y] && shouldSet(r.Set[x]) {
 		r.Vs[x] = ar.Vs[y]
 		r.Set[x] = true
@@ -543,6 +559,9 @@ func (r *AnyVRing2) Add(a interface{}, x, y int64) {
 
 func (r *AnyVRing1[T]) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*AnyVRing1[T])
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if ar.Set[int64(i)+start] && shouldSet(r.Set[j]) {
@@ -555,6 +574,9 @@ func (r *AnyVRing1[T]) BatchAdd(a interface{}, start int64, os []uint8, vps []ui
 
 func (r *AnyVRing2) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*AnyVRing2)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if ar.Set[int64(i)+start] && shouldSet(r.Set[j]) {

@@ -15,7 +15,12 @@
 package plan2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func GetBindings(expr *plan.Expr) []int32 {
@@ -45,23 +50,6 @@ func doGetBindings(expr *plan.Expr) map[int32]any {
 	return res
 }
 
-func hasSubquery(expr *plan.Expr) bool {
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Sub:
-		return true
-
-	case *plan.Expr_F:
-		ret := false
-		for _, arg := range exprImpl.F.Args {
-			ret = ret || hasSubquery(arg)
-		}
-		return ret
-
-	default:
-		return false
-	}
-}
-
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
@@ -83,11 +71,9 @@ func decreaseDepthAndDispatch(preds []*plan.Expr) ([]*plan.Expr, []*plan.Expr) {
 	var filterPreds, joinPreds []*plan.Expr
 	for _, pred := range preds {
 		newPred, correlated := decreaseDepth(pred)
-		if f, ok := pred.Expr.(*plan.Expr_F); ok && !correlated {
-			if f.F.Func.ObjName == "=" {
-				joinPreds = append(joinPreds, newPred)
-				continue
-			}
+		if !correlated {
+			joinPreds = append(joinPreds, newPred)
+			continue
 		}
 		filterPreds = append(filterPreds, newPred)
 	}
@@ -219,4 +205,233 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	}
 
 	return new_expr
+}
+
+func getJoinSide(expr *plan.Expr, leftTags map[int32]*Binding) (side int8) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			side |= getJoinSide(arg, leftTags)
+		}
+
+	case *plan.Expr_Col:
+		if _, ok := leftTags[exprImpl.Col.RelPos]; ok {
+			side = JoinSideLeft
+		} else {
+			side = JoinSideRight
+		}
+
+	case *plan.Expr_Corr:
+		side = JoinSideCorrelated
+	}
+
+	return
+}
+
+func containsTag(expr *plan.Expr, tag int32) bool {
+	var ret bool
+
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			ret = ret || containsTag(arg, tag)
+		}
+
+	case *plan.Expr_Col:
+		return exprImpl.Col.RelPos == tag
+	}
+
+	return ret
+}
+
+func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefs(arg, tag, projects)
+		}
+
+	case *plan.Expr_Col:
+		colRef := exprImpl.Col
+		if colRef.RelPos == tag {
+			expr = DeepCopyExpr(projects[colRef.ColPos])
+		}
+	}
+
+	return expr
+}
+
+func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, error) {
+	conds := splitAstConjunction(astExpr)
+	exprs := make([]*plan.Expr, len(conds))
+
+	for i, cond := range conds {
+		cond, err := ctx.qualifyColumnNames(cond, nil, false)
+		if err != nil {
+			return nil, err
+		}
+
+		expr, err := ctx.binder.BindExpr(cond, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		exprs[i] = expr
+	}
+
+	return exprs, nil
+}
+
+//splitAstConjunction split a expression to a list of AND conditions.
+func splitAstConjunction(astExpr tree.Expr) []tree.Expr {
+	var astExprs []tree.Expr
+	switch typ := astExpr.(type) {
+	case nil:
+	case *tree.AndExpr:
+		astExprs = append(astExprs, splitAstConjunction(typ.Left)...)
+		astExprs = append(astExprs, splitAstConjunction(typ.Right)...)
+	case *tree.ParenExpr:
+		astExprs = append(astExprs, splitAstConjunction(typ.Expr)...)
+	default:
+		astExprs = append(astExprs, astExpr)
+	}
+	return astExprs
+}
+
+// applyDistributivity (X AND B) OR (X AND C) OR (X AND D) => X AND (B OR C OR D)
+// TODO: move it into optimizer
+func applyDistributivity(expr *plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = applyDistributivity(arg)
+		}
+
+		if exprImpl.F.Func.ObjName != "or" {
+			break
+		}
+
+		leftConds := splitPlanConjunction(exprImpl.F.Args[0])
+		rightConds := splitPlanConjunction(exprImpl.F.Args[1])
+
+		condMap := make(map[string]int)
+
+		for _, cond := range rightConds {
+			condMap[cond.String()] = JoinSideRight
+		}
+
+		var commonConds, leftOnlyConds, rightOnlyConds []*plan.Expr
+
+		for _, cond := range leftConds {
+			exprStr := cond.String()
+
+			if condMap[exprStr] == JoinSideRight {
+				commonConds = append(commonConds, cond)
+				condMap[exprStr] = JoinSideBoth
+			} else {
+				leftOnlyConds = append(leftOnlyConds, cond)
+				condMap[exprStr] = JoinSideLeft
+			}
+		}
+
+		for _, cond := range rightConds {
+			if condMap[cond.String()] == JoinSideRight {
+				rightOnlyConds = append(rightOnlyConds, cond)
+			}
+		}
+
+		if len(commonConds) == 0 {
+			return expr
+		}
+
+		expr, _ = combinePlanConjunction(commonConds)
+
+		if len(leftOnlyConds) == 0 || len(rightOnlyConds) == 0 {
+			return expr
+		}
+
+		leftExpr, _ := combinePlanConjunction(leftOnlyConds)
+		rightExpr, _ := combinePlanConjunction(rightOnlyConds)
+
+		leftExpr, _ = bindFuncExprImplByPlanExpr("or", []*plan.Expr{leftExpr, rightExpr})
+
+		expr, _ = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, leftExpr})
+	}
+
+	return expr
+}
+
+func splitPlanConjunction(expr *plan.Expr) []*plan.Expr {
+	var exprs []*plan.Expr
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "and" {
+			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[0])...)
+			exprs = append(exprs, splitPlanConjunction(exprImpl.F.Args[1])...)
+		} else {
+			exprs = append(exprs, expr)
+		}
+
+	default:
+		exprs = append(exprs, expr)
+	}
+
+	return exprs
+}
+
+func combinePlanConjunction(exprs []*plan.Expr) (expr *plan.Expr, err error) {
+	expr = exprs[0]
+
+	for i := 1; i < len(exprs); i++ {
+		expr, err = bindFuncExprImplByPlanExpr("and", []*plan.Expr{expr, exprs[i]})
+
+		if err != nil {
+			break
+		}
+	}
+
+	return
+}
+
+func rejectsNull(filter *plan.Expr) bool {
+	filter = replaceColRefWithNull(DeepCopyExpr(filter))
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	vec, err := colexec.EvalExpr(bat, nil, filter)
+	if err != nil {
+		return false
+	}
+
+	if nulls.Any(vec.Nsp) {
+		return true
+	}
+
+	switch vec.Typ.Oid {
+	case types.T_bool:
+		return !vec.Col.([]bool)[0]
+
+	default:
+		return false
+	}
+}
+
+func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		expr = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: true,
+				},
+			},
+		}
+
+	case *plan.Expr_F:
+		for i, arg := range exprImpl.F.Args {
+			exprImpl.F.Args[i] = replaceColRefWithNull(arg)
+		}
+	}
+
+	return expr
 }

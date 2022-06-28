@@ -15,6 +15,7 @@
 package hakeeper
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
@@ -35,6 +36,6 @@ type Checker interface {
 	// Check is periodically called by the HAKeeper for checking the cluster
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
-	Check(alloc IDAllocator, cluster ClusterInfo,
-		dn DNState, log LogState, currentTick uint64) []hapb.ScheduleCommand
+	Check(alloc util.IDAllocator, cluster hapb.ClusterInfo,
+		dn hapb.DNState, log hapb.LogState, currentTick uint64) []hapb.ScheduleCommand
 }

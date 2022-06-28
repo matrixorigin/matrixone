@@ -233,6 +233,9 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 	//pos := b.lastPos / uint64(b.pageSize)
 	for ; length > allocated && l1pos < uint64(l1end); l1pos++ {
 		l1bit := b.level1[l1pos]
+		if b.pageSize == INODE_SIZE {
+			l1bit = ALL_UNIT_SET
+		}
 		if l1bit == ALL_UNIT_CLEAR {
 			b.lastPos += BITS_PER_UNITSET * uint64(b.pageSize)
 			continue
@@ -275,6 +278,7 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 					}
 					if (*val & (1 << nextPos)) == 0 {
 						l0freePos = b.getBitPos(*val, nextPos+1)
+						startPos = l0freePos
 						nextPos = l0freePos + 1
 						allocatedPage = 0
 					} else {

@@ -27,17 +27,16 @@ func Empty(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustBytesCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]uint8, 1)
 		vector.SetCol(resultVector, empty.Empty(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.(*types.Bytes)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
 		if err != nil {
 			return nil, err
