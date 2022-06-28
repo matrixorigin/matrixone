@@ -219,9 +219,14 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 		if def.IsHidden() {
 			continue
 		}
-		colVal, err := h.table.GetValue(id, row, uint16(def.Idx))
-		if err != nil {
-			return err
+		var colVal any
+		if int(col) == def.Idx {
+			colVal = v
+		} else {
+			colVal, err = h.table.GetValue(id, row, uint16(def.Idx))
+			if err != nil {
+				return err
+			}
 		}
 		vec := containers.MakeVector(def.Type, def.Nullable())
 		vec.Append(colVal)

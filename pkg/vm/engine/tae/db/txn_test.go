@@ -784,3 +784,125 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	wg.Wait()
 }
+
+// func TestTxn10(t *testing.T) {
+// 	opts := config.WithLongScanAndCKPOpts(nil)
+// 	tae := newTestEngine(t, opts)
+// 	defer tae.Close()
+// 	schema := catalog.MockSchemaAll(18, 2)
+// 	tae.bindSchema(schema)
+// 	bat := catalog.MockBatch(schema, 5)
+// 	defer bat.Close()
+// 	tae.createRelAndAppend(bat.Window(0, 2), true)
+
+// 	txn1, rel1 := tae.getRelation()
+// 	blk := getOneBlock(rel1)
+// 	view, err := blk.GetColumnDataById(2, nil, nil)
+// 	assert.NoError(t, err)
+// 	defer view.Close()
+// 	t.Log(view.String())
+// 	err = rel1.Append(bat.Window(2, 1))
+// 	assert.NoError(t, err)
+// 	blk = getOneBlock(rel1)
+// 	view, err = blk.GetColumnDataById(2, nil, nil)
+// 	assert.NoError(t, err)
+// 	defer view.Close()
+// 	t.Log(view.String())
+// 	{
+// 		txn, rel := tae.getRelation()
+// 		err := rel.Append(bat.Window(2, 1))
+// 		assert.NoError(t, err)
+// 		assert.NoError(t, txn.Commit())
+// 		txn, rel = tae.getRelation()
+// 		blk := getOneBlock(rel)
+// 		view, err := blk.GetColumnDataById(2, nil, nil)
+// 		assert.NoError(t, err)
+// 		defer view.Close()
+// 		t.Log(view.String())
+// 		assert.NoError(t, txn.Commit())
+// 	}
+
+// 	// filter := handle.NewEQFilter(int32(99))
+// 	// err = rel1.DeleteByFilter(filter)
+// 	// assert.NoError(t, err)
+// 	win := bat.CloneWindow(2, 1)
+// 	win.Vecs[2].Update(0, int32(99))
+// 	err = rel1.Append(win)
+// 	{
+// 		// filter := handle.NewEQFilter(int32(99))
+// 		// txn, rel := tae.getRelation()
+// 		// err = rel1.UpdateByFilter(filter, 2, int32(88))
+// 		// assert.NoError(t, err)
+// 		// assert.NoError(t, txn.Commit())
+// 	}
+// 	return
+// 	assert.NoError(t, txn1.Commit())
+// }
+
+// func TestTxn11(t *testing.T) {
+// 	opts := config.WithLongScanAndCKPOpts(nil)
+// 	tae := newTestEngine(t, opts)
+// 	defer tae.Close()
+// 	schema := catalog.MockSchema(2, 0)
+// 	tae.bindSchema(schema)
+// 	bat1 := catalog.MockBatch(schema, 0)
+// 	defer bat1.Close()
+// 	bat1.Vecs[0].AppendMany(int32(1), int32(2))
+// 	bat1.Vecs[1].AppendMany(int32(1), int32(2))
+// 	bat2 := catalog.MockBatch(schema, 0)
+// 	defer bat2.Close()
+// 	bat2.Vecs[0].Append(int32(3))
+// 	bat2.Vecs[0].Append(int32(4))
+// 	bat2.Vecs[1].Append(int32(1))
+// 	bat2.Vecs[1].Append(int32(2))
+
+// 	tae.createRelAndAppend(bat1, true)
+
+// 	buffer := new(bytes.Buffer)
+
+// 	txn, rel := tae.getRelation()
+// 	blk := getOneBlock(rel)
+// 	view, err := blk.GetColumnDataById(0, nil, buffer)
+// 	assert.NoError(t, err)
+// 	defer view.Close()
+// 	view, err = blk.GetColumnDataById(1, nil, buffer)
+// 	assert.NoError(t, err)
+// 	defer view.Close()
+
+// 	err = rel.Append(bat2)
+// 	assert.NoError(t, err)
+// 	it := rel.MakeBlockIt()
+// 	for it.Valid() {
+// 		blk = it.GetBlock()
+// 		t.Log(blk.Fingerprint().String())
+// 		view, err = blk.GetColumnDataById(0, nil, buffer)
+// 		assert.NoError(t, err)
+// 		defer view.Close()
+// 		t.Log(view.String())
+// 		view, err = blk.GetColumnDataById(1, nil, buffer)
+// 		assert.NoError(t, err)
+// 		defer view.Close()
+// 		t.Log(view.String())
+// 		it.Next()
+// 	}
+// 	filter := handle.NewEQFilter(int32(1))
+// 	err = rel.DeleteByFilter(filter)
+// 	checkAllColRowsByScan(t, rel, 3, true)
+// 	assert.NoError(t, err)
+// 	{
+// 		txn, rel := tae.getRelation()
+// 		it := rel.MakeBlockIt()
+// 		for it.Valid() {
+// 			blk := it.GetBlock()
+// 			view, err := blk.GetColumnDataById(0, nil, buffer)
+// 			assert.NoError(t, err)
+// 			defer view.Close()
+// 			t.Log(view.String())
+// 			it.Next()
+// 		}
+
+// 		assert.NoError(t, txn.Commit())
+// 	}
+
+// 	txn.Commit()
+// }

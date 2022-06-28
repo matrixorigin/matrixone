@@ -51,6 +51,7 @@ func (appender *blockAppender) IsAppendable() bool {
 func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) {
 	left := appender.node.block.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
+		// n = rows
 		return
 	}
 	if rows > left {

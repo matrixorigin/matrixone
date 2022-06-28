@@ -15,7 +15,7 @@ func ApplyUpdates(vec Vector, mask *roaring.Bitmap, vals map[uint32]any) {
 	}
 }
 
-func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) {
+func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 	buffer.Reset()
 	offBuf := bs.OffsetBuf()
 	lenBuf := bs.LengthBuf()
@@ -24,13 +24,18 @@ func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) {
 	if buffer.Cap() < size {
 		buffer.Grow(size)
 	}
+	nbs := NewBytes()
 	buf := buffer.Bytes()[:size]
 	copy(buf, dataBuf)
+	nbs.Data = buf[:len(dataBuf)]
 	if len(offBuf) == 0 {
-		return
+		return nbs
 	}
 	copy(buf[len(dataBuf):], offBuf)
 	copy(buf[len(dataBuf)+len(offBuf):], lenBuf)
+	nbs.SetOffsetBuf(buf[len(dataBuf) : len(dataBuf)+len(offBuf)])
+	nbs.SetLengthBuf(buf[len(dataBuf)+len(offBuf) : size])
+	return nbs
 }
 
 func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...MemAllocator) (cloned Vector) {
@@ -46,7 +51,7 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...MemAllocator
 	if src.HasNull() {
 		nulls = src.NullMask().Clone()
 	}
-	FillBufferWithBytes(bs, buffer)
-	cloned.ResetWithData(bs, nulls)
+	nbs := FillBufferWithBytes(bs, buffer)
+	cloned.ResetWithData(nbs, nulls)
 	return
 }
