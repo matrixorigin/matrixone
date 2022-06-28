@@ -67,6 +67,24 @@ func TestLpadVarchar(t *testing.T) {
 			proc:      process.New(mheap.New(nil)),
 			wantBytes: []byte(nil),
 		},
+		{
+			name:      "Tx",
+			vecs:      makeLpadVectors("hello", 1, ""),
+			proc:      process.New(mheap.New(nil)),
+			wantBytes: []byte(""),
+		},
+		{
+			name:      "Tx2",
+			vecs:      makeLpadVectors("", 5, "x"),
+			proc:      process.New(mheap.New(nil)),
+			wantBytes: []byte("xxxxx"),
+		},
+		{
+			name:      "Tx3",
+			vecs:      makeLpadVectors("你好", 10, "再见"),
+			proc:      process.New(mheap.New(nil)),
+			wantBytes: []byte("再见再见再见再见你好"),
+		},
 	}
 
 	for _, c := range cases {
@@ -75,7 +93,13 @@ func TestLpadVarchar(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantBytes, lpad.Col.(*types.Bytes).Data)
+			if c.wantBytes == nil {
+				ret := nulls.Contains(lpad.Nsp, 0)
+				require.Equal(t, ret, true)
+			} else {
+				require.Equal(t, c.wantBytes, lpad.Col.(*types.Bytes).Data)
+			}
+
 		})
 	}
 
@@ -100,15 +124,19 @@ func makeLpadVectors(src string, length int64, pad string) []*vector.Vector {
 		Nsp:     &nulls.Nulls{},
 		Typ:     types.Type{Oid: types.T_varchar, Size: 24},
 		IsConst: true,
-		Length:  10,
+		Length:  1,
 	}
+
+	//if src == nil {
+	//	nulls.Add(vec[0].Nsp, 0)
+	//}
 
 	vec[1] = &vector.Vector{
 		Col:     []int64{length},
 		Nsp:     &nulls.Nulls{},
 		Typ:     types.Type{Oid: types.T_int64},
 		IsConst: true,
-		Length:  10,
+		Length:  1,
 	}
 
 	vec[2] = &vector.Vector{
@@ -116,7 +144,7 @@ func makeLpadVectors(src string, length int64, pad string) []*vector.Vector {
 		Nsp:     &nulls.Nulls{},
 		Typ:     types.Type{Oid: types.T_varchar, Size: 24},
 		IsConst: true,
-		Length:  10,
+		Length:  1,
 	}
 	return vec
 }

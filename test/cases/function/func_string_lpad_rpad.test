@@ -109,10 +109,8 @@ SELECT ((rpad(1.0,2048,1)) = ('4(') ^ (0.1));
 
 
 #中文
--- @bvt:issue#3157
 SELECT RPAD("你好", 10, "再见");
 SELECT LPAD("你好", 10, "再见");
--- @bvt:issue
 
 #WHERE
 drop table if exists t1;
