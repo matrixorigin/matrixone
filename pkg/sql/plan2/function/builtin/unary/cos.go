@@ -39,7 +39,7 @@ func Cos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *p
 			resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 			resultValues := make([]float64, 1)
 			nulls.Set(resultVector.Nsp, origVec.Nsp)
-			vector.SetCol(resultVector, cos.Cos[T](origVecCol, resultValues))
+			vector.SetCol(resultVector, cos.Cos(origVecCol, resultValues))
 			return resultVector, nil
 		}
 	} else {
@@ -51,7 +51,7 @@ func Cos[T constraints.Integer | constraints.Float](vs []*vector.Vector, proc *p
 		results = results[:len(origVecCol)]
 		resultVector.Col = results
 		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, cos.Cos[T](origVecCol, results))
+		vector.SetCol(resultVector, cos.Cos(origVecCol, results))
 		return resultVector, nil
 	}
 }

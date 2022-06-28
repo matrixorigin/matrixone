@@ -17,6 +17,7 @@ package cot
 import (
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
 
@@ -34,98 +35,29 @@ var (
 )
 
 func init() {
-	CotUint8 = cotUint8
-	CotUint16 = cotUint16
-	CotUint32 = cotUint32
-	CotUint64 = cotUint64
-	CotInt8 = cotInt8
-	CotInt16 = cotInt16
-	CotInt32 = cotInt32
-	CotInt64 = cotInt64
-	CotFloat32 = cotFloat32
-	CotFloat64 = cotFloat64
+	CotUint8 = Cot[uint8]
+	CotUint16 = Cot[uint16]
+	CotUint32 = Cot[uint32]
+	CotUint64 = Cot[uint64]
+	CotInt8 = Cot[int8]
+	CotInt16 = Cot[int16]
+	CotInt32 = Cot[int32]
+	CotInt64 = Cot[int64]
+	CotFloat32 = Cot[float32]
+	CotFloat64 = Cot[float64]
 }
 
-func cotUint8(xs []uint8, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
+// golang math weirdness, there is no cot function.
+func cot(x float64) float64 {
+	if x == 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "cot(0) value out of range"))
 	}
-	return rs
-}
-
-func cotUint16(xs []uint16, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotUint32(xs []uint32, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotUint64(xs []uint64, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotInt8(xs []int8, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotInt16(xs []int16, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotInt32(xs []int32, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotInt64(xs []int64, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotFloat32(xs []float32, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(float64(n))
-	}
-	return rs
-}
-
-func cotFloat64(xs []float64, rs []float64) []float64 {
-	for i, n := range xs {
-		rs[i] = 1.0 - math.Tan(n)
-	}
-	return rs
+	return math.Tan(math.Pi/2.0 - x)
 }
 
 func Cot[T constraints.Integer | constraints.Float](inputValues []T, resultValues []float64) []float64 {
 	for i, n := range inputValues {
-		res := math.Tan(float64(n))
-		if res < 1e-9 && res >= 0 {
-			resultValues[i] = 16331239353195392.0000
-		} else if res > -1e-9 && res < 0 {
-			resultValues[i] = -16331239353195392.0000
-		} else {
-			resultValues[i] = 1.0 / res
-		}
+		resultValues[i] = cot(float64(n))
 	}
 	return resultValues
 }

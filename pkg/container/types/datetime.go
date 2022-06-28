@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"strings"
 	gotime "time"
 	"unsafe"
 
@@ -82,6 +83,7 @@ func (dt Datetime) String2(precision int32) string {
 // 				"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
 // 				"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
 func ParseDatetime(s string, precision int32) (Datetime, error) {
+	s = strings.TrimSpace(s)
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
 			return d.ToTime(), nil

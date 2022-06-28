@@ -61,9 +61,7 @@ SELECT COT(-1);
 SELECT COT(0.001);
 SELECT COT(-0.001);
 
--- @bvt:issue#3133 
 select cot(0);
--- @bvt:issue
 
 #SELECT ASIN(13413);
 #SELECT ASIN(-3114);
