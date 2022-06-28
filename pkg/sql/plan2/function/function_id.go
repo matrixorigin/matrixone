@@ -329,6 +329,6 @@ func GetFunctionIsWinfunByName(name string) bool {
 	if err != nil {
 		return false
 	}
-	fs := functionRegister[fid]
+	fs := functionRegister[fid].Overloads
 	return len(fs) > 0 && fs[0].Flag == plan.Function_WIN
 }

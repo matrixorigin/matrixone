@@ -204,9 +204,10 @@ select * from t1 where not (s1 < any (select s1 from t1));
 s1
 2
 select * from t1 where (s1+1 = ANY (select s1 from t1));
-Operator '+' with parameters [CHAR BIGINT] will be implemented in future version.
+s1
+1
 select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
-Operator '+' with parameters [CHAR BIGINT] will be implemented in future version.
+"ANY" subquery as non-root expression will be supported in future version
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 (s1 CHAR(1));
