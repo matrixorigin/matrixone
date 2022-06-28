@@ -73,8 +73,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				if bat.Vecs[i].Typ.Oid == types.T_any {
 					bat.Vecs[i].Typ.Oid = types.T(n.TargetColDefs[i].Typ.GetId())
 				}
-				vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
-				vector.SetLength(bat.Vecs[i], bat.Vecs[i].Length)
+				switch bat.Vecs[i].Typ.Oid {
+				case types.T_char, types.T_varchar:
+					bat.Vecs[i].Col = &types.Bytes{
+						Data:    nil,
+						Offsets: make([]uint32, len(bat.Zs)),
+						Lengths: make([]uint32, len(bat.Zs)),
+					}
+				default:
+					vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
+				}
+				vector.SetVectorLength(bat.Vecs[i], bat.Vecs[i].Length)
 			}
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
 		}
