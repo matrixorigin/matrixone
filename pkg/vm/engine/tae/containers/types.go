@@ -34,6 +34,7 @@ type VectorView interface {
 	Slice() any
 	DataWindow(offset, length int) []byte
 	Get(i int) any
+	GetCopy(i int) any
 
 	Length() int
 	Capacity() int

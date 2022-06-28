@@ -125,6 +125,15 @@ func (vec *StrVector[T]) Get(i int) T {
 	return any(vec.data.Slice()[s : s+l]).(T)
 }
 
+func (vec *StrVector[T]) GetCopy(i int) T {
+	s := vec.offsets.Get(i)
+	l := vec.lengths.Get(i)
+	src := vec.data.Slice()[s : s+l]
+	dst := make([]byte, l)
+	copy(dst, src)
+	return any(dst).(T)
+}
+
 func (vec *StrVector[T]) Update(i int, v T) {
 	val := any(v).([]byte)
 	nlen := len(val)

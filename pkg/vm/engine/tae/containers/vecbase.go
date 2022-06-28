@@ -36,8 +36,9 @@ func (base *vecBase[T]) Data() []byte                                   { return
 func (base *vecBase[T]) DataWindow(offset, length int) []byte {
 	return base.derived.stlvec.DataWindow(offset, length)
 }
-func (base *vecBase[T]) Bytes() *Bytes     { return base.derived.stlvec.Bytes() }
-func (base *vecBase[T]) Get(i int) (v any) { return base.derived.stlvec.Get(i) }
+func (base *vecBase[T]) Bytes() *Bytes         { return base.derived.stlvec.Bytes() }
+func (base *vecBase[T]) Get(i int) (v any)     { return base.derived.stlvec.Get(i) }
+func (base *vecBase[T]) GetCopy(i int) (v any) { return base.derived.stlvec.GetCopy(i) }
 
 func (base *vecBase[T]) tryCOW() {
 	if base.derived.roStorage != nil {

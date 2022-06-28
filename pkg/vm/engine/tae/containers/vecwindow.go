@@ -108,6 +108,9 @@ func (win *vectorWindow[T]) Data() []byte {
 func (win *vectorWindow[T]) Get(i int) (v any) {
 	return win.ref.Get(i + win.offset)
 }
+func (win *vectorWindow[T]) GetCopy(i int) (v any) {
+	return win.ref.GetCopy(i + win.offset)
+}
 
 func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }
 func (win *vectorWindow[T]) HasNull() bool  { return win.ref.HasNull() }
