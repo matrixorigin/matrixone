@@ -70,9 +70,7 @@ DROP TABLE t1;
 #嵌套
 select length(space(1)) as a;
 select length(space(1024*1024*1024)) as a;
--- @bvt:issue#3256
 select length(space(1024*1024)) as a;
--- @bvt:issue
 
 select length(space(1024*1024*1024)) as a;
 

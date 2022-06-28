@@ -372,6 +372,7 @@ func buildUnresolvedName(query *Query, node *Node, colName string, tableName str
 			return corrExpr, nil
 		}
 	}
+
 	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", colName))
 }
 
@@ -442,34 +443,6 @@ func getResolveTable(dbName string, tableName string, ctx CompilerContext, binde
 		return objRef, tableDef, true
 	}
 	return nil, nil, false
-}
-
-//getLastTableDef get insert/update/delete tableDef
-// FIXME
-func getLastTableDef(query *Query) (*ObjectRef, *TableDef) {
-	node := query.Nodes[query.Steps[len(query.Steps)-1]]
-	for {
-		if node.TableDef != nil {
-			return node.ObjRef, node.TableDef
-		}
-		if len(node.Children) == 0 {
-			break
-		}
-		node = query.Nodes[node.Children[0]]
-	}
-	return nil, nil
-}
-
-func newQueryAndSelectCtx(typ plan.Query_StatementType) (*Query, *BinderContext) {
-	binderCtx := &BinderContext{
-		columnAlias: make(map[string]*Expr),
-		cteTables:   make(map[string]*TableDef),
-		usingCols:   make(map[string]string),
-	}
-	query := &Query{
-		StmtType: typ,
-	}
-	return query, binderCtx
 }
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {

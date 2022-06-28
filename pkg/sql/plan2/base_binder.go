@@ -429,7 +429,7 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 	if astExpr.Else != nil {
 		args = append(args, astExpr.Else)
 	} else {
-		args = append(args, tree.NewNumVal(constant.MakeUnknown(), "", false))
+		args = append(args, tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null))
 	}
 
 	return b.bindFuncExprImplByAstExpr("case", args, depth)
@@ -670,7 +670,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, errors.New("", "nullif function need two args")
 		}
 		elseExpr := astArgs[0]
-		thenExpr := tree.NewNumVal(constant.MakeUnknown(), "", false)
+		thenExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_char)
 		whenExpr := tree.NewComparisonExpr(tree.EQUAL, astArgs[0], astArgs[1])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
@@ -679,16 +679,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if len(astArgs) != 2 {
 			return nil, errors.New("", "ifnull function need two args")
 		}
-		elseExpr := tree.NewNumVal(constant.MakeUnknown(), "", false)
+		elseExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null)
 		thenExpr := astArgs[1]
 		whenExpr := tree.NewIsNullExpr(astArgs[0])
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
-	case "extract":
-		// ”extract(year from col_name)"  parser return year as UnresolvedName.
-		// we must rewrite it to string。 because binder bind UnresolvedName as column name
-		unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
-		astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
+	//case "extract":
+	//	// ”extract(year from col_name)"  parser return year as UnresolvedName.
+	//	// we must rewrite it to string。 because binder bind UnresolvedName as column name
+	//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
+	//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
 	case "count":
 		// we will rewrite "count(*)" to "starcount(col)"
 		// count(*) : astExprs[0].(type) is *tree.NumVal
@@ -842,7 +842,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, errors.New("", "cast types length not match args length")
 		}
 		for idx, castType := range argsCastType {
-			if argsType[idx] != castType {
+			if argsType[idx] != castType && castType != types.T_any {
 				args[idx], err = appendCastBeforeExpr(args[idx], &plan.Type{
 					Id: plan.Type_TypeId(castType),
 				})
@@ -868,8 +868,39 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
-	switch astExpr.Value.Kind() {
-	case constant.Unknown:
+	// over_int64_err := errors.New("", "Constants over int64 will support in future version.")
+
+	getStringExpr := func(val string) *Expr {
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: val,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_VARCHAR,
+				Nullable: false,
+				Size:     4,
+				Width:    int32(len(val)),
+			},
+		}
+	}
+
+	returnDecimalExpr := func(val string) (*Expr, error) {
+		typ := &plan.Type{
+			Id:       plan.Type_DECIMAL128,
+			Width:    int32(len(val)),
+			Scale:    0,
+			Nullable: false,
+		}
+		return appendCastBeforeExpr(getStringExpr(val), typ)
+	}
+
+	switch astExpr.ValType {
+	case tree.P_null:
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -881,14 +912,14 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Nullable: true,
 			},
 		}, nil
-	case constant.Bool:
-		boolValue := constant.BoolVal(astExpr.Value)
+	case tree.P_bool:
+		val := constant.BoolVal(astExpr.Value)
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Isnull: false,
 					Value: &plan.Const_Bval{
-						Bval: boolValue,
+						Bval: val,
 					},
 				},
 			},
@@ -898,17 +929,17 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Size:     1,
 			},
 		}, nil
-	case constant.Int:
-		intValue, _ := constant.Int64Val(astExpr.Value)
-		if astExpr.Negative() {
-			intValue = -intValue
+	case tree.P_int64:
+		val, ok := constant.Int64Val(astExpr.Value)
+		if !ok {
+			return nil, errors.New("", "Parser error")
 		}
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
 					Isnull: false,
 					Value: &plan.Const_Ival{
-						Ival: intValue,
+						Ival: val,
 					},
 				},
 			},
@@ -918,11 +949,36 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Size:     8,
 			},
 		}, nil
-	case constant.Float:
-		floatValue, _ := constant.Float64Val(astExpr.Value)
-		if astExpr.Negative() {
-			floatValue = -floatValue
+	case tree.P_uint64:
+		val, ok := constant.Uint64Val(astExpr.Value)
+		if !ok {
+			return nil, errors.New("", "Parser error")
 		}
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_Uval{
+						Uval: val,
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:       plan.Type_UINT64,
+				Nullable: false,
+				Size:     8,
+			},
+		}, nil
+	case tree.P_decimal:
+		return returnDecimalExpr(astExpr.String())
+	case tree.P_float64:
+		floatValue, ok := constant.Float64Val(astExpr.Value)
+		if !ok {
+			return returnDecimalExpr(astExpr.String())
+		}
+		//if astExpr.Negative() {
+		//	floatValue = -floatValue
+		//}
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -938,24 +994,13 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 				Size:     8,
 			},
 		}, nil
-	case constant.String:
+	case tree.P_hexnum:
+		return returnDecimalExpr(astExpr.String())
+	case tree.P_bit:
+		return returnDecimalExpr(astExpr.String())
+	case tree.P_char:
 		stringValue := constant.StringVal(astExpr.Value)
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: stringValue,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       plan.Type_VARCHAR,
-				Nullable: false,
-				Size:     4,
-				Width:    math.MaxInt32,
-			},
-		}, nil
+		return getStringExpr(stringValue), nil
 	default:
 		return nil, errors.New("", fmt.Sprintf("unsupport value: %v", astExpr.Value))
 	}

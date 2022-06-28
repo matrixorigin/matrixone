@@ -86,11 +86,7 @@ func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]by
 	}
 
 	if offset > elemsize {
-		if length+elemsize > offset {
-			return bytes[:min(elemsize, length+elemsize-offset)], min(elemsize, length+elemsize-offset)
-		} else {
-			return []byte{}, 0
-		}
+		return []byte{}, 0
 	}
 	return bytes[elemsize-offset : elemsize-offset+min(length, offset)], min(length, offset)
 }

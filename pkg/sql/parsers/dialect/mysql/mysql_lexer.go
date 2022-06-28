@@ -122,7 +122,7 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 	if err != nil {
 		// TODO: toDecimal()
 		//l.scanner.LastError = err
-		lval.str = str
+		lval.item = str
 		return HEXNUM
 	}
 	switch {
@@ -136,5 +136,19 @@ func (l *Lexer) toHexNum(lval *yySymType, str string) int {
 }
 
 func (l *Lexer) toBit(lval *yySymType, str string) int {
+	ival, err := strconv.ParseUint(str[2:], 2, 64)
+	if err != nil {
+		// TODO: toDecimal()
+		//l.scanner.LastError = err
+		lval.item = str
+		return BIT_LITERAL
+	}
+	switch {
+	case ival <= math.MaxInt64:
+		lval.item = int64(ival)
+	default:
+		lval.item = ival
+	}
+	lval.str = str
 	return BIT_LITERAL
 }

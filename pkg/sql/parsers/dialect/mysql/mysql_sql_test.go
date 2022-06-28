@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
+		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
+		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
 	}
 )
 
@@ -51,6 +52,11 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
+		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
+	}, {
+		input: "select 0b111111111111111111111111111111111111111111111111111",
+	}, {
 		input:  "select date,format,to_date(date, format) as to_date from t1;",
 		output: "select date, format, to_date(date, format) as to_date from t1",
 	}, {

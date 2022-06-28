@@ -20,19 +20,15 @@ select -1,-11,-101,-1001,-10001,-100001,-1000001,-10000001,-100000001,-100000000
 create table t1 (a bigint unsigned not null, primary key(a));
 insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612);
 select * from t1;
--- @bvt:issue#3349
 select * from t1 where a=18446744073709551615;
 delete from t1 where a=18446744073709551615;
 select * from t1;
--- @bvt:issue
 drop table t1;
 create table t1 ( a int not null default 1, big bigint primary key );
 insert into t1 (big) values (-1),(12345678901234567),(9223372036854775807);
--- @bvt:issue#3349
 select * from t1;
 select min(big),max(big),max(big)-1 from t1;
 select min(big),max(big),max(big)-1 from t1 group by a;
--- @bvt:issue
 drop table t1;
 create table t1 ( a int not null default 1, big bigint unsigned primary key);
 insert into t1 (big) values (0),(18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612);
@@ -66,10 +62,8 @@ insert into t2 values(17156792991891826145, 3);
 insert into t2 values( 9223372036854775807, 4);
 select * from t1;
 select * from t2;
--- @bvt:issue#3349
 select * from t1 join t2 on t1.value64=t2.value64 order by t1.value64 asc, t2.value32 desc;
 select * from t1 join t2 on t1.value64=t2.value64 where t1.value64=17156792991891826145;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (sint64 bigint not null);
@@ -78,9 +72,7 @@ select * from t1;
 drop table t1;
 create table t1 (bigint_col bigint unsigned);
 insert into t1 values (17666000000000000000);
--- @bvt:issue#3349
 select * from t1 where bigint_col=17666000000000000000;
--- @bvt:issue
 -- @bvt:issue#3274
 select * from t1 where bigint_col='17666000000000000000';
 -- @bvt:issue
@@ -146,17 +138,13 @@ create table t (id bigint unsigned, b int);
 insert into t values(8894754949779693574,1);
 insert into t values(8894754949779693579,2);
 insert into t values(17790886498483827171,3);
--- @bvt:issue#3349
 select count(*) from t 
 where id>=8894754949779693574 and id =17790886498483827171 order by 1 asc;
 select count(*) from t 
 where id between 8894754949779693574 and 17790886498483827171;
--- @bvt:issue
 drop table t;
--- @bvt:issue#3349
 SELECT (184467440737095 BETWEEN 0 AND 18446744073709551500);
 SELECT 184467440737095 >= 0;
--- @bvt:issue
 SELECT CAST(100 AS UNSIGNED) BETWEEN 1 AND -1;
 SELECT CAST(100 AS UNSIGNED) NOT BETWEEN 1 AND -1;
 SELECT CAST(0 AS UNSIGNED) BETWEEN 0 AND -1;
@@ -164,11 +152,9 @@ SELECT CAST(0 AS UNSIGNED) NOT BETWEEN 0 AND -1;
 
 SELECT ( 9223372036854775808 BETWEEN 9223372036854775808 AND 9223372036854775808 );
 SELECT ( 9223372036854775807 BETWEEN 9223372036854775808 AND 1 );
--- @bvt:issue#3349
 SELECT ( -1 BETWEEN 9223372036854775808 AND 1 );
 SELECT ( 0 BETWEEN 9223372036854775808 AND 1 );
 SELECT ( 1 BETWEEN 9223372036854775808 AND 1 );
--- @bvt:issue
 
 #Test cases of update with single tables
 drop table if exists t1;
