@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -84,7 +83,7 @@ func main() {
 	batchRows := uint32(10000) * 1 / 2 * batchCnt
 	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 	bat := catalog.MockBatch(schema, int(batchRows))
-	newbat := mobat.New(true, bat.Attrs)
+	newbat := batch.New(true, bat.Attrs)
 	newbat.Vecs = moengine.CopyToMoVectors(bat.Vecs)
 	bats := moengine.SplitBatch(newbat, int(batchCnt))
 	var wg sync.WaitGroup
