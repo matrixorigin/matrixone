@@ -105,10 +105,8 @@ CREATE TABLE t1 (
 INSERT INTO t1 VALUES (1,1,'a'),(2,2,'b'),(2,3,'c'),(3,4,'E'),(3,5,'C'),(3,6,'D'),(NULL,NULL,'');
 create table t2 (id int, a bigint unsigned not null, c char(10), d int, primary key (a));
 insert into t2 values (1,1,"a",1),(3,4,"A",4),(3,5,"B",5),(3,6,"C",6),(4,7,"D",7);
--- @bvt:issue#3305
 select t1.*,t2.* from t1 left join t2 on (t1.a=t2.a) where t2.id is null;
 select t1.*,t2.* from t1 left join t2 on (t1.a=t2.a and t2.id is null);
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -131,12 +129,10 @@ CREATE TABLE t2 (
 INSERT INTO t2 VALUES (1,1,'El Gato');
 INSERT INTO t2 VALUES (2,1,'Perrito');
 INSERT INTO t2 VALUES (3,3,'Happy');
--- @bvt:issue#3305
 select t1.name, t2.name, t2.id from t1 left join t2 on (t1.id = t2.owner) where t2.id is null;
 select t1.name, t2.name, t2.id from t1 left join t2 on (t1.id = t2.owner) where t2.name is null;
 select t1.name, t2.name, t2.id from t2 right join t1 on (t1.id = t2.owner) where t2.id is null;
 select t1.name, t2.name, t2.id from t2 right join t1 on (t1.id = t2.owner) where t2.name is null;
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -150,10 +146,8 @@ CREATE TABLE t2 (id2 INT NOT NULL PRIMARY KEY, dat2 CHAR(1));
 INSERT INTO t2 VALUES (1,'x');
 INSERT INTO t2 VALUES (2,'y');
 INSERT INTO t2 VALUES (3,'z');
--- @bvt:issue#3305
 SELECT t2.id2 FROM t2 LEFT OUTER JOIN t1 ON t1.id2 = t2.id2 WHERE id1 IS NULL;
 SELECT t2.id2 FROM t2 NATURAL LEFT OUTER JOIN t1 WHERE id1 IS NULL;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -258,9 +252,7 @@ SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topi
 SELECT * from t2 where topic IN (SELECT SUM(topic) FROM t1);
 -- @bvt:issue
 SELECT * from t2 where topic IN (SELECT topic FROM t2 GROUP BY topic HAVING topic is not null);
--- @bvt:issue#3305
 SELECT * from t2 where topic NOT IN (SELECT topic FROM t2 GROUP BY topic HAVING topic is null);
--- @bvt:issue
 
 -- @case
 -- @desc:test for is operator in case-when

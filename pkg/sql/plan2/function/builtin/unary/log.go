@@ -36,7 +36,7 @@ func Log[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pr
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
 
-		logResult := log.Log[T](inputValues, resultValues)
+		logResult := log.Log(inputValues, resultValues)
 		if nulls.Any(logResult.Nsp) {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -49,7 +49,7 @@ func Log[T constraints.Integer | constraints.Float](vectors []*vector.Vector, pr
 		}
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
-		lnResult := log.Log[T](inputValues, resultValues)
+		lnResult := log.Log(inputValues, resultValues)
 		nulls.Or(inputVector.Nsp, lnResult.Nsp, resultVector.Nsp)
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil

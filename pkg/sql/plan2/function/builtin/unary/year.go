@@ -25,7 +25,7 @@ import (
 
 func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint16, Size: 2}
+	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
@@ -33,25 +33,33 @@ func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType)
-		resultValues := make([]uint16, 1)
-		vector.SetCol(resultVector, year.DateToYear(inputValues, resultValues))
+		resultValues := make([]int64, 1)
+		year.DateToYearPlan2(inputValues, resultValues)
+		// resultValues2 := make([]int64, 1)
+		// resultValues2[0] = int64(resultValues[0])
+		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint16Slice(resultVector.Data)
+		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, year.DateToYear(inputValues, resultValues))
+		year.DateToYearPlan2(inputValues, resultValues)
+		// resultValues2 := make([]int64, len(resultValues))
+		// for i, x := range resultValues {
+		// 	resultValues2[i] = int64(x)
+		// }
+		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	}
 }
 
 func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint16, Size: 2}
+	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
@@ -59,25 +67,34 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType)
-		resultValues := make([]uint16, 1)
-		vector.SetCol(resultVector, year.DatetimeToYear(inputValues, resultValues))
+		resultValues := make([]int64, 1)
+		year.DatetimeToYearPlan2(inputValues, resultValues)
+		// resultValues2 := make([]int64, 1)
+		// resultValues2[0] = int64(resultValues[0])
+		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint16Slice(resultVector.Data)
+		// resultValues := make([]uint16, len(inputValues))
+		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, year.DatetimeToYear(inputValues, resultValues))
+		year.DatetimeToYearPlan2(inputValues, resultValues)
+		// resultValues2 := make([]int64, len(resultValues))
+		// for i, x := range resultValues {
+		// 	resultValues2[i] = int64(x)
+		// }
+		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	}
 }
 
 func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_uint16, Size: 2}
+	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustBytesCols(inputVector)
 	if inputVector.IsConst {
@@ -85,18 +102,26 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType)
-		resultValues := make([]uint16, 1)
-		vector.SetCol(resultVector, year.DateStringToYear(inputValues, resultVector.Nsp, resultValues))
+		resultValues := make([]int64, 1)
+		year.DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
+		// resultValues2 := make([]int64, 1)
+		// resultValues2[0] = int64(resultValues[0])
+		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
 		if err != nil {
 			return nil, err
 		}
-		resultValues := encoding.DecodeUint16Slice(resultVector.Data)
+		resultValues := encoding.DecodeInt64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues.Lengths)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, year.DateStringToYear(inputValues, resultVector.Nsp, resultValues))
+		year.DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
+		// resultValues2 := make([]int64, len(resultValues))
+		// for i, x := range resultValues {
+		// 	resultValues2[i] = int64(x)
+		// }
+		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	}
 }

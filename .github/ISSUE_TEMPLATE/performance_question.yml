@@ -1,9 +1,10 @@
 name: Performance question
 description: Create a performance problem report to improve MatrixOne
 title: "[Performance]: "
-labels: [kind/performance, needs-triage]
-assignees:
-  - m-schen
+# labels: [kind/performance, needs-triage]
+labels: [kind/performance]
+# assignees:
+#   - m-schen
 body:
   - type: checkboxes
     attributes:
@@ -22,33 +23,43 @@ body:
         - Hardware parameters:
         - OS type:
         - Others:
-      render: markdown
+      render: Markdown
     validations:
       required: false
   - type: textarea
     attributes:
-      label: Actual Behavior
-      description: Describe the performance what you encountered.
+      label: Details of Performance
+      description: |
+        Please describe the details of your desired performance requirements.
+      value: |
+        For example:Do you want to improve the response time? 
+        Or the number of concurrent requests? Or is the throughput?
     validations:
       required: true
-  - type: textarea
-    attributes:
-      label: Expected Behavior
-      description: Describe the performance what you expected.
-    validations:
-      required: false
-  - type: textarea
-    attributes:
-      label: Steps to Reproduce
-      description: List steps detailedly to reproduce the operations to test performance.
-      render: markdown
-    validations:
-      required: false
+  # - type: textarea
+  #   attributes:
+  #     label: Actual Behavior
+  #     description: Describe the performance what you encountered.
+  #   validations:
+  #     required: true
+  # - type: textarea
+  #   attributes:
+  #     label: Expected Behavior
+  #     description: Describe the performance what you expected.
+  #   validations:
+  #     required: false
+  # - type: textarea
+  #   attributes:
+  #     label: Steps to Reproduce
+  #     description: List steps detailedly to reproduce the operations to test performance.
+  #     render: markdown
+  #   validations:
+  #     required: false
   - type: textarea
     attributes:
       label: Additional information
       description: |
-        Add any other context about the problem here. 
+        Add any other context about the problem here.
       value: |
         For example: Have you compared MatrixOne with other databases? 
         If yes, what's their difference?

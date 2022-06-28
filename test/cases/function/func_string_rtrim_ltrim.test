@@ -12,13 +12,11 @@ select cast(rtrim(ltrim('  20.06 ')) as decimal(19,2));
 select concat_ws(':',ltrim('  left  '),':',rtrim('  right  '),':');
 
 #WHERE
--- @bvt:issue#3248
 CREATE TABLE t (a int NOT NULL);
 INSERT INTO t values(21123);
 SELECT 1 FROM t WHERE rtrim(a & NULL);
 SELECT 1 FROM t WHERE ltrim(a & NULL);
 DROP TABLE t;
--- @bvt:issue
 
 #特殊字符集
 -- @bvt:issue#3187

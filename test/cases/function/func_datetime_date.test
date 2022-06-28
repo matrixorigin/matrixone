@@ -8,14 +8,14 @@ SELECT DATE(1231241.4513);
 -- @bvt:issue
 SELECT DATE("2017-06-15");
 
--- @bvt:issue#3269
+
 SELECT DATE("2017-06-15 09:34:21");
--- @bvt:issue
+
 SELECT DATE("The date is 2017-06-15");
 
--- @bvt:issue#3269
+
 SELECT DATE('2008-05-17 11:31:31') as required_DATE;
--- @bvt:issue
+
 
 #NULL值
 -- @bvt:issue#3183
@@ -54,9 +54,9 @@ drop table t1;
 
 
 #EXTREME VALUES
--- @bvt:issue#3269
+
 select date("1997-12-31 23:59:59.000001");
--- @bvt:issue
+
 
 select date("1997-13-31 23:59:59.000001");
 -- @bvt:issue#3378
@@ -526,12 +526,12 @@ DROP TABLE t3;
 #SELECT date(now()) = date(utc_timestamp());
 -- @bvt:issue
 
--- @bvt:issue#3269
+
 SELECT date("2022-12-22 02:34:23") = date("2022-12-22 03:34:23");
--- @bvt:issue
+
 
 #insert & distinct
--- @bvt:issue#3269
+
 drop table if exists t1;
 create table t1(a date);
 insert into t1 SELECT DATE("2017-06-15 09:34:21");
@@ -539,7 +539,7 @@ insert into t1 SELECT DATE("2019-06-25 10:12:21");
 insert into t1 SELECT DATE("2019-06-25 18:20:49");
 select distinct a from t1;
 drop table t1;
--- @bvt:issue
+
 
 #HAVING & 算术运算
 -- @bvt:issue#3378

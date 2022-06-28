@@ -23,7 +23,11 @@ null	null
 null	null
 1.5707963267948966	1.5707963267948966
 select cot(d),cot(fl) from t1;
-Data truncation: DOUBLE value is out of range in 'cot(`func_math`.`t1`.`d`)'
+cot(0) value out of range
+select cot(d),cot(fl) from t1 where d <> 0;
+cot(d)	cot(fl)
+0.6420926159343306	1.8340266997618755
+-0.4576575543602858	0.6124124816462909
 select tan(d),tan(fl) from t1;
 tan(d)	tan(fl)
 1.557407724654902	0.5452483326059671

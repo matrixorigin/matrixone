@@ -85,6 +85,20 @@ message TxnMeta {
     metadata.DNShard    Coordinator = 6;
 }
 
+// CNTxnSnapshot snapshot of the cn txn operation.
+message CNTxnSnapshot {
+    // ID txn id
+    TxnMeta                   Txn      = 1 [(gogoproto.nullable) = false];
+    // DNShards DNs for which data has been written in the current transaction
+    repeated metadata.DNShard DNShards = 2 [(gogoproto.nullable) = false]; 
+    // ReadyOnly txn options
+    bool ReadyOnly        = 3;
+    // EnableCacheWrite txn options
+    bool EnableCacheWrite = 4;
+    // Disable1PCOpt txn options
+    bool Disable1PCOpt    = 5;
+}
+
 // CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 
 // single transaction, then the transaction becomes a 2pc transaction.
 message CNOpRequest {

@@ -48,7 +48,7 @@ func datetimeToMonth(xs []types.Datetime, rs []uint8) []uint8 {
 func dateStringToMonth(xs *types.Bytes, ns *nulls.Nulls, rs []uint8) []uint8 {
 	for i := range xs.Lengths {
 		str := string(xs.Get(int64(i)))
-		d, e := types.ParseDatetime(str, 0)
+		d, e := types.ParseDateCast(str)
 		if e != nil {
 			// set null
 			nulls.Add(ns, uint64(i))
