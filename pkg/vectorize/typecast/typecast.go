@@ -188,6 +188,10 @@ func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
 	return rs, nil
 }
 
+func int64ToUint64(xs []int64, rs []uint64) ([]int64, error) {
+	return nil, nil
+}
+
 func BytesToInt[T constraints.Integer](xs *types.Bytes, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 

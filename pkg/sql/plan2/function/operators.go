@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 func initOperators() {
@@ -4200,45 +4201,39 @@ var operators = map[int]Functions{
 					return int32(i), nil
 				}
 			}
+			l := len(inputs)
+			minCost, minIndex := math.MaxInt32, -1
+			convertTypes := make([]types.T, l)
+			targetTypes := make([]types.T, l)
 			for i, o := range overloads {
-				l := len(inputs)
-				finalTypes := make([]types.T, l)
 				if l >= 2 {
 					flag := true
-					for i := 0; i < l-1; i += 2 {
-						if inputs[i] != types.T_bool {
+					for j := 0; j < l-1; j += 2 {
+						if inputs[j] != types.T_bool {
 							flag = false
 							break
 						}
-						finalTypes[i] = types.T_bool
+						targetTypes[j] = types.T_bool
 					}
 					if l%2 == 1 {
-						if inputs[l-1] != ScalarNull {
-							if castTable[inputs[l-1]][o.ReturnTyp] {
-								finalTypes[l-1] = o.ReturnTyp
-							} else {
-								flag = false
-							}
-						} else {
-							finalTypes[l-1] = ScalarNull
-						}
+						targetTypes[l-1] = o.ReturnTyp
 					}
 					for j := 1; j < l; j += 2 {
-						if inputs[j] != ScalarNull {
-							if castTable[inputs[j]][o.ReturnTyp] {
-								finalTypes[j] = o.ReturnTyp
-							} else {
-								flag = false
-								break
-							}
-						} else {
-							finalTypes[j] = ScalarNull
-						}
+						targetTypes[j] = o.ReturnTyp
 					}
 					if flag {
-						return int32(i), finalTypes
+						if code, c := tryToMatch(inputs, targetTypes); code == matchedByConvert {
+							if c < minCost {
+								minCost = c
+								copy(convertTypes, targetTypes)
+								minIndex = i
+							}
+						}
 					}
 				}
+			}
+			if minIndex != -1 {
+				return int32(minIndex), convertTypes
 			}
 			return wrongFunctionParameters, nil
 		},
