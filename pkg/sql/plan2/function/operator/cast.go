@@ -232,7 +232,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			case types.T_int32:
 				return CastLeftToRight[uint64, int32](lv, rv, proc)
 			case types.T_int64:
-				return CastLeftToRight[uint64, int64](lv, rv, proc)
+				return CastUint64ToInt64(lv, rv, proc)
 			case types.T_uint8:
 				return CastLeftToRight[uint64, uint8](lv, rv, proc)
 			case types.T_uint16:
@@ -737,8 +737,8 @@ func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vect
 // float32 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float64)
 // float64 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float32)
 func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
-	lvs := lv.Col.([]T1)
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[T1](lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
@@ -752,7 +752,6 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	}
 
 	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
-	//vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -765,10 +764,39 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	return vec, nil
 }
 
+// CastUint64ToInt64 : cast uint64 to int64
+func CastUint64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.FixedLength()
+	lvs := vector.MustTCols[uint64](lv)
+
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]int64, 1)
+		if _, err := typecast.Uint64ToInt64(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeInt64Slice(vec.Data)
+	if _, err := typecast.Uint64ToInt64(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
 // CastSpecials1Int : Cast converts string to integer,Contains the following:
 // (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
 func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
+	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
 	var vec *vector.Vector
 	var err error
@@ -795,7 +823,7 @@ func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 // CastSpecials1Float : Cast converts string to floating point number,Contains the following:
 // (char / varhcar) -> (float32 / float64)
 func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
+	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
 	var vec *vector.Vector
 	var err error

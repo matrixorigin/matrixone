@@ -183,7 +183,7 @@ func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
 		overflowFlag |= x >> 63
 	}
 	if overflowFlag != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint unsigned to bigint"))
 	}
 	return rs, nil
 }
