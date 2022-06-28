@@ -389,7 +389,7 @@ func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	if err != nil {
 		panic(err)
 	}
-	if blk.CurrOp == catalog.OpSoftDelete {
+	if !blk.IsActive() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
