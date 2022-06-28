@@ -1900,10 +1900,10 @@ func TestChaos1(t *testing.T) {
 	assert.NoError(t, err)
 	defer view.Close()
 	assert.Equal(t, int(appendCnt), view.Length())
+	mask := view.DeleteMask
 	view.ApplyDeletes()
-	t.Log(view.DeleteMask.String())
 	t.Log(view.String())
-	assert.Equal(t, uint64(deleteCnt), view.DeleteMask.GetCardinality())
+	assert.Equal(t, uint64(deleteCnt), mask.GetCardinality())
 }
 
 // Testing Steps
