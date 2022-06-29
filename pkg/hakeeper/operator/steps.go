@@ -153,3 +153,35 @@ func (a RemoveDnReplica) IsFinish(_ hakeeper.LogState, state hakeeper.DNState) b
 	}
 	return true
 }
+
+// StopDnStore corresponds to dn store shutdown command.
+type StopDnStore struct {
+	StoreID string
+}
+
+func (a StopDnStore) String() string {
+	return fmt.Sprintf("stopping dn store %s", a.StoreID)
+}
+
+func (a StopDnStore) IsFinish(_ hakeeper.LogState, state hakeeper.DNState) bool {
+	if _, ok := state.Stores[a.StoreID]; ok {
+		return false
+	}
+	return true
+}
+
+// StopLogStore corresponds to log store shutdown command.
+type StopLogStore struct {
+	StoreID string
+}
+
+func (a StopLogStore) String() string {
+	return fmt.Sprintf("stopping log store %s", a.StoreID)
+}
+
+func (a StopLogStore) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
+	if _, ok := state.Stores[a.StoreID]; ok {
+		return false
+	}
+	return true
+}

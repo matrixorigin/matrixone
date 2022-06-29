@@ -15,13 +15,14 @@ package checkers
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestFixExpiredStore(t *testing.T) {
@@ -142,7 +143,7 @@ func TestFixExpiredStore(t *testing.T) {
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{{
 				UUID: "b",
-				ConfigChange: hapb.ConfigChange{
+				ConfigChange: &hapb.ConfigChange{
 					Replica: hapb.Replica{
 						UUID:      "a",
 						ShardID:   1,
@@ -203,7 +204,7 @@ func TestFixExpiredStore(t *testing.T) {
 			currentTick: 15 * hakeeper.TickPerSecond * 60,
 			expected: []hapb.ScheduleCommand{{
 				UUID: "b",
-				ConfigChange: hapb.ConfigChange{
+				ConfigChange: &hapb.ConfigChange{
 					Replica: hapb.Replica{
 						UUID:      "a",
 						ShardID:   1,
@@ -265,7 +266,7 @@ func TestFixExpiredStore(t *testing.T) {
 			expected: []hapb.ScheduleCommand{
 				{
 					UUID: "a",
-					ConfigChange: hapb.ConfigChange{
+					ConfigChange: &hapb.ConfigChange{
 						Replica: hapb.Replica{
 							UUID:      "a",
 							ShardID:   1,
@@ -364,7 +365,7 @@ func TestFixZombie(t *testing.T) {
 			expected: []hapb.ScheduleCommand{
 				{
 					UUID: "c",
-					ConfigChange: hapb.ConfigChange{
+					ConfigChange: &hapb.ConfigChange{
 						Replica: hapb.Replica{
 							UUID:    "c",
 							ShardID: 1,
