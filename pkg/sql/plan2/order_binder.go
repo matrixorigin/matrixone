@@ -24,10 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func NewOrderBinder(distinctBinder *DistinctBinder, selectList tree.SelectExprs) *OrderBinder {
+func NewOrderBinder(projectionBinder *ProjectionBinder, selectList tree.SelectExprs) *OrderBinder {
 	return &OrderBinder{
-		DistinctBinder: distinctBinder,
-		selectList:     selectList,
+		ProjectionBinder: projectionBinder,
+		selectList:       selectList,
 	}
 }
 
@@ -38,7 +38,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				Typ: b.ctx.projects[colPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: b.ctx.distinctTag,
+						RelPos: b.ctx.projectTag,
 						ColPos: colPos,
 					},
 				},
@@ -62,7 +62,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				Typ: b.ctx.projects[colPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: b.ctx.distinctTag,
+						RelPos: b.ctx.projectTag,
 						ColPos: int32(colPos),
 					},
 				},
@@ -88,6 +88,10 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 
 	exprStr := expr.String()
 	if colPos, ok = b.ctx.projectByExpr[exprStr]; !ok {
+		if b.ctx.isDistinct {
+			return nil, errors.New("", "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+		}
+
 		colPos = int32(len(b.ctx.projects))
 		b.ctx.projectByExpr[exprStr] = colPos
 		b.ctx.projects = append(b.ctx.projects, expr)
@@ -97,7 +101,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		Typ: b.ctx.projects[colPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: b.ctx.distinctTag,
+				RelPos: b.ctx.projectTag,
 				ColPos: colPos,
 			},
 		},

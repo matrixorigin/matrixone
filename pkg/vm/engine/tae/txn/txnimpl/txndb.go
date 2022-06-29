@@ -3,11 +3,10 @@ package txnimpl
 import (
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -84,7 +83,7 @@ func (db *txnDB) Close() error {
 	return err
 }
 
-func (db *txnDB) BatchDedup(id uint64, pks ...*vector.Vector) (err error) {
+func (db *txnDB) BatchDedup(id uint64, pks ...containers.Vector) (err error) {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err
@@ -96,7 +95,7 @@ func (db *txnDB) BatchDedup(id uint64, pks ...*vector.Vector) (err error) {
 	return table.DoBatchDedup(pks...)
 }
 
-func (db *txnDB) Append(id uint64, bat *batch.Batch) error {
+func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 	table, err := db.getOrSetTable(id)
 	if err != nil {
 		return err

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
 )
@@ -76,7 +77,7 @@ func WithTxnCacheWrite() TxnOption {
 
 type txnOperator struct {
 	logger *zap.Logger
-	sender TxnSender
+	sender rpc.TxnSender
 
 	option struct {
 		readyOnly        bool
@@ -94,7 +95,7 @@ type txnOperator struct {
 	}
 }
 
-func newTxnOperator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
+func newTxnOperator(sender rpc.TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 
@@ -111,7 +112,7 @@ func newTxnOperator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOption)
 	return tc
 }
 
-func newTxnOperatorWithSnapshot(sender TxnSender, snapshot []byte, logger *zap.Logger) (*txnOperator, error) {
+func newTxnOperatorWithSnapshot(sender rpc.TxnSender, snapshot []byte, logger *zap.Logger) (*txnOperator, error) {
 	v := &txn.CNTxnSnapshot{}
 	if err := v.Unmarshal(snapshot); err != nil {
 		return nil, err

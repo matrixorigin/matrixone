@@ -16,15 +16,11 @@ package logservice
 
 import (
 	"context"
-	"net"
-	"sync"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4/logger"
-	"github.com/lni/goutils/netutil"
-	"github.com/lni/goutils/syncutil"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -32,9 +28,77 @@ var (
 	plog = logger.GetLogger("LogService")
 )
 
+const (
+	LogServiceRPCName = "logservice-rpc"
+)
+
 type Lsn = uint64
 
 type LogRecord = pb.LogRecord
+
+// TODO: move this to a better place
+func firstError(err1 error, err2 error) error {
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
+// RPCRequest is request message type used in morpc
+type RPCRequest struct {
+	pb.Request
+	payload []byte
+}
+
+var _ morpc.PayloadMessage = (*RPCRequest)(nil)
+
+func (r *RPCRequest) SetID(id uint64) {
+	r.RequestID = id
+}
+
+func (r *RPCRequest) GetID() uint64 {
+	return r.RequestID
+}
+
+func (r *RPCRequest) DebugString() string {
+	return ""
+}
+
+func (r *RPCRequest) GetPayloadField() []byte {
+	return r.payload
+}
+
+func (r *RPCRequest) SetPayloadField(data []byte) {
+	r.payload = data
+}
+
+// RPCResponse is response message type used in morpc
+type RPCResponse struct {
+	pb.Response
+	payload []byte
+}
+
+var _ morpc.PayloadMessage = (*RPCResponse)(nil)
+
+func (r *RPCResponse) SetID(id uint64) {
+	r.RequestID = id
+}
+
+func (r *RPCResponse) GetID() uint64 {
+	return r.RequestID
+}
+
+func (r *RPCResponse) DebugString() string {
+	return ""
+}
+
+func (r *RPCResponse) GetPayloadField() []byte {
+	return r.payload
+}
+
+func (r *RPCResponse) SetPayloadField(data []byte) {
+	r.payload = data
+}
 
 // Service is the top layer component of a log service node. It manages the
 // underlying log store which in turn manages all log shards including the
@@ -42,10 +106,9 @@ type LogRecord = pb.LogRecord
 // clients owned by DN nodes and the HAKeeper service via network, it can
 // be considered as the interface layer of the LogService.
 type Service struct {
-	cfg         Config
-	store       *store
-	stopper     *syncutil.Stopper
-	connStopper *syncutil.Stopper
+	cfg    Config
+	store  *store
+	server morpc.RPCServer
 }
 
 func NewService(cfg Config) (*Service, error) {
@@ -59,16 +122,27 @@ func NewService(cfg Config) (*Service, error) {
 		plog.Errorf("failed to create log store %v", err)
 		return nil, err
 	}
+
+	mf := func() morpc.Message {
+		return &RPCRequest{}
+	}
+	codec := morpc.NewMessageCodec(mf, 16*1024)
+	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec)
+	if err != nil {
+		return nil, err
+	}
+
 	plog.Infof("store created")
 	service := &Service{
-		cfg:         cfg,
-		store:       store,
-		stopper:     syncutil.NewStopper(),
-		connStopper: syncutil.NewStopper(),
+		cfg:    cfg,
+		store:  store,
+		server: server,
 	}
+	server.RegisterRequestHandler(service.handleRPCRequest)
+
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
-	if err := service.startServer(); err != nil {
+	if err := server.Start(); err != nil {
 		plog.Errorf("failed to start the server %v", err)
 		if err := store.Close(); err != nil {
 			plog.Errorf("failed to close the store, %v", err)
@@ -79,103 +153,33 @@ func NewService(cfg Config) (*Service, error) {
 	return service, nil
 }
 
-func (s *Service) Close() error {
-	s.stopper.Stop()
-	s.connStopper.Stop()
-	return s.store.Close()
+func (s *Service) Close() (err error) {
+	err = firstError(err, s.server.Close())
+	err = firstError(err, s.store.Close())
+	return err
 }
 
 func (s *Service) ID() string {
 	return s.store.ID()
 }
 
-func (s *Service) startServer() error {
-	listener, err := netutil.NewStoppableListener(s.cfg.ServiceListenAddress,
-		nil, s.stopper.ShouldStop())
-	if err != nil {
-		return err
+func (s *Service) handleRPCRequest(req morpc.Message,
+	seq uint64, cs morpc.ClientSession) error {
+	rr, ok := req.(*RPCRequest)
+	if !ok {
+		panic("unexpected message type")
 	}
-	s.connStopper.RunWorker(func() {
-		// sync.WaitGroup's doc mentions that
-		// "Note that calls with a positive delta that occur when the counter is
-		//  zero must happen before a Wait."
-		// It is unclear that whether the stdlib is going complain in future
-		// releases when Wait() is called when the counter is zero and Add() with
-		// positive delta has never been called.
-		<-s.connStopper.ShouldStop()
-	})
-	s.stopper.RunWorker(func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				if err == netutil.ErrListenerStopped {
-					return
-				}
-				panic(err)
-			}
-			var once sync.Once
-			closeFn := func() {
-				once.Do(func() {
-					if err := conn.Close(); err != nil {
-						plog.Errorf("failed to close the connection, %v", err)
-					}
-				})
-			}
-			s.connStopper.RunWorker(func() {
-				<-s.stopper.ShouldStop()
-				closeFn()
-			})
-			s.connStopper.RunWorker(func() {
-				s.serve(conn)
-				closeFn()
-			})
-		}
-	})
-	return nil
-}
-
-func (s *Service) serve(conn net.Conn) {
-	magicNum := make([]byte, len(magicNumber))
-	reqBuf := make([]byte, reqBufSize)
-	recvBuf := make([]byte, recvBufSize)
-
-	for {
-		err := readMagicNumber(conn, magicNum)
-		if err != nil {
-			if errors.Is(err, errPoisonReceived) {
-				if err := sendPoisonAck(conn, poisonNumber[:]); err != nil {
-					plog.Errorf("failed to send poison ack, %v", err)
-				}
-				return
-			}
-			if errors.Is(err, errBadMessage) {
-				return
-			}
-			operr, ok := err.(net.Error)
-			if ok && operr.Timeout() {
-				continue
-			} else {
-				return
-			}
-		}
-		req, payload, err := readRequest(conn, reqBuf, recvBuf)
-		if err != nil {
-			plog.Errorf("failed to read request, %v", err)
-			return
-		}
-		// with error already encoded into the resp
-		resp, records := s.handle(req, payload)
-		var recs []byte
-		if len(records.Records) > 0 {
-			data := MustMarshal(&records)
-			resp.PayloadSize = uint64(len(data))
-			recs = data
-		}
-		if err := writeResponse(conn, resp, recs, recvBuf); err != nil {
-			plog.Errorf("failed to write response, %v", err)
-			return
-		}
+	resp, records := s.handle(rr.Request, rr.GetPayloadField())
+	var recs []byte
+	if len(records.Records) > 0 {
+		recs = MustMarshal(&records)
 	}
+	// FIXME: set timeout value
+	resp.RequestID = rr.RequestID
+	return cs.Write(&RPCResponse{
+		Response: resp,
+		payload:  recs,
+	}, morpc.SendOptions{})
 }
 
 func (s *Service) handle(req pb.Request,

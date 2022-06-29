@@ -146,6 +146,11 @@ func (vec *StdVector[T]) Get(i int) (v T) {
 	return
 }
 
+func (vec *StdVector[T]) GetCopy(i int) (v T) {
+	v = vec.slice[i]
+	return
+}
+
 func (vec *StdVector[T]) Update(i int, v T) {
 	vec.slice[i] = v
 }
@@ -165,6 +170,9 @@ func (vec *StdVector[T]) RangeDelete(offset, length int) {
 }
 
 func (vec *StdVector[T]) AppendMany(vals ...T) {
+	if len(vals) == 0 {
+		return
+	}
 	predictSize := len(vals) + len(vec.slice)
 	if predictSize > vec.capacity {
 		vec.tryExpand(predictSize)
@@ -173,10 +181,15 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 	vec.buf = unsafe.Slice((*byte)(unsafe.Pointer(&vec.slice[0])), stl.SizeOfMany[T](predictSize))
 }
 
-func (vec *StdVector[T]) Clone(offset, length int) stl.Vector[T] {
+func (vec *StdVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator) stl.Vector[T] {
 	opts := &Options{
-		Capacity:  length,
-		Allocator: vec.GetAllocator(),
+		Capacity: length,
+	}
+
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
 	}
 	cloned := NewStdVector[T](opts)
 	cloned.AppendMany(vec.slice[offset : offset+length]...)
@@ -235,6 +248,22 @@ func (vec *StdVector[T]) readBytesShared(bs *stl.Bytes) {
 	vec.buf = bs.Data
 	vec.capacity = len(vec.buf) / stl.Sizeof[T]()
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
+}
+
+func (vec *StdVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {
+	sizeBuf := buf[:stl.Sizeof[uint32]()]
+	size := *(*uint32)(unsafe.Pointer(&sizeBuf[0]))
+	n = int64(stl.Sizeof[uint32]())
+	if size == 0 {
+		vec.Reset()
+		return
+	}
+	buf = buf[stl.Sizeof[uint32]():]
+	bs := stl.NewBytes()
+	bs.Data = buf[:size]
+	vec.ReadBytes(bs, true)
+	n += int64(size)
+	return
 }
 
 func (vec *StdVector[T]) ReadFrom(r io.Reader) (n int64, err error) {

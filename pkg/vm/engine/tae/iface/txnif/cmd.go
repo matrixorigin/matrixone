@@ -28,6 +28,7 @@ type TxnCmd interface {
 	Desc() string
 	String() string
 	VerboseString() string
+	Close()
 }
 
 type CmdFactory func(int16) TxnCmd

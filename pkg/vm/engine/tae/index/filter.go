@@ -20,14 +20,13 @@ import (
 
 	"github.com/FastFilter/xorfilter"
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 type StaticFilter interface {
 	MayContainsKey(key any) (bool, error)
-	MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
+	MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	GetMemoryUsage() uint32
@@ -39,10 +38,10 @@ type binaryFuseFilter struct {
 	inner *xorfilter.BinaryFuse8
 }
 
-func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
-	sf := &binaryFuseFilter{typ: data.Typ}
+func NewBinaryFuseFilter(data containers.Vector) (StaticFilter, error) {
+	sf := &binaryFuseFilter{typ: data.GetType()}
 	hashes := make([]uint64, 0)
-	collector := func(v any, _ uint32) error {
+	op := func(v any, _ int) error {
 		hash, err := types.Hash(v, sf.typ)
 		if err != nil {
 			return err
@@ -51,7 +50,7 @@ func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 		return nil
 	}
 	var err error
-	if err = compute.ApplyOpToColumn(data, collector, nil); err != nil {
+	if err = data.Foreach(op, nil); err != nil {
 		return nil, err
 	}
 	if sf.inner, err = xorfilter.PopulateBinaryFuse8(hashes); err != nil {
@@ -79,12 +78,12 @@ func (filter *binaryFuseFilter) MayContainsKey(key any) (bool, error) {
 	return false, nil
 }
 
-func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
+func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
 	positive := roaring.NewBitmap()
 	row := uint32(0)
 	exist := false
 
-	collector := func(v any, _ uint32) error {
+	op := func(v any, _ int) error {
 		hash, err := types.Hash(v, filter.typ)
 		if err != nil {
 			return err
@@ -96,7 +95,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 		return nil
 	}
 
-	if err := compute.ApplyOpToColumn(keys, collector, visibility); err != nil {
+	if err := keys.Foreach(op, visibility); err != nil {
 		return false, nil, err
 	}
 	if positive.GetCardinality() != 0 {

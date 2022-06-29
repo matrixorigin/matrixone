@@ -18,8 +18,7 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
@@ -53,7 +52,7 @@ func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (resp *BatchResp, err error) {
 	existence := make(map[any]bool)
 
-	op := func(v any, i uint32) error {
+	op := func(v any, i int) error {
 		encoded := types.EncodeValue(v, art.typ)
 		if keys.NeedVerify {
 			if _, found := existence[string(encoded)]; found {
@@ -73,13 +72,13 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 				resp.UpdatedRows = roaring.New()
 			}
 			resp.UpdatedRows.Add(old.(uint32))
-			resp.UpdatedKeys.Add(i)
+			resp.UpdatedKeys.Add(uint32(i))
 		}
 		startRow++
 		return nil
 	}
 
-	err = compute.ApplyOpToColumnWithOffset(keys.Keys, keys.Start, keys.Count, op, nil)
+	err = keys.Keys.ForeachWindow(keys.Start, keys.Count, op, nil)
 	return
 }
 
@@ -93,10 +92,10 @@ func (art *simpleARTMap) Update(key any, offset uint32) (err error) {
 	return
 }
 
-func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) (err error) {
+func (art *simpleARTMap) BatchUpdate(keys containers.Vector, offsets []uint32, start uint32) (err error) {
 	idx := 0
 
-	op := func(v any, _ uint32) error {
+	op := func(v any, _ int) error {
 		encoded := types.EncodeValue(v, art.typ)
 		old, _ := art.tree.Insert(encoded, offsets[idx])
 		if old == nil {
@@ -107,7 +106,7 @@ func (art *simpleARTMap) BatchUpdate(keys *vector.Vector, offsets []uint32, star
 		return nil
 	}
 
-	err = compute.ApplyOpToColumn(keys, op, nil)
+	err = keys.Foreach(op, nil)
 	return
 }
 
@@ -144,7 +143,7 @@ func (art *simpleARTMap) Contains(key any) bool {
 // When deduplication occurs, the corresponding row number will be taken out. If the row
 // number is included in the rowmask, the error will be ignored
 func (art *simpleARTMap) ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool {
-	op := func(v any, _ uint32) error {
+	op := func(v any, _ int) error {
 		encoded := types.EncodeValue(v, art.typ)
 		// 1. If duplication found
 		if v, found := art.tree.Search(encoded); found {
@@ -161,7 +160,7 @@ func (art *simpleARTMap) ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) 
 		}
 		return nil
 	}
-	if err := compute.ApplyOpToColumnWithOffset(keysCtx.Keys, keysCtx.Start, keysCtx.Count, op, keysCtx.Selects); err != nil {
+	if err := keysCtx.Keys.ForeachWindow(int(keysCtx.Start), int(keysCtx.Count), op, keysCtx.Selects); err != nil {
 		if err == ErrDuplicate {
 			return true
 		} else {

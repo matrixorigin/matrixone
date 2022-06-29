@@ -55,7 +55,7 @@ func TestNewFuture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	req := newTestMessage([]byte("id"))
+	req := newTestMessage(1)
 	f := newFuture(nil)
 	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
@@ -72,7 +72,7 @@ func TestReleaseFuture(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	req := newTestMessage([]byte("id"))
+	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
 	f.init(ctx, req, SendOptions{}, false)
 	f.c <- req
@@ -87,7 +87,7 @@ func TestGet(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	req := newTestMessage([]byte("id"))
+	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
 	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
@@ -102,7 +102,7 @@ func TestGetWithTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1)
 	defer cancel()
 
-	req := newTestMessage([]byte("id"))
+	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
 	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
@@ -117,18 +117,18 @@ func TestGetWithInvalidResponse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	req := newTestMessage([]byte("id"))
+	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
 	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()
 
-	f.done(newTestMessage([]byte("id2")))
+	f.done(newTestMessage(2))
 	assert.Equal(t, 0, len(f.c))
 }
 
 func TestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-	req := newTestMessage([]byte("id"))
+	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
 	f.init(ctx, req, SendOptions{}, false)
 	defer f.Close()

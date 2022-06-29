@@ -10,7 +10,7 @@ Before reporting an issue, you should see whether the problem has already been r
 ## **Issue Templates**
 
 If the problem you're reporting is not already in the issue tracker, you can file an issue with your GitHub account. MatrixOne uses issue templates for different kinds of issues. Issue templates are a bundle of questions to collect necessary information about the problem to make it easy for other contributors to participate.
-MatrixOne suggests 6 types of issue templates: 
+MatrixOne suggests 6 types of issue templates:
 
 A `Bug report` issue template consists of information below:  
 
@@ -28,9 +28,9 @@ A clear and concise description of what the problem is and state your reasons wh
 * **Describe the feature you'd like:**  
 A clear and concise description of what you want to happen.
 * **Describe alternatives you've considered:**  
-A clear and concise description of any alternative solutions or features you've considered. 
+A clear and concise description of any alternative solutions or features you've considered.
 * **Teachability, Documentation, Adoption, Migration Strategy:**  
-If you can, explain some scenarios how users might use this, situations it would be helpful in. Any API designs, mockups, or diagrams are also helpful. 
+If you can, explain some scenarios how users might use this, situations it would be helpful in. Any API designs, mockups, or diagrams are also helpful.
 
 A `Documentation Issue` consists of information below:  
 
@@ -73,7 +73,7 @@ Add any other context or screenshots about the refactoring request here.
 
 A `General Question`:
 
-If the previous templates don't fit with what you'd like to report or ask, please use this general question template to file issue. 
+If the previous templates don't fit with what you'd like to report or ask, please use this general question template to file issue.
 
 Before asking a question, make sure you have:
 
@@ -84,10 +84,10 @@ Before asking a question, make sure you have:
 
 ## **Issue Labels**
 
-Once your issue is submitted, it will automatically be labeled with `needs-triage`, a MatrixOne maintainer will look at the issue, tag it with more suitable labels, and assign it to a suitable developer. 
+Once your issue is submitted, it will automatically be labeled with `needs-triage`, a MatrixOne maintainer will look at the issue, tag it with more suitable labels, and assign it to a suitable developer.
 If you'd like to work on the issue by yourself, you can comment `/assign` on the issue you would like to work on, and you will be automatically assigned to the issue. You can then find yourself listed under Assignees section.
 
 ## **Good First Issues**
 
 When you make the first contribution to MatrixOne, you can select one of the issues labeled [`good-first-issues`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) each of which is relatively approachable for first-time contributors.
-For detailed suggestions you need when you make the first contribution, you can see [Make Your First Contribution](../make-your-first-contribution.md). 
+For detailed suggestions you need when you make the first contribution, you can see [Make Your First Contribution](../make-your-first-contribution.md).

@@ -13,7 +13,7 @@ t1
 t2
 show columns from t1;
 Field	Type	Null	Key	Default	Comment
-id	INT	NO		NULL		
-str	CHAR	NO		NULL	
-name	VARCHAR	NO		NULL		
+id	INT	YES		NULL		
+str	CHAR	YES		NULL	
+name	VARCHAR	YES		NULL		
 drop database if exists test01;

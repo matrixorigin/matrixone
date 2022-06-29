@@ -172,74 +172,49 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			return nil, err
 		}
 
-		if len(node.ProjectList) > 0 { //it's a distinct aggNnode
-			node.GroupBy = node.ProjectList
-			node.ProjectList = make([]*Expr, len(node.GroupBy))
-			distinctTag := node.BindingTags[0]
+		node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
+		colIdx := 0
+		groupTag := node.BindingTags[0]
+		aggregateTag := node.BindingTags[1]
 
-			for idx, expr := range node.GroupBy {
-				err := builder.remapExpr(expr, childMap)
-				if err != nil {
-					return nil, err
-				}
-
-				node.ProjectList[idx] = &plan.Expr{
-					Typ: expr.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: -1,
-							ColPos: int32(idx),
-						},
-					},
-				}
-
-				returnMap[getColMapKey(distinctTag, int32(idx))] = [2]int32{0, int32(idx)}
-			}
-		} else {
-			node.ProjectList = make([]*Expr, len(node.GroupBy)+len(node.AggList))
-			colIdx := 0
-			groupTag := node.BindingTags[0]
-			aggregateTag := node.BindingTags[1]
-
-			for idx, expr := range node.GroupBy {
-				err := builder.remapExpr(expr, childMap)
-				if err != nil {
-					return nil, err
-				}
-
-				node.ProjectList[colIdx] = &Expr{
-					Typ: expr.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							RelPos: -1,
-							ColPos: int32(idx),
-						},
-					},
-				}
-
-				returnMap[getColMapKey(groupTag, int32(idx))] = [2]int32{0, int32(colIdx)}
-				colIdx++
+		for idx, expr := range node.GroupBy {
+			err := builder.remapExpr(expr, childMap)
+			if err != nil {
+				return nil, err
 			}
 
-			for idx, expr := range node.AggList {
-				err := builder.remapExpr(expr, childMap)
-				if err != nil {
-					return nil, err
-				}
-
-				node.ProjectList[colIdx] = &Expr{
-					Typ: expr.Typ,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							RelPos: -2,
-							ColPos: int32(idx),
-						},
+			node.ProjectList[colIdx] = &Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -1,
+						ColPos: int32(idx),
 					},
-				}
-
-				returnMap[getColMapKey(aggregateTag, int32(idx))] = [2]int32{0, int32(colIdx)}
-				colIdx++
+				},
 			}
+
+			returnMap[getColMapKey(groupTag, int32(idx))] = [2]int32{0, int32(colIdx)}
+			colIdx++
+		}
+
+		for idx, expr := range node.AggList {
+			err := builder.remapExpr(expr, childMap)
+			if err != nil {
+				return nil, err
+			}
+
+			node.ProjectList[colIdx] = &Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &ColRef{
+						RelPos: -2,
+						ColPos: int32(idx),
+					},
+				},
+			}
+
+			returnMap[getColMapKey(aggregateTag, int32(idx))] = [2]int32{0, int32(colIdx)}
+			colIdx++
 		}
 
 	case plan.Node_SORT:
@@ -317,12 +292,48 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			}
 		}
 
+	case plan.Node_DISTINCT:
+		childMap, err := builder.remapAllColRefs(node.Children[0])
+		if err != nil {
+			return nil, err
+		}
+
+		// Rewrite DISTINCT to AGG
+		node.NodeType = plan.Node_AGG
+		preNode := builder.qry.Nodes[node.Children[0]]
+		node.GroupBy = make([]*Expr, len(preNode.ProjectList))
+		node.ProjectList = make([]*Expr, len(preNode.ProjectList))
+		for prjIdx, prjExpr := range preNode.ProjectList {
+			node.GroupBy[prjIdx] = &plan.Expr{
+				Typ: prjExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(prjIdx),
+					},
+				},
+			}
+
+			node.ProjectList[prjIdx] = &plan.Expr{
+				Typ: prjExpr.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: int32(prjIdx),
+					},
+				},
+			}
+		}
+
+		returnMap = childMap
+
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
 		node.ProjectList = append(node.ProjectList, &plan.Expr{
 			Typ:  &plan.Type{Id: plan.Type_INT64},
 			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
 		})
+
 	default:
 		return nil, errors.New("", "unsupport node type to rebiuld query")
 	}
@@ -337,6 +348,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		builder.qry.Steps[i] = rootId
+
 		_, err := builder.remapAllColRefs(rootId)
 		if err != nil {
 			return nil, err
@@ -501,11 +513,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	ctx.groupTag = builder.genNewTag()
 	ctx.aggregateTag = builder.genNewTag()
 	ctx.projectTag = builder.genNewTag()
-	if clause.Distinct {
-		ctx.distinctTag = builder.genNewTag()
-	} else {
-		ctx.distinctTag = ctx.projectTag
-	}
 
 	// bind GROUP BY clause
 	if clause.GroupBy != nil {
@@ -558,13 +565,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 	}
 
-	// bind distinct
-	distinctBinder := NewDistinctBinder(projectionBinder)
+	ctx.isDistinct = clause.Distinct
 
 	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
 	if stmt.OrderBy != nil {
-		orderBinder := NewOrderBinder(distinctBinder, selectList)
+		orderBinder := NewOrderBinder(projectionBinder, selectList)
 		orderBys = make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
 
 		for _, order := range stmt.OrderBy {
@@ -673,14 +679,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		BindingTags: []int32{ctx.projectTag},
 	}, ctx)
 
-	// append Agg node if distinct
+	// append DISTINCT node
 	if clause.Distinct {
-		// we use projectionList for distinct's aggNode
 		nodeId = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_AGG,
-			ProjectList: distinctBinder.GetProjectionList(),
-			Children:    []int32{nodeId},
-			BindingTags: []int32{ctx.distinctTag, builder.genNewTag()},
+			NodeType: plan.Node_DISTINCT,
+			Children: []int32{nodeId},
 		}, ctx)
 	}
 
@@ -701,13 +704,13 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	// append result PROJECT node
-	if len(ctx.projects) > resultLen {
+	if builder.qry.Nodes[nodeId].NodeType != plan.Node_PROJECT {
 		for i := 0; i < resultLen; i++ {
 			ctx.results = append(ctx.results, &plan.Expr{
 				Typ: ctx.projects[i].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: ctx.distinctTag,
+						RelPos: ctx.projectTag,
 						ColPos: int32(i),
 					},
 				},
@@ -1377,6 +1380,14 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeId int32) int32 {
 
 	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
 		return nodeId
+	}
+
+	for _, filter := range node.OnList {
+		if f, ok := filter.Expr.(*plan.Expr_F); ok {
+			if f.F.Func.ObjName != "=" {
+				return nodeId
+			}
+		}
 	}
 
 	var targetNode *plan.Node

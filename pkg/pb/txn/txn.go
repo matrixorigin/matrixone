@@ -17,6 +17,8 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
 const (
@@ -156,4 +158,61 @@ func (m TxnMeta) DebugString() string {
 		buffer.WriteString(", ")
 	}
 	return buffer.String()
+}
+
+// GetTargetDN return dn shard ID that message need send to.
+func (m TxnRequest) GetTargetDN() metadata.DNShard {
+	switch m.Method {
+	case TxnMethod_Read, TxnMethod_Write:
+		return m.CNRequest.Target
+	case TxnMethod_Commit:
+		return m.CommitRequest.DNShards[0]
+	case TxnMethod_Rollback:
+		return m.RollbackRequest.DNShards[0]
+	case TxnMethod_Prepare:
+		return m.PrepareRequest.DNShard
+	case TxnMethod_GetStatus:
+		return m.GetStatusRequest.DNShard
+	case TxnMethod_CommitDNShard:
+		return m.CommitDNShardRequest.DNShard
+	case TxnMethod_RollbackDNShard:
+		return m.RollbackDNShardRequest.DNShard
+	default:
+		panic("unknown txn request method")
+	}
+}
+
+// ID implement morpc Messgae
+func (m *TxnRequest) SetID(id uint64) {
+	m.RequestID = id
+}
+
+// ID implement morpc Messgae
+func (m *TxnRequest) GetID() uint64 {
+	return m.RequestID
+}
+
+// GetPayloadField implement morpc PayloadMessgae
+func (m TxnRequest) GetPayloadField() []byte {
+	if m.CNRequest != nil {
+		return m.CNRequest.Payload
+	}
+	return nil
+}
+
+// SetPayloadField implement morpc PayloadMessgae
+func (m *TxnRequest) SetPayloadField(data []byte) {
+	if m.CNRequest != nil {
+		m.CNRequest.Payload = data
+	}
+}
+
+// ID implement morpc Messgae
+func (m *TxnResponse) SetID(id uint64) {
+	m.RequestID = id
+}
+
+// ID implement morpc Messgae
+func (m *TxnResponse) GetID() uint64 {
+	return m.RequestID
 }

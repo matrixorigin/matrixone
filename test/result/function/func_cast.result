@@ -1,9 +1,7 @@
 select CAST(1-2 AS UNSIGNED);
-CAST(1-2 AS UNSIGNED)
-18446744073709551615
+overflow from bigint to bigint unsigned
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
-CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER)
--1
+overflow from bigint to bigint unsigned
 select CAST('10 ' as unsigned integer);
 CAST('10 ' as unsigned integer)
 10
@@ -14,8 +12,7 @@ select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 cast(-5 as unsigned) | 1	cast(-5 as unsigned) & -1
 18446744073709551611	18446744073709551611
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
-cast(-5 as unsigned) -1	cast(-5 as unsigned) + 1
-18446744073709551610	18446744073709551612
+overflow from bigint to bigint unsigned
 select cast(5 as unsigned) -6.0;
 cast(5 as unsigned) -6.0
 -1.0
@@ -41,14 +38,12 @@ select CAST(0xb3 as signed);
 CAST(0xb3 as signed)
 179
 select CAST(0x8fffffffffffffff as signed);
-CAST(0x8fffffffffffffff as signed)
--8070450532247928833
+overflow from bigint unsigned to bigint
 select CAST(0xffffffffffffffff as unsigned);
 CAST(0xffffffffffffffff as unsigned)
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
-CAST(0xfffffffffffffffe as signed)
--2
+overflow from bigint unsigned to bigint
 select cast('-10a' as signed integer);
 cast('-10a' as signed integer)
 -10
@@ -101,8 +96,7 @@ select cast(18446744073709551615 as unsigned);
 cast(18446744073709551615 as unsigned)
 18446744073709551615
 select cast(18446744073709551615 as signed);
-cast(18446744073709551615 as signed)
--1
+overflow from bigint unsigned to bigint
 select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
@@ -177,9 +171,9 @@ SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
 CAST(DATE'2000-01-01' AS FLOAT)	CAST(DATE'2000-01-01' AS DOUBLE)
 2.00001E7	2.0000101E7
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
-Function or operator 'timestamp' will be implemented in future version.
+Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
-Function or operator 'timestamp' will be implemented in future version.
+Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
 SELECT CAST(NULL AS REAL), CAST(NULL AS FLOAT), CAST(NULL AS DOUBLE);
 CAST(NULL AS REAL)	CAST(NULL AS FLOAT)	CAST(NULL AS DOUBLE)
 null	null	null
