@@ -125,7 +125,6 @@ message Request {
 
   uint64 DNShardID    = 7;
   uint64 DNID         = 8;
-  uint64 PayloadSize  = 9;
 };
 
 enum ErrorCode {
@@ -154,7 +153,6 @@ message Response {
   uint64 ShardID      = 4;
   uint64 Index        = 5;
   uint64 LastIndex    = 6;
-  uint64 PayloadSize  = 7;
 };
 
 message LogRecordResponse {

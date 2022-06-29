@@ -4,7 +4,8 @@
 
 The ``LEFT JOIN`` keyword returns all records from the left table (table1), and the matching records from the right table (table2). The result is 0 records from the right side, if there is no match.
 
-Note: In some databases ``LEFT JOIN`` is called ``LEFT OUTER JOIN``.
+!!! note  "<font size=4>note</font>"
+    <font size=3>In some databases ``LEFT JOIN`` is called ``LEFT OUTER JOIN``.</font>
 
 ## **Syntax**
 
