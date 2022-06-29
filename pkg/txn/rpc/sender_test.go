@@ -47,7 +47,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 		return cs.Write(&txn.TxnResponse{
 			RequestID: request.ID(),
 			Method:    txn.TxnMethod_Write,
-		})
+		}, morpc.SendOptions{})
 	})
 
 	sd, err := NewSender(nil)
@@ -86,7 +86,7 @@ func TestSendWithMultiDN(t *testing.T) {
 			return cs.Write(&txn.TxnResponse{
 				RequestID:    request.ID(),
 				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
-			})
+			}, morpc.SendOptions{})
 		})
 	}
 

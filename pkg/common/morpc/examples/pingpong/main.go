@@ -68,7 +68,7 @@ func startServer() error {
 	}
 	s.RegisterRequestHandler(func(request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
 		// write request back to client
-		return cs.Write(request)
+		return cs.Write(request, morpc.SendOptions{})
 	})
 
 	return s.Start()
