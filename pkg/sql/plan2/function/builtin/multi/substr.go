@@ -15,6 +15,8 @@
 package multi
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -93,7 +95,6 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 
 				// get length constant value
 				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
-
 				if startValue > 0 {
 					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 				} else if startValue < 0 {
@@ -246,6 +247,9 @@ func castConstAsint64(srcColumn interface{}, columnType types.T, idx int) int64 
 		dstValue = int64(srcColumn.([]uint32)[idx])
 	case types.T_uint64:
 		dstValue = int64(srcColumn.([]uint64)[idx])
+		if srcColumn.([]uint64)[idx] > math.MaxInt64 {
+			dstValue = math.MaxInt64
+		}
 	case types.T_int8:
 		dstValue = int64(srcColumn.([]int8)[idx])
 	case types.T_int16:

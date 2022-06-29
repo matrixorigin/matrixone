@@ -2110,7 +2110,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		if ret, err = cw.Compile(ses, getDataFromPipeline); err != nil {
 			goto handleFailed
 		}
-
 		runner = ret.(ComputationRunner)
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
