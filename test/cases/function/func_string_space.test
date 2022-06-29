@@ -11,12 +11,10 @@ drop table t1;
 -- @bvt:issue
 
 #DATETYPE, INSERT
--- @bvt:issue#3172
 create table t1 (a varchar(16383));
 insert into t1 select space(50000);
 select length(a) from t1;
 drop table t1;
--- @bvt:issue
 
 #嵌套，EXTREME VALUE
 select space(5),concat_ws('*',space(5),'*');
