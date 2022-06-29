@@ -128,7 +128,6 @@ type BindContext struct {
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
-	distinctTag  int32
 	resultTag    int32
 
 	groups     []*plan.Expr
@@ -150,6 +149,7 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
+	isDistinct   bool
 	isCorrelated bool
 	hasSingleRow bool
 
@@ -210,12 +210,8 @@ type ProjectionBinder struct {
 }
 
 type OrderBinder struct {
-	*DistinctBinder
-	selectList tree.SelectExprs
-}
-
-type DistinctBinder struct {
 	*ProjectionBinder
+	selectList tree.SelectExprs
 }
 
 type LimitBinder struct {
