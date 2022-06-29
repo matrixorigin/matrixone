@@ -25,7 +25,6 @@ DROP TABLE t1;
 -- @bvt:issue
 
 #INSERT, DISTINCT, ON CONDITION
--- @bvt:issue#3256
 CREATE TABLE t1 (t1_fld1 int, b varchar(255));
 CREATE TABLE t2 (t2_fld1 int, b varchar(255));
 CREATE TABLE t3 (t3_fld1 int, b varchar(255));
@@ -41,7 +40,6 @@ SELECT t1.t1_fld1, t2.t2_fld1, t3.t3_fld1 FROM t1 JOIN t2 JOIN t3 ON (length(t1.
 drop table t1;
 drop table t2;
 drop table t3;
--- @bvt:issue#3256
 
 #EXTREME VALUE，中文
 -- @bvt:issue#3256

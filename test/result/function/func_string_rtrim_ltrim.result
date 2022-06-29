@@ -236,6 +236,7 @@ insert into t1 values(1, "2017-06-15    "),(1, "2019-06-25    "),(2, "    2019-0
 Data truncation: Incorrect DATETIME value: '2017-06-15    ' for column 'b' at row 0
 select b from t1 group by b having rtrim(ltrim(b))>"2018-01-01";
 b
+2019-06-25 00:00:00
 drop table t1;
 create table t1(a INT,  b date);
 create table t2(a INT,  b date);
