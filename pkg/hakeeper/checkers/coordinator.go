@@ -15,8 +15,6 @@
 package checkers
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/logservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
@@ -25,14 +23,14 @@ import (
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 )
 
+// NB: Coordinator is assumed to be used in synchronous, single-threaded context.
 type Coordinator struct {
 	OperatorController *operator.Controller
 
-	mu struct {
-		sync.Mutex
-		teardown  bool
-		operators []*operator.Operator
-	}
+	// Considering the context of `Coordinator`,
+	// there is no need for a mutext to protect.
+	teardown    bool
+	teardownOps []*operator.Operator
 }
 
 func NewCoordinator() *Coordinator {
@@ -44,19 +42,16 @@ func (c *Coordinator) Check(alloc util.IDAllocator, cluster hapb.ClusterInfo,
 
 	c.OperatorController.RemoveFinishedOperator(dnState, logState)
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// if we've discovered unhealth already, no need to keep alive anymore.
-	if c.mu.teardown {
-		return c.OperatorController.Dispatch(c.mu.operators, logState, dnState)
+	if c.teardown {
+		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState)
 	}
 
 	// check whether system health or not.
 	if operators, health := syshealth.Check(cluster, dnState, logState, currentTick); !health {
-		c.mu.teardown = true
-		c.mu.operators = operators
-		return c.OperatorController.Dispatch(c.mu.operators, logState, dnState)
+		c.teardown = true
+		c.teardownOps = operators
+		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState)
 	}
 
 	// system health, try to keep alive.
