@@ -16,11 +16,6 @@ package frontend
 
 import (
 	"fmt"
-	"go/constant"
-	"math"
-	"strconv"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go/constant"
+	"math"
+	"strconv"
+	"strings"
 )
 
 type InsertValues struct {

@@ -95,6 +95,7 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 
 				// get length constant value
 				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
+
 				if startValue > 0 {
 					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 				} else if startValue < 0 {
