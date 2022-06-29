@@ -77,7 +77,7 @@ func startServer() error {
 		// send more message back
 		go func() {
 			for i := 0; i < 10; i++ {
-				if err := cs.Write(&message.ExampleMessage{MsgID: request.ID(), Content: fmt.Sprintf("stream-%d", i)},
+				if err := cs.Write(&message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)},
 					morpc.SendOptions{}); err != nil {
 					panic(err)
 				}
