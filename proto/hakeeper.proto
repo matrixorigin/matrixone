@@ -45,6 +45,9 @@ enum ConfigChangeType {
 message ConfigChange {
     Replica Replica             = 1 [(gogoproto.nullable) = false];
     ConfigChangeType ChangeType = 2;
+
+    // only used for bootstrap
+    map<uint64, string> InitialMembers = 3;
 }
 
 // ShutdownStore would stop store.
