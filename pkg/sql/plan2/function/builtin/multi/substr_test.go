@@ -15,6 +15,8 @@
 package multi
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestSubStr(t *testing.T) {
@@ -88,7 +89,7 @@ func TestSubStr(t *testing.T) {
 			name:       "TEST08",
 			vecs:       makeSubStrVectors("abcdefghijklmn", 6, -8, true),
 			proc:       procs,
-			wantBytes:  []byte("f"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 		{
@@ -102,14 +103,14 @@ func TestSubStr(t *testing.T) {
 			name:       "TEST09",
 			vecs:       makeSubStrVectors("abcdefghijklmn", 6, -4, true),
 			proc:       procs,
-			wantBytes:  []byte("fghij"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 		{
 			name:       "TEST10",
 			vecs:       makeSubStrVectors("abcdefghijklmn", 6, -1, true),
 			proc:       procs,
-			wantBytes:  []byte("fghijklm"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 		{
@@ -130,7 +131,7 @@ func TestSubStr(t *testing.T) {
 			name:       "Test13",
 			vecs:       makeSubStrVectors("abcdefghijklmn", -16, 0, false),
 			proc:       procs,
-			wantBytes:  []byte("abcdefghijklmn"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 		{
@@ -158,14 +159,14 @@ func TestSubStr(t *testing.T) {
 			name:       "Test17",
 			vecs:       makeSubStrVectors("abcdefghijklmn", -16, 10, true),
 			proc:       procs,
-			wantBytes:  []byte("abcdefgh"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 		{
 			name:       "Test18",
 			vecs:       makeSubStrVectors("abcdefghijklmn", -16, 20, true),
 			proc:       procs,
-			wantBytes:  []byte("abcdefghijklmn"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 		{
@@ -200,7 +201,7 @@ func TestSubStr(t *testing.T) {
 			name:       "Test23",
 			vecs:       makeSubStrVectors("abcdefghijklmn", -6, -5, true),
 			proc:       procs,
-			wantBytes:  []byte("ijk"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 		{
@@ -214,7 +215,7 @@ func TestSubStr(t *testing.T) {
 			name:       "Test25",
 			vecs:       makeSubStrVectors("abcdefghijklmn", -6, -1, true),
 			proc:       procs,
-			wantBytes:  []byte("ijklmn"),
+			wantBytes:  []byte(""),
 			wantScalar: true,
 		},
 	}
