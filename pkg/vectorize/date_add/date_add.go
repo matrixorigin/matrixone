@@ -22,12 +22,14 @@ var (
 	DateAdd       func([]types.Date, []int64, []int64, *nulls.Nulls, []types.Date) []types.Date
 	DatetimeAdd   func([]types.Datetime, []int64, []int64, *nulls.Nulls, []types.Datetime) []types.Datetime
 	DateStringAdd func(*types.Bytes, []int64, []int64, *nulls.Nulls, *types.Bytes) *types.Bytes
+	TimestampAdd  func([]types.Timestamp, []int64, []int64, *nulls.Nulls, []types.Timestamp) ([]types.Timestamp, error)
 )
 
 func init() {
 	DateAdd = dateAdd
 	DatetimeAdd = datetimeAdd
 	DateStringAdd = dateStringAdd
+	TimestampAdd = timestampAdd
 }
 
 func dateAdd(xs []types.Date, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Date) []types.Date {
@@ -38,7 +40,7 @@ func dateAdd(xs []types.Date, ys []int64, zs []int64, ns *nulls.Nulls, rs []type
 		return rs
 	}
 	for i, d := range xs {
-		date, success := d.ToTime().AddInterval(ys[0], types.IntervalType(zs[0]), true)
+		date, success := d.ToTime().AddInterval(ys[0], types.IntervalType(zs[0]), types.DateType)
 		if success {
 			rs[i] = date.ToDate()
 		} else {
@@ -57,7 +59,7 @@ func datetimeAdd(xs []types.Datetime, ys []int64, zs []int64, ns *nulls.Nulls, r
 		return rs
 	}
 	for i, d := range xs {
-		date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), false)
+		date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.DateTimeType)
 		if success {
 			rs[i] = date
 		} else {
@@ -81,7 +83,7 @@ func dateStringAdd(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs 
 		if types.UnitIsDayOrLarger(types.IntervalType(zs[0])) {
 			d, e := types.ParseDate(str)
 			if e == nil {
-				date, success := d.ToTime().AddInterval(ys[0], types.IntervalType(zs[0]), true)
+				date, success := d.ToTime().AddInterval(ys[0], types.IntervalType(zs[0]), types.DateType)
 				if success {
 					rs.AppendOnce([]byte(date.ToDate().String()))
 				} else {
@@ -98,7 +100,7 @@ func dateStringAdd(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs 
 			rs.AppendOnce([]byte(""))
 			continue
 		}
-		date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), false)
+		date, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.DateTimeType)
 		if success {
 			if date.MicroSec() == 0 {
 				rs.AppendOnce([]byte(date.String2(0)))
@@ -111,4 +113,28 @@ func dateStringAdd(xs *types.Bytes, ys []int64, zs []int64, ns *nulls.Nulls, rs 
 		}
 	}
 	return rs
+}
+
+func timestampAdd(xs []types.Timestamp, ys []int64, zs []int64, ns *nulls.Nulls, rs []types.Timestamp) ([]types.Timestamp, error) {
+	if len(ys) == 0 || len(zs) == 0 {
+		for i := range xs {
+			nulls.Add(ns, uint64(i))
+		}
+		return rs, nil
+	}
+	ds := make([]types.Datetime, len(xs))
+	ds, err := types.TimestampToDatetime(xs, ds)
+	if err != nil {
+		return rs, err
+	}
+	for i, d := range ds {
+		d, success := d.AddInterval(ys[0], types.IntervalType(zs[0]), types.TimeStampType)
+		if success {
+			rs[i] = types.FromClockUTC(int32(d.Year()), d.Month(), d.Day(), uint8(d.Hour()), uint8(d.Minute()), uint8(d.Sec()), uint32(d.MicroSec()))
+		} else {
+			rs[i] = 0
+			nulls.Add(ns, uint64(i))
+		}
+	}
+	return rs, nil
 }

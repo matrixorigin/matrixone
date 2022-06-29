@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -50,7 +49,6 @@ func (s *sender) Close() error {
 
 func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
 	if len(requests) == 1 {
-		requests[0].RequestID = s.getUUID()
 		resp, err := s.doSend(ctx, requests[0])
 		if err != nil {
 			return nil, err
@@ -111,11 +109,6 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
-}
-
-func (s *sender) getUUID() []byte {
-	id := uuid.New()
-	return id[:]
 }
 
 type executor struct {

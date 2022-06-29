@@ -153,7 +153,7 @@ enum TxnMethod {
 // 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard)
 message TxnRequest {
     // RequestID request id
-    bytes                       RequestID                = 1;
+    uint64                      RequestID                = 1;
     // Txn transaction metadata
     TxnMeta                     Txn                      = 2 [(gogoproto.nullable) = false];
     // TxnMethod TxnRequest opCode, select the Request defined below according to TxnMethod.
@@ -179,7 +179,7 @@ message TxnRequest {
 // TxnResponse response of TxnRequest.
 message TxnResponse {
     // RequestID corresponding request id
-    bytes                        RequestID                 = 1;
+    uint64                       RequestID                 = 1;
     // Txn transaction metadata. TxnResponse.TxnMeta and TxnRequest.TxnMeta may differ 
     // in that the node initiating the TxnRequest needs to process the returned TxnMeta, 
     // e.g. to determine whether the transaction is Aborted by the status of the returned 

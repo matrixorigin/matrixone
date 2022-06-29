@@ -117,3 +117,34 @@ func DateStringSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		return resultVector, nil
 	}
 }
+
+func TimeStampSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	firstVector := vectors[0]
+	firstValues := vector.MustTCols[types.Timestamp](vectors[0])
+	secondValues := vector.MustTCols[int64](vectors[1])
+	thirdValues := vector.MustTCols[int64](vectors[2])
+
+	resultType := types.Type{Oid: types.T_timestamp, Precision: firstVector.Typ.Precision, Size: 8}
+	resultElementSize := int(resultType.Size)
+	if firstVector.IsScalar() {
+		if firstVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := vector.NewConst(resultType)
+		resultValues := make([]types.Timestamp, 1)
+		resultValues, err := date_sub.TimestampSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		vector.SetCol(resultVector, resultValues)
+		return resultVector, err
+	} else {
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(firstValues)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := encoding.DecodeTimestampSlice(resultVector.Data)
+		resultValues = resultValues[:len(firstValues)]
+		nulls.Set(resultVector.Nsp, firstVector.Nsp)
+		resultValues, err = date_sub.TimestampSub(firstValues, secondValues, thirdValues, resultVector.Nsp, resultValues)
+		vector.SetCol(resultVector, resultValues)
+		return resultVector, err
+	}
+}
