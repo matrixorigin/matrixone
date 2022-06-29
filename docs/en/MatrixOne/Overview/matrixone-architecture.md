@@ -8,7 +8,7 @@ MatrixOne is totally redesigned. It consists of multiple components and form a c
 ## **Query Parser Layer**
 
 * **Parser:** Parses SQL, Streaming Query, or Python language into an abstract syntax tree for further processing.
-* **Planner:** Finds the best execution plan through rule-based, cost-based optimization algorithms, and transfers abstract syntax tree to plan tree.
+* **Planner:** Finds the best execution plan through rule-based, cost-based optimization algorithms, and transfers the abstract syntax tree to plan tree.
 * **IR Generator:** Converts Python code into an intermediate representation.
 
 ## **Computation Layer**
@@ -19,7 +19,7 @@ MatrixOne is totally redesigned. It consists of multiple components and form a c
 
 ## **Cluster Management Layer (MatrixCube)**
 
-MatrixCube is a fundamental library for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
+MatrixCube is a fundamental library for building distributed systems. It guarantees reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers to focus on the business logic for a single node. MatrixCube is currently built upon multi-raft to provide replicated state machines and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
 
 * **Prophet:** Used by MatrixCube to manage and schedule the MatrixOne cluster.
 * **Transaction Manager:** MatrixOne supports distributed transaction of snapshot isolation level.

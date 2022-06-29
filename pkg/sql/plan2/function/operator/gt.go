@@ -157,7 +157,7 @@ func isBytesGt(b1, b2 []byte) bool {
 
 func GtGeneral[T OrderedValue](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	v1, v2 := vs[0], vs[1]
-	col1, col2 := vector.MustTCols2[T](v1), vector.MustTCols2[T](v2)
+	col1, col2 := vector.MustTCols[T](v1), vector.MustTCols[T](v2)
 	if v1.IsScalarNull() || v2.IsScalarNull() {
 		return HandleWithNullCol(vs, proc)
 	}

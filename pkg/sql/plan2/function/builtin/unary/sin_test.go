@@ -41,10 +41,10 @@ func TestSin(t *testing.T) {
 	sinIntAndFloat[float32](t, types.T_float32, 0.5, 0.479425538604203)
 	sinIntAndFloat[float32](t, types.T_float32, 1.5, 0.9974949866040544)
 
-	sinIntAndFloat[float64](t, types.T_float64, 2.5, 0.5984721441039564)
-	sinIntAndFloat[float64](t, types.T_float64, 3.5, -0.35078322768961984)
-	sinIntAndFloat[float64](t, types.T_float64, 4.5, -0.977530117665097)
-	sinIntAndFloat[float64](t, types.T_float64, 5.5, -0.7055403255703919)
+	sinIntAndFloat(t, types.T_float64, 2.5, 0.5984721441039564)
+	sinIntAndFloat(t, types.T_float64, 3.5, -0.35078322768961984)
+	sinIntAndFloat(t, types.T_float64, 4.5, -0.977530117665097)
+	sinIntAndFloat(t, types.T_float64, 5.5, -0.7055403255703919)
 }
 
 func sinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -58,7 +58,7 @@ func sinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeSinVectors[T](src, true, typ),
+			vecs:       makeSinVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,

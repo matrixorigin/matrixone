@@ -39,7 +39,7 @@ func TestSinh(t *testing.T) {
 
 	SinhIntAndFloat[float32](t, types.T_float32, 1.0001, math.Sinh(float64(float32(1.0001))))
 
-	SinhIntAndFloat[float64](t, types.T_float64, 0.2, 0.201336002541094)
+	SinhIntAndFloat(t, types.T_float64, 0.2, 0.201336002541094)
 }
 
 func SinhIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -53,7 +53,7 @@ func SinhIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makesinhVectors[T](src, true, typ),
+			vecs:       makesinhVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,

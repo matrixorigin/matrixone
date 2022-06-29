@@ -125,7 +125,7 @@ SELECT COT(-0.001);
 COT(-0.001)
 -999.9996666666443
 select cot(0);
-Data truncation: DOUBLE value is out of range in 'cot(0)'
+cot(0) value out of range
 SELECT ATAN(13413);
 ATAN(13413)
 1.5707217722583913

@@ -49,8 +49,8 @@ func TestCos(t *testing.T) {
 	cosIntAndFloat[float32](t, types.T_float32, 7.5, 0.3466353178350258)
 	cosIntAndFloat[float32](t, types.T_float32, -123425, -0.31587422160647155)
 
-	cosIntAndFloat[float64](t, types.T_float64, 0.141241241241313, 0.9900420267854725)
-	cosIntAndFloat[float64](t, types.T_float64, -124314124124.12412341, -0.9992386393564632)
+	cosIntAndFloat(t, types.T_float64, 0.141241241241313, 0.9900420267854725)
+	cosIntAndFloat(t, types.T_float64, -124314124124.12412341, -0.9992386393564632)
 }
 
 func cosIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -64,7 +64,7 @@ func cosIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makecosVectors[T](src, true, typ),
+			vecs:       makecosVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,

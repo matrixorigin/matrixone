@@ -15,6 +15,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -22,22 +23,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
 )
 
-// WithReadyOnlyTxn setup readyonly flag
-func WithReadyOnlyTxn() TxnOption {
+// WithTxnReadyOnly setup readyonly flag
+func WithTxnReadyOnly() TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.readyOnly = true
 	}
 }
 
-// WithDisable1PCOpt disable 1pc optimisation on distributed transaction. By default, mo enables 1pc
+// WithTxnDisable1PCOpt disable 1pc optimisation on distributed transaction. By default, mo enables 1pc
 // optimization for distributed transactions. For write operations, if all partitions' prepares are
 // executed successfully, then the transaction is considered committed and returned directly to the
 // client. Partitions' prepared data are committed asynchronously.
-func WithDisable1PCOpt() TxnOption {
+func WithTxnDisable1PCOpt() TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.disable1PCOpt = true
 	}
@@ -50,7 +52,14 @@ func WithTxnLogger(logger *zap.Logger) TxnOption {
 	}
 }
 
-// WithCacheWriteTxn Set cache write requests, after each Write call, the request will not be sent
+// WithTxnCNCoordinator set cn txn coodinator
+func WithTxnCNCoordinator() TxnOption {
+	return func(tc *txnOperator) {
+		tc.option.coordinator = true
+	}
+}
+
+// WithTxnCacheWrite Set cache write requests, after each Write call, the request will not be sent
 // to the DN node immediately, but stored in the Coordinator's memory, and the Coordinator will
 // choose the right time to send the cached requests. The following scenarios trigger the sending
 // of requests to DN:
@@ -59,7 +68,7 @@ func WithTxnLogger(logger *zap.Logger) TxnOption {
 //    called, used to implement "read your write".
 // 2. Before commit, obviously, the cached write requests needs to be sent to the corresponding DN node
 //    before commit.
-func WithCacheWriteTxn() TxnOption {
+func WithTxnCacheWrite() TxnOption {
 	return func(tc *txnOperator) {
 		tc.option.enableCacheWrite = true
 		tc.mu.cachedWrites = make(map[uint64][]txn.TxnRequest)
@@ -68,12 +77,13 @@ func WithCacheWriteTxn() TxnOption {
 
 type txnOperator struct {
 	logger *zap.Logger
-	sender TxnSender
+	sender rpc.TxnSender
 
 	option struct {
 		readyOnly        bool
 		enableCacheWrite bool
 		disable1PCOpt    bool
+		coordinator      bool
 	}
 
 	mu struct {
@@ -85,7 +95,7 @@ type txnOperator struct {
 	}
 }
 
-func newTxnOperator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
+func newTxnOperator(sender rpc.TxnSender, txnMeta txn.TxnMeta, options ...TxnOption) *txnOperator {
 	tc := &txnOperator{sender: sender}
 	tc.mu.txn = txnMeta
 
@@ -100,6 +110,28 @@ func newTxnOperator(sender TxnSender, txnMeta txn.TxnMeta, options ...TxnOption)
 		zap.Bool("enable-cache-write", tc.option.enableCacheWrite),
 		zap.Bool("disable-1pc", tc.option.disable1PCOpt))
 	return tc
+}
+
+func newTxnOperatorWithSnapshot(sender rpc.TxnSender, snapshot []byte, logger *zap.Logger) (*txnOperator, error) {
+	v := &txn.CNTxnSnapshot{}
+	if err := v.Unmarshal(snapshot); err != nil {
+		return nil, err
+	}
+
+	tc := &txnOperator{sender: sender}
+	tc.logger = logger
+	tc.mu.txn = v.Txn
+	tc.option.disable1PCOpt = v.Disable1PCOpt
+	tc.option.enableCacheWrite = v.EnableCacheWrite
+	tc.option.readyOnly = v.ReadyOnly
+
+	tc.adjust()
+	tc.logger.Debug("txn created",
+		zap.String("txn", tc.mu.txn.DebugString()),
+		zap.Bool("read-only", tc.option.readyOnly),
+		zap.Bool("enable-cache-write", tc.option.enableCacheWrite),
+		zap.Bool("disable-1pc", tc.option.disable1PCOpt))
+	return tc, nil
 }
 
 func (tc *txnOperator) adjust() {
@@ -120,6 +152,61 @@ func (tc *txnOperator) adjust() {
 	if tc.logger.Core().Enabled(zap.DebugLevel) {
 		tc.logger = tc.logger.With(util.TxnIDField(tc.mu.txn))
 	}
+}
+
+func (tc *txnOperator) Snapshot() ([]byte, error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if err := tc.checkStatus(true); err != nil {
+		return nil, err
+	}
+
+	snapshot := &txn.CNTxnSnapshot{
+		Txn:              tc.mu.txn,
+		DNShards:         tc.mu.dnShards,
+		ReadyOnly:        tc.option.readyOnly,
+		EnableCacheWrite: tc.option.enableCacheWrite,
+		Disable1PCOpt:    tc.option.disable1PCOpt,
+	}
+	return snapshot.Marshal()
+}
+
+func (tc *txnOperator) ApplySnapshot(data []byte) error {
+	if !tc.option.coordinator {
+		tc.logger.Fatal("apply snapshot on non-coordinator txn operator")
+	}
+
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if err := tc.checkStatus(true); err != nil {
+		return err
+	}
+
+	snapshot := &txn.CNTxnSnapshot{}
+	if err := snapshot.Unmarshal(data); err != nil {
+		return err
+	}
+
+	if !bytes.Equal(snapshot.Txn.ID, tc.mu.txn.ID) {
+		tc.logger.Fatal("apply snapshot with invalid txn id")
+	}
+
+	for _, dn := range snapshot.DNShards {
+		has := false
+		for _, v := range tc.mu.dnShards {
+			if v.ShardID == dn.ShardID {
+				has = true
+				break
+			}
+		}
+
+		if !has {
+			tc.mu.dnShards = append(tc.mu.dnShards, dn)
+		}
+	}
+	return nil
 }
 
 func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {

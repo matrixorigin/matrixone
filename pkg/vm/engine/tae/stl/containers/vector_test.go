@@ -379,3 +379,33 @@ func TestVector11(t *testing.T) {
 	vec.Close()
 	assert.Zero(t, opts.Allocator.Usage())
 }
+
+func TestVector12(t *testing.T) {
+	opts := withAllocator(nil)
+	vec := NewVector[[]byte](opts)
+	h1 := "h1"
+	h2 := "hh2"
+	h3 := "hhh3"
+	h4 := "hhhh4"
+	vec.Append([]byte(h1))
+	vec.Append([]byte(h2))
+	vec.Append([]byte(h3))
+	vec.Append([]byte(h4))
+
+	w := new(bytes.Buffer)
+	_, err := vec.WriteTo(w)
+	assert.NoError(t, err)
+	buf := w.Bytes()
+	vec2 := NewVector[[]byte](opts)
+	n, err := vec2.InitFromSharedBuf(buf)
+	assert.Equal(t, int(n), len(buf))
+	assert.NoError(t, err)
+	assert.Zero(t, vec2.Allocated())
+	for i := 0; i < vec.Length(); i++ {
+		assert.Equal(t, vec.Get(i), vec2.Get(i))
+	}
+
+	vec2.Close()
+	vec.Close()
+	assert.Zero(t, opts.Allocator.Usage())
+}

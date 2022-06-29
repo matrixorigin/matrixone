@@ -15,13 +15,13 @@
 package jobs
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
-func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData *vector.Vector) (err error) {
+func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData containers.Vector) (err error) {
 	// write indexes, collect their meta, and refresh host's index holder
 	schema := meta.GetSchema()
 	sortCol, err := file.OpenColumn(schema.SortKey.Defs[0].Idx)

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"go.uber.org/zap"
 )
 
@@ -48,13 +49,13 @@ var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
 	logger    *zap.Logger
-	sender    TxnSender
+	sender    rpc.TxnSender
 	clock     clock.Clock
 	generator TxnIDGenerator
 }
 
 // NewTxnClient
-func NewTxnClient(sender TxnSender, options ...TxnClientCreateOption) TxnClient {
+func NewTxnClient(sender rpc.TxnSender, options ...TxnClientCreateOption) TxnClient {
 	c := &txnClient{sender: sender}
 	for _, opt := range options {
 		opt(c)
@@ -86,6 +87,10 @@ func (client *txnClient) New(options ...TxnOption) TxnOperator {
 	// time minus the maximum clock offset as the transaction's snapshotTimestamp to avoid
 	// conflicts due to clock uncertainty.
 	txnMeta.SnapshotTS = now
-	options = append(options, WithTxnLogger(client.logger))
+	options = append(options, WithTxnLogger(client.logger), WithTxnCNCoordinator())
 	return newTxnOperator(client.sender, txnMeta, options...)
+}
+
+func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
+	return newTxnOperatorWithSnapshot(client.sender, snapshot, client.logger)
 }

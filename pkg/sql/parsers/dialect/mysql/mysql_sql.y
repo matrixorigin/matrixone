@@ -838,7 +838,7 @@ field_item:
 
 field_terminator:
     STRING
-// |   HEX
+// |   HEXNUM
 // |   BIT_LITERAL
 
 duplicate_opt:
@@ -5364,9 +5364,20 @@ literal:
     {
         $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
     }
-// |   HEX
-// |   BIT_LITERAL
-// |   VALUE_ARG
+|   BIT_LITERAL
+	{
+        switch v := $1.(type) {
+        case uint64:
+            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
+        case int64:
+            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+        case string:
+        	$$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
+        default:
+            yylex.Error("parse integral fail")
+            return 1
+        }
+	}
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt

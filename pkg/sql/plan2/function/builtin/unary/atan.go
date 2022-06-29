@@ -35,7 +35,7 @@ func Atan[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		}
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, atan.Atan[T](inputValues, resultValues))
+		vector.SetCol(resultVector, atan.Atan(inputValues, resultValues))
 		return resultVector, nil
 	} else {
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
@@ -45,7 +45,7 @@ func Atan[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, atan.Atan[T](inputValues, resultValues))
+		vector.SetCol(resultVector, atan.Atan(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

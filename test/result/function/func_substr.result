@@ -413,11 +413,11 @@ insert into t1 values (9,null,null);
 insert into t1 values (10,'','');
 select ltrim(c),ltrim(vc) from t1;
 ltrim(c)	ltrim(vc)
-Daffy	Aducklife
-Daffy	Aducklife 
+Daffy  	Aducklife
+Daffy  	Aducklife 
 Bugs	Arabbitlife 
 Cowboy	Lifeontherange
-Anonymous	Wannabuythisbook?  
+Anonymous  	Wannabuythisbook?  
 BestSeller	OneHeckuvabook 
 BestSeller	OneHeckuvabook 
 EveryoneBu	Thisverybook 

@@ -112,13 +112,14 @@ func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err err
 
 type catalogStatsMonitor struct {
 	*catalog.LoopProcessor
-	db                *DB
-	unCheckpointedCnt int64
-	minTs             uint64
-	maxTs             uint64
-	lastScheduleTime  time.Time
-	cntLimit          int64
-	intervalLimit     time.Duration
+	db                 *DB
+	unCheckpointedCnt  int64
+	minTs              uint64
+	maxTs              uint64
+	lastScheduleTime   time.Time
+	cntLimit           int64
+	intervalLimit      time.Duration
+	lastStatsPrintTime time.Time
 }
 
 func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration) *catalogStatsMonitor {
@@ -131,10 +132,11 @@ func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration)
 		intervalLimit = time.Millisecond * time.Duration(options.DefaultCatalogCkpInterval)
 	}
 	monitor := &catalogStatsMonitor{
-		LoopProcessor: new(catalog.LoopProcessor),
-		db:            db,
-		intervalLimit: intervalLimit,
-		cntLimit:      cntLimit,
+		LoopProcessor:      new(catalog.LoopProcessor),
+		db:                 db,
+		intervalLimit:      intervalLimit,
+		cntLimit:           cntLimit,
+		lastStatsPrintTime: time.Now(),
 	}
 	monitor.BlockFn = monitor.onBlock
 	monitor.SegmentFn = monitor.onSegment
@@ -151,7 +153,10 @@ func (monitor *catalogStatsMonitor) PreExecute() error {
 }
 
 func (monitor *catalogStatsMonitor) PostExecute() error {
-	monitor.db.PrintStats()
+	if time.Since(monitor.lastStatsPrintTime) > time.Second {
+		monitor.db.PrintStats()
+		monitor.lastStatsPrintTime = time.Now()
+	}
 	if monitor.unCheckpointedCnt == 0 {
 		monitor.lastScheduleTime = time.Now()
 		return nil

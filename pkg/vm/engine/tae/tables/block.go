@@ -23,20 +23,18 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -44,6 +42,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
+
+var ImmutMemAllocator stl.MemAllocator
+
+func init() {
+	ImmutMemAllocator = stl.NewSimpleAllocator()
+}
 
 type dataBlock struct {
 	*sync.RWMutex
@@ -165,10 +169,10 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 		}
 		keysCtx := new(index.KeysCtx)
 		err = blk.node.DoWithPin(func() (err error) {
-			var vec *movec.Vector
+			var vec containers.Vector
 			if blk.meta.GetSchema().IsSinglePK() {
 				// TODO: use mempool
-				vec, err = blk.node.GetVectorCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil, nil)
+				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
 				if err != nil {
 					return
 				}
@@ -176,14 +180,15 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 				keysCtx.Keys = vec
 			} else {
 				sortKeys := blk.meta.GetSchema().SortKey
-				vs := make([]*movec.Vector, sortKeys.Size())
+				vs := make([]containers.Vector, sortKeys.Size())
 				for i := range vs {
-					vec, err = blk.node.GetVectorCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil, nil)
+					vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil)
 					if err != nil {
 						return
 					}
 					// TODO: apply deletes
 					vs[i] = vec
+					defer vs[i].Close()
 				}
 				keysCtx.Keys = model.EncodeCompoundColumn(vs...)
 			}
@@ -193,7 +198,8 @@ func (blk *dataBlock) ReplayIndex() (err error) {
 			return
 		}
 		keysCtx.Start = 0
-		keysCtx.Count = uint32(movec.Length(keysCtx.Keys))
+		keysCtx.Count = keysCtx.Keys.Length()
+		defer keysCtx.Keys.Close()
 		err = blk.index.BatchUpsert(keysCtx, 0, 0)
 		return
 	}
@@ -216,6 +222,17 @@ func (blk *dataBlock) GetMaxCheckpointTS() uint64 {
 
 func (blk *dataBlock) GetMaxVisibleTS() uint64 {
 	return blk.mvcc.LoadMaxVisible()
+}
+
+func (blk *dataBlock) Close() {
+	if blk.node != nil {
+		_ = blk.node.Close()
+		blk.node = nil
+	}
+	if blk.file != nil {
+		_ = blk.file.Close()
+		blk.file = nil
+	}
 }
 
 func (blk *dataBlock) Destroy() (err error) {
@@ -449,54 +466,7 @@ func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err e
 		return
 	}
 	if updateMask != nil {
-		view.UpdateMasks[colIdx] = updateMask
-		view.UpdateVals[colIdx] = updateVals
-	}
-	return
-}
-
-func (blk *dataBlock) MakeBlockView() (view *model.BlockView, err error) {
-	mvcc := blk.mvcc
-	mvcc.RLock()
-	ts := mvcc.LoadMaxVisible()
-	view = model.NewBlockView(ts)
-	for i := range blk.meta.GetSchema().ColDefs {
-		if err = blk.FillBlockView(uint16(i), view); err != nil {
-			break
-		}
-	}
-	if err != nil {
-		mvcc.RUnlock()
-		return
-	}
-	deleteChain := mvcc.GetDeleteChain()
-	n, err := deleteChain.CollectDeletesLocked(ts, true)
-	if err != nil {
-		mvcc.RUnlock()
-		return
-	}
-	dnode := n.(*updates.DeleteNode)
-	if dnode != nil {
-		view.DeleteMask = dnode.GetDeleteMaskLocked()
-	}
-	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
-	if err != nil {
-		mvcc.RUnlock()
-		return
-	}
-	if blk.node != nil {
-		attrs := make([]int, len(blk.meta.GetSchema().ColDefs))
-		vecs := make([]vector.IVector, len(blk.meta.GetSchema().ColDefs))
-		for i := range blk.meta.GetSchema().ColDefs {
-			attrs[i] = i
-			vecs[i], _ = blk.node.GetVectorView(maxRow, i)
-		}
-		view.Raw, err = batch.NewBatch(attrs, vecs)
-	}
-	mvcc.RUnlock()
-	if blk.node == nil {
-		// Load from block file
-		view.RawBatch, err = blk.file.LoadBatch(blk.meta.GetSchema().Attrs(), blk.meta.GetSchema().Types())
+		view.SetUpdates(int(colIdx), updateMask, updateVals)
 	}
 	return
 }
@@ -511,43 +481,43 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 
 func (blk *dataBlock) GetPKColumnDataOptimized(ts uint64) (view *model.ColumnView, err error) {
 	sortIdx := blk.meta.GetSchema().GetSingleSortKeyIdx()
-	wrapper, err := blk.getVectorWrapper(sortIdx)
+	col, err := blk.loadColumnData(sortIdx, nil)
 	if err != nil {
-		return view, err
+		return
 	}
 	view = model.NewColumnView(ts, sortIdx)
-	view.MemNode = wrapper.MNode
-	view.RawVec = &wrapper.Vector
+	view.SetData(col)
 	blk.mvcc.RLock()
 	err = blk.FillColumnDeletes(view)
 	blk.mvcc.RUnlock()
 	if err != nil {
 		return
 	}
-	view.AppliedVec = view.RawVec
 	return
 }
 
 func (blk *dataBlock) GetColumnDataByName(
 	txn txnif.AsyncTxn,
 	attr string,
-	compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+	compressed, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(txn, colIdx, compressed, decompressed)
+	return blk.GetColumnDataById(txn, colIdx, compressed, buffer)
 }
 
 func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
-	compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+	compressed, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	if blk.meta.IsAppendable() {
-		return blk.getVectorCopy(txn.GetStartTS(), colIdx, compressed, decompressed, false)
+		return blk.getVectorCopy(txn.GetStartTS(), colIdx, compressed, buffer, false)
 	}
 
 	view = model.NewColumnView(txn.GetStartTS(), colIdx)
-	if view.RawVec, err = blk.getVectorWithBuffer(colIdx, compressed, decompressed); err != nil {
+	vec, err := blk.loadColumnData(colIdx, buffer)
+	if err != nil {
 		return
 	}
+	view.SetData(vec)
 
 	blk.mvcc.RLock()
 	err = blk.FillColumnUpdates(view)
@@ -565,7 +535,7 @@ func (blk *dataBlock) GetColumnDataById(
 func (blk *dataBlock) getVectorCopy(
 	ts uint64,
 	colIdx int,
-	compressed, decompressed *bytes.Buffer,
+	compressed, buffer *bytes.Buffer,
 	raw bool) (view *model.ColumnView, err error) {
 	err = blk.node.DoWithPin(func() (err error) {
 		maxRow := uint32(0)
@@ -584,28 +554,20 @@ func (blk *dataBlock) getVectorCopy(
 
 		view = model.NewColumnView(ts, colIdx)
 		if raw {
-			view.RawVec, err = blk.node.GetVectorCopy(maxRow, colIdx, compressed, decompressed)
+			var data containers.Vector
+			data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
+			if err != nil {
+				return
+			}
+			view.SetData(data)
 			return
 		}
 
-		ivec, err := blk.node.GetVectorView(maxRow, colIdx)
+		vec, err := blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
 		if err != nil {
 			return
 		}
-		// TODO: performance optimization needed
-		var srcvec *movec.Vector
-		if decompressed == nil {
-			srcvec, _ = ivec.CopyToVector()
-		} else {
-			srcvec, _ = ivec.CopyToVectorWithBuffer(compressed, decompressed)
-		}
-		if maxRow < uint32(movec.Length(srcvec)) {
-			view.RawVec = movec.New(srcvec.Typ)
-			movec.Window(srcvec, 0, int(maxRow), view.RawVec)
-		} else {
-			view.RawVec = srcvec
-		}
-
+		view.SetData(vec)
 		blk.mvcc.RLock()
 		err = blk.FillColumnUpdates(view)
 		if err == nil {
@@ -701,18 +663,18 @@ func (blk *dataBlock) RangeDelete(
 	return
 }
 
-func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v any, err error) {
+func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err error) {
 	ts := txn.GetStartTS()
 	blk.mvcc.RLock()
-	deleted, err := blk.mvcc.IsDeletedLocked(row, ts, blk.mvcc.RWMutex)
+	deleted, err := blk.mvcc.IsDeletedLocked(uint32(row), ts, blk.mvcc.RWMutex)
 	if err != nil {
 		blk.mvcc.RUnlock()
 		return
 	}
 	if !deleted {
-		chain := blk.mvcc.GetColumnChain(col)
+		chain := blk.mvcc.GetColumnChain(uint16(col))
 		chain.RLock()
-		v, err = chain.GetValueLocked(row, ts)
+		v, err = chain.GetValueLocked(uint32(row), ts)
 		chain.RUnlock()
 		if err == txnif.TxnInternalErr {
 			blk.mvcc.RUnlock()
@@ -733,43 +695,23 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v an
 	if blk.meta.IsAppendable() {
 		view, _ = blk.getVectorCopy(txn.GetStartTS(), int(col), nil, nil, true)
 	} else {
-		wrapper, _ := blk.getVectorWrapper(int(col))
-		// defer common.GPool.Free(wrapper.MNode)
-		view.RawVec = &wrapper.Vector
-		view.MemNode = wrapper.MNode
-		defer view.Free()
+		vec, _ := blk.loadColumnData(int(col), nil)
+		view.SetData(vec)
 	}
-	v = compute.GetValue(view.RawVec, row)
+	v = view.GetValue(row)
+	view.Close()
 	return
 }
 
-func (blk *dataBlock) getVectorWithBuffer(
+func (blk *dataBlock) loadColumnData(
 	colIdx int,
-	compressed, decompressed *bytes.Buffer) (vec *movec.Vector, err error) {
+	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	dataFile := blk.colFiles[colIdx]
-
-	wrapper := vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
-	wrapper.File = dataFile
-	if decompressed == nil {
-		decompressed = new(bytes.Buffer)
-	}
-	if _, err = wrapper.ReadWithBuffer(dataFile, compressed, decompressed); err != nil {
+	def := blk.meta.GetSchema().ColDefs[colIdx]
+	vec = containers.MakeVector(def.Type, def.Nullable())
+	if err = vec.ReadFromFile(dataFile, buffer); err != nil {
 		return
 	}
-	vec = &wrapper.Vector
-	return
-}
-
-func (blk *dataBlock) getVectorWrapper(colIdx int) (wrapper *vector.VectorWrapper, err error) {
-	dataFile := blk.colFiles[colIdx]
-
-	wrapper = vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
-	wrapper.File = dataFile
-	_, err = wrapper.ReadFrom(dataFile)
-	if err != nil {
-		return
-	}
-
 	return
 }
 
@@ -826,17 +768,17 @@ func (blk *dataBlock) blkGetByFilter(ts uint64, filter *handle.Filter) (offset u
 		return
 	}
 	err = nil
-	pkColumn, err := blk.getVectorWrapper(blk.meta.GetSchema().GetSingleSortKeyIdx())
+	pkColumn, err := blk.loadColumnData(blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
 	if err != nil {
 		return
 	}
-	defer common.GPool.Free(pkColumn.MNode)
-	col := &pkColumn.Vector
-	offset, existed := compute.GetOffsetByVal(col, filter.Val, nil)
+	defer pkColumn.Close()
+	off, existed := compute.GetOffsetByVal(pkColumn, filter.Val, nil)
 	if !existed {
 		err = data.ErrNotFound
 		return
 	}
+	offset = uint32(off)
 
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
@@ -880,18 +822,14 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 		var row uint32
 		err = blk.node.DoWithPin(func() (err error) {
 			blk.mvcc.RLock()
-			vec, err := blk.node.data.GetVectorByAttr(blk.meta.GetSchema().GetSingleSortKeyIdx())
-			if err != nil {
-				blk.mvcc.RUnlock()
-				return err
-			}
+			vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
 			blk.mvcc.RUnlock()
 			blk.mvcc.Lock()
 			defer blk.mvcc.Unlock()
 			var currRow uint32
 			for gen.HasNext() {
 				row = gen.Next()
-				v, _ := vec.GetValue(int(row))
+				v := vecview.Get(int(row))
 				currRow, err = blk.index.GetActiveRow(v)
 				if err != nil || currRow == row {
 					if err = blk.index.Delete(v, ts); err != nil {
@@ -908,10 +846,10 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 			var w bytes.Buffer
 			sortKeys := blk.meta.GetSchema().SortKey
 			vals := make([]any, sortKeys.Size())
-			vecs := make([]vector.IVector, sortKeys.Size())
+			vecs := make([]containers.VectorView, sortKeys.Size())
 			blk.mvcc.RLock()
 			for i := range vecs {
-				vec, err := blk.node.data.GetVectorByAttr(sortKeys.Defs[i].Idx)
+				vec := blk.node.data.Vecs[sortKeys.Defs[i].Idx].GetView()
 				if err != nil {
 					blk.mvcc.RUnlock()
 					return err
@@ -925,7 +863,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 			for gen.HasNext() {
 				row = gen.Next()
 				for i := range vals {
-					vals[i], _ = vecs[i].GetValue(int(row))
+					vals[i] = vecs[i].Get(int(row))
 				}
 				v := model.EncodeTypedVals(&w, vals...)
 				currRow, err = blk.index.GetActiveRow(v)
@@ -942,7 +880,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts uint
 	return
 }
 
-func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask *roaring.Bitmap) (err error) {
+func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
 	if blk.meta.IsAppendable() {
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
@@ -961,7 +899,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 		it := keyselects.Iterator()
 		for it.HasNext() {
 			row := it.Next()
-			key := compute.GetValue(pks, row)
+			key := pks.Get(int(row))
 			if blk.index.HasDeleteFrom(key, ts) {
 				err = txnif.TxnWWConflictErr
 				break
@@ -984,16 +922,14 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *movec.Vector, rowmask 
 	if err != nil {
 		return err
 	}
-	defer view.Free()
-	deduplicate := func(v any, _ uint32) error {
-		if _, existed := compute.GetOffsetByVal(view.AppliedVec, v, view.DeleteMask); existed {
+	defer view.Close()
+	deduplicate := func(v any, _ int) error {
+		if _, existed := compute.GetOffsetByVal(view.GetData(), v, view.DeleteMask); existed {
 			return data.ErrDuplicate
 		}
 		return nil
 	}
-	if err = compute.ApplyOpToColumn(pks, deduplicate, keyselects); err != nil {
-		return err
-	}
+	err = pks.Foreach(deduplicate, keyselects)
 	return
 }
 
@@ -1017,18 +953,17 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.
 			return view, err
 		}
 		if updateMask != nil {
-			view.UpdateMasks[uint16(i)] = updateMask
-			view.UpdateVals[uint16(i)] = updateVals
+			view.SetUpdates(i, updateMask, updateVals)
 		}
-		view.ColLogIndexes[uint16(i)] = indexes
+		view.SetLogIndexes(i, indexes)
 	}
 	deleteChain := blk.mvcc.GetDeleteChain()
 	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs)
 	blk.mvcc.RUnlock()
 	return
 }
-func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *mobat.Batch) []*movec.Vector {
-	vs := make([]*movec.Vector, schema.GetSortKeyCnt())
+func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Batch) []containers.Vector {
+	vs := make([]containers.Vector, schema.GetSortKeyCnt())
 	for i := range vs {
 		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
 	}
