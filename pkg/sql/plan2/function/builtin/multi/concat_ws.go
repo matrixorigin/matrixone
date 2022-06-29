@@ -195,11 +195,12 @@ func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	resultVector := vector.NewConst(resultType)
 	resultValues := &types.Bytes{
-		Data:    make([]byte, 0),
+		Data:    make([]byte, len(separator)),
 		Offsets: make([]uint32, 1),
 		Lengths: make([]uint32, 1),
 	}
-	resultLength := uint32(0)
+	copy(resultValues.Data, separator)
+	resultLength := uint32(len(separator))
 	for i := range inputCleaned {
 		bytesI := vector.MustBytesCols(inputCleaned[i])
 		resultValues.Data = append(resultValues.Data, bytesI.Get(0)...)

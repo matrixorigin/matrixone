@@ -11,7 +11,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.26.11
 	github.com/aws/smithy-go v1.11.3
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
-	github.com/bxcodec/faker/v3 v3.8.0
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292
 	github.com/fagongzi/goetty v1.13.0
@@ -30,6 +29,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.27
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
+	github.com/pierrec/lz4/v4 v4.1.14
 	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
 	github.com/sirupsen/logrus v1.8.1
@@ -67,7 +67,6 @@ require (
 	github.com/minio/md5-simd v1.1.0 // indirect
 	github.com/minio/sha256-simd v0.1.1 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.14 // indirect
 	github.com/rs/xid v1.2.1 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
