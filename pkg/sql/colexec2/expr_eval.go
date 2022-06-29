@@ -158,6 +158,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			return nil, err
 		}
 		vec.Length = len(bat.Zs)
+		vec.FillDefaultValue()
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
@@ -250,6 +251,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 			return nil, err
 		}
 		vec.Length = len(s.Zs)
+		vec.FillDefaultValue()
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub

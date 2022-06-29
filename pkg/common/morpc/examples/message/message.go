@@ -15,39 +15,36 @@
 package message
 
 import (
-	"encoding/hex"
-
 	"github.com/fagongzi/goetty/v2/buf"
 )
 
 // ExampleMessage example message
 type ExampleMessage struct {
-	MsgID   []byte
+	MsgID   uint64
 	Content string
 }
 
-func (tm *ExampleMessage) ID() []byte {
+func (tm *ExampleMessage) GetID() uint64 {
 	return tm.MsgID
 }
 
+func (tm *ExampleMessage) SetID(id uint64) {
+	tm.MsgID = id
+}
+
 func (tm *ExampleMessage) DebugString() string {
-	return hex.EncodeToString(tm.MsgID) + "," + string(tm.Content)
+	return ""
 }
 
 func (tm *ExampleMessage) Size() int {
-	return 8 + len(tm.MsgID) + len(tm.Content)
+	return 4 + 8 + len(tm.Content)
 }
 
 func (tm *ExampleMessage) MarshalTo(data []byte) (int, error) {
 	offset := 0
 
-	buf.Int2BytesTo(len(tm.MsgID), data[offset:])
-	offset += 4
-
-	if len(tm.MsgID) > 0 {
-		copy(data[offset:], tm.MsgID)
-		offset += len(tm.MsgID)
-	}
+	buf.Uint64ToBytesTo(tm.MsgID, data[offset:])
+	offset += 8
 
 	buf.Int2BytesTo(len(tm.Content), data[offset:])
 	offset += 4
@@ -63,16 +60,10 @@ func (tm *ExampleMessage) MarshalTo(data []byte) (int, error) {
 func (tm *ExampleMessage) Unmarshal(data []byte) error {
 	offset := 0
 
-	n := buf.Byte2Int(data)
-	offset += 4
+	tm.MsgID = buf.Byte2Uint64(data)
+	offset += 8
 
-	tm.MsgID = make([]byte, n)
-	if n > 0 {
-		copy(tm.MsgID, data[offset:offset+n])
-		offset += n
-	}
-
-	n = buf.Byte2Int(data[offset:])
+	n := buf.Byte2Int(data[offset:])
 	offset += 4
 
 	content := make([]byte, n)

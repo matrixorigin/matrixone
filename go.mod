@@ -9,12 +9,11 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.16.5
 	github.com/aws/aws-sdk-go-v2/config v1.15.11
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.26.11
-	github.com/aws/smithy-go v1.11.3
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292
 	github.com/fagongzi/goetty v1.13.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220624135603-5923140593a7
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220629100032-f8e8c3c38772
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -58,6 +57,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.13.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.11.9 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.16.7 // indirect
+	github.com/aws/smithy-go v1.11.3 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
