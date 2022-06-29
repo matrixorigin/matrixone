@@ -7,7 +7,7 @@ aggregate function calls cannot be nested
 SELECT DISTINCT GP1.a AS g1 FROM t1 AS GP1
 WHERE GP1.a >= 0
 ORDER BY 2+ANY_VALUE(GP1.b) LIMIT 8;
-column "gp1.a" must appear in the GROUP BY clause or be used in an aggregate function
+for SELECT DISTINCT, ORDER BY expressions must appear in select list
 drop table t1;
 create table t1(
 a int,

@@ -426,6 +426,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select distinct(n_name), ((abs(n_regionkey))) from nation",
 		"SET @var = abs(-1), @@session.string_var = 'aaa'",
 		"SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
+		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_NAME", //test distinct with order by
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -443,6 +444,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SET @var = avg(2)", // can't use agg function
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
+		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
 		//"select 18446744073709551500",                             //over int64
 		//"select 0xffffffffffffffff",                               //over int64
 	}

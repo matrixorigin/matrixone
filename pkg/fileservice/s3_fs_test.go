@@ -36,12 +36,20 @@ func TestS3FS(t *testing.T) {
 	err = json.Unmarshal(content, &sharedConfig)
 	assert.Nil(t, err)
 
+	os.Setenv("AWS_REGION", sharedConfig.Region)
+	os.Setenv("AWS_ACCESS_KEY_ID", sharedConfig.APIKey)
+	os.Setenv("AWS_SECRET_ACCESS_KEY", sharedConfig.APISecret)
+
 	testFileService(t, func() FileService {
 
 		config := sharedConfig
-		config.KeyPrefix = time.Now().Format("2006-01-02T15:04:05")
+		config.KeyPrefix = time.Now().Format("2006-01-02.15:04:05.000000")
 
-		fs, err := NewS3FS(config)
+		fs, err := NewS3FS(
+			config.Endpoint,
+			config.Bucket,
+			config.KeyPrefix,
+		)
 		assert.Nil(t, err)
 
 		return fs
