@@ -52,8 +52,12 @@ type RPCRequest struct {
 
 var _ morpc.PayloadMessage = (*RPCRequest)(nil)
 
-func (r *RPCRequest) ID() []byte {
-	return nil
+func (r *RPCRequest) SetID(id uint64) {
+	r.RequestID = id
+}
+
+func (r *RPCRequest) GetID() uint64 {
+	return r.RequestID
 }
 
 func (r *RPCRequest) DebugString() string {
@@ -76,8 +80,12 @@ type RPCResponse struct {
 
 var _ morpc.PayloadMessage = (*RPCResponse)(nil)
 
-func (r *RPCResponse) ID() []byte {
-	return nil
+func (r *RPCResponse) SetID(id uint64) {
+	r.RequestID = id
+}
+
+func (r *RPCResponse) GetID() uint64 {
+	return r.RequestID
 }
 
 func (r *RPCResponse) DebugString() string {
@@ -167,6 +175,7 @@ func (s *Service) handleRPCRequest(req morpc.Message,
 		recs = MustMarshal(&records)
 	}
 	// FIXME: set timeout value
+	resp.RequestID = rr.RequestID
 	return cs.Write(&RPCResponse{
 		Response: resp,
 		payload:  recs,

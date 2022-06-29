@@ -5,13 +5,14 @@ package txn
 
 import (
 	fmt "fmt"
+	io "io"
+	math "math"
+	math_bits "math/bits"
+
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
 	metadata "github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	io "io"
-	math "math"
-	math_bits "math/bits"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
