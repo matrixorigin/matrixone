@@ -16,7 +16,6 @@ package morpc
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -165,7 +164,7 @@ func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddr()),
-			zap.String("request-id", hex.EncodeToString(request.ID())),
+			zap.Uint64("request-id", request.GetID()),
 			zap.String("request", request.DebugString()))
 	}
 
@@ -181,7 +180,7 @@ func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint
 	if ce := s.logger.Check(zap.DebugLevel, "handle request completed"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddr()),
-			zap.String("request-id", hex.EncodeToString(request.ID())))
+			zap.Uint64("request-id", request.GetID()))
 	}
 	return nil
 }
@@ -240,7 +239,7 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 						timeout += sendResponses[idx].opts.Timeout
 						if err := rs.Write(sendResponses[idx].message, goetty.WriteOptions{}); err != nil {
 							s.logger.Error("write response failed",
-								zap.String("request-id", hex.EncodeToString(sendResponses[idx].message.ID())),
+								zap.Uint64("request-id", sendResponses[idx].message.GetID()),
 								zap.Error(err))
 							return
 						}
@@ -251,7 +250,7 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 						if err := rs.Flush(timeout); err != nil {
 							for idx := range sendResponses {
 								s.logger.Error("write response failed",
-									zap.String("request-id", hex.EncodeToString(sendResponses[idx].message.ID())),
+									zap.Uint64("request-id", sendResponses[idx].message.GetID()),
 									zap.Error(err))
 							}
 							return
@@ -260,8 +259,8 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 							var fields []zap.Field
 							fields = append(fields, zap.String("client", rs.RemoteAddr()))
 							for idx := range sendResponses {
-								fields = append(fields, zap.String("request-id",
-									hex.EncodeToString(sendResponses[idx].message.ID())))
+								fields = append(fields, zap.Uint64("request-id",
+									sendResponses[idx].message.GetID()))
 								fields = append(fields, zap.String("response",
 									sendResponses[idx].message.DebugString()))
 							}
