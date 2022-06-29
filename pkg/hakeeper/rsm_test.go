@@ -234,7 +234,7 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
 	sc1 := hapb.ScheduleCommand{
 		UUID: "uuid1",
-		ConfigChange: hapb.ConfigChange{
+		ConfigChange: &hapb.ConfigChange{
 			Replica: hapb.Replica{
 				ShardID: 1,
 			},
@@ -242,7 +242,7 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	}
 	sc2 := hapb.ScheduleCommand{
 		UUID: "uuid2",
-		ConfigChange: hapb.ConfigChange{
+		ConfigChange: &hapb.ConfigChange{
 			Replica: hapb.Replica{
 				ShardID: 2,
 			},
@@ -250,7 +250,7 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	}
 	sc3 := hapb.ScheduleCommand{
 		UUID: "uuid1",
-		ConfigChange: hapb.ConfigChange{
+		ConfigChange: &hapb.ConfigChange{
 			Replica: hapb.Replica{
 				ShardID: 3,
 			},
@@ -258,7 +258,7 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	}
 	sc4 := hapb.ScheduleCommand{
 		UUID: "uuid3",
-		ConfigChange: hapb.ConfigChange{
+		ConfigChange: &hapb.ConfigChange{
 			Replica: hapb.Replica{
 				ShardID: 4,
 			},
