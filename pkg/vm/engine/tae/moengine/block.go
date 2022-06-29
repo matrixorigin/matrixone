@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -34,7 +35,7 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 	bat := batch.New(true, attrs)
 	bat.Vecs = make([]*vector.Vector, len(attrs))
 	for i, attr := range attrs {
-		view, err = blk.handle.GetColumnDataByName(attr, compressed[i], deCompressed[i])
+		view, err = blk.handle.GetColumnDataByName(attr, deCompressed[i])
 		if err != nil {
 			view.Close()
 			return nil, err

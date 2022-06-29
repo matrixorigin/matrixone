@@ -286,18 +286,10 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 			continue
 		}
 		start := info.GetSrcOff()
-		end := start + info.GetSrcLen()
-		bat := data.CloneWindow(int(start), int(end-start))
+		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
-		length := info.GetDestLen()
-		datablk := blk.GetBlockData()
-		appender, err := datablk.MakeAppender()
-		if err != nil {
-			panic(err)
-		}
-		_, _, err = appender.OnReplayInsertNode(bat, 0, int(length), nil)
-		if err != nil {
+		if err = blk.GetBlockData().OnReplayAppendPayload(bat); err != nil {
 			panic(err)
 		}
 	}
@@ -335,8 +327,8 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	datablk := blk.GetBlockData()
-	err = datablk.OnReplayDelete(deleteNode)
+	blkData := blk.GetBlockData()
+	err = blkData.OnReplayDelete(deleteNode)
 	if err != nil {
 		panic(err)
 	}
@@ -365,13 +357,9 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	datablk := blk.GetBlockData()
-
-	appender, err := datablk.MakeAppender()
-	if err != nil {
+	if err = blk.GetBlockData().OnReplayAppend(appendNode); err != nil {
 		panic(err)
 	}
-	appender.OnReplayAppendNode(cmd.GetAppendNode())
 	if observer != nil {
 		observer.OnTimeStamp(appendNode.GetCommitTS())
 	}
