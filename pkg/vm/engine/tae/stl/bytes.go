@@ -1,6 +1,8 @@
 package stl
 
-import "unsafe"
+import (
+	"unsafe"
+)
 
 func NewBytes() *Bytes {
 	return &Bytes{
@@ -8,6 +10,24 @@ func NewBytes() *Bytes {
 		Length: make([]uint32, 0),
 		Offset: make([]uint32, 0),
 	}
+}
+
+func (bs *Bytes) Get(i int) []byte {
+	if len(bs.Length) == 0 {
+		return []byte{}
+	}
+	return bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]
+}
+
+func (bs *Bytes) Window(offset, length int) *Bytes {
+	win := NewBytes()
+	if len(bs.Length) == 0 || length == 0 {
+		return win
+	}
+	win.Offset = bs.Offset[offset : offset+length]
+	win.Length = bs.Length[offset : offset+length]
+	win.Data = bs.Data
+	return win
 }
 
 func (bs *Bytes) DataSize() int   { return len(bs.Data) }

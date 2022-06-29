@@ -97,7 +97,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 		} else {
 			for i := 0; i < rows; i++ {
 				ival := rand.Intn(math.MaxInt64)
-				vec.Append(ival)
+				vec.Append(int64(ival))
 			}
 		}
 	case types.Type_UINT8:
@@ -162,7 +162,7 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 	case types.Type_VARCHAR, types.Type_CHAR:
 		if unique {
 			for i := 0; i < rows; i++ {
-				s := fmt.Sprintf("%d-%d", i, rand.Intn(10000000))
+				s := fmt.Sprintf("%d-%d", i, 0)
 				vec.Append([]byte(s))
 			}
 		} else {
@@ -197,10 +197,102 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 	return
 }
 
-func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
-	bat = MockBatch(vecTypes, rows, uniqueIdx, provider)
+func MockVector2(typ types.Type, rows int, offset int) Vector {
+	vec := MakeVector(typ, true)
+	switch typ.Oid {
+	case types.Type_BOOL:
+		for i := 0; i < rows; i++ {
+			if i%2 == 0 {
+				vec.Append(true)
+			} else {
+				vec.Append(false)
+			}
+		}
+	case types.Type_INT8:
+		for i := 0; i < rows; i++ {
+			vec.Append(int8(i + offset))
+		}
+	case types.Type_INT16:
+		for i := 0; i < rows; i++ {
+			vec.Append(int16(i + offset))
+		}
+	case types.Type_INT32:
+		for i := 0; i < rows; i++ {
+			vec.Append(int32(i + offset))
+		}
+	case types.Type_INT64:
+		for i := 0; i < rows; i++ {
+			vec.Append(int64(i + offset))
+		}
+	case types.Type_UINT8:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint8(i + offset))
+		}
+	case types.Type_UINT16:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint16(i + offset))
+		}
+	case types.Type_UINT32:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint32(i + offset))
+		}
+	case types.Type_UINT64:
+		for i := 0; i < rows; i++ {
+			vec.Append(uint64(i + offset))
+		}
+	case types.Type_FLOAT32:
+		for i := 0; i < rows; i++ {
+			vec.Append(float32(i + offset))
+		}
+	case types.Type_FLOAT64:
+		for i := 0; i < rows; i++ {
+			vec.Append(float64(i + offset))
+		}
+	case types.Type_DECIMAL64:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Decimal64(i + offset))
+		}
+	case types.Type_DECIMAL128:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Decimal128{Lo: int64(i + offset)})
+		}
+	case types.Type_TIMESTAMP:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Timestamp(i + offset))
+		}
+	case types.Type_DATE:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Date(i + offset))
+		}
+	case types.Type_DATETIME:
+		for i := 0; i < rows; i++ {
+			vec.Append(types.Datetime(i + offset))
+		}
+	case types.Type_CHAR, types.Type_VARCHAR:
+		for i := 0; i < rows; i++ {
+			vec.Append([]byte(strconv.Itoa(i + offset)))
+		}
+	default:
+		panic("not support")
+	}
+	return vec
+}
+
+func MockBatchWithAttrs(vecTypes []types.Type, attrs []string, nullables []bool, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
+	bat = MockNullableBatch(vecTypes, nullables, rows, uniqueIdx, provider)
 	bat.Attrs = attrs
 	return
+}
+
+func MockNullableBatch(vecTypes []types.Type, nullables []bool, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
+	bat = NewEmptyBatch()
+	for idx := range vecTypes {
+		attr := "mock_" + strconv.Itoa(idx)
+		unique := uniqueIdx == idx
+		vec := MockVector(vecTypes[idx], rows, unique, nullables[idx], provider.GetColumnProvider(idx))
+		bat.AddVector(attr, vec)
+	}
+	return bat
 }
 
 func MockBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDataProvider) (bat *Batch) {
@@ -213,4 +305,43 @@ func MockBatch(vecTypes []types.Type, rows int, uniqueIdx int, provider *MockDat
 		bat.AddVector(attr, vec)
 	}
 	return bat
+}
+
+type compressedFileInfo struct {
+	size  int64
+	osize int64
+	algo  int
+}
+
+func (i *compressedFileInfo) Name() string      { return "" }
+func (i *compressedFileInfo) Size() int64       { return i.size }
+func (i *compressedFileInfo) OriginSize() int64 { return i.osize }
+func (i *compressedFileInfo) CompressAlgo() int { return i.algo }
+
+type mockCompressedFile struct {
+	stat compressedFileInfo
+	buf  []byte
+}
+
+func (f *mockCompressedFile) Read(p []byte) (n int, err error) {
+	copy(p, f.buf)
+	n = len(f.buf)
+	return
+}
+
+func (f *mockCompressedFile) Ref()                         {}
+func (f *mockCompressedFile) Unref()                       {}
+func (f *mockCompressedFile) RefCount() int64              { return 0 }
+func (f *mockCompressedFile) Stat() common.FileInfo        { return &f.stat }
+func (f *mockCompressedFile) GetFileType() common.FileType { return common.MemFile }
+
+func MockCompressedFile(buf []byte, osize int, algo int) common.IVFile {
+	return &mockCompressedFile{
+		stat: compressedFileInfo{
+			size:  int64(len(buf)),
+			osize: int64(osize),
+			algo:  algo,
+		},
+		buf: buf,
+	}
 }

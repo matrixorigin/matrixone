@@ -15,43 +15,44 @@
 package mul
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 
 var (
-	Int8Mul              = NumericMul[int8]
-	Int8MulSels          = NumericMulSels[int8]
-	Int8MulScalar        = NumericMulScalar[int8]
-	Int8MulScalarSels    = NumericMulScalarSels[int8]
-	Int16Mul             = NumericMul[int16]
-	Int16MulSels         = NumericMulSels[int16]
-	Int16MulScalar       = NumericMulScalar[int16]
-	Int16MulScalarSels   = NumericMulScalarSels[int16]
-	Int32Mul             = NumericMul[int32]
-	Int32MulSels         = NumericMulSels[int32]
-	Int32MulScalar       = NumericMulScalar[int32]
-	Int32MulScalarSels   = NumericMulScalarSels[int32]
-	Int64Mul             = NumericMul[int64]
-	Int64MulSels         = NumericMulSels[int64]
-	Int64MulScalar       = NumericMulScalar[int64]
-	Int64MulScalarSels   = NumericMulScalarSels[int64]
-	Uint8Mul             = NumericMul[uint8]
-	Uint8MulSels         = NumericMulSels[uint8]
-	Uint8MulScalar       = NumericMulScalar[uint8]
-	Uint8MulScalarSels   = NumericMulScalarSels[uint8]
-	Uint16Mul            = NumericMul[uint16]
-	Uint16MulSels        = NumericMulSels[uint16]
-	Uint16MulScalar      = NumericMulScalar[uint16]
-	Uint16MulScalarSels  = NumericMulScalarSels[uint16]
-	Uint32Mul            = NumericMul[uint32]
-	Uint32MulSels        = NumericMulSels[uint32]
-	Uint32MulScalar      = NumericMulScalar[uint32]
-	Uint32MulScalarSels  = NumericMulScalarSels[uint32]
-	Uint64Mul            = NumericMul[uint64]
-	Uint64MulSels        = NumericMulSels[uint64]
-	Uint64MulScalar      = NumericMulScalar[uint64]
-	Uint64MulScalarSels  = NumericMulScalarSels[uint64]
+	Int8Mul              = NumericMulInts[int8]
+	Int8MulSels          = NumericMulSelsInts[int8]
+	Int8MulScalar        = NumericMulScalarInts[int8]
+	Int8MulScalarSels    = NumericMulScalarSelsInts[int8]
+	Int16Mul             = NumericMulInts[int16]
+	Int16MulSels         = NumericMulSelsInts[int16]
+	Int16MulScalar       = NumericMulScalarInts[int16]
+	Int16MulScalarSels   = NumericMulScalarSelsInts[int16]
+	Int32Mul             = NumericMulInts[int32]
+	Int32MulSels         = NumericMulSelsInts[int32]
+	Int32MulScalar       = NumericMulScalarInts[int32]
+	Int32MulScalarSels   = NumericMulScalarSelsInts[int32]
+	Int64Mul             = NumericMulInts[int64]
+	Int64MulSels         = NumericMulSelsInts[int64]
+	Int64MulScalar       = NumericMulScalarInts[int64]
+	Int64MulScalarSels   = NumericMulScalarSelsInts[int64]
+	Uint8Mul             = NumericMulInts[uint8]
+	Uint8MulSels         = NumericMulSelsInts[uint8]
+	Uint8MulScalar       = NumericMulScalarInts[uint8]
+	Uint8MulScalarSels   = NumericMulScalarSelsInts[uint8]
+	Uint16Mul            = NumericMulInts[uint16]
+	Uint16MulSels        = NumericMulSelsInts[uint16]
+	Uint16MulScalar      = NumericMulScalarInts[uint16]
+	Uint16MulScalarSels  = NumericMulScalarSelsInts[uint16]
+	Uint32Mul            = NumericMulInts[uint32]
+	Uint32MulSels        = NumericMulSelsInts[uint32]
+	Uint32MulScalar      = NumericMulScalarInts[uint32]
+	Uint32MulScalarSels  = NumericMulScalarSelsInts[uint32]
+	Uint64Mul            = NumericMulInts[uint64]
+	Uint64MulSels        = NumericMulSelsInts[uint64]
+	Uint64MulScalar      = NumericMulScalarInts[uint64]
+	Uint64MulScalarSels  = NumericMulScalarSelsInts[uint64]
 	Float32Mul           = NumericMul[float32]
 	Float32MulSels       = NumericMulSels[float32]
 	Float32MulScalar     = NumericMulScalar[float32]
@@ -97,6 +98,47 @@ var (
 	Decimal128MulScalar     = decimal128MulScalar
 	Decimal128MulScalarSels = decimal128MulScalarSels
 )
+
+// the slowest overflow check
+func NumericMulInts[T constraints.Integer](xs, ys, rs []T) []T {
+	for i, x := range xs {
+		rs[i] = x * ys[i]
+		if x != 0 && rs[i]/x != ys[i] {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int multiply overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericMulSelsInts[T constraints.Integer](xs, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = xs[sel] * ys[sel]
+		if xs[sel] != 0 && rs[i]/xs[sel] != ys[sel] {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int multiply overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericMulScalarInts[T constraints.Integer](x T, ys, rs []T) []T {
+	for i, y := range ys {
+		rs[i] = x * y
+		if x != 0 && rs[i]/x != y {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int multiply overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericMulScalarSelsInts[T constraints.Integer](x T, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = x * ys[sel]
+		if x != 0 && rs[i]/x != ys[sel] {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+	}
+	return rs
+}
 
 func NumericMul[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {

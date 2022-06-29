@@ -58,9 +58,8 @@ func getSliceFromLeftWithLength(bytes []byte, offset int64, length int64) ([]byt
 	elemsize := int64(len(bytes))
 
 	if length < 0 {
-		length += elemsize - offset
+		length = 0
 	}
-
 	if offset >= elemsize || length < 0 {
 		return []byte{}, 0
 	}
@@ -71,7 +70,7 @@ func getSliceFromLeftWithLength(bytes []byte, offset int64, length int64) ([]byt
 func getSliceFromRight(bytes []byte, offset int64) ([]byte, int64) {
 	elemsize := int64(len(bytes))
 	if offset > elemsize {
-		return bytes[:], elemsize
+		return []byte{}, 0
 	}
 	return bytes[elemsize-offset:], offset
 }
@@ -80,18 +79,14 @@ func getSliceFromRight(bytes []byte, offset int64) ([]byte, int64) {
 func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]byte, int64) {
 	elemsize := int64(len(bytes))
 	if length < 0 {
-		length += elemsize - offset
+		length = 0
 	}
 	if length < 0 {
 		return []byte{}, 0
 	}
 
 	if offset > elemsize {
-		if length+elemsize > offset {
-			return bytes[:min(elemsize, length+elemsize-offset)], min(elemsize, length+elemsize-offset)
-		} else {
-			return []byte{}, 0
-		}
+		return []byte{}, 0
 	}
 	return bytes[elemsize-offset : elemsize-offset+min(length, offset)], min(length, offset)
 }

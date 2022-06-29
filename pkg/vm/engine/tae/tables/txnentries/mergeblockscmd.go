@@ -22,9 +22,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type mergeBlocksCmd struct {
+	txnbase.BaseCmd
 	tid         uint64
 	droppedSegs []*common.ID
 	createdSegs []*common.ID

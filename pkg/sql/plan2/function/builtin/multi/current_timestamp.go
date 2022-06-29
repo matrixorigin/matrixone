@@ -20,16 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func CurrentTimestampTypeCheck(args []types.T, require []types.T, _ types.T) bool {
-	if len(args) == 0 {
-		return true
-	}
-	if len(args) == 1 && args[0] == types.T_int64 {
-		return true
-	}
-	return false
-}
-
 // a general round method is needed for timestamp fsp
 func CurrentTimestamp(vectors []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
 	resultPrecision := int32(6)

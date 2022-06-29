@@ -27,7 +27,7 @@ func TestUnaryMinusDecimal64(t *testing.T) {
 	testProc := testutil.NewProc()
 	output, err := UnaryMinusDecimal64([]*vector.Vector{input}, testProc)
 	require.NoError(t, err)
-	outputCol := vector.MustTCols2[types.Decimal64](output)
+	outputCol := vector.MustTCols[types.Decimal64](output)
 
 	require.Equal(t, []types.Decimal64{-123, -234, -345, 0}, outputCol)
 }
