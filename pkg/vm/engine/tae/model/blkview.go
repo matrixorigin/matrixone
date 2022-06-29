@@ -45,8 +45,8 @@ func (view *BlockView) SetBatch(bat *containers.Batch) {
 	}
 }
 
-func (view *BlockView) GetDataView(i int) containers.VectorView {
-	return view.Columns[i].GetDataView()
+func (view *BlockView) GetColumnData(i int) containers.Vector {
+	return view.Columns[i].GetData()
 }
 
 func (view *BlockView) SetData(i int, data containers.Vector) {
