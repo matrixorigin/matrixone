@@ -831,6 +831,16 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "unary_minus":
+		if args[0].Typ.Id == plan.Type_UINT64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_DECIMAL128,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// get args(exprs) & types
