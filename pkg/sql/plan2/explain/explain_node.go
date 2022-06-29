@@ -66,6 +66,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Sink Scan"
 	case plan.Node_AGG:
 		pname = "Aggregate"
+	case plan.Node_DISTINCT:
+		pname = "Distinct"
 	case plan.Node_FILTER:
 		pname = "Filter"
 	case plan.Node_JOIN:
@@ -138,6 +140,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		case plan.Node_SINK_SCAN:
 			fallthrough
 		case plan.Node_AGG:
+			fallthrough
+		case plan.Node_DISTINCT:
 			fallthrough
 		case plan.Node_FILTER:
 			fallthrough
@@ -498,6 +502,10 @@ type RowsetDataDescribeImpl struct {
 
 func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	var result string
+	if r.RowsetData == nil {
+		return result, nil
+	}
+
 	var first bool = true
 	for index := range r.RowsetData.Cols {
 		if !first {

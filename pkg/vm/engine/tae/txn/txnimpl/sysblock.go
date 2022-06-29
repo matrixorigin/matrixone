@@ -279,9 +279,9 @@ func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err 
 	return
 }
 
-func (blk *txnSysBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataById(colIdx, compressed, decompressed)
+		return blk.txnBlock.GetColumnDataById(colIdx, buffer)
 	}
 	if blk.table.GetID() == catalog.SystemTable_DB_ID {
 		return blk.getDBTableData(colIdx)
@@ -294,9 +294,9 @@ func (blk *txnSysBlock) GetColumnDataById(colIdx int, compressed, decompressed *
 	}
 }
 
-func (blk *txnSysBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+func (blk *txnSysBlock) GetColumnDataByName(attr string, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(colIdx, compressed, decompressed)
+	return blk.GetColumnDataById(colIdx, buffer)
 }
 
 func (blk *txnSysBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {

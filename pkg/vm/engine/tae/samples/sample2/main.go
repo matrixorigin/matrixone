@@ -114,8 +114,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		var compressed bytes.Buffer
-		var decompressed bytes.Buffer
+		var buffer bytes.Buffer
 		segIt := rel.MakeSegmentIt()
 		for segIt.Valid() {
 			seg := segIt.GetSegment()
@@ -124,9 +123,8 @@ func main() {
 			for blkIt.Valid() {
 				blk := blkIt.GetBlock()
 				logutil.Info(blk.String())
-				compressed.Reset()
-				decompressed.Reset()
-				view, err := blk.GetColumnDataById(0, &compressed, &decompressed)
+				buffer.Reset()
+				view, err := blk.GetColumnDataById(0, &buffer)
 				logutil.Infof("Block %s Rows %d", blk.Fingerprint().BlockString(), view.Length())
 				if err != nil {
 					panic(err)

@@ -122,7 +122,7 @@ func makePlan2TimestampConstExpr(v types.Timestamp) *plan.Expr_C {
 
 func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	t1, t2 := types.T(expr.Typ.Id), types.T(targetType.Id)
-	if t1 == t2 {
+	if isSameColumnType(expr.Typ, targetType) {
 		return expr, nil
 	}
 	if types.T(expr.Typ.Id) == types.T_any {

@@ -89,7 +89,7 @@ type RPCClient interface {
 // Note that it is not thread-safe.
 type ClientSession interface {
 	// Write writing the response message to the client.
-	Write(response Message) error
+	Write(response Message, opts SendOptions) error
 }
 
 // RPCServer RPC server implementation corresponding to RPCClient.
@@ -158,3 +158,8 @@ type ServerOption func(*server)
 
 // BackendOption options for create remote backend
 type BackendOption func(*remoteBackend)
+
+type sendMessage struct {
+	message Message
+	opts    SendOptions
+}

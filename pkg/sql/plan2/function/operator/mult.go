@@ -113,7 +113,7 @@ func Mult[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 
 //LeftType:   types.T_decimal64,
 //RightType:  types.T_decimal64,
-//ReturnType: types.T_decimal64,
+//ReturnType: types.T_decimal128,
 func MultDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
 	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)

@@ -21,17 +21,24 @@ import (
 
 func (s *Service) handleCommands(cmds []hapb.ScheduleCommand) {
 	for _, cmd := range cmds {
-		switch cmd.ConfigChange.ChangeType {
-		case hapb.AddReplica:
-			s.handleAddReplica(cmd)
-		case hapb.RemoveReplica:
-			s.handleRemoveReplica(cmd)
-		case hapb.StartReplica:
-			s.handleStartReplica(cmd)
-		case hapb.StopReplica:
-			s.handleStopReplica(cmd)
-		default:
-			panic("unknown type")
+		if cmd.GetConfigChange() != nil {
+			switch cmd.ConfigChange.ChangeType {
+			case hapb.AddReplica:
+				s.handleAddReplica(cmd)
+			case hapb.RemoveReplica:
+				s.handleRemoveReplica(cmd)
+			case hapb.StartReplica:
+				s.handleStartReplica(cmd)
+			case hapb.StopReplica:
+				s.handleStopReplica(cmd)
+			default:
+				panic("unknown type")
+			}
+			return
+		}
+
+		if cmd.GetShutdownStore() != nil {
+			// FIXME: add logic to shutdown store
 		}
 	}
 }

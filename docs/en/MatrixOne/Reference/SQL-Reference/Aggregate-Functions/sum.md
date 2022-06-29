@@ -6,7 +6,8 @@ Aggregate function.
 
 The SUM() function calculates the sum of a set of values.
 
-Note: NULL values are not counted.
+!!! note  "<font size=4>note</font>"
+    <font size=3>NULL values are not counted.</font>  
 
 ## **Syntax**
 
