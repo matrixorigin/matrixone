@@ -166,10 +166,11 @@ func (s *Service) handleRPCRequest(req morpc.Message,
 	if len(records.Records) > 0 {
 		recs = MustMarshal(&records)
 	}
+	// FIXME: set timeout value
 	return cs.Write(&RPCResponse{
 		Response: resp,
 		payload:  recs,
-	})
+	}, morpc.SendOptions{})
 }
 
 func (s *Service) handle(req pb.Request,
