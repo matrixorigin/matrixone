@@ -5,13 +5,11 @@ SELECT RPAD('hi',5,'?');
 SELECT RPAD('hi',1,'?');
 
 #SELECT,嵌套
--- @bvt:issue#3255
 CREATE TABLE t1 (title varchar(255));
 INSERT INTO t1 VALUES ('Congress reconvenes in September to debate welfare and adult education');
 INSERT INTO t1 VALUES ('House passes the CAREERS bill');
 SELECT RPAD("",(55 - LENGTH(title)),".") from t1;
 DROP TABLE t1;
--- @bvt:issue
 
 #EXTREME VALUE
 -- @bvt:issue#3408
@@ -109,10 +107,8 @@ SELECT ((rpad(1.0,2048,1)) = ('4(') ^ (0.1));
 
 
 #中文
--- @bvt:issue#3157
 SELECT RPAD("你好", 10, "再见");
 SELECT LPAD("你好", 10, "再见");
--- @bvt:issue
 
 #WHERE
 drop table if exists t1;
