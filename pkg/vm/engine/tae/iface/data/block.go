@@ -55,8 +55,8 @@ type Block interface {
 	GetID() *common.ID
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
-	GetColumnDataByName(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error)
-	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error)
+	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
+	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() any
 	GetBufMgr() base.INodeManager
 

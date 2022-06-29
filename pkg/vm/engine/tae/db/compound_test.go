@@ -41,7 +41,7 @@ func TestCompoundPK1(t *testing.T) {
 	rows := 0
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(2, nil, nil)
+		view, err := blk.GetColumnDataById(2, nil)
 		defer view.Close()
 		assert.NoError(t, err)
 		rows += view.Length()
@@ -57,7 +57,7 @@ func TestCompoundPK1(t *testing.T) {
 	it = rel.MakeBlockIt()
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(2, nil, nil)
+		view, err := blk.GetColumnDataById(2, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		rows += view.Length()
@@ -87,7 +87,7 @@ func TestCompoundPK1(t *testing.T) {
 	rows = 0
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(0, nil, nil)
+		view, err := blk.GetColumnDataById(0, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		view.ApplyDeletes()
@@ -110,7 +110,7 @@ func TestCompoundPK1(t *testing.T) {
 	rows = 0
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(0, nil, nil)
+		view, err := blk.GetColumnDataById(0, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		view.ApplyDeletes()
@@ -132,7 +132,7 @@ func TestCompoundPK1(t *testing.T) {
 	rows = 0
 	for it.Valid() {
 		blk := it.GetBlock()
-		view, err := blk.GetColumnDataById(0, nil, nil)
+		view, err := blk.GetColumnDataById(0, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		view.ApplyDeletes()

@@ -411,7 +411,7 @@ func (seg *localSegment) BatchDedup(key containers.Vector) error {
 func (seg *localSegment) GetColumnDataById(
 	blk *catalog.BlockEntry,
 	colIdx int,
-	compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
+	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(seg.table.store.txn.GetStartTS(), colIdx)
 	npos := int(blk.ID)
 	n := seg.nodes[npos]
@@ -419,7 +419,7 @@ func (seg *localSegment) GetColumnDataById(
 	if err != nil {
 		return
 	}
-	err = n.FillColumnView(view, decompressed)
+	err = n.FillColumnView(view, buffer)
 	h.Close()
 	if err != nil {
 		return

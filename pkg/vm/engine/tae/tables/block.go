@@ -499,17 +499,17 @@ func (blk *dataBlock) GetPKColumnDataOptimized(ts uint64) (view *model.ColumnVie
 func (blk *dataBlock) GetColumnDataByName(
 	txn txnif.AsyncTxn,
 	attr string,
-	compressed, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(txn, colIdx, compressed, buffer)
+	return blk.GetColumnDataById(txn, colIdx, buffer)
 }
 
 func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
-	compressed, buffer *bytes.Buffer) (view *model.ColumnView, err error) {
+	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	if blk.meta.IsAppendable() {
-		return blk.getVectorCopy(txn.GetStartTS(), colIdx, compressed, buffer, false)
+		return blk.getVectorCopy(txn.GetStartTS(), colIdx, buffer, false)
 	}
 
 	view = model.NewColumnView(txn.GetStartTS(), colIdx)
@@ -535,7 +535,7 @@ func (blk *dataBlock) GetColumnDataById(
 func (blk *dataBlock) getVectorCopy(
 	ts uint64,
 	colIdx int,
-	compressed, buffer *bytes.Buffer,
+	buffer *bytes.Buffer,
 	raw bool) (view *model.ColumnView, err error) {
 	err = blk.node.DoWithPin(func() (err error) {
 		maxRow := uint32(0)
@@ -693,7 +693,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 	}
 	view := model.NewColumnView(txn.GetStartTS(), int(col))
 	if blk.meta.IsAppendable() {
-		view, _ = blk.getVectorCopy(txn.GetStartTS(), int(col), nil, nil, true)
+		view, _ = blk.getVectorCopy(txn.GetStartTS(), int(col), nil, true)
 	} else {
 		vec, _ := blk.loadColumnData(int(col), nil)
 		view.SetData(vec)
