@@ -15,18 +15,17 @@
 package jobs
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type flushBlkTask struct {
 	*tasks.BaseTask
-	data    *batch.Batch
-	sortCol *vector.Vector
+	data    *containers.Batch
+	sortCol containers.Vector
 	meta    *catalog.BlockEntry
 	file    file.Block
 	ts      uint64
@@ -37,8 +36,8 @@ func NewFlushBlkTask(
 	bf file.Block,
 	ts uint64,
 	meta *catalog.BlockEntry,
-	data *batch.Batch,
-	sortCol *vector.Vector) *flushBlkTask {
+	data *containers.Batch,
+	sortCol containers.Vector) *flushBlkTask {
 	task := &flushBlkTask{
 		ts:      ts,
 		data:    data,

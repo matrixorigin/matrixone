@@ -125,6 +125,15 @@ func (vec *StrVector[T]) Get(i int) T {
 	return any(vec.data.Slice()[s : s+l]).(T)
 }
 
+func (vec *StrVector[T]) GetCopy(i int) T {
+	s := vec.offsets.Get(i)
+	l := vec.lengths.Get(i)
+	src := vec.data.Slice()[s : s+l]
+	dst := make([]byte, l)
+	copy(dst, src)
+	return any(dst).(T)
+}
+
 func (vec *StrVector[T]) Update(i int, v T) {
 	val := any(v).([]byte)
 	nlen := len(val)
@@ -174,10 +183,14 @@ func (vec *StrVector[T]) AppendMany(vals ...T) {
 	}
 }
 
-func (vec *StrVector[T]) Clone(offset, length int) stl.Vector[T] {
+func (vec *StrVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator) stl.Vector[T] {
 	opts := &Options{
-		Capacity:  length,
-		Allocator: vec.GetAllocator(),
+		Capacity: length,
+	}
+	if len(allocator) == 0 {
+		opts.Allocator = vec.GetAllocator()
+	} else {
+		opts.Allocator = allocator[0]
 	}
 	cloned := NewStrVector[T](opts)
 	if offset == 0 {
@@ -223,6 +236,25 @@ func (vec *StrVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 	vec.lengths.ReadBytes(bs1, share)
 	bs1.Data = bs.OffsetBuf()
 	vec.offsets.ReadBytes(bs1, share)
+}
+
+func (vec *StrVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {
+	var nr int64
+	if nr, err = vec.data.InitFromSharedBuf(buf); err != nil {
+		return
+	}
+	n += nr
+	buf = buf[nr:]
+	if nr, err = vec.offsets.InitFromSharedBuf(buf); err != nil {
+		return
+	}
+	n += nr
+	buf = buf[nr:]
+	if nr, err = vec.lengths.InitFromSharedBuf(buf); err != nil {
+		return
+	}
+	n += nr
+	return
 }
 
 func (vec *StrVector[T]) ReadFrom(r io.Reader) (n int64, err error) {

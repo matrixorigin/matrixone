@@ -27,7 +27,7 @@ type Vector[T any] interface {
 	Close()
 
 	// Clone deep copy data from offset to offset+length and create a new vector
-	Clone(offset, length int) Vector[T]
+	Clone(offset, length int, allocator ...MemAllocator) Vector[T]
 
 	// ReadBytes reads a serialized buffer and initializes the vector using the buf
 	// as its initial contents.
@@ -53,8 +53,11 @@ type Vector[T any] interface {
 	Slice() []T
 	SliceWindow(offset, length int) []T
 
-	// Get returns the specified element value at i
+	// Get returns the specified element at i
+	// Note: If T is []byte, make sure not to use v after the vector is closed
 	Get(i int) (v T)
+	// GetCopy returns the copy of the specified element at i
+	GetCopy(i int) (v T)
 	// Append appends a element into the vector
 	// If the prediction length is large than Capacity, it will cause the underlying memory reallocation.
 	// Reallocation:
@@ -91,4 +94,5 @@ type Vector[T any] interface {
 	// ReadFrom reads data from r until EOF and appends it to the buffer, growing
 	// the buffer as needed.
 	ReadFrom(io.Reader) (int64, error)
+	InitFromSharedBuf(buf []byte) (int64, error)
 }

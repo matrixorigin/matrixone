@@ -43,8 +43,8 @@ func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 		r.compressed = make([]*bytes.Buffer, len(attrs))
 		r.decompressed = make([]*bytes.Buffer, len(attrs))
 		for i := 0; i < len(attrs); i++ {
-			//cds[i] = bytes.NewBuffer(make([]byte, 1<<20))
-			//dds[i] = bytes.NewBuffer(make([]byte, 1<<20))
+			//r.compressed[i] = bytes.NewBuffer(make([]byte, 1<<20))
+			//r.decompressed[i] = bytes.NewBuffer(make([]byte, 1<<20))
 			r.compressed[i] = new(bytes.Buffer)
 			r.decompressed[i] = new(bytes.Buffer)
 		}

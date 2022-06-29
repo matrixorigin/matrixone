@@ -2,10 +2,10 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
@@ -91,7 +91,7 @@ func (reader *ZMReader) Destroy() (err error) {
 	return nil
 }
 
-func (reader *ZMReader) ContainsAny(keys *vector.Vector) (visibility *roaring.Bitmap, ok bool) {
+func (reader *ZMReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
 	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
 	return reader.node.zonemap.ContainsAny(keys)
@@ -151,8 +151,8 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	return meta, nil
 }
 
-func (writer *ZMWriter) AddValues(values *vector.Vector) (err error) {
-	typ := values.Typ
+func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
+	typ := values.GetType()
 	if writer.zonemap == nil {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
@@ -163,7 +163,7 @@ func (writer *ZMWriter) AddValues(values *vector.Vector) (err error) {
 	}
 	ctx := new(index.KeysCtx)
 	ctx.Keys = values
-	ctx.Count = uint32(vector.Length(values))
+	ctx.Count = values.Length()
 	err = writer.zonemap.BatchUpdate(ctx)
 	return
 }
