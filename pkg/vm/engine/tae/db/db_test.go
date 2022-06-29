@@ -379,7 +379,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.True(t, view.DeleteMask.Contains(1))
 		assert.True(t, view.DeleteMask.Contains(2))
 		assert.Equal(t, bat.Vecs[2].Length(), view.Length())
-		v = view.GetDataView().Get(3)
+		v = view.GetData().Get(3)
 		assert.Equal(t, int32(999), v)
 
 		assert.Nil(t, txn.Commit())
@@ -607,7 +607,7 @@ func TestCompactBlock2(t *testing.T) {
 		defer view.Close()
 		assert.Nil(t, err)
 		assert.Nil(t, view.DeleteMask)
-		v := view.GetDataView().Get(1)
+		v := view.GetData().Get(1)
 		// t.Logf("view: %v", view.GetData().String())
 		// t.Logf("raw : %v", bat.Vecs[3].String())
 		assert.Equal(t, int64(999), v)
@@ -653,7 +653,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(4))
 		assert.True(t, view.DeleteMask.Contains(5))
-		v := view.GetDataView().Get(3)
+		v := view.GetData().Get(3)
 		assert.Equal(t, int64(1999), v)
 		assert.Equal(t, bat.Vecs[0].Length()-2, view.Length())
 
