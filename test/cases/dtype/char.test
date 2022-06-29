@@ -14,16 +14,12 @@ SELECT 38.8, CAST(38.8 AS CHAR);
 SELECT '9223372036854775807' = 9223372036854775807;
 -- @bvt:issue
 SELECT '9223372036854775807' = "9223372036854775807";
--- @bvt:issue#3357
 SELECT CAST('9223372036854775807' AS UNSIGNED) = 9223372036854775806;
--- @bvt:issue
 SELECT CAST("2017-08-29" AS DATE);
 SELECT CAST(150 AS CHAR);
 SELECT CAST(5-10 AS CHAR);
--- @bvt:issue#3372
 SELECT CONCAT_WS('My', 'S', 'QL');
 SELECT CONCAT_WS('My', NULL, 'QL');
--- @bvt:issue
 -- @bvt:issue#3247
 SELECT CONCAT_WS(14,'.3');
 -- @bvt:issue
@@ -59,11 +55,9 @@ INSERT INTO Demochar VALUES('Rapier', 'Abigail','F',	'Human Resources',38);
 INSERT INTO Demochar VALUES('Martin', 'Kelly','F','Information Services',54);
 INSERT INTO Demochar VALUES('Poland', 'Carole','F','Production Control',29);
 SELECT * FROM Demochar;
--- @bvt:issue#3372
 select concat_ws(LastName,FirstName) from Demochar where Age > 40 order by 1 asc;
 select concat_ws(LastName,FirstName) as fullname from Demochar where Age > 40 order by fullname desc;
 select concat_ws(LastName,FirstName),Gender,Age from Demochar where Gender='F' order by Age asc;
--- @bvt:issue
 select cast(Age as char) as cAge from Demochar where cast(Age as char) like '2_';
 -- @bvt:issue#3252
 select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge;

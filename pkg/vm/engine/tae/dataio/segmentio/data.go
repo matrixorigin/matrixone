@@ -15,8 +15,9 @@
 package segmentio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const UPGRADE_FILE_NUM = 2
@@ -87,6 +88,7 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 	df.stat.originSize = meta.GetOriginSize()
 	df.stat.size = meta.GetFileSize()
 	df.upgradeFile()
+	n = len(buf)
 	return
 }
 

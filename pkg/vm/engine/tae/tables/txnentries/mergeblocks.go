@@ -163,18 +163,19 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			continue
 		}
 		deletes := view.DeleteMask
-		for colIdx, mask := range view.UpdateMasks {
-			vals := view.UpdateVals[colIdx]
-			view.UpdateMasks[colIdx], view.UpdateVals[colIdx], view.DeleteMask = compute.ShuffleByDeletes(mask, vals, deletes)
-			for row, v := range view.UpdateVals[colIdx] {
+		for colIdx, column := range view.Columns {
+			column.UpdateMask, column.UpdateVals, view.DeleteMask = compute.ShuffleByDeletes(
+				column.UpdateMask,
+				column.UpdateVals,
+				deletes)
+			for row, v := range column.UpdateVals {
 				toPos, toRow := entry.resolveAddr(fromPos, row)
-
-				if err = blks[toPos].Update(toRow, colIdx, v); err != nil {
+				if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
 					return
 				}
 			}
 		}
-		if len(view.UpdateMasks) == 0 {
+		if len(view.Columns) == 0 {
 			_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask)
 		}
 		if view.DeleteMask != nil {

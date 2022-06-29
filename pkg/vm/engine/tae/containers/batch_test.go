@@ -4,23 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
-
-func checkEqualBatch(t *testing.T, b1, b2 *Batch) {
-	assert.Equal(t, b1.Length(), b2.Length())
-	assert.Equal(t, b1.DeleteCnt(), b2.DeleteCnt())
-	assert.Equal(t, b1.DeleteCnt(), b2.DeleteCnt())
-	if b1.HasDelete() {
-		assert.True(t, b1.Deletes.Equals(b2.Deletes))
-	}
-	for i := range b1.Vecs {
-		assert.Equal(t, b1.Attrs[i], b2.Attrs[i])
-		checkEqualVector(t, b1.Vecs[i], b2.Vecs[i])
-	}
-}
 
 func TestBatch1(t *testing.T) {
 	vecTypes := types.MockColTypes(4)[2:]
@@ -49,7 +35,7 @@ func TestBatch1(t *testing.T) {
 	bat2 := NewEmptyBatch()
 	_, err = bat2.ReadFrom(r)
 	assert.NoError(t, err)
-	checkEqualBatch(t, bat, bat2)
+	assert.True(t, bat.Equals(bat2))
 
 	bat.Close()
 }
@@ -58,10 +44,31 @@ func TestBatch2(t *testing.T) {
 	vecTypes := types.MockColTypes(17)
 	bat := MockBatch(vecTypes, 10, 3, nil)
 	assert.Equal(t, 10, bat.Length())
-	for _, vec := range bat.Vecs {
-		t.Log(vec.String())
-	}
-	t.Log(stl.DefaultAllocator.String())
+
+	cloned := bat.CloneWindow(0, 5)
+	assert.Equal(t, 5, cloned.Length())
+	t.Log(cloned.Allocated())
+	cloned.Close()
+	cloned = bat.CloneWindow(0, bat.Length())
+	assert.True(t, bat.Equals(cloned))
+	cloned.Close()
 	bat.Close()
-	t.Log(stl.DefaultAllocator.String())
+}
+
+func TestBatch3(t *testing.T) {
+	vecTypes := types.MockColTypes(17)
+	bat := MockBatch(vecTypes, 101, 3, nil)
+	defer bat.Close()
+	bats := bat.Split(5)
+	assert.Equal(t, 5, len(bats))
+	row := 0
+	for _, b := range bats {
+		row += b.Length()
+	}
+	assert.Equal(t, bat.Length(), row)
+
+	bat2 := MockBatch(vecTypes, 20, 3, nil)
+	bats = bat2.Split(2)
+	t.Log(bats[0].Vecs[3].Length())
+	t.Log(bats[1].Vecs[3].Length())
 }
