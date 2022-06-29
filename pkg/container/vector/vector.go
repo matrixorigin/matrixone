@@ -63,7 +63,7 @@ func GetFixedVectorValues[T any](v *Vector, sz int) []T {
 }
 
 func (v *Vector) FillDefaultValue() {
-	if !nulls.Any(v.Nsp) {
+	if !nulls.Any(v.Nsp) || len(v.Data) == 0 {
 		return
 	}
 	switch v.Typ.Oid {
