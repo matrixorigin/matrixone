@@ -1316,12 +1316,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 		node.Children[1] = childId
 
 	case plan.Node_PROJECT:
-		child := builder.qry.Nodes[node.Children[0]]
-		if child.NodeType == plan.Node_VALUE_SCAN && child.RowsetData == nil {
-			cantPushdown = filters
-			break
-		}
-
 		projectTag := node.BindingTags[0]
 
 		for _, filter := range filters {
