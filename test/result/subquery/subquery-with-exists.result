@@ -520,7 +520,6 @@ INSERT INTO t1 VALUES (1, 10), (3, 30), (2, 20);
 CREATE TABLE t2(pk INT PRIMARY KEY, a INT, b INT);
 INSERT INTO t2 VALUES (2, 20, 700), (1, 10, 200), (4, 10, 100);
 SELECT * FROM t1  WHERE EXISTS (SELECT DISTINCT a FROM t2 WHERE t1.a < t2.a ORDER BY b);
-pk	a
-1	10
+for SELECT DISTINCT, ORDER BY expressions must appear in select list
 drop table if exists t1;
 drop table if exists t2;
