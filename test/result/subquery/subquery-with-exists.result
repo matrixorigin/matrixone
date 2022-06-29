@@ -524,3 +524,4 @@ pk	a
 1	10
 drop table if exists t1;
 drop table if exists t2;
+1122
