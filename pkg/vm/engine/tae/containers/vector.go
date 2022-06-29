@@ -309,7 +309,9 @@ func (vec *vector[T]) ReadFromFile(f common.IVFile, buffer *bytes.Buffer) (err e
 			buf = buffer.Bytes()[:osize]
 		}
 		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
-			vec.GetAllocator().Free(n)
+			if n != nil {
+				vec.GetAllocator().Free(n)
+			}
 			return
 		}
 	}
