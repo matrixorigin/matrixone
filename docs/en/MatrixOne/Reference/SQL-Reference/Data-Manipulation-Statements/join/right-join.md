@@ -4,7 +4,8 @@
 
 The ``RIGHT JOIN`` keyword returns all records from the right table (table2), and the matching records from the left table (table1). The result is ``NULL`` records from the left side, if there is no match.
 
-Note: In some databases ``RIGHT JOIN`` is called ``RIGHT OUTER JOIN``.
+!!! note  "<font size=4>note</font>"
+    <font size=3>In some databases ``RIGHT JOIN`` is called ``RIGHT OUTER JOIN``.</font>
 
 ## **Syntax**
 
