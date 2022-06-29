@@ -2169,7 +2169,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64, types.T_decimal64},
-				ReturnTyp: types.T_decimal64,
+				ReturnTyp: types.T_decimal128,
 				Fn:        operator.MultDecimal64,
 			},
 			{
@@ -2208,7 +2208,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal64, types.T_decimal64},
-				ReturnTyp: types.T_decimal64,
+				ReturnTyp: types.T_decimal128,
 				Fn:        operator.DivDecimal64,
 			},
 			{
@@ -2216,7 +2216,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    BINARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_decimal128, types.T_decimal128},
-				ReturnTyp: types.T_decimal64,
+				ReturnTyp: types.T_decimal128,
 				Fn:        operator.DivDecimal128,
 			},
 		},

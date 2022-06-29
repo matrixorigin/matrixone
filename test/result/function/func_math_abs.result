@@ -32,13 +32,9 @@ DROP TABLE t;
 create table t1(a int, b int, c int);
 insert into t1 values(100,1,2),(200,1,1),(300,2,1),(400,2,2);
 select distinct b from t1 order by abs(b);
-b
-1
-2
+for SELECT DISTINCT, ORDER BY expressions must appear in select list
 select distinct b as z from t1 order by abs(z);
-z
-1
-2
+for SELECT DISTINCT, ORDER BY expressions must appear in select list
 select distinct abs(b) as z from t1 order by z;
 z
 1

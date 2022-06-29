@@ -121,6 +121,7 @@ select * from (select *,substring(b,1),substring(b,-1),substring(b,-2),substring
 drop table t1;
 
 #SELECT, GROUP BY
+-- @bvt:issue#3506
 CREATE TABLE t1 (a varchar(2000), b varchar(10));
 INSERT INTO t1 select space(1300),'one';
 INSERT INTO t1 select space(1300),'two';
@@ -162,7 +163,7 @@ select * from t1 where substring(b,1,1) = 'a';
 drop table t1;
 
 #HAVING & 逻辑运算
--- @bvt:issue#3413
+-- @bvt:issue#3500
 drop table if exists t1;
 create table t1(b varchar(5));
 insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');

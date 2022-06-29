@@ -34,8 +34,9 @@ To allow naming of a PRIMARY KEY constraint, and for defining a PRIMARY KEY cons
 );
 ```
 
-Note: In the example above there is only ONE PRIMARY KEY (PK_Person). However, the VALUE of the primary key is made up of TWO COLUMNS (ID + LastName).
+!!! note  "<font size=4>note</font>"
+    <font size=3>In the example above there is only ONE PRIMARY KEY (PK_Person). However, the VALUE of the primary key is made up of TWO COLUMNS (ID + LastName).</font>  
 
 ## **Constraints**
 
-`DROP PRIMARY KEY` is not supported yet. 
+`DROP PRIMARY KEY` is not supported yet.
