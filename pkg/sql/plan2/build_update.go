@@ -150,11 +150,9 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	idx := 1
 	for _, colName := range updateAttrs {
 		origTyp := getColTyp(colName)
-		if !isSameColumnType(lastNode.ProjectList[idx].Typ, origTyp) {
-			lastNode.ProjectList[idx], err = appendCastBeforeExpr(lastNode.ProjectList[idx], origTyp)
-			if err != nil {
-				return nil, err
-			}
+		lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], origTyp)
+		if err != nil {
+			return nil, err
 		}
 		idx++
 	}

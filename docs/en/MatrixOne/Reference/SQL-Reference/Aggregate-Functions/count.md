@@ -6,7 +6,8 @@ Aggregate function.
 
 The COUNT() function calculates the number of records returned by a select query.
 
-Note: NULL values are not counted.
+!!! note  "<font size=4>note</font>"
+    <font size=3>NULL values are not counted.</font>  
 
 ## **Syntax**
 
