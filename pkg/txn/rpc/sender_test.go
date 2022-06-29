@@ -15,7 +15,6 @@
 package rpc
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -24,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -45,9 +43,9 @@ func TestSendWithSingleRequest(t *testing.T) {
 
 	s.RegisterRequestHandler(func(request morpc.Message, sequence uint64, cs morpc.ClientSession) error {
 		return cs.Write(&txn.TxnResponse{
-			RequestID: request.ID(),
+			RequestID: request.GetID(),
 			Method:    txn.TxnMethod_Write,
-		})
+		}, morpc.SendOptions{})
 	})
 
 	sd, err := NewSender(nil)
@@ -84,9 +82,9 @@ func TestSendWithMultiDN(t *testing.T) {
 		s.RegisterRequestHandler(func(m morpc.Message, sequence uint64, cs morpc.ClientSession) error {
 			request := m.(*txn.TxnRequest)
 			return cs.Write(&txn.TxnResponse{
-				RequestID:    request.ID(),
+				RequestID:    request.GetID(),
 				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetDN().Address, sequence))},
-			})
+			}, morpc.SendOptions{})
 		})
 	}
 
@@ -129,7 +127,7 @@ func TestSendWithMultiDN(t *testing.T) {
 }
 
 func TestNewExecutor(t *testing.T) {
-	ts := newTestStream(nil)
+	ts := newTestStream(1, nil)
 	defer func() {
 		assert.NoError(t, ts.Close())
 	}()
@@ -139,7 +137,7 @@ func TestNewExecutor(t *testing.T) {
 }
 
 func TestNewExectorWithClosedStream(t *testing.T) {
-	ts := newTestStream(nil)
+	ts := newTestStream(1, nil)
 	assert.NoError(t, ts.Close())
 	_, err := newExecutor(context.Background(), nil, ts)
 	assert.Error(t, err)
@@ -147,7 +145,7 @@ func TestNewExectorWithClosedStream(t *testing.T) {
 
 func TestExecute(t *testing.T) {
 	var requests []morpc.Message
-	ts := newTestStream(func(m morpc.Message) (morpc.Message, error) {
+	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
 		requests = append(requests, m)
 		return m, nil
 	})
@@ -165,7 +163,7 @@ func TestExecute(t *testing.T) {
 
 	assert.Equal(t, n, len(requests))
 	for i := 0; i < n; i++ {
-		assert.Equal(t, ts.id, requests[i].ID())
+		assert.Equal(t, ts.id, requests[i].GetID())
 	}
 
 	assert.Equal(t, n, len(exec.indexes))
@@ -175,7 +173,7 @@ func TestExecute(t *testing.T) {
 }
 
 func TestExecuteWithClosedStream(t *testing.T) {
-	ts := newTestStream(nil)
+	ts := newTestStream(1, nil)
 
 	exec, err := newExecutor(context.Background(), nil, ts)
 	assert.NoError(t, err)
@@ -185,9 +183,9 @@ func TestExecuteWithClosedStream(t *testing.T) {
 }
 
 func TestWaitCompleted(t *testing.T) {
-	ts := newTestStream(func(m morpc.Message) (morpc.Message, error) {
+	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
 		req := m.(*txn.TxnRequest)
-		return &txn.TxnResponse{RequestID: m.ID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
+		return &txn.TxnResponse{RequestID: m.GetID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
 	})
 	defer func() {
 		assert.NoError(t, ts.Close())
@@ -208,9 +206,9 @@ func TestWaitCompleted(t *testing.T) {
 }
 
 func TestWaitCompletedWithContextDone(t *testing.T) {
-	ts := newTestStream(func(m morpc.Message) (morpc.Message, error) {
+	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
 		req := m.(*txn.TxnRequest)
-		return &txn.TxnResponse{RequestID: m.ID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
+		return &txn.TxnResponse{RequestID: m.GetID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
 	})
 	defer func() {
 		assert.NoError(t, ts.Close())
@@ -227,9 +225,9 @@ func TestWaitCompletedWithContextDone(t *testing.T) {
 }
 
 func TestWaitCompletedWithStreamClosed(t *testing.T) {
-	ts := newTestStream(func(m morpc.Message) (morpc.Message, error) {
+	ts := newTestStream(1, func(m morpc.Message) (morpc.Message, error) {
 		req := m.(*txn.TxnRequest)
-		return &txn.TxnResponse{RequestID: m.ID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
+		return &txn.TxnResponse{RequestID: m.GetID(), CNOpResponse: &txn.CNOpResponse{Payload: req.CNRequest.Payload}}, nil
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -244,7 +242,7 @@ func TestWaitCompletedWithStreamClosed(t *testing.T) {
 }
 
 type testStream struct {
-	id     []byte
+	id     uint64
 	c      chan morpc.Message
 	handle func(morpc.Message) (morpc.Message, error)
 
@@ -254,17 +252,16 @@ type testStream struct {
 	}
 }
 
-func newTestStream(handle func(morpc.Message) (morpc.Message, error)) *testStream {
-	id := uuid.New()
+func newTestStream(id uint64, handle func(morpc.Message) (morpc.Message, error)) *testStream {
 	return &testStream{
-		id:     id[:],
+		id:     id,
 		c:      make(chan morpc.Message, 1024),
 		handle: handle,
 	}
 }
 
 func (s *testStream) Send(request morpc.Message, opts morpc.SendOptions) error {
-	if !bytes.Equal(s.id, request.ID()) {
+	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
 
@@ -304,7 +301,7 @@ func (s *testStream) Close() error {
 	return nil
 }
 
-func (s *testStream) ID() []byte {
+func (s *testStream) ID() uint64 {
 	return s.id
 }
 

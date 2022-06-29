@@ -38,7 +38,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
+			view, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			fp := blk.Fingerprint()
@@ -61,7 +61,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	{
 		blk := getOneBlock(rel)
-		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
+		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
@@ -103,7 +103,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
+			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -144,7 +144,7 @@ func TestHiddenWithPK1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
+			view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			offsets := make([]uint32, 0)
@@ -189,7 +189,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
 	blk := getOneBlock(rel)
-	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil, nil)
+	view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
 	defer view.Close()
 	assert.NoError(t, err)
 	_ = view.GetData().Foreach(func(v any, _ int) (err error) {
@@ -216,7 +216,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 	blk = getOneBlock(rel)
 
 	assert.Equal(t, bats[0].Length()-1, int(rel.Rows()))
-	view, err = blk.GetColumnDataById(3, nil, nil)
+	view, err = blk.GetColumnDataById(3, nil)
 	assert.NoError(t, err)
 	defer view.Close()
 	assert.Equal(t, bats[0].Length()-1, view.Length())
@@ -247,7 +247,7 @@ func TestHidden2(t *testing.T) {
 		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
+			view, err := blk.GetColumnDataById(def.Idx, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length(), view.Length())
@@ -268,7 +268,7 @@ func TestHidden2(t *testing.T) {
 			return
 		}, nil)
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
+			view, err := blk.GetColumnDataById(def.Idx, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			view.ApplyDeletes()
@@ -283,7 +283,7 @@ func TestHidden2(t *testing.T) {
 		blk := getOneBlock(rel)
 		var hidden *model.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(def.Idx, nil, nil)
+			view, err := blk.GetColumnDataById(def.Idx, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
@@ -380,8 +380,7 @@ func TestHidden2(t *testing.T) {
 		rows := 0
 		for it.Valid() {
 			blk := it.GetBlock()
-			// hidden, err := blk.GetColumnDataById(0, nil, nil)
-			hidden, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil, nil)
+			hidden, err := blk.GetColumnDataById(schema.HiddenKey.Idx, nil)
 			assert.NoError(t, err)
 			defer hidden.Close()
 			hidden.ApplyDeletes()

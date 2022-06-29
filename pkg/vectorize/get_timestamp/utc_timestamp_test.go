@@ -11,18 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package timestamp
+package get_timestamp
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"testing"
 
-var (
-	GetUTCTimestamp func() types.Datetime
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func init() {
-	GetUTCTimestamp = getUTCTimestamp
-}
-
-func getUTCTimestamp() types.Datetime {
-	return types.Now().UTC()
+func TestUTCTimeStamp(t *testing.T) {
+	timestampStr := GetUTCTimestamp().String()
+	if _, err := types.ParseDatetime(timestampStr, 6); err != nil {
+		t.Errorf("GetUTCTimestamp() error = %v\n", err)
+	}
 }

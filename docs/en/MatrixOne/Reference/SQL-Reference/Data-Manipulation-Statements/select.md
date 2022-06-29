@@ -30,23 +30,23 @@ Retrieves data from a table.
 * SELECT ... INTO OUTFILE writes the selected rows to a file. Column and line terminators can be specified to produce a specific output format.
 
 ``` sql
-> SELECT <expr_list> 
-  INTO OUTFILE 'file_name' 
+> SELECT <expr_list>
+  INTO OUTFILE 'file_name'
     [{FIELDS}
-        [TERMINATED BY 'char'] 
+        [TERMINATED BY 'char']
         [ENCLOSED BY 'char']
     ]
     [LINES
         [TERMINATED BY 'string']
     ]
     [HEADER 'bool']
-    [MAX_FILE_SIZE long] 
+    [MAX_FILE_SIZE long]
     [FORCE_QUOTE {'col1','col2',...}]
 ```
 
 #### Explanations
 
-* `<expr_list>` is the query result you want to export. 
+* `<expr_list>` is the query result you want to export.
 * `'file_name'` is the file name of the absolute path on the server. The query will fail if a file with the same filename already exists. And the front folder written in the absolute path must be created in advance, otherwise an error will occur.
 * `TERMINATED BY` is an optional argument as the field separator. The default value is comma `,`.
 * `ENCLOSED BY` is an optional argument as the inclusion character of column fields. The default value is double quotations `"`.
@@ -57,6 +57,10 @@ Retrieves data from a table.
   When this value is not set, one file will be exported by default.
 * `FORCE_QUOTE` is used to add double quotes for every `NOT NULL` value in the specified column.
 * `NULL` values will be exported as `\N`.
+* `HAVING` specifies conditions on groups, typically formed by the `GROUP BY` clause. The query result includes only groups satisfying the `HAVING` conditions. (If no GROUP BY is present, all rows implicitly form a single aggregate group.)
+  The `HAVING` clause, like the `WHERE` clause, specifies selection conditions. The `WHERE` clause specifies conditions on columns in the select list, but cannot refer to aggregate functions.
+  The SQL standard requires that HAVING must reference only columns in the `GROUP BY` clause or columns used in aggregate functions.
+  If the `HAVING` clause refers to a column that is ambiguous, a warning occurs.
 
 !!! info Suggestions
     If `MAX_FILE_SIZE` is not set, a large file may be exported and the operation may fail. Therefore, we recommend you to set this value case by case.
@@ -85,11 +89,30 @@ Retrieves data from a table.
 ```
 
 ```sql
-select * from t1 into outfile '/Users/tmp/test.csv' 
-FIELDS TERMINATED BY ',' 
+select * from t1 into outfile '/Users/tmp/test.csv'
+FIELDS TERMINATED BY ','
 ENCLOSED BY '"'
-LINES TERMINATED BY '\n' 
-header 'TRUE' 
-MAX_FILE_SIZE 9223372036854775807 
+LINES TERMINATED BY '\n'
+header 'TRUE'
+MAX_FILE_SIZE 9223372036854775807
 FORCE_QUOTE (a, b)
+```
+
+```sql
+> create table t1 (spID int,userID int,score smallint);
+> insert into t1 values (1,1,1);
+> insert into t1 values (2,2,2);
+> insert into t1 values (2,1,4);
+> insert into t1 values (3,3,3);
+> insert into t1 values (1,1,5);
+> insert into t1 values (4,6,10);
+> insert into t1 values (5,11,99);
+> select userID,count(score) from t1 group by userID having count(score)>1 order by userID;
++--------+--------------+
+| userid | count(score) |
++--------+--------------+
+|      1 |            3 |
++--------+--------------+
+> select userID,count(score) from t1 where userID>2 group by userID having count(score)>1 order by userID;
+Empty set (0.01 sec)s
 ```

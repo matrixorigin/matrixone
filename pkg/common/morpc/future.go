@@ -15,7 +15,6 @@
 package morpc
 
 import (
-	"bytes"
 	"context"
 	"runtime"
 	"sync"
@@ -36,7 +35,7 @@ func newFutureWithChan(c chan Message) *Future {
 
 // Future is used to obtain response data synchronously.
 type Future struct {
-	id          []byte
+	id          uint64
 	c           chan Message
 	releaseFunc func(*Future)
 	stream      bool
@@ -60,7 +59,7 @@ func (f *Future) init(ctx context.Context, request Message, opts SendOptions, st
 		}
 	}
 
-	f.id = request.ID()
+	f.id = request.GetID()
 	f.ctx = ctx
 	f.request = request
 	f.opts = opts
@@ -103,7 +102,7 @@ func (f *Future) done(response Message) {
 	defer f.mu.Unlock()
 
 	if !f.mu.closed && !f.timeout() {
-		if !bytes.Equal(response.ID(), f.id) {
+		if response.GetID() != f.id {
 			return
 		}
 
@@ -131,7 +130,7 @@ func (f *Future) unRef() {
 
 func (f *Future) reset() {
 	f.request = nil
-	f.id = nil
+	f.id = 0
 	f.ctx = nil
 	f.opts = SendOptions{}
 	f.stream = false
