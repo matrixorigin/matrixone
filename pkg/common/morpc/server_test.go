@@ -34,7 +34,7 @@ func TestHandleServer(t *testing.T) {
 		}()
 
 		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
-			return cs.Write(request)
+			return cs.Write(request, SendOptions{})
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -59,7 +59,7 @@ func TestHandleServerWithPayloadMessage(t *testing.T) {
 		}()
 
 		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
-			return cs.Write(request)
+			return cs.Write(request, SendOptions{})
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -85,7 +85,7 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		rs.RegisterRequestHandler(func(request Message, sequence uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
 			wc <- struct{}{}
-			return cs.Write(request)
+			return cs.Write(request, SendOptions{})
 		})
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -99,9 +99,9 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		resp, err := f.Get()
 		assert.Error(t, ctx.Err(), err)
 		assert.Nil(t, resp)
-	}, WithServerWriteFilter(func(m []Message) []Message {
+	}, WithServerWriteFilter(func(m Message) bool {
 		<-wc
-		return m
+		return true
 	}))
 }
 
@@ -119,7 +119,7 @@ func TestStreamServer(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for i := 0; i < n; i++ {
-					assert.NoError(t, cs.Write(request))
+					assert.NoError(t, cs.Write(request, SendOptions{}))
 				}
 			}()
 			return nil

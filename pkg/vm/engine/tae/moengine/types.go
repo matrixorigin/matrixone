@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -57,9 +58,8 @@ type txnBlock struct {
 }
 
 type txnReader struct {
-	handle       handle.Relation
-	it           handle.BlockIt
-	compressed   []*bytes.Buffer
-	decompressed []*bytes.Buffer
-	zs           []int64
+	handle handle.Relation
+	it     handle.BlockIt
+	buffer []*bytes.Buffer
+	zs     []int64
 }

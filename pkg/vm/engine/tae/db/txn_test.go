@@ -241,15 +241,13 @@ func (c *APP1Client) CheckBound() {
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeBlockIt()
-	var comp bytes.Buffer
-	var decomp bytes.Buffer
+	var buffer bytes.Buffer
 	var view *model.ColumnView
 	found := false
 	for blockIt.Valid() {
-		comp.Reset()
-		decomp.Reset()
+		buffer.Reset()
 		blk := blockIt.GetBlock()
-		view, err = blk.GetColumnDataByName(repertory.ColDefs[1].Name, &comp, &decomp)
+		view, err = blk.GetColumnDataByName(repertory.ColDefs[1].Name, &buffer)
 		if err != nil {
 			return
 		}
@@ -568,9 +566,8 @@ func TestWarehouse(t *testing.T) {
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
-		var comp bytes.Buffer
-		var decomp bytes.Buffer
-		view, _ := blk.GetColumnDataById(1, &comp, &decomp)
+		var buffer bytes.Buffer
+		view, _ := blk.GetColumnDataById(1, &buffer)
 		t.Log(view.GetData().String())
 		defer view.Close()
 		checkAllColRowsByScan(t, rel, 20, false)
@@ -708,7 +705,7 @@ func TestTxn9(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(2, nil, nil)
+			view, err := blk.GetColumnDataById(2, nil)
 			assert.NoError(t, err)
 			defer view.Close()
 			t.Log(view.GetData().String())
