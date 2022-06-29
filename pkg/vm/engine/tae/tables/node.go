@@ -303,7 +303,7 @@ func (node *appendableNode) FillHiddenColumn(startRow, length uint32) (err error
 	return
 }
 
-func (node *appendableNode) ApplyAppend(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn) (from int, err error) {
+func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTxn) (from int, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)
@@ -317,22 +317,13 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, offset, length in
 			continue
 		}
 		destVec := node.data.Vecs[def.Idx]
-		if offset == 0 && length == bat.Length() {
-			node.block.Lock()
-			destVec.Extend(bat.Vecs[srcPos])
-			node.block.Unlock()
-		} else {
-			srcVec := bat.Vecs[srcPos]
-			node.block.Lock()
-			for i := offset; i < offset+length; i++ {
-				destVec.Append(srcVec.Get(i))
-			}
-			node.block.Unlock()
-		}
+		node.block.Lock()
+		destVec.Extend(bat.Vecs[srcPos])
+		node.block.Unlock()
 	}
-	if err = node.FillHiddenColumn(uint32(from), uint32(length)); err != nil {
+	if err = node.FillHiddenColumn(uint32(from), uint32(bat.Length())); err != nil {
 		return
 	}
-	node.rows += uint32(length)
+	node.rows += uint32(bat.Length())
 	return
 }

@@ -103,8 +103,6 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		prevAppender = ctx.driver
 		if anode, destOff, err = ctx.driver.ApplyAppend(
 			bat,
-			0,
-			bat.Length(),
 			seg.table.store.txn,
 			prev); err != nil {
 			return

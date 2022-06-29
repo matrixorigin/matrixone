@@ -41,7 +41,6 @@ type BlockAppender interface {
 	GetMeta() any
 	PrepareAppend(rows uint32) (n uint32, err error)
 	ApplyAppend(bat *containers.Batch,
-		offset, length int,
 		txn txnif.AsyncTxn,
 		anode txnif.AppendNode,
 	) (txnif.AppendNode, int, error)
