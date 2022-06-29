@@ -108,7 +108,10 @@ func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batc
 	return
 }
 
-func (node *appendableNode) GetColumnDataCopy(maxRow uint32, colIdx int, buffer *bytes.Buffer) (vec containers.Vector, err error) {
+func (node *appendableNode) GetColumnDataCopy(
+	maxRow uint32,
+	colIdx int,
+	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
