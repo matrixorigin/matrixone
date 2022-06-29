@@ -97,6 +97,7 @@ func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (R
 		goetty.WithAppSessionOptions(
 			goetty.WithCodec(codec, codec),
 			goetty.WithLogger(s.logger),
+			goetty.WithDisableReleaseOutBuf(), // release out buf when write loop reutrned
 		),
 	)
 	if err != nil {
@@ -187,7 +188,10 @@ func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint
 
 func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
-		defer cs.close()
+		defer func() {
+			cs.close()
+			rs.OutBuf().Release()
+		}()
 
 		responses := make([]sendMessage, 0, s.options.batchSendSize)
 		fetch := func() {
