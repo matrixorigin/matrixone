@@ -170,13 +170,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	for i, block := range task.compacted {
 		var vec containers.Vector
 		if !schema.HasSortKey() {
-			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil); err != nil {
 				return
 			}
 			view.ApplyDeletes()
 			vec = view.Orphan()
 		} else if schema.SortKey.Size() == 1 {
-			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil); err != nil {
 				return
 			}
 			view.ApplyDeletes()
@@ -184,7 +184,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		} else {
 			cols := make([]containers.Vector, schema.SortKey.Size())
 			for idx := range cols {
-				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil, nil); err != nil {
+				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil); err != nil {
 					return
 				}
 				view.ApplyDeletes()
@@ -298,7 +298,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(def.Idx, nil); err != nil {
 				return
 			}
 			defer view.Close()

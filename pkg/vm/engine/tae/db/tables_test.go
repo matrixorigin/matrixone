@@ -256,9 +256,8 @@ func TestTxn3(t *testing.T) {
 		err = blk.Update(1, colIdx, int8(11))
 		assert.NotNil(t, err)
 
-		var comp bytes.Buffer
-		var decomp bytes.Buffer
-		view, err := blk.GetColumnDataById(0, &comp, &decomp)
+		var buffer bytes.Buffer
+		view, err := blk.GetColumnDataById(0, &buffer)
 		assert.Nil(t, err)
 		defer view.Close()
 		assert.Equal(t, int(rows), view.Length())
@@ -317,9 +316,8 @@ func TestTxn3(t *testing.T) {
 		assert.Nil(t, err)
 		// chain := it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
 		// t.Log(chain.StringLocked())
-		var comp bytes.Buffer
-		var decomp bytes.Buffer
-		view, err := it2.GetBlock().GetColumnDataByName(schema.ColDefs[0].Name, &comp, &decomp)
+		var buffer bytes.Buffer
+		view, err := it2.GetBlock().GetColumnDataByName(schema.ColDefs[0].Name, &buffer)
 		assert.Nil(t, err)
 		vec := view.GetData()
 		defer view.Close()
@@ -329,7 +327,7 @@ func TestTxn3(t *testing.T) {
 		assert.Equal(t, int8(40), vec.Get(20))
 
 		assert.Nil(t, txn.Commit())
-		view, err = it2.GetBlock().GetColumnDataByName(schema.ColDefs[colIdx].Name, &comp, &decomp)
+		view, err = it2.GetBlock().GetColumnDataByName(schema.ColDefs[colIdx].Name, &buffer)
 		assert.Nil(t, err)
 		defer view.Close()
 		// chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
@@ -527,14 +525,12 @@ func TestTxn6(t *testing.T) {
 			_, err = rel.GetValue(id, row+1, uint16(3))
 			assert.NotNil(t, err)
 
-			var comp bytes.Buffer
-			var decomp bytes.Buffer
+			var buffer bytes.Buffer
 			it := rel.MakeBlockIt()
 			for it.Valid() {
-				comp.Reset()
-				decomp.Reset()
+				buffer.Reset()
 				blk := it.GetBlock()
-				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &comp, &decomp)
+				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &buffer)
 				assert.Nil(t, err)
 				defer view.Close()
 				assert.Equal(t, bats[0].Length(), view.Length())
@@ -632,13 +628,13 @@ func TestMergeBlocks1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(3, nil, nil)
+			view, _ := blk.GetColumnDataById(3, nil)
 			assert.NotNil(t, view)
 			defer view.Close()
 			if view.DeleteMask != nil {
 				t.Log(view.DeleteMask.String())
 			}
-			pkView, _ := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil, nil)
+			pkView, _ := blk.GetColumnDataById(schema.GetSingleSortKeyIdx(), nil)
 			defer pkView.Close()
 			for i := 0; i < pkView.Length(); i++ {
 				pkv := pkView.GetValue(i)

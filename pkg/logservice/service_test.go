@@ -321,9 +321,15 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	nhID2 := service2.ID()
 
 	done := false
-	for i := 0; i < 3000; i++ {
+
+	// FIXME:
+	// as per #3478, this test is flaky, increased loop count to 6000 to
+	// see whether gossip can finish syncing in 6 seconds time. also added some
+	// logging to get collect more details
+	for i := 0; i < 6000; i++ {
 		si1, ok := service1.GetShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
+			plog.Errorf("shard 1 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -336,6 +342,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok := service1.GetShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
+			plog.Errorf("shard 2 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -348,6 +355,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si1, ok = service2.GetShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
+			plog.Errorf("shard 1 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -360,6 +368,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok = service2.GetShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
+			plog.Errorf("shard 2 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -371,6 +380,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 		assert.Equal(t, cfg2.ServiceAddress, ri.ServiceAddress)
 
 		done = true
+		break
 	}
 	assert.True(t, done)
 }
