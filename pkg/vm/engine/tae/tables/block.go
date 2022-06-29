@@ -21,10 +21,8 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -121,92 +119,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		}
 	}
 	return block
-}
-
-func (blk *dataBlock) ReplayDelta() (err error) {
-	if !blk.meta.IsAppendable() {
-		return
-	}
-	an := updates.NewCommittedAppendNode(blk.ckpTs, blk.node.rows, blk.mvcc)
-	blk.mvcc.OnReplayAppendNode(an)
-	masks, vals := blk.file.LoadUpdates()
-	if masks != nil {
-		for colIdx, mask := range masks {
-			logutil.Info("[Start]",
-				common.TimestampField(blk.ckpTs),
-				common.OperationField("install-update"),
-				common.OperandNameSpace(),
-				common.AnyField("rows", blk.node.rows),
-				common.AnyField("col", colIdx),
-				common.CountField(int(mask.GetCardinality())))
-			un := updates.NewCommittedColumnUpdateNode(blk.ckpTs, blk.ckpTs, blk.meta.AsCommonID(), nil)
-			un.SetMask(mask)
-			un.SetValues(vals[colIdx])
-			if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
-				return
-			}
-		}
-	}
-	deletes, err := blk.file.LoadDeletes()
-	if err != nil || deletes == nil {
-		return
-	}
-	logutil.Info("[Start]", common.TimestampField(blk.ckpTs),
-		common.OperationField("install-del"),
-		common.OperandNameSpace(),
-		common.AnyField("rows", blk.node.rows),
-		common.CountField(int(deletes.GetCardinality())))
-	deleteNode := updates.NewMergedNode(blk.ckpTs)
-	deleteNode.SetDeletes(deletes)
-	err = blk.OnReplayDelete(deleteNode)
-	return
-}
-
-func (blk *dataBlock) ReplayIndex() (err error) {
-	if blk.meta.IsAppendable() {
-		if !blk.meta.GetSchema().HasPK() {
-			return
-		}
-		keysCtx := new(index.KeysCtx)
-		err = blk.node.DoWithPin(func() (err error) {
-			var vec containers.Vector
-			if blk.meta.GetSchema().IsSinglePK() {
-				// TODO: use mempool
-				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
-				if err != nil {
-					return
-				}
-				// TODO: apply deletes
-				keysCtx.Keys = vec
-			} else {
-				sortKeys := blk.meta.GetSchema().SortKey
-				vs := make([]containers.Vector, sortKeys.Size())
-				for i := range vs {
-					vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil)
-					if err != nil {
-						return
-					}
-					// TODO: apply deletes
-					vs[i] = vec
-					defer vs[i].Close()
-				}
-				keysCtx.Keys = model.EncodeCompoundColumn(vs...)
-			}
-			return
-		})
-		if err != nil {
-			return
-		}
-		keysCtx.Start = 0
-		keysCtx.Count = keysCtx.Keys.Length()
-		defer keysCtx.Keys.Close()
-		err = blk.index.BatchUpsert(keysCtx, 0, 0)
-		return
-	}
-	if blk.meta.GetSchema().HasSortKey() {
-		err = blk.index.ReadFrom(blk)
-	}
-	return
 }
 
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
@@ -583,12 +495,6 @@ func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v an
 	return blk.updateWithFineLock(txn, row, colIdx, v)
 }
 
-func (blk *dataBlock) OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error) {
-	chain := blk.mvcc.GetColumnChain(colIdx)
-	chain.OnReplayUpdateNode(node)
-	return
-}
-
 func (blk *dataBlock) updateWithCoarseLock(
 	txn txnif.AsyncTxn,
 	row uint32,
@@ -629,12 +535,6 @@ func (blk *dataBlock) updateWithFineLock(
 		}
 		chain.Unlock()
 	}
-	return
-}
-
-func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
-	blk.mvcc.OnReplayDeleteNode(node)
-	err = node.OnApply()
 	return
 }
 

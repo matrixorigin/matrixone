@@ -40,18 +40,27 @@ type BlockAppender interface {
 	GetID() *common.ID
 	GetMeta() any
 	PrepareAppend(rows uint32) (n uint32, err error)
-	ApplyAppend(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn, anode txnif.AppendNode) (txnif.AppendNode, int, error)
-	OnReplayInsertNode(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn) (node txnif.AppendNode, from int, err error)
+	ApplyAppend(bat *containers.Batch,
+		offset, length int,
+		txn txnif.AsyncTxn,
+		anode txnif.AppendNode,
+	) (txnif.AppendNode, int, error)
 	IsAppendable() bool
-	OnReplayAppendNode(an txnif.AppendNode)
+	ReplayAppend(bat *containers.Batch) error
+}
+
+type BlockReplayer interface {
+	OnReplayDelete(node txnif.DeleteNode) (err error)
+	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
+	OnReplayAppend(node txnif.AppendNode) (err error)
+	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
 
 type Block interface {
 	CheckpointUnit
+	BlockReplayer
 
 	GetRowsOnReplay() uint64
-	OnReplayDelete(node txnif.DeleteNode) (err error)
-	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	GetID() *common.ID
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int

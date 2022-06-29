@@ -62,15 +62,12 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 	appender.placeholder += n
 	return
 }
-func (appender *blockAppender) OnReplayAppendNode(an txnif.AppendNode) {
-	appendNode := an.(*updates.AppendNode)
-	appender.node.block.mvcc.OnReplayAppendNode(appendNode)
-}
-func (appender *blockAppender) OnReplayInsertNode(bat *containers.Batch, offset, length int, txn txnif.AsyncTxn) (node txnif.AppendNode, from int, err error) {
+func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 	err = appender.node.DoWithPin(func() (err error) {
+		var from int
 		err = appender.node.Expand(0, func() error {
 			var err error
-			from, err = appender.node.ApplyAppend(bat, offset, length, txn)
+			from, err = appender.node.ApplyAppend(bat, 0, bat.Length(), nil)
 			return err
 		})
 		schema := appender.node.block.meta.GetSchema()
@@ -83,15 +80,15 @@ func (appender *blockAppender) OnReplayInsertNode(bat *containers.Batch, offset,
 				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
 				defer keysCtx.Keys.Close()
 			}
-			keysCtx.Start = offset
-			keysCtx.Count = length
+			keysCtx.Start = 0
+			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
 			err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
 			if err != nil {
 				panic(err)
 			}
 		}
-		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
+		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
 
 		return
 	})
