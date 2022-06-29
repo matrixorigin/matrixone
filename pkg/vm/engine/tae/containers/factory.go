@@ -4,6 +4,8 @@ import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 
 func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 	switch typ.Oid {
+	case types.Type_ANY:
+		vec = NewVector[any](typ, nullable, opts...)
 	case types.Type_BOOL:
 		vec = NewVector[bool](typ, nullable, opts...)
 	case types.Type_INT8:

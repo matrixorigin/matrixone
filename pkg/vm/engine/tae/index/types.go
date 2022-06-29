@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 var (
@@ -14,20 +14,20 @@ var (
 )
 
 type KeysCtx struct {
-	Keys *vector.Vector
+	Keys containers.Vector
 
 	// Select the key where this bitmap indicates.
 	// Nil to select all
 	Selects *roaring.Bitmap
 	// Select a continous interval [Start, Start+Count) from keys
-	Start, Count uint32
+	Start, Count int
 
 	// Whether need to verify Keys
 	NeedVerify bool
 }
 
 func (ctx *KeysCtx) SelectAll() {
-	ctx.Count = uint32(vector.Length(ctx.Keys))
+	ctx.Count = ctx.Keys.Length()
 }
 
 type BatchResp struct {
@@ -39,7 +39,7 @@ type SecondaryIndex interface {
 	Insert(key any, row uint32) error
 	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (resp *BatchResp, err error)
 	Update(key any, row uint32) error
-	BatchUpdate(keys *vector.Vector, offsets []uint32, start uint32) error
+	BatchUpdate(keys containers.Vector, offsets []uint32, start uint32) error
 	Delete(key any) (old uint32, err error)
 	Search(key any) (uint32, error)
 	Contains(key any) bool

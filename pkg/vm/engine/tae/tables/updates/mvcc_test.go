@@ -18,10 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMutationControllerAppend(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	mc := NewMVCCHandle(nil)
 
 	nodeCnt := 10000

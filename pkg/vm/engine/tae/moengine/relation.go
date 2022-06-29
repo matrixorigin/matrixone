@@ -21,8 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 var (
@@ -133,20 +135,42 @@ func (rel *txnRelation) Attribute() []engine.Attribute {
 }
 
 func (rel *txnRelation) Write(_ uint64, bat *batch.Batch, _ engine.Snapshot) error {
-	return rel.handle.Append(bat)
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	allNullables := schema.AllNullables()
+	taeBatch := containers.NewEmptyBatch()
+	defer taeBatch.Close()
+	for i, vec := range bat.Vecs {
+		v := MOToVectorTmp(vec, allNullables[i])
+		//v := MOToVector(vec, allNullables[i])
+		taeBatch.AddVector(bat.Attrs[i], v)
+	}
+	return rel.handle.Append(taeBatch)
 }
 
 func (rel *txnRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) error {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	allNullables := schema.AllNullables()
+	bat := containers.NewEmptyBatch()
+	defer bat.Close()
+	for i, vec := range data.Vecs {
+		idx := catalog.GetAttrIdx(schema.AllNames(), data.Attrs[i])
+		if vec.Typ.Oid == types.Type_ANY {
+			vec.Typ = schema.ColDefs[idx].Type
+			logutil.Warn("[Moengine]", common.OperationField("Update"),
+				common.OperandField("Col type is any"))
+		}
+		v := MOToVectorTmp(vec, allNullables[idx])
+		bat.AddVector(data.Attrs[i], v)
+	}
 	hiddenIdx := catalog.GetAttrIdx(data.Attrs, schema.HiddenKey.Name)
-	for idx := 0; idx < vector.Length(data.Vecs[hiddenIdx]); idx++ {
-		v := compute.GetValue(data.Vecs[hiddenIdx], uint32(idx))
-		for i, attr := range data.Attrs {
+	for idx := 0; idx < bat.Vecs[hiddenIdx].Length(); idx++ {
+		v := bat.Vecs[hiddenIdx].Get(idx)
+		for i, attr := range bat.Attrs {
 			if schema.HiddenKey.Name == attr {
 				continue
 			}
 			colIdx := schema.GetColIdx(attr)
-			err := rel.handle.UpdateByHiddenKey(v, colIdx, compute.GetValue(data.Vecs[i], uint32(idx)))
+			err := rel.handle.UpdateByHiddenKey(v, colIdx, bat.Vecs[i].Get(idx))
 			if err != nil {
 				return err
 			}
@@ -158,16 +182,24 @@ func (rel *txnRelation) Update(_ uint64, data *batch.Batch, _ engine.Snapshot) e
 func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engine.Snapshot) error {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	logutil.Debugf("Delete col: %v", col)
+	allNullables := schema.AllNullables()
+	idx := catalog.GetAttrIdx(schema.AllNames(), col)
+	if data.Typ.Oid == types.Type_ANY {
+		data.Typ = schema.ColDefs[idx].Type
+		logutil.Warn("[Moengine]", common.OperationField("Delete"),
+			common.OperandField("Col type is any"))
+	}
+	vec := MOToVectorTmp(data, allNullables[idx])
+	defer vec.Close()
 	if schema.HiddenKey.Name == col {
-		return rel.handle.DeleteByHiddenKeys(data)
+		return rel.handle.DeleteByHiddenKeys(vec)
 	}
 	if !schema.HasPK() || schema.IsCompoundSortKey() {
 		panic(any("No valid primary key found"))
 	}
 	if schema.SortKey.Defs[0].Name == col {
-		for i := 0; i < vector.Length(data); i++ {
-			v := compute.GetValue(data, uint32(i))
-			filter := handle.NewEQFilter(v)
+		for i := 0; i < vec.Length(); i++ {
+			filter := handle.NewEQFilter(vec.Get(i))
 			err := rel.handle.DeleteByFilter(filter)
 			if err != nil {
 				return err

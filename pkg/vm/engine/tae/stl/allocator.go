@@ -19,7 +19,9 @@ type MemAllocator interface {
 }
 
 func init() {
-	DefaultAllocator = NewSimpleAllocator()
+	simple := NewSimpleAllocator()
+	// DefaultAllocator = DebugOneAllocator(simple)
+	DefaultAllocator = simple
 }
 
 func NewSimpleAllocator() MemAllocator {

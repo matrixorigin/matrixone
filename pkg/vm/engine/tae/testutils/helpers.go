@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,4 +51,11 @@ func RemoveDefaultTestPath(module string, t *testing.T) {
 func InitTestEnv(module string, t *testing.T) string {
 	RemoveDefaultTestPath(module, t)
 	return MakeDefaultTestPath(module, t)
+}
+
+func EnsureNoLeak(t *testing.T) {
+	// assert.Zerof(t, stl.DefaultAllocator.Usage(), stl.DefaultAllocator.String())
+	if stl.DefaultAllocator.Usage() != 0 {
+		t.Log(stl.DefaultAllocator.String())
+	}
 }

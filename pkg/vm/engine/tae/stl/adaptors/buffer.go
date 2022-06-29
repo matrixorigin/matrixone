@@ -17,6 +17,7 @@ func NewBuffer(buf []byte) *Buffer {
 	return b
 }
 
+func (b *Buffer) Reset()         { b.storage.Reset() }
 func (b *Buffer) Close()         { b.storage.Close() }
 func (b *Buffer) String() string { return b.storage.String() }
 
