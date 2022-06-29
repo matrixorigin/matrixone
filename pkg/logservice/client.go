@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -23,8 +24,15 @@ import (
 )
 
 var (
+	ErrDeadlineNotSet  = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
+	ErrInvalidDeadline = moerr.NewError(moerr.INVALID_INPUT, "invalid deadline")
 	// ErrIncompatibleClient is returned when write requests are made on read-only clients.
 	ErrIncompatibleClient = moerr.NewError(moerr.INVALID_INPUT, "incompatible client")
+)
+
+const (
+	connectionTimeout      = 5 * time.Second
+	defaultWriteSocketSize = 64 * 1024
 )
 
 // IsTempError returns a boolean value indicating whether the specified error is a temp
@@ -56,7 +64,6 @@ type client struct {
 	cfg    LogServiceClientConfig
 	client morpc.RPCClient
 	addr   string
-	buf    []byte
 }
 
 var _ Client = (*client)(nil)
@@ -65,7 +72,6 @@ func CreateClient(ctx context.Context,
 	name string, cfg LogServiceClientConfig) (Client, error) {
 	c := &client{
 		cfg: cfg,
-		buf: make([]byte, reqBufSize),
 	}
 	var e error
 	for _, addr := range cfg.ServiceAddresses {
@@ -148,13 +154,12 @@ func (c *client) request(ctx context.Context,
 		return pb.Response{}, nil, err
 	}
 	req := pb.Request{
-		Method:      mt,
-		ShardID:     c.cfg.ShardID,
-		DNID:        c.cfg.ReplicaID,
-		Timeout:     int64(timeout),
-		Index:       index,
-		MaxSize:     maxSize,
-		PayloadSize: uint64(len(payload)),
+		Method:  mt,
+		ShardID: c.cfg.ShardID,
+		DNID:    c.cfg.ReplicaID,
+		Timeout: int64(timeout),
+		Index:   index,
+		MaxSize: maxSize,
 	}
 	rr := &RPCRequest{
 		Request: req,
@@ -162,7 +167,8 @@ func (c *client) request(ctx context.Context,
 	}
 	// FIXME: fix SendOption
 	// FIXME: how to avoid allocation here?
-	future, err := c.client.Send(ctx, c.addr, rr, morpc.SendOptions{})
+	future, err := c.client.Send(ctx,
+		c.addr, rr, morpc.SendOptions{Timeout: time.Duration(timeout)})
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -175,7 +181,7 @@ func (c *client) request(ctx context.Context,
 		panic("unexpected response type")
 	}
 	var recs pb.LogRecordResponse
-	if response.PayloadSize > 0 {
+	if len(response.payload) > 0 {
 		MustUnmarshal(&recs, response.payload)
 	}
 	err = toError(response.Response)
@@ -222,10 +228,27 @@ func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
 
 func getRPCClient(ctx context.Context, target string) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
-		return &RPCRequest{}
+		return &RPCResponse{}
 	}
-	codec := morpc.NewMessageCodec(mf, 16*1024)
+	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
 	// FIXME: set options
-	bf := morpc.NewGoettyBasedBackendFactory(codec)
-	return morpc.NewClient(bf, morpc.WithClientInitBackends([]string{target}, []int{1}))
+	bf := morpc.NewGoettyBasedBackendFactory(codec,
+		morpc.WithBackendConnectWhenCreate(),
+		morpc.WithBackendConnectTimeout(connectionTimeout))
+	return morpc.NewClient(bf,
+		morpc.WithClientInitBackends([]string{target}, []int{1}),
+		morpc.WithClientMaxBackendPerHost(1),
+		morpc.WithClientDisableCreateTask())
+}
+
+func getTimeoutFromContext(ctx context.Context) (time.Duration, error) {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return 0, ErrDeadlineNotSet
+	}
+	now := time.Now()
+	if now.After(d) {
+		return 0, ErrInvalidDeadline
+	}
+	return d.Sub(now), nil
 }
