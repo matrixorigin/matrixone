@@ -87,7 +87,7 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 		if def.IsHidden() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(def.Idx, nil, nil)
+		view, err = task.compacted.GetColumnDataById(def.Idx, nil)
 		if err != nil {
 			return
 		}

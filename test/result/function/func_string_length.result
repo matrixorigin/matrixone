@@ -22,22 +22,21 @@ CREATE TABLE t3 (t3_fld1 int, b varchar(255));
 INSERT INTO t1 select LENGTH(space(300)), "abcdefg";
 INSERT INTO t1 select LENGTH(space(300)), "123124141";
 INSERT INTO t2 select LENGTH(space(65680)), "abcdefg";
+the space count exceeds maxallowedCount 8000
 INSERT INTO t2 select LENGTH(space(65680)), "1238193";
+the space count exceeds maxallowedCount 8000
 INSERT INTO t3 select LENGTH(space(65680)), "1238193";
+the space count exceeds maxallowedCount 8000
 INSERT INTO t3 select LENGTH(space(16777300)),"123124141";
+the space count exceeds maxallowedCount 8000
 INSERT INTO t3 select LENGTH(space(16777300)),"123asdq";
+the space count exceeds maxallowedCount 8000
 SELECT DISTINCT * from t1;
 t1_fld1	b
 300	abcdefg
 300	123124141
 SELECT t1.t1_fld1, t2.t2_fld1, t3.t3_fld1 FROM t1 JOIN t2 JOIN t3 ON (length(t1.b) = length(t2.b));
 t1_fld1	t2_fld1	t3_fld1
-300	65680	65680
-300	65680	65680
-300	65680	16777300
-300	65680	16777300
-300	65680	16777300
-300	65680	16777300
 drop table t1;
 drop table t2;
 drop table t3;

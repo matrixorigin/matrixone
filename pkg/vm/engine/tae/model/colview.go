@@ -24,7 +24,6 @@ type ColumnView struct {
 	ColIdx     int
 	Ts         uint64
 	data       containers.Vector
-	dataView   containers.VectorView
 	UpdateMask *roaring.Bitmap
 	UpdateVals map[uint32]any
 	DeleteMask *roaring.Bitmap
@@ -41,23 +40,20 @@ func NewColumnView(ts uint64, colIdx int) *ColumnView {
 func (view *ColumnView) Orphan() containers.Vector {
 	data := view.data
 	view.data = nil
-	view.dataView = nil
 	return data
 }
 
 func (view *ColumnView) SetData(data containers.Vector) {
 	view.data = data
-	view.dataView = data.GetView()
 }
 
-func (view *ColumnView) ApplyDeletes() containers.VectorView {
+func (view *ColumnView) ApplyDeletes() containers.Vector {
 	if view.DeleteMask == nil {
-		return view.dataView
+		return view.data
 	}
 	view.data.Compact(view.DeleteMask)
 	view.DeleteMask = nil
-	view.dataView = view.data.GetView()
-	return view.dataView
+	return view.data
 }
 
 func (view *ColumnView) Eval(clear bool) (err error) {
@@ -76,9 +72,6 @@ func (view *ColumnView) Eval(clear bool) (err error) {
 	return
 }
 
-func (view *ColumnView) GetDataView() containers.VectorView {
-	return view.dataView
-}
 func (view *ColumnView) GetData() containers.Vector {
 	return view.data
 }
@@ -103,7 +96,6 @@ func (view *ColumnView) Close() {
 		view.data.Close()
 	}
 	view.data = nil
-	view.dataView = nil
 	view.UpdateMask = nil
 	view.UpdateVals = nil
 	view.DeleteMask = nil
