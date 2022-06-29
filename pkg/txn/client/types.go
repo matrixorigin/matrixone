@@ -69,14 +69,6 @@ type TxnOperator interface {
 	Rollback(ctx context.Context) error
 }
 
-// TxnSender is used to send transaction requests to the DN nodes.
-type TxnSender interface {
-	// Send send request to the specified DN node, and wait for response synchronously.
-	// For any reason, if no response is received, the internal will keep retrying until
-	// the Context times out.
-	Send(context.Context, []txn.TxnRequest) ([]txn.TxnResponse, error)
-}
-
 // TxnIDGenerator txn id generator
 type TxnIDGenerator interface {
 	// Generate returns a unique transaction id

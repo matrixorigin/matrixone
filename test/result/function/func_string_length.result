@@ -69,14 +69,11 @@ select length(space(1)) as a;
 a
 1
 select length(space(1024*1024*1024)) as a;
-a
-null
+the space count exceeds maxallowedCount 8000
 select length(space(1024*1024)) as a;
-a
-1048576
+the space count exceeds maxallowedCount 8000
 select length(space(1024*1024*1024)) as a;
-a
-null
+the space count exceeds maxallowedCount 8000
 drop table if exists t1;
 create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");

@@ -12,9 +12,9 @@ stringabc 	stringabc
 drop table t1;
 create table t1 (a varchar(16383));
 insert into t1 select space(50000);
+the space count exceeds maxallowedCount 8000
 select length(a) from t1;
 length(a)
-16383
 drop table t1;
 select space(5),concat_ws('*',space(5),'*');
 space(5)	concat_ws('*',space(5),'*')
@@ -24,23 +24,19 @@ space(-1)
 select space(-4294967295);
 space(-4294967295)
 select space(4294967295);
-space(4294967295)
-null
+the space count exceeds maxallowedCount 8000
 select space(-4294967296);
 space(-4294967296)
 select space(4294967296);
-space(4294967296)
-null
+the space count exceeds maxallowedCount 8000
 select space(-4294967297);
 space(-4294967297)
 select space(4294967297);
-space(4294967297)
-null
+the space count exceeds maxallowedCount 8000
 select space(-18446744073709551615);
 space(-18446744073709551615)
 select space(18446744073709551615);
 space(18446744073709551615)
-null
 select space(-18446744073709551616);
 space(-18446744073709551616)
 select space(18446744073709551616);
@@ -53,10 +49,9 @@ space(18446744073709551617)
 null
 SELECT space(9223372036854775808);
 space(9223372036854775808)
-null
 SELECT length(space(9223372036854775809));
 length(space(9223372036854775809))
-null
+0
 SELECT SPACE(NULL);
 SPACE(NULL)
 null
@@ -79,8 +74,7 @@ space(i)
 null
 DROP TABLE t;
 SELECT space(1073741824);
-space(1073741824)
-null
+the space count exceeds maxallowedCount 8000
 SELECT TO_DATE(SPACE(2),'1');
 invalid inputs for function 'to_date()'   1
 drop table if exists t1;
