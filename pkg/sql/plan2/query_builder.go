@@ -1213,7 +1213,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeId int32, filters []*plan.Expr)
 			for i, filter := range filters {
 				joinSides[i] = getJoinSide(filter, leftTags)
 			}
-		} else if node.JoinType == plan.Node_LEFT {
+		} else if node.JoinType != plan.Node_INNER {
 			var newOnList []*plan.Expr
 			for _, cond := range node.OnList {
 				conj := splitPlanConjunction(applyDistributivity(cond))
