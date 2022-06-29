@@ -34,6 +34,11 @@ func describeExpr(expr *plan.Expr, options *ExplainOptions) (string, error) {
 		result += strconv.FormatInt(int64(exprImpl.Col.ColPos), 10)
 		result += "]"
 	case *plan.Expr_C:
+		if exprImpl.C.Isnull {
+			result += expr.Typ.Id.String() + "(null)"
+			break
+		}
+
 		switch val := exprImpl.C.Value.(type) {
 		case *plan.Const_Ival:
 			result += strconv.FormatInt(val.Ival, 10)
