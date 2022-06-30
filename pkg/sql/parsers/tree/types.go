@@ -128,8 +128,11 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 	fs := strings.ToLower(node.FamilyString)
 	ctx.WriteString(fs)
 
-	if node.Unsigned && fs != "unsigned" {
-		ctx.WriteString(" unsigned")
+	if node.Unsigned {
+		if fs != "" {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("unsigned")
 	}
 	if node.Zerofill {
 		ctx.WriteString(" zerofill")
