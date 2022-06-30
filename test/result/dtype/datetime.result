@@ -36,25 +36,25 @@ cast(2000-01-01 as datetime(0))*1.1
 22000111100000.0
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';
 1 second later
-2022-03-01 00:00:00.999900
+2022-03-01 00:00:00.999900000
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 MINUTE) '1 minute later';
 1 minute later
-2022-03-01 00:00:59.999900
+2022-03-01 00:00:59.999900000
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 HOUR) '1 hour later';
 1 hour later
-2022-03-01 00:59:59.999900
+2022-03-01 00:59:59.999900000
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 DAY) '1 day later';
 1 day later
-2022-03-01 23:59:59.999900
+2022-03-01 23:59:59.999900000
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 WEEK) '1 week later';
 1 week later
-2022-03-07 23:59:59.999900
+2022-03-07 23:59:59.999900000
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 13 MONTH) '1 month earlier';
 1 month earlier
-2023-03-28 23:59:59.999900
+2023-03-28 23:59:59.999900000
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 YEAR) '1 year earlier';
 1 year earlier
-2023-02-28 23:59:59.999900
+2023-02-28 23:59:59.999900000
 select cast(cast('2000-12-31' as date) as datetime(0));
 cast(cast(2000-12-31 as date) as datetime(0))
 2000-12-31 00:00:00
@@ -91,7 +91,7 @@ a
 2022-01-09 00:00:02
 drop table t1;
 create table t1 ( a int not null default 1, big datetime(4) primary key);
-insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00.00.000050');
+insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
 select * from t1;
 a	big
 select * from t1 order by big limit 1,3;
