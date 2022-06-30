@@ -300,13 +300,13 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		case types.T_int64:
 			return CastSpecials1Int[int64](lv, rv, proc)
 		case types.T_uint8:
-			return CastSpecials1Int[uint8](lv, rv, proc)
+			return CastSpecials1Uint[uint8](lv, rv, proc)
 		case types.T_uint16:
-			return CastSpecials1Int[uint16](lv, rv, proc)
+			return CastSpecials1Uint[uint16](lv, rv, proc)
 		case types.T_uint32:
-			return CastSpecials1Int[uint32](lv, rv, proc)
+			return CastSpecials1Uint[uint32](lv, rv, proc)
 		case types.T_uint64:
-			return CastSpecials1Int[uint64](lv, rv, proc)
+			return CastSpecials1Uint[uint64](lv, rv, proc)
 		}
 	}
 
@@ -824,7 +824,7 @@ func CastInt64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 
 // CastSpecials1Int : Cast converts string to integer,Contains the following:
 // (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
-func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
 	var vec *vector.Vector
@@ -841,6 +841,31 @@ func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
 	}
 	if _, err = typecast.BytesToInt(col, rs); err != nil {
+		return nil, err
+	}
+
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	col := vector.MustBytesCols(lv)
+	var vec *vector.Vector
+	var err error
+	var rs []T
+	if lv.IsScalar() {
+		vec = proc.AllocScalarVector(rv.Typ)
+		rs = make([]T, 1)
+	} else {
+		vec, err = proc.AllocVector(rv.Typ, int64(rtl)*int64(len(col.Offsets)))
+		if err != nil {
+			return nil, err
+		}
+		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
+	}
+	if _, err = typecast.BytesToUint(col, rs); err != nil {
 		return nil, err
 	}
 

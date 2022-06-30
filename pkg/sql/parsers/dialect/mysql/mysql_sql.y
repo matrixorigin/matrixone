@@ -4540,11 +4540,15 @@ cast_type:
     }
 |   SIGNED integer_opt
     {
+    	name := $1
+    	if $2 != "" {
+    		name = $2
+    	}
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family: tree.IntFamily,
-                FamilyString: $1,
+                FamilyString: name,
 		        Width:  64,
 		        Locale: &locale,
 		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
@@ -4557,7 +4561,7 @@ cast_type:
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family: tree.IntFamily,
-                FamilyString: $1,
+                FamilyString: $2,
 		        Width:  64,
 		        Locale: &locale,
                 Unsigned: true,
