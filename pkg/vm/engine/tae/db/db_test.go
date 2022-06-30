@@ -520,7 +520,7 @@ func TestCompactBlock1(t *testing.T) {
 		destBlock, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
 		m := destBlock.GetMeta().(*catalog.BlockEntry)
-		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler, nil)
+		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler, nil, nil)
 		err = txn.LogTxnEntry(m.GetSegment().GetTable().GetDB().ID, destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
 		assert.Nil(t, err)
 		// err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
@@ -2402,8 +2402,19 @@ func TestCompactBlk(t *testing.T) {
 	_ = rel.Append(bats[0])
 	assert.Nil(t, txn.Commit())
 
+	{
+		v := getSingleSortKeyValue(bat, schema, 1)
+		t.Logf("v is %v**********", v)
+		filter := handle.NewEQFilter(v)
+		txn2, rel := tae.getRelation()
+		t.Log("********before delete******************")
+		checkAllColRowsByScan(t, rel, 5, true)
+		_ = rel.DeleteByFilter(filter)
+		assert.Nil(t, txn2.Commit())
+	}
+
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 5, true)
+	checkAllColRowsByScan(t, rel, 4, true)
 
 	{
 		t.Log("************compact************")
@@ -2422,7 +2433,7 @@ func TestCompactBlk(t *testing.T) {
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.getRelation()
 			t.Log("********before delete******************")
-			checkAllColRowsByScan(t, rel, 5, true)
+			checkAllColRowsByScan(t, rel, 4, true)
 			_ = rel.DeleteByFilter(filter)
 			assert.Nil(t, txn2.Commit())
 		}
@@ -2432,7 +2443,7 @@ func TestCompactBlk(t *testing.T) {
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.getRelation()
 			t.Log("********before delete******************")
-			checkAllColRowsByScan(t, rel, 4, true)
+			checkAllColRowsByScan(t, rel, 3, true)
 			_ = rel.DeleteByFilter(filter)
 			assert.Nil(t, txn2.Commit())
 		}
@@ -2442,7 +2453,7 @@ func TestCompactBlk(t *testing.T) {
 			filter := handle.NewEQFilter(v)
 			txn2, rel := tae.getRelation()
 			t.Log("********before delete******************")
-			checkAllColRowsByScan(t, rel, 3, true)
+			checkAllColRowsByScan(t, rel, 2, true)
 			_ = rel.UpdateByFilter(filter, 0, int8(111))
 			assert.Nil(t, txn2.Commit())
 		}
@@ -2452,7 +2463,7 @@ func TestCompactBlk(t *testing.T) {
 	}
 
 	_, rel = tae.getRelation()
-	checkAllColRowsByScan(t, rel, 3, true)
+	checkAllColRowsByScan(t, rel, 2, true)
 
 	v := getSingleSortKeyValue(bat, schema, 3)
 	filter := handle.NewEQFilter(v)
@@ -2488,7 +2499,7 @@ func TestDelete3(t *testing.T) {
 	tae.deleteAll(true)
 	tae.checkRowsByScan(0, true)
 	deleted := true
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 70; i++ {
 		if deleted {
 			tae.checkRowsByScan(0, true)
 			tae.doAppend(bat)
