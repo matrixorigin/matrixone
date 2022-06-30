@@ -23,14 +23,13 @@ package operator
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestOperatorStep(t *testing.T) {
-	logState := hakeeper.LogState{
-		Shards: map[uint64]logservice.LogShardInfo{1: {
+	logState := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
 			ShardID:  1,
 			Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 			Epoch:    1,
@@ -38,7 +37,7 @@ func TestOperatorStep(t *testing.T) {
 		Stores: nil,
 	}
 
-	dnState := hakeeper.DNState{}
+	dnState := pb.DNState{}
 
 	assert.False(t, AddLogService{StoreID: "d", ShardID: 1, ReplicaID: 4}.IsFinish(logState, dnState))
 	assert.True(t, AddLogService{StoreID: "c", ShardID: 1, ReplicaID: 3}.IsFinish(logState, dnState))

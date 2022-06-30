@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -40,7 +40,7 @@ type stats struct {
 	toAdd    map[uint64]int
 }
 
-func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, currentTick uint64) (*util.ClusterStores, stats) {
+func collectStats(cluster pb.ClusterInfo, infos pb.LogState, currentTick uint64) (*util.ClusterStores, stats) {
 	collect := stats{
 		toRemove: make(map[uint64][]replica),
 		toAdd:    make(map[uint64]int),
@@ -122,7 +122,7 @@ func collectStats(cluster hapb.ClusterInfo, infos hapb.LogState, currentTick uin
 	return stores, collect
 }
 
-func Check(alloc util.IDAllocator, cluster hapb.ClusterInfo, infos hapb.LogState,
+func Check(alloc util.IDAllocator, cluster pb.ClusterInfo, infos pb.LogState,
 	removing map[uint64][]uint64, adding map[uint64][]uint64, currentTick uint64) (operators []*operator.Operator) {
 	stores, stats := collectStats(cluster, infos, currentTick)
 
