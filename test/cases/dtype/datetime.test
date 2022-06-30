@@ -48,7 +48,7 @@ drop table t1;
 
 -- @bvt:issue#3362
 create table t1 ( a int not null default 1, big datetime(4) primary key);
-insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00.00.000050');
+insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
 select * from t1;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;

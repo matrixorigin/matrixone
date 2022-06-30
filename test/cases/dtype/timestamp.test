@@ -18,7 +18,7 @@ update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
 drop table t1;
 create table t1 ( a int not null default 1, big timestamp(4) primary key);
 -- @bvt:issue#3362
-insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00.00.000050');
+insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
 select * from t1;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;
