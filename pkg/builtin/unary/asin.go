@@ -24,21 +24,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/acos"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/asin"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
-	extend.FunctionRegistry["acos"] = builtin.Acos
-	extend.UnaryReturnTypes[builtin.Acos] = func(extend extend.Extend) types.T {
+	extend.FunctionRegistry["asin"] = builtin.Asin
+	extend.UnaryReturnTypes[builtin.Asin] = func(extend extend.Extend) types.T {
 		return types.T_float64
 	}
 
-	extend.UnaryStrings[builtin.Acos] = func(e extend.Extend) string {
-		return fmt.Sprintf("acos(%s)", e)
+	extend.UnaryStrings[builtin.Asin] = func(e extend.Extend) string {
+		return fmt.Sprintf("asin(%s)", e)
 	}
-	overload.OpTypes[builtin.Acos] = overload.Unary
-	overload.UnaryOps[builtin.Acos] = []*overload.UnaryOp{
+	overload.OpTypes[builtin.Asin] = overload.Unary
+	overload.UnaryOps[builtin.Asin] = []*overload.UnaryOp{
 		{ // T_uint8
 			Typ:        types.T_uint8,
 			ReturnType: types.T_float64,
@@ -51,15 +51,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosUint8(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinUint8(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -75,15 +75,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosUint16(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinUint16(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -99,15 +99,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosUint32(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinUint32(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -123,15 +123,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosUint64(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinUint64(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -147,15 +147,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosInt8(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinInt8(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -171,15 +171,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosInt16(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinInt16(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -195,15 +195,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosInt32(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinInt32(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -219,15 +219,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosInt64(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinInt64(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -243,15 +243,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosFloat32(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinFloat32(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
@@ -267,15 +267,15 @@ func init() {
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				acosResult := acos.AcosFloat64(origVecCol, results)
-				if nulls.Any(acosResult.Nsp) {
+				asinResult := asin.AsinFloat64(origVecCol, results)
+				if nulls.Any(asinResult.Nsp) {
 					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = acosResult.Nsp
+						resultVector.Nsp = asinResult.Nsp
 					} else {
-						resultVector.Nsp.Or(acosResult.Nsp)
+						resultVector.Nsp.Or(asinResult.Nsp)
 					}
 				}
-				resultVector.Col = acosResult.Result
+				resultVector.Col = asinResult.Result
 				return resultVector, err
 			},
 		},
