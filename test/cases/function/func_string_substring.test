@@ -27,8 +27,10 @@ select substring('hello', 4294967296, 1);
 select substring('hello', -4294967297, 1);
 select substring('hello', 4294967297, 1);
 
+-- @bvt:issue#3169
 select substring('hello', -18446744073709551615, 1);
 select substring('hello', 18446744073709551615, 1);
+-- @bvt:issue
 
 -- @bvt:issue#3155
 select substring('hello', -18446744073709551616, 1);
@@ -46,6 +48,8 @@ select substring('hello', 1, 4294967296);
 select substring('hello', 1, -4294967297);
 select substring('hello', 1, 4294967297);
 
+-- @bvt:issue#3169
+-- @bvt:issue#3166
 select substring('hello', 1, -18446744073709551615);
 select substring('hello', 1, 18446744073709551615);
 select substring('hello', 1, -18446744073709551616);
@@ -53,6 +57,8 @@ select substring('hello', 1, 18446744073709551616);
 select substring('hello', 1, -18446744073709551617);
 select substring('hello', 1, 18446744073709551617);
 select substring('hello', -1, -1);
+-- @bvt:issue
+-- @bvt:issue
 select substring('hello', -4294967295, -4294967295);
 select substring('hello', 4294967295, 4294967295);
 select substring('hello', -4294967296, -4294967296);
@@ -129,8 +135,9 @@ SELECT SUBSTRING(a,1,10), LENGTH(a) FROM t1 GROUP BY a;
 drop table t1;
 CREATE TABLE t1(a INT);
 INSERT INTO t1 VALUES (0),(0);
-SELECT 1 FROM t1 GROUP BY SUBSTRING('',1,'0');
+SELECT 1 FROM t1 GROUP BY SUBSTRING('',1,'');
 drop table t1;
+-- @bvt:issue
 
 #INSERT
 create table t1 (email varchar(50));

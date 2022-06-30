@@ -32,9 +32,11 @@ var (
 // Message morpc is not a normal remote method call, rather it is a message-based asynchronous
 // driven framework.
 type Message interface {
-	// ID each message has a unique ID. If it is a message transmitted in stream, the ID must
-	// be set to Stream.ID
-	ID() []byte
+	// SetID each message has a unique ID in a RPCClient Backend. If it is a message transmitted
+	// in stream, the ID must be set to Stream.ID.
+	SetID(uint64)
+	// GetID returns ID of the message
+	GetID() uint64
 	// DebugString return debug string
 	DebugString() string
 	// Size size of message after marshal
@@ -140,7 +142,7 @@ type Backend interface {
 type Stream interface {
 	// ID returns the stream ID. All messages transmitted on the current stream need to use the
 	// stream ID as the message ID
-	ID() []byte
+	ID() uint64
 	// Send send message to stream
 	Send(request Message, opts SendOptions) error
 	// Receive returns a channel to read message from server. The channel will be closed after stream

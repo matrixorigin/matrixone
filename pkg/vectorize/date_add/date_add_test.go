@@ -174,3 +174,41 @@ func TestDateStringAdd(t *testing.T) {
 	}
 
 }
+
+func TestTimeStampAdd(t *testing.T) {
+	testCases := []struct {
+		name    string
+		args1   []types.Timestamp
+		args2   []int64
+		args3   []int64
+		want    []types.Timestamp
+		success bool
+	}{
+		{
+			args1:   []types.Timestamp{types.FromClockUTC(2020, 1, 1, 1, 1, 1, 1)},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.MicroSecond)},
+			want:    []types.Timestamp{types.FromClockUTC(2020, 1, 1, 1, 1, 1, 2)},
+			success: true,
+		},
+		{
+			args1:   []types.Timestamp{types.TimestampMaxValue},
+			args2:   []int64{1},
+			args3:   []int64{int64(types.MicroSecond)},
+			want:    []types.Timestamp{0},
+			success: false,
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			got := make([]types.Timestamp, len(c.args1))
+			nu := &nulls.Nulls{}
+			rs, err := timestampAdd(c.args1, c.args2, c.args3, nu, got)
+			require.Equal(t, c.want, rs)
+			require.Equal(t, err, nil)
+			require.Equal(t, c.success, !nulls.Contains(nu, 0))
+		})
+	}
+
+}

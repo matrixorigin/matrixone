@@ -51,6 +51,8 @@ type Container struct {
 	strHashStates [][3]uint64
 	strHashMap    *hashtable.StringHashMap
 
+	hasNull bool
+
 	sels [][]int64
 
 	bat *batch.Batch

@@ -1,21 +1,21 @@
 #SELECT, 嵌套
--- @bvt:issue#3265
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 ( number INT NOT NULL, alpha CHAR(6) NOT NULL );
 INSERT INTO t1 VALUES (1413006,'idlfmv'),
 (1413065,'smpsfz'),(1413127,'sljrhx'),(1413304,'qerfnd');
+-- @bvt:issue#3405
 SELECT number, any_value(alpha), CONCAT_WS('<---->',number,any_value(alpha)) AS new
 FROM t1 GROUP BY number;
 SELECT CONCAT_WS('<---->',number,alpha) AS new
 FROM t1 GROUP BY CONCAT_WS('<---->',number,alpha) LIMIT 1;
+-- @bvt:issue
 SELECT any_value(number), any_value(alpha), CONCAT_WS('<->',any_value(number),any_value(alpha)) AS new
 FROM t1 GROUP BY new LIMIT 1;
 SELECT any_value(number), any_value(alpha), CONCAT_WS('-',any_value(number),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha)) AS new
 FROM t1 GROUP BY new LIMIT 1;
-SELECT any_value(number), any_value(alpha), CONCAT_WS('<------------------>',any_value(number),any_value(alpha)) AS new
-FROM t1 GROUP BY new LIMIT 1;
+SELECT any_value(number), any_value(alpha), CONCAT_WS('<------------------>',any_value(number),any_value(alpha))
+FROM t1 GROUP BY CONCAT_WS('<------------------>',any_value(number),any_value(alpha)) LIMIT 1;
 drop table t1;
--- @bvt:issue
 
 #SELECT, 嵌套，NULL
 select concat_ws(', ','monty','was here','again');

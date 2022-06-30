@@ -112,29 +112,27 @@ func (r *StrRing) Grows(size int, m *mheap.Mheap) error {
 }
 
 func (r *StrRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
+	if nulls.Contains(vec.Nsp, uint64(sel)) {
+		r.Ns[i] += z
+		return
+	}
 	if v := vec.Col.(*types.Bytes).Get(sel); r.Es[i] || bytes.Compare(v, r.Vs[i]) < 0 {
 		r.Es[i] = false
 		r.Vs[i] = append(r.Vs[i][:0], v...)
-	}
-	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i] += z
 	}
 }
 
 func (r *StrRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.(*types.Bytes)
 	for i := range os {
+		if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+			r.Ns[vps[i]-1] += zs[int64(i)+start]
+			continue
+		}
 		j := vps[i] - 1
 		if v := vs.Get(int64(i) + start); r.Es[j] || bytes.Compare(v, r.Vs[j]) < 0 {
 			r.Es[j] = false
 			r.Vs[j] = append(r.Vs[j][:0], v...)
-		}
-	}
-	if nulls.Any(vec.Nsp) {
-		for i := range os {
-			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[vps[i]-1] += zs[int64(i)+start]
-			}
 		}
 	}
 }
@@ -142,16 +140,13 @@ func (r *StrRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, v
 func (r *StrRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.(*types.Bytes)
 	for j := range zs {
+		if nulls.Contains(vec.Nsp, uint64(j)) {
+			r.Ns[i] += zs[j]
+			continue
+		}
 		if v := vs.Get(int64(j)); r.Es[i] || bytes.Compare(v, r.Vs[i]) < 0 {
 			r.Es[i] = false
 			r.Vs[i] = append(r.Vs[i][:0], v...)
-		}
-	}
-	if nulls.Any(vec.Nsp) {
-		for j := range zs {
-			if nulls.Contains(vec.Nsp, uint64(j)) {
-				r.Ns[i] += zs[j]
-			}
 		}
 	}
 }

@@ -28,7 +28,7 @@ SELECT SIN(0);
 SELECT SIN(0.001);
 SELECT SIN(-0.001);
 
--- @bvt:issue#3517
+-- @bvt:issue#3360
 SELECT SIN("ABC");
 -- @bvt:issue
 
@@ -39,7 +39,7 @@ SELECT COS(-1);
 SELECT COS(0);
 SELECT COS(0.001);
 SELECT COS(-0.001);
--- @bvt:issue#3517
+-- @bvt:issue#3360
 SELECT COS("ABC");
 -- @bvt:issue
 
@@ -50,7 +50,7 @@ SELECT TAN(-1);
 SELECT TAN(0);
 SELECT TAN(0.001);
 SELECT TAN(-0.001);
--- @bvt:issue#3517
+-- @bvt:issue#3360
 SELECT TAN("ABC");
 -- @bvt:issue
 

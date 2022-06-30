@@ -70,6 +70,14 @@ const (
 	MinMonthInYear = 1
 )
 
+type TimeType int32
+
+const (
+	DateType      = 0
+	DateTimeType  = 1
+	TimeStampType = 2
+)
+
 // ParseDate will parse a string to be a Date
 // Support Format:
 // `yyyy-mm-dd`
