@@ -16,8 +16,10 @@ package logservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
+	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -48,9 +50,17 @@ func firstError(err1 error, err2 error) error {
 type RPCRequest struct {
 	pb.Request
 	payload []byte
+	pool    *sync.Pool
 }
 
 var _ morpc.PayloadMessage = (*RPCRequest)(nil)
+
+func (r *RPCRequest) Release() {
+	if r.pool != nil {
+		r.payload = nil
+		r.pool.Put(r)
+	}
+}
 
 func (r *RPCRequest) SetID(id uint64) {
 	r.RequestID = id
@@ -76,9 +86,17 @@ func (r *RPCRequest) SetPayloadField(data []byte) {
 type RPCResponse struct {
 	pb.Response
 	payload []byte
+	pool    *sync.Pool
 }
 
 var _ morpc.PayloadMessage = (*RPCResponse)(nil)
+
+func (r *RPCResponse) Release() {
+	if r.pool != nil {
+		r.payload = nil
+		r.pool.Put(r)
+	}
+}
 
 func (r *RPCResponse) SetID(id uint64) {
 	r.RequestID = id
@@ -106,9 +124,11 @@ func (r *RPCResponse) SetPayloadField(data []byte) {
 // clients owned by DN nodes and the HAKeeper service via network, it can
 // be considered as the interface layer of the LogService.
 type Service struct {
-	cfg    Config
-	store  *store
-	server morpc.RPCServer
+	cfg      Config
+	store    *store
+	server   morpc.RPCServer
+	pool     *sync.Pool
+	respPool *sync.Pool
 }
 
 func NewService(cfg Config) (*Service, error) {
@@ -122,21 +142,34 @@ func NewService(cfg Config) (*Service, error) {
 		plog.Errorf("failed to create log store %v", err)
 		return nil, err
 	}
+	pool := &sync.Pool{}
+	pool.New = func() interface{} {
+		return &RPCRequest{pool: pool}
+	}
+	respPool := &sync.Pool{}
+	respPool.New = func() interface{} {
+		return &RPCResponse{pool: respPool}
+	}
 
 	mf := func() morpc.Message {
-		return &RPCRequest{}
+		return pool.Get().(*RPCRequest)
 	}
 	codec := morpc.NewMessageCodec(mf, 16*1024)
-	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec)
+	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
+		morpc.WithServerGoettyOptions(goetty.WithReleaseMsgFunc(func(i interface{}) {
+			respPool.Put(i)
+		})))
 	if err != nil {
 		return nil, err
 	}
 
 	plog.Infof("store created")
 	service := &Service{
-		cfg:    cfg,
-		store:  store,
-		server: server,
+		cfg:      cfg,
+		store:    store,
+		server:   server,
+		pool:     pool,
+		respPool: respPool,
 	}
 	server.RegisterRequestHandler(service.handleRPCRequest)
 
@@ -169,17 +202,19 @@ func (s *Service) handleRPCRequest(req morpc.Message,
 	if !ok {
 		panic("unexpected message type")
 	}
+	defer rr.Release()
 	resp, records := s.handle(rr.Request, rr.GetPayloadField())
 	var recs []byte
 	if len(records.Records) > 0 {
+		plog.Infof("total recs: %d", len(records.Records))
 		recs = MustMarshal(&records)
 	}
-	// FIXME: set timeout value
 	resp.RequestID = rr.RequestID
-	return cs.Write(&RPCResponse{
-		Response: resp,
-		payload:  recs,
-	}, morpc.SendOptions{})
+	response := s.respPool.Get().(*RPCResponse)
+	response.Response = resp
+	response.payload = recs
+	return cs.Write(response,
+		morpc.SendOptions{Timeout: time.Duration(rr.Request.Timeout)})
 }
 
 func (s *Service) handle(req pb.Request,

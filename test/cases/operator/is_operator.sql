@@ -175,13 +175,9 @@ INSERT INTO t2 VALUES ('1999-05-10 00:01:01',1), ('1999-05-10 00:00:00',2);
 SELECT * FROM t1 WHERE a IS NULL;
 SELECT * FROM t2 WHERE a IS NULL;
 SELECT * FROM t1 LEFT JOIN t1 AS t1_2 ON 1 WHERE t1_2.a IS NULL;
--- @bvt:issue#3306
 SELECT * FROM t2 LEFT JOIN t2 AS t2_2 ON 1 WHERE t2_2.a IS not NULL;
--- @bvt:issue
 SELECT * FROM t1 JOIN t1 AS t1_2 ON 1 WHERE t1_2.a IS NULL;
--- @bvt:issue#3306
 SELECT * FROM t2 JOIN t2 AS t2_2 ON 1 WHERE t2_2.a IS not NULL;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
