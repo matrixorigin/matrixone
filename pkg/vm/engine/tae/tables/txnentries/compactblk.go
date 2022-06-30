@@ -83,7 +83,7 @@ func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	}
 	deletes := view.DeleteMask
 	for colIdx, column := range view.Columns {
-		column.UpdateMask, column.UpdateVals, column.DeleteMask = compute.ShuffleByDeletes(
+		column.UpdateMask, column.UpdateVals, view.DeleteMask = compute.ShuffleByDeletes(
 			column.UpdateMask,
 			column.UpdateVals,
 			deletes)
