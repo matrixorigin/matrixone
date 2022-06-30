@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
