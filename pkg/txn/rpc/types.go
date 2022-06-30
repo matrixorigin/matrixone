@@ -38,7 +38,10 @@ type TxnServer interface {
 	Close() error
 	// RegisterMethodHandler register txn request handler func
 	RegisterMethodHandler(txn.TxnMethod, TxnRequestHandleFunc)
+	// SetFilter set filter func. Requests can be modified or filtered out by the filter
+	// before they are processed by the handler.
+	SetFilter(func(*txn.TxnRequest) bool)
 }
 
 // TxnRequestHandleFunc txn request handle func
-type TxnRequestHandleFunc func(context.Context, txn.TxnRequest) (txn.TxnResponse, error)
+type TxnRequestHandleFunc func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error
