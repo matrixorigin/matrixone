@@ -51,11 +51,14 @@ type txnDatabase struct {
 }
 
 type txnRelation struct {
-	handle handle.Relation
-	nodes  engine.Nodes
+	baseRelation
 }
 
 type sysRelation struct {
+	baseRelation
+}
+
+type baseRelation struct {
 	handle handle.Relation
 	nodes  engine.Nodes
 }
