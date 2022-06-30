@@ -19,8 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +33,7 @@ func TestShutdownStores(t *testing.T) {
 
 	// operator for log service
 	{
-		serviceType := hapb.LogService
+		serviceType := pb.LogService
 		ops := shutdownStores(serviceType, stores)
 		require.Equal(t, len(stores), len(ops))
 
@@ -50,7 +49,7 @@ func TestShutdownStores(t *testing.T) {
 
 	// operator for dn service
 	{
-		serviceType := hapb.DnService
+		serviceType := pb.DnService
 		ops := shutdownStores(serviceType, stores)
 		require.Equal(t, len(stores), len(ops))
 
@@ -70,8 +69,8 @@ func TestParseLogStores(t *testing.T) {
 	// construct current tick in order to make hearbeat tick expired
 	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.LogStoreTimeout) + 1
 
-	logState := hapb.LogState{
-		Stores: map[string]hapb.LogStoreInfo{
+	logState := pb.LogState{
+		Stores: map[string]pb.LogStoreInfo{
 			"expired1": mockLogStoreInfo(
 				expiredTick,
 				mockLogReplicaInfo(10, 100),
@@ -92,7 +91,7 @@ func TestParseLogStores(t *testing.T) {
 
 	logStores := parseLogStores(logState, currTick)
 	require.Equal(t, len(logState.Stores), logStores.length())
-	require.Equal(t, hapb.LogService, logStores.serviceType)
+	require.Equal(t, pb.LogService, logStores.serviceType)
 	require.Equal(t, 1, len(logStores.expired))
 	require.Equal(t, 1, len(logStores.shutdownExpiredStores()))
 	require.Equal(t, 2, len(logStores.working))
@@ -104,23 +103,23 @@ func TestParseDnStores(t *testing.T) {
 	// construct current tick in order to make hearbeat tick expired
 	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.LogStoreTimeout) + 1
 
-	dnState := hapb.DNState{
-		Stores: map[string]hapb.DNStoreInfo{
+	dnState := pb.DNState{
+		Stores: map[string]pb.DNStoreInfo{
 			"expired1": {
 				Tick: expiredTick,
-				Shards: []logservice.DNShardInfo{
+				Shards: []pb.DNShardInfo{
 					mockDnShardInfo(10, 100),
 				},
 			},
 			"working1": {
 				Tick: currTick,
-				Shards: []logservice.DNShardInfo{
+				Shards: []pb.DNShardInfo{
 					mockDnShardInfo(11, 101),
 				},
 			},
 			"working2": {
 				Tick: currTick,
-				Shards: []logservice.DNShardInfo{
+				Shards: []pb.DNShardInfo{
 					mockDnShardInfo(12, 102),
 					mockDnShardInfo(13, 103),
 				},
@@ -130,7 +129,7 @@ func TestParseDnStores(t *testing.T) {
 
 	dnStores := parseDnStores(dnState, currTick)
 	require.Equal(t, len(dnState.Stores), dnStores.length())
-	require.Equal(t, hapb.DnService, dnStores.serviceType)
+	require.Equal(t, pb.DnService, dnStores.serviceType)
 	require.Equal(t, 1, len(dnStores.expired))
 	require.Equal(t, 1, len(dnStores.shutdownExpiredStores()))
 	require.Equal(t, 2, len(dnStores.working))
@@ -169,8 +168,8 @@ func TestLogShardMap(t *testing.T) {
 
 	tick := uint64(10)
 
-	logState := hapb.LogState{
-		Stores: map[string]hapb.LogStoreInfo{
+	logState := pb.LogState{
+		Stores: map[string]pb.LogStoreInfo{
 			"expired1": mockLogStoreInfo(
 				tick,
 				mockLogReplicaInfo(10, 100),
@@ -189,7 +188,7 @@ func TestLogShardMap(t *testing.T) {
 		},
 	}
 
-	logShardMap := logShardsWithExpired(expiredStores, logState, hapb.ClusterInfo{})
+	logShardMap := logShardsWithExpired(expiredStores, logState, pb.ClusterInfo{})
 	require.Equal(t, 5, len(logShardMap))
 	require.Equal(t, 2, len(logShardMap[10].expiredReplicas))
 	require.Equal(t, 1, len(logShardMap[11].expiredReplicas))
@@ -205,8 +204,8 @@ func TestCheck(t *testing.T) {
 
 	// system healthy
 	{
-		logState := hapb.LogState{
-			Stores: map[string]hapb.LogStoreInfo{
+		logState := pb.LogState{
+			Stores: map[string]pb.LogStoreInfo{
 				"expired1": mockLogStoreInfo(
 					expiredTick,
 					mockLogReplicaInfo(10, 100),
@@ -225,23 +224,23 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := hapb.DNState{
-			Stores: map[string]hapb.DNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardInfo(10, 100),
 					},
 				},
 				"working11": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardInfo(11, 101),
 					},
 				},
 				"working12": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardInfo(12, 102),
 						mockDnShardInfo(13, 103),
 					},
@@ -249,15 +248,15 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(hapb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(pb.ClusterInfo{}, dnState, logState, currTick)
 		require.True(t, healthy)
 		require.Equal(t, 0, len(ops))
 	}
 
 	// system unhealthy
 	{
-		logState := hapb.LogState{
-			Stores: map[string]hapb.LogStoreInfo{
+		logState := pb.LogState{
+			Stores: map[string]pb.LogStoreInfo{
 				"expired1": mockLogStoreInfo(
 					expiredTick,
 					mockLogReplicaInfo(10, 100),
@@ -276,23 +275,23 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		dnState := hapb.DNState{
-			Stores: map[string]hapb.DNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired11": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardInfo(10, 100),
 					},
 				},
 				"working11": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardInfo(11, 101),
 					},
 				},
 				"working12": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardInfo(12, 102),
 						mockDnShardInfo(13, 103),
 					},
@@ -300,29 +299,29 @@ func TestCheck(t *testing.T) {
 			},
 		}
 
-		ops, healthy := Check(hapb.ClusterInfo{}, dnState, logState, currTick)
+		ops, healthy := Check(pb.ClusterInfo{}, dnState, logState, currTick)
 		require.False(t, healthy)
 		require.Equal(t, 6, len(ops))
 	}
 }
 
-func mockLogReplicaInfo(shardID, replicaID uint64) logservice.LogReplicaInfo {
-	info := logservice.LogReplicaInfo{
+func mockLogReplicaInfo(shardID, replicaID uint64) pb.LogReplicaInfo {
+	info := pb.LogReplicaInfo{
 		ReplicaID: replicaID,
 	}
 	info.ShardID = shardID
 	return info
 }
 
-func mockLogStoreInfo(tick uint64, replicas ...logservice.LogReplicaInfo) hapb.LogStoreInfo {
-	return hapb.LogStoreInfo{
+func mockLogStoreInfo(tick uint64, replicas ...pb.LogReplicaInfo) pb.LogStoreInfo {
+	return pb.LogStoreInfo{
 		Tick:     tick,
 		Replicas: replicas,
 	}
 }
 
-func mockDnShardInfo(shardID, replicaID uint64) logservice.DNShardInfo {
-	return logservice.DNShardInfo{
+func mockDnShardInfo(shardID, replicaID uint64) pb.DNShardInfo {
+	return pb.DNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}
