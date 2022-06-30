@@ -106,8 +106,7 @@ func (s *server) onMessage(request morpc.Message, sequence uint64, cs morpc.Clie
 		s.logger.Fatal("missing txn request handler",
 			zap.String("method", m.Method.String()))
 	}
-
-	timeout := time.Until(time.UnixMicro(m.TimeoutAt))
+	timeout := time.Until(time.Unix(0, m.TimeoutAt))
 	if timeout <= 0 {
 		return nil
 	}

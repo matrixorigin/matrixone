@@ -154,7 +154,7 @@ enum TxnMethod {
 message TxnRequest {
     // RequestID request id
     uint64                      RequestID                = 1;
-    // TimeoutAt timeout unix timestamp in microsecond.
+    // TimeoutAt timeout unix timestamp in nanoseconds.
     int64                       TimeoutAt                = 2;
     // Txn transaction metadata
     TxnMeta                     Txn                      = 3 [(gogoproto.nullable) = false];

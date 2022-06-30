@@ -468,7 +468,7 @@ func (m *CNOpResponse) GetPayload() []byte {
 type TxnRequest struct {
 	// RequestID request id
 	RequestID uint64 `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
-	// TimeoutAt timeout timestamp in unix nano.
+	// TimeoutAt timeout unix timestamp in nanoseconds.
 	TimeoutAt int64 `protobuf:"varint,2,opt,name=TimeoutAt,proto3" json:"TimeoutAt,omitempty"`
 	// Txn transaction metadata
 	Txn TxnMeta `protobuf:"bytes,3,opt,name=Txn,proto3" json:"Txn"`
