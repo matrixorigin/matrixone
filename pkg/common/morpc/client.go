@@ -132,6 +132,8 @@ func (c *client) adjust() {
 }
 
 func (c *client) maybeInitBackends() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.options.initBackends) > 0 {
 		for idx, backend := range c.options.initBackends {
 			for i := 0; i < c.options.initBackendCounts[idx]; i++ {
