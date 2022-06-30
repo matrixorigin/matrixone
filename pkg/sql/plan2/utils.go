@@ -275,6 +275,14 @@ func splitAndBindCondition(astExpr tree.Expr, ctx *BindContext) ([]*plan.Expr, e
 		if err != nil {
 			return nil, err
 		}
+		// expr must be bool type, if not, try to do type convert
+		// but just ignore the subQuery. It will be solved at optimizer.
+		if expr.GetSub() == nil {
+			expr, err = makePlan2CastExpr(expr, &plan.Type{Id: plan.Type_BOOL})
+			if err != nil {
+				return nil, err
+			}
+		}
 		exprs[i] = expr
 	}
 
