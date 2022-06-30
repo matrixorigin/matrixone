@@ -6,7 +6,7 @@ select CAST('10 ' as unsigned integer);
 cast(10  as integer unsigned)
 10
 select CAST('10x' as unsigned integer);
-Can't cast '10x' as type of unsigned integer
+Can't cast '10x' as BIGINT UNSIGNED type.
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 cast(-5 as unsigned) | 1	cast(-5 as unsigned) & -1
 18446744073709551611	18446744073709551611
@@ -44,9 +44,9 @@ CAST(0xffffffffffffffff as unsigned)
 select CAST(0xfffffffffffffffe as signed);
 overflow from bigint unsigned to bigint
 select cast('-10a' as signed integer);
-Can't cast '-10a' as type of integer
+Can't cast '-10a' as BIGINT type.
 select cast('a10' as unsigned integer);
-Can't cast 'a10' as type of unsigned integer
+Can't cast 'a10' as BIGINT UNSIGNED type.
 select 10+'a';
 10+'a'
 10.0
@@ -57,19 +57,19 @@ select 10E+0+'a';
 10E+0+'a'
 10.0
 select cast('18446744073709551616' as unsigned);
-Overflow when cast '18446744073709551616' as type of unsigned integer
+Can't cast '18446744073709551616' as BIGINT UNSIGNED type.
 select cast('18446744073709551616' as signed);
-Overflow when cast '18446744073709551616' as type of integer
+Can't cast '18446744073709551616' as BIGINT type.
 select cast('9223372036854775809' as signed);
-Overflow when cast '9223372036854775809' as type of integer
+Can't cast '9223372036854775809' as BIGINT type.
 select cast('-1' as unsigned);
-Can't cast '-1' as type of unsigned integer
+Can't cast '-1' as BIGINT UNSIGNED type.
 select cast('abc' as signed);
-Can't cast 'abc' as type of integer
+Can't cast 'abc' as BIGINT type.
 select cast('1a' as signed);
-Can't cast '1a' as type of integer
+Can't cast '1a' as BIGINT type.
 select cast('' as signed);
-Can't cast '' as type of integer
+Can't cast '' as BIGINT type.
 select cast("2001-1-1" as date) = "2001-01-01";
 cast("2001-1-1" as date) = "2001-01-01"
 1
@@ -91,7 +91,7 @@ select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
 select cast('18446744073709551615' as signed);
-Overflow when cast '18446744073709551615' as type of integer
+Can't cast '18446744073709551615' as BIGINT type.
 select cast('9223372036854775807' as signed);
 cast('9223372036854775807' as signed)
 9223372036854775807

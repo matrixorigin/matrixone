@@ -376,6 +376,22 @@ func generalDivParamsConvert(l, r types.T) (types.T, types.T, bool) {
 	return l, r, false
 }
 
+// a general type check function for unary aggregate functions.
+// it will do strict type check for parameters, and return the first overload if all parameters are scalar null.
+func generalTypeCheckForUnaryAggregate(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+	if len(inputs) == 1 {
+		if inputs[0] == types.T_any {
+			return 0, nil
+		}
+		for i, o := range overloads {
+			if o.Args[0] == inputs[0] {
+				return int32(i), nil
+			}
+		}
+	}
+	return wrongFunctionParameters, nil
+}
+
 // tryToMatch checks whether the types of the two input parameters match directly
 // or can be matched by implicit type conversion.
 // If the match is successful,

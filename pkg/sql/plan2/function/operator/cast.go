@@ -17,6 +17,7 @@ package operator
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +31,35 @@ import (
 )
 
 func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	vec, err := doCast(vs, proc)
+	if err != nil {
+		if sqlErr, ok := err.(*errors.SqlError); ok {
+			if sqlErr.Code() == errno.SyntaxErrororAccessRuleViolation {
+				return nil, err
+			}
+		}
+		return nil, formatCastError(vs[0], vs[1].Typ)
+
+	}
+	return vec, err
+}
+
+func formatCastError(vec *vector.Vector, typ types.Type) error {
+	var errStr string
+	if vec.IsScalar() {
+		if vec.ConstVectorIsNull() {
+			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
+		} else {
+			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec.Col), "["), "]")
+			errStr = fmt.Sprintf("Can't cast '%s' as %v type.", valueStr, typ)
+		}
+	} else {
+		errStr = fmt.Sprintf("Can't cast %v type column as %v type.", vec.Typ, typ)
+	}
+	return errors.New(errno.InternalError, errStr)
+}
+
+func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := vs[0]
 	rv := vs[1]
 	if rv.IsScalarNull() {

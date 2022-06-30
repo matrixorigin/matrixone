@@ -31,20 +31,15 @@ select avg(h) from t1;
 avg(h)
 14.31400000000000000000000
 select avg(i) from t1;
-avg(i)
-20120312.0000
+Function 'avg' with parameters [DATE] will be implemented in future version.
 select avg(k) from t1;
-avg(k)
-20120312100312.0000
+Function 'avg' with parameters [DATETIME] will be implemented in future version.
 select avg(l) from t1;
-avg(l)
-20120312130312.0000
+Function 'avg' with parameters [TIMESTAMP] will be implemented in future version.
 select avg(m) from t1;
-avg(m)
-0.0
+Function 'avg' with parameters [CHAR] will be implemented in future version.
 select avg(n) from t1;
-avg(n)
-0.0
+Function 'avg' with parameters [VARCHAR] will be implemented in future version.
 select avg(a) from t1 limit 1;
 avg(a)
 1.0000
@@ -70,20 +65,15 @@ select avg(h) from t1 limit 1;
 avg(h)
 14.31400000000000000000000
 select avg(i) from t1 limit 1;
-avg(i)
-20120312.0000
+Function 'avg' with parameters [DATE] will be implemented in future version.
 select avg(k) from t1 limit 1;
-avg(k)
-20120312100312.0000
+Function 'avg' with parameters [DATETIME] will be implemented in future version.
 select avg(l) from t1 limit 1;
-avg(l)
-20120312130312.0000
+Function 'avg' with parameters [TIMESTAMP] will be implemented in future version.
 select avg(m) from t1 limit 1;
-avg(m)
-0.0
+Function 'avg' with parameters [CHAR] will be implemented in future version.
 select avg(n) from t1 limit 1;
-avg(n)
-0.0
+Function 'avg' with parameters [VARCHAR] will be implemented in future version.
 drop table t1;
 create table t1(a bigint);
 select avg(a) from t1;
@@ -151,7 +141,7 @@ CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
 INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
 INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 SELECT DISTINCT SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
-SUM(  a )
+Function 'sum' with parameters [VARCHAR] will be implemented in future version.
 SELECT DISTINCT SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SUM(  b )
 1
@@ -318,10 +308,7 @@ grp	sum(a)	count(a)	avg(a)	std(a)	variance(a)	bit_or(a)	bit_and(a)	min(a)	max(a)
 2	5	2	2.5000	0.5	0.25	3	2	2	3	b	c
 3	15	3	5.0000	0.816496580927726	0.6666666666666666	7	4	4	6	C	E
 select grp, sum(a)+count(a)+avg(a)+std(a)+variance(a)+bit_or(a)+bit_and(a)+min(a)+max(a)+min(c)+max(c) as sum from t1 group by grp;
-grp	sum
-1	7.0
-2	20.25
-3	45.48316324759439
+Can't cast CHAR type column as DOUBLE type.
 create table t2 (grp int, a bigint unsigned, c char(10));
 insert into t2 select grp,max(a)+max(grp),max(c) from t1 group by grp;
 select * from t2;
