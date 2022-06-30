@@ -4508,13 +4508,13 @@ cast_type:
 	        },
         }
     }
-|   DATETIME length_opt
+|   DATETIME timestamp_option_opt
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family:             tree.TimestampFamily,
-		        Precision:          0,
+		        Precision:          $2,
                 FamilyString: $1,
                 DisplayWith: $2,
 		        TimePrecisionIsSet: false,

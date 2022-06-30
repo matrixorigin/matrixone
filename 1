@@ -1,0 +1,39 @@
+support more interval feature
+support:
+1. INTERVAL "-1:1" HOUR_MINUTE
+2. support more date/datetime input format
+3. when date_add/sub arg is string, the return type will be datetime
+
+# Please enter the commit message for your changes. Lines starting
+# with '#' will be ignored, and an empty message aborts the commit.
+#
+# Date:      Thu Jun 30 12:21:30 2022 +0800
+#
+# On branch interval_big
+# Changes to be committed:
+#	modified:   pkg/container/types/date.go
+#	modified:   pkg/container/types/date_test.go
+#	modified:   pkg/container/types/datetime.go
+#	modified:   pkg/container/types/datetime_test.go
+#	modified:   pkg/container/types/interval.go
+#	modified:   pkg/container/types/interval_test.go
+#	modified:   pkg/sql/parsers/dialect/mysql/mysql_sql.go
+#	modified:   pkg/sql/parsers/dialect/mysql/mysql_sql.y
+#	modified:   pkg/sql/plan2/function/builtin/multi/date_add.go
+#	modified:   pkg/sql/plan2/function/builtin/multi/date_add_test.go
+#	modified:   pkg/sql/plan2/function/builtin/multi/date_sub.go
+#	modified:   pkg/sql/plan2/function/builtin/multi/date_sub_test.go
+#	modified:   pkg/sql/plan2/function/buitins.go
+#	modified:   pkg/vectorize/date_add/date_add.go
+#	modified:   pkg/vectorize/date_add/date_add_test.go
+#	modified:   pkg/vectorize/date_sub/date_sub.go
+#	modified:   pkg/vectorize/date_sub/date_sub_test.go
+#	modified:   test/cases/expression/temporal_interval.sql
+#	modified:   test/cases/function/func_cast.test
+#	modified:   test/cases/function/func_datetime_date_add.test
+#	modified:   test/cases/operator/is_operator.sql
+#	modified:   test/result/dtype/datetime.result
+#	modified:   test/result/expression/temporal_interval.result
+#	modified:   test/result/function/func_cast.result
+#	modified:   test/result/function/func_datetime_date_add.result
+#
