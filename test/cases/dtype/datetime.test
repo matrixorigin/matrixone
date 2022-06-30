@@ -19,7 +19,7 @@ select cast('2022-01-01 25:00:00' as datetime(0));
 select cast('2000-01-01' as datetime(0))+1;
 select cast('2000-01-01' as datetime(0))*1;
 -- @bvt:issue
--- @bvt:issue#330
+-- @bvt:issue#3300
 select cast('2000-01-01' as datetime(0))*1.1;
 -- @bvt:issue
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';
