@@ -76,7 +76,7 @@ func newLogShardMap() logShardMap {
 }
 
 // registerExpiredReplica registers replica as expired.
-func (m logShardMap) registerExpiredReplica(replica logservice.LogReplicaInfo, cluster pb.ClusterInfo) {
+func (m logShardMap) registerExpiredReplica(replica pb.LogReplicaInfo, cluster pb.ClusterInfo) {
 	replicaID := replica.ReplicaID
 	shardID := replica.ShardID
 
