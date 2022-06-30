@@ -44,14 +44,14 @@ func isSysRelation(name string) bool {
 	return false
 }
 
-func (s sysRelation) Write(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
+func (s *sysRelation) Write(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
 	return ErrReadOnly
 }
 
-func (s sysRelation) Update(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
+func (s *sysRelation) Update(_ uint64, _ *batch.Batch, _ engine.Snapshot) error {
 	return ErrReadOnly
 }
 
-func (s sysRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
+func (s *sysRelation) Delete(_ uint64, _ *vector.Vector, _ string, _ engine.Snapshot) error {
 	return ErrReadOnly
 }

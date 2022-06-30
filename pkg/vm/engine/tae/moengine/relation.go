@@ -27,6 +27,8 @@ var (
 	_ engine.Relation = (*baseRelation)(nil)
 )
 
+const ADDR = "localhost:20000"
+
 func (rel *baseRelation) ID(_ engine.Snapshot) string {
 	return rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
 }
