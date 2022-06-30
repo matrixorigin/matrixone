@@ -17,7 +17,7 @@ drop table t1;
 drop table t2;
 
 #DATE TYPE
--- @bvt:issue#3407
+-- @bvt:issue#3498
 CREATE TABLE t1 (s char(8), b CHAR(100), c VARCHAR(255), d int, e float, f datetime);
 INSERT INTO t1 VALUES ('test', "hhhhhhh", "12jknfjniosdjcoijcpowef", 1234, 0.14123123, "2012-02-08 12:03:23");
 SELECT LENGTH(s), length(b), length(c), length(d), length(e), length(f) FROM t1;
@@ -25,7 +25,6 @@ DROP TABLE t1;
 -- @bvt:issue
 
 #INSERT, DISTINCT, ON CONDITION
--- @bvt:issue#3256
 CREATE TABLE t1 (t1_fld1 int, b varchar(255));
 CREATE TABLE t2 (t2_fld1 int, b varchar(255));
 CREATE TABLE t3 (t3_fld1 int, b varchar(255));
@@ -41,17 +40,14 @@ SELECT t1.t1_fld1, t2.t2_fld1, t3.t3_fld1 FROM t1 JOIN t2 JOIN t3 ON (length(t1.
 drop table t1;
 drop table t2;
 drop table t3;
--- @bvt:issue#3256
 
 #EXTREME VALUE，中文
 -- @bvt:issue#3256
 select length('\n\t\r\b\0\_\%\\');
 -- @bvt:issue
 
--- @bvt:issue#3407
 select length(12314124);
 select length(0.14123124124);
--- @bvt:issue
 
 select length('1039214-#**$&#@*#(*($*');
 select length(NULL);
@@ -70,18 +66,13 @@ DROP TABLE t1;
 #嵌套
 select length(space(1)) as a;
 select length(space(1024*1024*1024)) as a;
--- @bvt:issue#3256
 select length(space(1024*1024)) as a;
--- @bvt:issue
 
 select length(space(1024*1024*1024)) as a;
 
 #WHERE, 算术运算
--- @bvt:issue#3407
 drop table if exists t1;
 create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 select * from t1 where length(b)-8>0;
 drop table t1;
-
--- @bvt:issue

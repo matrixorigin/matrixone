@@ -19,12 +19,14 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestZoneMapNumeric(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.Type_INT32}
 	zm := NewZoneMap(typ)
 	var yes bool
@@ -35,8 +37,9 @@ func TestZoneMapNumeric(t *testing.T) {
 
 	rows := 1000
 	ctx := new(KeysCtx)
-	ctx.Keys = compute.MockVec(typ, rows, 0)
-	ctx.Count = uint32(rows)
+	ctx.Keys = containers.MockVector2(typ, rows, 0)
+	ctx.Count = rows
+	defer ctx.Keys.Close()
 	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 
@@ -56,8 +59,9 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows = 500
-	ctx.Keys = compute.MockVec(typ, rows, 700)
-	ctx.Count = uint32(rows)
+	ctx.Keys = containers.MockVector2(typ, rows, 700)
+	ctx.Count = rows
+	defer ctx.Keys.Close()
 	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 
@@ -71,8 +75,9 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.False(t, yes)
 
 	rows = 500
-	ctx.Keys = compute.MockVec(typ, rows, -200)
-	ctx.Count = uint32(rows)
+	ctx.Keys = containers.MockVector2(typ, rows, -200)
+	ctx.Count = rows
+	defer ctx.Keys.Close()
 	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 
@@ -91,8 +96,9 @@ func TestZoneMapNumeric(t *testing.T) {
 	rows = 500
 	typ1 := typ
 	typ1.Oid = types.Type_INT64
-	ctx.Keys = compute.MockVec(typ1, rows, 2000)
-	ctx.Count = uint32(rows)
+	ctx.Keys = containers.MockVector2(typ1, rows, 2000)
+	ctx.Count = rows
+	defer ctx.Keys.Close()
 	err = zm.BatchUpdate(ctx)
 	require.Error(t, err)
 
@@ -103,12 +109,14 @@ func TestZoneMapNumeric(t *testing.T) {
 	require.True(t, yes)
 
 	typ1.Oid = types.Type_INT32
-	vec := compute.MockVec(typ1, rows, 3000)
+	vec := containers.MockVector2(typ1, rows, 3000)
+	defer vec.Close()
 	visibility, yes = zm1.ContainsAny(vec)
 	require.False(t, yes)
 	require.Equal(t, uint64(0), visibility.GetCardinality())
 
-	vec = compute.MockVec(typ1, rows, 0)
+	vec = containers.MockVector2(typ1, rows, 0)
+	defer vec.Close()
 	visibility, yes = zm1.ContainsAny(vec)
 	require.True(t, yes)
 	require.Equal(t, uint64(rows), visibility.GetCardinality())
@@ -121,6 +129,7 @@ func TestZoneMapNumeric(t *testing.T) {
 }
 
 func TestZoneMapString(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.Type_CHAR}
 	zm := NewZoneMap(typ)
 	var yes bool
@@ -130,8 +139,9 @@ func TestZoneMapString(t *testing.T) {
 
 	rows := 1000
 	ctx := new(KeysCtx)
-	ctx.Keys = compute.MockVec(typ, rows, 0)
-	ctx.Count = uint32(rows)
+	ctx.Keys = containers.MockVector2(typ, rows, 0)
+	ctx.Count = rows
+	defer ctx.Keys.Close()
 	err = zm.BatchUpdate(ctx)
 	require.NoError(t, err)
 

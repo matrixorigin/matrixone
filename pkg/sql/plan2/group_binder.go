@@ -15,7 +15,6 @@
 package plan2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -57,20 +56,20 @@ func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRo
 	}
 
 	if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
-		return nil, errors.New(errno.GroupingError, "correlated columns in GROUP BY clause not yet supported")
+		return nil, errors.New("", "correlated columns in GROUP BY clause not yet supported")
 	}
 
 	return expr, nil
 }
 
 func (b *GroupBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.GroupingError, "GROUP BY clause cannot contain aggregate functions!")
+	return nil, errors.New("", "GROUP BY clause cannot contain aggregate functions!")
 }
 
 func (b *GroupBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.WindowingError, "GROUP BY clause cannot contain window functions!")
+	return nil, errors.New("", "GROUP BY clause cannot contain window functions!")
 }
 
 func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.GroupingError, "subquery in GROUP BY clause not yet supported")
+	return nil, errors.New("", "subquery in GROUP BY clause not yet supported")
 }

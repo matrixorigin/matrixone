@@ -15,6 +15,7 @@ package multi
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/get_timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/builtin"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -22,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -53,7 +53,7 @@ func init() {
 				}
 				nulls.Set(vec.Nsp, new(nulls.Nulls))
 				result := make([]types.Datetime, 0)
-				result = append(result, timestamp.GetUTCTimestamp())
+				result = append(result, get_timestamp.GetUTCTimestamp())
 				vector.SetCol(vec, result)
 
 				return vec, nil

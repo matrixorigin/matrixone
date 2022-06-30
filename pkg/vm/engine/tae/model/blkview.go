@@ -15,137 +15,80 @@
 package model
 
 import (
-	"bytes"
-
 	"github.com/RoaringBitmap/roaring"
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BlockView struct {
 	Ts               uint64
-	Raw              batch.IBatch
-	RawBatch         *mobat.Batch
-	UpdateMasks      map[uint16]*roaring.Bitmap
-	UpdateVals       map[uint16]map[uint32]any
+	Columns          map[int]*ColumnView
 	DeleteMask       *roaring.Bitmap
-	AppliedIBatch    batch.IBatch
-	AppliedBatch     *mobat.Batch
-	ColLogIndexes    map[uint16][]*wal.Index
 	DeleteLogIndexes []*wal.Index
 }
 
 func NewBlockView(ts uint64) *BlockView {
 	return &BlockView{
-		Ts:            ts,
-		UpdateMasks:   make(map[uint16]*roaring.Bitmap),
-		UpdateVals:    make(map[uint16]map[uint32]any),
-		ColLogIndexes: make(map[uint16][]*wal.Index),
+		Ts:      ts,
+		Columns: make(map[int]*ColumnView),
 	}
 }
 
-func (view *BlockView) Eval() {
-	if len(view.UpdateMasks) == 0 {
-		view.AppliedIBatch = view.Raw
-		view.Raw = nil
-		return
-	}
-
-	var err error
-	attrs := view.Raw.GetAttrs()
-	vecs := make([]vector.IVector, len(attrs))
-	for i, attr := range attrs {
-		vecs[i], err = view.Raw.GetVectorByAttr(attr)
-		if err != nil {
-			panic(err)
-		}
-	}
-	for colIdx, mask := range view.UpdateMasks {
-		vals := view.UpdateVals[colIdx]
-		vec, err := view.Raw.GetVectorByAttr(int(colIdx))
-		if err != nil {
-			panic(err)
-		}
-		vec = compute.ApplyUpdateToIVector(vec, mask, vals)
-
-		vecs[colIdx] = vec
-	}
-	view.AppliedIBatch, err = batch.NewBatch(attrs, vecs)
-	if err != nil {
-		panic(err)
-	}
-	view.Raw = nil
+func (view *BlockView) Orphan(i int) containers.Vector {
+	col := view.Columns[i]
+	return col.Orphan()
 }
 
-// update data.offset
-func UpdateOffsets(data *types.Bytes, start, end int) {
-	if start == -1 {
-		data.Offsets[0] = 0
-		start++
-	}
-	for i := start; i < end; i++ {
-		data.Offsets[i+1] = data.Offsets[i] + data.Lengths[i]
+func (view *BlockView) SetBatch(bat *containers.Batch) {
+	for i, col := range bat.Vecs {
+		view.SetData(i, col)
 	}
 }
 
-func (view *BlockView) Marshal() (buf []byte, err error) {
-	var byteBuf bytes.Buffer
-	// Ts
-	byteBuf.Write(types.EncodeFixed(view.Ts))
-	// DeleteMask
-	if view.DeleteMask == nil {
-		cardinality := uint64(0)
-		byteBuf.Write(types.EncodeFixed(cardinality))
-	} else {
-		cardinality := view.DeleteMask.GetCardinality()
-		byteBuf.Write(types.EncodeFixed(cardinality))
-		iterator := view.DeleteMask.Iterator()
-		for iterator.HasNext() {
-			idx := iterator.Next()
-			byteBuf.Write(types.EncodeFixed(idx))
+func (view *BlockView) GetColumnData(i int) containers.Vector {
+	return view.Columns[i].GetData()
+}
+
+func (view *BlockView) SetData(i int, data containers.Vector) {
+	col := view.Columns[i]
+	if col == nil {
+		col = NewColumnView(view.Ts, i)
+		view.Columns[i] = col
+	}
+	col.SetData(data)
+}
+
+func (view *BlockView) SetUpdates(i int, mask *roaring.Bitmap, vals map[uint32]any) {
+	col := view.Columns[i]
+	if col == nil {
+		col = NewColumnView(view.Ts, i)
+		view.Columns[i] = col
+	}
+	col.UpdateMask = mask
+	col.UpdateVals = vals
+}
+
+func (view *BlockView) SetLogIndexes(i int, indexes []*wal.Index) {
+	col := view.Columns[i]
+	if col == nil {
+		col = NewColumnView(view.Ts, i)
+		view.Columns[i] = col
+	}
+	col.LogIndexes = indexes
+}
+
+func (view *BlockView) Eval(clear bool) (err error) {
+	for _, col := range view.Columns {
+		if err = col.Eval(clear); err != nil {
+			break
 		}
 	}
-	// AppliedIBatch
-	if view.AppliedIBatch == nil {
-		batLength := 0
-		byteBuf.Write(types.EncodeFixed(uint64(batLength)))
-	} else {
-		batBuf, err := view.AppliedIBatch.Marshal()
-		if err != nil {
-			return nil, err
-		}
-		batLength := len(batBuf)
-		byteBuf.Write(types.EncodeFixed(uint64(batLength)))
-		byteBuf.Write(batBuf)
-	}
-	buf = byteBuf.Bytes()
 	return
 }
 
-func (view *BlockView) Unmarshal(buf []byte) (err error) {
-	pos := 0
-	// Ts
-	view.Ts = types.DecodeFixed[uint64](buf[pos : pos+8])
-	pos += 8
-	// DeleteMask
-	cardinality := types.DecodeFixed[uint64](buf[pos : pos+8])
-	pos += 8
-	view.DeleteMask = roaring.NewBitmap()
-	for i := 0; i < int(cardinality); i++ {
-		idx := types.DecodeFixed[uint32](buf[pos : pos+4])
-		pos += 4
-		view.DeleteMask.Add(idx)
+func (view *BlockView) Close() {
+	for _, col := range view.Columns {
+		col.Close()
 	}
-	// AppliedIBatch
-	batLength := types.DecodeFixed[uint64](buf[pos : pos+8])
-	pos += 8
-	if batLength == uint64(0) {
-		return
-	}
-	view.AppliedIBatch = &batch.Batch{}
-	return view.AppliedIBatch.Unmarshal(buf[pos : pos+int(batLength)])
+	view.DeleteMask = nil
 }

@@ -16,7 +16,6 @@ package dnservice
 
 import (
 	"fmt"
-
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
@@ -53,7 +52,7 @@ func Check(
 		steps := checkShard(shard, stores.WorkingStores(), idAlloc)
 		if len(steps) > 0 {
 			operators = append(operators,
-				operator.NewOperator("dn", shardID, operator.NoopEpoch, steps...),
+				operator.NewOperator("dnservice", shardID, operator.NoopEpoch, steps...),
 			)
 		}
 

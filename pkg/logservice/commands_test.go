@@ -27,7 +27,7 @@ import (
 func TestHandleStartReplica(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cmd := hapb.ScheduleCommand{
-			ConfigChange: hapb.ConfigChange{
+			ConfigChange: &hapb.ConfigChange{
 				ChangeType: hapb.StartReplica,
 				Replica: hapb.Replica{
 					ShardID:   1,
@@ -44,7 +44,7 @@ func TestHandleStartReplica(t *testing.T) {
 func TestHandleStopReplica(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		cmd := hapb.ScheduleCommand{
-			ConfigChange: hapb.ConfigChange{
+			ConfigChange: &hapb.ConfigChange{
 				ChangeType: hapb.StartReplica,
 				Replica: hapb.Replica{
 					ShardID:   1,
@@ -56,7 +56,7 @@ func TestHandleStopReplica(t *testing.T) {
 		mustHaveReplica(t, s.store, 1, 1)
 
 		cmd = hapb.ScheduleCommand{
-			ConfigChange: hapb.ConfigChange{
+			ConfigChange: &hapb.ConfigChange{
 				ChangeType: hapb.StopReplica,
 				Replica: hapb.Replica{
 					ShardID:   1,
@@ -82,7 +82,7 @@ func TestHandleAddReplica(t *testing.T) {
 		store: store1,
 	}
 	cmd := hapb.ScheduleCommand{
-		ConfigChange: hapb.ConfigChange{
+		ConfigChange: &hapb.ConfigChange{
 			ChangeType: hapb.AddReplica,
 			Replica: hapb.Replica{
 				UUID:      uuid.New().String(),
@@ -110,7 +110,7 @@ func TestHandleRemoveReplica(t *testing.T) {
 		store: store1,
 	}
 	cmd := hapb.ScheduleCommand{
-		ConfigChange: hapb.ConfigChange{
+		ConfigChange: &hapb.ConfigChange{
 			ChangeType: hapb.RemoveReplica,
 			Replica: hapb.Replica{
 				ShardID:   1,

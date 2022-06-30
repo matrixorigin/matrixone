@@ -29,10 +29,20 @@ import (
 // ErrDivByZero is reported on a division by zero.
 var ErrDivByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
 
-func Div[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+var (
+	Float32Div = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Div[float32](vs, proc, types.Type{Oid: types.T_float32})
+	}
+
+	Float64Div = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Div[float64](vs, proc, types.Type{Oid: types.T_float64})
+	}
+)
+
+func Div[T constraints.Float](vectors []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
 	lvs, rvs := vector.MustTCols[T](lv), vector.MustTCols[T](rv)
-	rtl := lv.Typ.Oid.FixedLength()
+	rtl := typ.Oid.FixedLength()
 
 	if lv.IsScalarNull() || rv.IsScalarNull() {
 		return proc.AllocScalarNullVector(lv.Typ), nil

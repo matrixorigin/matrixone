@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"strings"
 	gotime "time"
 	"unsafe"
 
@@ -82,6 +83,7 @@ func (dt Datetime) String2(precision int32) string {
 // 				"1999-09-09 11:11:11.9994"      "1999-09-09 11:11:11.999"
 // 				"1999-09-09 11:11:11.9995"      "1999-09-09 11:11:12.000"
 func ParseDatetime(s string, precision int32) (Datetime, error) {
+	s = strings.TrimSpace(s)
 	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
 			return d.ToTime(), nil
@@ -238,7 +240,7 @@ func DatetimeToTimestamp(xs []Datetime, rs []Timestamp) ([]Timestamp, error) {
 	return rs, nil
 }
 
-func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64, isDate bool) (Datetime, bool) {
+func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
 	date = date.Add(gotime.Duration(addMsec) * gotime.Microsecond)
 	date = date.Add(gotime.Duration(addSec) * gotime.Second)
 	date = date.Add(gotime.Duration(addMin) * gotime.Minute)
@@ -256,12 +258,17 @@ func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHou
 	}
 	date = date.AddDate(int(addYear), int(addMonth), int(addDay))
 
-	if isDate {
+	switch timeType {
+	case DateType:
 		if !validDate(int32(date.Year()), uint8(date.Month()), uint8(date.Day())) {
 			return 0, false
 		}
-	} else {
+	case DateTimeType:
 		if !validDatetime(int32(date.Year()), uint8(date.Month()), uint8(date.Day())) {
+			return 0, false
+		}
+	case TimeStampType:
+		if !ValidTimestamp(FromClockUTC(int32(date.Year()), uint8(date.Month()), uint8(date.Day()), uint8(date.Hour()), uint8(date.Minute()), uint8(date.Second()), uint32(date.Nanosecond()*1000))) {
 			return 0, false
 		}
 	}
@@ -272,7 +279,7 @@ func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHou
 // now date or datetime use the function to add/sub date, we need a bool arg to tell isDate/isDatetime
 // date/datetime have different regions, so we don't use same valid function
 // return type bool means the if the date/datetime is valid
-func (dt Datetime) AddInterval(nums int64, its IntervalType, isDate bool) (Datetime, bool) {
+func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) (Datetime, bool) {
 	goTime := dt.ConvertToGoTime()
 	var addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64
 	switch its {
@@ -295,7 +302,7 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, isDate bool) (Datet
 	case Year:
 		addYear += nums
 	}
-	return dt.AddDateTime(goTime, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear, isDate)
+	return dt.AddDateTime(goTime, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear, timeType)
 }
 
 func (dt Datetime) MicroSec() int64 {

@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -39,21 +40,17 @@ func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 		r.it.Unlock()
 		return nil, nil
 	}
-	if r.compressed == nil {
-		r.compressed = make([]*bytes.Buffer, len(attrs))
-		r.decompressed = make([]*bytes.Buffer, len(attrs))
+	if r.buffer == nil {
+		r.buffer = make([]*bytes.Buffer, len(attrs))
 		for i := 0; i < len(attrs); i++ {
-			//cds[i] = bytes.NewBuffer(make([]byte, 1<<20))
-			//dds[i] = bytes.NewBuffer(make([]byte, 1<<20))
-			r.compressed[i] = new(bytes.Buffer)
-			r.decompressed[i] = new(bytes.Buffer)
+			r.buffer[i] = new(bytes.Buffer)
 		}
 	}
 	h := r.it.GetBlock()
 	r.it.Next()
 	r.it.Unlock()
 	block := newBlock(h)
-	bat, err := block.Read(refCount, attrs, r.compressed, r.decompressed)
+	bat, err := block.Read(refCount, attrs, nil, r.buffer)
 	if err != nil {
 		return nil, err
 	}
