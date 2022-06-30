@@ -55,9 +55,9 @@ func WithServerWriteFilter(filter func(Message) bool) ServerOption {
 
 // WithServerBatchSendSize set the maximum number of messages to be sent together
 // at each batch. Default is 8.
-func WithServerBatchSendSize(size int) BackendOption {
-	return func(rb *remoteBackend) {
-		rb.options.batchSendSize = size
+func WithServerBatchSendSize(size int) ServerOption {
+	return func(s *server) {
+		s.options.batchSendSize = size
 	}
 }
 
