@@ -132,7 +132,7 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 }
 
 type OrderedValue interface {
-	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Decimal64
+	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Decimal64 | types.Timestamp
 }
 
 type NormalType interface {

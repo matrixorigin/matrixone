@@ -615,6 +615,17 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.EqGeneral[bool],
 			},
+			{
+				Index:  17,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_timestamp,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.EqGeneral[types.Timestamp],
+			},
 		},
 	},
 
@@ -808,6 +819,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GtBool,
+			},
+			{
+				Index:  17,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_timestamp,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GtGeneral[types.Timestamp],
 			},
 		},
 	},
@@ -1003,6 +1025,17 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.GeBool,
 			},
+			{
+				Index:  17,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_timestamp,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.GeGeneral[types.Timestamp],
+			},
 		},
 	},
 
@@ -1196,6 +1229,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LtBool,
+			},
+			{
+				Index:  17,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_timestamp,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LtGeneral[types.Timestamp],
 			},
 		},
 	},
@@ -1391,6 +1435,17 @@ var operators = map[int]Functions{
 				ReturnTyp: types.T_bool,
 				Fn:        operator.LeBool,
 			},
+			{
+				Index:  17,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_timestamp,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.LeGeneral[types.Timestamp],
+			},
 		},
 	},
 
@@ -1584,6 +1639,17 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.NeGeneral[bool],
+			},
+			{
+				Index:  17,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_timestamp,
+					types.T_timestamp,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.NeGeneral[types.Timestamp],
 			},
 		},
 	},
