@@ -15,16 +15,13 @@
 package morpc
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/fagongzi/util/hack"
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/stop"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -126,8 +123,12 @@ type remoteBackend struct {
 
 	mu struct {
 		sync.RWMutex
-		futures map[string]*Future
-		streams map[string]*stream
+		futures map[uint64]*Future
+		streams map[uint64]*stream
+	}
+
+	atomic struct {
+		id uint64
 	}
 }
 
@@ -157,8 +158,8 @@ func NewRemoteBackend(
 		},
 	}
 	rb.writeC = make(chan *Future, rb.options.bufferSize)
-	rb.mu.futures = make(map[string]*Future, rb.options.bufferSize)
-	rb.mu.streams = make(map[string]*stream, rb.options.bufferSize)
+	rb.mu.futures = make(map[uint64]*Future, rb.options.bufferSize)
+	rb.mu.streams = make(map[uint64]*stream, rb.options.bufferSize)
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if rb.options.connect {
@@ -211,6 +212,8 @@ func (rb *remoteBackend) adjust() {
 }
 
 func (rb *remoteBackend) Send(ctx context.Context, request Message, opts SendOptions) (*Future, error) {
+	request.SetID(rb.nextID())
+
 	f := rb.newFuture()
 	f.init(ctx, request, opts, false)
 	if err := rb.doSend(f); err != nil {
@@ -229,8 +232,8 @@ func (rb *remoteBackend) NewStream(receiveChanBuffer int) (Stream, error) {
 
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
-	st := newStream(make(chan Message, receiveChanBuffer), rb.doSend)
-	rb.mu.streams[hack.SliceToString(st.ID())] = st
+	st := newStream(rb.nextID(), make(chan Message, receiveChanBuffer), rb.doSend)
+	rb.mu.streams[st.ID()] = st
 	return st, nil
 }
 
@@ -371,7 +374,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 						writeTimeout += f.opts.Timeout
 						if err := rb.conn.Write(f.request, goetty.WriteOptions{}); err != nil {
 							rb.logger.Error("write request failed",
-								zap.String("request-id", hex.EncodeToString(f.request.ID())),
+								zap.Uint64("request-id", f.request.GetID()),
 								zap.Error(err))
 							retry = true
 							written = 0
@@ -385,7 +388,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					if err := rb.conn.Flush(writeTimeout); err != nil {
 						for _, f := range sendFutures {
 							rb.logger.Error("write request failed",
-								zap.String("request-id", hex.EncodeToString(f.request.ID())),
+								zap.Uint64("request-id", f.request.GetID()),
 								zap.Error(err))
 						}
 						retry = true
@@ -498,7 +501,7 @@ func (rb *remoteBackend) requestDone(response Message) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	id := hack.SliceToString(response.ID())
+	id := response.GetID()
 	if f, ok := rb.mu.futures[id]; ok {
 		if !f.stream {
 			delete(rb.mu.futures, id)
@@ -508,18 +511,17 @@ func (rb *remoteBackend) requestDone(response Message) {
 }
 
 func (rb *remoteBackend) addFuture(f *Future) {
-	id := hack.SliceToString(f.request.ID())
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	rb.mu.futures[id] = f
+	rb.mu.futures[f.request.GetID()] = f
 }
 
 func (rb *remoteBackend) releaseFuture(f *Future) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	delete(rb.mu.futures, hack.SliceToString(f.id))
+	delete(rb.mu.futures, f.id)
 	if !f.stream {
 		f.reset()
 		rb.futurePool.Put(f)
@@ -593,6 +595,10 @@ func (rb *remoteBackend) newFuture() *Future {
 	return rb.futurePool.Get().(*Future)
 }
 
+func (rb *remoteBackend) nextID() uint64 {
+	return atomic.AddUint64(&rb.atomic.id, 1)
+}
+
 type goettyBasedBackendFactory struct {
 	codec   Codec
 	options []BackendOption
@@ -610,7 +616,7 @@ func (bf *goettyBasedBackendFactory) Create(remote string) (Backend, error) {
 }
 
 type stream struct {
-	id       []byte
+	id       uint64
 	ctx      context.Context
 	cancel   context.CancelFunc
 	c        chan Message
@@ -622,11 +628,10 @@ type stream struct {
 	}
 }
 
-func newStream(c chan Message, sendFunc func(f *Future) error) *stream {
+func newStream(id uint64, c chan Message, sendFunc func(f *Future) error) *stream {
 	ctx, cancel := context.WithCancel(context.Background())
-	id := uuid.New()
 	return &stream{
-		id:       id[:],
+		id:       id,
 		c:        c,
 		sendFunc: sendFunc,
 		ctx:      ctx,
@@ -635,7 +640,7 @@ func newStream(c chan Message, sendFunc func(f *Future) error) *stream {
 }
 
 func (s *stream) Send(request Message, opts SendOptions) error {
-	if !bytes.Equal(s.id, request.ID()) {
+	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
 
@@ -682,6 +687,6 @@ func (s *stream) Close() error {
 	return nil
 }
 
-func (s *stream) ID() []byte {
+func (s *stream) ID() uint64 {
 	return s.id
 }

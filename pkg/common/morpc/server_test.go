@@ -40,7 +40,7 @@ func TestHandleServer(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 
-		req := &testMessage{id: []byte{1}}
+		req := newTestMessage(1)
 		f, err := c.Send(ctx, testAddr, req, SendOptions{})
 		assert.NoError(t, err)
 
@@ -65,7 +65,7 @@ func TestHandleServerWithPayloadMessage(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 		defer cancel()
 
-		req := &testMessage{id: []byte{1}, payload: []byte("payload")}
+		req := &testMessage{id: 1, payload: []byte("payload")}
 		f, err := c.Send(ctx, testAddr, req, SendOptions{})
 		assert.NoError(t, err)
 
@@ -91,7 +91,7 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
-		req := &testMessage{id: []byte{1}}
+		req := newTestMessage(1)
 		f, err := c.Send(ctx, testAddr, req, SendOptions{})
 		assert.NoError(t, err)
 

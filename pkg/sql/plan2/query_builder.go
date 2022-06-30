@@ -348,6 +348,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		builder.qry.Steps[i] = rootId
+
 		_, err := builder.remapAllColRefs(rootId)
 		if err != nil {
 			return nil, err
@@ -1379,6 +1380,14 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeId int32) int32 {
 
 	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
 		return nodeId
+	}
+
+	for _, filter := range node.OnList {
+		if f, ok := filter.Expr.(*plan.Expr_F); ok {
+			if f.F.Func.ObjName != "=" {
+				return nodeId
+			}
+		}
 	}
 
 	var targetNode *plan.Node

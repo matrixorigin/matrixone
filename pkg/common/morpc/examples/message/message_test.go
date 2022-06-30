@@ -21,7 +21,7 @@ import (
 )
 
 func TestMarshal(t *testing.T) {
-	m := &ExampleMessage{MsgID: []byte{1}, Content: "hello"}
+	m := &ExampleMessage{MsgID: 1, Content: "hello"}
 
 	data := make([]byte, m.Size())
 	_, err := m.MarshalTo(data)

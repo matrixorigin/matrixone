@@ -47,7 +47,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	f, err := cli.Send(ctx, addr, &message.ExampleMessage{MsgID: []byte{1}, Content: "hello"}, morpc.SendOptions{})
+	f, err := cli.Send(ctx, addr, &message.ExampleMessage{MsgID: 1, Content: "hello"}, morpc.SendOptions{})
 	if err != nil {
 		panic(err)
 	}
