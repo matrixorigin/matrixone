@@ -116,15 +116,16 @@ message LogRecord {
 };
 
 message Request {
-  MethodType Method   = 1;
-  string Name         = 2;
-  uint64 ShardID      = 3;
-  uint64 Index        = 4;
-  uint64 MaxSize      = 5;
-  int64 Timeout       = 6;
+  uint64 RequestID    = 1;
+  MethodType Method   = 2;
+  string Name         = 3;
+  uint64 ShardID      = 4;
+  uint64 Index        = 5;
+  uint64 MaxSize      = 6;
+  int64 Timeout       = 7;
 
-  uint64 DNShardID    = 7;
-  uint64 DNID         = 8;
+  uint64 DNShardID    = 8;
+  uint64 DNID         = 9;
 };
 
 enum ErrorCode {
@@ -147,12 +148,13 @@ enum ErrorCode {
 };
 
 message Response {
-  MethodType Method   = 1;
-  ErrorCode ErrorCode = 2;
-  string ErrorMessage = 3;
-  uint64 ShardID      = 4;
-  uint64 Index        = 5;
-  uint64 LastIndex    = 6;
+  uint64 RequestID    = 1;
+  MethodType Method   = 2;
+  ErrorCode ErrorCode = 3;
+  string ErrorMessage = 4;
+  uint64 ShardID      = 5;
+  uint64 Index        = 6;
+  uint64 LastIndex    = 7;
 };
 
 message LogRecordResponse {
