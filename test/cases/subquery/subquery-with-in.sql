@@ -9,7 +9,7 @@ SELECT 1 IN (SELECT 1);
 -- @bvt:issue#3323
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 -- @bvt:issue
--- @bvt:issue#3320
+-- @bvt:issue#3556
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 not IN (SELECT (SELECT a));
 -- @bvt:issue
 SELECT * FROM (SELECT 1 as id) b WHERE id IN (SELECT * FROM (SELECT 1 as id) c ORDER BY id);
@@ -80,9 +80,7 @@ INSERT INTO t1 VALUES (1), (2), (3), (4);
 INSERT INTO t2 VALUES (1,10), (3,30);
 select * from t1 where t1.a in (SELECT t1.a FROM t1 LEFT JOIN t2 ON t2.a=t1.a);
 SELECT * FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10;
--- @bvt:issue#3320
 SELECT * FROM t1 WHERE t1.a NOT IN (SELECT a FROM t2 LEFT JOIN t3 ON t2.b=t3.b WHERE t3.b IS NOT NULL OR t2.a > 10);
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -130,9 +128,7 @@ CREATE TABLE t1(c INT);
 CREATE TABLE t2(a INT, b INT);
 INSERT INTO t2 VALUES (1, 10), (2, NULL);
 INSERT INTO t1 VALUES (1), (3);
--- @bvt:issue#3320
 SELECT * FROM t2 WHERE b NOT IN (SELECT max(t.c) FROM t1, t1 t WHERE t.c>10);
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 
@@ -799,9 +795,7 @@ CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1),(2),(3);
 CREATE TABLE t2 (a INT);
 INSERT INTO t1 VALUES (1),(2),(3);
--- @bvt:issue#3320
-SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE 0);
--- @bvt:issue
+SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE false);
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 
@@ -927,31 +921,23 @@ insert into t2 values('ee', NULL),('bb', 2),('ff', 2),('cc', 3),('aa', 1),('dd',
 select oref, a, a in (select ie from t1 where oref=t2.oref) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select ie from t1 where oref=t2.oref);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select ie from t1 where oref=t2.oref);
--- @bvt:issue
 -- @bvt:issue#3304
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue
 update t1 set ie=3 where oref='ff' and ie=1;
 -- @bvt:issue#3304
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp);
--- @bvt:issue
 -- @bvt:issue#3304
 select oref, a, a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1) Z from t2;
 -- @bvt:issue
 select oref, a from t2 where a in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1);
--- @bvt:issue#3320
 select oref, a from t2 where a not in (select min(ie) from t1 where oref=t2.oref group by grp having min(ie) > 1);
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -990,9 +976,7 @@ CREATE TABLE t2 (b int, PRIMARY KEY(b));
 INSERT INTO t1 VALUES (1), (NULL), (4);
 INSERT INTO t2 VALUES (3), (1),(2), (5), (4), (7), (6);
 SELECT a FROM t1, t2 WHERE a=b AND (b NOT IN (SELECT a FROM t1));
--- @bvt:issue#3320
 SELECT a FROM t1, t2 WHERE a=b AND (b NOT IN (SELECT a FROM t1 WHERE a > 4));
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
@@ -1002,9 +986,7 @@ CREATE TABLE t3 (id int PRIMARY KEY, name varchar(10));
 INSERT INTO t1 VALUES (2), (NULL), (3), (1);
 INSERT INTO t2 VALUES (234), (345), (457);
 INSERT INTO t3 VALUES (222,'bbb'), (333,'ccc'), (111,'aaa');
--- @bvt:issue#3320
 SELECT * FROM t1 WHERE t1.id NOT IN (SELECT t2.id FROM t2,t3  WHERE t3.name='xxx' AND t2.id=t3.id);
--- @bvt:issue
 -- @bvt:issue#3304
 SELECT (t1.id IN (SELECT t2.id FROM t2,t3  WHERE t3.name='xxx' AND t2.id=t3.id)) AS x FROM t1;
 -- @bvt:issue
@@ -1077,7 +1059,6 @@ CREATE TABLE parent (id int);
 INSERT INTO parent VALUES (1), (2);
 CREATE TABLE child (parent_id int, other int);
 INSERT INTO child VALUES (1,NULL);
--- @bvt:issue#3320
 SELECT    p.id, c.parent_id
 FROM      parent p
 LEFT JOIN child  c
@@ -1107,7 +1088,6 @@ WHERE     c.parent_id IN (
               FROM   child
               WHERE  parent_id = 3
           );
--- @bvt:issue
 
 DROP TABLE IF EXISTS parent;
 DROP TABLE IF EXISTS child;
