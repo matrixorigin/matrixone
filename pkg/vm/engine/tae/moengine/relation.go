@@ -92,6 +92,10 @@ func (rel *baseRelation) GetPrimaryKeys(_ engine.Snapshot) (attrs []*engine.Attr
 	return
 }
 
+func (rel *baseRelation) Truncate(_ engine.Snapshot) error {
+	panic(any("implement me"))
+}
+
 func (rel *baseRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
 	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
 	key := new(engine.Attribute)

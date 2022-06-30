@@ -82,6 +82,10 @@ func (r *localRoRelation) GetPrimaryKeys(_ engine.Snapshot) []*engine.Attribute 
 	panic(any("implement me"))
 }
 
+func (r *localRoRelation) Truncate(_ engine.Snapshot) error {
+	panic(any("implement me"))
+}
+
 func (r *localRoRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
 	panic(any("implement me"))
 }
