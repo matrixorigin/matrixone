@@ -639,7 +639,7 @@ create table t4 (a int(11) default null);
 insert into t4 values (0),(1);
 create table t5 (a int(11) default null);
 insert into t5 values (0),(1),(0),(1);
--- @bvt:issue#3320
+-- @bvt:issue#3570
 select * from t2, t3
 where
     t2.a < 10 and
