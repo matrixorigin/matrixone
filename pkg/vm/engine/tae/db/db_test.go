@@ -2470,3 +2470,41 @@ func TestCompactBlk(t *testing.T) {
 	_, _, err = rel.GetByFilter(filter)
 	assert.NotNil(t, err)
 }
+
+func TestDelete3(t *testing.T) {
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.BlockMaxRows = 2
+	schema.SegmentMaxBlocks = 2000
+	tae.bindSchema(schema)
+	// rows := int(schema.BlockMaxRows * 1)
+	rows := int(schema.BlockMaxRows*1) + 1
+	bat := catalog.MockBatch(schema, rows)
+
+	tae.createRelAndAppend(bat, true)
+	tae.checkRowsByScan(rows, false)
+	tae.deleteAll(true)
+	tae.checkRowsByScan(0, true)
+	deleted := true
+	for i := 0; i < 100; i++ {
+		if deleted {
+			tae.checkRowsByScan(0, true)
+			tae.doAppend(bat)
+			deleted = false
+			tae.checkRowsByScan(rows, true)
+		} else {
+			tae.checkRowsByScan(rows, true)
+			err := tae.deleteAll(true)
+			if err == nil {
+				deleted = true
+				tae.checkRowsByScan(0, true)
+				// assert.Zero(t, tae.getRows())
+			} else {
+				tae.checkRowsByScan(rows, true)
+				// assert.Equal(t, tae.getRows(), rows)
+			}
+		}
+	}
+}
