@@ -422,3 +422,63 @@ func TestCopy1(t *testing.T) {
 		assert.Equal(t, v2.Get(i), v3.Get(i))
 	}
 }
+
+func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, relcnt int, schema *catalog.Schema) {
+	defs, err := SchemaToDefs(schema)
+	defs[5].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, int32(3), false)
+	defs[6].(*engine.AttributeDef).Attr.Default = engine.MakeDefaultExpr(true, nil, true)
+	assert.NoError(t, err)
+	err = dbase.Create(0, name, defs, txn.GetCtx())
+	assert.Nil(t, err)
+	names := dbase.Relations(txn.GetCtx())
+	assert.Equal(t, relcnt, len(names))
+	rel, err := dbase.Relation(name, txn.GetCtx())
+	assert.Nil(t, err)
+	rDefs := rel.TableDefs(nil)
+	rDefs = rDefs[:len(rDefs)-1]
+	for i, def := range rDefs {
+		assert.Equal(t, defs[i], def)
+	}
+	rAttr := rDefs[5].(*engine.AttributeDef).Attr
+	assert.Equal(t, int32(3), rAttr.Default.Value.(int32))
+	rAttr = rDefs[6].(*engine.AttributeDef).Attr
+	assert.Equal(t, true, rAttr.Default.IsNull)
+	rAttr = rDefs[7].(*engine.AttributeDef).Attr
+	assert.Equal(t, false, rAttr.Default.Exist)
+	assert.Equal(t, 1, len(rel.Nodes(nil)))
+	assert.Equal(t, ADDR, rel.Nodes(nil)[0].Addr)
+	bat := catalog.MockBatch(schema, 100)
+	defer bat.Close()
+
+	newbat := mobat.New(true, bat.Attrs)
+	newbat.Vecs = CopyToMoVectors(bat.Vecs)
+	err = rel.Write(0, newbat, txn.GetCtx())
+	assert.Equal(t, ErrReadOnly, err)
+	attrs := rel.GetPrimaryKeys(nil)
+	assert.NotNil(t, attrs)
+	assert.Equal(t, schema.SortKey.Defs[0].Name, attrs[0].Name)
+	attr := rel.GetHideKey(nil)
+	assert.NotNil(t, attr.Name, catalog.HiddenColumnName)
+}
+
+func TestSysRelation(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	tae := initDB(t, nil)
+	defer tae.Close()
+	e := NewEngine(tae)
+	txn, err := e.StartTxn(nil)
+	assert.Nil(t, err)
+	err = e.Create(0, catalog.SystemTable_DB_Name, 0, txn.GetCtx())
+	assert.Nil(t, err)
+	names := e.Databases(txn.GetCtx())
+	assert.Equal(t, 2, len(names))
+	dbase, err := e.Database(catalog.SystemTable_DB_Name, txn.GetCtx())
+	assert.Nil(t, err)
+	schema := catalog.MockSchema(13, 12)
+	checkSysTable(t, catalog.SystemTable_DB_Name, dbase, txn, 1, schema)
+	schema = catalog.MockSchema(14, 13)
+	checkSysTable(t, catalog.SystemTable_Table_Name, dbase, txn, 2, schema)
+	schema = catalog.MockSchema(15, 14)
+	checkSysTable(t, catalog.SystemTable_Columns_Name, dbase, txn, 3, schema)
+	assert.Nil(t, txn.Commit())
+}
