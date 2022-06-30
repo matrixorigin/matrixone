@@ -44,6 +44,7 @@ type compactBlockTask struct {
 	meta      *catalog.BlockEntry
 	scheduler tasks.TaskScheduler
 	scopes    []common.ID
+	mapping   []uint32
 }
 
 func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
@@ -114,8 +115,8 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 			vecs = append(vecs, preparer.SortKey)
 			// preparer.Columns.AddVector(catalog.SortKeyNamePrefx, preparer.SortKey)
 		}
-		if err = mergesort.SortBlockColumns(vecs, idx); err != nil {
-			return
+		if task.mapping, err = mergesort.SortBlockColumns(vecs, idx); err != nil {
+			return preparer, err
 		}
 	}
 	// Prepare hidden column data
@@ -178,7 +179,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
-	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler)
+	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}

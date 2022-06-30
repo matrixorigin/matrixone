@@ -18,7 +18,7 @@ func TestSort1(t *testing.T) {
 		vecs := []containers.Vector{vec, vec2}
 		t.Log(vec)
 		t.Log(vec2)
-		_ = SortBlockColumns(vecs, 0)
+		_,_ = SortBlockColumns(vecs, 0)
 		t.Log(vec)
 		t.Log(vec2)
 		vec.Close()
@@ -31,7 +31,7 @@ func TestSort2(t *testing.T) {
 		vec := containers.MockVector(vecType, 10000, false, false, nil)
 		t0 := time.Now()
 		vecs := []containers.Vector{vec}
-		_ = SortBlockColumns(vecs, 0)
+		_,_ = SortBlockColumns(vecs, 0)
 		t.Logf("%v takes %v", vecType.String(), time.Since(t0))
 		vec.Close()
 	}
@@ -41,10 +41,10 @@ func TestMerge1(t *testing.T) {
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 5, false, false, nil)
 		vecs := []containers.Vector{vec}
-		_ = SortBlockColumns(vecs, 0)
+		_,_ = SortBlockColumns(vecs, 0)
 		vec2 := containers.MockVector(vecType, 5, false, false, nil)
 		vecs = []containers.Vector{vec2}
-		_ = SortBlockColumns(vecs, 0)
+		_,_ = SortBlockColumns(vecs, 0)
 		vec3 := containers.MockVector(vecType, 5, false, true, nil)
 		vec3.Update(rand.Intn(5), types.Null{})
 		vec4 := containers.MockVector(vecType, 5, false, true, nil)
