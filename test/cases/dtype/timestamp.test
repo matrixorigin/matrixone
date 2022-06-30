@@ -52,14 +52,10 @@ insert into t1 values('2022-01-01 00:00:00.000500', 2);
 insert into t1 values('2022-01-01 00:00:00.005000', 3);
 insert into t2 values('2022-01-01 00:00:00.005', 4);
 insert into t2 values('2022-01-01 00:00:00.001', 5);
--- @bvt:issue#3290
 select * from t1;
 select * from t2;
--- @bvt:issue
--- @bvt:issue#3274
 select * from t1 join t2 on t1.dt=t2.dt order by 1 desc, t2.dt asc;
 select * from t1 join t2 on t1.dt=t2.dt where t1.value32<>t2.value32;
--- @bvt:issue
 
 #Test cases of operators
 drop table if exists t1;
@@ -79,10 +75,8 @@ SELECT * from t_timestamp WHERE id = 20200102;
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id = 2.0200102e7;
 -- @bvt:issue
--- @bvt:issue#3270
 SELECT * from t_timestamp WHERE id = '20200102';
 SELECT * from t_timestamp WHERE id IN ('2020-01-01','2022-01-02');
--- @bvt:issue
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id IN (2.0200101e7,2.0200102e7 );
 -- @bvt:issue
@@ -96,10 +90,9 @@ SELECT * from t_timestamp WHERE id BETWEEN 20191231 AND 20200101;
 -- @bvt:issue#3271
 SELECT * from t_timestamp WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;
 -- @bvt:issue
--- @bvt:issue#3270
 SELECT * from t_timestamp WHERE id BETWEEN '2020-01-01' AND '2020-01-02';
 SELECT * from t_timestamp WHERE id BETWEEN '2022-01-01 00:00:00' AND '2022-01-02 00:00:00.000000';
--- @bvt:issue
+
 drop table if exists t1;
 CREATE TABLE t1 (a timestamp(6));
 INSERT INTO t1 VALUES ('2022-03-01 00:00:01.0001');
@@ -118,13 +111,12 @@ drop table if exists t21;
 drop table if exists t12;
 CREATE TABLE t1 (a timestamp, b int primary key);
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',1),('2022-01-01 00:00:00',2);
--- @bvt:issue#3170
 update t1 set a='2022-01-02' where a='2022-01-01 00:00:00' limit 1;
 select * from t1;
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',3);
 update t1 set a='2022-01-02' where a='2022-01-01 00:00:00';
 select * from t1;
--- @bvt:issue
+
 drop table t1;
 create table t1 (
 a timestamp primary key,
@@ -135,10 +127,9 @@ insert into t1 (a) values ('2022-01-02'),('2022-01-04'),('2022-01-06'),('2022-01
 update t1 set a=a+101;
 select a,b from t1;
 -- @bvt:issue--
--- @bvt:issue#3170
 update t1 set a='2022-01-27 12:12:12.0001' where a='2022-01-08 00:01:01';
 select a,b from t1;
--- @bvt:issue
+
 -- @bvt:issue#3168
 update t1 set a=a-1 where 1 > 2;
 select a,b from t1;
@@ -158,15 +149,12 @@ drop table if exists t11;
 drop table if exists t12;
 CREATE TABLE t1 (a timestamp, b int primary key);
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',1),('2022-01-01 00:00:00',2);
--- @bvt:issue#3168
 delete from t1 where a='2022-01-01 00:00:00' limit 1;
 select * from t1;
--- @bvt:issue
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',3);
--- @bvt:issue#3168
 delete from t1 where a='2022-01-01';
 select * from t1;
--- @bvt:issue
+
 drop table t1;
 create table t1 (
 a timestamp primary key,
