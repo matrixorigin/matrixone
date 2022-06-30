@@ -54,6 +54,31 @@ func TestSend(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestSendWithAlradyContextDone(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
+			defer cancel()
+
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
+			defer f.Close()
+
+			resp, err := f.Get()
+			assert.Error(t, err)
+			assert.Nil(t, resp)
+		},
+		WithBackendConnectWhenCreate(),
+		WithBackendFilter(func(f []*Future) []*Future {
+			time.Sleep(time.Millisecond * 10)
+			return f
+		}))
+}
+
 func TestSendWithResetConnAndRetry(t *testing.T) {
 	retry := 0
 	testBackendSend(t,
@@ -351,5 +376,13 @@ func (tm *testMessage) SetPayloadField(data []byte) {
 }
 
 func newTestCodec() Codec {
-	return NewMessageCodec(func() Message { return &testMessage{} }, 1024)
+	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, 1024)
 }
+
+var (
+	messagePool = sync.Pool{
+		New: func() any {
+			return newTestMessage(0)
+		},
+	}
+)
