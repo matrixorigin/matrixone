@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/stop"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -53,11 +53,19 @@ func WithServerWriteFilter(filter func(Message) bool) ServerOption {
 	}
 }
 
+// WithServerGoettyOptions set write filter func. Input ready to send Messages, output
+// is really need to be send Messages.
+func WithServerGoettyOptions(options ...goetty.Option) ServerOption {
+	return func(s *server) {
+		s.options.goettyOptions = options
+	}
+}
+
 // WithServerBatchSendSize set the maximum number of messages to be sent together
 // at each batch. Default is 8.
-func WithServerBatchSendSize(size int) BackendOption {
-	return func(rb *remoteBackend) {
-		rb.options.batchSendSize = size
+func WithServerBatchSendSize(size int) ServerOption {
+	return func(s *server) {
+		s.options.batchSendSize = size
 	}
 }
 
@@ -66,10 +74,11 @@ type server struct {
 	address     string
 	logger      *zap.Logger
 	application goetty.NetApplication
-	stopper     *stop.Stopper
+	stopper     *stopper.Stopper
 	handler     func(request Message, sequence uint64, cs ClientSession) error
 
 	options struct {
+		goettyOptions []goetty.Option
 		bufferSize    int
 		batchSendSize int
 		filter        func(Message) bool
@@ -83,22 +92,23 @@ func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (R
 	s := &server{
 		name:    name,
 		address: address,
-		stopper: stop.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
+		stopper: stopper.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
 	}
 	for _, opt := range options {
 		opt(s)
 	}
 	s.adjust()
 
+	s.options.goettyOptions = append(s.options.goettyOptions,
+		goetty.WithCodec(codec, codec),
+		goetty.WithLogger(s.logger),
+		goetty.WithDisableReleaseOutBuf()) // release out buf when write loop reutrned
+
 	app, err := goetty.NewApplication(
 		s.address,
 		s.onMessage,
 		goetty.WithAppLogger(s.logger),
-		goetty.WithAppSessionOptions(
-			goetty.WithCodec(codec, codec),
-			goetty.WithLogger(s.logger),
-			goetty.WithDisableReleaseOutBuf(), // release out buf when write loop reutrned
-		),
+		goetty.WithAppSessionOptions(s.options.goettyOptions...),
 	)
 	if err != nil {
 		s.logger.Error("create rpc server failed",

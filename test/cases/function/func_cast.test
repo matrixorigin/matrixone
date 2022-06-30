@@ -1,9 +1,7 @@
 select CAST(1-2 AS UNSIGNED);
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
--- @bvt:issue#3360
 select CAST('10 ' as unsigned integer);
 select CAST('10x' as unsigned integer);
--- @bvt:issue
 -- @bvt:issue#3294
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 -- @bvt:issue
@@ -33,10 +31,8 @@ select CAST(0xb3 as signed);
 select CAST(0x8fffffffffffffff as signed);
 select CAST(0xffffffffffffffff as unsigned);
 select CAST(0xfffffffffffffffe as signed);
--- @bvt:issue#3360
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
--- @bvt:issue
 -- @bvt:issue#3247
 select 10+'a';
 -- @bvt:issue
@@ -48,17 +44,13 @@ select 10E+0+'a';
 -- @bvt:issue
 
 # out-of-range cases
--- @bvt:issue#3360
 select cast('18446744073709551616' as unsigned);
 select cast('18446744073709551616' as signed);
 select cast('9223372036854775809' as signed);
--- @bvt:issue
 select cast('-1' as unsigned);
--- @bvt:issue#3360
 select cast('abc' as signed);
 select cast('1a' as signed);
 select cast('' as signed);
--- @bvt:issue
 #
 # Character set conversion
 #
@@ -199,10 +191,8 @@ select date_add(cast('2004-12-30 12:00:00' as date), interval 0 hour);
 #
 select cast(18446744073709551615 as unsigned);
 select cast(18446744073709551615 as signed);
--- @bvt:issue#3360
 select cast('18446744073709551615' as unsigned);
 select cast('18446744073709551615' as signed);
--- @bvt:issue
 select cast('9223372036854775807' as signed);
 
 select cast(concat_ws('184467440','73709551615') as unsigned);
