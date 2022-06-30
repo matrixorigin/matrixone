@@ -77,11 +77,9 @@ select * from t1 where bigint_col='17666000000000000000';
 
 #Test cases of cast
 drop table t1;
--- @bvt:issue#3249
 select cast(10000002383263201056 as unsigned) mod 50 as result;
 select cast(19999999999999999999 as signed);
 select cast(-19999999999999999999 as signed);
--- @bvt:issue
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));

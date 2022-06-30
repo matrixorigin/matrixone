@@ -133,14 +133,11 @@ bigint_col
 17666000000000000000
 drop table t1;
 select cast(10000002383263201056 as unsigned) mod 50 as result;
-result
-6
+overflow from bigint unsigned to bigint
 select cast(19999999999999999999 as signed);
-cast(19999999999999999999 as signed)
-9223372036854775807
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 select cast(-19999999999999999999 as signed);
-cast(-19999999999999999999 as signed)
--9223372036854775808
+Operator 'cast' with parameters [DECIMAL128 BIGINT] will be implemented in future version.
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a BIGINT(20) UNSIGNED,
 b VARCHAR(20));

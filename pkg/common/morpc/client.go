@@ -19,7 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/stop"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -68,7 +68,7 @@ func WithClientCreateTaskChanSize(size int) ClientOption {
 
 type client struct {
 	logger  *zap.Logger
-	stopper *stop.Stopper
+	stopper *stopper.Stopper
 	factory BackendFactory
 	createC chan string
 
@@ -99,7 +99,7 @@ func NewClient(factory BackendFactory, options ...ClientOption) (RPCClient, erro
 		opt(c)
 	}
 	c.adjust()
-	c.stopper = stop.NewStopper("rpc client", stop.WithLogger(c.logger))
+	c.stopper = stopper.NewStopper("rpc client", stopper.WithLogger(c.logger))
 
 	if err := c.maybeInitBackends(); err != nil {
 		c.Close()
@@ -132,6 +132,8 @@ func (c *client) adjust() {
 }
 
 func (c *client) maybeInitBackends() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if len(c.options.initBackends) > 0 {
 		for idx, backend := range c.options.initBackends {
 			for i := 0; i < c.options.initBackendCounts[idx]; i++ {

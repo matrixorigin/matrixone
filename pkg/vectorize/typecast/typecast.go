@@ -15,10 +15,12 @@
 package typecast
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"math"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -134,13 +136,13 @@ var (
 	Int32ToBytes   = IntToBytes[int32]
 	BytesToInt64   = BytesToInt[int64]
 	Int64ToBytes   = IntToBytes[int64]
-	BytesToUint8   = BytesToInt[uint8]
+	BytesToUint8   = BytesToUint[uint8]
 	Uint8ToBytes   = IntToBytes[uint8]
-	BytesToUint16  = BytesToInt[uint16]
+	BytesToUint16  = BytesToUint[uint16]
 	Uint16ToBytes  = IntToBytes[uint16]
-	BytesToUint32  = BytesToInt[uint32]
+	BytesToUint32  = BytesToUint[uint32]
 	Uint32ToBytes  = IntToBytes[uint32]
-	BytesToUint64  = BytesToInt[uint64]
+	BytesToUint64  = BytesToUint[uint64]
 	Uint64ToBytes  = IntToBytes[uint64]
 	BytesToFloat32 = BytesToFloat[float32]
 	Float32ToBytes = FloatToBytes[float32]
@@ -200,14 +202,34 @@ func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
 	return rs, nil
 }
 
-func BytesToInt[T constraints.Integer](xs *types.Bytes, rs []T) ([]T, error) {
+func BytesToInt[T constraints.Signed](xs *types.Bytes, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 
 	for i, o := range xs.Offsets {
 		s := string(xs.Data[o : o+xs.Lengths[i]])
-		val, err := strconv.ParseInt(s, 10, bitSize)
+		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
-			return nil, err
+			if strings.Contains(err.Error(), "value out of range") {
+				return nil, fmt.Errorf("Overflow when cast '%s' as type of integer", s)
+			}
+			return nil, fmt.Errorf("Can't cast '%s' as type of integer", s)
+		}
+		rs[i] = T(val)
+	}
+	return rs, nil
+}
+
+func BytesToUint[T constraints.Unsigned](xs *types.Bytes, rs []T) ([]T, error) {
+	var bitSize = int(unsafe.Sizeof(T(0))) * 8
+
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+		if err != nil {
+			if strings.Contains(err.Error(), "value out of range") {
+				return nil, fmt.Errorf("Overflow when cast '%s' as type of unsigned integer", s)
+			}
+			return nil, fmt.Errorf("Can't cast '%s' as type of unsigned integer", s)
 		}
 		rs[i] = T(val)
 	}
