@@ -31,17 +31,11 @@ select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 QUARTER);
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
--- @bvt:issue#3236
 select date_add("1997-12-31 23:59:59",INTERVAL "-10000:1" HOUR_MINUTE);
--- @bvt:issue
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" DAY_HOUR);
--- @bvt:issue#3236
 select date_add("1997-12-31 23:59:59",INTERVAL "-100 1" YEAR_MONTH);
--- @bvt:issue
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:99:99" HOUR_SECOND);
--- @bvt:issue#3236
 select date_add("1997-12-31 23:59:59",INTERVAL " -10000 99:99" DAY_MINUTE);
--- @bvt:issue
 select date_add("1997-12-31 23:59:59",INTERVAL "10000 99:99:99" DAY_SECOND);
 select date_add("1997-12-31",INTERVAL 1 SECOND);
 select date_add("1997-12-31",INTERVAL 1 DAY);
@@ -72,9 +66,7 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1 MONTH);
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 QUARTER);
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 YEAR);
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 SECOND);
--- @bvt:issue#3236
 select date_sub("1998-01-01 00:00:009",INTERVAL -100000 MINUTE);
--- @bvt:issue
 -- @bvt:issue#3259
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 HOUR);
 -- @bvt:issue
@@ -91,17 +83,11 @@ select date_sub("1998-01-01 00:00:00",INTERVAL "1:1:1" HOUR_SECOND);
 select date_sub("1998-01-01 00:00:00",INTERVAL "1 1:1" DAY_MINUTE);
 select date_sub("1998-01-01 00:00:00",INTERVAL "1 1:1:1" DAY_SECOND);
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000:1" MINUTE_SECOND);
--- @bvt:issue#3236
 select date_sub("1998-01-01 00:00:00",INTERVAL "-10000:1" HOUR_MINUTE);
--- @bvt:issue
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000:1" DAY_HOUR);
--- @bvt:issue#3236
 select date_sub("1998-01-01 00:00:00",INTERVAL "-100 1" YEAR_MONTH);
--- @bvt:issue
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000:99:99" HOUR_SECOND);
--- @bvt:issue#3236
 select date_sub("1998-01-01 00:00:00",INTERVAL " -10000 99:99" DAY_MINUTE);
--- @bvt:issue
 select date_sub("1998-01-01 00:00:00",INTERVAL "10000 99:99:99" DAY_SECOND);
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND);
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1:1.000002" HOUR_MICROSECOND);
@@ -182,20 +168,18 @@ select i + INTERVAL 1 SECOND from t1;
 -- @desc:test for temporal interval with month,weekday,week,date,dayofyear,hour,minute,second,cast
 -- @label:bvt
 select month(date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND));
--- @bvt:issue#3264
 select weekday(date_sub("1998-01-01 00:00:00",INTERVAL 1 MINUTE));
 select date(date_sub("1998-01-01 00:00:00",INTERVAL 1 DAY));
 select dayofyear(date_sub("1998-01-01 00:00:00",INTERVAL 1 MONTH));
--- @bvt:issue
 
 select month(date_add("1997-12-31 23:59:59",INTERVAL "1:1" MINUTE_SECOND));
--- @bvt:issue#3264
+
 select weekday(date_add("1997-12-31 23:59:59",INTERVAL "1:1" HOUR_MINUTE));
 select date(date_add("1997-12-31 23:59:59",INTERVAL "1 1" YEAR_MONTH));
 select dayofyear(date_add("1997-12-31 23:59:59",INTERVAL "1:1:1" HOUR_SECOND));
 
 select date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_SECOND;
--- @bvt:issue
+
 
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) AS DECIMAL(20,6));
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) + INTERVAL 14 MICROSECOND AS DECIMAL(20,6));
@@ -272,7 +256,7 @@ drop table if exists t2;
 -- @label:bvt
 drop table if exists t1;
 CREATE TABLE t1 ( datum DATE );
--- @bvt:issue#3269
+
 INSERT INTO t1 VALUES ( "2000-1-1" );
 INSERT INTO t1 VALUES ( "2000-1-2" );
 INSERT INTO t1 VALUES ( "2000-1-3" );
@@ -280,7 +264,7 @@ INSERT INTO t1 VALUES ( "2000-1-4" );
 INSERT INTO t1 VALUES ( "2000-1-5" );
 SELECT * FROM t1 WHERE datum BETWEEN cast("2000-1-2" as date) AND cast("2000-1-4" as date);
 SELECT * FROM t1 WHERE datum BETWEEN cast("2000-1-2" as date) AND datum - INTERVAL 100 DAY;
--- @bvt:issue
+
 
 -- @case
 -- @desc:test for temporal interval with cast
