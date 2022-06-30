@@ -15,33 +15,70 @@
 package bootstrap
 
 import (
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"sort"
 )
 
-func Bootstrap(alloc util.IDAllocator, cluster hapb.ClusterInfo,
-	dn hapb.DNState, log hapb.LogState) (commands []*hapb.ScheduleCommand) {
+type Manager struct {
+	cluster hapb.ClusterInfo
+}
 
-	for _, shardRecord := range cluster.LogShards {
+func NewBootstrapManager(cluster hapb.ClusterInfo) *Manager {
+	var dnShard []metadata.DNShardRecord
+	var logShard []metadata.LogShardRecord
+
+	if cluster.DNShards != nil {
+		dnShard = make([]metadata.DNShardRecord, len(cluster.DNShards))
+		copy(dnShard, cluster.DNShards)
+	}
+
+	if cluster.LogShards != nil {
+		logShard = make([]metadata.LogShardRecord, len(cluster.LogShards))
+		copy(logShard, cluster.LogShards)
+	}
+
+	manager := &Manager{
+		cluster: hapb.ClusterInfo{
+			DNShards:  dnShard,
+			LogShards: logShard,
+		},
+	}
+
+	return manager
+}
+
+func (bm *Manager) Bootstrap(alloc util.IDAllocator,
+	dn hapb.DNState, log hapb.LogState) (commands []hapb.ScheduleCommand, err error) {
+
+	logStores := sortLogStoresByTick(log.Stores)
+	dnStores := sortDNStoresByTick(dn.Stores)
+
+	for _, shardRecord := range bm.cluster.LogShards {
+		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
+			return nil, errors.New("not enough log stores")
+		}
+
 		initialMembers := make(map[uint64]string)
 
-		for uuid := range log.Stores {
+		for _, storeInfo := range logStores {
 			if uint64(len(initialMembers)) == shardRecord.NumberOfReplicas {
 				break
 			}
 
 			replicaID, ok := alloc.Next()
 			if !ok {
-				panic("alloc id error")
+				return nil, errors.New("id allocator error")
 			}
 
-			initialMembers[replicaID] = uuid
+			initialMembers[replicaID] = storeInfo
 		}
 
 		for replicaID, uuid := range initialMembers {
 			commands = append(commands,
-				&hapb.ScheduleCommand{
+				hapb.ScheduleCommand{
 					UUID: uuid,
 					ConfigChange: &hapb.ConfigChange{
 						Replica: hapb.Replica{
@@ -57,14 +94,14 @@ func Bootstrap(alloc util.IDAllocator, cluster hapb.ClusterInfo,
 		}
 	}
 
-	for _, dnRecord := range cluster.DNShards {
-		for uuid := range dn.Stores {
+	for _, dnRecord := range bm.cluster.DNShards {
+		for _, uuid := range dnStores {
 			replicaID, ok := alloc.Next()
 			if !ok {
-				panic("alloc id error")
+				return nil, errors.New("id allocator error")
 			}
 
-			commands = append(commands, &hapb.ScheduleCommand{
+			commands = append(commands, hapb.ScheduleCommand{
 				UUID: uuid,
 				ConfigChange: &hapb.ConfigChange{
 					Replica: hapb.Replica{
@@ -83,10 +120,10 @@ func Bootstrap(alloc util.IDAllocator, cluster hapb.ClusterInfo,
 	return
 }
 
-func CheckBootstrap(cluster hapb.ClusterInfo, log hapb.LogState) bool {
+func (bm *Manager) CheckBootstrap(log hapb.LogState) bool {
 	for _, shardInfo := range log.Shards {
 		var shardRecord metadata.LogShardRecord
-		for _, record := range cluster.LogShards {
+		for _, record := range bm.cluster.LogShards {
 			if record.ShardID == shardInfo.ShardID {
 				shardRecord = record
 				break
@@ -102,4 +139,54 @@ func CheckBootstrap(cluster hapb.ClusterInfo, log hapb.LogState) bool {
 	}
 
 	return true
+}
+
+func sortLogStoresByTick(logStores map[string]hapb.LogStoreInfo) []string {
+	storeSlice := make([]struct {
+		uuid string
+		hapb.LogStoreInfo
+	}, 0, len(logStores))
+	uuidSlice := make([]string, 0, len(logStores))
+
+	for uuid, storeInfo := range logStores {
+		storeSlice = append(storeSlice, struct {
+			uuid string
+			hapb.LogStoreInfo
+		}{uuid, storeInfo})
+	}
+
+	sort.Slice(storeSlice, func(i, j int) bool {
+		return storeSlice[i].Tick > storeSlice[j].Tick
+	})
+
+	for _, store := range storeSlice {
+		uuidSlice = append(uuidSlice, store.uuid)
+	}
+
+	return uuidSlice
+}
+
+func sortDNStoresByTick(dnStores map[string]hapb.DNStoreInfo) []string {
+	storeSlice := make([]struct {
+		uuid string
+		hapb.DNStoreInfo
+	}, 0, len(dnStores))
+	uuidSlice := make([]string, 0, len(dnStores))
+
+	for uuid, storeInfo := range dnStores {
+		storeSlice = append(storeSlice, struct {
+			uuid string
+			hapb.DNStoreInfo
+		}{uuid, storeInfo})
+	}
+
+	sort.Slice(storeSlice, func(i, j int) bool {
+		return storeSlice[i].Tick > storeSlice[j].Tick
+	})
+
+	for _, store := range storeSlice {
+		uuidSlice = append(uuidSlice, store.uuid)
+	}
+
+	return uuidSlice
 }

@@ -379,9 +379,9 @@ func TestFixZombie(t *testing.T) {
 	}
 
 	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
 		coordinator := NewCoordinator()
 		output := coordinator.Check(c.idAlloc, c.cluster, c.dn, c.log, c.currentTick)
-		fmt.Printf("case %v: %s\n", i, c.desc)
 		assert.Equal(t, c.expected, output)
 	}
 }

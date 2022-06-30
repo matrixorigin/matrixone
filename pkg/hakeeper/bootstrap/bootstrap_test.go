@@ -15,6 +15,7 @@
 package bootstrap
 
 import (
+	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
@@ -24,14 +25,54 @@ import (
 	"testing"
 )
 
+func TestNewBootstrapManager(t *testing.T) {
+	cases := []struct {
+		cluster  hapb.ClusterInfo
+		expected *Manager
+	}{
+		{
+			cluster: hapb.ClusterInfo{DNShards: nil, LogShards: nil},
+			expected: &Manager{
+				cluster: hapb.ClusterInfo{DNShards: nil, LogShards: nil},
+			},
+		},
+		{
+			cluster: hapb.ClusterInfo{
+				DNShards: []metadata.DNShardRecord{{
+					ShardID:    1,
+					LogShardID: 1,
+				}},
+				LogShards: []metadata.LogShardRecord{{ShardID: 2}},
+			},
+			expected: &Manager{
+				cluster: hapb.ClusterInfo{
+					DNShards: []metadata.DNShardRecord{{
+						ShardID:    1,
+						LogShardID: 1,
+					}},
+					LogShards: []metadata.LogShardRecord{{ShardID: 2}},
+				},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		bm := NewBootstrapManager(c.cluster)
+		assert.Equal(t, c.expected, bm)
+	}
+}
+
 func TestBootstrap(t *testing.T) {
 	cases := []struct {
 		desc string
 
-		cluster  hapb.ClusterInfo
-		dn       hapb.DNState
-		log      hapb.LogState
-		expected int
+		cluster hapb.ClusterInfo
+		dn      hapb.DNState
+		log     hapb.LogState
+
+		expectedNum            int
+		expectedInitialMembers map[uint64]string
+		err                    error
 	}{
 		{
 			desc: "1 log shard with 3 replicas and 1 dn shard",
@@ -47,18 +88,58 @@ func TestBootstrap(t *testing.T) {
 				Stores: map[string]hapb.DNStoreInfo{"dn-a": {}},
 			},
 			log: hapb.LogState{
-				Stores: map[string]hapb.LogStoreInfo{"log-a": {}, "log-b": {}, "log-c": {}, "log-d": {}},
+				Stores: map[string]hapb.LogStoreInfo{
+					"log-a": {Tick: 100},
+					"log-b": {Tick: 110},
+					"log-c": {Tick: 120},
+					"log-d": {Tick: 130},
+				},
 			},
 
-			expected: 4,
+			expectedNum: 4,
+			expectedInitialMembers: map[uint64]string{
+				1: "log-d",
+				2: "log-c",
+				3: "log-b",
+			},
+		},
+		{
+			desc: "err: not enough log stores",
+
+			cluster: hapb.ClusterInfo{
+				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
+				LogShards: []metadata.LogShardRecord{{
+					ShardID:          1,
+					NumberOfReplicas: 3,
+				}},
+			},
+			dn: hapb.DNState{
+				Stores: map[string]hapb.DNStoreInfo{"dn-a": {}},
+			},
+			log: hapb.LogState{
+				Stores: map[string]hapb.LogStoreInfo{
+					"log-a": {Tick: 100},
+					"log-b": {Tick: 110}},
+			},
+
+			expectedNum:            0,
+			expectedInitialMembers: map[uint64]string{},
+			err:                    errors.New("not enough log stores"),
 		},
 	}
 
-	for _, c := range cases {
-		alloc := util.NewTestIDAllocator(0)
-		output := Bootstrap(alloc, c.cluster, c.dn, c.log)
-		assert.Equal(t, c.expected, len(output))
+	for i, c := range cases {
+		fmt.Printf("case %v: %s\n", i, c.desc)
 
+		alloc := util.NewTestIDAllocator(0)
+		bm := NewBootstrapManager(c.cluster)
+		output, err := bm.Bootstrap(alloc, c.dn, c.log)
+		assert.Equal(t, c.err, err)
+		if err != nil {
+			continue
+		}
+		assert.Equal(t, c.expectedNum, len(output))
+		assert.Equal(t, c.expectedInitialMembers, output[0].ConfigChange.InitialMembers)
 	}
 }
 
@@ -95,7 +176,6 @@ func TestCheckBootstrap(t *testing.T) {
 						Replicas: map[uint64]string{2: "b", 3: "c"},
 					},
 				},
-				Stores: nil,
 			},
 			expected: true,
 		},
@@ -123,7 +203,6 @@ func TestCheckBootstrap(t *testing.T) {
 						Replicas: map[uint64]string{2: "b", 3: "c"},
 					},
 				},
-				Stores: nil,
 			},
 			expected: false,
 		},
@@ -131,7 +210,48 @@ func TestCheckBootstrap(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		output := CheckBootstrap(c.cluster, c.log)
+		bm := NewBootstrapManager(c.cluster)
+		output := bm.CheckBootstrap(c.log)
+		assert.Equal(t, c.expected, output)
+	}
+}
+
+func TestSortLogStores(t *testing.T) {
+	cases := []struct {
+		logStores map[string]hapb.LogStoreInfo
+		expected  []string
+	}{{
+		logStores: map[string]hapb.LogStoreInfo{
+			"a": {Tick: 100},
+			"b": {Tick: 120},
+			"c": {Tick: 90},
+			"d": {Tick: 95},
+		},
+		expected: []string{"b", "a", "d", "c"},
+	}}
+
+	for _, c := range cases {
+		output := sortLogStoresByTick(c.logStores)
+		assert.Equal(t, c.expected, output)
+	}
+}
+
+func TestSortDNStores(t *testing.T) {
+	cases := []struct {
+		dnStores map[string]hapb.DNStoreInfo
+		expected []string
+	}{{
+		dnStores: map[string]hapb.DNStoreInfo{
+			"a": {Tick: 100},
+			"b": {Tick: 120},
+			"c": {Tick: 90},
+			"d": {Tick: 95},
+		},
+		expected: []string{"b", "a", "d", "c"},
+	}}
+
+	for _, c := range cases {
+		output := sortDNStoresByTick(c.dnStores)
 		assert.Equal(t, c.expected, output)
 	}
 }
