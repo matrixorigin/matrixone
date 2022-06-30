@@ -122,10 +122,8 @@ SELECT * from t_double WHERE id IN ('1.1e0', '2.2e0');
 -- @bvt:issue
 SELECT * from t_double WHERE id BETWEEN 1.1 AND 1.9;
 SELECT * from t_double WHERE id BETWEEN 1.1e0 AND 1.9e0;
--- @bvt:issue#3279
 SELECT * from t_double WHERE id BETWEEN '1.1' AND '1.9';
 SELECT * from t_double WHERE id BETWEEN '1.1e0' AND '1.9e0';
--- @bvt:issue
 drop table t1;
 CREATE TABLE t1 (a double(5,4));
 INSERT INTO t1 VALUES (1),(0.8999),(0.800000);

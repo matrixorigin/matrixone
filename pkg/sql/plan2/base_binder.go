@@ -866,9 +866,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		for idx, castType := range argsCastType {
 			if argsType[idx] != castType && castType != types.T_any {
-				args[idx], err = appendCastBeforeExpr(args[idx], &plan.Type{
+				typ := rewriteDecimalTypeIfNecessary(&plan.Type{
 					Id: plan.Type_TypeId(castType),
 				})
+				args[idx], err = appendCastBeforeExpr(args[idx], typ)
 				if err != nil {
 					return nil, err
 				}
