@@ -16,12 +16,14 @@ package moengine
 
 import (
 	"bytes"
-
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
+
+var ErrReadOnly = errors.New("tae moengine: read only")
 
 type Txn interface {
 	GetCtx() []byte
@@ -49,6 +51,14 @@ type txnDatabase struct {
 }
 
 type txnRelation struct {
+	baseRelation
+}
+
+type sysRelation struct {
+	baseRelation
+}
+
+type baseRelation struct {
 	handle handle.Relation
 	nodes  engine.Nodes
 }
