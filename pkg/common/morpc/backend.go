@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/stop"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -102,7 +102,7 @@ type remoteBackend struct {
 	resetReadC chan struct{}
 	writeC     chan *Future
 	resetConnC chan struct{}
-	stopper    *stop.Stopper
+	stopper    *stopper.Stopper
 	closeOnce  sync.Once
 	futurePool sync.Pool
 
@@ -140,7 +140,7 @@ func NewRemoteBackend(
 	codec Codec,
 	options ...BackendOption) (Backend, error) {
 	rb := &remoteBackend{
-		stopper:    stop.NewStopper(fmt.Sprintf("backend-%s", remote)),
+		stopper:    stopper.NewStopper(fmt.Sprintf("backend-%s", remote)),
 		remote:     remote,
 		codec:      codec,
 		resetReadC: make(chan struct{}, 1),
