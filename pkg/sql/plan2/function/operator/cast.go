@@ -16,6 +16,7 @@ package operator
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -300,13 +301,13 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		case types.T_int64:
 			return CastSpecials1Int[int64](lv, rv, proc)
 		case types.T_uint8:
-			return CastSpecials1Int[uint8](lv, rv, proc)
+			return CastSpecials1Uint[uint8](lv, rv, proc)
 		case types.T_uint16:
-			return CastSpecials1Int[uint16](lv, rv, proc)
+			return CastSpecials1Uint[uint16](lv, rv, proc)
 		case types.T_uint32:
-			return CastSpecials1Int[uint32](lv, rv, proc)
+			return CastSpecials1Uint[uint32](lv, rv, proc)
 		case types.T_uint64:
-			return CastSpecials1Int[uint64](lv, rv, proc)
+			return CastSpecials1Uint[uint64](lv, rv, proc)
 		}
 	}
 
@@ -538,6 +539,36 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_time {
 	// 	return CastTimestampAsTime(lv, rv, proc)
 	// }
+
+	if isNumeric(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
+		switch lv.Typ.Oid {
+		case types.T_int8:
+			return CastNumValToBool[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastNumValToBool[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastNumValToBool[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastNumValToBool[int64](lv, rv, proc)
+		case types.T_uint8:
+			return CastNumValToBool[uint8](lv, rv, proc)
+		case types.T_uint16:
+			return CastNumValToBool[uint16](lv, rv, proc)
+		case types.T_uint32:
+			return CastNumValToBool[uint32](lv, rv, proc)
+		case types.T_uint64:
+			return CastNumValToBool[uint64](lv, rv, proc)
+		case types.T_float32:
+			return CastNumValToBool[float32](lv, rv, proc)
+		case types.T_float64:
+			return CastNumValToBool[float64](lv, rv, proc)
+		}
+	}
+
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
+		return CastStringToBool(lv, rv, proc)
+	}
+
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("parameter types [%s, %s] of cast function do not match", lv.Typ.Oid, rv.Typ.Oid))
 }
 
@@ -824,7 +855,7 @@ func CastInt64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 
 // CastSpecials1Int : Cast converts string to integer,Contains the following:
 // (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
-func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := rv.Typ.Oid.TypeLen()
 	col := vector.MustBytesCols(lv)
 	var vec *vector.Vector
@@ -841,6 +872,31 @@ func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
 	}
 	if _, err = typecast.BytesToInt(col, rs); err != nil {
+		return nil, err
+	}
+
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	col := vector.MustBytesCols(lv)
+	var vec *vector.Vector
+	var err error
+	var rs []T
+	if lv.IsScalar() {
+		vec = proc.AllocScalarVector(rv.Typ)
+		rs = make([]T, 1)
+	} else {
+		vec, err = proc.AllocVector(rv.Typ, int64(rtl)*int64(len(col.Offsets)))
+		if err != nil {
+			return nil, err
+		}
+		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
+	}
+	if _, err = typecast.BytesToUint(col, rs); err != nil {
 		return nil, err
 	}
 
@@ -1872,6 +1928,71 @@ func CastDecimal128ToFloat64(lv, rv *vector.Vector, proc *process.Process) (*vec
 	return vec, nil
 }
 
+func CastNumValToBool[T constraints.Integer | constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := vector.MustTCols[T](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]bool, 1)
+		if _, err := typecast.NumericToBool(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeBoolSlice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.NumericToBool(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	resultType.Size = 8
+	vs := vector.MustBytesCols(lv)
+	if lv.IsScalar() {
+		srcStr := vs.Get(0)
+		vec := proc.AllocScalarVector(resultType)
+		rs := make([]bool, 1)
+		val, err := strconv.ParseFloat(string(srcStr), 64)
+		if err == nil && val != 0 {
+			rs[0] = true
+		}
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs.Lengths)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeBoolSlice(vec.Data)
+	rs = rs[:len(vs.Lengths)]
+	for i := range vs.Lengths {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		srcStr := vs.Get(int64(i))
+		val, err := strconv.ParseFloat(string(srcStr), 64)
+		if err == nil && val != 0 {
+			rs[i] = true
+		}
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
 //  isInteger return true if the types.T is integer type
 func isInteger(t types.T) bool {
 	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
@@ -1935,4 +2056,9 @@ func isDecimal(t types.T) bool {
 		return true
 	}
 	return false
+}
+
+// isBool: return true if the types.T is decimal64 or decimal128
+func isBool(t types.T) bool {
+	return t == types.T_bool
 }

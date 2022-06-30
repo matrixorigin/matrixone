@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/stop"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -74,7 +74,7 @@ type server struct {
 	address     string
 	logger      *zap.Logger
 	application goetty.NetApplication
-	stopper     *stop.Stopper
+	stopper     *stopper.Stopper
 	handler     func(request Message, sequence uint64, cs ClientSession) error
 
 	options struct {
@@ -92,7 +92,7 @@ func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (R
 	s := &server{
 		name:    name,
 		address: address,
-		stopper: stop.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
+		stopper: stopper.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
 	}
 	for _, opt := range options {
 		opt(s)
