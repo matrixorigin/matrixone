@@ -26,6 +26,7 @@ message Type {
 		UINT32  = 27;
 		UINT64  = 28;
 		UINT128 = 29;
+
 		FLOAT32 = 30;
 		FLOAT64 = 31;
 		DECIMAL64	= 32;
@@ -249,6 +250,7 @@ message ColDef {
 	bool primary        = 5;
 	int32 pkidx 		= 6;
 	string alias		= 7;
+	bool is_prune		= 8;
 }
 
 message IndexDef {
@@ -369,14 +371,15 @@ message Node {
 
 		// Proper Relational Operators
 		AGG = 30;
-		FILTER = 31;
-		JOIN = 32;
-		SAMPLE = 33;
-		SORT = 34;
-		UNION = 35;
-		UNION_ALL = 36;
-		UNIQUE = 37;
-		WINDOW = 38;
+		DISTINCT = 31;
+		FILTER = 32;
+		JOIN = 33;
+		SAMPLE = 34;
+		SORT = 35;
+		UNION = 36;
+		UNION_ALL = 37;
+		UNIQUE = 38;
+		WINDOW = 39;
 
 		// Physical tuple mover
 		BROADCAST = 40;

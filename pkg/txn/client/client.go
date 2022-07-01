@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"go.uber.org/zap"
 )
 
@@ -48,13 +49,13 @@ var _ TxnClient = (*txnClient)(nil)
 
 type txnClient struct {
 	logger    *zap.Logger
-	sender    TxnSender
+	sender    rpc.TxnSender
 	clock     clock.Clock
 	generator TxnIDGenerator
 }
 
 // NewTxnClient
-func NewTxnClient(sender TxnSender, options ...TxnClientCreateOption) TxnClient {
+func NewTxnClient(sender rpc.TxnSender, options ...TxnClientCreateOption) TxnClient {
 	c := &txnClient{sender: sender}
 	for _, opt := range options {
 		opt(c)

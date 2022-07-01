@@ -21,8 +21,9 @@
 package operator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	"sync"
+
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 // Controller is used to manage operators.
@@ -97,7 +98,7 @@ func (c *Controller) GetAddingReplicas() (adding map[uint64][]uint64) {
 	return
 }
 
-func (c *Controller) RemoveFinishedOperator(dnState hakeeper.DNState, state hakeeper.LogState) {
+func (c *Controller) RemoveFinishedOperator(dnState pb.DNState, state pb.LogState) {
 	for _, ops := range c.operators {
 		for _, op := range ops {
 			op.Check(state, dnState)
@@ -109,91 +110,108 @@ func (c *Controller) RemoveFinishedOperator(dnState hakeeper.DNState, state hake
 	}
 }
 
-func (c *Controller) Dispatch(ops []*Operator, logState hakeeper.LogState, dnState hakeeper.DNState) (commands []hakeeper.ScheduleCommand) {
+func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState, dnState pb.DNState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
 		c.operators[op.shardID] = append(c.operators[op.shardID], op)
 		step := op.Check(logState, dnState)
-		var cmd hakeeper.ScheduleCommand
+		var cmd pb.ScheduleCommand
 		switch st := step.(type) {
 		case AddLogService:
-			cmd = hakeeper.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.Target,
-				ConfigChange: hakeeper.ConfigChange{
-					Replica: hakeeper.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 						Epoch:     st.Epoch,
 					},
-					ChangeType: hakeeper.AddReplica,
+					ChangeType: pb.AddReplica,
 				},
-				ServiceType: hakeeper.LogService,
+				ServiceType: pb.LogService,
 			}
 		case RemoveLogService:
-			cmd = hakeeper.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.Target,
-				ConfigChange: hakeeper.ConfigChange{
-					Replica: hakeeper.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.RemoveReplica,
+					ChangeType: pb.RemoveReplica,
 				},
-				ServiceType: hakeeper.LogService,
+				ServiceType: pb.LogService,
 			}
 		case StartLogService:
-			cmd = hakeeper.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: hakeeper.ConfigChange{
-					Replica: hakeeper.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.StartReplica,
+					ChangeType: pb.StartReplica,
 				},
-				ServiceType: hakeeper.LogService,
+				ServiceType: pb.LogService,
 			}
 		case StopLogService:
-			cmd = hakeeper.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: hakeeper.ConfigChange{
-					Replica: hakeeper.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:    st.StoreID,
 						ShardID: st.ShardID,
 					},
-					ChangeType: hakeeper.StopReplica,
+					ChangeType: pb.StopReplica,
 				},
-				ServiceType: hakeeper.LogService,
+				ServiceType: pb.LogService,
 			}
 		case AddDnReplica:
-			cmd = hakeeper.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: hakeeper.ConfigChange{
-					Replica: hakeeper.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.AddReplica,
+					ChangeType: pb.AddReplica,
 				},
-				ServiceType: hakeeper.DnService,
+				ServiceType: pb.DnService,
 			}
 		case RemoveDnReplica:
-			cmd = hakeeper.ScheduleCommand{
+			cmd = pb.ScheduleCommand{
 				UUID: st.StoreID,
-				ConfigChange: hakeeper.ConfigChange{
-					Replica: hakeeper.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      st.StoreID,
 						ShardID:   st.ShardID,
 						ReplicaID: st.ReplicaID,
 					},
-					ChangeType: hakeeper.RemoveReplica,
+					ChangeType: pb.RemoveReplica,
 				},
-				ServiceType: hakeeper.DnService,
+				ServiceType: pb.DnService,
+			}
+		case StopDnStore:
+			cmd = pb.ScheduleCommand{
+				UUID: st.StoreID,
+				ShutdownStore: &pb.ShutdownStore{
+					StoreID: st.StoreID,
+				},
+				ServiceType: pb.DnService,
+			}
+		case StopLogStore:
+			cmd = pb.ScheduleCommand{
+				UUID: st.StoreID,
+				ShutdownStore: &pb.ShutdownStore{
+					StoreID: st.StoreID,
+				},
+				ServiceType: pb.LogService,
 			}
 		}
+
 		commands = append(commands, cmd)
 	}
 

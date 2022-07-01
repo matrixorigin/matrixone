@@ -20,10 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
@@ -56,10 +55,10 @@ func main() {
 	defer tae.Close()
 
 	schema := catalog.MockSchemaAll(10, 3)
-	schema.BlockMaxRows = 80000
-	schema.SegmentMaxBlocks = 5
-	batchCnt := uint32(200)
-	batchRows := schema.BlockMaxRows * 1 / 20 * batchCnt
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 2
+	batchCnt := uint32(1)
+	batchRows := int(schema.BlockMaxRows * 1 / 20 * batchCnt)
 	{
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
@@ -68,10 +67,10 @@ func main() {
 			panic(err)
 		}
 	}
-	bat := catalog.MockData(schema, batchRows)
-	bats := compute.SplitBatch(bat, int(batchCnt))
+	bat := catalog.MockBatch(schema, batchRows)
+	bats := bat.Split(int(batchCnt))
 	var wg sync.WaitGroup
-	doAppend := func(b *batch.Batch) func() {
+	doAppend := func(b *containers.Batch) func() {
 		return func() {
 			defer wg.Done()
 			txn, _ := tae.StartTxn(nil)
@@ -99,21 +98,6 @@ func main() {
 		_ = p.Submit(doAppend(b))
 	}
 	wg.Wait()
-	// {
-	// 	txn := mgr.StartTxn(nil)
-	// 	db, _ := txn.GetDatabase(dbName)
-	// 	rel, _ := db.GetRelationByName(schema.Name)
-	// 	var compressed bytes.Buffer
-	// 	var decompressed bytes.Buffer
-	// 	it := rel.MakeBlockIt()
-	// 	for it.Valid() {
-	// 		blk := it.GetBlock()
-	// 		vec, _ := blk.GetVectorCopy(schema.ColDefs[schema.PrimaryKey].Name, &compressed, &decompressed)
-	// 		logutil.Info(vec.String())
-	// 		it.Next()
-	// 	}
-	// }
-
 	stopProfile()
 	logutil.Infof("Append takes: %s", time.Since(now))
 	waitTime := time.Millisecond * time.Duration(batchCnt/200+1) * 300

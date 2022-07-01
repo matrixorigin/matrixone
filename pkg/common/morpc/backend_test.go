@@ -16,12 +16,14 @@ package morpc
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -40,7 +42,7 @@ func TestSend(t *testing.T) {
 		func(b *remoteBackend) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := &testMessage{id: []byte("id1")}
+			req := newTestMessage(1)
 			f, err := b.Send(ctx, req, SendOptions{})
 			assert.NoError(t, err)
 			defer f.Close()
@@ -52,6 +54,30 @@ func TestSend(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestSendWithAlreadyContextDone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+
+			req := newTestMessage(1)
+			f, err := b.Send(ctx, req, SendOptions{})
+			assert.NoError(t, err)
+			defer f.Close()
+			resp, err := f.Get()
+			assert.Error(t, err)
+			assert.Nil(t, resp)
+		},
+		WithBackendConnectWhenCreate(),
+		WithBackendFilter(func(f []*Future) []*Future {
+			cancel()
+			return f
+		}))
+}
+
 func TestSendWithResetConnAndRetry(t *testing.T) {
 	retry := 0
 	testBackendSend(t,
@@ -61,7 +87,7 @@ func TestSendWithResetConnAndRetry(t *testing.T) {
 		func(b *remoteBackend) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
-			req := &testMessage{id: []byte("id1")}
+			req := &testMessage{id: 1}
 			f, err := b.Send(ctx, req, SendOptions{})
 			assert.NoError(t, err)
 			defer f.Close()
@@ -85,7 +111,7 @@ func TestSendWithTimeout(t *testing.T) {
 		func(b *remoteBackend) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
-			req := &testMessage{id: []byte("id1")}
+			req := &testMessage{id: 1}
 			f, err := b.Send(ctx, req, SendOptions{})
 			assert.NoError(t, err)
 			defer f.Close()
@@ -191,7 +217,7 @@ func TestBusy(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
-			req := &testMessage{id: []byte("id1")}
+			req := &testMessage{id: 1}
 			f1, err := b.Send(ctx, req, SendOptions{})
 			assert.NoError(t, err)
 			defer f1.Close()
@@ -219,7 +245,7 @@ func TestBusy(t *testing.T) {
 func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 	var f *Future
 	c := make(chan Message, 1)
-	s := newStream(c, func(v *Future) error {
+	s := newStream(1, c, func(v *Future) error {
 		f = v
 		return nil
 	})
@@ -297,7 +323,7 @@ func (b *testBackend) Send(ctx context.Context, request Message, opts SendOption
 }
 
 func (b *testBackend) NewStream(bufferSize int) (Stream, error) {
-	return newStream(make(chan Message, bufferSize), func(f *Future) error {
+	return newStream(1, make(chan Message, bufferSize), func(f *Future) error {
 		return nil
 	}), nil
 }
@@ -306,33 +332,37 @@ func (b *testBackend) Close()     {}
 func (b *testBackend) Busy() bool { return b.busy }
 
 type testMessage struct {
-	id      []byte
+	id      uint64
 	payload []byte
 }
 
-func newTestMessage(id []byte) *testMessage {
+func newTestMessage(id uint64) *testMessage {
 	return &testMessage{id: id}
 }
 
-func (tm *testMessage) ID() []byte {
+func (tm *testMessage) SetID(id uint64) {
+	tm.id = id
+}
+
+func (tm *testMessage) GetID() uint64 {
 	return tm.id
 }
 
 func (tm *testMessage) DebugString() string {
-	return string(tm.id)
+	return fmt.Sprintf("%d", tm.id)
 }
 
 func (tm *testMessage) Size() int {
-	return len(tm.id)
+	return 8
 }
 
 func (tm *testMessage) MarshalTo(data []byte) (int, error) {
-	return copy(data, tm.id), nil
+	buf.Uint64ToBytesTo(tm.id, data)
+	return 8, nil
 }
 
 func (tm *testMessage) Unmarshal(data []byte) error {
-	tm.id = make([]byte, len(data))
-	copy(tm.id, data)
+	tm.id = buf.Byte2Uint64(data)
 	return nil
 }
 
@@ -345,5 +375,13 @@ func (tm *testMessage) SetPayloadField(data []byte) {
 }
 
 func newTestCodec() Codec {
-	return NewMessageCodec(func() Message { return &testMessage{} }, 1024)
+	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, 1024)
 }
+
+var (
+	messagePool = sync.Pool{
+		New: func() any {
+			return newTestMessage(0)
+		},
+	}
+)

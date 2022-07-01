@@ -62,6 +62,53 @@ func GetFixedVectorValues[T any](v *Vector, sz int) []T {
 	return DecodeFixedCol[T](v, sz)
 }
 
+func (v *Vector) FillDefaultValue() {
+	if !nulls.Any(v.Nsp) || len(v.Data) == 0 {
+		return
+	}
+	switch v.Typ.Oid {
+	case types.T_bool:
+		fillDefaultValue[bool](v)
+	case types.T_int8:
+		fillDefaultValue[int8](v)
+	case types.T_int16:
+		fillDefaultValue[int16](v)
+	case types.T_int32:
+		fillDefaultValue[int32](v)
+	case types.T_int64:
+		fillDefaultValue[int64](v)
+	case types.T_uint8:
+		fillDefaultValue[uint8](v)
+	case types.T_uint16:
+		fillDefaultValue[uint16](v)
+	case types.T_uint32:
+		fillDefaultValue[uint32](v)
+	case types.T_uint64:
+		fillDefaultValue[uint64](v)
+	case types.T_float32:
+		fillDefaultValue[uint64](v)
+	case types.T_float64:
+		fillDefaultValue[float64](v)
+	case types.T_date:
+		fillDefaultValue[types.Date](v)
+	case types.T_datetime:
+		fillDefaultValue[types.Datetime](v)
+	case types.T_timestamp:
+		fillDefaultValue[types.Timestamp](v)
+	case types.T_decimal64:
+		fillDefaultValue[types.Decimal64](v)
+	case types.T_decimal128:
+		fillDefaultValue[types.Decimal128](v)
+	case types.T_char, types.T_varchar, types.T_json:
+		col := v.Col.(*types.Bytes)
+		rows := v.Nsp.Np.ToArray()
+		for _, row := range rows {
+			col.Offsets[row] = 0
+			col.Lengths[row] = 0
+		}
+	}
+}
+
 func (v *Vector) ToConst(row int) *Vector {
 	if v.IsConst {
 		return v
@@ -196,6 +243,17 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	}
 	v.IsConst = false
 	return v
+}
+
+func fillDefaultValue[T any](v *Vector) {
+	var dv T
+
+	col := v.Col.([]T)
+	rows := v.Nsp.Np.ToArray()
+	for _, row := range rows {
+		col[row] = dv
+	}
+	v.Col = col
 }
 
 func toConstVector[T any](v *Vector, row int) *Vector {

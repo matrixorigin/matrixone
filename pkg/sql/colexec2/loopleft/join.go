@@ -161,23 +161,46 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			return err
 		}
 		bs := vec.Col.([]bool)
-		for j, b := range bs {
-			if b {
-				flg = false
-				for k, rp := range ap.Result {
-					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
-							rbat.Clean(proc.Mp)
-							return err
-						}
-					} else {
-						if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp); err != nil {
-							rbat.Clean(proc.Mp)
-							return err
+		if len(bs) == 1 {
+			if bs[0] {
+				for j := 0; j < len(ctr.bat.Zs); j++ {
+					flg = false
+					for k, rp := range ap.Result {
+						if rp.Rel == 0 {
+							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
+								rbat.Clean(proc.Mp)
+								return err
+							}
+						} else {
+							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp); err != nil {
+								rbat.Clean(proc.Mp)
+								return err
+							}
 						}
 					}
+					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+
 				}
-				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+			}
+		} else {
+			for j, b := range bs {
+				if b {
+					flg = false
+					for k, rp := range ap.Result {
+						if rp.Rel == 0 {
+							if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[rp.Pos], int64(i), proc.Mp); err != nil {
+								rbat.Clean(proc.Mp)
+								return err
+							}
+						} else {
+							if err := vector.UnionOne(rbat.Vecs[k], ctr.bat.Vecs[rp.Pos], int64(j), proc.Mp); err != nil {
+								rbat.Clean(proc.Mp)
+								return err
+							}
+						}
+					}
+					rbat.Zs = append(rbat.Zs, ctr.bat.Zs[j])
+				}
 			}
 		}
 		vector.Clean(vec, proc.Mp)

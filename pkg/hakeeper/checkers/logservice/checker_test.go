@@ -18,8 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"sort"
@@ -29,21 +28,21 @@ import (
 func TestCollectStats(t *testing.T) {
 	cases := []struct {
 		desc     string
-		cluster  hapb.ClusterInfo
-		infos    hapb.LogState
+		cluster  pb.ClusterInfo
+		infos    pb.LogState
 		tick     uint64
 		expected stats
 	}{
 		{
 			desc: "Normal case",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             ""}}},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
 					1: {
 						ShardID:  1,
 						Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
@@ -51,10 +50,10 @@ func TestCollectStats(t *testing.T) {
 						LeaderID: 0,
 						Term:     0,
 					}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -62,8 +61,8 @@ func TestCollectStats(t *testing.T) {
 								Term:     0,
 							}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -71,8 +70,8 @@ func TestCollectStats(t *testing.T) {
 								Term:     0,
 							}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -81,31 +80,31 @@ func TestCollectStats(t *testing.T) {
 			}, tick: 10, expected: stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{}}},
 		{
 			desc: "Shard 1 has only 2 replicas, which is expected as 3.",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             ""}}},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b"},
 					Epoch:    1,
 					LeaderID: 0,
 					Term:     0}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -115,75 +114,75 @@ func TestCollectStats(t *testing.T) {
 			}, tick: 10, expected: stats{toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{1: 1}}},
 		{
 			desc: "replica on Store c is not started.",
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
 					1: {
 						ShardID:  1,
 						Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 						Epoch:    1,
 						LeaderID: 0,
 						Term:     0}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{}},
+						Replicas: []pb.LogReplicaInfo{}},
 				},
 			}, tick: 10,
 			expected: stats{toStart: []replica{{"c", 1, 0, 3}},
 				toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{}}},
 		{
 			desc: "replica on Store d is a zombie.",
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
 					1: {
 						ShardID:  1,
 						Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 						Epoch:    1,
 						LeaderID: 0,
 						Term:     0}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 4: "d"},
 								Epoch:    0,
@@ -195,48 +194,48 @@ func TestCollectStats(t *testing.T) {
 				toRemove: map[uint64][]replica{}, toAdd: map[uint64]int{}}},
 		{
 			desc: "Shard 1 has 4 replicas, which is expected as 3.",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             ""}}},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
 					1: {
 						ShardID:  1,
 						Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
 						Epoch:    1,
 						LeaderID: 0,
 						Term:     0}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"b": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"c": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"d": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c", 4: "d"},
 								Epoch:    1,
@@ -250,34 +249,34 @@ func TestCollectStats(t *testing.T) {
 		},
 		{
 			desc: "Store a is expired",
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
 					1: {
 						ShardID:  1,
 						Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 						Epoch:    1,
 						LeaderID: 0,
 						Term:     0}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {Tick: 0, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"b": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
 								LeaderID: 0,
 								Term:     0}}}},
 					"c": {Tick: 999999999, RaftAddress: "", ServiceAddress: "", GossipAddress: "",
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -301,14 +300,14 @@ func TestCollectStats(t *testing.T) {
 func TestCollectStore(t *testing.T) {
 	cases := []struct {
 		desc     string
-		cluster  hapb.ClusterInfo
-		infos    hapb.LogState
+		cluster  pb.ClusterInfo
+		infos    pb.LogState
 		tick     uint64
 		expected util.ClusterStores
 	}{
 		{
 			desc: "no expired stores",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
@@ -316,13 +315,13 @@ func TestCollectStore(t *testing.T) {
 					Name:             "",
 				}},
 			},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 					Epoch:    1,
 				}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {
 						Tick:     uint64(10 * hakeeper.TickPerSecond * 60),
 						Replicas: nil,
@@ -357,7 +356,7 @@ func TestCollectStore(t *testing.T) {
 		},
 		{
 			desc: "store b expired",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: nil,
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
@@ -365,13 +364,13 @@ func TestCollectStore(t *testing.T) {
 					Name:             "",
 				}},
 			},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 					Epoch:    1,
 				}},
-				Stores: map[string]hapb.LogStoreInfo{
+				Stores: map[string]pb.LogStoreInfo{
 					"a": {
 						Tick:     uint64(10 * hakeeper.TickPerSecond * 60),
 						Replicas: nil,
@@ -423,8 +422,8 @@ func TestCollectStore(t *testing.T) {
 func TestCheck(t *testing.T) {
 	cases := []struct {
 		desc        string
-		cluster     hapb.ClusterInfo
-		infos       hapb.LogState
+		cluster     pb.ClusterInfo
+		infos       pb.LogState
 		removing    map[uint64][]uint64
 		adding      map[uint64][]uint64
 		currentTick uint64
@@ -432,25 +431,25 @@ func TestCheck(t *testing.T) {
 	}{
 		{
 			desc: "normal case",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             "shard 1",
 				}},
 			},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 					Epoch:    1,
 					LeaderID: 1,
 					Term:     1,
 				}},
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Tick: 0,
-					Replicas: []logservice.LogReplicaInfo{{
-						LogShardInfo: logservice.LogShardInfo{
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
 							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 							Epoch:    1,
@@ -459,8 +458,8 @@ func TestCheck(t *testing.T) {
 						}, ReplicaID: 1}}},
 					"b": {
 						Tick: 0,
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -469,8 +468,8 @@ func TestCheck(t *testing.T) {
 							}, ReplicaID: 2}}},
 					"c": {
 						Tick: 0,
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -486,25 +485,25 @@ func TestCheck(t *testing.T) {
 		},
 		{
 			desc: "store \"a\" expired",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             "shard 1",
 				}},
 			},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 					Epoch:    1,
 					LeaderID: 1,
 					Term:     1,
 				}},
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Tick: 0,
-					Replicas: []logservice.LogReplicaInfo{{
-						LogShardInfo: logservice.LogShardInfo{
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
 							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 							Epoch:    1,
@@ -513,8 +512,8 @@ func TestCheck(t *testing.T) {
 						}, ReplicaID: 1}}},
 					"b": {
 						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -523,8 +522,8 @@ func TestCheck(t *testing.T) {
 							}, ReplicaID: 2}}},
 					"c": {
 						Tick: uint64(14 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -546,25 +545,25 @@ func TestCheck(t *testing.T) {
 		},
 		{
 			desc: "shard 1 has only 2 replicas, which expected as 3",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             "shard 1",
 				}},
 			},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b"},
 					Epoch:    1,
 					LeaderID: 1,
 					Term:     1,
 				}},
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Tick: uint64(14 * hakeeper.TickPerSecond * 60),
-					Replicas: []logservice.LogReplicaInfo{{
-						LogShardInfo: logservice.LogShardInfo{
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
 							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 							Epoch:    1,
@@ -573,8 +572,8 @@ func TestCheck(t *testing.T) {
 						}, ReplicaID: 1}}},
 					"b": {
 						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -583,7 +582,7 @@ func TestCheck(t *testing.T) {
 							}, ReplicaID: 2}}},
 					"c": {
 						Tick:     uint64(14 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{}},
+						Replicas: []pb.LogReplicaInfo{}},
 				},
 			},
 			removing:    nil,
@@ -600,25 +599,25 @@ func TestCheck(t *testing.T) {
 		},
 		{
 			desc: "replica 3 on store c is not started",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             "shard 1",
 				}},
 			},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 					Epoch:    1,
 					LeaderID: 1,
 					Term:     1,
 				}},
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Tick: uint64(14 * hakeeper.TickPerSecond * 60),
-					Replicas: []logservice.LogReplicaInfo{{
-						LogShardInfo: logservice.LogShardInfo{
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
 							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 							Epoch:    1,
@@ -627,8 +626,8 @@ func TestCheck(t *testing.T) {
 						}, ReplicaID: 1}}},
 					"b": {
 						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -637,7 +636,7 @@ func TestCheck(t *testing.T) {
 							}, ReplicaID: 2}}},
 					"c": {
 						Tick:     uint64(14 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{}},
+						Replicas: []pb.LogReplicaInfo{}},
 				},
 			},
 			removing:    nil,
@@ -652,25 +651,25 @@ func TestCheck(t *testing.T) {
 		},
 		{
 			desc: "store \"a\" expired and is processing",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 					Name:             "shard 1",
 				}},
 			},
-			infos: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{1: {
+			infos: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{1: {
 					ShardID:  1,
 					Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 					Epoch:    1,
 					LeaderID: 1,
 					Term:     1,
 				}},
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Tick: 0,
-					Replicas: []logservice.LogReplicaInfo{{
-						LogShardInfo: logservice.LogShardInfo{
+					Replicas: []pb.LogReplicaInfo{{
+						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
 							Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 							Epoch:    1,
@@ -679,8 +678,8 @@ func TestCheck(t *testing.T) {
 						}, ReplicaID: 1}}},
 					"b": {
 						Tick: uint64(13 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,
@@ -689,8 +688,8 @@ func TestCheck(t *testing.T) {
 							}, ReplicaID: 2}}},
 					"c": {
 						Tick: uint64(14 * hakeeper.TickPerSecond * 60),
-						Replicas: []logservice.LogReplicaInfo{{
-							LogShardInfo: logservice.LogShardInfo{
+						Replicas: []pb.LogReplicaInfo{{
+							LogShardInfo: pb.LogShardInfo{
 								ShardID:  1,
 								Replicas: map[uint64]string{1: "a", 2: "b", 3: "c"},
 								Epoch:    1,

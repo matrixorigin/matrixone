@@ -28,6 +28,31 @@ type NodeDescribeImpl struct {
 	Node *plan.Node
 }
 
+func (ndesc *NodeDescribeImpl) GetTableDefine(options *ExplainOptions) (string, error) {
+	var result string = "Table Define:"
+	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
+		tableDef := ndesc.Node.TableDef
+		result += "TABLE '" + tableDef.Name + "'("
+		var first bool = true
+		for i, col := range tableDef.Cols {
+			if !first {
+				result += ", "
+			}
+			first = false
+			//result += "'" + col.Name + "':" + col.Typ.Id.String()
+			if col.IsPrune {
+				result += "'" + col.Name + "'#[0," + strconv.Itoa(i) + "](*)"
+			} else {
+				result += "'" + col.Name + "'#[0," + strconv.Itoa(i) + "]"
+			}
+		}
+		result += ")"
+	} else {
+		panic("implement me")
+	}
+	return result, nil
+}
+
 func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 	return &NodeDescribeImpl{
 		Node: node,
@@ -66,6 +91,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Sink Scan"
 	case plan.Node_AGG:
 		pname = "Aggregate"
+	case plan.Node_DISTINCT:
+		pname = "Distinct"
 	case plan.Node_FILTER:
 		pname = "Filter"
 	case plan.Node_JOIN:
@@ -138,6 +165,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		case plan.Node_SINK_SCAN:
 			fallthrough
 		case plan.Node_AGG:
+			fallthrough
+		case plan.Node_DISTINCT:
 			fallthrough
 		case plan.Node_FILTER:
 			fallthrough
@@ -498,6 +527,10 @@ type RowsetDataDescribeImpl struct {
 
 func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
 	var result string
+	if r.RowsetData == nil {
+		return result, nil
+	}
+
 	var first bool = true
 	for index := range r.RowsetData.Cols {
 		if !first {

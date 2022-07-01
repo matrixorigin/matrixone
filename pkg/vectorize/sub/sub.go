@@ -15,6 +15,7 @@
 package sub
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -22,60 +23,60 @@ import (
 )
 
 var (
-	Int8Sub                = Numeric[int8]
-	Int8SubScalar          = NumericScalar[int8]
-	Int8SubByScalar        = NumericByScalar[int8]
-	Int16Sub               = Numeric[int16]
-	Int16SubScalar         = NumericScalar[int16]
-	Int16SubByScalar       = NumericByScalar[int16]
-	Int32Sub               = Numeric[int32]
-	Int32SubScalar         = NumericScalar[int32]
-	Int32SubByScalar       = NumericByScalar[int32]
-	Int64Sub               = Numeric[int64]
-	Int64SubScalar         = NumericScalar[int64]
-	Int64SubByScalar       = NumericByScalar[int64]
-	Uint8Sub               = Numeric[uint8]
-	Uint8SubScalar         = NumericScalar[uint8]
-	Uint8SubByScalar       = NumericByScalar[uint8]
-	Uint16Sub              = Numeric[uint16]
-	Uint16SubScalar        = NumericScalar[uint16]
-	Uint16SubByScalar      = NumericByScalar[uint16]
-	Uint32Sub              = Numeric[uint32]
-	Uint32SubScalar        = NumericScalar[uint32]
-	Uint32SubByScalar      = NumericByScalar[uint32]
-	Uint64Sub              = Numeric[uint64]
-	Uint64SubScalar        = NumericScalar[uint64]
-	Uint64SubByScalar      = NumericByScalar[uint64]
+	Int8Sub                = NumericSigned[int8]
+	Int8SubScalar          = NumericScalarSigned[int8]
+	Int8SubByScalar        = NumericByScalarSigned[int8]
+	Int16Sub               = NumericSigned[int16]
+	Int16SubScalar         = NumericScalarSigned[int16]
+	Int16SubByScalar       = NumericByScalarSigned[int16]
+	Int32Sub               = NumericSigned[int32]
+	Int32SubScalar         = NumericScalarSigned[int32]
+	Int32SubByScalar       = NumericByScalarSigned[int32]
+	Int64Sub               = NumericSigned[int64]
+	Int64SubScalar         = NumericScalarSigned[int64]
+	Int64SubByScalar       = NumericByScalarSigned[int64]
+	Uint8Sub               = NumericUnsigned[uint8]
+	Uint8SubScalar         = NumericScalarUnsigned[uint8]
+	Uint8SubByScalar       = NumericByScalarUnsigned[uint8]
+	Uint16Sub              = NumericUnsigned[uint16]
+	Uint16SubScalar        = NumericScalarUnsigned[uint16]
+	Uint16SubByScalar      = NumericByScalarUnsigned[uint16]
+	Uint32Sub              = NumericUnsigned[uint32]
+	Uint32SubScalar        = NumericScalarUnsigned[uint32]
+	Uint32SubByScalar      = NumericByScalarUnsigned[uint32]
+	Uint64Sub              = NumericUnsigned[uint64]
+	Uint64SubScalar        = NumericScalarUnsigned[uint64]
+	Uint64SubByScalar      = NumericByScalarUnsigned[uint64]
 	Float32Sub             = Numeric[float32]
 	Float32SubScalar       = NumericScalar[float32]
 	Float32SubByScalar     = NumericByScalar[float32]
 	Float64Sub             = Numeric[float64]
 	Float64SubScalar       = NumericScalar[float64]
 	Float64SubByScalar     = NumericByScalar[float64]
-	Int8SubSels            = NumericSels[int8]
-	Int8SubScalarSels      = NumericScalarSels[int8]
-	Int8SubByScalarSels    = NumericByScalarSels[int8]
-	Int16SubSels           = NumericSels[int16]
-	Int16SubScalarSels     = NumericScalarSels[int16]
-	Int16SubByScalarSels   = NumericByScalarSels[int16]
-	Int32SubSels           = NumericSels[int32]
-	Int32SubScalarSels     = NumericScalarSels[int32]
-	Int32SubByScalarSels   = NumericByScalarSels[int32]
-	Int64SubSels           = NumericSels[int64]
-	Int64SubScalarSels     = NumericScalarSels[int64]
-	Int64SubByScalarSels   = NumericByScalarSels[int64]
-	Uint8SubSels           = NumericSels[uint8]
-	Uint8SubScalarSels     = NumericScalarSels[uint8]
-	Uint8SubByScalarSels   = NumericByScalarSels[uint8]
-	Uint16SubSels          = NumericSels[uint16]
-	Uint16SubScalarSels    = NumericScalarSels[uint16]
-	Uint16SubByScalarSels  = NumericByScalarSels[uint16]
-	Uint32SubSels          = NumericSels[uint32]
-	Uint32SubScalarSels    = NumericScalarSels[uint32]
-	Uint32SubByScalarSels  = NumericByScalarSels[uint32]
-	Uint64SubSels          = NumericSels[uint64]
-	Uint64SubScalarSels    = NumericScalarSels[uint64]
-	Uint64SubByScalarSels  = NumericByScalarSels[uint64]
+	Int8SubSels            = NumericSelsSigned[int8]
+	Int8SubScalarSels      = NumericScalarSelsSigned[int8]
+	Int8SubByScalarSels    = NumericByScalarSelsSigned[int8]
+	Int16SubSels           = NumericSelsSigned[int16]
+	Int16SubScalarSels     = NumericScalarSelsSigned[int16]
+	Int16SubByScalarSels   = NumericByScalarSelsSigned[int16]
+	Int32SubSels           = NumericSelsSigned[int32]
+	Int32SubScalarSels     = NumericScalarSelsSigned[int32]
+	Int32SubByScalarSels   = NumericByScalarSelsSigned[int32]
+	Int64SubSels           = NumericSelsSigned[int64]
+	Int64SubScalarSels     = NumericScalarSelsSigned[int64]
+	Int64SubByScalarSels   = NumericByScalarSelsSigned[int64]
+	Uint8SubSels           = NumericSelsUnsigned[uint8]
+	Uint8SubScalarSels     = NumericScalarSelsUnsigned[uint8]
+	Uint8SubByScalarSels   = NumericByScalarSelsUnsigned[uint8]
+	Uint16SubSels          = NumericSelsUnsigned[uint16]
+	Uint16SubScalarSels    = NumericScalarSelsUnsigned[uint16]
+	Uint16SubByScalarSels  = NumericByScalarSelsUnsigned[uint16]
+	Uint32SubSels          = NumericSelsUnsigned[uint32]
+	Uint32SubScalarSels    = NumericScalarSelsUnsigned[uint32]
+	Uint32SubByScalarSels  = NumericByScalarSelsUnsigned[uint32]
+	Uint64SubSels          = NumericSelsUnsigned[uint64]
+	Uint64SubScalarSels    = NumericScalarSelsUnsigned[uint64]
+	Uint64SubByScalarSels  = NumericByScalarSelsUnsigned[uint64]
 	Float32SubSels         = NumericSels[float32]
 	Float32SubScalarSels   = NumericScalarSels[float32]
 	Float32SubByScalarSels = NumericByScalarSels[float32]
@@ -123,6 +124,144 @@ var (
 	Float32Float64Sub     = NumericBigSmall[float64, float32]
 	Float32Float64SubSels = NumericSelsBigSmall[float64, float32]
 )
+
+func NumericSigned[T constraints.Signed](xs, ys, rs []T) []T {
+	for i, x := range xs {
+		rs[i] = x - ys[i]
+		if x < 0 && ys[i] > 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+		if x > 0 && ys[i] < 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericSelsSigned[T constraints.Signed](xs, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = xs[sel] - ys[sel]
+		if xs[sel] < 0 && ys[i] > 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+		if xs[sel] > 0 && ys[i] < 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericScalarSigned[T constraints.Signed](x T, ys, rs []T) []T {
+	for i, y := range ys {
+		rs[i] = x - y
+		if x < 0 && ys[i] > 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+		if x > 0 && ys[i] < 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericScalarSelsSigned[T constraints.Signed](x T, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = x - ys[sel]
+		if x < 0 && ys[i] > 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+		if x > 0 && ys[i] < 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericByScalarSigned[T constraints.Signed](x T, ys, rs []T) []T {
+	for i, y := range ys {
+		rs[i] = y - x
+		if y < 0 && x > 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+		if y > 0 && x < 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericByScalarSelsSigned[T constraints.Signed](x T, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = ys[sel] - x
+		if ys[sel] < 0 && x > 0 && rs[i] >= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction underflow"))
+		}
+		if ys[sel] > 0 && ys[i] < 0 && rs[i] <= 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "int subtraction overflow"))
+		}
+	}
+	return rs
+}
+
+func NumericUnsigned[T constraints.Unsigned](xs, ys, rs []T) []T {
+	for i, x := range xs {
+		rs[i] = x - ys[i]
+		if rs[i] > x {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "subtraction underflow"))
+		}
+	}
+	return rs
+}
+
+func NumericSelsUnsigned[T constraints.Unsigned](xs, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = xs[sel] - ys[sel]
+		if rs[i] > xs[sel] {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "subtraction underflow"))
+		}
+	}
+	return rs
+}
+
+func NumericScalarUnsigned[T constraints.Unsigned](x T, ys, rs []T) []T {
+	for i, y := range ys {
+		rs[i] = x - y
+		if rs[i] > x {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "subtraction underflow"))
+		}
+	}
+	return rs
+}
+
+func NumericScalarSelsUnsigned[T constraints.Unsigned](x T, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = x - ys[sel]
+		if rs[i] > x {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "subtraction underflow"))
+		}
+	}
+	return rs
+}
+
+func NumericByScalarUnsigned[T constraints.Unsigned](x T, ys, rs []T) []T {
+	for i, y := range ys {
+		rs[i] = y - x
+		if rs[i] > y {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "subtraction underflow"))
+		}
+	}
+	return rs
+}
+
+func NumericByScalarSelsUnsigned[T constraints.Unsigned](x T, ys, rs []T, sels []int64) []T {
+	for i, sel := range sels {
+		rs[i] = ys[sel] - x
+		if rs[i] > ys[sel] {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "subtraction underflow"))
+		}
+	}
+	return rs
+}
 
 func Numeric[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {

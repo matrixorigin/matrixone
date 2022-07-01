@@ -6,9 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -36,6 +35,7 @@ func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
 	db := initDB(t, opts)
 	return &testEngine{
 		DB: db,
+		t:  t,
 	}
 }
 
@@ -52,8 +52,21 @@ func (e *testEngine) Close() error {
 	return e.DB.Close()
 }
 
-func (e *testEngine) createRelAndAppend(bat *mobat.Batch, createDB bool) (handle.Database, handle.Relation) {
+func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
 	return createRelationAndAppend(e.t, e.DB, defaultTestDB, e.schema, bat, createDB)
+}
+
+func (e *testEngine) getRows() int {
+	txn, rel := e.getRelation()
+	rows := rel.Rows()
+	assert.NoError(e.t, txn.Commit())
+	return int(rows)
+}
+
+func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
+	txn, rel := e.getRelation()
+	checkAllColRowsByScan(e.t, rel, exp, applyDelete)
+	assert.NoError(e.t, txn.Commit())
 }
 
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
@@ -85,7 +98,14 @@ func (e *testEngine) getDB() (txn txnif.AsyncTxn, db handle.Database) {
 	return
 }
 
-func (e *testEngine) tryAppend(bat *mobat.Batch) {
+func (e *testEngine) doAppend(bat *containers.Batch) {
+	txn, rel := e.getRelation()
+	err := rel.Append(bat)
+	assert.NoError(e.t, err)
+	assert.NoError(e.t, txn.Commit())
+}
+
+func (e *testEngine) tryAppend(bat *containers.Batch) {
 	txn, err := e.DB.StartTxn(nil)
 	assert.NoError(e.t, err)
 	db, err := txn.GetDatabase(defaultTestDB)
@@ -102,6 +122,27 @@ func (e *testEngine) tryAppend(bat *mobat.Batch) {
 		return
 	}
 	_ = txn.Commit()
+}
+
+func (e *testEngine) deleteAll(skipConflict bool) error {
+	txn, rel := e.getRelation()
+	it := rel.MakeBlockIt()
+	for it.Valid() {
+		blk := it.GetBlock()
+		view, err := blk.GetColumnDataByName(catalog.HiddenColumnName, nil)
+		assert.NoError(e.t, err)
+		defer view.Close()
+		view.ApplyDeletes()
+		err = rel.DeleteByHiddenKeys(view.GetData())
+		assert.NoError(e.t, err)
+		it.Next()
+	}
+	checkAllColRowsByScan(e.t, rel, 0, true)
+	err := txn.Commit()
+	if !skipConflict {
+		assert.NoError(e.t, err)
+	}
+	return err
 }
 
 func (e *testEngine) truncate() {
@@ -151,10 +192,10 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	return
 }
 
-func lenOfBats(bats []*mobat.Batch) int {
+func lenOfBats(bats []*containers.Batch) int {
 	rows := 0
 	for _, bat := range bats {
-		rows += compute.LengthOfBatch(bat)
+		rows += bat.Length()
 	}
 	return rows
 }
@@ -217,7 +258,7 @@ func createRelationAndAppend(
 	e *DB,
 	dbName string,
 	schema *catalog.Schema,
-	bat *mobat.Batch,
+	bat *containers.Batch,
 	createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
 	assert.NoError(t, err)
@@ -283,7 +324,8 @@ func getColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDel
 
 func forEachColumnView(rel handle.Relation, colIdx int, fn func(view *model.ColumnView) error) {
 	forEachBlock(rel, func(blk handle.Block) (err error) {
-		view, err := blk.GetColumnDataById(colIdx, nil, nil)
+		view, err := blk.GetColumnDataById(colIdx, nil)
+		defer view.Close()
 		if err != nil {
 			return
 		}
@@ -307,7 +349,7 @@ func forEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	}
 }
 
-func appendFailClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendFailClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -321,7 +363,7 @@ func appendFailClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *
 	}
 }
 
-func appendClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func appendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -335,7 +377,7 @@ func appendClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync
 	}
 }
 
-func tryAppendClosure(t *testing.T, data *mobat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
 	return func() {
 		if wg != nil {
 			defer wg.Done()
@@ -496,7 +538,7 @@ func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 	assert.NoError(t, txn.Commit())
 }
 
-func getSingleSortKeyValue(bat *mobat.Batch, schema *catalog.Schema, row int) (v any) {
-	v = compute.GetValue(bat.Vecs[schema.GetSingleSortKeyIdx()], uint32(row))
+func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
+	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)
 	return
 }

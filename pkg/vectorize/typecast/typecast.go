@@ -15,10 +15,12 @@
 package typecast
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"math"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -62,7 +64,7 @@ var (
 	Uint8ToInt64   = NumericToNumeric[uint8, int64]
 	Uint16ToInt64  = NumericToNumeric[uint16, int64]
 	Uint32ToInt64  = NumericToNumeric[uint32, int64]
-	Uint64ToInt64  = NumericToNumeric[uint64, int64]
+	Uint64ToInt64  = uint64ToInt64 // we handle overflow error in this function
 	Float32ToInt64 = NumericToNumeric[float32, int64]
 	Float64ToInt64 = NumericToNumeric[float64, int64]
 
@@ -99,7 +101,7 @@ var (
 	Int8ToUint64    = NumericToNumeric[int8, uint64]
 	Int16ToUint64   = NumericToNumeric[int16, uint64]
 	Int32ToUint64   = NumericToNumeric[int32, uint64]
-	Int64ToUint64   = NumericToNumeric[int64, uint64]
+	Int64ToUint64   = int64ToUint64
 	Uint8ToUint64   = NumericToNumeric[uint8, uint64]
 	Uint16ToUint64  = NumericToNumeric[uint16, uint64]
 	Uint32ToUint64  = NumericToNumeric[uint32, uint64]
@@ -134,13 +136,13 @@ var (
 	Int32ToBytes   = IntToBytes[int32]
 	BytesToInt64   = BytesToInt[int64]
 	Int64ToBytes   = IntToBytes[int64]
-	BytesToUint8   = BytesToInt[uint8]
+	BytesToUint8   = BytesToUint[uint8]
 	Uint8ToBytes   = IntToBytes[uint8]
-	BytesToUint16  = BytesToInt[uint16]
+	BytesToUint16  = BytesToUint[uint16]
 	Uint16ToBytes  = IntToBytes[uint16]
-	BytesToUint32  = BytesToInt[uint32]
+	BytesToUint32  = BytesToUint[uint32]
 	Uint32ToBytes  = IntToBytes[uint32]
-	BytesToUint64  = BytesToInt[uint64]
+	BytesToUint64  = BytesToUint[uint64]
 	Uint64ToBytes  = IntToBytes[uint64]
 	BytesToFloat32 = BytesToFloat[float32]
 	Float32ToBytes = FloatToBytes[float32]
@@ -176,14 +178,58 @@ func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, r
 	return rs, nil
 }
 
-func BytesToInt[T constraints.Integer](xs *types.Bytes, rs []T) ([]T, error) {
+func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
+	overflowFlag := uint64(0)
+	for i, x := range xs {
+		rs[i] = int64(x)
+		overflowFlag |= x >> 63
+	}
+	if overflowFlag != 0 {
+		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint unsigned to bigint")
+	}
+	return rs, nil
+}
+
+func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
+	overflowFlag := int64(0)
+	for i, x := range xs {
+		rs[i] = uint64(x)
+		overflowFlag |= x >> 63
+	}
+	if overflowFlag != 0 {
+		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint to bigint unsigned")
+	}
+	return rs, nil
+}
+
+func BytesToInt[T constraints.Signed](xs *types.Bytes, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 
 	for i, o := range xs.Offsets {
 		s := string(xs.Data[o : o+xs.Lengths[i]])
-		val, err := strconv.ParseInt(s, 10, bitSize)
+		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
-			return nil, err
+			if strings.Contains(err.Error(), "value out of range") {
+				return nil, fmt.Errorf("Overflow when cast '%s' as type of integer", s)
+			}
+			return nil, fmt.Errorf("Can't cast '%s' as type of integer", s)
+		}
+		rs[i] = T(val)
+	}
+	return rs, nil
+}
+
+func BytesToUint[T constraints.Unsigned](xs *types.Bytes, rs []T) ([]T, error) {
+	var bitSize = int(unsafe.Sizeof(T(0))) * 8
+
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+		if err != nil {
+			if strings.Contains(err.Error(), "value out of range") {
+				return nil, fmt.Errorf("Overflow when cast '%s' as type of unsigned integer", s)
+			}
+			return nil, fmt.Errorf("Can't cast '%s' as type of unsigned integer", s)
 		}
 		rs[i] = T(val)
 	}
@@ -425,6 +471,13 @@ func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]fl
 			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
 		}
 		rs[i] = result
+	}
+	return rs, nil
+}
+
+func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool) ([]bool, error) {
+	for i, x := range xs {
+		rs[i] = (x != 0)
 	}
 	return rs, nil
 }

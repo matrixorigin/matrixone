@@ -1,21 +1,17 @@
 select CAST(1-2 AS UNSIGNED);
-CAST(1-2 AS UNSIGNED)
-18446744073709551615
+can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
-CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER)
--1
+can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select CAST('10 ' as unsigned integer);
-CAST('10 ' as unsigned integer)
+cast(10  as integer unsigned)
 10
 select CAST('10x' as unsigned integer);
-CAST('10x' as unsigned integer)
-10
+can't cast '10x' from VARCHAR type to BIGINT UNSIGNED type.
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 cast(-5 as unsigned) | 1	cast(-5 as unsigned) & -1
 18446744073709551611	18446744073709551611
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
-cast(-5 as unsigned) -1	cast(-5 as unsigned) + 1
-18446744073709551610	18446744073709551612
+can't cast '-5' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select cast(5 as unsigned) -6.0;
 cast(5 as unsigned) -6.0
 -1.0
@@ -41,20 +37,16 @@ select CAST(0xb3 as signed);
 CAST(0xb3 as signed)
 179
 select CAST(0x8fffffffffffffff as signed);
-CAST(0x8fffffffffffffff as signed)
--8070450532247928833
+can't cast '10376293541461622783' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select CAST(0xffffffffffffffff as unsigned);
 CAST(0xffffffffffffffff as unsigned)
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
-CAST(0xfffffffffffffffe as signed)
--2
+can't cast '18446744073709551614' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select cast('-10a' as signed integer);
-cast('-10a' as signed integer)
--10
+can't cast '-10a' from VARCHAR type to BIGINT type.
 select cast('a10' as unsigned integer);
-cast('a10' as unsigned integer)
-0
+can't cast 'a10' from VARCHAR type to BIGINT UNSIGNED type.
 select 10+'a';
 10+'a'
 10.0
@@ -65,26 +57,19 @@ select 10E+0+'a';
 10E+0+'a'
 10.0
 select cast('18446744073709551616' as unsigned);
-cast('18446744073709551616' as unsigned)
-18446744073709551615
+can't cast '18446744073709551616' from VARCHAR type to BIGINT UNSIGNED type.
 select cast('18446744073709551616' as signed);
-cast('18446744073709551616' as signed)
--1
+can't cast '18446744073709551616' from VARCHAR type to BIGINT type.
 select cast('9223372036854775809' as signed);
-cast('9223372036854775809' as signed)
--9223372036854775807
+can't cast '9223372036854775809' from VARCHAR type to BIGINT type.
 select cast('-1' as unsigned);
-cast('-1' as unsigned)
-18446744073709551615
+can't cast '-1' from VARCHAR type to BIGINT UNSIGNED type.
 select cast('abc' as signed);
-cast('abc' as signed)
-0
+can't cast 'abc' from VARCHAR type to BIGINT type.
 select cast('1a' as signed);
-cast('1a' as signed)
-1
+can't cast '1a' from VARCHAR type to BIGINT type.
 select cast('' as signed);
-cast('' as signed)
-0
+can't cast '' from VARCHAR type to BIGINT type.
 select cast("2001-1-1" as date) = "2001-01-01";
 cast("2001-1-1" as date) = "2001-01-01"
 1
@@ -101,14 +86,12 @@ select cast(18446744073709551615 as unsigned);
 cast(18446744073709551615 as unsigned)
 18446744073709551615
 select cast(18446744073709551615 as signed);
-cast(18446744073709551615 as signed)
--1
+can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
 select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
 select cast('18446744073709551615' as signed);
-cast('18446744073709551615' as signed)
--1
+can't cast '18446744073709551615' from VARCHAR type to BIGINT type.
 select cast('9223372036854775807' as signed);
 cast('9223372036854775807' as signed)
 9223372036854775807
@@ -177,9 +160,9 @@ SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
 CAST(DATE'2000-01-01' AS FLOAT)	CAST(DATE'2000-01-01' AS DOUBLE)
 2.00001E7	2.0000101E7
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
-Function or operator 'timestamp' will be implemented in future version.
+Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
-Function or operator 'timestamp' will be implemented in future version.
+Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
 SELECT CAST(NULL AS REAL), CAST(NULL AS FLOAT), CAST(NULL AS DOUBLE);
 CAST(NULL AS REAL)	CAST(NULL AS FLOAT)	CAST(NULL AS DOUBLE)
 null	null	null
@@ -216,8 +199,7 @@ create table t1(f1 date, f2 timestamp, f3 datetime);
 insert into t1 values ("2006-01-01", "2006-01-01 12:01:01", "2006-01-01 12:01:01");
 insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02");
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
-f1
-2006-01-01
+Operator 'cast' with parameters [BIGINT DATE] will be implemented in future version.
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
 f1
 2006-01-01
@@ -228,8 +210,7 @@ select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast(
 f3
 2006-01-01 12:01:01
 select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-f3
-2006-01-01 12:01:01
+Operator '>=' with parameters [TIMESTAMP DATETIME] will be implemented in future version.
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
 f1
 2006-01-01
@@ -237,7 +218,7 @@ select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
 f1
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
-[22000]Incorrect date value
+can't cast 'zzz' from VARCHAR type to DATE type.
 drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');

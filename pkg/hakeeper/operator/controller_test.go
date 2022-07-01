@@ -1,7 +1,7 @@
 package operator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -12,13 +12,13 @@ func TestDispatchAndRemoveOperator(t *testing.T) {
 	operator2 := &Operator{shardID: 1}
 	operator3 := &Operator{shardID: 2}
 
-	c.Dispatch([]*Operator{operator1}, hakeeper.LogState{}, hakeeper.DNState{})
+	c.Dispatch([]*Operator{operator1}, pb.LogState{}, pb.DNState{})
 	assert.Equal(t, []*Operator{operator1}, c.operators[1])
 
-	c.Dispatch([]*Operator{operator2}, hakeeper.LogState{}, hakeeper.DNState{})
+	c.Dispatch([]*Operator{operator2}, pb.LogState{}, pb.DNState{})
 	assert.Equal(t, []*Operator{operator1, operator2}, c.operators[1])
 
-	c.Dispatch([]*Operator{operator3}, hakeeper.LogState{}, hakeeper.DNState{})
+	c.Dispatch([]*Operator{operator3}, pb.LogState{}, pb.DNState{})
 	assert.Equal(t, []*Operator{operator3}, c.operators[2])
 
 	c.RemoveOperator(operator1)

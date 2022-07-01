@@ -47,19 +47,9 @@ insert into t4 values(1, '2021-12-13','2021-12-13 13:00:00');
 insert into t4 values(2, '20211214','20211213');
 insert into t4 values(3,'2021-12-14','2021-12-14');
 insert into t4 values(4,'2021-12-15','2021-12-14');
--- @bvt:issue#3253
 select * from t4 where b>'20211213';
--- @bvt:issue
--- @bvt:issue#3254
 select * from t4 where c>'20211213';
--- @bvt:issue
--- @bvt:issue#3253
 select * from t4 where b>'2021-12-13';
--- @bvt:issue
--- @bvt:issue#3254
 select * from t4 where c>'2021-12-13';
--- @bvt:issue
--- @bvt:issue#3253
 select * from t4 where b between '2021-12-13' and '2021-12-14';
-select * from t4 where b not between '2021-12-13' and '2021-12-14';  
--- @bvt:issue
+select * from t4 where b not between '2021-12-13' and '2021-12-14';

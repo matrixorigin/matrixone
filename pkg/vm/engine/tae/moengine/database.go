@@ -44,6 +44,10 @@ func (db *txnDatabase) Relation(name string, _ engine.Snapshot) (rel engine.Rela
 	if err != nil {
 		return
 	}
+	if isSysRelation(name) {
+		rel = newSysRelation(h)
+		return
+	}
 	rel = newRelation(h)
 	return
 }

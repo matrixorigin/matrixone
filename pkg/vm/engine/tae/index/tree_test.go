@@ -18,13 +18,14 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestARTIndexNumeric(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.Type_INT32}
 	idx := NewSimpleARTMap(typ)
 
@@ -34,10 +35,11 @@ func TestARTIndexNumeric(t *testing.T) {
 	res = idx.Contains(int32(0))
 	require.False(t, res)
 
-	var batches []*vector.Vector
+	var vecs []containers.Vector
 	for i := 0; i < 10; i++ {
-		batch := compute.MockVec(typ, 100, i*100)
-		batches = append(batches, batch)
+		vec := containers.MockVector2(typ, 100, i*100)
+		vecs = append(vecs, vec)
+		defer vec.Close()
 	}
 
 	_, err = idx.Search(int32(55))
@@ -48,7 +50,7 @@ func TestARTIndexNumeric(t *testing.T) {
 
 	ctx := new(KeysCtx)
 	ctx.Count = 100
-	ctx.Keys = batches[0]
+	ctx.Keys = vecs[0]
 	_, err = idx.BatchInsert(ctx, uint32(0), false)
 	require.NoError(t, err)
 
@@ -67,11 +69,11 @@ func TestARTIndexNumeric(t *testing.T) {
 
 	ctx = new(KeysCtx)
 	ctx.Count = 100
-	ctx.Keys = batches[0]
+	ctx.Keys = vecs[0]
 	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
-	ctx.Keys = batches[1]
+	ctx.Keys = vecs[1]
 	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.NoError(t, err)
 
@@ -100,7 +102,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		updated = append(updated, uint32(i+10000))
 	}
-	err = idx.BatchUpdate(batches[0], updated, 0)
+	err = idx.BatchUpdate(vecs[0], updated, 0)
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(67))
@@ -109,6 +111,7 @@ func TestARTIndexNumeric(t *testing.T) {
 }
 
 func TestArtIndexString(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.Type_VARCHAR}
 	idx := NewSimpleARTMap(typ)
 
@@ -118,10 +121,11 @@ func TestArtIndexString(t *testing.T) {
 	res = idx.Contains([]byte(strconv.Itoa(0)))
 	require.False(t, res)
 
-	var batches []*vector.Vector
+	var vecs []containers.Vector
 	for i := 0; i < 10; i++ {
-		batch := compute.MockVec(typ, 100, i*100)
-		batches = append(batches, batch)
+		vec := containers.MockVector2(typ, 100, i*100)
+		vecs = append(vecs, vec)
+		defer vec.Close()
 	}
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
@@ -131,10 +135,11 @@ func TestArtIndexString(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 
 	ctx := new(KeysCtx)
-	ctx.Keys = batches[0]
+	ctx.Keys = vecs[0]
 	ctx.Count = 100
 	_, err = idx.BatchInsert(ctx, uint32(0), false)
 	require.NoError(t, err)
+	t.Log(idx.String())
 
 	row, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
@@ -152,7 +157,7 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
-	ctx.Keys = batches[1]
+	ctx.Keys = vecs[1]
 	_, err = idx.BatchInsert(ctx, uint32(100), false)
 	require.NoError(t, err)
 
@@ -165,6 +170,7 @@ func TestArtIndexString(t *testing.T) {
 }
 
 func TestMVART(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.Type_INT32}
 	m := NewMultiplRowsART(typ)
 	require.Equal(t, 0, m.Size())

@@ -730,9 +730,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	switch name {
 	case "date":
 		// rewrite date function to cast function, and retrun directly
-		return appendCastBeforeExpr(args[0], &Type{
-			Id: plan.Type_DATE,
-		})
+		if args[0].Typ.Id != plan.Type_VARCHAR && args[0].Typ.Id != plan.Type_CHAR {
+			return appendCastBeforeExpr(args[0], &Type{
+				Id: plan.Type_DATE,
+			})
+		}
 	case "interval":
 		// rewrite interval function to ListExpr, and retrun directly
 		return &plan.Expr{
@@ -776,6 +778,19 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "adddate", "subdate":
+		if len(args) != 2 {
+			return nil, errors.New("", "add_date/sub_date function need two args")
+		}
+		args, err = resetDateFunctionArgs2(args[0], args[1])
+		if err != nil {
+			return nil, err
+		}
+		if name == "adddate" {
+			name = "date_add"
+		} else {
+			name = "date_sub"
+		}
 	case "+":
 		// rewrite "date '2001' + interval '1 day'" to date_add(date '2001', 1, day(unit))
 		if len(args) != 2 {
@@ -818,6 +833,16 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "unary_minus":
+		if args[0].Typ.Id == plan.Type_UINT64 {
+			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
+				Id:       plan.Type_DECIMAL128,
+				Nullable: false,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	// get args(exprs) & types
@@ -843,9 +868,10 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		for idx, castType := range argsCastType {
 			if argsType[idx] != castType && castType != types.T_any {
-				args[idx], err = appendCastBeforeExpr(args[idx], &plan.Type{
+				typ := rewriteDecimalTypeIfNecessary(&plan.Type{
 					Id: plan.Type_TypeId(castType),
 				})
+				args[idx], err = appendCastBeforeExpr(args[idx], typ)
 				if err != nil {
 					return nil, err
 				}
@@ -1009,6 +1035,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal) (*Expr, error) {
 // --- util functions ----
 
 func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
+	if expr.Typ.Id == plan.Type_ANY {
+		return expr, nil
+	}
 	argsType := []types.T{
 		types.T(expr.Typ.Id),
 		types.T(toType.Id),
@@ -1134,4 +1163,37 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 			Typ: intervalTypeInFunction,
 		},
 	}, nil
+}
+
+func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+	switch intervalExpr.Expr.(type) {
+	case *plan.Expr_List:
+		return resetDateFunctionArgs(dateExpr, intervalExpr)
+	}
+	list := &plan.ExprList{
+		List: make([]*Expr, 2),
+	}
+	list.List[0] = intervalExpr
+	strType := &plan.Type{
+		Id:   plan.Type_CHAR,
+		Size: 4,
+	}
+	strExpr := &Expr{
+		Expr: &plan.Expr_C{
+			C: &Const{
+				Value: &plan.Const_Sval{
+					Sval: "day",
+				},
+			},
+		},
+		Typ: strType,
+	}
+	list.List[1] = strExpr
+	expr := &plan.Expr_List{
+		List: list,
+	}
+	listExpr := &Expr{
+		Expr: expr,
+	}
+	return resetDateFunctionArgs(dateExpr, listExpr)
 }

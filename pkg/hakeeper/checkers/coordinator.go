@@ -17,30 +17,50 @@ package checkers
 import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/logservice"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+// NB: Coordinator is assumed to be used in synchronous, single-threaded context.
 type Coordinator struct {
 	OperatorController *operator.Controller
+
+	// Considering the context of `Coordinator`,
+	// there is no need for a mutext to protect.
+	teardown    bool
+	teardownOps []*operator.Operator
 }
 
 func NewCoordinator() *Coordinator {
 	return &Coordinator{OperatorController: operator.NewController()}
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, cluster hapb.ClusterInfo,
-	dn hapb.DNState, log hapb.LogState, currentTick uint64) []hapb.ScheduleCommand {
+func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
+	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
 
-	c.OperatorController.RemoveFinishedOperator(dn, log)
+	c.OperatorController.RemoveFinishedOperator(dnState, logState)
 
+	// if we've discovered unhealth already, no need to keep alive anymore.
+	if c.teardown {
+		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState)
+	}
+
+	// check whether system health or not.
+	if operators, health := syshealth.Check(cluster, dnState, logState, currentTick); !health {
+		c.teardown = true
+		c.teardownOps = operators
+		return c.OperatorController.Dispatch(c.teardownOps, logState, dnState)
+	}
+
+	// system health, try to keep alive.
 	removing := c.OperatorController.GetRemovingReplicas()
 	adding := c.OperatorController.GetAddingReplicas()
 
 	operators := make([]*operator.Operator, 0)
-	operators = append(operators, logservice.Check(alloc, cluster, log, removing, adding, currentTick)...)
-	operators = append(operators, dnservice.Check(alloc, dn, currentTick)...)
+	operators = append(operators, logservice.Check(alloc, cluster, logState, removing, adding, currentTick)...)
+	operators = append(operators, dnservice.Check(alloc, dnState, currentTick)...)
 
-	return c.OperatorController.Dispatch(operators, log, dn)
+	return c.OperatorController.Dispatch(operators, logState, dnState)
 }

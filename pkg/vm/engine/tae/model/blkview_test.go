@@ -18,8 +18,7 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,145 +26,16 @@ import (
 func TestEval(t *testing.T) {
 	view := NewBlockView(123455)
 	colTypes := types.MockColTypes(14)
-	rows := uint64(64)
-	attrs1 := make([]int, 0)
-	vecs1 := make([]vector.IVector, 0)
-	for i, colType := range colTypes {
-		attrs1 = append(attrs1, i)
-		vec := vector.MockVector(colType, rows)
-		vec.ResetReadonly()
-		vecs1 = append(vecs1, vec)
-	}
-	bat, err := batch.NewBatch(attrs1, vecs1)
-	assert.Nil(t, err)
-	view.Raw = bat
+	rows := 64
+	bat := containers.MockBatch(colTypes, rows, 3, nil)
 
-	view.UpdateMasks[1] = &roaring.Bitmap{}
-	view.UpdateMasks[1].Add(3)
-	view.UpdateVals[1] = make(map[uint32]any)
-	view.UpdateVals[1][3] = int16(7)
+	view.SetBatch(bat)
+	defer view.Close()
+	view.SetUpdates(1, roaring.BitmapOf(3), map[uint32]any{3: int16(7)})
+	view.SetUpdates(13, roaring.BitmapOf(4), map[uint32]any{4: []byte("testEval")})
 
-	view.UpdateMasks[13] = &roaring.Bitmap{}
-	view.UpdateMasks[13].Add(4)
-	view.UpdateVals[13] = make(map[uint32]any)
-	view.UpdateVals[13][4] = []byte("testEval")
+	_ = view.Eval(true)
 
-	view.Eval()
-
-	vec1, err := view.AppliedIBatch.GetVectorByAttr(1)
-	assert.Nil(t, err)
-	val, err := vec1.GetValue(3)
-	assert.Nil(t, err)
-	assert.Equal(t, int16(7), val)
-	t.Logf("%v", vec1)
-
-	vec2, err := view.AppliedIBatch.GetVectorByAttr(13)
-	assert.Nil(t, err)
-	val, err = vec2.GetValue(4)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("testEval"), val)
-	val, err = vec2.GetValue(5)
-	assert.Nil(t, err)
-	assert.Equal(t, []byte("str5"), val)
-	t.Logf("%v", vec2)
-}
-
-func TestMarshal(t *testing.T) {
-	view := NewBlockView(123455)
-
-	colTypes := types.MockColTypes(14)
-	rows := uint64(64)
-	attrs1 := make([]int, 0)
-	vecs1 := make([]vector.IVector, 0)
-	for i, colType := range colTypes {
-		attrs1 = append(attrs1, i)
-		vec := vector.MockVector(colType, rows)
-		vec.ResetReadonly()
-		vecs1 = append(vecs1, vec)
-	}
-	bat, err := batch.NewBatch(attrs1, vecs1)
-	assert.Nil(t, err)
-	view.AppliedIBatch = bat
-
-	view.DeleteMask = &roaring.Bitmap{}
-	view.DeleteMask.Add(0)
-	view.DeleteMask.Add(3)
-	view.DeleteMask.Add(88)
-
-	// _, err = view.Marshal()
-	// assert.Nil(t, err)
-	buf, err := view.Marshal()
-	assert.Nil(t, err)
-	view2 := NewBlockView(0)
-	err = view2.Unmarshal(buf)
-	assert.Nil(t, err)
-
-	assert.Equal(t, uint64(123455), view2.Ts)
-
-	assert.Equal(t, 3, int(view2.DeleteMask.GetCardinality()))
-	assert.True(t, view2.DeleteMask.Contains(0))
-	assert.True(t, view2.DeleteMask.Contains(3))
-	assert.True(t, view2.DeleteMask.Contains(88))
-
-	assert.Equal(t, len(view.AppliedIBatch.GetAttrs()), len(view2.AppliedIBatch.GetAttrs()))
-}
-
-func TestMarshal2(t *testing.T) {
-	view := NewBlockView(123455)
-
-	view.AppliedIBatch = nil
-
-	view.DeleteMask = &roaring.Bitmap{}
-	view.DeleteMask.Add(0)
-	view.DeleteMask.Add(3)
-	view.DeleteMask.Add(88)
-
-	// _, err = view.Marshal()
-	// assert.Nil(t, err)
-	buf, err := view.Marshal()
-	assert.Nil(t, err)
-	view2 := NewBlockView(0)
-	err = view2.Unmarshal(buf)
-	assert.Nil(t, err)
-
-	assert.Equal(t, uint64(123455), view2.Ts)
-
-	assert.Equal(t, 3, int(view2.DeleteMask.GetCardinality()))
-	assert.True(t, view2.DeleteMask.Contains(0))
-	assert.True(t, view2.DeleteMask.Contains(3))
-	assert.True(t, view2.DeleteMask.Contains(88))
-
-	assert.Nil(t, view2.AppliedIBatch)
-}
-
-func TestMarshal3(t *testing.T) {
-	view := NewBlockView(123455)
-
-	colTypes := types.MockColTypes(14)
-	rows := uint64(64)
-	attrs1 := make([]int, 0)
-	vecs1 := make([]vector.IVector, 0)
-	for i, colType := range colTypes {
-		attrs1 = append(attrs1, i)
-		vec := vector.MockVector(colType, rows)
-		vec.ResetReadonly()
-		vecs1 = append(vecs1, vec)
-	}
-	bat, err := batch.NewBatch(attrs1, vecs1)
-	assert.Nil(t, err)
-	view.AppliedIBatch = bat
-
-	// _, err = view.Marshal()
-	// assert.Nil(t, err)
-	buf, err := view.Marshal()
-	assert.Nil(t, err)
-	view2 := NewBlockView(0)
-	err = view2.Unmarshal(buf)
-	assert.Nil(t, err)
-
-	assert.Equal(t, uint64(123455), view2.Ts)
-
-	assert.Equal(t, 0, int(view2.DeleteMask.GetCardinality()))
-
-	assert.Equal(t, len(view.AppliedIBatch.GetAttrs()), len(view2.AppliedIBatch.GetAttrs()))
+	assert.Equal(t, any(int16(7)), view.GetColumnData(1).Get(3))
+	assert.Equal(t, any([]byte("testEval")), view.GetColumnData(13).Get(4))
 }

@@ -657,7 +657,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
-			logutil.Infof("line %d %v ", i, line)
 			//wait_a := time.Now()
 			rowIdx := batchBegin + i
 			offset := i + 1
@@ -1023,7 +1022,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
 						fs := field
-						d, err := types.ParseStringToDecimal64(fs, vec.Typ.Precision, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal64(fs, vec.Typ.Width, vec.Typ.Scale)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1040,7 +1039,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
 						fs := field
-						d, err := types.ParseStringToDecimal128(fs, vec.Typ.Precision, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal128(fs, vec.Typ.Width, vec.Typ.Scale)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1509,7 +1508,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal64(field, vec.Typ.Precision, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal64(field, vec.Typ.Width, vec.Typ.Scale)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
@@ -1531,7 +1530,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					} else {
 						field := line[j]
 						//logutil.Infof("==== > field string [%s] ",fs)
-						d, err := types.ParseStringToDecimal128(field, vec.Typ.Precision, vec.Typ.Scale)
+						d, err := types.ParseStringToDecimal128(field, vec.Typ.Width, vec.Typ.Scale)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {

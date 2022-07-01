@@ -33,11 +33,9 @@ INSERT INTO Demovarchar VALUES('Rapier', 'Abigail','F',	'Human Resources',38);
 INSERT INTO Demovarchar VALUES('Martin', 'Kelly','F','Information Services',54);
 INSERT INTO Demovarchar VALUES('Poland', 'Carole','F','Production Control',29);
 SELECT * FROM Demovarchar;
--- @bvt:issue#3372
 select concat_ws(LastName,FirstName) from Demovarchar where Age > 40 order by 1 asc;
 select concat_ws(LastName,FirstName) as fullname from Demovarchar where Age > 40 order by fullname desc;
 select concat_ws(LastName,FirstName),Gender,Age from Demovarchar where Gender='F' order by Age asc;
--- @bvt:issue
 -- @bvt:issue#3252
 select cast(Age as char) and Age as cAge from Demovarchar where Age>=50 order by cAge desc;
 -- @bvt:issue
@@ -83,9 +81,7 @@ select * from employees where officeCode not in ('5','7','1');
 select avg(officeCode) from employees where jobTitle like 'Sales%' group by jobTitle; 
 -- @bvt:issue
 select officeCode,sum(cast(officeCode as unsigned)) from employees group by officeCode;
--- @bvt:issue#3251
 select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
--- @bvt:issue
 
 #Test cases of query with multi tables
 create table job(
@@ -179,7 +175,6 @@ i varchar(10) not null default '0',
 j varchar(10) not null default '0',
 primary key (a));
 insert into t1 (a) values ('2'),('4'),('6'),('8'),('10'),('12'),('14'),('16'),('18'),('20'),('22'),('24'),('26'),('23');
--- @bvt:issue#3251
 delete from t1 where a=2+2;
 select a,b from t1;
 delete from t1 where  a=24;
@@ -188,7 +183,6 @@ delete from t1 where  3 < 2;
 select a,b from t1;
 delete from t1 where  1 < 2;
 select a,b from t1;
--- @bvt:issue
 drop table t1;
 create table t1 (a varchar(10) primary key, b varchar(32));
 insert into t1 values ('abc','apple'), ('ab','apple');

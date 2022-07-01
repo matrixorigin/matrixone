@@ -189,7 +189,7 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 			panic(err)
 		}
 	}
-	logutil.Info("[PrepareCommit]",
+	logutil.Debug("[PrepareCommit]",
 		common.NameSpaceField("txns"),
 		common.DurationField(time.Since(now)),
 		common.CountField(len(items)))
@@ -216,7 +216,7 @@ func (mgr *TxnManager) onCommit(items ...any) {
 		// Here only wait the txn to be done. The err returned can be access via op.Txn.GetError()
 		_ = op.Txn.WaitDone(err)
 	}
-	logutil.Info("[Commit]",
+	logutil.Debug("[Commit]",
 		common.NameSpaceField("txns"),
 		common.CountField(len(items)),
 		common.DurationField(time.Since(now)))

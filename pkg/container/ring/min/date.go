@@ -136,43 +136,38 @@ func (r *DateRing) Grows(size int, m *mheap.Mheap) error {
 }
 
 func (r *DateRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
-	if v := vec.Col.([]types.Date)[sel]; v < r.Vs[i] {
-		r.Vs[i] = v
-	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
 		r.Ns[i] += z
+		return
+	}
+	if v := vec.Col.([]types.Date)[sel]; v < r.Vs[i] {
+		r.Vs[i] = v
 	}
 }
 
 func (r *DateRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]types.Date)
 	for i := range os {
+		if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+			r.Ns[vps[i]-1] += zs[int64(i)+start]
+			continue
+		}
 		j := vps[i] - 1
 		if vs[int64(i)+start] < r.Vs[j] {
 			r.Vs[j] = vs[int64(i)+start]
-		}
-	}
-	if nulls.Any(vec.Nsp) {
-		for i := range os {
-			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[vps[i]-1] += zs[int64(i)+start]
-			}
 		}
 	}
 }
 
 func (r *DateRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]types.Date)
-	for _, v := range vs {
+	for j, v := range vs {
+		if nulls.Contains(vec.Nsp, uint64(j)) {
+			r.Ns[i] += zs[j]
+			continue
+		}
 		if v < r.Vs[i] {
 			r.Vs[i] = v
-		}
-	}
-	if nulls.Any(vec.Nsp) {
-		for j := range vs {
-			if nulls.Contains(vec.Nsp, uint64(j)) {
-				r.Ns[i] += zs[j]
-			}
 		}
 	}
 }

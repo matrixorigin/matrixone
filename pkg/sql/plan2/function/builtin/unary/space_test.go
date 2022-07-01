@@ -16,6 +16,8 @@ package unary
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 /*
@@ -157,7 +158,7 @@ func makeCharVector(values []string, nsp []uint64) *vector.Vector {
 */
 
 func TestSpaceUint64(t *testing.T) {
-	inputVector := makeUint64Vector([]uint64{1, 2, 3, 0, 9999999}, []uint64{4})
+	inputVector := makeUint64Vector([]uint64{1, 2, 3, 0, 8000}, []uint64{4})
 	proc := NewTestProc()
 	output, err := SpaceUint64([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
@@ -169,7 +170,7 @@ func TestSpaceUint64(t *testing.T) {
 }
 
 func TestSpaceInt64(t *testing.T) {
-	inputVector := makeInt64Vector([]int64{1, 2, 3, 0, -1, 9999999}, []uint64{4})
+	inputVector := makeInt64Vector([]int64{1, 2, 3, 0, -1, 8000}, []uint64{4})
 	proc := NewTestProc()
 	output, err := SpaceInt64([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
@@ -181,7 +182,7 @@ func TestSpaceInt64(t *testing.T) {
 }
 
 func TestSpaceFloat64(t *testing.T) {
-	inputVector := makeFloat64Vector([]float64{1.4, 1.6, 3.3, 0, -1, 9999999}, []uint64{4})
+	inputVector := makeFloat64Vector([]float64{1.4, 1.6, 3.3, 0, -1, 8000}, []uint64{4})
 	proc := NewTestProc()
 	output, err := SpaceFloat[float64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)

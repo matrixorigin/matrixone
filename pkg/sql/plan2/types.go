@@ -77,28 +77,6 @@ type BaseOptimizer struct {
 	ctx   CompilerContext
 }
 
-//use for build select
-type BinderContext struct {
-	// when build_projection we may set columnAlias and then use in build_orderby
-	columnAlias map[string]*Expr
-	// when build_cte will set cteTables and use in build_from
-	cteTables map[string]*TableDef
-
-	// use for build subquery
-	subqueryIsCorrelated bool
-	// unused, commented out for now.
-	// subqueryIsScalar     bool
-
-	subqueryParentIds []int32
-
-	// use to storage the using columns.
-	// select R.*, S.* from R, S using(a) where S.a > 10
-	// then we store {'a':'S'},
-	// when we use buildUnresolvedName(), and the colName = 'a' and tableName = 'S', we reset tableName=''
-	// because the ProjectNode(after JoinNode) had coalesced the using cols
-	usingCols map[string]string
-}
-
 ///////////////////////////////
 // Data structures for refactor
 ///////////////////////////////
@@ -128,7 +106,6 @@ type BindContext struct {
 	groupTag     int32
 	aggregateTag int32
 	projectTag   int32
-	distinctTag  int32
 	resultTag    int32
 
 	groups     []*plan.Expr
@@ -150,6 +127,7 @@ type BindContext struct {
 	// for join tables
 	bindingTree *BindingTreeNode
 
+	isDistinct   bool
 	isCorrelated bool
 	hasSingleRow bool
 
@@ -210,12 +188,8 @@ type ProjectionBinder struct {
 }
 
 type OrderBinder struct {
-	*DistinctBinder
-	selectList tree.SelectExprs
-}
-
-type DistinctBinder struct {
 	*ProjectionBinder
+	selectList tree.SelectExprs
 }
 
 type LimitBinder struct {
@@ -242,4 +216,9 @@ type Binding struct {
 	types       []*plan.Type
 	refCnts     []uint
 	colIdByName map[string]int32
+}
+
+// Used to collect used columns during column clipping
+type ColumnCollect struct {
+	posMap map[[2]int32]int
 }

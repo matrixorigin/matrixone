@@ -16,12 +16,12 @@ package morpc
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/stop"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -47,17 +47,25 @@ func WithServerSessionBufferSize(size int) ServerOption {
 
 // WithServerWriteFilter set write filter func. Input ready to send Messages, output
 // is really need to be send Messages.
-func WithServerWriteFilter(filter func([]Message) []Message) ServerOption {
+func WithServerWriteFilter(filter func(Message) bool) ServerOption {
 	return func(s *server) {
 		s.options.filter = filter
 	}
 }
 
+// WithServerGoettyOptions set write filter func. Input ready to send Messages, output
+// is really need to be send Messages.
+func WithServerGoettyOptions(options ...goetty.Option) ServerOption {
+	return func(s *server) {
+		s.options.goettyOptions = options
+	}
+}
+
 // WithServerBatchSendSize set the maximum number of messages to be sent together
 // at each batch. Default is 8.
-func WithServerBatchSendSize(size int) BackendOption {
-	return func(rb *remoteBackend) {
-		rb.options.batchSendSize = size
+func WithServerBatchSendSize(size int) ServerOption {
+	return func(s *server) {
+		s.options.batchSendSize = size
 	}
 }
 
@@ -66,13 +74,14 @@ type server struct {
 	address     string
 	logger      *zap.Logger
 	application goetty.NetApplication
-	stopper     *stop.Stopper
+	stopper     *stopper.Stopper
 	handler     func(request Message, sequence uint64, cs ClientSession) error
 
 	options struct {
+		goettyOptions []goetty.Option
 		bufferSize    int
 		batchSendSize int
-		filter        func([]Message) []Message
+		filter        func(Message) bool
 	}
 }
 
@@ -83,21 +92,23 @@ func NewRPCServer(name, address string, codec Codec, options ...ServerOption) (R
 	s := &server{
 		name:    name,
 		address: address,
-		stopper: stop.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
+		stopper: stopper.NewStopper(fmt.Sprintf("rpc-server-%s", name)),
 	}
 	for _, opt := range options {
 		opt(s)
 	}
 	s.adjust()
 
+	s.options.goettyOptions = append(s.options.goettyOptions,
+		goetty.WithCodec(codec, codec),
+		goetty.WithLogger(s.logger),
+		goetty.WithDisableReleaseOutBuf()) // release out buf when write loop reutrned
+
 	app, err := goetty.NewApplication(
 		s.address,
 		s.onMessage,
 		goetty.WithAppLogger(s.logger),
-		goetty.WithAppSessionOptions(
-			goetty.WithCodec(codec, codec),
-			goetty.WithLogger(s.logger),
-		),
+		goetty.WithAppSessionOptions(s.options.goettyOptions...),
 	)
 	if err != nil {
 		s.logger.Error("create rpc server failed",
@@ -141,8 +152,8 @@ func (s *server) adjust() {
 		s.options.bufferSize = 16
 	}
 	if s.options.filter == nil {
-		s.options.filter = func(messages []Message) []Message {
-			return messages
+		s.options.filter = func(messages Message) bool {
+			return true
 		}
 	}
 }
@@ -164,7 +175,7 @@ func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddr()),
-			zap.String("request-id", hex.EncodeToString(request.ID())),
+			zap.Uint64("request-id", request.GetID()),
 			zap.String("request", request.DebugString()))
 	}
 
@@ -180,19 +191,22 @@ func (s *server) onMessage(rs goetty.IOSession, value interface{}, sequence uint
 	if ce := s.logger.Check(zap.DebugLevel, "handle request completed"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
 			zap.String("client", rs.RemoteAddr()),
-			zap.String("request-id", hex.EncodeToString(request.ID())))
+			zap.Uint64("request-id", request.GetID()))
 	}
 	return nil
 }
 
 func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 	return s.stopper.RunTask(func(ctx context.Context) {
-		defer cs.close()
+		defer func() {
+			cs.close()
+			rs.OutBuf().Release()
+		}()
 
-		responses := make([]Message, 0, s.options.batchSendSize)
+		responses := make([]sendMessage, 0, s.options.batchSendSize)
 		fetch := func() {
 			for i := 0; i < len(responses); i++ {
-				responses[i] = nil
+				responses[i] = sendMessage{}
 			}
 			responses = responses[:0]
 
@@ -228,11 +242,18 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 
 				if len(responses) > 0 {
 					written := 0
-					sendResponses := s.options.filter(responses)
-					for _, resp := range sendResponses {
-						if err := rs.Write(resp, goetty.WriteOptions{}); err != nil {
+					sendResponses := responses[:0]
+					for idx := range responses {
+						if s.options.filter(responses[idx].message) {
+							sendResponses = append(sendResponses, responses[idx])
+						}
+					}
+					timeout := time.Duration(0)
+					for idx := range sendResponses {
+						timeout += sendResponses[idx].opts.Timeout
+						if err := rs.Write(sendResponses[idx].message, goetty.WriteOptions{}); err != nil {
 							s.logger.Error("write response failed",
-								zap.String("request-id", hex.EncodeToString(resp.ID())),
+								zap.Uint64("request-id", sendResponses[idx].message.GetID()),
 								zap.Error(err))
 							return
 						}
@@ -240,10 +261,10 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 					}
 
 					if written > 0 {
-						if err := rs.Flush(0); err != nil {
-							for _, f := range sendResponses {
+						if err := rs.Flush(timeout); err != nil {
+							for idx := range sendResponses {
 								s.logger.Error("write response failed",
-									zap.String("request-id", hex.EncodeToString(f.ID())),
+									zap.Uint64("request-id", sendResponses[idx].message.GetID()),
 									zap.Error(err))
 							}
 							return
@@ -251,11 +272,11 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 						if ce := s.logger.Check(zap.DebugLevel, "write responses"); ce != nil {
 							var fields []zap.Field
 							fields = append(fields, zap.String("client", rs.RemoteAddr()))
-							for _, r := range sendResponses {
-								fields = append(fields, zap.String("request-id",
-									hex.EncodeToString(r.ID())))
+							for idx := range sendResponses {
+								fields = append(fields, zap.Uint64("request-id",
+									sendResponses[idx].message.GetID()))
 								fields = append(fields, zap.String("response",
-									r.DebugString()))
+									sendResponses[idx].message.DebugString()))
 							}
 
 							ce.Write(fields...)
@@ -269,7 +290,7 @@ func (s *server) startWriteLoop(rs goetty.IOSession, cs *clientSession) error {
 }
 
 type clientSession struct {
-	c chan Message
+	c chan sendMessage
 
 	mu struct {
 		sync.RWMutex
@@ -279,7 +300,7 @@ type clientSession struct {
 
 func newClientSession() *clientSession {
 	return &clientSession{
-		c: make(chan Message, 16),
+		c: make(chan sendMessage, 16),
 	}
 }
 
@@ -293,7 +314,7 @@ func (cs *clientSession) close() {
 	cs.mu.closed = true
 }
 
-func (cs *clientSession) Write(msg Message) error {
+func (cs *clientSession) Write(message Message, opts SendOptions) error {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -301,6 +322,6 @@ func (cs *clientSession) Write(msg Message) error {
 		return errClientClosed
 	}
 
-	cs.c <- msg
+	cs.c <- sendMessage{message: message, opts: opts}
 	return nil
 }

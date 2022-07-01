@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
-		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
+		input:  "select 'a\\'b'",
+		output: "select a'b",
 	}
 )
 
@@ -52,6 +52,18 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select 'a\\'b'",
+		output: "select a'b",
+	}, {
+		input:  "select char_length('\\n\\t\\r\\b\\0\\_\\%\\\\');",
+		output: "select char_length(\\n\\t\\r\\b\\0\\_\\%\\\\)",
+	}, {
+		input:  "select CAST('10 ' as unsigned);",
+		output: "select cast(10  as unsigned)",
+	}, {
+		input:  "select CAST('10 ' as unsigned integer);",
+		output: "select cast(10  as integer unsigned)",
+	}, {
 		input:  "SELECT ((+0) IN ((0b111111111111111111111111111111111111111111111111111),(rpad(1.0,2048,1)), (32767.1)));",
 		output: "select ((+0) in ((0b111111111111111111111111111111111111111111111111111), (rpad(1.0, 2048, 1)), (32767.1)))",
 	}, {
@@ -166,7 +178,7 @@ var (
 		output: "select 2007-01-01 + interval(a, day) from t1",
 	}, {
 		input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
-		output: "select cast(coalesce(t0.c0, -1) as unsigned unsigned) = true from t0",
+		output: "select cast(coalesce(t0.c0, -1) as unsigned) = true from t0",
 	}, {
 		input:  "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;",
 		output: "select fld1, variance(fld2) as q from t1 group by fld1 having q is not null",
@@ -421,7 +433,7 @@ var (
 		output: "select * from t10 where (b = ba or b = cb) and (c = dc or c = ed)",
 	}, {
 		input:  "select CAST(userID AS DOUBLE) cast_double, CAST(userID AS FLOAT(3)) cast_float , CAST(userID AS REAL) cast_real, CAST(userID AS SIGNED) cast_signed, CAST(userID AS UNSIGNED) cast_unsigned from t1 limit 2",
-		output: "select cast(userid as double) as cast_double, cast(userid as float(3)) as cast_float, cast(userid as real) as cast_real, cast(userid as signed) as cast_signed, cast(userid as unsigned unsigned) as cast_unsigned from t1 limit 2",
+		output: "select cast(userid as double) as cast_double, cast(userid as float(3)) as cast_float, cast(userid as real) as cast_real, cast(userid as signed) as cast_signed, cast(userid as unsigned) as cast_unsigned from t1 limit 2",
 	}, {
 		input: "select distinct name as name1 from t1",
 	}, {

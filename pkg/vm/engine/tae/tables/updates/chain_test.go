@@ -44,6 +44,7 @@ func commitTxn(txn *txnbase.Txn) {
 }
 
 func TestColumnChain1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -77,6 +78,7 @@ func TestColumnChain1(t *testing.T) {
 }
 
 func TestColumnChain2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -192,6 +194,7 @@ func TestColumnChain2(t *testing.T) {
 }
 
 func TestColumnChain3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	ncnt := 100
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -227,6 +230,7 @@ func TestColumnChain3(t *testing.T) {
 	node := chain.GetHead().GetPayload().(*ColumnUpdateNode)
 	cmd, err := node.MakeCommand(1)
 	assert.Nil(t, err)
+	defer cmd.Close()
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
@@ -235,6 +239,7 @@ func TestColumnChain3(t *testing.T) {
 	r := bytes.NewBuffer(buf)
 
 	cmd2, _, err := txnbase.BuildCommandFrom(r)
+	defer cmd2.Close()
 	assert.Nil(t, err)
 	updateCmd := cmd2.(*UpdateCmd)
 	assert.Equal(t, txnbase.CmdUpdate, updateCmd.GetType())
@@ -247,6 +252,7 @@ func TestColumnChain3(t *testing.T) {
 }
 
 func TestColumnChain4(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -349,6 +355,7 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -460,6 +467,7 @@ func TestDeleteChain1(t *testing.T) {
 }
 
 func TestDeleteChain2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	controller := NewMVCCHandle(nil)
 	chain := NewDeleteChain(nil, controller)
 
@@ -513,7 +521,7 @@ func TestDeleteChain2(t *testing.T) {
 	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS())
 	assert.NoError(t, err)
 	t.Log(mask.String())
-	assert.Equal(t, uint64(4), mask.GetCardinality())
+	assert.Equal(t, uint64(8), mask.GetCardinality())
 
 	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1)
 	assert.NoError(t, err)

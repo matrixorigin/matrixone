@@ -129,7 +129,7 @@ func TestClientRead(t *testing.T) {
 		recs, lsn, err := c.Read(ctx, 4, math.MaxUint64)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
-		assert.Equal(t, 2, len(recs))
+		require.Equal(t, 2, len(recs))
 		assert.Equal(t, cmd, recs[0].Data)
 		assert.Equal(t, cmd2, recs[1].Data)
 
