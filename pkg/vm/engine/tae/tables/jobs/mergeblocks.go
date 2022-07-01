@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -61,6 +62,7 @@ type mergeBlocksTask struct {
 	newSeg      handle.Segment
 	scheduler   tasks.TaskScheduler
 	scopes      []common.ID
+	deletes     []*roaring.Bitmap
 }
 
 func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
@@ -164,6 +166,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
+	task.deletes = make([]*roaring.Bitmap, len(task.compacted))
 
 	// 1. Prepare sort key resources
 	// If there's no sort key, use hidden
@@ -173,6 +176,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil); err != nil {
 				return
 			}
+			task.deletes[i] = view.DeleteMask
 			view.ApplyDeletes()
 			vec = view.Orphan()
 		} else if schema.SortKey.Size() == 1 {
@@ -360,7 +364,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		mapping,
 		fromAddr,
 		toAddr,
-		task.scheduler)
+		task.scheduler,
+		task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return
 	}
