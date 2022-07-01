@@ -90,7 +90,7 @@ func TestDateStringSub(t *testing.T) {
 			name:    "TEST01",
 			vecs:    makeDateStringSubVectors("2022-01-02", true, 1, types.Day),
 			proc:    process.New(mheap.New(nil)),
-			want:    "2022-01-01",
+			want:    "2022-01-01 00:00:00",
 			contain: false,
 		},
 		{
@@ -111,7 +111,7 @@ func TestDateStringSub(t *testing.T) {
 			name:    "TEST04",
 			vecs:    makeDateStringSubVectors("xxxx", true, 1, types.Second),
 			proc:    process.New(mheap.New(nil)),
-			want:    "",
+			want:    "0001-01-01 00:00:00",
 			contain: true,
 		},
 	}
@@ -122,7 +122,7 @@ func TestDateStringSub(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.want, string(date.Col.(*types.Bytes).Data))
+			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
 			require.Equal(t, c.contain, nulls.Contains(date.Nsp, 0))
 		})
 	}

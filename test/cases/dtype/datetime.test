@@ -19,7 +19,7 @@ select cast('2022-01-01 25:00:00' as datetime(0));
 select cast('2000-01-01' as datetime(0))+1;
 select cast('2000-01-01' as datetime(0))*1;
 -- @bvt:issue
--- @bvt:issue#330
+-- @bvt:issue#3300
 select cast('2000-01-01' as datetime(0))*1.1;
 -- @bvt:issue
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';
@@ -34,26 +34,21 @@ select cast(cast('2000-12-31' as datetime(0)) as date);
 
 #Test cases of query with single table
 drop table if exists t1;
--- @bvt:issue#3362#
 create table t1 (a datetime(0) not null, primary key(a));
 insert into t1 values ('20200101000000'), ('2022-01-02'), ('2022-01-02 00:00:01'), ('2022-01-02 00:00:01.512345');
 select * from t1;
--- @bvt:issue
--- @bvt:issue#3254
 select * from t1 where a='2022-01-02';
--- @bvt:issue
 -- @bvt:issue#3258
 select * from t1 where a>20220102;
 -- @bvt:issue
--- @bvt:issue#3254
 select * from t1 where a!='2022-01-02';
 update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
 select * from t1;
 drop table t1;
--- @bvt:issue
+
 -- @bvt:issue#3362
 create table t1 ( a int not null default 1, big datetime(4) primary key);
-insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00.00.000050');
+insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
 select * from t1;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;
