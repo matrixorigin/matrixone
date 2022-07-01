@@ -28,17 +28,16 @@ func Atan[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
 	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		inputValues := inputVector.Col.([]T)
 		resultVector := vector.NewConst(resultType)
 		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, atan.Atan[T](inputValues, resultValues))
+		vector.SetCol(resultVector, atan.Atan(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		inputValues := inputVector.Col.([]T)
 		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
 		if err != nil {
 			return nil, err
@@ -46,7 +45,7 @@ func Atan[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		resultValues := encoding.DecodeFloat64Slice(resultVector.Data)
 		resultValues = resultValues[:len(inputValues)]
 		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, atan.Atan[T](inputValues, resultValues))
+		vector.SetCol(resultVector, atan.Atan(inputValues, resultValues))
 		return resultVector, nil
 	}
 }

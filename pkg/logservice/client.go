@@ -16,15 +16,24 @@ package logservice
 
 import (
 	"context"
-	"net"
+	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 var (
+	ErrDeadlineNotSet  = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
+	ErrInvalidDeadline = moerr.NewError(moerr.INVALID_INPUT, "invalid deadline")
 	// ErrIncompatibleClient is returned when write requests are made on read-only clients.
 	ErrIncompatibleClient = moerr.NewError(moerr.INVALID_INPUT, "incompatible client")
+)
+
+const (
+	connectionTimeout      = 5 * time.Second
+	defaultWriteSocketSize = 64 * 1024
 )
 
 // IsTempError returns a boolean value indicating whether the specified error is a temp
@@ -53,27 +62,35 @@ type Client interface {
 }
 
 type client struct {
-	conn net.Conn
-	cfg  LogServiceClientConfig
-	buf  []byte
+	cfg    LogServiceClientConfig
+	client morpc.RPCClient
+	addr   string
+	req    *RPCRequest
+	pool   *sync.Pool
 }
 
 var _ Client = (*client)(nil)
 
 func CreateClient(ctx context.Context,
 	name string, cfg LogServiceClientConfig) (Client, error) {
+	pool := &sync.Pool{}
+	pool.New = func() interface{} {
+		return &RPCResponse{pool: pool}
+	}
 	c := &client{
-		cfg: cfg,
-		buf: make([]byte, reqBufSize),
+		cfg:  cfg,
+		req:  &RPCRequest{},
+		pool: pool,
 	}
 	var e error
 	for _, addr := range cfg.ServiceAddresses {
-		conn, err := getConnection(ctx, addr)
+		cc, err := getRPCClient(ctx, addr, c.pool)
 		if err != nil {
 			e = err
 			continue
 		}
-		c.conn = conn
+		c.addr = addr
+		c.client = cc
 		if cfg.ReadOnly {
 			if err := c.connectReadOnly(ctx); err == nil {
 				return c, nil
@@ -92,10 +109,7 @@ func CreateClient(ctx context.Context,
 }
 
 func (c *client) Close() error {
-	if err := sendPoison(c.conn, poisonNumber[:]); err != nil {
-		return err
-	}
-	return waitPoisonAck(c.conn)
+	return c.client.Close()
 }
 
 func (c *client) Config() LogServiceClientConfig {
@@ -134,11 +148,11 @@ func (c *client) connectReadWrite(ctx context.Context) error {
 	if c.readOnly() {
 		panic(ErrIncompatibleClient)
 	}
-	return c.connect(ctx, pb.MethodType_CONNECT)
+	return c.connect(ctx, pb.CONNECT)
 }
 
 func (c *client) connectReadOnly(ctx context.Context) error {
-	return c.connect(ctx, pb.MethodType_CONNECT_RO)
+	return c.connect(ctx, pb.CONNECT_RO)
 }
 
 func (c *client) request(ctx context.Context,
@@ -149,22 +163,38 @@ func (c *client) request(ctx context.Context,
 		return pb.Response{}, nil, err
 	}
 	req := pb.Request{
-		Method:      mt,
-		ShardID:     c.cfg.ShardID,
-		DNID:        c.cfg.ReplicaID,
-		Timeout:     int64(timeout),
-		Index:       index,
-		MaxSize:     maxSize,
-		PayloadSize: uint64(len(payload)),
+		Method:  mt,
+		Timeout: int64(timeout),
+		LogRequest: pb.LogRequest{
+			ShardID: c.cfg.ShardID,
+			DNID:    c.cfg.ReplicaID,
+			Index:   index,
+			MaxSize: maxSize,
+		},
 	}
-	if err := writeRequest(c.conn, req, c.buf, payload); err != nil {
-		return pb.Response{}, nil, err
-	}
-	resp, recs, err := readResponse(c.conn, c.buf)
+	c.req.Request = req
+	c.req.payload = payload
+	future, err := c.client.Send(ctx,
+		c.addr, c.req, morpc.SendOptions{Timeout: time.Duration(timeout)})
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
-	err = toError(resp)
+	defer future.Close()
+	msg, err := future.Get()
+	if err != nil {
+		return pb.Response{}, nil, err
+	}
+	response, ok := msg.(*RPCResponse)
+	if !ok {
+		panic("unexpected response type")
+	}
+	resp := response.Response
+	defer response.Release()
+	var recs pb.LogRecordResponse
+	if len(response.payload) > 0 {
+		MustUnmarshal(&recs, response.payload)
+	}
+	err = toError(response.Response)
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -177,31 +207,57 @@ func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
 }
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
-	resp, _, err := c.request(ctx, pb.MethodType_APPEND, rec.Data, 0, 0)
+	resp, _, err := c.request(ctx, pb.APPEND, rec.Data, 0, 0)
 	if err != nil {
 		return 0, err
 	}
-	return resp.Index, nil
+	return resp.LogResponse.Index, nil
 }
 
 func (c *client) read(ctx context.Context,
 	firstIndex Lsn, maxSize uint64) ([]pb.LogRecord, Lsn, error) {
-	resp, recs, err := c.request(ctx, pb.MethodType_READ, nil, firstIndex, maxSize)
+	resp, recs, err := c.request(ctx, pb.READ, nil, firstIndex, maxSize)
 	if err != nil {
 		return nil, 0, err
 	}
-	return recs, resp.LastIndex, nil
+	return recs, resp.LogResponse.LastIndex, nil
 }
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
-	_, _, err := c.request(ctx, pb.MethodType_TRUNCATE, nil, lsn, 0)
+	_, _, err := c.request(ctx, pb.TRUNCATE, nil, lsn, 0)
 	return err
 }
 
 func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
-	resp, _, err := c.request(ctx, pb.MethodType_GET_TRUNCATE, nil, 0, 0)
+	resp, _, err := c.request(ctx, pb.GET_TRUNCATE, nil, 0, 0)
 	if err != nil {
 		return 0, err
 	}
-	return resp.Index, nil
+	return resp.LogResponse.Index, nil
+}
+
+func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RPCClient, error) {
+	mf := func() morpc.Message {
+		return pool.Get().(*RPCResponse)
+	}
+	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
+	bf := morpc.NewGoettyBasedBackendFactory(codec,
+		morpc.WithBackendConnectWhenCreate(),
+		morpc.WithBackendConnectTimeout(connectionTimeout))
+	return morpc.NewClient(bf,
+		morpc.WithClientInitBackends([]string{target}, []int{1}),
+		morpc.WithClientMaxBackendPerHost(1),
+		morpc.WithClientDisableCreateTask())
+}
+
+func getTimeoutFromContext(ctx context.Context) (time.Duration, error) {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return 0, ErrDeadlineNotSet
+	}
+	now := time.Now()
+	if now.After(d) {
+		return 0, ErrInvalidDeadline
+	}
+	return d.Sub(now), nil
 }

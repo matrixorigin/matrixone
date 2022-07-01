@@ -18,6 +18,8 @@ import (
 	goErrors "errors"
 	"fmt"
 
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"strings"
 )
 
 var (
@@ -56,6 +57,15 @@ type TxnState struct {
 	fromState int
 	err       error
 }
+
+type ShowStatementType int
+
+const (
+	NotShowStatement   ShowStatementType = 0
+	ShowCreateDatabase ShowStatementType = 1
+	ShowCreateTable    ShowStatementType = 2
+	ShowColumns        ShowStatementType = 3
+)
 
 func InitTxnState() *TxnState {
 	return &TxnState{
@@ -164,7 +174,9 @@ type Session struct {
 
 	IsInternal bool
 
-	ep *tree.ExportParam
+	Data         [][]interface{}
+	ep           *tree.ExportParam
+	showStmtType ShowStatementType
 
 	closeRef      *CloseExportData
 	txnHandler    *TxnHandler
@@ -657,8 +669,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Id:        plan.Type_TypeId(attr.Attr.Type.Oid),
 					Width:     attr.Attr.Type.Width,
 					Precision: attr.Attr.Type.Precision,
+					Scale:     attr.Attr.Type.Scale,
 				},
 				Primary: attr.Attr.Primary,
+				Default: plan2.MakePlan2DefaultExpr(attr.Attr.Default),
 			})
 		}
 	}
@@ -670,6 +684,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Id:        plan.Type_TypeId(hideKey.Type.Oid),
 				Width:     hideKey.Type.Width,
 				Precision: hideKey.Type.Precision,
+				Scale:     hideKey.Type.Scale,
 			},
 			Primary: hideKey.Primary,
 		})

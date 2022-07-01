@@ -85,6 +85,20 @@ message TxnMeta {
     metadata.DNShard    Coordinator = 6;
 }
 
+// CNTxnSnapshot snapshot of the cn txn operation.
+message CNTxnSnapshot {
+    // ID txn id
+    TxnMeta                   Txn      = 1 [(gogoproto.nullable) = false];
+    // DNShards DNs for which data has been written in the current transaction
+    repeated metadata.DNShard DNShards = 2 [(gogoproto.nullable) = false]; 
+    // ReadyOnly txn options
+    bool ReadyOnly        = 3;
+    // EnableCacheWrite txn options
+    bool EnableCacheWrite = 4;
+    // Disable1PCOpt txn options
+    bool Disable1PCOpt    = 5;
+}
+
 // CNOpRequest cn read/write request, CN -> DN. If data is written to more than one DN (>1) in a 
 // single transaction, then the transaction becomes a 2pc transaction.
 message CNOpRequest {
@@ -138,55 +152,61 @@ enum TxnMethod {
 // 1. CN -> DN (TxnMethod.Read, TxnMethod.Write, TxnMethod.Commit, TxnMethod.Rollback)
 // 2. DN -> DN (TxnMethod.Prepare, TxnMethod.GetStatus, TxnMethod.CommitDNShard, TxnMethod.RollbackDNShard)
 message TxnRequest {
+    // RequestID request id
+    uint64                      RequestID                = 1;
+    // TimeoutAt timeout unix timestamp in nanoseconds.
+    int64                       TimeoutAt                = 2;
     // Txn transaction metadata
-    TxnMeta                     Txn                      = 1 [(gogoproto.nullable) = false];
+    TxnMeta                     Txn                      = 3 [(gogoproto.nullable) = false];
     // TxnMethod TxnRequest opCode, select the Request defined below according to TxnMethod.
-    TxnMethod                   Method                   = 2;
+    TxnMethod                   Method                   = 4;
     // Flag request flag
-    uint32                      Flag                     = 3;
+    uint32                      Flag                     = 5;
     // CNOpRequest corresponds to TxnMethod.Read, TxnMethod.Write
-    CNOpRequest                 CNRequest                = 4; 
+    CNOpRequest                 CNRequest                = 6; 
     // TxnCommitRequest corresponds to TxnMethod.Commit
-    TxnCommitRequest            CommitRequest            = 5;
+    TxnCommitRequest            CommitRequest            = 7;
     // TxnRollbackRequest corresponds to TxnMethod.Rollback
-    TxnRollbackRequest          RollbackRequest          = 6;
+    TxnRollbackRequest          RollbackRequest          = 8;
     // TxnPrepareRequest corresponds to TxnMethod.Prepare
-    TxnPrepareRequest           PrepareRequest           = 7;
+    TxnPrepareRequest           PrepareRequest           = 9;
     // TxnGetStatusRequest corresponds to TxnMethod.GetStatus
-    TxnGetStatusRequest         GetStatusRequest         = 8;
+    TxnGetStatusRequest         GetStatusRequest         = 10;
     // TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
-    TxnCommitDNShardRequest   CommitDNShardRequest   = 9;
+    TxnCommitDNShardRequest     CommitDNShardRequest     = 11;
     // TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
-    TxnRollbackDNShardRequest RollbackDNShardRequest = 10;
+    TxnRollbackDNShardRequest   RollbackDNShardRequest   = 12;
 }
 
 // TxnResponse response of TxnRequest.
 message TxnResponse {
+    // RequestID corresponding request id
+    uint64                       RequestID                 = 1;
     // Txn transaction metadata. TxnResponse.TxnMeta and TxnRequest.TxnMeta may differ 
     // in that the node initiating the TxnRequest needs to process the returned TxnMeta, 
     // e.g. to determine whether the transaction is Aborted by the status of the returned 
     // TxnMeta.
-    TxnMeta                      Txn                       = 1;
+    TxnMeta                      Txn                       = 2;
     // TxnMethod same as TxnRequest.TxnMethod
-    TxnMethod                    Method                    = 2;
+    TxnMethod                    Method                    = 3;
     // Flag request flag, same as the corresponding request
-    uint32                       Flag                      = 3;
+    uint32                       Flag                      = 4;
     // TxnError explicit error
-    TxnError                     TxnError                  = 4;
+    TxnError                     TxnError                  = 5;
     // CNOpResponse corresponds to TxnMethod.Read, TxnMethod.Write response
-    CNOpResponse                 CNOpResponse              = 5; 
+    CNOpResponse                 CNOpResponse              = 6; 
     // TxnCommitResponse corresponds to TxnMethod.Commit response
-    TxnCommitResponse            CommitResponse            = 6;
+    TxnCommitResponse            CommitResponse            = 7;
     // TxnRollbackResponse corresponds to TxnMethod.Rollback response
-    TxnRollbackResponse          RollbackResponse          = 7;
+    TxnRollbackResponse          RollbackResponse          = 8;
     // TxnPrepareResponse corresponds to TxnMethod.Prepare response
-    TxnPrepareResponse           PrepareResponse           = 8;
+    TxnPrepareResponse           PrepareResponse           = 9;
     // TxnGetStatusResponse corresponds to TxnMethod.GetStatus response
-    TxnGetStatusResponse         GetStatusResponse         = 9;
+    TxnGetStatusResponse         GetStatusResponse         = 10;
     // TxnCommitDNShardResponse corresponds to TxnMethod.CommitDNShard response
-    TxnCommitDNShardResponse   CommitDNShardResponse   = 10;
+    TxnCommitDNShardResponse     CommitDNShardResponse     = 11;
     // TxnRollbackDNShardResponse corresponds to TxnMethod.RollbackDNShard response
-    TxnRollbackDNShardResponse RollbackDNShardResponse = 11;
+    TxnRollbackDNShardResponse   RollbackDNShardResponse   = 12;
 }
 
 // TxnCommitRequest CN sent the commit request to coordinator DN.
@@ -194,7 +214,7 @@ message TxnCommitRequest {
     // DNShards DNs for which data has been written in the current transaction.
     // The first DN is the coordinator of the transaction.
     repeated metadata.DNShard DNShards    = 1 [(gogoproto.nullable) = false]; 
-    bool                      disable1PCOpt = 2;
+    bool                      Disable1PCOpt = 2;
 }
 
 // TxnCommitResponse response of TxnCommitRequest. 
@@ -216,7 +236,7 @@ message TxnRollbackResponse {
 // is to send prepare requests to all DNs.
 message TxnPrepareRequest {
     // DNShard prepare DN
-    metadata.DNShard          DNShard  = 1;
+    metadata.DNShard          DNShard  = 1 [(gogoproto.nullable) = false];
     // DNShards if the DNShard is the coordinator DN, DNShards is not empty, 
     // otherwise is empty. The coordinator DN needs to write the DNShards and prepare 
     // data together atomically to the LogService. So during error recovery we can use 
@@ -233,7 +253,7 @@ message TxnPrepareResponse {
 // TxnGetStatusRequest query the status of a transaction on DN
 message TxnGetStatusRequest {
     // DNShard target DN
-    metadata.DNShard DNShard = 1;
+    metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
 }
 
 // TxnGetStatusResponse response of TxnGetStatusRequest
@@ -244,7 +264,7 @@ message TxnGetStatusResponse {
 // LogService.
 message TxnCommitDNShardRequest {
      // DNShard target DN
-     metadata.DNShard DNShard = 1;
+     metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
 }
 
 // TxnCommitDNShardResponse response of TxnCommitDNShardRequest
@@ -254,7 +274,7 @@ message TxnCommitDNShardResponse {
 // TxnCommitDNShardRequest rollback txn on DNShard
 message TxnRollbackDNShardRequest {
      // DNShard target DN
-     metadata.DNShard DNShard = 1;
+     metadata.DNShard DNShard = 1 [(gogoproto.nullable) = false];
 }
 
 // TxnRollbackDNShardResponse response of TxnRollbackDNShardRequest

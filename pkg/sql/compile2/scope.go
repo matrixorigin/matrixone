@@ -17,8 +17,11 @@ package compile2
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"runtime"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 
@@ -132,6 +135,28 @@ func (s *Scope) DropIndex(ts uint64, snapshot engine.Snapshot, engine engine.Eng
 func (s *Scope) Delete(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
 	s.Magic = Merge
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deletion.Argument)
+	arg.Ts = ts
+	defer arg.TableSource.Close(snapshot)
+	if err := s.MergeRun(engine); err != nil {
+		return 0, err
+	}
+	return arg.AffectedRows, nil
+}
+
+func (s *Scope) Insert(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+	s.Magic = Merge
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
+	arg.Ts = ts
+	defer arg.TargetTable.Close(snapshot)
+	if err := s.MergeRun(engine); err != nil {
+		return 0, err
+	}
+	return arg.Affected, nil
+}
+
+func (s *Scope) Update(ts uint64, snapshot engine.Snapshot, engine engine.Engine) (uint64, error) {
+	s.Magic = Merge
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*update.Argument)
 	arg.Ts = ts
 	defer arg.TableSource.Close(snapshot)
 	if err := s.MergeRun(engine); err != nil {
@@ -275,7 +300,7 @@ func (s *Scope) NumCPU() int {
 
 // Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(e engine.Engine) (err error) {
-	p := pipeline2.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+	p := pipeline2.New(s.DataSource.Attributes, s.DataSource.AttributeTypes, s.Instructions, s.Reg)
 	if s.DataSource.Bat != nil {
 		if _, err = p.ConstRun(s.DataSource.Bat, s.Proc); err != nil {
 			return err
@@ -423,10 +448,11 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 		ss[i] = &Scope{
 			Magic: Normal,
 			DataSource: &Source{
-				R:            rds[i],
-				SchemaName:   s.DataSource.SchemaName,
-				RelationName: s.DataSource.RelationName,
-				Attributes:   s.DataSource.Attributes,
+				R:              rds[i],
+				SchemaName:     s.DataSource.SchemaName,
+				RelationName:   s.DataSource.RelationName,
+				Attributes:     s.DataSource.Attributes,
+				AttributeTypes: s.DataSource.AttributeTypes,
 			},
 		}
 		ss[i].Proc = process.New(mheap.New(s.Proc.Mp.Gm))
@@ -515,6 +541,7 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 						Arg: &group.Argument{
 							Aggs:  arg.Aggs,
 							Exprs: arg.Exprs,
+							Types: arg.Types,
 						},
 					})
 				}

@@ -108,6 +108,7 @@ func (r *NumericRing) Grow(m *mheap.Mheap) error {
 		r.BitAndResult = encoding.DecodeUint64Slice(data)
 	}
 	r.BitAndResult = r.BitAndResult[:n+1]
+	r.Data = r.Data[:(n+1)*8]
 	r.BitAndResult[n] = ^uint64(0) // UINT64_MAX
 	r.NullCnt = append(r.NullCnt, 0)
 	return nil
@@ -134,6 +135,7 @@ func (r *NumericRing) Grows(size int, m *mheap.Mheap) error {
 		r.BitAndResult = encoding.DecodeUint64Slice(data)
 	}
 	r.BitAndResult = r.BitAndResult[:n+size]
+	r.Data = r.Data[:(n+size)*8]
 
 	// set all empty to ^uint64(0)
 	for i := 0; i < size; i++ {

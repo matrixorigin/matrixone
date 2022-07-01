@@ -42,7 +42,7 @@ func runClientTest(t *testing.T,
 
 	init := make(map[uint64]string)
 	init[2] = service.ID()
-	assert.NoError(t, service.store.StartReplica(1, 2, init))
+	assert.NoError(t, service.store.StartReplica(1, 2, init, false))
 
 	scfg := LogServiceClientConfig{
 		ReadOnly:         readOnly,
@@ -91,6 +91,22 @@ func TestClientAppend(t *testing.T) {
 	runClientTest(t, false, fn)
 }
 
+func TestClientAppendAlloc(t *testing.T) {
+	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
+		cmd := make([]byte, 16+headerSize+8)
+		cmd = getAppendCmd(cmd, cfg.ReplicaID)
+		rand.Read(cmd[headerSize+8:])
+		ac := testing.AllocsPerRun(1000, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := c.Append(ctx, pb.LogRecord{Data: cmd})
+			require.NoError(t, err)
+		})
+		plog.Infof("ac: %f", ac)
+	}
+	runClientTest(t, false, fn)
+}
+
 func TestClientRead(t *testing.T) {
 	fn := func(t *testing.T, cfg LogServiceClientConfig, c Client) {
 		cmd := make([]byte, 16+headerSize+8)
@@ -113,7 +129,7 @@ func TestClientRead(t *testing.T) {
 		recs, lsn, err := c.Read(ctx, 4, math.MaxUint64)
 		require.NoError(t, err)
 		assert.Equal(t, uint64(4), lsn)
-		assert.Equal(t, 2, len(recs))
+		require.Equal(t, 2, len(recs))
 		assert.Equal(t, cmd, recs[0].Data)
 		assert.Equal(t, cmd2, recs[1].Data)
 

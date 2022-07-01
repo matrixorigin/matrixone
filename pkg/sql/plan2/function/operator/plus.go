@@ -24,19 +24,64 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+var (
+	PlusUint8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[uint8](vs, proc, types.Type{Oid: types.T_uint8})
+	}
+
+	PlusUint16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[uint16](vs, proc, types.Type{Oid: types.T_uint16})
+	}
+
+	PlusUint32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[uint32](vs, proc, types.Type{Oid: types.T_uint32})
+	}
+
+	PlusUint64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[uint64](vs, proc, types.Type{Oid: types.T_uint64})
+	}
+
+	PlusInt8 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[int8](vs, proc, types.Type{Oid: types.T_int8})
+	}
+
+	PlusInt16 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[int16](vs, proc, types.Type{Oid: types.T_int16})
+	}
+
+	PlusInt32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[int32](vs, proc, types.Type{Oid: types.T_int32})
+	}
+
+	PlusInt64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[int64](vs, proc, types.Type{Oid: types.T_int64})
+	}
+
+	PlusFloat32 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[float32](vs, proc, types.Type{Oid: types.T_float32})
+	}
+
+	PlusFloat64 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return Plus[float64](vs, proc, types.Type{Oid: types.T_float64})
+	}
+)
+
+func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	leftValues, rightValues := left.Col.([]T), right.Col.([]T)
-	resultElementSize := left.Typ.Oid.FixedLength()
+	leftValues, rightValues := vector.MustTCols[T](left), vector.MustTCols[T](right)
+	if left.IsScalarNull() || right.IsScalarNull() {
+		return proc.AllocScalarNullVector(left.Typ), nil
+	}
+	resultElementSize := typ.Oid.TypeLen()
 	switch {
 	case left.IsScalar() && right.IsScalar():
-		resultVector := proc.AllocScalarVector(left.Typ)
+		resultVector := proc.AllocScalarVector(typ)
 		resultValues := make([]T, 1)
 		nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 		vector.SetCol(resultVector, add.NumericAdd[T](leftValues, rightValues, resultValues))
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
-		resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(rightValues)))
+		resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(rightValues)))
 		if err != nil {
 			return nil, err
 		}
@@ -45,7 +90,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		vector.SetCol(resultVector, add.NumericAddScalar[T](leftValues[0], rightValues, resultValues))
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
-		resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(leftValues)))
+		resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(leftValues)))
 		if err != nil {
 			return nil, err
 		}
@@ -54,7 +99,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 		vector.SetCol(resultVector, add.NumericAddScalar[T](rightValues[0], leftValues, resultValues))
 		return resultVector, nil
 	}
-	resultVector, err := proc.AllocVector(left.Typ, int64(resultElementSize*len(leftValues)))
+	resultVector, err := proc.AllocVector(typ, int64(resultElementSize*len(leftValues)))
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +114,7 @@ func Plus[T constraints.Integer | constraints.Float](vectors []*vector.Vector, p
 //ReturnType: types.T_decimal64,
 func PlusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+	lvs, rvs := vector.MustTCols[types.Decimal64](lv), vector.MustTCols[types.Decimal64](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lvScale
 	if lvScale < rvScale {
@@ -123,7 +168,7 @@ func PlusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 //ReturnType: types.T_decimal128,
 func PlusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+	lvs, rvs := vector.MustTCols[types.Decimal128](lv), vector.MustTCols[types.Decimal128](rv)
 	lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
 	resultScale := lvScale
 	if lvScale < rvScale {

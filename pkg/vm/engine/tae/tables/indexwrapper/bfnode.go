@@ -2,10 +2,10 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -97,7 +97,7 @@ func (reader *BFReader) MayContainsKey(key any) (bool, error) {
 	return reader.node.impl.MayContainsKey(key)
 }
 
-func (reader *BFReader) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
+func (reader *BFReader) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
 	handle := reader.node.mgr.Pin(reader.node)
 	defer handle.Close()
 	return reader.node.impl.MayContainsAnyKeys(keys, visibility)
@@ -107,7 +107,7 @@ type BFWriter struct {
 	cType       CompressType
 	file        common.IRWFile
 	impl        index.StaticFilter
-	data        *vector.Vector
+	data        containers.Vector
 	colIdx      uint16
 	internalIdx uint16
 }
@@ -160,17 +160,15 @@ func (writer *BFWriter) Finalize() (*IndexMeta, error) {
 	return meta, nil
 }
 
-func (writer *BFWriter) AddValues(values *vector.Vector) error {
+func (writer *BFWriter) AddValues(values containers.Vector) error {
 	if writer.data == nil {
 		writer.data = values
 		return nil
 	}
-	if writer.data.Typ != values.Typ {
+	if writer.data.GetType() != values.GetType() {
 		return data.ErrWrongType
 	}
-	if err := vector.Append(writer.data, values.Col); err != nil {
-		return err
-	}
+	writer.data.Extend(values)
 	return nil
 }
 

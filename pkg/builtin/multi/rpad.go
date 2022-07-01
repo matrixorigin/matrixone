@@ -64,11 +64,11 @@ func init() {
 				// gets all args
 				strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
 				oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
-
+				rowCount := vector.Length(origVecs[0])
 				if origVecs[0].Ref == 1 || origVecs[1].Ref == 0 {
 					// uses the original vector to store our result if it isn't needed anymore
 					origVecs[0].Ref = 0
-					result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+					result, nsp, err := rpad.Rpad(rowCount, strs, sizes, padstrs, isConst, oriNsps)
 					if err != nil {
 						return nil, err
 					}
@@ -81,7 +81,7 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+				result, nsp, err := rpad.Rpad(rowCount, strs, sizes, padstrs, isConst, oriNsps)
 				if err != nil {
 					return nil, err
 				}
@@ -100,10 +100,11 @@ func init() {
 				// gets all args
 				strs, sizes, padstrs := origVecs[0].Col.(*types.Bytes), origVecs[1].Col, origVecs[2].Col
 				oriNsps := []*nulls.Nulls{origVecs[0].Nsp, origVecs[1].Nsp, origVecs[2].Nsp}
+				rowCount := vector.Length(origVecs[0])
 				if origVecs[0].Ref == 1 || origVecs[1].Ref == 0 {
 					// uses the original vector to store our result if it isn't needed anymore
 					origVecs[0].Ref = 0
-					result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+					result, nsp, err := rpad.Rpad(rowCount, strs, sizes, padstrs, isConst, oriNsps)
 					if err != nil {
 						return nil, err
 					}
@@ -116,7 +117,7 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				result, nsp, err := rpad.Rpad(strs, sizes, padstrs, isConst, oriNsps)
+				result, nsp, err := rpad.Rpad(rowCount, strs, sizes, padstrs, isConst, oriNsps)
 				if err != nil {
 					return nil, err
 				}

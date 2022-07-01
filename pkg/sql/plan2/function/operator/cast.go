@@ -16,6 +16,7 @@ package operator
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,7 +36,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "the target type of cast function cannot be null")
 	}
 	if lv.IsScalarNull() {
-		return proc.AllocScalarNullVector(lv.Typ), nil
+		return proc.AllocScalarNullVector(rv.Typ), nil
 	}
 
 	if lv.Typ.Oid == rv.Typ.Oid && isNumeric(lv.Typ.Oid) {
@@ -154,7 +155,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			case types.T_uint32:
 				return CastLeftToRight[int64, uint32](lv, rv, proc)
 			case types.T_uint64:
-				return CastLeftToRight[int64, uint64](lv, rv, proc)
+				return CastInt64ToUint64(lv, rv, proc)
 			case types.T_float32:
 				return CastLeftToRight[int64, float32](lv, rv, proc)
 			case types.T_float64:
@@ -232,7 +233,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			case types.T_int32:
 				return CastLeftToRight[uint64, int32](lv, rv, proc)
 			case types.T_int64:
-				return CastLeftToRight[uint64, int64](lv, rv, proc)
+				return CastUint64ToInt64(lv, rv, proc)
 			case types.T_uint8:
 				return CastLeftToRight[uint64, uint8](lv, rv, proc)
 			case types.T_uint16:
@@ -300,13 +301,13 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		case types.T_int64:
 			return CastSpecials1Int[int64](lv, rv, proc)
 		case types.T_uint8:
-			return CastSpecials1Int[uint8](lv, rv, proc)
+			return CastSpecials1Uint[uint8](lv, rv, proc)
 		case types.T_uint16:
-			return CastSpecials1Int[uint16](lv, rv, proc)
+			return CastSpecials1Uint[uint16](lv, rv, proc)
 		case types.T_uint32:
-			return CastSpecials1Int[uint32](lv, rv, proc)
+			return CastSpecials1Uint[uint32](lv, rv, proc)
 		case types.T_uint64:
-			return CastSpecials1Int[uint64](lv, rv, proc)
+			return CastSpecials1Uint[uint64](lv, rv, proc)
 		}
 	}
 
@@ -437,15 +438,15 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return CastDecimal128AsDecimal128(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_varchar && rv.Typ.Oid == types.T_date {
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_date {
 		return CastVarcharAsDate(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_varchar && rv.Typ.Oid == types.T_datetime {
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_datetime {
 		return CastVarcharAsDatetime(lv, rv, proc)
 	}
 
-	if lv.Typ.Oid == types.T_varchar && rv.Typ.Oid == types.T_timestamp {
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
 		return CastVarcharAsTimestamp(lv, rv, proc)
 	}
 	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_decimal128 {
@@ -522,15 +523,58 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return CastTimestampAsDate(lv, rv, proc)
 	}
 
+	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_float32 {
+		return CastDecimal64ToFloat32(lv, rv, proc)
+	}
+	if lv.Typ.Oid == types.T_decimal128 && rv.Typ.Oid == types.T_float32 {
+		return CastDecimal128ToFloat32(lv, rv, proc)
+	}
+
+	if lv.Typ.Oid == types.T_decimal64 && rv.Typ.Oid == types.T_float64 {
+		return CastDecimal64ToFloat64(lv, rv, proc)
+	}
+	if lv.Typ.Oid == types.T_decimal128 && rv.Typ.Oid == types.T_float64 {
+		return CastDecimal128ToFloat64(lv, rv, proc)
+	}
 	// if lv.Typ.Oid == types.T_timestamp && rv.Typ.Oid == types.T_time {
 	// 	return CastTimestampAsTime(lv, rv, proc)
 	// }
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "parameter types of cast function do not match")
+
+	if isNumeric(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
+		switch lv.Typ.Oid {
+		case types.T_int8:
+			return CastNumValToBool[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastNumValToBool[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastNumValToBool[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastNumValToBool[int64](lv, rv, proc)
+		case types.T_uint8:
+			return CastNumValToBool[uint8](lv, rv, proc)
+		case types.T_uint16:
+			return CastNumValToBool[uint16](lv, rv, proc)
+		case types.T_uint32:
+			return CastNumValToBool[uint32](lv, rv, proc)
+		case types.T_uint64:
+			return CastNumValToBool[uint64](lv, rv, proc)
+		case types.T_float32:
+			return CastNumValToBool[float32](lv, rv, proc)
+		case types.T_float64:
+			return CastNumValToBool[float64](lv, rv, proc)
+		}
+	}
+
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
+		return CastStringToBool(lv, rv, proc)
+	}
+
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("parameter types [%s, %s] of cast function do not match", lv.Typ.Oid, rv.Typ.Oid))
 }
 
 func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Timestamp)
+	lvs := vector.MustTCols[types.Timestamp](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
@@ -601,7 +645,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 func CastDecimal64ToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
 
-	lvs := lv.Col.([]types.Decimal64)
+	lvs := vector.MustTCols[types.Decimal64](lv)
 	col := &types.Bytes{
 		Data:    make([]byte, 0, len(lvs)),
 		Offsets: make([]uint32, 0, len(lvs)),
@@ -625,7 +669,7 @@ func CastDecimal64ToString(lv, rv *vector.Vector, proc *process.Process) (*vecto
 
 func CastDecimal128ToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
-	lvs := lv.Col.([]types.Decimal128)
+	lvs := vector.MustTCols[types.Decimal128](lv)
 	col := &types.Bytes{
 		Data:    make([]byte, 0, len(lvs)),
 		Offsets: make([]uint32, 0, len(lvs)),
@@ -648,7 +692,7 @@ func CastDecimal128ToString(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
-//  CastSameType: Cast handles the same data type and is numeric , Contains the following:
+// CastSameType : Cast handles the same data type and is numeric , Contains the following:
 // int8    -> int8,
 // int16   -> int16,
 // int32   -> int32,
@@ -660,8 +704,8 @@ func CastDecimal128ToString(lv, rv *vector.Vector, proc *process.Process) (*vect
 // float32 -> float32,
 // float64 -> float64,
 func CastSameType[T constraints.Integer | constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := lv.Typ.Oid.FixedLength()
-	lvs := lv.Col.([]T)
+	rtl := lv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[T](lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
@@ -683,13 +727,13 @@ func CastSameType[T constraints.Integer | constraints.Float](lv, rv *vector.Vect
 	return vec, nil
 }
 
-//  CastSameType2: Cast handles the same data type and is date series , Contains the following:
+// CastSameType2 : Cast handles the same data type and is date series , Contains the following:
 // date -> date
 // datetime -> datetime
 // timestamp -> timestamp
 func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
-	lvs := lv.Col.([]T)
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[T](lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
@@ -711,7 +755,7 @@ func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vect
 	return vec, nil
 }
 
-//  CastLeftToRight: Cast handles conversions in the form of cast (left as right), where left and right are different types,
+// CastLeftToRight : Cast handles conversions in the form of cast (left as right), where left and right are different types,
 //  and both left and right are numeric types, Contains the following:
 // int8 -> (int16/int32/int64/uint8/uint16/uint32/uint64/float32/float64)
 // int16 -> (int8/int32/int64/uint8/uint16/uint32/uint64/float32/float64)
@@ -724,8 +768,8 @@ func CastSameType2[T types.Date | types.Datetime | types.Timestamp](lv, rv *vect
 // float32 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float64)
 // float64 -> (int8/int16/int32/int64/uint8/uint16/uint32/uint64/float32)
 func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
-	lvs := lv.Col.([]T1)
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[T1](lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
@@ -739,7 +783,6 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	}
 
 	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
-	//vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
 	if err != nil {
 		return nil, err
 	}
@@ -752,11 +795,69 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	return vec, nil
 }
 
-//  CastSpecials1Int: Cast converts string to integer,Contains the following:
+// CastUint64ToInt64 : cast uint64 to int64
+func CastUint64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[uint64](lv)
+
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]int64, 1)
+		if _, err := typecast.Uint64ToInt64(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeInt64Slice(vec.Data)
+	if _, err := typecast.Uint64ToInt64(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// CastInt64ToUint64 : cast int64 to uint64
+func CastInt64ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[int64](lv)
+
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]uint64, 1)
+		if _, err := typecast.Int64ToUint64(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeUint64Slice(vec.Data)
+	if _, err := typecast.Int64ToUint64(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// CastSpecials1Int : Cast converts string to integer,Contains the following:
 // (char / varhcar) -> (int8 / int16 / int32/ int64 / uint8 / uint16 / uint32 / uint64)
-func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
-	col := lv.Col.(*types.Bytes)
+func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	col := vector.MustBytesCols(lv)
 	var vec *vector.Vector
 	var err error
 	var rs []T
@@ -779,11 +880,36 @@ func CastSpecials1Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 	return vec, nil
 }
 
-//  CastSpecials1Float: Cast converts string to floating point number,Contains the following:
+func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	col := vector.MustBytesCols(lv)
+	var vec *vector.Vector
+	var err error
+	var rs []T
+	if lv.IsScalar() {
+		vec = proc.AllocScalarVector(rv.Typ)
+		rs = make([]T, 1)
+	} else {
+		vec, err = proc.AllocVector(rv.Typ, int64(rtl)*int64(len(col.Offsets)))
+		if err != nil {
+			return nil, err
+		}
+		rs = encoding.DecodeFixedSlice[T](vec.Data, rtl)
+	}
+	if _, err = typecast.BytesToUint(col, rs); err != nil {
+		return nil, err
+	}
+
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// CastSpecials1Float : Cast converts string to floating point number,Contains the following:
 // (char / varhcar) -> (float32 / float64)
 func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	rtl := rv.Typ.Oid.FixedLength()
-	col := lv.Col.(*types.Bytes)
+	rtl := rv.Typ.Oid.TypeLen()
+	col := vector.MustBytesCols(lv)
 	var vec *vector.Vector
 	var err error
 	var rs []T
@@ -805,11 +931,11 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 	return vec, nil
 }
 
-//  CastSpecials2Int: Cast converts integer to string,Contains the following:
+// CastSpecials2Int : Cast converts integer to string,Contains the following:
 // (int8 /int16/int32/int64/uint8/uint16/uint32/uint64) -> (char / varhcar)
 func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
-	lvs := lv.Col.([]T)
+	lvs := vector.MustTCols[T](lv)
 	col := &types.Bytes{
 		Data:    make([]byte, 0, len(lvs)),
 		Offsets: make([]uint32, 0, len(lvs)),
@@ -831,11 +957,11 @@ func CastSpecials2Int[T constraints.Integer](lv, rv *vector.Vector, proc *proces
 	return vec, nil
 }
 
-//  CastSpecials2Float: Cast converts floating point number to string ,Contains the following:
+// CastSpecials2Float : Cast converts floating point number to string ,Contains the following:
 // (float32/float64) -> (char / varhcar)
 func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
-	lvs := lv.Col.([]T)
+	lvs := vector.MustTCols[T](lv)
 	col := &types.Bytes{
 		Data:    make([]byte, 0, len(lvs)),
 		Offsets: make([]uint32, 0, len(lvs)),
@@ -882,41 +1008,49 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // }
 
 //
-//  CastSpecials3:  Cast converts string to string ,Contains the following:
+// CastSpecials3 :  Cast converts string to string ,Contains the following:
 // char -> char
 // char -> varhcar
 // varchar -> char
 // varchar -> varhcar
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs := lv.Col.(*types.Bytes)
-	col := &types.Bytes{
-		Data:    make([]byte, len(lvs.Data)),
-		Offsets: make([]uint32, len(lvs.Offsets)),
-		Lengths: make([]uint32, len(lvs.Lengths)),
+	source := vector.MustBytesCols(lv)
+	if lv.IsScalar() {
+		if lv.IsScalarNull() {
+			return proc.AllocScalarNullVector(rv.Typ), nil
+		}
+		vec := proc.AllocScalarVector(rv.Typ)
+		vec.Col = &types.Bytes{
+			Data:    make([]byte, len(source.Data)),
+			Offsets: []uint32{source.Offsets[0]},
+			Lengths: []uint32{source.Lengths[0]},
+		}
+		target := vector.MustBytesCols(vec)
+		copy(target.Data, source.Data)
+		return vec, nil
 	}
-	copy(col.Data, lvs.Data)
-	copy(col.Offsets, lvs.Offsets)
-	copy(col.Lengths, lvs.Lengths)
-	if err := proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
+	vec, err := proc.AllocVector(rv.Typ, int64(len(source.Data)))
+	if err != nil {
 		return nil, err
 	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
+	b := vec.Col.(*types.Bytes)
+	b.Data = vec.Data
+	b.Offsets = make([]uint32, len(source.Offsets))
+	b.Lengths = make([]uint32, len(source.Lengths))
+	copy(b.Data, source.Data)
+	copy(b.Offsets, source.Offsets)
+	copy(b.Lengths, source.Lengths)
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
 	return vec, nil
 }
 
 func CastSpecialIntToDecimal[T constraints.Integer](
-	lv, rv *vector.Vector,
+	lv, _ *vector.Vector,
 	i2d func(xs []T, rs []types.Decimal128) ([]types.Decimal128, error),
 	proc *process.Process) (*vector.Vector, error) {
 	resultScale := int32(0)
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
-	lvs := lv.Col.([]T)
+	lvs := vector.MustTCols[T](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
 		rs := make([]types.Decimal128, 1)
@@ -942,13 +1076,13 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 	return vec, nil
 }
 
-func CastSpecialIntToDecimal_64[T constraints.Integer](
+func CastSpecialIntToDecimal64[T constraints.Integer](
 	lv, rv *vector.Vector,
 	i2d func(xs []T, rs []types.Decimal64, scale int64) ([]types.Decimal64, error),
 	proc *process.Process) (*vector.Vector, error) {
-	resultScale := int32(rv.Typ.Scale)
+	resultScale := rv.Typ.Scale
 	resultTyp := types.Type{Oid: types.T_decimal64, Size: 8, Width: 38, Scale: resultScale}
-	lvs := lv.Col.([]T)
+	lvs := vector.MustTCols[T](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
 		rs := make([]types.Decimal64, 1)
@@ -974,17 +1108,17 @@ func CastSpecialIntToDecimal_64[T constraints.Integer](
 	return vec, nil
 }
 
-//  CastSpecials4: Cast converts signed integer to decimal128 ,Contains the following:
+// CastSpecials4 : Cast converts signed integer to decimal128 ,Contains the following:
 // (int8/int16/int32/int64) to decimal128
 func CastSpecials4[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CastSpecialIntToDecimal(lv, rv, typecast.IntToDecimal128[T], proc)
 }
 
 func CastSpecials4_64[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return CastSpecialIntToDecimal_64(lv, rv, typecast.IntToDecimal64[T], proc)
+	return CastSpecialIntToDecimal64(lv, rv, typecast.IntToDecimal64[T], proc)
 }
 
-//  CastSpecialu4: Cast converts signed integer to decimal128 ,Contains the following:
+// CastSpecialu4 : Cast converts unsigned integer to decimal128 ,Contains the following:
 // (uint8/uint16/uint32/uint64) to decimal128
 func CastSpecialu4[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CastSpecialIntToDecimal(lv, rv, typecast.UintToDecimal128[T], proc)
@@ -993,12 +1127,12 @@ func CastSpecialu4[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.
 func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	resultType.Size = 16
+	vs := vector.MustTCols[T](lv)
 	if lv.IsScalar() {
-		vs := lv.Col.([]T)
 		srcStr := fmt.Sprintf("%f", vs[0])
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]types.Decimal128, 1)
-		decimal128, err := types.ParseStringToDecimal128(string(srcStr), resultType.Width, resultType.Scale)
+		decimal128, err := types.ParseStringToDecimal128(srcStr, resultType.Width, resultType.Scale)
 		if err != nil {
 			return nil, err
 		}
@@ -1007,7 +1141,6 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 		vector.SetCol(vec, rs)
 		return vec, nil
 	}
-	vs := lv.Col.([]T)
 	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs)))
 	if err != nil {
 		return nil, err
@@ -1019,7 +1152,7 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 			continue
 		}
 		strValue := fmt.Sprintf("%f", vs[i])
-		decimal128, err2 := types.ParseStringToDecimal128(string(strValue), resultType.Width, resultType.Scale)
+		decimal128, err2 := types.ParseStringToDecimal128(strValue, resultType.Width, resultType.Scale)
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1033,12 +1166,12 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	resultType.Size = 8
+	vs := vector.MustTCols[T](lv)
 	if lv.IsScalar() {
-		vs := lv.Col.([]T)
 		srcStr := fmt.Sprintf("%f", vs[0])
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]types.Decimal64, 1)
-		decimal64, err := types.ParseStringToDecimal64(string(srcStr), resultType.Width, resultType.Scale)
+		decimal64, err := types.ParseStringToDecimal64(srcStr, resultType.Width, resultType.Scale)
 		if err != nil {
 			return nil, err
 		}
@@ -1047,7 +1180,6 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 		vector.SetCol(vec, rs)
 		return vec, nil
 	}
-	vs := lv.Col.([]T)
 
 	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs)))
 	if err != nil {
@@ -1060,7 +1192,7 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 			continue
 		}
 		strValue := fmt.Sprintf("%f", vs[i])
-		decimal64, err2 := types.ParseStringToDecimal64(string(strValue), resultType.Width, resultType.Scale)
+		decimal64, err2 := types.ParseStringToDecimal64(strValue, resultType.Width, resultType.Scale)
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1071,15 +1203,15 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 	return vec, nil
 }
 
-//  CastVarcharAsDate : Cast converts varchar to date type
+// CastVarcharAsDate : Cast converts varchar to date type
 func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vs := lv.Col.(*types.Bytes)
+	vs := vector.MustBytesCols(lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Date, 1)
 		varcharValue := vs.Get(0)
-		data, err2 := types.ParseDate(string(varcharValue))
+		data, err2 := types.ParseDateCast(string(varcharValue))
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1089,7 +1221,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 		return vec, nil
 	}
 
-	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)))
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.TypeLen()*len(vs.Lengths)))
 	if err != nil {
 		return nil, err
 	}
@@ -1100,7 +1232,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 			continue
 		}
 		varcharValue := vs.Get(int64(i))
-		data, err2 := types.ParseDate(string(varcharValue))
+		data, err2 := types.ParseDateCast(string(varcharValue))
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1113,7 +1245,7 @@ func CastVarcharAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Ve
 
 // CastVarcharAsDatetime : Cast converts varchar to datetime type
 func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vs := lv.Col.(*types.Bytes)
+	vs := vector.MustBytesCols(lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
@@ -1129,7 +1261,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 		return vec, nil
 	}
 
-	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)))
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.TypeLen()*len(vs.Lengths)))
 	if err != nil {
 		return nil, err
 	}
@@ -1153,7 +1285,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 
 // CastVarcharAsTimestamp : Cast converts varchar to timestamp type
 func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vs := lv.Col.(*types.Bytes)
+	vs := vector.MustBytesCols(lv)
 
 	if lv.IsScalar() {
 		scalarVector := proc.AllocScalarVector(rv.Typ)
@@ -1169,7 +1301,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 		return scalarVector, nil
 	}
 
-	allocVector, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)))
+	allocVector, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Oid.TypeLen()*len(vs.Lengths)))
 	if err != nil {
 		return nil, err
 	}
@@ -1188,12 +1320,12 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return allocVector, nil
 }
 
-// CastDecimal64AsDecimal128: Cast converts decimal64 to timestamp decimal128
-func CastDecimal64AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// CastDecimal64AsDecimal128 : Cast converts decimal64 to timestamp decimal128
+func CastDecimal64AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lvScale := lv.Typ.Scale
 	resultScale := lvScale
 	resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
-	lvs := lv.Col.([]types.Decimal64)
+	lvs := vector.MustTCols[types.Decimal64](lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
@@ -1220,10 +1352,10 @@ func CastDecimal64AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*v
 	return vec, nil
 }
 
-// CastDecimal64AsDecimal64:Cast converts decimal64 to timestamp decimal64
-func CastDecimal64AsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// CastDecimal64AsDecimal64 : Cast converts decimal64 to timestamp decimal64
+func CastDecimal64AsDecimal64(lv, _ *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultTyp := lv.Typ
-	lvs := lv.Col.([]types.Decimal64)
+	lvs := vector.MustTCols[types.Decimal64](lv)
 
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
@@ -1246,10 +1378,10 @@ func CastDecimal64AsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*ve
 	return vec, nil
 }
 
-//  CastDecimal128AsDecimal128: Cast converts decimal128 to timestamp decimal128
-func CastDecimal128AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// CastDecimal128AsDecimal128 : Cast converts decimal128 to timestamp decimal128
+func CastDecimal128AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultTyp := lv.Typ
-	lvs := lv.Col.([]types.Decimal128)
+	lvs := vector.MustTCols[types.Decimal128](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
 		rs := make([]types.Decimal128, 1)
@@ -1273,7 +1405,7 @@ func CastDecimal128AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*
 //  castTimeStampAsDatetime : Cast converts timestamp to datetime decimal128
 func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Timestamp)
+	lvs := vector.MustTCols[types.Timestamp](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
@@ -1301,17 +1433,21 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 
 //  castTimestampAsVarchar : Cast converts timestamp to varchar
 func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs := lv.Col.([]types.Timestamp)
+	lvs := vector.MustTCols[types.Timestamp](lv)
 	resultType := rv.Typ
 	resultElementSize := int(resultType.Size)
+	precision := lv.Typ.Precision
 	if lv.IsScalar() {
+		if lv.IsScalarNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
 		vec := proc.AllocScalarVector(resultType)
 		rs := &types.Bytes{
 			Data:    []byte{},
 			Offsets: make([]uint32, 1),
 			Lengths: make([]uint32, 1),
 		}
-		if _, err := typecast.TimestampToVarchar(lvs, rs); err != nil {
+		if _, err := typecast.TimestampToVarchar(lvs, rs, precision); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1328,7 +1464,7 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 		Offsets: make([]uint32, len(lvs)),
 		Lengths: make([]uint32, len(lvs)),
 	}
-	if _, err := typecast.TimestampToVarchar(lvs, rs); err != nil {
+	if _, err := typecast.TimestampToVarchar(lvs, rs, precision); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
@@ -1336,12 +1472,12 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
-// CastStringAsDecimal64: onverts char/varchar as decimal64
+// CastStringAsDecimal64 : onverts char/varchar as decimal64
 func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	resultType.Size = 8
+	vs := vector.MustBytesCols(lv)
 	if lv.IsScalar() {
-		vs := lv.Col.(*types.Bytes)
 		srcStr := vs.Get(0)
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]types.Decimal64, 1)
@@ -1354,7 +1490,6 @@ func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vecto
 		vector.SetCol(vec, rs)
 		return vec, nil
 	}
-	vs := lv.Col.(*types.Bytes)
 
 	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs.Lengths)))
 	if err != nil {
@@ -1380,7 +1515,7 @@ func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vecto
 
 func CastBoolToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
-	lvs := lv.Col.([]bool)
+	lvs := vector.MustTCols[bool](lv)
 	col := &types.Bytes{
 		Data:    make([]byte, 0, len(lvs)),
 		Offsets: make([]uint32, 0, len(lvs)),
@@ -1404,7 +1539,7 @@ func CastBoolToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 
 func CastDateAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
-	lvs := lv.Col.([]types.Date)
+	lvs := vector.MustTCols[types.Date](lv)
 	col := &types.Bytes{
 		Data:    make([]byte, 0, len(lvs)),
 		Offsets: make([]uint32, 0, len(lvs)),
@@ -1428,7 +1563,7 @@ func CastDateAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 
 func CastDateAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Date)
+	lvs := vector.MustTCols[types.Date](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
@@ -1453,12 +1588,12 @@ func CastDateAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	return vec, nil
 }
 
-// CastStringAsDecimal128: onverts char/varchar as decimal128
+// CastStringAsDecimal128 : onverts char/varchar as decimal128
 func CastStringAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	resultType.Size = 16
+	vs := vector.MustBytesCols(lv)
 	if lv.IsScalar() {
-		vs := lv.Col.(*types.Bytes)
 		srcStr := vs.Get(0)
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]types.Decimal128, 1)
@@ -1471,7 +1606,6 @@ func CastStringAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vect
 		vector.SetCol(vec, rs)
 		return vec, nil
 	}
-	vs := lv.Col.(*types.Bytes)
 	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs.Lengths)))
 	if err != nil {
 		return nil, err
@@ -1494,10 +1628,10 @@ func CastStringAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
-//  CastDatetimeAsTimeStamp : Cast converts datetime to timestamp
+// CastDatetimeAsTimeStamp : Cast converts datetime to timestamp
 func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Datetime)
+	lvs := vector.MustTCols[types.Datetime](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
@@ -1523,10 +1657,10 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 	return vec, nil
 }
 
-//  CastDateAsTimeStamp : Cast converts date to timestamp
+// CastDateAsTimeStamp : Cast converts date to timestamp
 func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Date)
+	lvs := vector.MustTCols[types.Date](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
@@ -1554,7 +1688,7 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 
 func CastDatetimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
-	lvs := lv.Col.([]types.Datetime)
+	lvs := vector.MustTCols[types.Datetime](lv)
 	col := &types.Bytes{
 		Data:    make([]byte, 0, len(lvs)),
 		Offsets: make([]uint32, 0, len(lvs)),
@@ -1576,10 +1710,11 @@ func CastDatetimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector
 	return vec, nil
 }
 
-//DateTime : high 44 bits stands for the seconds passed by, low 20 bits stands for the microseconds passed by
+// CastDatetimeAsDate : convert datetime to date
+// DateTime : high 44 bits stands for the seconds passed by, low 20 bits stands for the microseconds passed by
 func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Datetime)
+	lvs := vector.MustTCols[types.Datetime](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Date, 1)
@@ -1606,7 +1741,7 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 
 func CastIntegerAsTimestamp[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]T)
+	lvs := vector.MustTCols[T](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
@@ -1633,7 +1768,7 @@ func CastIntegerAsTimestamp[T constraints.Integer](lv, rv *vector.Vector, proc *
 
 func CastDecimal64AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Decimal64)
+	lvs := vector.MustTCols[types.Decimal64](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
@@ -1660,7 +1795,7 @@ func CastDecimal64AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*ve
 
 func CastDecimal128AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
-	lvs := lv.Col.([]types.Decimal128)
+	lvs := vector.MustTCols[types.Decimal128](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
@@ -1679,6 +1814,179 @@ func CastDecimal128AsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*v
 	rs = rs[:len(lvs)]
 	if _, err := typecast.Decimal128ToTimestamp(lvs, lv.Typ.Precision, lv.Typ.Scale, rs); err != nil {
 		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal64ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 4
+	lvs := lv.Col.([]types.Decimal64)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]float32, 1)
+		if _, err := typecast.Decimal64ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat32Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal64ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal128ToFloat32(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 4
+	lvs := lv.Col.([]types.Decimal128)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]float32, 1)
+		if _, err := typecast.Decimal128ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat32Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal128ToFloat32(lvs, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal64ToFloat64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := lv.Col.([]types.Decimal64)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]float64, 1)
+		if _, err := typecast.Decimal64ToFloat64(lvs, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat64Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal64ToFloat64(lvs, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastDecimal128ToFloat64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := lv.Col.([]types.Decimal128)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]float64, 1)
+		if _, err := typecast.Decimal128ToFloat64(lvs, lv.Typ.Scale, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeFloat64Slice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.Decimal128ToFloat64(lvs, lv.Typ.Scale, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastNumValToBool[T constraints.Integer | constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := vector.MustTCols[T](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]bool, 1)
+		if _, err := typecast.NumericToBool(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeBoolSlice(vec.Data)
+	rs = rs[:len(lvs)]
+	if _, err := typecast.NumericToBool(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	resultType := rv.Typ
+	resultType.Size = 8
+	vs := vector.MustBytesCols(lv)
+	if lv.IsScalar() {
+		srcStr := vs.Get(0)
+		vec := proc.AllocScalarVector(resultType)
+		rs := make([]bool, 1)
+		val, err := strconv.ParseFloat(string(srcStr), 64)
+		if err == nil && val != 0 {
+			rs[0] = true
+		}
+		nulls.Reset(vec.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(resultType, int64(resultType.Size)*int64(len(vs.Lengths)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeBoolSlice(vec.Data)
+	rs = rs[:len(vs.Lengths)]
+	for i := range vs.Lengths {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		srcStr := vs.Get(int64(i))
+		val, err := strconv.ParseFloat(string(srcStr), 64)
+		if err == nil && val != 0 {
+			rs[i] = true
+		}
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
 	vector.SetCol(vec, rs)

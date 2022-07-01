@@ -35,13 +35,19 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 	bat := batch.New(true, attrs)
 	bat.Vecs = make([]*vector.Vector, len(attrs))
 	for i, attr := range attrs {
-		view, err = blk.handle.GetColumnDataByName(attr, compressed[i], deCompressed[i])
+		view, err = blk.handle.GetColumnDataByName(attr, deCompressed[i])
 		if err != nil {
+			view.Close()
 			return nil, err
 		}
 		view.ApplyDeletes()
-		view.AppliedVec.Ref = cs[i]
-		bat.Vecs[i] = view.AppliedVec
+		if view.GetData().Allocated() > 0 {
+			bat.Vecs[i] = CopyToMoVector(view.GetData())
+		} else {
+			bat.Vecs[i] = VectorsToMO(view.GetData())
+		}
+		bat.Attrs[i] = attr
+		view.Close()
 	}
 	return bat, nil
 }

@@ -16,6 +16,7 @@ package sum
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -99,6 +100,7 @@ func (r *Decimal64Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal64Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*8]
 	r.Vs[n] = 0
 	r.Ns = append(r.Ns, 0)
 	return nil
@@ -125,6 +127,7 @@ func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal64Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*8]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 	}
@@ -170,12 +173,18 @@ func (r *Decimal64Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *Decimal64Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	r.Vs[x] += ar.Vs[y]
 	r.Ns[x] += ar.Ns[y]
 }
 
 func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		r.Vs[vps[i]-1] += ar.Vs[int64(i)+start]
 		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]
@@ -185,6 +194,9 @@ func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []u
 // r[x] += a[y] * z
 func (r *Decimal64Ring) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	r.Ns[x] += ar.Ns[y] * z
 	r.Vs[x] += types.Decimal64Int64Mul(r.Vs[y], z)
 }

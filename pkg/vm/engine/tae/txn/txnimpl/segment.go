@@ -17,9 +17,9 @@ package txnimpl
 import (
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -187,7 +187,7 @@ func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
 	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())
 }
 
-func (seg *txnSegment) BatchDedup(pks *vector.Vector) (err error) {
+func (seg *txnSegment) BatchDedup(pks containers.Vector) (err error) {
 	if isLocalSegment(seg.entry.AsCommonID()) {
 		return seg.table.localSegment.BatchDedup(pks)
 	}

@@ -44,6 +44,7 @@ func commitTxn(txn *txnbase.Txn) {
 }
 
 func TestColumnChain1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -73,10 +74,11 @@ func TestColumnChain1(t *testing.T) {
 	}
 	t.Log(chain.StringLocked())
 	assert.Equal(t, cnt1+cnt2+cnt3+cnt4, chain.DepthLocked())
-	t.Log(chain.GetHead().GetPayload().(*ColumnNode).StringLocked())
+	t.Log(chain.GetHead().GetPayload().(*ColumnUpdateNode).StringLocked())
 }
 
 func TestColumnChain2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -188,10 +190,11 @@ func TestColumnChain2(t *testing.T) {
 
 	// t.Log(chain.view.StringLocked())
 	// t.Log(chain.StringLocked())
-	// t.Log(chain.GetHead().GetPayload().(*ColumnNode).StringLocked())
+	// t.Log(chain.GetHead().GetPayload().(*ColumnUpdateNode).StringLocked())
 }
 
 func TestColumnChain3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	ncnt := 100
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -224,9 +227,10 @@ func TestColumnChain3(t *testing.T) {
 	// t.Log(chain.StringLocked())
 	assert.Equal(t, ncnt, chain.DepthLocked())
 
-	node := chain.GetHead().GetPayload().(*ColumnNode)
+	node := chain.GetHead().GetPayload().(*ColumnUpdateNode)
 	cmd, err := node.MakeCommand(1)
 	assert.Nil(t, err)
+	defer cmd.Close()
 
 	var w bytes.Buffer
 	_, err = cmd.WriteTo(&w)
@@ -235,18 +239,20 @@ func TestColumnChain3(t *testing.T) {
 	r := bytes.NewBuffer(buf)
 
 	cmd2, _, err := txnbase.BuildCommandFrom(r)
+	defer cmd2.Close()
 	assert.Nil(t, err)
 	updateCmd := cmd2.(*UpdateCmd)
 	assert.Equal(t, txnbase.CmdUpdate, updateCmd.GetType())
 	assert.Equal(t, *node.id, *updateCmd.update.id)
-	assert.True(t, node.txnMask.Equals(updateCmd.update.txnMask))
+	assert.True(t, node.mask.Equals(updateCmd.update.mask))
 	// t.Log(updateCmd.update.StringLocked())
-	// assert.Equal(t, node.txnVals, updateCmd.update.txnVals)
+	// assert.Equal(t, node.vals, updateCmd.update.vals)
 	// t.Log(updateCmd.update.id.BlockString())
-	// t.Log(updateCmd.update.txnMask.String())
+	// t.Log(updateCmd.update.mask.String())
 }
 
 func TestColumnChain4(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -349,6 +355,7 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
@@ -460,6 +467,7 @@ func TestDeleteChain1(t *testing.T) {
 }
 
 func TestDeleteChain2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
 	controller := NewMVCCHandle(nil)
 	chain := NewDeleteChain(nil, controller)
 
@@ -513,7 +521,7 @@ func TestDeleteChain2(t *testing.T) {
 	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS())
 	assert.NoError(t, err)
 	t.Log(mask.String())
-	assert.Equal(t, uint64(4), mask.GetCardinality())
+	assert.Equal(t, uint64(8), mask.GetCardinality())
 
 	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1)
 	assert.NoError(t, err)

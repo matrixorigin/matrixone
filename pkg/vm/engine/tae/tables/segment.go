@@ -15,10 +15,10 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -63,7 +63,7 @@ func (segment *dataSegment) Destory() (err error) {
 
 func (segment *dataSegment) GetID() uint64 { return segment.meta.GetID() }
 
-func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) (err error) {
+func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) (err error) {
 	// TODO: segment level index
 	return data.ErrPossibleDuplicate
 	// blkIt := segment.meta.MakeBlockIt(false)

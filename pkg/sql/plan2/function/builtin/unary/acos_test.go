@@ -37,7 +37,7 @@ func TestAcos(t *testing.T) {
 
 	acosIntAndFloatInValid[float32](t, types.T_float32, 1.0001)
 
-	acosIntAndFloatInValid[float64](t, types.T_float64, 1.0001)
+	acosIntAndFloatInValid(t, types.T_float64, 1.0001)
 }
 
 func acosIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T) {
@@ -51,7 +51,7 @@ func acosIntAndFloatInValid[T constraints.Integer | constraints.Float](t *testin
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeacosVectors[T](src, true, typ),
+			vecs:       makeacosVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{},
 			wantScalar: true,
@@ -81,7 +81,7 @@ func acosIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeacosVectors[T](src, true, typ),
+			vecs:       makeacosVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,

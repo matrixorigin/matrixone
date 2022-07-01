@@ -368,7 +368,6 @@ func (catalog *Catalog) onReplayCreateSegment(cmd *EntryCommand, dataFactory Dat
 	cmd.Segment.link = new(common.Link)
 	cmd.Segment.entries = make(map[uint64]*common.DLNode)
 	cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
-	cmd.Segment.ReplayFile(cache)
 	tbl.AddEntryLocked(cmd.Segment)
 	cmd.Segment.LogIndex = idx
 	if observer != nil {
@@ -851,7 +850,7 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 	catalog.ckpmu.RUnlock()
 	now := time.Now()
 	entry := catalog.PrepareCheckpoint(minTs, maxTs)
-	logutil.Infof("PrepareCheckpoint: %s", time.Since(now))
+	logutil.Debugf("PrepareCheckpoint: %s", time.Since(now))
 	if len(entry.LogIndexes) == 0 {
 		return
 	}
@@ -860,7 +859,7 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 	if err != nil {
 		return
 	}
-	logutil.Infof("MakeLogEntry: %s", time.Since(now))
+	logutil.Debugf("MakeLogEntry: %s", time.Since(now))
 	now = time.Now()
 	defer logEntry.Free()
 	checkpoint := new(Checkpoint)
@@ -873,19 +872,19 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 	if err = logEntry.WaitDone(); err != nil {
 		panic(err)
 	}
-	logutil.Infof("SaveCheckpointed: %s", time.Since(now))
+	logutil.Debugf("SaveCheckpointed: %s", time.Since(now))
 	// for _, index := range entry.LogIndexes {
-	// 	logutil.Infof("Ckp0Index %s", index.String())
+	// 	logutil.Debugf("Ckp0Index %s", index.String())
 	// }
 	now = time.Now()
 	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {
 		logutil.Warnf("Schedule checkpoint log indexes: %v", err)
 		return
 	}
-	logutil.Infof("CheckpointWal: %s", time.Since(now))
+	logutil.Debugf("CheckpointWal: %s", time.Since(now))
 	catalog.ckpmu.Lock()
 	catalog.checkpoints = append(catalog.checkpoints, checkpoint)
 	catalog.ckpmu.Unlock()
-	logutil.Infof("Max LogIndex: %s", entry.MaxIndex.String())
+	logutil.Debugf("Max LogIndex: %s", entry.MaxIndex.String())
 	return
 }

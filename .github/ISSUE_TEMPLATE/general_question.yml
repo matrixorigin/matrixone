@@ -1,9 +1,10 @@
 name: General question
 description: Ask questions not covered above
 title: "[Question]: "
-labels: [kind/questions, needs-triage]
-assignees:
-  - m-schen
+# labels: [kind/questions, needs-triage]
+labels: [kind/questions]
+# assignees:
+#   - m-schen
 body:
   - type: markdown
     attributes:

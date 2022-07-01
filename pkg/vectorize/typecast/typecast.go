@@ -15,9 +15,12 @@
 package typecast
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"math"
 	"strconv"
+	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -61,7 +64,7 @@ var (
 	Uint8ToInt64   = NumericToNumeric[uint8, int64]
 	Uint16ToInt64  = NumericToNumeric[uint16, int64]
 	Uint32ToInt64  = NumericToNumeric[uint32, int64]
-	Uint64ToInt64  = NumericToNumeric[uint64, int64]
+	Uint64ToInt64  = uint64ToInt64 // we handle overflow error in this function
 	Float32ToInt64 = NumericToNumeric[float32, int64]
 	Float64ToInt64 = NumericToNumeric[float64, int64]
 
@@ -98,7 +101,7 @@ var (
 	Int8ToUint64    = NumericToNumeric[int8, uint64]
 	Int16ToUint64   = NumericToNumeric[int16, uint64]
 	Int32ToUint64   = NumericToNumeric[int32, uint64]
-	Int64ToUint64   = NumericToNumeric[int64, uint64]
+	Int64ToUint64   = int64ToUint64
 	Uint8ToUint64   = NumericToNumeric[uint8, uint64]
 	Uint16ToUint64  = NumericToNumeric[uint16, uint64]
 	Uint32ToUint64  = NumericToNumeric[uint32, uint64]
@@ -133,13 +136,13 @@ var (
 	Int32ToBytes   = IntToBytes[int32]
 	BytesToInt64   = BytesToInt[int64]
 	Int64ToBytes   = IntToBytes[int64]
-	BytesToUint8   = BytesToInt[uint8]
+	BytesToUint8   = BytesToUint[uint8]
 	Uint8ToBytes   = IntToBytes[uint8]
-	BytesToUint16  = BytesToInt[uint16]
+	BytesToUint16  = BytesToUint[uint16]
 	Uint16ToBytes  = IntToBytes[uint16]
-	BytesToUint32  = BytesToInt[uint32]
+	BytesToUint32  = BytesToUint[uint32]
 	Uint32ToBytes  = IntToBytes[uint32]
-	BytesToUint64  = BytesToInt[uint64]
+	BytesToUint64  = BytesToUint[uint64]
 	Uint64ToBytes  = IntToBytes[uint64]
 	BytesToFloat32 = BytesToFloat[float32]
 	Float32ToBytes = FloatToBytes[float32]
@@ -175,14 +178,58 @@ func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, r
 	return rs, nil
 }
 
-func BytesToInt[T constraints.Integer](xs *types.Bytes, rs []T) ([]T, error) {
+func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
+	overflowFlag := uint64(0)
+	for i, x := range xs {
+		rs[i] = int64(x)
+		overflowFlag |= x >> 63
+	}
+	if overflowFlag != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint unsigned to bigint"))
+	}
+	return rs, nil
+}
+
+func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
+	overflowFlag := int64(0)
+	for i, x := range xs {
+		rs[i] = uint64(x)
+		overflowFlag |= x >> 63
+	}
+	if overflowFlag != 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint to bigint unsigned"))
+	}
+	return rs, nil
+}
+
+func BytesToInt[T constraints.Signed](xs *types.Bytes, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 
 	for i, o := range xs.Offsets {
 		s := string(xs.Data[o : o+xs.Lengths[i]])
-		val, err := strconv.ParseInt(s, 10, bitSize)
+		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
-			return nil, err
+			if strings.Contains(err.Error(), "value out of range") {
+				return nil, fmt.Errorf("Overflow when cast '%s' as type of integer", s)
+			}
+			return nil, fmt.Errorf("Can't cast '%s' as type of integer", s)
+		}
+		rs[i] = T(val)
+	}
+	return rs, nil
+}
+
+func BytesToUint[T constraints.Unsigned](xs *types.Bytes, rs []T) ([]T, error) {
+	var bitSize = int(unsafe.Sizeof(T(0))) * 8
+
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+		if err != nil {
+			if strings.Contains(err.Error(), "value out of range") {
+				return nil, fmt.Errorf("Overflow when cast '%s' as type of unsigned integer", s)
+			}
+			return nil, fmt.Errorf("Can't cast '%s' as type of unsigned integer", s)
 		}
 		rs[i] = T(val)
 	}
@@ -293,11 +340,10 @@ func dateToTimestamp(xs []types.Date, rs []types.Timestamp) ([]types.Timestamp, 
 	return types.DateToTimestamp(xs, rs)
 }
 
-func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes) (*types.Bytes, error) {
+func timestampToVarchar(xs []types.Timestamp, rs *types.Bytes, precision int32) (*types.Bytes, error) {
 	oldLen := uint32(0)
 	for i, x := range xs {
-		//todo: pass precision arg?
-		rs.Data = append(rs.Data, []byte(x.String())...)
+		rs.Data = append(rs.Data, []byte(x.String2(precision))...)
 		newLen := uint32(len(rs.Data))
 		rs.Offsets[i] = oldLen
 		rs.Lengths[i] = newLen - oldLen
@@ -377,6 +423,61 @@ func Decimal128ToTimestamp(xs []types.Decimal128, precision int32, scale int32, 
 	div.Decimal128DivByScalar(bydel128, xs, 0, scale, tempdel128)
 	for i, x := range tempdel128 {
 		rs[i] = types.Timestamp(x.Lo)
+	}
+	return rs, nil
+}
+
+func Decimal64ToFloat32(xs []types.Decimal64, scale int32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal64ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 32)
+		if err != nil {
+			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = float32(result)
+	}
+	return rs, nil
+}
+
+func Decimal128ToFloat32(xs []types.Decimal128, scale int32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal128ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = float32(result)
+	}
+	return rs, nil
+}
+
+func Decimal64ToFloat64(xs []types.Decimal64, scale int32, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal64ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = result
+	}
+	return rs, nil
+}
+
+func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		xStr := string(x.Decimal128ToString(scale))
+		result, err := strconv.ParseFloat(xStr, 64)
+		if err != nil {
+			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+		}
+		rs[i] = result
+	}
+	return rs, nil
+}
+
+func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool) ([]bool, error) {
+	for i, x := range xs {
+		rs[i] = (x != 0)
 	}
 	return rs, nil
 }

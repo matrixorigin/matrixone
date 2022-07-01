@@ -17,7 +17,6 @@ package deletion
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -35,15 +34,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
-
+	defer bat.Clean(proc.Mp)
 	err := p.TableSource.Delete(p.Ts, bat.GetVector(0), p.UseDeleteKey, proc.Snapshot)
 	if err != nil {
 		return false, err
 	}
 
-	affectedRows := uint64(vector.Length(bat.Vecs[0]))
-	batch.Clean(bat, proc.Mp)
-	proc.Reg.InputBatch = &batch.Batch{}
+	affectedRows := uint64(batch.Length(bat))
 
 	p.M.Lock()
 	p.AffectedRows += affectedRows

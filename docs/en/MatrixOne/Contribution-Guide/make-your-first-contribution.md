@@ -6,9 +6,9 @@ This document will help you get started on your first contribution to MatrixOne.
 
 ## **How to Contribute?**
 
-Before setting about contribution, you need figure out that in what area you can help us. You can see [Types of contributions](How-to-Contribute/types-of-contributions.md) for more details.
+Before setting about contribution, you need figure out what area you are trying to help us in. You can see [Types of contributions](How-to-Contribute/types-of-contributions.md) for more details.
 
-As your first-ever contribution, it can be selected from the following categories, which require little technical background of the contributor:
+As your first-ever contribution, it can be selected from the following categories which require little technical background of the contributor:
 
 * To report a bug in the code
 
@@ -66,11 +66,11 @@ git remote add upstream https://github.com/matrixorigin/matrixone.git
 
 #### **Make some changes**
 
-Now you can edit the code, modify the documents and make whatever changes you want about your issue, on the branch you just created.
+Now you can edit the code, modify the documents, and make whatever changes you want about your issue in the branch you just created.
 
 #### **Run MatrixOne in a standalone mode**
 
-If you want to demonstrate whether the changes you made are valid or reproduce an issue, you need to run MatrixOne in a standalone mode.  
+If you want to demonstrate whether the changes you made are valid or produce an issue, you need to run MatrixOne in a standalone mode.  
 Before running, make sure you have installed MatrixOne according to our [Install tutorial](./../Get-Started/install-standalone-matrixone.md).
 And you can connect MatrixOne Serve according to the [Connect tutorial](./../Get-Started/connect-to-matrixone-server.md).
 
@@ -118,7 +118,7 @@ Having pushed your changes, you can visit your folk at `https://github.com/$user
 ![Pull Request](https://github.com/matrixorigin/artwork/blob/main/docs/contribution-guide/contribution-guide-pr.png?raw=true)
 ![Pull Request Template](https://github.com/matrixorigin/artwork/blob/main/docs/contribution-guide/contribution-guide-pr-template.png?raw=true)
 
-Once your PR is opened, it will be assigned to reviewers. These reviewers will check your contribution and make a detail review, according to correctness, bugs, style and so on.
+Once your PR is opened, it will be assigned to reviewers. These reviewers will check your contribution and make a detail review according to correctness, bugs, style and so on.
 
 ### **Step 8 After merging, Keep your repo in sync**
 

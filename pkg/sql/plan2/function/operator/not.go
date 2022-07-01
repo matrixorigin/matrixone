@@ -15,69 +15,52 @@
 package operator
 
 import (
-	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func NotCol(lv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
-	}
-	n := len(lvs)
-	vec, err := proc.AllocVector(lv.Typ, int64(n)*1)
+func NotScalar(sv, nsv *vector.Vector, col1, col2 []bool, proc *process.Process) (*vector.Vector, error) {
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	col := make([]bool, len(lvs))
-	for i := 0; i < len(lvs); i++ {
-		col[i] = !lvs[i]
-		if nulls.Contains(lv.Nsp, uint64(i)) {
-			col[i] = false
-		}
+	vcols := vec.Col.([]bool)
+	value := col1[0]
+	for i := range vcols {
+		vcols[i] = value && col2[i]
 	}
-	nulls.Or(lv.Nsp, nil, vec.Nsp)
-	vector.SetCol(vec, col)
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }
 
-func NotConst(lv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lvs, ok := lv.Col.([]bool)
-	if !ok {
-		return nil, errors.New("the left vec col is not []bool type")
+func Not(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1 := vs[0]
+	col1 := vector.MustTCols[bool](v1)
+	if v1.IsScalarNull() {
+		return proc.AllocScalarNullVector(retType), nil
 	}
-	vec := proc.AllocScalarVector(lv.Typ)
-	vector.SetCol(vec, []bool{!lvs[0]})
-	return vec, nil
-}
 
-func NotNull(lv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(lv.Typ), nil
-}
-
-type NotFunc = func(lv *vector.Vector, proc *process.Process) (*vector.Vector, error)
-
-var NotFuncMap = map[int]NotFunc{}
-
-var NotFuncVec = []NotFunc{
-	NotCol, NotConst, NotNull,
-}
-
-func InitNotFuncMap() {
-	for i := 0; i < len(NotFuncVec); i++ {
-		NotFuncMap[i] = NotFuncVec[i]
+	c1 := v1.IsScalar()
+	switch {
+	case c1:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = !col1[0]
+		return vec, nil
 	}
-}
-
-func Not(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv := vectors[0]
-	lt := GetTypeID(lv)
-	vec, err := NotFuncMap[lt](lv, proc)
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
-		return nil, errors.New("Not function: " + err.Error())
+		return nil, err
 	}
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		vcols[i] = !col1[i]
+	}
+	nulls.Or(v1.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }

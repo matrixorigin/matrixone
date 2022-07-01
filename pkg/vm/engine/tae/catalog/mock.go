@@ -17,8 +17,7 @@ package catalog
 import (
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -131,6 +130,10 @@ func (h *mockDBHandle) CreateRelation(def any) (rel handle.Relation, err error) 
 	return
 }
 
+func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err error) {
+	panic("not implemented")
+}
+
 func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err error) {
 	entry, err := h.entry.DropTableEntry(name, h.Txn)
 	if err != nil {
@@ -193,13 +196,13 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 	return newMockDBHandle(txn.catalog, txn, entry), nil
 }
 
-func MockData(schema *Schema, rows uint32) *batch.Batch {
+func MockBatch(schema *Schema, rows int) *containers.Batch {
 	if schema.IsSingleSortKey() {
 		sortKey := schema.GetSingleSortKey()
-		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), sortKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, sortKey.Idx, nil)
 	} else if schema.IsCompoundSortKey() {
-		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
 	} else {
-		return compute.MockBatchWithAttrs(schema.Types(), schema.Attrs(), uint64(rows), schema.HiddenKey.Idx, nil)
+		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.HiddenKey.Idx, nil)
 	}
 }

@@ -15,7 +15,6 @@
 package plan2
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -49,7 +48,7 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	}
 	qry, ok := pn.Plan.(*plan.Plan_Query)
 	if !ok {
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, pn.String()))
+		panic(errors.New("", pn.String()))
 	}
 	opt.qry = qry.Query
 	return opt.optimize()
@@ -62,6 +61,9 @@ func (opt *BaseOptimizer) optimize() (*Query, error) {
 	for _, step := range opt.qry.Steps {
 		opt.exploreNode(opt.qry.Nodes[step])
 	}
+
+	opt.pruneUsedNodes(opt.qry)
+
 	return opt.qry, nil
 }
 
@@ -74,4 +76,29 @@ func (opt *BaseOptimizer) exploreNode(n *Node) {
 			rule.Apply(n, opt.qry)
 		}
 	}
+}
+
+func (opt *BaseOptimizer) pruneUsedNodes(qry *plan.Query) {
+	var newSteps []int32
+	var newNodes []*plan.Node
+
+	for _, step := range qry.Steps {
+		newSteps = append(newSteps, opt.compactPlanTree(qry, step, &newNodes))
+	}
+
+	qry.Steps = newSteps
+	qry.Nodes = newNodes
+}
+
+func (opt *BaseOptimizer) compactPlanTree(qry *plan.Query, nodeId int32, nodes *[]*plan.Node) int32 {
+	node := qry.Nodes[nodeId]
+
+	for i, childId := range node.Children {
+		node.Children[i] = opt.compactPlanTree(qry, childId, nodes)
+	}
+
+	node.NodeId = int32(len(*nodes))
+	*nodes = append(*nodes, node)
+
+	return node.NodeId
 }

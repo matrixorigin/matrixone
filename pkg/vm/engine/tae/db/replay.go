@@ -8,13 +8,10 @@ import (
 	"path"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -60,7 +57,6 @@ func (replayer *Replayer) PreReplayWal() {
 			return catalog.ErrStopCurrRecur
 		}
 		entry.InitData(replayer.DataFactory)
-		entry.ReplayFile(replayer.cache)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
@@ -215,7 +211,7 @@ func (replayer *Replayer) OnTimeStamp(ts uint64) {
 func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 	if idxCtx != nil && idxCtx.Size > 0 {
 		logutil.Info("", common.OperationField("replay-cmd"),
-			common.OperandField(txncmd.String()),
+			common.OperandField(txncmd.Desc()),
 			common.AnyField("index", idxCtx.String()))
 	}
 	var err error
@@ -247,14 +243,11 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 }
 
 func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
-	var data batch.IBatch
-	var deletes *roaring.Bitmap
+	var data *containers.Batch
 	for _, subTxnCmd := range cmd.Cmds {
 		switch subCmd := subTxnCmd.(type) {
 		case *txnbase.BatchCmd:
 			data = subCmd.Bat
-		case *txnbase.DeleteBitmapCmd:
-			deletes = subCmd.Bitmap
 		case *txnbase.PointerCmd:
 			batEntry, err := db.Wal.LoadEntry(subCmd.Group, subCmd.Lsn)
 			if err != nil {
@@ -266,7 +259,11 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 				panic(err)
 			}
 			data = txnCmd.(*txnbase.BatchCmd).Bat
+			batEntry.Free()
 		}
+	}
+	if data != nil {
+		defer data.Close()
 	}
 
 	for _, info := range cmd.Infos {
@@ -289,46 +286,13 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 			continue
 		}
 		start := info.GetSrcOff()
-		end := start + info.GetSrcLen() - 1
-		bat, err := db.window(blk.GetSchema(), data, deletes, start, end)
-		if err != nil {
-			panic(err)
-		}
-		len := info.GetDestLen()
-		// off := info.GetDestOff()
-		datablk := blk.GetBlockData()
-		appender, err := datablk.MakeAppender()
-		if err != nil {
-			panic(err)
-		}
-		_, _, err = appender.OnReplayInsertNode(bat, 0, len, nil)
-		if err != nil {
+		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
+		bat.Compact()
+		defer bat.Close()
+		if err = blk.GetBlockData().OnReplayAppendPayload(bat); err != nil {
 			panic(err)
 		}
 	}
-}
-
-func (db *DB) window(schema *catalog.Schema, data batch.IBatch, deletes *roaring.Bitmap, start, end uint32) (*gbat.Batch, error) {
-	ret := gbat.New(true, []string{})
-	for _, attrId := range data.GetAttrs() {
-		def := schema.ColDefs[attrId]
-		if def.IsHidden() {
-			continue
-		}
-		src, err := data.GetVectorByAttr(attrId)
-		if err != nil {
-			return nil, err
-		}
-		srcVec, err := src.Window(start, end+1).CopyToVector()
-		if err != nil {
-			return nil, err
-		}
-		deletes := common.BM32Window(deletes, int(start), int(end))
-		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
-		ret.Vecs = append(ret.Vecs, srcVec)
-		ret.Attrs = append(ret.Attrs, def.Name)
-	}
-	return ret, nil
 }
 
 func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) (err error) {
@@ -363,8 +327,8 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	datablk := blk.GetBlockData()
-	err = datablk.OnReplayDelete(deleteNode)
+	blkData := blk.GetBlockData()
+	err = blkData.OnReplayDelete(deleteNode)
 	if err != nil {
 		panic(err)
 	}
@@ -393,13 +357,9 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	datablk := blk.GetBlockData()
-
-	appender, err := datablk.MakeAppender()
-	if err != nil {
+	if err = blk.GetBlockData().OnReplayAppend(appendNode); err != nil {
 		panic(err)
 	}
-	appender.OnReplayAppendNode(cmd.GetAppendNode())
 	if observer != nil {
 		observer.OnTimeStamp(appendNode.GetCommitTS())
 	}
@@ -417,7 +377,7 @@ func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	if err != nil {
 		panic(err)
 	}
-	if blk.CurrOp == catalog.OpSoftDelete {
+	if !blk.IsActive() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}

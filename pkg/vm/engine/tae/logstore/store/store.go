@@ -281,11 +281,11 @@ func (bs *baseStore) onPostCommits(batches []*batch) {
 
 func (bs *baseStore) onCommits(batches []*batch) {
 	for _, bat := range batches {
-		infos := make([]*entry.Info, 0)
+		bat.infos = make([]*entry.Info, 0)
 		for _, e := range bat.entrys {
 			info := e.GetInfo()
 			if info != nil {
-				infos = append(infos, info.(*entry.Info))
+				bat.infos = append(bat.infos, info.(*entry.Info))
 			}
 			if e.IsPrintTime() {
 				logutil.Infof("sync and queues takes %dms", e.Duration().Milliseconds())
@@ -295,8 +295,6 @@ func (bs *baseStore) onCommits(batches []*batch) {
 		}
 		cnt := len(bat.entrys)
 		bs.flushWg.Add(-1 * cnt)
-		bat.infos = make([]*entry.Info, len(infos))
-		copy(bat.infos, infos)
 	}
 	bats := make([]*batch, len(batches))
 	copy(bats, batches)
@@ -519,12 +517,6 @@ func (s *baseStore) Replay(h ApplyHandle) error {
 	if err != nil {
 		return err
 	}
-	for group, checkpointed := range r.checkpointrange {
-		s.checkpointed.ids[group] = checkpointed.GetCheckpointed()
-	}
-	for _, ent := range r.entrys {
-		s.synced.ids[ent.group] = ent.commitId
-	}
 	s.OnReplay(r)
 	r.Apply()
 	return nil
@@ -575,4 +567,5 @@ func (s *baseStore) OnCommitVFile(vf VFile) {
 	if err != nil {
 		panic(err)
 	}
+	e.Free()
 }

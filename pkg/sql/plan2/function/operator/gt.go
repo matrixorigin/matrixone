@@ -15,288 +15,350 @@
 package operator
 
 import (
-	"errors"
+	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/gt"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/lt"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func great[T OrderedValue](d1, d2 interface{}, aScale, bScale int32) bool {
-	l, v := d1.(T), d2.(T)
-	return l > v
-}
-
-func great_B(d1, d2 interface{}, aScale, bScale int32) bool {
-	l, v := d1.(bool), d2.(bool)
-	return l && !v
-}
-
-func great_D(d1, d2 interface{}, aScale, bScale int32) bool {
-	l, v := d1.(types.Decimal128), d2.(types.Decimal128)
-	return types.CompareDecimal128Decimal128(l, v, aScale, bScale) > 0
-}
-
-type GtOpFunc = func(d1, d2 interface{}, aScale, bScale int32) bool
-
-var GtOpFuncMap = map[int]GtOpFunc{}
-
-var GtOpFuncVec = []GtOpFunc{
-	great[int8], great[int16], great[int32], great[int64], great[uint8], great[uint16], great[uint32],
-	great[uint64], great[float32], great[float64], great[string], great_B, great[types.Date],
-	great[types.Datetime], great[types.Decimal64], great_D,
-}
-
-func InitGtOpFuncMap() {
-	for i := 0; i < len(GtOpFuncVec); i++ {
-		GtOpFuncMap[i] = GtOpFuncVec[i]
-	}
-}
-
-var StrGtOpFuncMap = map[int]StrCompOpFunc{}
-
-var StrGtOpFuncVec = []StrCompOpFunc{
-	greatCol_Col, greatCol_Const, greatConst_Col, greatConst_Const,
-}
-
-func greatCol_Col(d1, d2 *vector.Vector) ([]bool, error) {
-	lvs, ok := d1.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the left col type is not *types.Bytes")
-	}
-	rvs, ok := d2.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the right col type is not *types.Bytes")
-	}
-	rs := make([]int64, len(lvs.Lengths))
-	rs = gt.StrGt(lvs, rvs, rs)
-	col := make([]bool, len(lvs.Lengths))
-	rsi := 0
-	for i := 0; i < len(col); i++ {
-		if rsi >= len(rs) {
-			break
-		}
-		if int64(i) == rs[rsi] {
-			col[i] = true
-			rsi++
-		}
-		if nulls.Contains(d1.Nsp, uint64(i)) || nulls.Contains(d2.Nsp, uint64(i)) {
-			col[i] = false
-		}
-	}
-	return col, nil
-}
-
-func greatCol_Const(d1, d2 *vector.Vector) ([]bool, error) {
-	lvs, ok := d1.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the left col type is not *types.Bytes")
-	}
-	rvs, ok := d2.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the right col type is not *types.Bytes")
-	}
-	rs := make([]int64, len(lvs.Lengths))
-	rs = lt.StrLtScalar(rvs.Data, lvs, rs)
-	col := make([]bool, len(lvs.Lengths))
-	rsi := 0
-	for i := 0; i < len(col); i++ {
-		if rsi >= len(rs) {
-			break
-		}
-		if int64(i) == rs[rsi] {
-			col[i] = true
-			rsi++
-		}
-		if nulls.Contains(d1.Nsp, uint64(i)) {
-			col[i] = false
-		}
-	}
-	return col, nil
-}
-
-func greatConst_Col(d1, d2 *vector.Vector) ([]bool, error) {
-	lvs, ok := d1.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the left col type is not *types.Bytes")
-	}
-	rvs, ok := d2.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the right col type is not *types.Bytes")
-	}
-	rs := make([]int64, len(rvs.Lengths))
-	rs = gt.StrGtScalar(lvs.Data, rvs, rs)
-	col := make([]bool, len(rvs.Lengths))
-	rsi := 0
-	for i := 0; i < len(col); i++ {
-		if rsi >= len(rs) {
-			break
-		}
-		if int64(i) == rs[rsi] {
-			col[i] = true
-			rsi++
-		}
-		if nulls.Contains(d2.Nsp, uint64(i)) {
-			col[i] = false
-		}
-	}
-	return col, nil
-}
-
-func greatConst_Const(d1, d2 *vector.Vector) ([]bool, error) {
-	lvs, ok := d1.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the left col type is not *types.Bytes")
-	}
-	rvs, ok := d2.Col.(*types.Bytes)
-	if !ok {
-		return nil, errors.New("the right col type is not *types.Bytes")
-	}
-	return []bool{string(lvs.Data) > string(rvs.Data)}, nil
-}
-
-func InitStrGtOpFuncMap() {
-	for i := 0; i < len(StrGtOpFuncVec); i++ {
-		StrGtOpFuncMap[i] = StrGtOpFuncVec[i]
-	}
-}
-
-func ColGtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	n := GetRetColLen[T](lv)
-	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
+func ScalarGtNotScalar[T OrderedValue](sv, nsv *vector.Vector, col1, col2 []T, proc *process.Process) (*vector.Vector, error) {
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	col, err := GetRetCol[T](lv, rv, col_col, GtOpFuncMap, StrGtOpFuncMap)
-	if err != nil {
-		return nil, err
+	vcols := vec.Col.([]bool)
+	value := col1[0]
+	for i := range vcols {
+		vcols[i] = value > col2[i]
 	}
-	vector.SetCol(vec, col)
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }
 
-func ColGtConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	n := GetRetColLen[T](lv)
-	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
+func NotScalarGtScalar[T OrderedValue](sv, nsv *vector.Vector, col1, col2 []T, proc *process.Process) (*vector.Vector, error) {
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	col, err := GetRetCol[T](lv, rv, col_const, GtOpFuncMap, StrGtOpFuncMap)
-	if err != nil {
-		return nil, err
+	vcols := vec.Col.([]bool)
+	value := col1[0]
+	for i := range vcols {
+		vcols[i] = col2[i] > value
 	}
-	vector.SetCol(vec, col)
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }
 
-func ColGtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
-}
-
-func ConstGtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	n := GetRetColLen[T](rv)
-	vec, err := proc.AllocVector(proc.GetBoolTyp(lv.Typ), int64(n)*1)
+func ScalarStringGtNotScalar(sv, nsv *vector.Vector, str []byte, col *types.Bytes, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-	col, err := GetRetCol[T](lv, rv, const_col, GtOpFuncMap, StrGtOpFuncMap)
-	if err != nil {
-		return nil, err
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = isBytesGt(str, col.Get(i))
 	}
-	vector.SetCol(vec, col)
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }
 
-func ConstGtConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vec := proc.AllocScalarVector(proc.GetBoolTyp(lv.Typ))
-	col, err := GetRetCol[T](lv, rv, const_const, GtOpFuncMap, StrGtOpFuncMap)
+func NotScalarStringGtScalar(sv, nsv *vector.Vector, str []byte, col *types.Bytes, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
 		return nil, err
 	}
-	vector.SetCol(vec, col)
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = isBytesGt(col.Get(i), str)
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }
 
-func ConstGtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
-}
-
-func NullGtCol[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
-}
-
-func NullGtConst[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
-}
-
-func NullGtNull[T DataValue](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return proc.AllocScalarNullVector(proc.GetBoolTyp(lv.Typ)), nil
-}
-
-type GtFunc = func(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error)
-
-var GtFuncMap = map[int]GtFunc{}
-
-var GtFuncVec = []GtFunc{
-	ColGtCol[int8], ColGtCol[int16], ColGtCol[int32], ColGtCol[int64], ColGtCol[uint8], ColGtCol[uint16],
-	ColGtCol[uint32], ColGtCol[uint64], ColGtCol[float32], ColGtCol[float64], ColGtCol[string], ColGtCol[bool],
-	ColGtCol[types.Date], ColGtCol[types.Datetime], ColGtCol[types.Decimal64], ColGtCol[types.Decimal128],
-
-	ColGtConst[int8], ColGtConst[int16], ColGtConst[int32], ColGtConst[int64], ColGtConst[uint8], ColGtConst[uint16],
-	ColGtConst[uint32], ColGtConst[uint64], ColGtConst[float32], ColGtConst[float64], ColGtConst[string], ColGtConst[bool],
-	ColGtConst[types.Date], ColGtConst[types.Datetime], ColGtConst[types.Decimal64], ColGtConst[types.Decimal128],
-
-	ColGtNull[int8], ColGtNull[int16], ColGtNull[int32], ColGtNull[int64], ColGtNull[uint8], ColGtNull[uint16],
-	ColGtNull[uint32], ColGtNull[uint64], ColGtNull[float32], ColGtNull[float64], ColGtNull[string], ColGtNull[bool],
-	ColGtNull[types.Date], ColGtNull[types.Datetime], ColGtNull[types.Decimal64], ColGtNull[types.Decimal128],
-
-	ConstGtCol[int8], ConstGtCol[int16], ConstGtCol[int32], ConstGtCol[int64], ConstGtCol[uint8], ConstGtCol[uint16],
-	ConstGtCol[uint32], ConstGtCol[uint64], ConstGtCol[float32], ConstGtCol[float64], ConstGtCol[string], ConstGtCol[bool],
-	ConstGtCol[types.Date], ConstGtCol[types.Datetime], ConstGtCol[types.Decimal64], ConstGtCol[types.Decimal128],
-
-	ConstGtConst[int8], ConstGtConst[int16], ConstGtConst[int32], ConstGtConst[int64], ConstGtConst[uint8], ConstGtConst[uint16],
-	ConstGtConst[uint32], ConstGtConst[uint64], ConstGtConst[float32], ConstGtConst[float64], ConstGtConst[string], ConstGtConst[bool],
-	ConstGtConst[types.Date], ConstGtConst[types.Datetime], ConstGtConst[types.Decimal64], ConstGtConst[types.Decimal128],
-
-	ConstGtNull[int8], ConstGtNull[int16], ConstGtNull[int32], ConstGtNull[int64], ConstGtNull[uint8], ConstGtNull[uint16],
-	ConstGtNull[uint32], ConstGtNull[uint64], ConstGtNull[float32], ConstGtNull[float64], ConstGtNull[string], ConstGtNull[bool],
-	ConstGtNull[types.Date], ConstGtNull[types.Datetime], ConstGtNull[types.Decimal64], ConstGtNull[types.Decimal128],
-
-	NullGtCol[int8], NullGtCol[int16], NullGtCol[int32], NullGtCol[int64], NullGtCol[uint8], NullGtCol[uint16],
-	NullGtCol[uint32], NullGtCol[uint64], NullGtCol[float32], NullGtCol[float64], NullGtCol[string], NullGtCol[bool],
-	NullGtCol[types.Date], NullGtCol[types.Datetime], NullGtCol[types.Decimal64], NullGtCol[types.Decimal128],
-
-	NullGtConst[int8], NullGtConst[int16], NullGtConst[int32], NullGtConst[int64], NullGtConst[uint8], NullGtConst[uint16],
-	NullGtConst[uint32], NullGtConst[uint64], NullGtConst[float32], NullGtConst[float64], NullGtConst[string], NullGtConst[bool],
-	NullGtConst[types.Date], NullGtConst[types.Datetime], NullGtConst[types.Decimal64], NullGtConst[types.Decimal128],
-
-	NullGtNull[int8], NullGtNull[int16], NullGtNull[int32], NullGtNull[int64], NullGtNull[uint8], NullGtNull[uint16],
-	NullGtNull[uint32], NullGtNull[uint64], NullGtNull[float32], NullGtNull[float64], NullGtNull[string], NullGtNull[bool],
-	NullGtNull[types.Date], NullGtNull[types.Datetime], NullGtNull[types.Decimal64], NullGtNull[types.Decimal128],
-}
-
-func InitGtFuncMap() {
-	InitGtOpFuncMap()
-	InitStrGtOpFuncMap()
-	for i := 0; i < len(GtFuncVec); i++ {
-		GtFuncMap[i] = GtFuncVec[i]
-	}
-}
-
-func GtDataValue[T DataValue](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv := vectors[0]
-	rv := vectors[1]
-	lt, rt := GetTypeID(lv), GetTypeID(rv)
-	dataID := GetDatatypeID[T]()
-	vec, err := GtFuncMap[(lt*3+rt)*dataTypeNum+dataID](lv, rv, proc)
+func ScalarBoolGtNotScalar(sv, nsv *vector.Vector, value bool, col []bool, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
 	if err != nil {
-		return nil, errors.New("Gt function: " + err.Error())
+		return nil, err
 	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = value && !col[i]
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func NotScalarBoolGtScalar(sv, nsv *vector.Vector, value bool, col []bool, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = col[i] && !value
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func ScalarDecimal64GtNotScalar(sv, nsv *vector.Vector, str types.Decimal64, col []types.Decimal64, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = types.CompareDecimal64Decimal64(str, col[i], sv.Typ.Scale, nsv.Typ.Scale) > 0
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func ScalarDecimal128GtNotScalar(sv, nsv *vector.Vector, str types.Decimal128, col []types.Decimal128, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = types.CompareDecimal128Decimal128(str, col[i], sv.Typ.Scale, nsv.Typ.Scale) > 0
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func NotScalarDecimal64GtScalar(sv, nsv *vector.Vector, str types.Decimal64, col []types.Decimal64, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = types.CompareDecimal64Decimal64(col[i], str, nsv.Typ.Scale, sv.Typ.Scale) > 0
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func NotScalarDecimal128GtScalar(sv, nsv *vector.Vector, str types.Decimal128, col []types.Decimal128, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = types.CompareDecimal128Decimal128(col[i], str, nsv.Typ.Scale, sv.Typ.Scale) > 0
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func isBytesGt(b1, b2 []byte) bool {
+	return bytes.Compare(b1, b2) > 0
+}
+
+func GtGeneral[T OrderedValue](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustTCols[T](v1), vector.MustTCols[T](v2)
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleWithNullCol(vs, proc)
+	}
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = col1[0] > col2[0]
+		return vec, nil
+	case c1 && !c2:
+		return ScalarGtNotScalar[T](v1, v2, col1, col2, proc)
+	case !c1 && c2:
+		return NotScalarGtScalar[T](v2, v1, col2, col1, proc)
+	}
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		vcols[i] = col1[i] > col2[i]
+	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func GtBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustTCols[bool](v1), vector.MustTCols[bool](v2)
+
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleWithNullCol(vs, proc)
+	}
+
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = col1[0] && !col2[0]
+		return vec, nil
+	case c1 && !c2:
+		return ScalarBoolGtNotScalar(v1, v2, col1[0], col2, proc)
+	case !c1 && c2:
+		return NotScalarBoolGtScalar(v2, v1, col2[0], col1, proc)
+	}
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		j := int64(i)
+		vcols[i] = col1[j] && !col2[j]
+	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func GtDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustTCols[types.Decimal64](v1), vector.MustTCols[types.Decimal64](v2)
+
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleWithNullCol(vs, proc)
+	}
+
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = types.CompareDecimal64Decimal64(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale) > 0
+		return vec, nil
+	case c1 && !c2:
+		return ScalarDecimal64GtNotScalar(v1, v2, col1[0], col2, proc)
+	case !c1 && c2:
+		return NotScalarDecimal64GtScalar(v2, v1, col2[0], col1, proc)
+	}
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		j := int64(i)
+		vcols[i] = types.CompareDecimal64Decimal64(col1[j], col2[j], v1.Typ.Scale, v2.Typ.Scale) > 0
+	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func GtDecimal128(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustTCols[types.Decimal128](v1), vector.MustTCols[types.Decimal128](v2)
+
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleWithNullCol(vs, proc)
+	}
+
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = types.CompareDecimal128Decimal128(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale) > 0
+		return vec, nil
+	case c1 && !c2:
+		return ScalarDecimal128GtNotScalar(v1, v2, col1[0], col2, proc)
+	case !c1 && c2:
+		return NotScalarDecimal128GtScalar(v2, v1, col2[0], col1, proc)
+	}
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		j := int64(i)
+		vcols[i] = types.CompareDecimal128Decimal128(col1[j], col2[j], v1.Typ.Scale, v2.Typ.Scale) > 0
+	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func GtString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleWithNullCol(vs, proc)
+	}
+
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = isBytesGt(col1.Get(0), col2.Get(0))
+		return vec, nil
+	case c1 && !c2:
+		return ScalarStringGtNotScalar(v1, v2, col1.Get(0), col2, proc)
+	case !c1 && c2:
+		return NotScalarStringGtScalar(v2, v1, col2.Get(0), col1, proc)
+	}
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		j := int64(i)
+		vcols[i] = isBytesGt(col1.Get(j), col2.Get(j))
+	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	FillNullPos(vec)
 	return vec, nil
 }

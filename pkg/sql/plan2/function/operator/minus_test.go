@@ -92,7 +92,7 @@ func minusIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, t
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			plus, err := Minus[T](c.vecs, c.proc)
+			plus, err := Minus[T](c.vecs, c.proc, c.vecs[0].Typ)
 			if err != nil {
 				t.Fatal(err)
 			}

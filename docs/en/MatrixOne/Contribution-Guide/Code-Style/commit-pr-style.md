@@ -1,6 +1,6 @@
 # Commit Message and Pull Request Style
 
-This document describes the commit message and Pull Request style applied to all MatrixOrigin repositories. When you are to commit, be sure to follow the style to write a good commit message, a good Pull Request title and description.
+This document describes the commit message and Pull Request style applied to all MatrixOrigin repositories. When you are ready to commit, be sure to follow the style guide to write a good commit message, a good Pull Request title, and description.
 
 ## Why a good commit message matters
 
@@ -19,7 +19,7 @@ Elements of a good commit message:
 
     It can be fixing a specific bug, adding a feature, improving performance, reliability and stability, or just be a change for the sake of correctness.
 
-2. **Why this change was made? (mandatory)**
+2. **Why was this change made? (mandatory)**
 
     For short and obvious patches, this part can be omitted, but it should be a clear description of what the approach was.
 

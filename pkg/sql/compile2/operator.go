@@ -17,10 +17,18 @@ package compile2
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopcomplement"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopleft"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/loopsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
@@ -55,6 +63,7 @@ var constBat *batch.Batch
 
 func init() {
 	constBat = batch.NewWithSize(0)
+	constBat.Zs = []int64{1}
 }
 
 func dupInstruction(in vm.Instruction) vm.Instruction {
@@ -73,6 +82,12 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *join.Argument:
 		rin.Arg = &join.Argument{
+			IsPreBuild: arg.IsPreBuild,
+			Result:     arg.Result,
+			Conditions: arg.Conditions,
+		}
+	case *semi.Argument:
+		rin.Arg = &semi.Argument{
 			IsPreBuild: arg.IsPreBuild,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
@@ -114,6 +129,26 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Data: arg.Data,
 			Func: arg.Func,
 		}
+	case *loopjoin.Argument:
+		rin.Arg = &loopjoin.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopsemi.Argument:
+		rin.Arg = &loopsemi.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopleft.Argument:
+		rin.Arg = &loopleft.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
+	case *loopcomplement.Argument:
+		rin.Arg = &loopcomplement.Argument{
+			Cond:   arg.Cond,
+			Result: arg.Result,
+		}
 	case *dispatch.Argument:
 	case *connector.Argument:
 	default:
@@ -124,7 +159,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 
 func constructRestrict(n *plan.Node) *restrict.Argument {
 	return &restrict.Argument{
-		E: colexec.RewriteFilterExprList(n.WhereList),
+		E: colexec.RewriteFilterExprList(n.FilterList),
 	}
 }
 
@@ -140,6 +175,41 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 	return &deletion.Argument{
 		TableSource:  relation,
 		UseDeleteKey: n.UseDeleteKey,
+	}, nil
+}
+
+func constructInsert(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*insert.Argument, error) {
+	db, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	relation, err := db.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &insert.Argument{
+		TargetTable:   relation,
+		TargetColDefs: n.TableDef.Cols,
+	}, nil
+}
+
+func constructUpdate(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot) (*update.Argument, error) {
+	dbSource, err := eg.Database(n.ObjRef.SchemaName, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	relation, err := dbSource.Relation(n.TableDef.Name, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return &update.Argument{
+		TableSource: relation,
+		PriKey:      n.UpdateInfo.PriKey,
+		PriKeyIdx:   n.UpdateInfo.PriKeyIdx,
+		HideKey:     n.UpdateInfo.HideKey,
+		UpdateAttrs: n.UpdateInfo.UpdateAttrs,
+		OtherAttrs:  n.UpdateInfo.OtherAttrs,
+		AttrOrders:  n.UpdateInfo.AttrOrders,
 	}, nil
 }
 
@@ -261,7 +331,6 @@ func constructComplement(n *plan.Node, proc *process.Process) *complement.Argume
 		Conditions: conds,
 		Result:     result,
 	}
-
 }
 
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
@@ -297,7 +366,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	}
 }
 
-func constructGroup(n *plan.Node) *group.Argument {
+func constructGroup(n, cn *plan.Node) *group.Argument {
 	aggs := make([]aggregate.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
@@ -314,9 +383,17 @@ func constructGroup(n *plan.Node) *group.Argument {
 			}
 		}
 	}
-
+	typs := make([]types.Type, len(cn.ProjectList))
+	for i, e := range cn.ProjectList {
+		typs[i].Oid = types.T(e.Typ.Id)
+		typs[i].Width = e.Typ.Width
+		typs[i].Size = e.Typ.Size
+		typs[i].Scale = e.Typ.Scale
+		typs[i].Precision = e.Typ.Precision
+	}
 	return &group.Argument{
 		Aggs:  aggs,
+		Types: typs,
 		Exprs: n.GroupBy,
 	}
 }
@@ -378,6 +455,58 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 	}
 }
 
+func constructLoopJoin(n *plan.Node, proc *process.Process) *loopjoin.Argument {
+	result := make([]loopjoin.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &loopjoin.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopSemi(n *plan.Node, proc *process.Process) *loopsemi.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	return &loopsemi.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopLeft(n *plan.Node, proc *process.Process) *loopleft.Argument {
+	result := make([]loopleft.ResultPos, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		result[i].Rel, result[i].Pos = constructJoinResult(expr)
+	}
+	return &loopleft.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
+func constructLoopComplement(n *plan.Node, proc *process.Process) *loopcomplement.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("complement result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	return &loopcomplement.Argument{
+		Result: result,
+		Cond:   colexec.RewriteFilterExprList(n.OnList),
+	}
+}
+
 func constructJoinResult(expr *plan.Expr) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
@@ -387,6 +516,23 @@ func constructJoinResult(expr *plan.Expr) (int32, int32) {
 }
 
 func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
+	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
+		b, ok := e.C.Value.(*plan.Const_Bval)
+		if !ok {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+		}
+		if b.Bval {
+			return expr, expr
+		}
+		return expr, &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Value: &plan.Const_Bval{Bval: true},
+				},
+			},
+		}
+	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
@@ -397,9 +543,42 @@ func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	return e.F.Args[0], e.F.Args[1]
 }
 
+func isEquiJoin(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if e, ok := expr.Expr.(*plan.Expr_F); ok {
+			if !supportedJoinCondition(e.F.Func.GetObj()) {
+				return false
+			}
+			if !hasColExpr(e.F.Args[0]) {
+				return false
+			}
+			if !hasColExpr(e.F.Args[1]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func supportedJoinCondition(id int64) bool {
 	fid, _ := function.DecodeOverloadID(id)
 	return fid == function.EQUAL
+}
+
+func hasColExpr(expr *plan.Expr) bool {
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return true
+	case *plan.Expr_F:
+		for i := range e.F.Args {
+			if hasColExpr(e.F.Args[i]) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 func exprRelPos(expr *plan.Expr) int32 {

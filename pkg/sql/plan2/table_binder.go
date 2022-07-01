@@ -31,21 +31,21 @@ func NewTableBinder(builder *QueryBuilder, ctx *BindContext) *TableBinder {
 }
 
 func (b *TableBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return b.baseBindExpr(astExpr, depth)
+	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
-func (b *TableBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32) (*plan.Expr, error) {
-	return b.baseBindColRef(astExpr, depth)
+func (b *TableBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	return b.baseBindColRef(astExpr, depth, isRoot)
 }
 
-func (b *TableBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *TableBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.GroupingError, "aggregate functions not allowed here")
 }
 
-func (b *TableBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32) (*plan.Expr, error) {
+func (b *TableBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "window functions not allowed here")
 }
 
-func (b *TableBinder) BindSubquery(astExpr *tree.Subquery) (*plan.Expr, error) {
+func (b *TableBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	return nil, errors.New(errno.WindowingError, "subquery in JOIN condition not yet supported")
 }

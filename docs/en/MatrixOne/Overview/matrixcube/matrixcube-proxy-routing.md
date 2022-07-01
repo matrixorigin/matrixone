@@ -1,18 +1,18 @@
 # **Shard Proxy and Global Routing**
 
-A distributed system consists of multiple servers. A lot of complicated traffic and coordination mechanisms are implemented to make the data stored in all servers balanced and the service equally scaled. But users usually don't care and have little intention to understand the distributed detail. Therefore, we designed a `Shard Proxy` to get a simple user experience just like working with a standalone database.The `Shard Proxy` is a central module to accept all user read/write requests. 
+A distributed system consists of multiple servers. A lot of complicated traffic and coordination mechanisms are implemented to make the data stored in all servers balanced and the service equally scaled. Users usually have little intention to understand the distributed detail. Therefore, we designed a `Shard Proxy` to achieve a simple user experience just like working with a standalone database.The `Shard Proxy` is a central module to accept all user read/write requests. 
 
-For example, when a user is quering for a certain table from a database. For a distributed database system, this request is actually looking for a `Shard` in a ceratin `Store`. 
+For example, when a user is querying for a certain table from a database. For a distributed database system, this request is actually looking for a `Shard` in a ceratin `Store`. 
 
-A user can send this request to any `Store` of the system. The `Shard Proxy` of the `Store` will take that request, it will look up for the `Global Routing` table to find the correct `Store`. 
+A user can send this request to any `Store` of the system. The `Shard Proxy` of the `Store` will take that request and it will look for the `Global Routing` table to find the correct `Store`. 
 
-As we have explained in the `Raft Group and Leader`,`Leader` is the representative of a `Raft Group`, all read and write requests are handled only by the leader. 
+As we have explained in the `Raft Group and Leader`,`Leader` is the representative of a `Raft Group`. All read and write requests are handled only by the leader. 
 
-Therefore, when a request for certain rows are executed. 
+Therefore, when a request for certain row is executed. 
 
-* Firstly, we need to locate the `Shard` where these rows are stored. 
-* Secondly, locate the `Leader Replica` of this `Shard` group. 
-* Thirdly, route the request to the `Store` where the `Leader Replica` is located. 
+* First, we need to locate the `Shard` where these rows are stored. 
+* Second, locate the `Leader Replica` of this `Shard` group. 
+* Third, route the request to the `Store` where the `Leader Replica` is located. 
 * Finally, `Leader Replica` executes the request and returns response. 
 
 ## **Example**

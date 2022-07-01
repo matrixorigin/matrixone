@@ -32,7 +32,8 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext)
 		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", stmt.Name))
 	}
 
-	sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
+	//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
+	sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 	return returnByRewriteSql(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 }
 
@@ -137,7 +138,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
-	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'P','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
+	sql := "SELECT attname `Field`,atttyp `Type`, attnotnull `Null`, iff(att_constraint_type = 'p','PRI','') `Key`, att_default `Default`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s'"
 
 	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
 
@@ -164,18 +165,21 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
 
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	binder := NewWhereBinder(builder, &BindContext{})
+
 	showVariables := &plan.ShowVariables{
 		Global: stmt.Global,
 	}
 	if stmt.Like != nil {
-		expr, _, err := buildComparisonExpr(stmt.Like, ctx, nil, nil, nil, false)
+		expr, err := binder.bindComparisonExpr(stmt.Like, 0, false)
 		if err != nil {
 			return nil, err
 		}
 		showVariables.Where = append(showVariables.Where, expr)
 	}
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil, nil, false)
+		exprs, err := splitAndBindCondition(stmt.Where.Expr, &BindContext{})
 		if err != nil {
 			return nil, err
 		}

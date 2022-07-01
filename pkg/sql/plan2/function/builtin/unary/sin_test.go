@@ -14,6 +14,7 @@
 package unary
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -33,17 +34,17 @@ func TestSin(t *testing.T) {
 
 	sinIntAndFloat[uint8](t, types.T_uint8, 5, -0.9589242746631385)
 	sinIntAndFloat[uint16](t, types.T_uint16, 6, -0.27941549819892586)
-	sinIntAndFloat[uint32](t, types.T_uint32, 7, 0.6569865987187891)
+	sinIntAndFloat[uint32](t, types.T_uint32, 7, math.Sin(7))
 	sinIntAndFloat[uint64](t, types.T_uint64, 8, 0.9893582466233817)
 
 	sinIntAndFloat[float32](t, types.T_float32, -0.5, -0.479425538604203)
 	sinIntAndFloat[float32](t, types.T_float32, 0.5, 0.479425538604203)
 	sinIntAndFloat[float32](t, types.T_float32, 1.5, 0.9974949866040544)
 
-	sinIntAndFloat[float64](t, types.T_float64, 2.5, 0.5984721441039564)
-	sinIntAndFloat[float64](t, types.T_float64, 3.5, -0.35078322768961984)
-	sinIntAndFloat[float64](t, types.T_float64, 4.5, -0.977530117665097)
-	sinIntAndFloat[float64](t, types.T_float64, 5.5, -0.7055403255703919)
+	sinIntAndFloat(t, types.T_float64, 2.5, 0.5984721441039564)
+	sinIntAndFloat(t, types.T_float64, 3.5, -0.35078322768961984)
+	sinIntAndFloat(t, types.T_float64, 4.5, -0.977530117665097)
+	sinIntAndFloat(t, types.T_float64, 5.5, -0.7055403255703919)
 }
 
 func sinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -57,7 +58,7 @@ func sinIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeSinVectors[T](src, true, typ),
+			vecs:       makeSinVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,

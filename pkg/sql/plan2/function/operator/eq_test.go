@@ -432,10 +432,10 @@ var testFuncVec = []testFunc{
 type testEqFunc = func(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 var testEqFuncVec = []testEqFunc{
-	EqDataValue[int8], EqDataValue[int16], EqDataValue[int32], EqDataValue[int64],
-	EqDataValue[uint8], EqDataValue[uint16], EqDataValue[uint32], EqDataValue[uint64],
-	EqDataValue[float32], EqDataValue[float64], EqDataValue[types.Date],
-	EqDataValue[types.Datetime], EqDataValue[types.Decimal64], EqDataValue[bool], EqDataValue[string],
+	EqGeneral[int8], EqGeneral[int16], EqGeneral[int32], EqGeneral[int64],
+	EqGeneral[uint8], EqGeneral[uint16], EqGeneral[uint32], EqGeneral[uint64],
+	EqGeneral[float32], EqGeneral[float64], EqGeneral[types.Date],
+	EqGeneral[types.Datetime], EqGeneral[types.Decimal64], EqGeneral[bool], EqString,
 }
 
 var EqretVec = [][]bool{
@@ -455,7 +455,6 @@ var retNotNullPosVec = [][]int{
 
 func Test_ColEqCol(t *testing.T) {
 	convey.Convey("Test col eq col operator succ", t, func() {
-		InitFuncMap()
 		proc := process.New(mheap.New(&guest.Mmu{Mmu: host.New(1000), Limit: 1000}))
 
 		for i := 0; i < 15; i++ {

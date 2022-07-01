@@ -82,7 +82,7 @@ func divFloat[T constraints.Float](t *testing.T, typ types.T, left T, right T, r
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			plus, err := Div[T](c.vecs, c.proc)
+			plus, err := Div[T](c.vecs, c.proc, c.vecs[0].Typ)
 			if err != nil {
 				t.Fatal(err)
 			}

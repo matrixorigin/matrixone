@@ -15,8 +15,8 @@
 package tables
 
 import (
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -51,6 +51,7 @@ func (appender *blockAppender) IsAppendable() bool {
 func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) {
 	left := appender.node.block.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
+		// n = rows
 		return
 	}
 	if rows > left {
@@ -61,15 +62,12 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 	appender.placeholder += n
 	return
 }
-func (appender *blockAppender) OnReplayAppendNode(an txnif.AppendNode) {
-	appendNode := an.(*updates.AppendNode)
-	appender.node.block.mvcc.OnReplayAppendNode(appendNode)
-}
-func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
+func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 	err = appender.node.DoWithPin(func() (err error) {
+		var from int
 		err = appender.node.Expand(0, func() error {
 			var err error
-			from, err = appender.node.ApplyAppend(bat, offset, length, txn)
+			from, err = appender.node.ApplyAppend(bat, nil)
 			return err
 		})
 		schema := appender.node.block.meta.GetSchema()
@@ -80,32 +78,32 @@ func (appender *blockAppender) OnReplayInsertNode(bat *gbat.Batch, offset, lengt
 			} else {
 				cols := appender.node.block.GetSortColumns(schema, bat)
 				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+				defer keysCtx.Keys.Close()
 			}
-			keysCtx.Start = offset
-			keysCtx.Count = length
+			keysCtx.Start = 0
+			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
 			err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
 			if err != nil {
 				panic(err)
 			}
 		}
-		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
+		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
 
 		return
 	})
 	return
 }
 func (appender *blockAppender) ApplyAppend(
-	bat *gbat.Batch,
-	offset, length uint32,
+	bat *containers.Batch,
 	txn txnif.AsyncTxn,
-	anode txnif.AppendNode) (node txnif.AppendNode, from uint32, err error) {
+	anode txnif.AppendNode) (node txnif.AppendNode, from int, err error) {
 	err = appender.node.DoWithPin(func() (err error) {
 		appender.node.block.mvcc.Lock()
 		defer appender.node.block.mvcc.Unlock()
 		err = appender.node.Expand(0, func() error {
 			var err error
-			from, err = appender.node.ApplyAppend(bat, offset, length, txn)
+			from, err = appender.node.ApplyAppend(bat, txn)
 			return err
 		})
 
@@ -118,16 +116,17 @@ func (appender *blockAppender) ApplyAppend(
 			} else {
 				cols := appender.node.block.GetSortColumns(schema, bat)
 				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+				defer keysCtx.Keys.Close()
 			}
-			keysCtx.Start = offset
-			keysCtx.Count = length
+			keysCtx.Start = 0
+			keysCtx.Count = bat.Length()
 			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
 			err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
 			if err != nil {
 				panic(err)
 			}
 		}
-		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(length))
+		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
 		if anode != nil {
 			anode.(*updates.AppendNode).SetMaxRow(appender.node.rows)
 			node = anode

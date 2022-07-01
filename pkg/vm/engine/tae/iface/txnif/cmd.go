@@ -25,7 +25,10 @@ type TxnCmd interface {
 	Marshal() ([]byte, error)
 	Unmarshal([]byte) error
 	GetType() int16
+	Desc() string
 	String() string
+	VerboseString() string
+	Close()
 }
 
 type CmdFactory func(int16) TxnCmd

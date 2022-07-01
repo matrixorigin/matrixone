@@ -1,0 +1,25 @@
+drop database if exists test01;
+drop database if exists test03;
+drop database if exists test04;
+drop database if exists test05;
+drop database if exists `测试数据库`;
+drop database if exists t01234567890123456789012345678901234567890123456789012345678901234567890123456789;
+create database test01;
+create database IF NOT EXISTS test01;
+create database `测试数据库`;
+create database t01234567890123456789012345678901234567890123456789012345678901234567890123456789;
+show databases;
+Database
+mo_catalog
+information_schema
+system_metrics
+create_database
+test01
+测试数据库
+t01234567890123456789012345678901234567890123456789012345678901234567890123456789
+drop database if exists test01;
+drop database if exists test03;
+drop database if exists test04;
+drop database if exists test05;
+drop database if exists `测试数据库`;
+drop database if exists t01234567890123456789012345678901234567890123456789012345678901234567890123456789;

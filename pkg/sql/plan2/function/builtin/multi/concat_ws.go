@@ -22,103 +22,111 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// this coupling in registeration and vectorize doesn't seem right, please revise this(broccoli)
+// todo(broccoli): revise this, maybe rewrite this? at least clean up the logic
 func Concat_ws(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	// for now, input vectors are guaranteed to be of type char/varchar,
-	// when our cast function stabilized, I will add cast to char types and
-	// then use cast in this concat_ws to support more data types
-	// this loop checks for function inputs
-	var separator []byte
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	scalarCount := 0
-	for i, v := range vectors {
-		if i == 0 {
-			if !v.IsScalar() {
-				return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the first argument(the separator) for concat_ws must be a constant char/varchar")
+	if vectors[0].IsScalar() {
+		if vectors[0].ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		vectorIsConst := make([]bool, 0)
+		inputCleaned := make([]*vector.Vector, 0) // no NULL const vectors
+		AllConst := true
+		for i := 1; i < len(vectors); i++ {
+			if vectors[i].IsScalarNull() {
+				continue
 			}
-			separator = v.Col.(*types.Bytes).Data
-			scalarCount++
+			if vectors[i].IsScalar() {
+				vectorIsConst = append(vectorIsConst, true)
+			} else {
+				vectorIsConst = append(vectorIsConst, false)
+				AllConst = false
+			}
+			inputCleaned = append(inputCleaned, vectors[i])
+		}
+		separator := vector.MustBytesCols(vectors[0]).Get(0)
+		if AllConst {
+			return concatWsWithConstSeparatorAllConst(inputCleaned, separator)
+		}
+		return concatWsWithConstSeparator(inputCleaned, separator, vectorIsConst, proc)
+	} else {
+		vectorIsConst := make([]bool, 0)
+		inputCleaned := make([]*vector.Vector, 0) // no NULL const vectors
+		AllConst := true
+		for i := 1; i < len(vectors); i++ {
+			if vectors[i].IsScalarNull() {
+				continue
+			}
+			if vectors[i].IsScalar() {
+				vectorIsConst = append(vectorIsConst, true)
+			} else {
+				vectorIsConst = append(vectorIsConst, false)
+				AllConst = false
+			}
+			inputCleaned = append(inputCleaned, vectors[i])
+		}
+		separator := vectors[0]
+		if AllConst {
+			return concatWsAllConst(inputCleaned, separator, proc)
 		} else {
-			if v.IsScalar() {
-				scalarCount++
-			}
+			return concatWs(inputCleaned, separator, vectorIsConst, proc)
 		}
 	}
-	if scalarCount == len(vectors) {
-		inputBytes := make([]*types.Bytes, len(vectors)-1)
-		inputNsps := make([]*nulls.Nulls, len(vectors)-1)
-		for i := 0; i < len(vectors)-1; i++ {
-			inputBytes[i] = vectors[i+1].Col.(*types.Bytes)
-			inputNsps[i] = vectors[i+1].Nsp
-		}
-		resultVector := vector.NewConst(resultType)
-		resultValues := &types.Bytes{
-			Data:    make([]byte, 0),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		result := concatWsInputBytes(inputBytes, inputNsps, separator, vectors[0].Length, resultValues)
-		resultVector.Col = result.OutputBytes
-		resultVector.Nsp = result.OutputNsp
-		return resultVector, nil
-	} else if scalarCount != 1 {
-		return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "for concat_ws, parameters except the first one must be all constant or all non-constant")
-	}
+}
 
-	inputBytes := make([]*types.Bytes, len(vectors)-1)
-	inputNsps := make([]*nulls.Nulls, len(vectors)-1)
-	for i := 0; i < len(vectors)-1; i++ {
-		inputBytes[i] = vectors[i+1].Col.(*types.Bytes)
-		inputNsps[i] = vectors[i+1].Nsp
-	}
+func concatWs(inputCleaned []*vector.Vector, separator *vector.Vector, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
+	separatorBytes := vector.MustBytesCols(separator)
+	length := len(separatorBytes.Offsets)
+	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	resultVector, err := proc.AllocVector(resultType, 0)
 	if err != nil {
 		return nil, moerr.NewError(moerr.INTERNAL_ERROR, "out of memory")
 	}
-	resultValues := &types.Bytes{
-		Data:    resultVector.Data,
-		Offsets: make([]uint32, vectors[0].Length),
-		Lengths: make([]uint32, vectors[0].Length),
-	}
-	result := concatWsInputBytes(inputBytes, inputNsps, separator, vectors[0].Length, resultValues)
-	resultVector.Col = result.OutputBytes
-	resultVector.Nsp = result.OutputNsp
-	return resultVector, nil
-}
-
-type ConcatWsResult struct {
-	OutputBytes *types.Bytes
-	OutputNsp   *nulls.Nulls
-}
-
-func concatWsInputBytes(inputBytes []*types.Bytes, inputNsps []*nulls.Nulls, separator []byte, length int, resultValues *types.Bytes) ConcatWsResult {
 	resultNsp := new(nulls.Nulls)
-	lengthOfSeparator := uint32(len(separator))
-	numOfColumns := len(inputBytes)
-
+	resultValues := &types.Bytes{
+		Data:    make([]byte, 0),
+		Offsets: make([]uint32, length),
+		Lengths: make([]uint32, length),
+	}
 	offsetsAll := uint32(0)
 	for i := 0; i < length; i++ {
 		offsetThisResultRow := uint32(0)
 		allNull := true
-		for j := 0; j < numOfColumns; j++ {
-			if nulls.Contains(inputNsps[j], uint64(i)) {
-				continue
-			}
-			allNull = false
-			offset := inputBytes[j].Offsets[i]
-			lengthOfThis := inputBytes[j].Lengths[i]
-			bytes := inputBytes[j].Data[offset : offset+lengthOfThis]
-			resultValues.Data = append(resultValues.Data, bytes...)
-			offsetThisResultRow += lengthOfThis
-			for k := j + 1; k < numOfColumns; k++ {
-				if !nulls.Contains(inputNsps[k], uint64(i)) {
-					resultValues.Data = append(resultValues.Data, separator...)
-					offsetThisResultRow += lengthOfSeparator
-					break
+		for j := range inputCleaned {
+			if vectorIsConst[j] {
+				allNull = false
+				inputJ := vector.MustBytesCols(inputCleaned[j])
+				lengthOfThis := inputJ.Lengths[0]
+				bytes := inputJ.Get(0)
+				resultValues.Data = append(resultValues.Data, bytes...)
+				offsetThisResultRow += lengthOfThis
+				for k := j + 1; k < len(inputCleaned); k++ {
+					if !nulls.Contains(inputCleaned[k].Nsp, uint64(i)) {
+						resultValues.Data = append(resultValues.Data, separatorBytes.Get(int64(i))...)
+						offsetThisResultRow += separatorBytes.Lengths[i]
+						break
+					}
+				}
+			} else {
+				inputJ := vector.MustBytesCols(inputCleaned[j])
+				if nulls.Contains(inputCleaned[j].Nsp, uint64(i)) {
+					continue
+				}
+				allNull = false
+				offset := inputJ.Offsets[i]
+				lengthOfThis := inputJ.Lengths[i]
+				bytes := inputJ.Data[offset : offset+lengthOfThis]
+				resultValues.Data = append(resultValues.Data, bytes...)
+				offsetThisResultRow += lengthOfThis
+				for k := j + 1; k < len(inputCleaned); k++ {
+					if !nulls.Contains(inputCleaned[k].Nsp, uint64(i)) {
+						resultValues.Data = append(resultValues.Data, separatorBytes.Get(int64(i))...)
+						offsetThisResultRow += separatorBytes.Lengths[i]
+						break
+					}
 				}
 			}
 		}
-
 		if allNull {
 			nulls.Add(resultNsp, uint64(i))
 			resultValues.Offsets[i] = offsetsAll
@@ -129,5 +137,161 @@ func concatWsInputBytes(inputBytes []*types.Bytes, inputNsps []*nulls.Nulls, sep
 			offsetsAll += offsetThisResultRow
 		}
 	}
-	return ConcatWsResult{resultValues, resultNsp}
+	nulls.Set(resultVector.Nsp, resultNsp)
+	vector.SetCol(resultVector, resultValues)
+	return resultVector, nil
+}
+
+func concatWsAllConst(inputCleaned []*vector.Vector, separator *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	separatorBytes := vector.MustBytesCols(separator)
+	length := len(separatorBytes.Offsets)
+	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultVector, err := proc.AllocVector(resultType, 0)
+	if err != nil {
+		return nil, moerr.NewError(moerr.INTERNAL_ERROR, "out of memory")
+	}
+	resultNsp := new(nulls.Nulls)
+	resultValues := &types.Bytes{
+		Data:    make([]byte, 0),
+		Offsets: make([]uint32, length),
+		Lengths: make([]uint32, length),
+	}
+	offsetsAll := uint32(0)
+	for i := 0; i < length; i++ {
+		offsetThisResultRow := uint32(0)
+		allNull := true
+		for j := range inputCleaned {
+			allNull = false
+			inputJ := vector.MustBytesCols(inputCleaned[j])
+			lengthOfThis := inputJ.Lengths[0]
+			bytes := inputJ.Get(0)
+			resultValues.Data = append(resultValues.Data, bytes...)
+			offsetThisResultRow += lengthOfThis
+			for k := j + 1; k < len(inputCleaned); k++ {
+				if !nulls.Contains(inputCleaned[k].Nsp, uint64(i)) {
+					resultValues.Data = append(resultValues.Data, separatorBytes.Get(int64(i))...)
+					offsetThisResultRow += separatorBytes.Lengths[i]
+					break
+				}
+			}
+		}
+		if allNull { // this check is redundant
+			nulls.Add(resultNsp, uint64(i))
+			resultValues.Offsets[i] = offsetsAll
+			resultValues.Lengths[i] = offsetThisResultRow
+		} else {
+			resultValues.Offsets[i] = offsetsAll
+			resultValues.Lengths[i] = offsetThisResultRow
+			offsetsAll += offsetThisResultRow
+		}
+	}
+	nulls.Set(resultVector.Nsp, resultNsp)
+	vector.SetCol(resultVector, resultValues)
+	return resultVector, nil
+}
+
+// the inputs are guaranteed to be scalar non-NULL
+func concatWsWithConstSeparatorAllConst(inputCleaned []*vector.Vector, separator []byte) (*vector.Vector, error) {
+	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultVector := vector.NewConst(resultType)
+	resultValues := &types.Bytes{
+		Data:    make([]byte, 0),
+		Offsets: make([]uint32, 1),
+		Lengths: make([]uint32, 1),
+	}
+	resultLength := uint32(0)
+	for i := range inputCleaned {
+		bytesI := vector.MustBytesCols(inputCleaned[i])
+		resultValues.Data = append(resultValues.Data, bytesI.Get(0)...)
+		resultLength += bytesI.Lengths[0]
+		if i == len(inputCleaned)-1 {
+			break
+		} else {
+			resultValues.Data = append(resultValues.Data, separator...)
+			resultLength += uint32(len(separator))
+		}
+	}
+	resultValues.Lengths[0] = resultLength
+	vector.SetCol(resultVector, resultValues)
+	return resultVector, nil
+}
+
+// inputCleaned does not have NULL const
+func concatWsWithConstSeparator(inputCleaned []*vector.Vector, separator []byte, vectorIsConst []bool, proc *process.Process) (*vector.Vector, error) {
+	length := 0
+	for i := range inputCleaned {
+		inputI := vector.MustBytesCols(inputCleaned[i])
+		lengthI := len(inputI.Offsets)
+		if lengthI == 0 {
+			length = 0 // this means that one column that needs to be concatenated is empty
+			break
+		}
+		if lengthI > length {
+			length = lengthI
+		}
+	}
+	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultVector, err := proc.AllocVector(resultType, 0)
+	resultNsp := new(nulls.Nulls)
+	if err != nil {
+		return nil, moerr.NewError(moerr.INTERNAL_ERROR, "out of memory")
+	}
+	lengthOfSeparator := uint32(len(separator))
+	resultValues := &types.Bytes{
+		Data:    make([]byte, 0),
+		Offsets: make([]uint32, length),
+		Lengths: make([]uint32, length),
+	}
+	offsetsAll := uint32(0)
+	for i := 0; i < length; i++ {
+		offsetThisResultRow := uint32(0)
+		allNull := true
+		for j := range inputCleaned {
+			if vectorIsConst[j] {
+				allNull = false
+				inputJ := vector.MustBytesCols(inputCleaned[j])
+				lengthOfThis := inputJ.Lengths[0]
+				bytes := inputJ.Get(0)
+				resultValues.Data = append(resultValues.Data, bytes...)
+				offsetThisResultRow += lengthOfThis
+				for k := j + 1; k < len(inputCleaned); k++ {
+					if !nulls.Contains(inputCleaned[k].Nsp, uint64(i)) {
+						resultValues.Data = append(resultValues.Data, separator...)
+						offsetThisResultRow += lengthOfSeparator
+						break
+					}
+				}
+			} else {
+				inputJ := vector.MustBytesCols(inputCleaned[j])
+				if nulls.Contains(inputCleaned[j].Nsp, uint64(i)) {
+					continue
+				}
+				allNull = false
+				offset := inputJ.Offsets[i]
+				lengthOfThis := inputJ.Lengths[i]
+				bytes := inputJ.Data[offset : offset+lengthOfThis]
+				resultValues.Data = append(resultValues.Data, bytes...)
+				offsetThisResultRow += lengthOfThis
+				for k := j + 1; k < len(inputCleaned); k++ {
+					if !nulls.Contains(inputCleaned[k].Nsp, uint64(i)) {
+						resultValues.Data = append(resultValues.Data, separator...)
+						offsetThisResultRow += lengthOfSeparator
+						break
+					}
+				}
+			}
+		}
+		if allNull {
+			nulls.Add(resultNsp, uint64(i))
+			resultValues.Offsets[i] = offsetsAll
+			resultValues.Lengths[i] = offsetThisResultRow
+		} else {
+			resultValues.Offsets[i] = offsetsAll
+			resultValues.Lengths[i] = offsetThisResultRow
+			offsetsAll += offsetThisResultRow
+		}
+	}
+	nulls.Set(resultVector.Nsp, resultNsp)
+	vector.SetCol(resultVector, resultValues)
+	return resultVector, nil
 }

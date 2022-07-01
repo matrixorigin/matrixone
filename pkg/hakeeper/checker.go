@@ -14,13 +14,10 @@
 
 package hakeeper
 
-// FIXME: placeholder, please feel free to change/remove.
-type Operator struct {
-	// UUID of the store that suppose to consume this Operator
-	UUID string
-	// other fields might be opCode, payload etc.
-	// feel free to add whatever you need
-}
+import (
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+)
 
 type IDAllocator interface {
 	// Next returns a new ID that can be used as the replica ID of a DN shard or
@@ -32,13 +29,21 @@ type IDAllocator interface {
 }
 
 // Checker is the interface suppose to be implemented by HAKeeper's
-// coordinator. Checker is suppose to be stateless - Checker is free to
+// coordinator. Checker is supposed to be stateless - Checker is free to
 // maintain whatever internal states, but those states should never be
 // assumed to be persistent across reboots.
 type Checker interface {
 	// Check is periodically called by the HAKeeper for checking the cluster
 	// health status, a list of Operator instances will be returned describing
 	// actions required to ensure the high availability of the cluster.
-	Check(alloc IDAllocator, cluster ClusterInfo,
-		dn DNState, log LogState, currentTick uint64) []Operator
+	Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
+		dn pb.DNState, log pb.LogState, currentTick uint64) []pb.ScheduleCommand
+}
+
+// BootstrapManager is the interface suppose to be implemented by HAKeeper's
+// bootstrap manager.
+type BootstrapManager interface {
+	Bootstrap(util.IDAllocator, pb.DNState, pb.LogState) []pb.ScheduleCommand
+
+	CheckBootstrap(pb.LogState) bool
 }

@@ -15,7 +15,6 @@
 package catalog
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -183,6 +182,10 @@ func (entry *SegmentEntry) String() string {
 	return entry.StringLocked()
 }
 
+func (entry *SegmentEntry) BlockCnt() int {
+	return len(entry.entries)
+}
+
 func (entry *SegmentEntry) IsAppendable() bool {
 	return entry.state == ES_Appendable
 }
@@ -283,7 +286,7 @@ func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 }
 
 func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
-	logutil.Info("[Catalog]", common.OperationField("remove"),
+	logutil.Debug("[Catalog]", common.OperationField("remove"),
 		common.OperandField(block.String()))
 	entry.Lock()
 	defer entry.Unlock()
@@ -345,18 +348,7 @@ func (entry *SegmentEntry) Clone() CheckpointItem {
 	}
 	return cloned
 }
-func (entry *SegmentEntry) ReplayFile(cache *bytes.Buffer) {
-	colCnt := len(entry.table.GetSchema().ColDefs)
-	indexCnt := make(map[int]int)
-	if entry.table.GetSchema().IsSingleSortKey() {
-		indexCnt[entry.table.GetSchema().GetSingleSortKey().Idx] = 2
-	} else if entry.table.GetSchema().IsCompoundSortKey() {
-		panic("implement me")
-	}
-	if err := entry.GetSegmentData().GetSegmentFile().Replay(colCnt, indexCnt, cache); err != nil {
-		panic(err)
-	}
-}
+
 func (entry *SegmentEntry) CloneCreate() CheckpointItem {
 	cloned := &SegmentEntry{
 		BaseEntry: entry.BaseEntry.CloneCreate(),

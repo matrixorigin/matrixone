@@ -129,7 +129,10 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 	ctx.WriteString(fs)
 
 	if node.Unsigned {
-		ctx.WriteString(" unsigned")
+		if fs != "" {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("unsigned")
 	}
 	if node.Zerofill {
 		ctx.WriteString(" zerofill")

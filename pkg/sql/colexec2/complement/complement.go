@@ -97,13 +97,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp)
-				continue
-			}
-			if err := ctr.probe(bat, ap, proc); err != nil {
-				ctr.state = End
-				proc.Reg.InputBatch = nil
-				return true, err
+				if err := ctr.emptyProbe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
+			} else {
+				if err := ctr.probe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
 			}
 			return false, nil
 		default:
@@ -148,7 +152,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 	}
 	for i, cond := range ap.Conditions[1] {
 		vec, err := colexec.EvalExpr(ctr.bat, proc, cond.Expr)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.vecs[j].needFree {
 					vector.Clean(ctr.vecs[j].vec, proc.Mp)
@@ -211,7 +215,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 				} else {
 					for k := 0; k < n; k++ {
 						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[i] = 0
+							ctr.zValues[k] = 0
 						} else {
 							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 						}
@@ -227,6 +231,7 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 		ctr.strHashMap.InsertStringBatchWithRing(ctr.zValues, ctr.strHashStates, ctr.keys[:n], ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.zValues[k] == 0 {
+				ctr.hasNull = true
 				continue
 			}
 			if v > ctr.rows {
@@ -242,15 +247,45 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
+func (ctr *Container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	defer bat.Clean(proc.Mp)
+	rbat := batch.NewWithSize(len(ap.Result))
+	for i, pos := range ap.Result {
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+	}
+	count := len(bat.Zs)
+	for i := 0; i < count; i += UnitLimit {
+		n := count - i
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		for k := 0; k < n; k++ {
+			for j, pos := range ap.Result {
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
+					rbat.Clean(proc.Mp)
+					return err
+				}
+			}
+			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+		}
+	}
+	proc.Reg.InputBatch = rbat
+	return nil
+}
+
 func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	defer bat.Clean(proc.Mp)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
+	if (len(ctr.bat.Zs) == 1 && ctr.hasNull) || len(ctr.bat.Zs) == 0 {
+		proc.Reg.InputBatch = rbat
+		return nil
+	}
 	for i, cond := range ap.Conditions[0] {
 		vec, err := colexec.EvalExpr(bat, proc, cond.Expr)
-		if err != nil {
+		if err != nil || vec.ConstExpand(proc.Mp) == nil {
 			for j := 0; j < i; j++ {
 				if ctr.vecs[j].needFree {
 					vector.Clean(ctr.vecs[j].vec, proc.Mp)
@@ -313,7 +348,7 @@ func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				} else {
 					for k := 0; k < n; k++ {
 						if vec.Nsp.Np.Contains(uint64(i + k)) {
-							ctr.zValues[i] = 0
+							ctr.zValues[k] = 0
 						} else {
 							ctr.keys[k] = append(ctr.keys[k], vs.Get(int64(i+k))...)
 						}

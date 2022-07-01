@@ -176,7 +176,7 @@ func Test_ConstOrNull(t *testing.T) {
 			log.Fatal(err)
 		}
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
-		convey.So(ret.Col, convey.ShouldBeNil)
+		convey.So(ret.Col, convey.ShouldResemble, []bool{false})
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
 
 		vec[0].Col = []bool{true}
@@ -204,7 +204,6 @@ func Test_NullOrNull(t *testing.T) {
 			log.Fatal(err)
 		}
 		convey.So(ret.IsConst, convey.ShouldBeTrue)
-		convey.So(ret.Col, convey.ShouldBeNil)
 		convey.So(nulls.Contains(ret.Nsp, 0), convey.ShouldEqual, true)
 	})
 }

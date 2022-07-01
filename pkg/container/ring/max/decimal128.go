@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+var Decimal128Max = types.Decimal128Max
+var Decimal128Min = types.Decimal128Min
 var Decimal128Size = encoding.Decimal128Size
 
 func NewDecimal128(typ types.Type) *Decimal128Ring {
@@ -107,7 +109,8 @@ func (r *Decimal128Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal128Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
-	r.Vs[n] = types.InitDecimal128(0)
+	r.Da = r.Da[:(n+1)*16]
+	r.Vs[n] = Decimal128Min
 	r.Ns = append(r.Ns, 0)
 	r.Es = append(r.Es, true)
 	return nil
@@ -135,9 +138,11 @@ func (r *Decimal128Ring) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDecimal128Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*16]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Es = append(r.Es, true)
+		r.Vs[i+n] = Decimal128Min
 	}
 	return nil
 }
@@ -189,6 +194,9 @@ func (r *Decimal128Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *Decimal128Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Decimal128Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if r.Es[x] || types.CompareDecimal128Decimal128Aligned(ar.Vs[y], r.Vs[x]) == 1 {
 		r.Es[x] = false
 		r.Vs[x] = ar.Vs[y]
@@ -198,6 +206,9 @@ func (r *Decimal128Ring) Add(a interface{}, x, y int64) {
 
 func (r *Decimal128Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*Decimal128Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if r.Es[j] || types.CompareDecimal128Decimal128Aligned(ar.Vs[int64(i)+start], r.Vs[j]) == 1 {

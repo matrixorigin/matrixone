@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -61,6 +62,7 @@ type mergeBlocksTask struct {
 	newSeg      handle.Segment
 	scheduler   tasks.TaskScheduler
 	scopes      []common.ID
+	deletes     []*roaring.Bitmap
 }
 
 func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
@@ -101,7 +103,7 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*ca
 
 func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
-func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []*vector.Vector, mapping []uint32) {
+func (task *mergeBlocksTask) mergeColumn(vecs []containers.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32, sort bool) (column []containers.Vector, mapping []uint32) {
 	if sort {
 		if isPrimary {
 			column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
@@ -114,7 +116,7 @@ func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uin
 	return
 }
 
-func (task *mergeBlocksTask) mergeColumnWithOutSort(column []*vector.Vector, fromLayout, toLayout []uint32) (ret []*vector.Vector, mapping []uint32) {
+func (task *mergeBlocksTask) mergeColumnWithOutSort(column []containers.Vector, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
 	totalLength := uint32(0)
 	for _, i := range toLayout {
 		totalLength += i
@@ -159,40 +161,48 @@ func (task *mergeBlocksTask) Execute() (err error) {
 
 	schema := task.mergedBlks[0].GetSchema()
 	var view *model.ColumnView
-	vecs := make([]*vector.Vector, 0)
+	vecs := make([]containers.Vector, 0)
 	rows := make([]uint32, len(task.compacted))
 	length := 0
 	fromAddr := make([]uint32, 0, len(task.compacted))
 	ids := make([]*common.ID, 0, len(task.compacted))
+	task.deletes = make([]*roaring.Bitmap, len(task.compacted))
 
 	// 1. Prepare sort key resources
 	// If there's no sort key, use hidden
 	for i, block := range task.compacted {
-		var vec *vector.Vector
+		var vec containers.Vector
 		if !schema.HasSortKey() {
-			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(schema.HiddenKey.Idx, nil); err != nil {
 				return
 			}
-			vec = view.ApplyDeletes()
+			task.deletes[i] = view.DeleteMask
+			view.ApplyDeletes()
+			vec = view.Orphan()
 		} else if schema.SortKey.Size() == 1 {
-			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil); err != nil {
 				return
 			}
-			vec = view.ApplyDeletes()
+			view.ApplyDeletes()
+			vec = view.Orphan()
 		} else {
-			cols := make([]*vector.Vector, schema.SortKey.Size())
+			cols := make([]containers.Vector, schema.SortKey.Size())
 			for idx := range cols {
-				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil, nil); err != nil {
+				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil); err != nil {
 					return
 				}
-				cols[idx] = view.ApplyDeletes()
+				view.ApplyDeletes()
+				cols[idx] = view.Orphan()
+				defer cols[idx].Close()
 			}
 			vec = model.EncodeCompoundColumn(cols...)
 		}
+		defer view.Close()
+		defer vec.Close()
 		vecs = append(vecs, vec)
-		rows[i] = uint32(vector.Length(vec))
+		rows[i] = uint32(vec.Length())
 		fromAddr = append(fromAddr, uint32(length))
-		length += vector.Length(vec)
+		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
 	}
 	to := make([]uint32, 0)
@@ -214,6 +224,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
 	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to, schema.HasSortKey())
+	for _, vec := range vecs {
+		defer vec.Close()
+	}
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 
@@ -227,7 +240,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// Flush sort key it correlates to only one column
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
-		length += vector.Length(vec)
+		length += vec.Length()
 		blk, err = toSegEntry.CreateNonAppendableBlock()
 		if err != nil {
 			return err
@@ -266,11 +279,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// Flush hidden column
 	hidden := schema.HiddenKey
 	for i, blk := range task.createdBlks {
-		vec, closer, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vector.Length(vecs[i])))
+		vec, err := model.PrepareHiddenData(hidden.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
 		if err != nil {
 			return err
 		}
-		defer closer()
+		defer vec.Close()
 		closure := blk.GetBlockData().FlushColumnDataClosure(ts, hidden.Idx, vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 		if err != nil {
@@ -289,18 +302,27 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if view, err = block.GetColumnDataById(def.Idx, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(def.Idx, nil); err != nil {
 				return
 			}
-			vec := view.ApplyDeletes()
+			defer view.Close()
+			view.ApplyDeletes()
+			vec := view.Orphan()
+			defer vec.Close()
 			vecs = append(vecs, vec)
 		}
-		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
-		for pos, vec := range vecs {
-			blk := task.createdBlks[pos]
-			// logutil.Infof("Flushing %s %v", blk.AsCommonID().String(), def)
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
+		vecs, _ := task.mergeColumn(vecs, &sortedIdx, false, rows, to, schema.HasSortKey())
+		for i := range vecs {
+			defer vecs[i].Close()
+		}
+		for i := range vecs {
+			blk := task.createdBlks[i]
+			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vecs[i], false)
+			flushTask, err = task.scheduler.ScheduleScopedFn(
+				tasks.WaitableCtx,
+				tasks.IOTask,
+				blk.AsCommonID(),
+				closure)
 			if err != nil {
 				return
 			}
@@ -342,10 +364,10 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		mapping,
 		fromAddr,
 		toAddr,
-		task.scheduler)
+		task.scheduler,
+		task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return
 	}
-
 	return
 }

@@ -95,7 +95,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	if len(msecStr) > int(precision) {
 		if msecStr[precision] >= '5' && msecStr[precision] <= '9' {
 			msecCarry = 1
-		} else if msecStr[precision] >= '0' && msecStr[precision] <= '5' {
+		} else if msecStr[precision] >= '0' && msecStr[precision] <= '4' {
 			msecCarry = 0
 		} else {
 			return 0, 0, errIncorrectDatetimeValue
@@ -246,4 +246,8 @@ func NowUTC() Timestamp {
 		nsec = int64(wall)
 	}
 	return Timestamp((sec << 20) + nsec/1000)
+}
+
+func ValidTimestamp(timestamp Timestamp) bool {
+	return timestamp > TimestampMinValue && timestamp < TimestampMaxValue
 }

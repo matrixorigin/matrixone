@@ -23,10 +23,17 @@ jobs:
         config: './.markdownlint.yaml'
         args: './docs/cn ./docs/en'
 
+  tae-sca:
+    # The type of runner that the job will run on.
+    runs-on: ubuntu-latest
+    name: SCA Test on CentOS/x64
+    steps:
+      - run: 'echo "No build required" '
 
   tae-ut:
+    # The type of runner that the job will run on.
     runs-on: ubuntu-latest
-    name: Staticcheck and UT Test on CentOS/x64
+    name: UT Test on CentOS/x64
     steps:
       - run: 'echo "No build required" '
 

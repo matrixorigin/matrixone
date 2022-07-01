@@ -21,21 +21,21 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
-	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/smithy-go/logging"
 )
 
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
-	config S3Config
-	client *s3.Client
+	client    *s3.Client
+	bucket    string
+	keyPrefix string
 }
 
 // key mapping scheme:
@@ -43,29 +43,37 @@ type S3FS struct {
 
 var _ FileService = new(S3FS)
 
-func NewS3FS(config S3Config) (*S3FS, error) {
-	u, err := url.Parse(config.Endpoint)
+func NewS3FS(
+	endpoint string,
+	bucket string,
+	keyPrefix string,
+) (*S3FS, error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
+	defer cancel()
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
 	}
 	if u.Scheme == "" {
 		u.Scheme = "https"
 	}
-	endpoint := u.String()
-	client := s3.New(s3.Options{
-		Credentials: credentials.NewStaticCredentialsProvider(
-			config.APIKey,
-			config.APISecret,
-			"",
-		),
-		EndpointResolver: s3.EndpointResolverFromURL(endpoint),
-		Region:           config.Region,
-		Logger:           logging.NewStandardLogger(os.Stdout),
-	})
+	endpoint = u.String()
+
+	client := s3.NewFromConfig(
+		cfg,
+		s3.WithEndpointResolver(s3.EndpointResolverFromURL(endpoint)),
+	)
 
 	return &S3FS{
-		config: config,
-		client: client,
+		client:    client,
+		bucket:    bucket,
+		keyPrefix: keyPrefix,
 	}, nil
 }
 
@@ -76,7 +84,7 @@ func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 		output, err := m.client.ListObjectsV2(
 			ctx,
 			&s3.ListObjectsV2Input{
-				Bucket:            ptrTo(m.config.Bucket),
+				Bucket:            ptrTo(m.bucket),
 				Delimiter:         ptrTo("/"),
 				Prefix:            ptrTo(m.pathToKey(dirPath) + "/"),
 				ContinuationToken: cont,
@@ -93,6 +101,7 @@ func (m *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 			entries = append(entries, DirEntry{
 				Name:  name,
 				IsDir: false,
+				Size:  int(obj.Size),
 			})
 		}
 
@@ -122,7 +131,7 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 	output, err := m.client.HeadObject(
 		ctx,
 		&s3.HeadObjectInput{
-			Bucket: ptrTo(m.config.Bucket),
+			Bucket: ptrTo(m.bucket),
 			Key:    ptrTo(key),
 		},
 	)
@@ -160,7 +169,7 @@ func (m *S3FS) Write(ctx context.Context, vector IOVector) error {
 	_, err = m.client.PutObject(
 		ctx,
 		&s3.PutObjectInput{
-			Bucket:        ptrTo(m.config.Bucket),
+			Bucket:        ptrTo(m.bucket),
 			Key:           ptrTo(key),
 			Body:          bytes.NewReader(content),
 			ContentLength: size,
@@ -182,7 +191,7 @@ func (m *S3FS) Read(ctx context.Context, vector *IOVector) error {
 	output, err := m.client.GetObject(
 		ctx,
 		&s3.GetObjectInput{
-			Bucket: ptrTo(m.config.Bucket),
+			Bucket: ptrTo(m.bucket),
 			Key:    ptrTo(m.pathToKey(vector.FilePath)),
 			Range:  ptrTo(rang),
 		},
@@ -242,7 +251,7 @@ func (m *S3FS) Delete(ctx context.Context, filePath string) error {
 	_, err := m.client.DeleteObject(
 		ctx,
 		&s3.DeleteObjectInput{
-			Bucket: ptrTo(m.config.Bucket),
+			Bucket: ptrTo(m.bucket),
 			Key:    ptrTo(m.pathToKey(filePath)),
 		},
 	)
@@ -254,11 +263,11 @@ func (m *S3FS) Delete(ctx context.Context, filePath string) error {
 }
 
 func (m *S3FS) pathToKey(filePath string) string {
-	return path.Join(m.config.KeyPrefix, filePath)
+	return path.Join(m.keyPrefix, filePath)
 }
 
 func (m *S3FS) keyToPath(key string) string {
-	path := strings.TrimPrefix(key, m.config.KeyPrefix)
+	path := strings.TrimPrefix(key, m.keyPrefix)
 	path = strings.TrimLeft(path, "/")
 	return path
 }

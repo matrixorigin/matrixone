@@ -32,6 +32,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
 	sql := "select @str_var, @int_var, @bool_var, @@global.float_var, @@session.null_var"
+	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -397,10 +398,15 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION", //test distinct
 		"select sum(n_nationkey) as s from nation order by s",
 		"select date_add(date '2001-01-01', interval 1 day) as a",
-		"select date_sub(date '2001-01-01', interval '1 day') as a",
-		"select date_add('2001-01-01', interval '1 day') as a",
+		"select date_sub(date '2001-01-01', interval '1' day) as a",
+		"select date_add('2001-01-01', interval '1' day) as a",
 		"select n_name, count(*) from nation group by n_name order by 2 asc",
 		"select count(distinct 12)",
+		"select nullif(n_name, n_comment), ifnull(n_comment, n_name) from nation",
+
+		"select 18446744073709551500",
+		"select 0xffffffffffffffff",
+		"select 0xffff",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
@@ -408,6 +414,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		// "SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY IN (1, 2)",  //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY NOT IN (1)", //test more expr
+		"select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - 1) >10",
 
 		"SELECT -1",
 		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
@@ -417,6 +424,9 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select n_name from nation where n_name != @str_var and n_regionkey > @int_var",
 		"select n_name from nation where n_name != @@global.str_var and n_regionkey > @@session.int_var",
 		"select distinct(n_name), ((abs(n_regionkey))) from nation",
+		"SET @var = abs(-1), @@session.string_var = 'aaa'",
+		"SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
+		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_NAME", //test distinct with order by
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -430,13 +440,18 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
 		"select n_name from nation where n_name != @not_exist_var",
+		"SET @var = abs(a)", // can't use column
+		"SET @var = avg(2)", // can't use agg function
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
+		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
+		//"select 18446744073709551500",                             //over int64
+		//"select 0xffffffffffffffff",                               //over int64
 	}
 	runTestShouldError(mock, t, sqls)
 }
 
-//test jion table plan building
+//test join table plan building
 func TestJoinTableSqlBuilder(t *testing.T) {
 	mock := NewMockOptimizer()
 
@@ -494,26 +509,58 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+//test CTE plan building
+func TestCTESqlBuilder(t *testing.T) {
+	mock := NewMockOptimizer()
+
+	// should pass
+	sqls := []string{
+		"WITH qn AS (SELECT * FROM nation) SELECT * FROM qn;",
+		"WITH qn(a, b) AS (SELECT * FROM nation) SELECT * FROM qn;",
+		"with qn0 as (select 1), qn1 as (select * from qn0), qn2 as (select 1), qn3 as (select 1 from qn1, qn2) select 1 from qn3",
+
+		`WITH qn AS (select "outer" as a)
+		SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
+		qn.a
+		FROM qn`,
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		`with qn1 as (with qn3 as (select * from qn2) select * from qn3),
+		qn2 as (select 1)
+		select * from qn1`,
+
+		`WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0),
+		qn AS (SELECT b as a FROM qn2)
+		SELECT qn.a  FROM qn`,
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
 func TestInsert(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
 	sqls := []string{
-		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
-		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
+		//"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
 		"INSERT INTO NATION SELECT * FROM NATION2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
 	sqls = []string{
-		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), ('NAME2', 22, 'COMMENT2')",                                // doesn't match value count
-		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 'NAME1'), (2, 22, 'NAME2')",                     // doesn't match value count
-		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",             // column not exist
-		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",           // table not exist
-		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
-		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
-		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",              // function expr not support now
-		"INSERT INTO region SELECT * FROM NATION2",                                                                   // column length not match
+		//"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), ('NAME2', 22, 'COMMENT2')",                                // doesn't match value count
+		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 'NAME1'), (2, 22, 'NAME2')",                     // doesn't match value count
+		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",             // column not exist
+		//"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",           // table not exist
+		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
+		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
+		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2, 'NAME1'), (2, 22, 'NAME2')",              // function expr not support now
+		"INSERT INTO region SELECT * FROM NATION2",                                            // column length not match
+		"INSERT INTO region SELECT 1, 2, 3, 4, 5, 6 FROM NATION2",                             // column length not match
+		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) SELECT 1, 2, 3 FROM NATION2", // table not exist
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -522,16 +569,16 @@ func TestUpdate(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
 	sqls := []string{
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
 	sqls = []string{
-		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
-		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
+		//"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
+		//"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
 		// "UPDATE NATION SET N_NAME = 2, N_REGIONKEY=2",       // column type not match
 		// "UPDATE NATION SET N_NAME = 'U1', N_REGIONKEY=2.2",  // column type not match
 	}
@@ -561,6 +608,7 @@ func TestSubQuery(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		`select
@@ -652,7 +700,7 @@ func TestShow(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"show variables",
-		"show create database tpch",
+		//"show create database tpch",
 		"show create table nation",
 		"show create table tpch.nation",
 		"show databases",
@@ -704,8 +752,8 @@ func TestResultColumns(t *testing.T) {
 		"begin",
 		"commit",
 		"rollback",
-		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
-		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		//"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
 		//"DELETE FROM NATION",
 		"create database db_name",
 		"drop database tpch",
