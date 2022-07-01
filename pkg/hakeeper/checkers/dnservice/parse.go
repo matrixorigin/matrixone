@@ -17,7 +17,7 @@ package dnservice
 import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 
 // parseDnState parses cluster dn state.
 func parseDnState(
-	dnState hapb.DNState, currTick uint64,
+	dnState pb.DNState, currTick uint64,
 ) (*util.ClusterStores, *clusterShards) {
 	stores := util.NewClusterStores()
 	shards := newClusterShards()

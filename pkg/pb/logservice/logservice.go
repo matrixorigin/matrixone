@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package hakeeper
+package logservice
 
 import (
 	"reflect"
 
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -26,9 +25,9 @@ const (
 	NoLeader uint64 = 0
 )
 
-// NewRSMState creates a new RSMState instance.
-func NewRSMState() RSMState {
-	return RSMState{
+// NewRSMState creates a new HAKeeperRSMState instance.
+func NewRSMState() HAKeeperRSMState {
+	return HAKeeperRSMState{
 		ScheduleCommands: make(map[string]CommandBatch),
 		LogShards:        make(map[string]uint64),
 		DNState:          NewDNState(),
@@ -54,7 +53,7 @@ func NewDNState() DNState {
 // Update applies the incoming DNStoreHeartbeat into HAKeeper. Tick is the
 // current tick of the HAKeeper which can be used as the timestamp of the
 // heartbeat.
-func (s *DNState) Update(hb pb.DNStoreHeartbeat, tick uint64) {
+func (s *DNState) Update(hb DNStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
 		storeInfo = DNStoreInfo{}
@@ -67,19 +66,19 @@ func (s *DNState) Update(hb pb.DNStoreHeartbeat, tick uint64) {
 // NewLogState creates a new LogState.
 func NewLogState() LogState {
 	return LogState{
-		Shards: make(map[uint64]pb.LogShardInfo),
+		Shards: make(map[uint64]LogShardInfo),
 		Stores: make(map[string]LogStoreInfo),
 	}
 }
 
 // Update applies the incoming heartbeat message to the LogState with the
 // specified tick used as the timestamp.
-func (s *LogState) Update(hb pb.LogStoreHeartbeat, tick uint64) {
+func (s *LogState) Update(hb LogStoreHeartbeat, tick uint64) {
 	s.updateStores(hb, tick)
 	s.updateShards(hb)
 }
 
-func (s *LogState) updateStores(hb pb.LogStoreHeartbeat, tick uint64) {
+func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo, ok := s.Stores[hb.UUID]
 	if !ok {
 		storeInfo = LogStoreInfo{}
@@ -92,11 +91,11 @@ func (s *LogState) updateStores(hb pb.LogStoreHeartbeat, tick uint64) {
 	s.Stores[hb.UUID] = storeInfo
 }
 
-func (s *LogState) updateShards(hb pb.LogStoreHeartbeat) {
+func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 	for _, incoming := range hb.Replicas {
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
-			recorded = pb.LogShardInfo{
+			recorded = LogShardInfo{
 				ShardID:  incoming.ShardID,
 				Replicas: make(map[uint64]string),
 			}

@@ -42,7 +42,6 @@ DROP TABLE t1;
 
 
 #INSERT
-
 DROP TABLE if exists t1;
 #create table t1 (a int primary key, b int, c int, d timestamp default current_timestamp);
 create table t1 (a int primary key, b int, c int, d timestamp);
