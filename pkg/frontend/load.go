@@ -657,7 +657,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
-			logutil.Infof("line %d %v ", i, line)
 			//wait_a := time.Now()
 			rowIdx := batchBegin + i
 			offset := i + 1
