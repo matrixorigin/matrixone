@@ -134,8 +134,7 @@ jobs:
 
       - name: Check MO-Server Status
         run: |
-          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
-          sleep 10s
+          if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
           ps -ef
 
       - uses: actions/checkout@v2
