@@ -16,7 +16,9 @@ package operator
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,6 +32,40 @@ import (
 )
 
 func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	vec, err := doCast(vs, proc)
+	if err != nil {
+		extraError := ""
+		if sqlErr, ok := err.(*errors.SqlError); ok {
+			if sqlErr.Code() == errno.SyntaxErrororAccessRuleViolation {
+				return nil, err
+			}
+		}
+		if moErr, ok := err.(*moerr.Error); ok {
+			if moErr.Code == moerr.OUT_OF_RANGE {
+				extraError = " Reason: overflow"
+			}
+		}
+		return nil, formatCastError(vs[0], vs[1].Typ, extraError)
+	}
+	return vec, err
+}
+
+func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error {
+	var errStr string
+	if vec.IsScalar() {
+		if vec.ConstVectorIsNull() {
+			errStr = fmt.Sprintf("can't cast 'NULL' as %v type.", typ)
+		} else {
+			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec.Col), "["), "]")
+			errStr = fmt.Sprintf("can't cast '%s' from %v type to %v type.", valueStr, vec.Typ, typ)
+		}
+	} else {
+		errStr = fmt.Sprintf("can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
+	}
+	return errors.New(errno.InternalError, errStr+extraInfo)
+}
+
+func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := vs[0]
 	rv := vs[1]
 	if rv.IsScalarNull() {

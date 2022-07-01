@@ -36,7 +36,8 @@ func initAggregateFunction() {
 // aggregates contains the aggregate function indexed by function id.
 var aggregates = map[int]Functions{
 	MAX: {
-		Id: MAX,
+		Id:          MAX,
+		TypeCheckFn: generalTypeCheckForUnaryAggregate,
 		Overloads: []Function{
 			{
 				Index:         0,
@@ -185,7 +186,8 @@ var aggregates = map[int]Functions{
 		},
 	},
 	MIN: {
-		Id: MIN,
+		Id:          MIN,
+		TypeCheckFn: generalTypeCheckForUnaryAggregate,
 		Overloads: []Function{
 			{
 				Index:         0,
@@ -334,7 +336,8 @@ var aggregates = map[int]Functions{
 		},
 	},
 	SUM: {
-		Id: SUM,
+		Id:          SUM,
+		TypeCheckFn: generalTypeCheckForUnaryAggregate,
 		Overloads: []Function{
 			{
 				Index:         0,
@@ -455,7 +458,8 @@ var aggregates = map[int]Functions{
 		},
 	},
 	AVG: {
-		Id: AVG,
+		Id:          AVG,
+		TypeCheckFn: generalTypeCheckForUnaryAggregate,
 		Overloads: []Function{
 			{
 				Index:         0,
@@ -595,6 +599,9 @@ var aggregates = map[int]Functions{
 		Id: BIT_AND,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 1 {
+				if inputs[0] == types.T_any {
+					return 0, nil
+				}
 				_, err := aggregate.NewBitAnd(types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -616,6 +623,9 @@ var aggregates = map[int]Functions{
 		Id: BIT_OR,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 1 {
+				if inputs[0] == types.T_any {
+					return 0, nil
+				}
 				_, err := aggregate.NewBitOr(types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -637,6 +647,9 @@ var aggregates = map[int]Functions{
 		Id: BIT_XOR,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 1 {
+				if inputs[0] == types.T_any {
+					return 0, nil
+				}
 				_, err := aggregate.NewBitXor(types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -658,6 +671,9 @@ var aggregates = map[int]Functions{
 		Id: VAR_POP,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 1 {
+				if inputs[0] == types.T_any {
+					return 0, nil
+				}
 				_, err := variance.NewVarianceRingWithTypeCheck(types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -679,6 +695,9 @@ var aggregates = map[int]Functions{
 		Id: STDDEV_POP,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
 			if len(inputs) == 1 {
+				if inputs[0] == types.T_any {
+					return 0, nil
+				}
 				_, err := stddevpop.NewStdDevPopRingWithTypeCheck(types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -715,7 +734,8 @@ var aggregates = map[int]Functions{
 		},
 	},
 	ANY_VALUE: {
-		Id: ANY_VALUE,
+		Id:          ANY_VALUE,
+		TypeCheckFn: generalTypeCheckForUnaryAggregate,
 		Overloads: []Function{
 			{
 				Index:         0,
