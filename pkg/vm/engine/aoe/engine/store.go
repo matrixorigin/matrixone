@@ -142,7 +142,6 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 				}
 			}
 		}
-		break
 	case FileterNe:
 		//blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -155,7 +154,6 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 			}
 		}
 		//s.SetBlocks(blocks)
-		break
 	case FileterLt:
 		//blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -168,7 +166,6 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 			}
 		}
 		//s.SetBlocks(blocks)
-		break
 	case FileterLe:
 		//blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -181,7 +178,6 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 			}
 		}
 		//s.SetBlocks(blocks)
-		break
 	case FileterGt:
 		//blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -194,7 +190,6 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 			}
 		}
 		//s.SetBlocks(blocks)
-		break
 	case FileterGe:
 		//blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -207,7 +202,6 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 			}
 		}
 		//s.SetBlocks(blocks)
-		break
 	default:
 		panic("No Support")
 	}

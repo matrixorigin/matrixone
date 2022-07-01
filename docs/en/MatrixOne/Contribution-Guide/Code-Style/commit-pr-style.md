@@ -1,6 +1,6 @@
 # Commit Message and Pull Request Style
 
-This document describes the commit message and Pull Request style applied to all MatrixOrigin repositories. When you are to commit, be sure to follow the style to write a good commit message, a good Pull Request title and description.
+This document describes the commit message and Pull Request style applied to all MatrixOrigin repositories. When you are ready to commit, be sure to follow the style guide to write a good commit message, a good Pull Request title, and description.
 
 ## Why a good commit message matters
 
@@ -19,7 +19,7 @@ Elements of a good commit message:
 
     It can be fixing a specific bug, adding a feature, improving performance, reliability and stability, or just be a change for the sake of correctness.
 
-2. **Why this change was made? (mandatory)**
+2. **Why was this change made? (mandatory)**
 
     For short and obvious patches, this part can be omitted, but it should be a clear description of what the approach was.
 
@@ -49,6 +49,7 @@ Please follow the following style for **all your commits**:
     - If the changes affect three or more subsystems, you can use `*` instead, like `*:`.
     - Use a lowercase letter on the text that immediately follows the colon. For example: "media: **update** the DM architecture image"
     - Do not add a period at the end of a commit message.
+
 - For the second line, always leave it blank.
 - For the why part, if there is no specific reason for the change, you can use one of the generic reasons like "Improve performance", "Improve test coverage."
 - For other lines, use no more than 80 characters.
@@ -71,7 +72,6 @@ Please follow the following style for **all your commits**:
 - Use relatively short sentences
 - Do not use lengthy compound words
 - Do not abbreviate unless it's absolutely necessary
-
 
 ## Pull Request description style
 

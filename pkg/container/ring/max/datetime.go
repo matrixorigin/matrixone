@@ -100,6 +100,7 @@ func (r *DatetimeRing) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDatetimeSlice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*8]
 	r.Vs[n] = math.MinInt64
 	r.Ns = append(r.Ns, 0)
 	return nil
@@ -126,6 +127,7 @@ func (r *DatetimeRing) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeDatetimeSlice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*8]
 	for i := 0; i < size; i++ {
 		r.Ns = append(r.Ns, 0)
 		r.Vs[i+n] = math.MinInt64
@@ -177,6 +179,9 @@ func (r *DatetimeRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *DatetimeRing) Add(a interface{}, x, y int64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if r.Vs[x] < ar.Vs[y] {
 		r.Vs[x] = ar.Vs[y]
 	}
@@ -185,6 +190,9 @@ func (r *DatetimeRing) Add(a interface{}, x, y int64) {
 
 func (r *DatetimeRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if ar.Vs[int64(i)+start] > r.Vs[j] {
@@ -196,6 +204,9 @@ func (r *DatetimeRing) BatchAdd(a interface{}, start int64, os []uint8, vps []ui
 
 func (r *DatetimeRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Vs[y] > r.Vs[x] {
 		r.Vs[x] = ar.Vs[y]
 	}

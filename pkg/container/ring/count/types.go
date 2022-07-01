@@ -22,3 +22,11 @@ type CountRing struct {
 	Vs  []int64
 	Typ types.Type
 }
+
+type DistCountRing struct {
+	Da  []byte
+	Ns  []int64
+	Vs  []int64
+	Typ types.Type
+	Ms  []map[any]uint8
+}

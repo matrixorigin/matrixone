@@ -154,7 +154,7 @@ func ParseBitSlicedIndexFileNameToInfo(filename string) (version, tblID, segID u
 }
 
 func ParseBlockBitSlicedIndexFileNameToInfo(filename string) (version, tblID, segID, blkID uint64, colIdx uint16, ok bool) {
-	filename = strings.Trim(filename, BBSISuffix)
+	filename = strings.TrimSuffix(filename, BBSISuffix)
 	infos := strings.Split(filename, "_")
 	arr := make([]int, 5)
 	var err error

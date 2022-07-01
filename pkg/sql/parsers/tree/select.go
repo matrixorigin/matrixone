@@ -169,6 +169,7 @@ type SelectClause struct {
 	Where    *Where
 	GroupBy  GroupBy
 	Having   *Where
+	Option   string
 }
 
 func (node *SelectClause) Format(ctx *FmtCtx) {
@@ -176,10 +177,26 @@ func (node *SelectClause) Format(ctx *FmtCtx) {
 	if node.Distinct {
 		ctx.WriteString("distinct ")
 	}
+	if node.Option != "" {
+		ctx.WriteString(node.Option)
+		ctx.WriteByte(' ')
+	}
 	node.Exprs.Format(ctx)
 	if len(node.From.Tables) > 0 {
-		ctx.WriteByte(' ')
-		node.From.Format(ctx)
+		canFrom := true
+		als, ok := node.From.Tables[0].(*AliasedTableExpr)
+		if ok {
+			tbl, ok := als.Expr.(*TableName)
+			if ok {
+				if string(tbl.ObjectName) == "" {
+					canFrom = false
+				}
+			}
+		}
+		if canFrom {
+			ctx.WriteByte(' ')
+			node.From.Format(ctx)
+		}
 	}
 	if node.Where != nil {
 		ctx.WriteByte(' ')

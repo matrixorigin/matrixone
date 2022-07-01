@@ -15,7 +15,7 @@ package multi
 
 import (
 	"errors"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/get_timestamp"
 
 	"github.com/matrixorigin/matrixone/pkg/builtin"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -34,7 +33,7 @@ func init() {
 		return types.T_datetime // return in 'YYYY-MM-DD hh:mm:ss' format
 	}
 	extend.MultiStrings[builtin.UTCTimestamp] = func(e []extend.Extend) string {
-		return fmt.Sprintf("utc_timestamp()")
+		return "utc_timestamp()"
 	}
 	overload.AppendFunctionRets(builtin.UTCTimestamp, []types.T{}, types.T_char)
 	overload.MultiOps[builtin.UTCTimestamp] = []*overload.MultiOp{
@@ -54,7 +53,7 @@ func init() {
 				}
 				nulls.Set(vec.Nsp, new(nulls.Nulls))
 				result := make([]types.Datetime, 0)
-				result = append(result, timestamp.GetUTCTimestamp())
+				result = append(result, get_timestamp.GetUTCTimestamp())
 				vector.SetCol(vec, result)
 
 				return vec, nil

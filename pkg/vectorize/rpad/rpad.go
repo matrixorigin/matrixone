@@ -21,8 +21,10 @@ import (
 )
 
 var (
-	Rpad func(*types.Bytes, interface{}, interface{}, []bool, []*nulls.Nulls) (*types.Bytes, *nulls.Nulls, error)
+	Rpad func(int, *types.Bytes, interface{}, interface{}, []bool, []*nulls.Nulls) (*types.Bytes, *nulls.Nulls, error)
 )
+
+const UINT16_MAX = ^uint16(0)
 
 func init() {
 	Rpad = rpad
@@ -30,7 +32,7 @@ func init() {
 
 // rpad returns a *types.Bytes containing the padded strings and a corresponding bitmap *nulls.Nulls.
 // rpad is multibyte-safe
-func rpad(strs *types.Bytes, sizes interface{}, pads interface{}, isConst []bool, oriNsp []*nulls.Nulls) (*types.Bytes, *nulls.Nulls, error) {
+func rpad(rowCount int, strs *types.Bytes, sizes interface{}, pads interface{}, isConst []bool, oriNsp []*nulls.Nulls) (*types.Bytes, *nulls.Nulls, error) {
 	// typecast
 	var padstrs = &types.Bytes{}
 	var err error
@@ -75,42 +77,41 @@ func rpad(strs *types.Bytes, sizes interface{}, pads interface{}, isConst []bool
 	var err2 error
 	switch sz := sizes.(type) {
 	case []int64:
-		result, nsp = rpadInt64(strs, sz, padstrs, isConst, oriNsp)
+		result, nsp = rpadInt64(rowCount, strs, sz, padstrs, isConst, oriNsp)
 	case []int32:
 		sizesInt64 := make([]int64, len(sz))
 		sizesInt64, err2 = typecast.Int32ToInt64(sz, sizesInt64)
-		result, nsp = rpadInt64(strs, sizesInt64, padstrs, isConst, oriNsp)
+		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []int16:
 		sizesInt64 := make([]int64, len(sz))
 		sizesInt64, err2 = typecast.Int16ToInt64(sz, sizesInt64)
-		result, nsp = rpadInt64(strs, sizesInt64, padstrs, isConst, oriNsp)
+		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []int8:
 		sizesInt64 := make([]int64, len(sz))
 		sizesInt64, err2 = typecast.Int8ToInt64(sz, sizesInt64)
-		result, nsp = rpadInt64(strs, sizesInt64, padstrs, isConst, oriNsp)
+		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []float64:
 		sizesInt64 := make([]int64, len(sz))
 		sizesInt64, err2 = typecast.Float64ToInt64(sz, sizesInt64)
-		result, nsp = rpadInt64(strs, sizesInt64, padstrs, isConst, oriNsp)
+		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []float32:
 		sizesInt64 := make([]int64, len(sz))
 		sizesInt64, err2 = typecast.Float32ToInt64(sz, sizesInt64)
-		result, nsp = rpadInt64(strs, sizesInt64, padstrs, isConst, oriNsp)
-
+		result, nsp = rpadInt64(rowCount, strs, sizesInt64, padstrs, isConst, oriNsp)
 	case []uint64:
-		result, nsp = rpadUint64(strs, sz, padstrs, isConst, oriNsp)
+		result, nsp = rpadUint64(rowCount, strs, sz, padstrs, isConst, oriNsp)
 	case []uint32:
 		sizesUint64 := make([]uint64, len(sz))
 		sizesUint64, err2 = typecast.Uint32ToUint64(sz, sizesUint64)
-		result, nsp = rpadUint64(strs, sizesUint64, padstrs, isConst, oriNsp)
+		result, nsp = rpadUint64(rowCount, strs, sizesUint64, padstrs, isConst, oriNsp)
 	case []uint16:
 		sizesUint64 := make([]uint64, len(sz))
 		sizesUint64, err2 = typecast.Uint16ToUint64(sz, sizesUint64)
-		result, nsp = rpadUint64(strs, sizesUint64, padstrs, isConst, oriNsp)
+		result, nsp = rpadUint64(rowCount, strs, sizesUint64, padstrs, isConst, oriNsp)
 	case []uint8:
 		sizesUint64 := make([]uint64, len(sz))
 		sizesUint64, err2 = typecast.Uint8ToUint64(sz, sizesUint64)
-		result, nsp = rpadUint64(strs, sizesUint64, padstrs, isConst, oriNsp)
+		result, nsp = rpadUint64(rowCount, strs, sizesUint64, padstrs, isConst, oriNsp)
 	default:
 		// return empty strings if sizes is a non-numerical type slice
 		nsp = new(nulls.Nulls)
@@ -126,10 +127,10 @@ func rpad(strs *types.Bytes, sizes interface{}, pads interface{}, isConst []bool
 	return result, nsp, nil
 }
 
-func rpadInt64(strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst []bool, oriNsp []*nulls.Nulls) (*types.Bytes, *nulls.Nulls) {
+func rpadInt64(rowCount int, strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst []bool, oriNsp []*nulls.Nulls) (*types.Bytes, *nulls.Nulls) {
 	results := &types.Bytes{}
 	resultNsp := new(nulls.Nulls)
-	for i := 0; i < len(strs.Lengths); i++ {
+	for i := 0; i < rowCount; i++ {
 		var newSize int64
 		if isConst[1] {
 			// accepts a constant literal
@@ -139,7 +140,7 @@ func rpadInt64(strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst [
 			newSize = sizes[i]
 		}
 		// gets NULL if any arg is NULL or the newSize < 0
-		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize < 0 {
+		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize < 0 || newSize > int64(UINT16_MAX) {
 			nulls.Add(resultNsp, row)
 			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 			results.Lengths = append(results.Lengths, 0)
@@ -152,7 +153,12 @@ func rpadInt64(strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst [
 		} else {
 			padRunes = []rune(string(padstrs.Get(int64(i))))
 		}
-		oriRunes := []rune(string(strs.Get(int64(i))))
+		var oriRunes []rune
+		if isConst[0] {
+			oriRunes = []rune(string(strs.Get(int64(0))))
+		} else {
+			oriRunes = []rune(string(strs.Get(int64(i))))
+		}
 		// gets the padded string
 		if int(newSize) <= len(oriRunes) {
 			// truncates the original string
@@ -177,7 +183,11 @@ func rpadInt64(strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst [
 				padding := int(newSize) - len(oriRunes)
 				// builds a padded string
 				tmp = make([]byte, 0, padding)
-				tmp = append(tmp, strs.Get(int64(i))...)
+				if isConst[0] {
+					tmp = append(tmp, strs.Get(int64(0))...)
+				} else {
+					tmp = append(tmp, strs.Get(int64(i))...)
+				}
 				// adds some pads
 				for j := 0; j < padding/len(padRunes); j++ {
 					tmp = append(tmp, string(padRunes)...)
@@ -194,10 +204,10 @@ func rpadInt64(strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst [
 	return results, resultNsp
 }
 
-func rpadUint64(strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst []bool, oriNsp []*nulls.Nulls) (*types.Bytes, *nulls.Nulls) {
+func rpadUint64(rowCount int, strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst []bool, oriNsp []*nulls.Nulls) (*types.Bytes, *nulls.Nulls) {
 	results := &types.Bytes{}
 	resultNsp := new(nulls.Nulls)
-	for i := 0; i < len(strs.Lengths); i++ {
+	for i := 0; i < rowCount; i++ {
 		var newSize uint64
 		if isConst[1] {
 			// accepts a constant literal
@@ -207,7 +217,7 @@ func rpadUint64(strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst
 			newSize = sizes[i]
 		}
 		// gets NULL if any arg is NULL or the newSize < 0
-		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) {
+		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize > uint64(UINT16_MAX) {
 			nulls.Add(resultNsp, row)
 			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 			results.Lengths = append(results.Lengths, 0)
@@ -220,7 +230,12 @@ func rpadUint64(strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst
 		} else {
 			padRunes = []rune(string(padstrs.Get(int64(i))))
 		}
-		oriRunes := []rune(string(strs.Get(int64(i))))
+		var oriRunes []rune
+		if isConst[0] {
+			oriRunes = []rune(string(strs.Get(int64(0))))
+		} else {
+			oriRunes = []rune(string(strs.Get(int64(i))))
+		}
 		// gets the padded string
 		if int(newSize) <= len(oriRunes) {
 			// truncates the original string
@@ -245,7 +260,11 @@ func rpadUint64(strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst
 				padding := int(newSize) - len(oriRunes)
 				// builds a padded string
 				tmp = make([]byte, 0, padding)
-				tmp = append(tmp, strs.Get(int64(i))...)
+				if isConst[0] {
+					tmp = append(tmp, strs.Get(int64(0))...)
+				} else {
+					tmp = append(tmp, strs.Get(int64(i))...)
+				}
 				// adds some pads
 				for j := 0; j < padding/len(padRunes); j++ {
 					tmp = append(tmp, string(padRunes)...)

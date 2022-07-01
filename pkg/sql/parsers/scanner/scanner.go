@@ -64,6 +64,8 @@ func (s *Scanner) Scan() (int, string) {
 			s.skip(1)
 		} else if s.cur() == '\'' || s.cur() == '"' {
 			return int('@'), ""
+		} else if s.cur() == ',' {
+			return tokenID, ""
 		}
 		var tID int
 		var tBytes string
@@ -288,35 +290,37 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 		s.skip(1)
 
 		if ch == '\\' {
-			if s.cur() == eofChar {
+			ch = s.cur()
+			switch ch {
+			case eofChar:
 				return LEX_ERROR, buffer.String()
-			}
-			if to, ok := encodeRef[byte(s.cur())]; ok {
-				ch = uint16(to)
-			} else {
-				ch = s.cur()
+			case 'n':
+				ch = '\n'
+			case '0':
+				ch = '\x00'
+			case 'b':
+				ch = 8
+			case 'Z':
+				ch = 26
+			case 'r':
+				ch = '\r'
+			case 't':
+				ch = '\t'
+			case '%', '_':
+				buffer.WriteByte(byte('\\'))
+				continue
+			case '\\', delim:
+			default:
+				continue
 			}
 		} else if ch == delim && s.cur() != delim {
 			break
 		}
-
 		buffer.WriteByte(byte(ch))
 		s.skip(1)
 	}
 
 	return typ, buffer.String()
-}
-
-var encodeRef = map[byte]byte{
-	'0':  '\x00',
-	'\'': '\'',
-	'"':  '"',
-	'b':  '\b',
-	'n':  '\n',
-	'r':  '\r',
-	't':  '\t',
-	'Z':  26, // ctl-Z
-	'\\': '\\',
 }
 
 // scanLiteralIdentifier scans an identifier enclosed by backticks. If the identifier
@@ -508,6 +512,11 @@ func (s *Scanner) scanNumber() (int, string) {
 			s.skip(1)
 			s.scanMantissa(16)
 			goto exit
+		} else if s.cur() == 'b' || s.cur() == 'B' {
+			token = BIT_LITERAL
+			s.skip(1)
+			s.scanMantissa(2)
+			goto exit
 		}
 	}
 
@@ -524,6 +533,9 @@ exponent:
 		if s.peek(1) == '+' || s.peek(1) == '-' {
 			token = FLOAT
 			s.skip(2)
+		} else if digitVal(s.peek(1)) < 10 {
+			token = FLOAT
+			s.skip(1)
 		} else {
 			goto exit
 		}
@@ -537,7 +549,7 @@ exit:
 		s.scanIdentifier(false)
 	}
 
-	return token, s.buf[start:s.Pos]
+	return token, strings.ToLower(s.buf[start:s.Pos])
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
@@ -557,13 +569,13 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
 	if keywordID, found := keywords[lower]; found {
-		return keywordID, keywordName
+		return keywordID, lower
 	}
 	// dual must always be case-insensitive
 	if lower == "dual" {
 		return ID, lower
 	}
-	return ID, keywordName
+	return ID, lower
 }
 
 func (s *Scanner) scanBitLiteral() (int, string) {
@@ -588,7 +600,7 @@ func (s *Scanner) scanHex() (int, string) {
 	if len(hex)%2 != 0 {
 		return LEX_ERROR, hex
 	}
-	return HEX, hex
+	return HEXNUM, hex
 }
 
 func (s *Scanner) scanMantissa(base int) {

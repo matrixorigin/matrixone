@@ -36,11 +36,15 @@ type ApproxCountDistinctRing struct {
 func (r *ApproxCountDistinctRing) Marshal(w io.Writer) error {
 	// length
 	n := len(r.Sk)
-	w.Write(encoding.EncodeUint32(uint32(n)))
+	if _, err := w.Write(encoding.EncodeUint32(uint32(n))); err != nil {
+		return err
+	}
 	// data & values
 	if n > 0 {
 		// in some tests Data is nil, encode Vs anyway
-		w.Write(encoding.EncodeUint64Slice(r.Vs))
+		if _, err := w.Write(encoding.EncodeUint64Slice(r.Vs)); err != nil {
+			return err
+		}
 	}
 	// sketches
 	for _, sk := range r.Sk {
@@ -48,11 +52,17 @@ func (r *ApproxCountDistinctRing) Marshal(w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		w.Write(encoding.EncodeUint32(uint32(len(sk_buf))))
-		w.Write(sk_buf)
+		if _, err := w.Write(encoding.EncodeUint32(uint32(len(sk_buf)))); err != nil {
+			return err
+		}
+		if _, err := w.Write(sk_buf); err != nil {
+			return err
+		}
 	}
 	// type
-	w.Write(encoding.EncodeType(r.Typ))
+	if _, err := w.Write(encoding.EncodeType(r.Typ)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -90,7 +100,9 @@ func (r *ApproxCountDistinctRing) unmarshal(data []byte, proc *process.Process) 
 		if proc == nil {
 			r.decodeData(data[:n*8])
 		} else {
-			r.decodeDataWithProc(data[:n*8], proc)
+			if err := r.decodeDataWithProc(data[:n*8], proc); err != nil {
+				return nil, err
+			}
 		}
 		data = data[n*8:]
 	}

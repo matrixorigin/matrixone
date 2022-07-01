@@ -15,8 +15,8 @@
 package batch
 
 import (
-	"errors"
 	"fmt"
+
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -28,7 +28,7 @@ var (
 
 func NewBatch(attrs []int, vecs []vector.IVector) (IBatch, error) {
 	if len(attrs) != len(vecs) || len(vecs) == 0 {
-		return nil, errors.New(fmt.Sprintf("invalid attrs and vectors length: %d %d", len(attrs), len(vecs)))
+		return nil, fmt.Errorf("invalid attrs and vectors length: %d %d", len(attrs), len(vecs))
 	}
 	bat := &Batch{
 		ClosedMask: roaring.NewBitmap(),
@@ -41,7 +41,7 @@ func NewBatch(attrs []int, vecs []vector.IVector) (IBatch, error) {
 		bat.AttrsMap[idx] = i
 	}
 	if len(bat.AttrsMap) != len(attrs) {
-		return nil, errors.New(fmt.Sprintf("len(bat.AttrsMap) != len(attrs): %d %d", len(bat.Attrs), len(attrs)))
+		return nil, fmt.Errorf("len(bat.AttrsMap) != len(attrs): %d %d", len(bat.Attrs), len(attrs))
 	}
 
 	return bat, nil

@@ -1,13 +1,17 @@
 # **SHOW DATABASES**
 
 ## **语法说明**
+
 显示实例上存在的数据库列表。
 
 ## **语法结构**
+
 ```
 > SHOW DATABASES [LIKE expr | WHERE expr]
 ```
+
 ## **示例**
+
 ```
 > SHOW DATABASES;
 +----------+
@@ -25,4 +29,3 @@
 +----------+
 9 rows in set (0.00 sec)
 ```
-

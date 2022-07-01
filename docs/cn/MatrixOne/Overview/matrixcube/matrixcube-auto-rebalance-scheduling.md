@@ -4,6 +4,7 @@ MatrixCube是一个实现分布式系统的框架。对于分布式系统来说�
 
 `Prophet`是MatrixCube的自平衡和调度的关键组件。`Prophet`中嵌入了`Etcd Server`组件来存储集群的元数据。
 其主要实现了三个目标：  
+
 * 保持每个`Store`存储量平衡。
 * 保持读写请求的负载平衡。
 * 保持逻辑表分布平衡。 
@@ -20,6 +21,7 @@ MatrixCube是一个实现分布式系统的框架。对于分布式系统来说�
 `Prophet`收集所有的`Heartbeat`，然后可以得到全局的`Replica`视图以及每个节点的存储空间信息。根据这些信息，`Prophet`将发送调度命令，将部分`Replica`转移到合适的`Store`上，以便保证每个`Store`上的`Replica`数目相近。由于每份`Replica`的数据量相同，因此`Shard`之间也能达到存储量的平衡。
 
 ## **Replica Hearbeat**
+
 分布式体系下每一个`Shard`在各个`Store`上有相应的`Replicas`（副本），这些`Replica`形成了一个`Raft-Group`，并且将在组内选举Leader。Leader周期性地向`Prophet`发送`Heartbeat`，将包括一下信息：
 
 * 当前`Shard`所拥有的`Replica`数量，以及每个`Replica`的最新活跃时间。
@@ -35,4 +37,3 @@ MatrixCube是一个实现分布式系统的框架。对于分布式系统来说�
 ## **Event Notify**
 
 收集到的`Heartbeat`信息将被同步到所有`Store`，从而每个`Store`中都能在本地形成全局路由信息。
-

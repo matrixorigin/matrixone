@@ -1,6 +1,7 @@
 # **INSERT**
 
 ## **语法描述**
+
 `INSERT`用于在表中插入新行。
 
 ## **语法结构**
@@ -11,7 +12,7 @@
 
 ## **示例**
 
-```
+```sql
 > CREATE TABLE test(a int, b varchar(10));
 
 > INSERT INTO test values(123, 'abc');

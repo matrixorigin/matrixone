@@ -6,7 +6,8 @@ Aggregate function.
 
 The SUM() function calculates the sum of a set of values.
 
-Note: NULL values are not counted.
+!!! note  "<font size=4>note</font>"
+    <font size=3>NULL values are not counted.</font>  
 
 ## **Syntax**
 
@@ -15,17 +16,18 @@ Note: NULL values are not counted.
 ```
 
 ## **Arguments**
+
 |  Arguments   | Description  |
 |  ----  | ----  |
 | expr  | Any expression |
 
 ## **Returned Value**
+
 Returns the sum of expr. A double if the input type is double, otherwise integer.
 
 If there are no matching rows, SUM() returns NULL.
 
 ## **Examples**
-
 
 ```sql
 > drop table if exists tbl1,tbl2;
@@ -57,4 +59,6 @@ If there are no matching rows, SUM() returns NULL.
 ```
 
 ## Constraints
-Currently, MatrixOne doesn't support select function() without from tables.
+
+1. Currently, MatrixOne doesn't support select function() without from tables.
+2. SUM(DISTINCT) is not supported for the 0.5.0 version.

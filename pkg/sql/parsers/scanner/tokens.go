@@ -24,6 +24,20 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		CONFIG = MYSQL_CONFIG
+		SOME = MYSQL_SOME
+		ANY = MYSQL_ANY
+		UNKNOWN = MYSQL_UNKNOWN
+		BOTH = MYSQL_BOTH
+		LEADING = MYSQL_LEADING
+		TRAILING = MYSQL_TRAILING
+		SQL_BIG_RESULT = MYSQL_SQL_BIG_RESULT
+		SQL_SMALL_RESULT = MYSQL_SQL_SMALL_RESULT
+		SQL_BUFFER_RESULT = MYSQL_SQL_BUFFER_RESULT
+		MIN = MYSQL_MIN
+		MAX = MYSQL_MAX
+		BIT_OR = MYSQL_BIT_OR
+		BIT_AND = MYSQL_BIT_AND
 		VERBOSE = MYSQL_VERBOSE
 		SQL_TSI_MINUTE = MYSQL_SQL_TSI_MINUTE
 		SQL_TSI_SECOND = MYSQL_SQL_TSI_SECOND
@@ -242,7 +256,6 @@ func initTokens(dialectType dialect.DialectType) {
 		LOCK = MYSQL_LOCK
 		KEYS = MYSQL_KEYS
 		VALUES = MYSQL_VALUES
-		LAST_INSERT_ID = MYSQL_LAST_INSERT_ID
 		NEXT = MYSQL_NEXT
 		VALUE = MYSQL_VALUE
 		SHARE = MYSQL_SHARE
@@ -455,6 +468,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"algorithm":                ALGORITHM,
 		"analyze":                  ANALYZE,
 		"and":                      AND,
+		"any":                      ANY,
 		"as":                       AS,
 		"asc":                      ASC,
 		"ascii":                    ASCII,
@@ -474,9 +488,11 @@ func initTokens(dialectType dialect.DialectType) {
 		"blob":                     BLOB,
 		"bool":                     BOOL,
 		"boolean":                  BOOLEAN,
-		"both":                     UNUSED,
+		"both":                     BOTH,
 		"by":                       BY,
 		"btree":                    BTREE,
+		"bit_or":                   BIT_OR,
+		"bit_and":                  BIT_AND,
 		"call":                     UNUSED,
 		"cascade":                  CASCADE,
 		"case":                     CASE,
@@ -505,6 +521,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"continue":                 UNUSED,
 		"connection":               CONNECTION,
 		"convert":                  CONVERT,
+		"config":                   CONFIG,
 		"cipher":                   CIPHER,
 		"chain":                    CHAIN,
 		"client":                   CLIENT,
@@ -631,8 +648,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"key_block_size":           KEY_BLOCK_SIZE,
 		"kill":                     UNUSED,
 		"language":                 LANGUAGE,
-		"last_insert_id":           LAST_INSERT_ID,
-		"leading":                  UNUSED,
+		"leading":                  LEADING,
 		"leave":                    UNUSED,
 		"left":                     LEFT,
 		"less":                     LESS,
@@ -774,11 +790,12 @@ func initTokens(dialectType dialect.DialectType) {
 		"sqlexception":             UNUSED,
 		"sqlstate":                 UNUSED,
 		"sqlwarning":               UNUSED,
-		"sql_big_result":           UNUSED,
+		"sql_big_result":           SQL_BIG_RESULT,
 		"sql_cache":                SQL_CACHE,
 		"sql_calc_found_rows":      UNUSED,
 		"sql_no_cache":             SQL_NO_CACHE,
-		"sql_small_result":         UNUSED,
+		"sql_small_result":         SQL_SMALL_RESULT,
+		"sql_buffer_result":        SQL_BUFFER_RESULT,
 		"ssl":                      SSL,
 		"slave":                    SLAVE,
 		"start":                    START,
@@ -806,13 +823,14 @@ func initTokens(dialectType dialect.DialectType) {
 		"tinyint":                  TINYINT,
 		"tinytext":                 TINYTEXT,
 		"to":                       TO,
-		"trailing":                 UNUSED,
+		"trailing":                 TRAILING,
 		"transaction":              TRANSACTION,
 		"trigger":                  TRIGGER,
 		"true":                     TRUE,
 		"truncate":                 TRUNCATE,
 		"uncommitted":              UNCOMMITTED,
 		"undo":                     UNUSED,
+		"unknown":                  UNKNOWN,
 		"union":                    UNION,
 		"unique":                   UNIQUE,
 		"unlock":                   UNLOCK,
@@ -867,6 +885,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"subdate":                  SUBDATE,
 		"sum":                      SUM,
 		"system_user":              SYSTEM_USER,
+		"some":                     SOME,
 		"translate":                TRANSLATE,
 		"trim":                     TRIM,
 		"variance":                 VARIANCE,
@@ -892,12 +911,25 @@ func initTokens(dialectType dialect.DialectType) {
 		"hour_microsecond":         HOUR_MICROSECOND,
 		"minute_second":            MINUTE_SECOND,
 		"minute_microsecond":       MINUTE_MICROSECOND,
+		"min":                      MIN,
 		"second_microsecond":       SECOND_MICROSECOND,
 	}
 }
 
 // mysql
 var (
+	CONFIG                   int
+	SOME                     int
+	ANY                      int
+	UNKNOWN                  int
+	TRAILING                 int
+	LEADING                  int
+	BOTH                     int
+	SQL_SMALL_RESULT         int
+	SQL_BIG_RESULT           int
+	SQL_BUFFER_RESULT        int
+	BIT_OR                   int
+	BIT_AND                  int
 	SQL_TSI_MINUTE           int
 	SQL_TSI_SECOND           int
 	SQL_TSI_YEAR             int
@@ -1099,7 +1131,6 @@ var (
 	LOCK                     int
 	KEYS                     int
 	VALUES                   int
-	LAST_INSERT_ID           int
 	NEXT                     int
 	VALUE                    int
 	SHARE                    int

@@ -118,9 +118,7 @@ func (b *build) buildSelectClause(stmt *tree.SelectClause, orderBy tree.OrderBy,
 		}
 	}
 	{ // construct result attributes
-		for _, attr := range result.As {
-			qry.Result = append(qry.Result, attr)
-		}
+		qry.Result = append(qry.Result, result.As...)
 	}
 	proj = pruneProjection(proj)
 	if len(orderBy) > 0 {

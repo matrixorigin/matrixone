@@ -103,6 +103,7 @@ func (r *ApproxCountDistinctRing) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeUint64Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
+	r.Da = r.Da[:(n+1)*8]
 	r.Vs[n] = 0
 	r.Sk = append(r.Sk, hll.New())
 	return nil
@@ -128,6 +129,7 @@ func (r *ApproxCountDistinctRing) Grows(size int, m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeUint64Slice(data)
 	}
 	r.Vs = r.Vs[:n+size]
+	r.Da = r.Da[:(n+size)*8]
 	for i := 0; i < size; i++ {
 		r.Sk = append(r.Sk, hll.New())
 	}
@@ -159,7 +161,9 @@ func (r *ApproxCountDistinctRing) BulkFill(i int64, zs []int64, vec *vector.Vect
 
 func (r *ApproxCountDistinctRing) Add(a interface{}, x, y int64) {
 	ar := a.(*ApproxCountDistinctRing)
-	r.Sk[x].Merge(ar.Sk[y])
+	if err := r.Sk[x].Merge(ar.Sk[y]); err != nil {
+		panic(err)
+	}
 }
 
 func (r *ApproxCountDistinctRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
@@ -167,14 +171,17 @@ func (r *ApproxCountDistinctRing) BatchAdd(a interface{}, start int64, os []uint
 	for i := range os {
 		dest := vps[i] - 1
 		src := int64(i) + start
-		r.Sk[dest].Merge(ar.Sk[src])
+		if err := r.Sk[dest].Merge(ar.Sk[src]); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (r *ApproxCountDistinctRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*ApproxCountDistinctRing)
-	r.Sk[x].Merge(ar.Sk[y])
-
+	if err := r.Sk[x].Merge(ar.Sk[y]); err != nil {
+		panic(err)
+	}
 }
 
 func (r *ApproxCountDistinctRing) Eval(_ []int64) *vector.Vector {

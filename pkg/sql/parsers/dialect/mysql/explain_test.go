@@ -54,8 +54,8 @@ func TestExplain(t *testing.T) {
 		},
 		{
 			name:   "test06",
-			input:  "explain (analyze true,verbose false,format JSON) select * from emp",
-			output: "explain (analyze true,verbose false,format JSON) select * from emp",
+			input:  "explain (analyze true,verbose false,format json) select * from emp",
+			output: "explain (analyze true,verbose false,format json) select * from emp",
 		},
 	}
 
@@ -106,7 +106,7 @@ func TestExplainTolerance(t *testing.T) {
 		},
 		{
 			name:  "test06",
-			input: "explain format JSON select * from emp",
+			input: "explain format json select * from emp",
 		},
 		{
 			name:  "test07",

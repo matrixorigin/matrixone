@@ -15,6 +15,8 @@
 package round
 
 import (
+	"math"
+
 	"golang.org/x/sys/cpu"
 )
 
@@ -33,12 +35,9 @@ func init() {
 func roundFloat32Avx2(xs []float32, rs []float32, digits int64) []float32 {
 	if digits == 0 {
 		float32RoundAvx2AsmZero(xs, rs)
-	} else if digits > 0 {
-		scale := float32(scaleTable[digits])
-		float32RoundAvx2Asm(xs, rs, scale)
 	} else {
-		scale := float32(scaleTable[-digits])
-		float32RoundAvx2Asm(xs, rs, 1/scale)
+		scale := float32(math.Pow10(int(digits)))
+		float32RoundAvx2Asm(xs, rs, scale)
 	}
 	return rs
 }
@@ -46,12 +45,9 @@ func roundFloat32Avx2(xs []float32, rs []float32, digits int64) []float32 {
 func roundFloat64Avx2(xs []float64, rs []float64, digits int64) []float64 {
 	if digits == 0 {
 		float64RoundAvx2AsmZero(xs, rs)
-	} else if digits > 0 {
-		scale := float64(scaleTable[digits])
-		float64RoundAvx2Asm(xs, rs, scale)
 	} else {
-		scale := float64(scaleTable[-digits])
-		float64RoundAvx2Asm(xs, rs, 1/scale)
+		scale := math.Pow10(int(digits))
+		float64RoundAvx2Asm(xs, rs, scale)
 	}
 	return rs
 }

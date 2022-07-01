@@ -366,6 +366,20 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 
 func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		vs := v.Col.([]bool)
+		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
+		buf.Write(encoding.EncodeBoolSlice(vs))
 	case types.T_int8:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -632,6 +646,28 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 	typ := encoding.DecodeType(data[:encoding.TypeSize])
 	data = data[encoding.TypeSize:]
 	switch typ.Oid {
+	case types.T_bool:
+		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Col = encoding.DecodeBoolSlice(data[:n])
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		return v, data, nil
 	case types.T_int8:
 		v := vector.New(typ)
 		v.Or = true

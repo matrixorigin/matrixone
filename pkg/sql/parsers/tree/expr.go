@@ -62,9 +62,9 @@ func (op BinaryOp) ToString() string {
 	case INTEGER_DIV:
 		return "div"
 	case BIT_OR:
-		return "or"
+		return "|"
 	case BIT_AND:
-		return "and"
+		return "&"
 	case BIT_XOR:
 		return "^"
 	case LEFT_SHIFT:
@@ -195,7 +195,7 @@ const (
 	NOT_REG_MATCH                        // NOT REG_MATCH
 	IS_DISTINCT_FROM
 	IS_NOT_DISTINCT_FROM
-
+	NULL_SAFE_EQUAL // <=>
 	//reference: https://dev.mysql.com/doc/refman/8.0/en/all-subqueries.html
 	//subquery with ANY,SOME,ALL
 	//operand comparison_operator [ANY | SOME | ALL] (subquery)
@@ -234,6 +234,8 @@ func (op ComparisonOp) ToString() string {
 		return "is distinct from"
 	case IS_NOT_DISTINCT_FROM:
 		return "is not distinct from"
+	case NULL_SAFE_EQUAL:
+		return "<=>"
 	case ANY:
 		return "any"
 	case SOME:
@@ -263,6 +265,12 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(node.Op.ToString())
 	ctx.WriteByte(' ')
+
+	if node.SubOp != ComparisonOp(0) {
+		ctx.WriteString(node.SubOp.ToString())
+		ctx.WriteByte(' ')
+	}
+
 	ctx.PrintExpr(node, node.Right, false)
 	if node.Escape != nil {
 		ctx.WriteString(" escape ")
@@ -274,6 +282,15 @@ func NewComparisonExpr(op ComparisonOp, l, r Expr) *ComparisonExpr {
 	return &ComparisonExpr{
 		Op:    op,
 		SubOp: ComparisonOp(0),
+		Left:  l,
+		Right: r,
+	}
+}
+
+func NewSubqueryComparisonExpr(op ComparisonOp, subOp ComparisonOp, l, r Expr) *ComparisonExpr {
+	return &ComparisonExpr{
+		Op:    op,
+		SubOp: subOp,
 		Left:  l,
 		Right: r,
 	}
@@ -638,6 +655,7 @@ type CaseExpr struct {
 func (node *CaseExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("case")
 	if node.Expr != nil {
+		ctx.WriteByte(' ')
 		node.Expr.Format(ctx)
 	}
 	ctx.WriteByte(' ')

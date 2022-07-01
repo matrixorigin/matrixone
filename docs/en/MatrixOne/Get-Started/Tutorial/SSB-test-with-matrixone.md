@@ -1,14 +1,13 @@
 # **Complete a SSB Test with MatrixOne**
 
-Star Schema Benchmark（SSB）Test is a popular scenario for OLAP database performance tests. By going through this tutorial, you’ll learn how to complete a SSB Test with MatrixOne.
+The Star Schema Benchmark（SSB）Test is a popular scenario for OLAP database performance tests. By going through this tutorial, you’ll learn how to complete a SSB Test with MatrixOne.
 
-In v0.1.0, only single table can work in MatrixOne. The following contents can be followed to data generation, data importing and querying.
+In v0.1.0, only single table can work in MatrixOne. The following contents can be followed for generating data, importing data, and querying data.
 
 ## **Before you begin**
 
 Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
   
-
 ## **1. Compile dbgen**
 
 ```
@@ -28,7 +27,6 @@ $ ./dbgen -s 1 -T p
 $ ./dbgen -s 1 -T s
 $ ./dbgen -s 1 -T d
 ```
-
 
 ## **3. Create tables in MatrixOne**
 
@@ -157,10 +155,10 @@ CREATE TABLE lineorder_flat(
 );
 ```
 
-
 ## **4. Load data into the created tables**
 
 Modify the parameter of system_vars_config.toml to a larger one in matrixone directory, such as 10GB. And restart MatrixOne service.
+
 ```
 max-entry-bytes = "10GB"
 ```
@@ -181,7 +179,7 @@ load data infile '/ssb-dbgen-path/lineorder.tbl' into table lineorder FIELDS TER
 
 Then you can query data in MatrixOne with the created table. 
 If you want to run a single table SSB query test, there is still one more data files needed for lineorder_flat. You can get the data files directly:
-> https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
+> <https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2>
 
 Load data into lineorder_flat.
 
@@ -192,6 +190,7 @@ load data infile '/ssb-dbgen-path/lineorder_flat.tbl ' into table lineorder_flat
 ## **5. Run SSB Queries**
 
 ### **Flat table queries**
+
 ```sql
 --Q1.1
 SELECT sum(LO_EXTENDEDPRICE * LO_DISCOUNT) AS revenue FROM lineorder_flat WHERE year(LO_ORDERDATE)=1993 AND LO_DISCOUNT BETWEEN 1 AND 3 AND LO_QUANTITY < 25;

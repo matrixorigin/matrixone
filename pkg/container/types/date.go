@@ -16,6 +16,9 @@ package types
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -42,51 +45,86 @@ const (
 
 var startupTime time.Time
 var localTZ int64
+var unixEpoch int64 // second unit, 1970-1-1 00:00:00 since 1-1-1 00:00:00
 
 func init() {
 	startupTime = time.Now()
 	_, offset := startupTime.Zone()
 	localTZ = int64(offset)
+	unixEpoch = FromClock(1970, 1, 1, 0, 0, 0, 0).sec()
 }
 
 var (
-	errIncorrectDateValue = errors.New(errno.DataException, "Incorrect date value")
+	ErrIncorrectDateValue = errors.New(errno.DataException, "Incorrect date value")
 
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 	//regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
+	errInvalidDateAddInterval = errors.New(errno.DataException, "Invalid date result")
 )
 
 const (
 	MaxDateYear    = 9999
-	MinDateYear    = 0
+	MinDateYear    = 1
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
+)
+
+type TimeType int32
+
+const (
+	DateType      = 0
+	DateTimeType  = 1
+	TimeStampType = 2
 )
 
 // ParseDate will parse a string to be a Date
 // Support Format:
 // `yyyy-mm-dd`
+// `yyyy-mm-d`
+// `yyyy-m-dd`
+// `yyyy-m-d`
 // `yyyymmdd`
 func ParseDate(s string) (Date, error) {
 	var y int32
 	var m, d uint8
 
 	if len(s) < 8 {
-		return -1, errIncorrectDateValue
+		return -1, ErrIncorrectDateValue
 	}
 
 	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
-		if len(s) != 10 || s[7] != '-' {
-			return -1, errIncorrectDateValue
+		if len(s) < 8 || len(s) > 10 {
+			return -1, ErrIncorrectDateValue
 		}
-		m = (s[5]-'0')*10 + (s[6] - '0')
-		d = (s[8]-'0')*10 + (s[9] - '0')
+		if len(s) == 8 {
+			if s[6] != '-' {
+				return -1, ErrIncorrectDateValue
+			}
+			m = s[5] - '0'
+			d = s[7] - '0'
+		} else if len(s) == 9 {
+			if s[6] == '-' {
+				m = s[5] - '0'
+				d = (s[7]-'0')*10 + (s[8] - '0')
+			} else if s[7] == '-' {
+				m = (s[5]-'0')*10 + (s[6] - '0')
+				d = s[8] - '0'
+			} else {
+				return -1, ErrIncorrectDateValue
+			}
+		} else {
+			if s[7] != '-' {
+				return -1, ErrIncorrectDateValue
+			}
+			m = (s[5]-'0')*10 + (s[6] - '0')
+			d = (s[8]-'0')*10 + (s[9] - '0')
+		}
 	} else {
 		if len(s) != 8 {
-			return -1, errIncorrectDateValue
+			return -1, ErrIncorrectDateValue
 		}
 		m = (s[4]-'0')*10 + (s[5] - '0')
 		d = (s[6]-'0')*10 + (s[7] - '0')
@@ -95,9 +133,77 @@ func ParseDate(s string) (Date, error) {
 	if validDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
-	return -1, errIncorrectDateValue
+	return -1, ErrIncorrectDateValue
 }
 
+// ParseDate will parse a string to be a Date (this is used for cast string to date,it's different from above)
+// Support Format: we exchange '.' with '-' anyway.
+// `yyyy-mm-dd`
+// `yyyymmdd`
+// `yyyy-mm.dd`
+// `yyyy-mm.dd hh`
+// `yyyy-mm.dd hh:mm:ss`
+// `yyyy-mm.dd hh:mm:ss.(msc)`
+func ParseDateCast(s string) (Date, error) {
+	var y int32
+	var m, d uint8
+	//special case
+	flag_spcial, _ := regexp.MatchString("^[0-9]{4}[.|-]{1}[0-9]{2}$", s)
+	if flag_spcial {
+		return -1, ErrIncorrectDateValue
+	}
+	//if it's pure number series like yyyymmdd,it must be 8 or 6 digits, otherwise there will be obfuscate
+	flag1, _ := regexp.MatchString("^[0-9]{4}[0-9]{1,2}[0-9]{1,2}$", s)
+	//the reg rule test: here refers to https://regex101.com/r/NlaiAo/1
+	flag2, _ := regexp.MatchString("^[0-9]{4}[.|-]{0,1}[0-9]{1,2}[.|-]{0,1}[0-9]{1,2}([ ](([0-9]{1,2})|([0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]*){0,1}))){0,1}$", s)
+	if !flag2 {
+		return -1, ErrIncorrectDateValue
+	}
+	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
+	if flag1 {
+		if len(s) == 8 {
+			m = (s[4]-'0')*10 + (s[5] - '0')
+			d = (s[6]-'0')*10 + (s[7] - '0')
+		} else if len(s) == 6 {
+			m = (s[4] - '0')
+			d = (s[5] - '0')
+		} else {
+			return -1, ErrIncorrectDateValue
+		}
+	} else {
+		// if len(s) < 8 {
+		// 	return -1, errIncorrectDateValue
+		// }
+		strs := strings.Split(s, " ")
+		strs = strings.FieldsFunc(strs[0], func(r rune) bool {
+			return r == '.' || r == '-'
+		})
+		v, _ := strconv.ParseUint(strs[1], 10, 8)
+		m = uint8(v)
+		v, _ = strconv.ParseUint(strs[2], 10, 8)
+		d = uint8(v)
+		// if s[4] == '-' {
+		// 	if len(s) != 10 && len(s) != 13 || (s[7] != '-' && s[7] != '.') {
+		// 		return -1, errIncorrectDateValue
+		// 	}
+		// 	m = (s[5]-'0')*10 + (s[6] - '0')
+		// 	d = (s[8]-'0')*10 + (s[9] - '0')
+		// } else {
+		// 	if len(s) != 8 {
+		// 		return -1, errIncorrectDateValue
+		// 	}
+		// 	m = (s[4]-'0')*10 + (s[5] - '0')
+		// 	d = (s[6]-'0')*10 + (s[7] - '0')
+		// }
+	}
+
+	if validDate(y, m, d) {
+		return FromCalendar(y, m, d), nil
+	}
+	return -1, ErrIncorrectDateValue
+}
+
+// date[0001-01-01 to 9999-12-31]
 func validDate(year int32, month, day uint8) bool {
 	if year >= MinDateYear && year <= MaxDateYear {
 		if MinMonthInYear <= month && month <= MaxMonthInYear {
@@ -197,6 +303,43 @@ func (d Date) Year() uint16 {
 	year := uint16(y) + 1
 
 	return year
+}
+
+func (d Date) YearMonth() uint32 {
+	year, month, _, _ := d.Calendar(true)
+	yearStr := fmt.Sprintf("%04d", year)
+	monthStr := fmt.Sprintf("%02d", month)
+	// fmt.Println(yearStr, monthStr, "--------")
+	result, _ := strconv.ParseUint(yearStr+monthStr, 10, 32)
+	// fmt.Println(result)
+	return uint32(result)
+}
+
+func (d Date) YearMonthStr() string {
+	year, month, _, _ := d.Calendar(true)
+	yearStr := fmt.Sprintf("%04d", year)
+	monthStr := fmt.Sprintf("%02d", month)
+	return yearStr + "-" + monthStr
+}
+
+var monthToQuarter = map[uint8]uint32{
+	1:  1,
+	2:  1,
+	3:  1,
+	4:  2,
+	5:  2,
+	6:  2,
+	7:  3,
+	8:  3,
+	9:  3,
+	10: 4,
+	11: 4,
+	12: 4,
+}
+
+func (d Date) Quarter() uint32 {
+	_, month, _, _ := d.Calendar(true)
+	return monthToQuarter[month]
 }
 
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
@@ -359,6 +502,28 @@ func (d Date) WeekOfYear() (year int32, week uint8) {
 	return year, uint8((yday-1)/7 + 1)
 }
 
+func (d Date) WeekOfYear2() uint8 {
+	// According to the rule that the first calendar week of a calendar year is
+	// the week including the first Thursday of that year, and that the last one is
+	// the week immediately preceding the first calendar week of the next calendar year.
+	// See https://www.iso.org/obp/ui#iso:std:iso:8601:-1:ed-1:v1:en:term:3.1.1.23 for details.
+
+	// weeks start with Monday
+	// Monday Tuesday Wednesday Thursday Friday Saturday Sunday
+	// 1      2       3         4        5      6        7
+	// +3     +2      +1        0        -1     -2       -3
+	// the offset to Thursday
+	delta := 4 - int32(d.DayOfWeek())
+	// handle Sunday
+	if delta == 4 {
+		delta = -3
+	}
+	// find the Thursday of the calendar week
+	d = Date(int32(d) + delta)
+	_, _, _, yday := d.Calendar(false)
+	return uint8((yday-1)/7 + 1)
+}
+
 func isLeap(year int32) bool {
 	return year%4 == 0 && (year%100 != 0 || year%400 == 0)
 }
@@ -367,7 +532,26 @@ func (d Date) ToTime() Datetime {
 	return Datetime(int64(d)*secsPerDay) << 20
 }
 
+func DateToTimestamp(xs []Date, rs []Timestamp) ([]Timestamp, error) {
+	for i, x := range xs {
+		rs[i] = x.ToTimeUTC()
+	}
+	return rs, nil
+}
+
 func (d Date) Month() uint8 {
 	_, month, _, _ := d.Calendar(true)
 	return month
+}
+
+func LastDay(year uint16, month uint8) int {
+	if isLeap(int32(year)) {
+		return int(leapYearMonthDays[month-1])
+	}
+	return int(flatYearMonthDays[month-1])
+}
+
+func (d Date) Day() uint8 {
+	_, _, day, _ := d.Calendar(true)
+	return day
 }

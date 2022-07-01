@@ -44,6 +44,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strconv"
 	"strings"
@@ -122,6 +123,21 @@ import (
 // void scale_int128_by_10(void* a, void* result) {
 //      *(__int128*)result = (*(__int128*)a) * 10;
 // }
+// void align_int128_using_scale_diff(void* src, void* dst, void* length, void* scale_diff) {
+//		__int128 scale = 1;
+// 		__int128* src_int128_p = (__int128*)src;
+// 		__int128* dst_int128_p = (__int128*)dst;
+// // the maximum scale_diff is 38, so this loop cost constant time
+//		for (int i = 0; i < *(int32_t*)scale_diff; i++) {
+//			scale *= 10;
+// 		}
+// 		for (int i = 0; i < *(int64_t*)length; i++) {
+//      	*dst_int128_p = (*src_int128_p) * scale;
+// 			src_int128_p++;
+// 			dst_int128_p++;
+// 		}
+// 		return;
+// }
 // void div_int128_by_10(void* a, void* result) {
 //      *(__int128*)result = (*(__int128*)a) / 10;
 // }
@@ -133,6 +149,9 @@ import (
 // }
 // void int128_is_negative(void* a, void* result) {
 //      *(bool*)result = (*(__int128*)a) < 0;
+// }
+// void int128_is_positive(void* a, void* result) {
+//      *(bool*)result = (*(__int128*)a) > 0;
 // }
 // void int128_is_zero(void* a, void* result) {
 //      *(bool*)result = (*(__int128*)a) == 0;
@@ -154,8 +173,25 @@ import (
 // }
 import "C"
 
+var Decimal128Max = Decimal128{}
+var Decimal128Min = Decimal128{}
+
+func init() {
+	Decimal128Max, _ = ParseStringToDecimal128("99999999999999999999999999999999999999", 38, 0)
+	Decimal128Min, _ = ParseStringToDecimal128("-99999999999999999999999999999999999999", 38, 0)
+}
+
 func ScaleDecimal64(a Decimal64, b int64) (result Decimal64) {
 	return Decimal64(int64(a) * b)
+}
+
+func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, scaleDiff int32) []Decimal64 {
+	scale := int64(math.Pow10(int(scaleDiff)))
+	length := len(src)
+	for i := 0; i < length; i++ {
+		dst[i] = Decimal64(int64(src[i]) * scale)
+	}
+	return dst
 }
 
 func ScaleDecimal64By10(a Decimal64) (result Decimal64) {
@@ -172,6 +208,7 @@ func CompareDecimal64Decimal64Aligned(a, b Decimal64) (result int64) {
 	}
 }
 
+// CompareDecimal64Decimal64 returns -1 if a < b, returns 1 if a > b, returns 0 if a == b
 func CompareDecimal64Decimal64(a, b Decimal64, aScale, bScale int32) (result int64) {
 	if aScale > bScale {
 		scaleDiff := aScale - bScale
@@ -199,7 +236,7 @@ func CompareDecimal128Decimal128(a, b Decimal128, aScale, bScale int32) (result 
 		scaleDiff := aScale - bScale
 		bScaled := b
 		for i := 0; i < int(scaleDiff); i++ {
-			bScaled = ScaleDecimal128By10(b)
+			bScaled = ScaleDecimal128By10(bScaled)
 		}
 		result = CompareDecimal128Decimal128Aligned(a, bScaled)
 	} else if aScale < bScale {
@@ -213,6 +250,12 @@ func CompareDecimal128Decimal128(a, b Decimal128, aScale, bScale int32) (result 
 		result = CompareDecimal128Decimal128Aligned(a, b)
 	}
 	return result
+}
+
+// void align_int128_using_scale_diff(void* src, void* dst, void* length, void* scale_diff) {
+func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, scaleDiff int32) {
+	length := int64(len(src))
+	C.align_int128_using_scale_diff(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), unsafe.Pointer(&length), unsafe.Pointer(&scaleDiff))
 }
 
 func ScaleDecimal128By10(a Decimal128) (result Decimal128) {
@@ -230,11 +273,24 @@ func Decimal64Decimal64Mul(a Decimal64, b Decimal64) (result Decimal128) {
 	return result
 }
 
-func Decimal128Decimal128Mul(a Decimal128, b Decimal128) (result Decimal128) {
-	C.mul_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+func Decimal64Int64Mul(a Decimal64, b int64) (result Decimal64) {
+	result = Decimal64(int64(a) * b)
 	return result
 }
 
+func Decimal128Decimal128Mul(a Decimal128, b Decimal128) (result Decimal128) {
+	C.mul_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+
+	if Decimal128IsNotZero(a) && Decimal128Decimal128DivAligned(result, a) != b {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal multiply overflow"))
+	}
+	return result
+}
+
+func Decimal128Int64Mul(a Decimal128, b int64) (result Decimal128) {
+	C.mul_int128_int64(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	return result
+}
 func InitDecimal128(value int64) (result Decimal128) {
 	if value == 1 {
 		C.init_int128_as_1(unsafe.Pointer(&result))
@@ -245,6 +301,10 @@ func InitDecimal128(value int64) (result Decimal128) {
 		C.mul_int128_int64(unsafe.Pointer(&result), unsafe.Pointer(&value), unsafe.Pointer(&result))
 	}
 	return result
+}
+
+func InitDecimal64(value int64, scale int64) (result Decimal64) {
+	return Decimal64(int64(math.Pow10(int(scale))) * value)
 }
 
 func InitDecimal128UsingUint(value uint64) (result Decimal128) {
@@ -259,6 +319,11 @@ func InitDecimal128UsingUint(value uint64) (result Decimal128) {
 
 func Decimal128IsNegative(a Decimal128) (result bool) {
 	C.int128_is_negative(unsafe.Pointer(&a), unsafe.Pointer(&result))
+	return result
+}
+
+func Decimal128IsPositive(a Decimal128) (result bool) {
+	C.int128_is_positive(unsafe.Pointer(&a), unsafe.Pointer(&result))
 	return result
 }
 
@@ -287,9 +352,51 @@ func NegDecimal128(a Decimal128) (result Decimal128) {
 	return result
 }
 
+// this implementation is bad, tangling, but it works,
+// wrote 50+ test cases, hoping to mitigate the pain of  my conscience, it didn't
+// I failed to find an elegant approach to support scientific notation, what a pathetic loser...
+// decimalStringPreprocess convert input decimal string to its internal representation form,
+// for example:  			Decimal(10, 5)    --------> 	converted result
+// 			input:			"12345.6789" 						"1234567890"
+// 							"12345.67"							"1234567000"
+// 							"-12345.67"							"1234567000" neg == true
+// 							"12345.123451"  					"1234512345"
+//							"12345.123456"						"1234512345" carry == true, the result is rounded(round away from zero)
+// 							"0.12345e5"							"1234500000"
+//							"0.12345e6"							err == "out of range"
+// 							"0.12345e-3"						"12"
+// 							"0.12345E-3"						"12"
+//							"0.126"								"12" carry == true
 func decimalStringPreprocess(s string, precision, scale int32) (result []byte, carry bool, neg bool, err error) {
 	if s == "" {
-		return result, carry, neg, errors.New("invalid decimal string")
+		return []byte("0"), false, false, errors.New("invalid decimal string")
+	}
+	if len(s) >= 50 {
+		s = s[:50] // to prevent attack,
+	}
+	s = strings.TrimSpace(s)
+	exponent := 0
+	if strings.Contains(s, "e") {
+		s2 := strings.Split(s, "e")
+		if len(s2) > 2 {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		exponent, err = strconv.Atoi(s2[1])
+		if err != nil {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		s = s2[0]
+	}
+	if strings.Contains(s, "E") {
+		s2 := strings.Split(s, "E")
+		if len(s2) > 2 {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		exponent, err = strconv.Atoi(s2[1])
+		if err != nil {
+			return []byte(""), false, false, errors.New("invalid decimal string")
+		}
+		s = s2[0]
 	}
 	parts := strings.Split(s, ".")
 	partsNumber := len(parts)
@@ -305,8 +412,44 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 				part0Bytes = part0Bytes[1:]
 			}
 		}
+		part0Bytes = []byte(strings.TrimLeft(string(part0Bytes), "0"))
+		if exponent > 0 {
+			lengthOfPart1Bytes := len(part1Bytes)
+			if lengthOfPart1Bytes > exponent {
+				part0Bytes = append(part0Bytes, part1Bytes[:exponent]...)
+				part1Bytes = part1Bytes[exponent:]
+			} else if lengthOfPart1Bytes == exponent {
+				part0Bytes = append(part0Bytes, part1Bytes...)
+				part1Bytes = []byte("")
+			} else {
+				paddingZeros := exponent - lengthOfPart1Bytes
+				part0Bytes = append(part0Bytes, part1Bytes...)
+				for i := 0; i < paddingZeros; i++ {
+					part0Bytes = append(part0Bytes, '0')
+				}
+				part1Bytes = []byte("")
+			}
+		}
+		if exponent < 0 {
+			exponentAbs := -exponent
+			lengthOfPart0Bytes := len(part0Bytes)
+			if lengthOfPart0Bytes > exponentAbs {
+				part1Bytes = append(part0Bytes[lengthOfPart0Bytes-exponentAbs:], part1Bytes...)
+				part0Bytes = part0Bytes[:lengthOfPart0Bytes-exponentAbs]
+			} else if lengthOfPart0Bytes == exponentAbs {
+				part1Bytes = append(part0Bytes, part1Bytes...)
+				part0Bytes = []byte("")
+			} else {
+				paddingZeros := exponentAbs - lengthOfPart0Bytes
+				part1Bytes = append(part0Bytes, part1Bytes...)
+				for i := 0; i < paddingZeros; i++ {
+					part1Bytes = append([]byte("0"), part1Bytes...)
+				}
+				part0Bytes = []byte("")
+			}
+		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123.45" is invalid for Decimal(5, 3)
-			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+			return []byte(""), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
 		}
 		if len(part1Bytes) > int(scale) {
 			for i := int(scale); i < len(part1Bytes); i++ {
@@ -326,7 +469,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 		}
 		result = append(part0Bytes, part1Bytes...)
 		return result, carry, neg, nil
-	} else if partsNumber == 1 { // this means the input string is of the form "123",
+	} else if partsNumber == 1 { // this means the input string is of the form "123", or "123e3", "123e-3"
 		part0Bytes := []byte(parts[0])
 		if part0Bytes[0] == '+' {
 			part0Bytes = part0Bytes[1:]
@@ -335,16 +478,59 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, c
 			neg = true
 			part0Bytes = part0Bytes[1:]
 		}
-		if len(part0Bytes) > int(precision-scale) { // for example, input "123" is invalid for Decimal(5, 3)
-			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+		part0Bytes = []byte(strings.TrimLeft(string(part0Bytes), "0"))
+		if exponent > 0 {
+			for i := 0; i < int(scale)+exponent; i++ {
+				part0Bytes = append(part0Bytes, '0')
+			}
+			if len(part0Bytes) > int(precision) { // for example, input "52345e3" is invalid for Decimal(10, 3)
+				return []byte("0"), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
+			}
+			return part0Bytes, carry, neg, nil
+		} else if exponent < 0 {
+			exponentAbs := -exponent
+			lengthOfPart0Bytes := len(part0Bytes)
+			if lengthOfPart0Bytes < exponentAbs {
+				lengthOfPart0BytesPlusScale := lengthOfPart0Bytes + int(scale)
+				if lengthOfPart0BytesPlusScale < exponentAbs {
+					return []byte("0"), false, false, nil
+				} else {
+					for i := 0; i < int(scale); i++ {
+						part0Bytes = append(part0Bytes, '0')
+					}
+					remaining := part0Bytes[:lengthOfPart0BytesPlusScale-exponentAbs]
+					if len(part0Bytes) > lengthOfPart0BytesPlusScale-exponentAbs {
+						if part0Bytes[lengthOfPart0BytesPlusScale-exponentAbs] >= '5' && part0Bytes[lengthOfPart0BytesPlusScale-exponentAbs] <= '9' {
+							carry = true
+						}
+					}
+					return remaining, carry, neg, nil
+				}
+			} else {
+				paddingZeros := int(scale) - lengthOfPart0Bytes
+				if paddingZeros >= 0 {
+					for i := 0; i < paddingZeros; i++ {
+						part0Bytes = append(part0Bytes, '0')
+					}
+				} else {
+					if part0Bytes[scale] >= '5' && part0Bytes[scale] <= '9' {
+						carry = true
+					}
+					part0Bytes = part0Bytes[:scale]
+				}
+				return part0Bytes, carry, neg, nil
+			}
+		} else {
+			for i := 0; i < int(scale); i++ {
+				part0Bytes = append(part0Bytes, '0')
+			}
+			if len(part0Bytes) > int(precision) { // for example, input "12345678" is invalid for Decimal(10, 3)
+				return []byte("0"), false, false, fmt.Errorf("input decimal value out of range for Decimal(%d, %d)", precision, scale)
+			}
+			return part0Bytes, carry, neg, nil
 		}
-		for i := 0; i < int(scale); i++ {
-			part0Bytes = append(part0Bytes, '0')
-		}
-		result = part0Bytes
-		return result, carry, neg, nil
 	} else {
-		return result, carry, neg, errors.New("invalid decimal string")
+		return []byte(""), false, false, errors.New("invalid decimal string")
 	}
 }
 
@@ -449,7 +635,7 @@ func (a Decimal128) Decimal128ToString(scale int32) []byte {
 	result := ""
 	neg := Decimal128IsNegative(a)
 	notZero := Decimal128IsNotZero(a)
-	if notZero == false {
+	if !notZero {
 		return []byte("0")
 	}
 	tmp := a
@@ -499,6 +685,13 @@ func Decimal64Add(a, b Decimal64, aScale, bScale int32) (result Decimal64) {
 
 func Decimal64AddAligned(a, b Decimal64) (result Decimal64) {
 	result = Decimal64(int64(a) + int64(b))
+
+	if a > 0 && b > 0 && result <= 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
+	}
+	if a < 0 && b < 0 && result >= 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
+	}
 	return result
 }
 
@@ -521,6 +714,12 @@ func Decimal64Sub(a, b Decimal64, aScale, bScale int32) (result Decimal64) {
 
 func Decimal64SubAligned(a, b Decimal64) (result Decimal64) {
 	result = Decimal64(int64(a) - int64(b))
+	if a < 0 && b > 0 && result >= 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
+	}
+	if a > 0 && b < 0 && result <= 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
+	}
 	return result
 }
 
@@ -547,6 +746,12 @@ func Decimal128Add(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
 
 func Decimal128AddAligned(a, b Decimal128) (result Decimal128) {
 	C.add_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	if Decimal128IsPositive(a) && Decimal128IsPositive(b) && (Decimal128IsNegative(result) || Decimal128IsZero(result)) {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
+	}
+	if Decimal128IsNegative(a) && Decimal128IsNegative(b) && (Decimal128IsPositive(result) || Decimal128IsZero(result)) {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal add overflow"))
+	}
 	return result
 }
 
@@ -573,6 +778,12 @@ func Decimal128Sub(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
 
 func Decimal128SubAligned(a, b Decimal128) (result Decimal128) {
 	C.sub_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	if Decimal128IsNegative(a) && Decimal128IsPositive(b) && (Decimal128IsPositive(result) || Decimal128IsZero(result)) {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
+	}
+	if Decimal128IsPositive(a) && Decimal128IsNegative(b) && (Decimal128IsNegative(result) || Decimal128IsZero(result)) {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal subtraction overflow"))
+	}
 	return result
 }
 
@@ -585,12 +796,23 @@ func Decimal64Decimal64Div(a, b Decimal64, aScale, bScale int32) (result Decimal
 	return result
 }
 
+func Decimal128Int64Div(a Decimal128, b int64) (result Decimal128) {
+	aScaled := a
+	C.div_int128_int64(unsafe.Pointer(&aScaled), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	return result
+}
+
 func Decimal128Decimal128Div(a, b Decimal128, aScale, bScale int32) (result Decimal128) {
 	aScaled := a
 	for i := 0; i < int(bScale); i++ {
 		aScaled = ScaleDecimal128By10(aScaled)
 	}
 	C.div_int128_int128(unsafe.Pointer(&aScaled), unsafe.Pointer(&b), unsafe.Pointer(&result))
+	return result
+}
+
+func Decimal128Decimal128DivAligned(a, b Decimal128) (result Decimal128) {
+	C.div_int128_int128(unsafe.Pointer(&a), unsafe.Pointer(&b), unsafe.Pointer(&result))
 	return result
 }
 

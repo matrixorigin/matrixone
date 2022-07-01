@@ -1,6 +1,6 @@
 # **Build a simple stock analysis Python App with MatrixOne**
 
-This tutorial shows you how build a simple Python application with MatrixOne.
+This tutorial shows you how to build a simple Python application with MatrixOne.
 
 ## **About the demo**
 
@@ -12,7 +12,7 @@ Every day after the market closes, we compare the P/E and P/B value with the his
 
 ## **Before you start**
 
-Before you start, you need to have a Tushare account and get an API token. If you haven't signed up for Tushare, you can sign it up at [https://tushare.pro/](https://tushare.pro/) and you can get your API token at [https://tushare.pro/user/token#](https://tushare.pro/user/token#).
+Before you start, you need to have a Tushare account and get an API token. If you haven't signed up for Tushare, you can sign up for it at [https://tushare.pro/](https://tushare.pro/) and you can find your API token at [https://tushare.pro/user/token#](https://tushare.pro/user/token#).
 
 !!! info 
     Tushare is an open source utility for crawling historical data of China stocks. It has a complete dataset, but pay attention to their rules of API access limit and frequency. 
@@ -33,13 +33,11 @@ pip3 install -r requirements.txt
 !!! info 
     `Pymysql` is the only ORM tool supported by MatrixOne. The other python MySQL ORM tools as `SQLAlchemy`, `mysql-connector`, `MySQLdb` are not supported yet.
 
-
-
 ## **Step1: prepare and load historical dataset**
 
-At first, we need to load the historical stock data in MatrixOne. 
+First, we need to load the historical stock data in MatrixOne. 
 
-As `Tushare` interface only allows a fetch of 5000 rows of data at once, we just collect the latest 5000 trade days data for each stock. Each year there are roughly 250 trade dates. 5000 makes almost 20 years of data, which largely satisfies our demo.
+As `Tushare` interface only allows a fetch of 5000 rows of data at once, we only have to collect the latest 5000 trade days data for each stock. Each year there are roughly 250 trade dates. 5000 makes almost 20 years of data, which largely satisfies our demo.
 
 The below code will set up tushare interface and get the list of stocks.
 
@@ -61,7 +59,6 @@ pool = pro.stock_basic(exchange = '',
 ```
 
 As we only need the P/E and P/B information, we call the `daily_basic` method and get each stock with data frames with `ts_code`, `trade_date`, `pe` and `pb` fields. Without any specification of start date and end date, `Tushare` will automatically output 5000 lastest records.
-
 
 ```python
 
@@ -129,7 +126,6 @@ if df.empty == False:
         cursor.executemany(" insert into pe (ts_code, trade_date,pe,pb) values (%s, %s,%s,%s)", val_to_insert)
         
 ```
-
 
 ## **Step2: find the historical lowest P/E or P/B stock**
 

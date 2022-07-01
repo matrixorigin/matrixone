@@ -34,8 +34,16 @@ var ArgAndRets_Lpad = []argsAndRet{
 
 func init() {
 	extend.FunctionRegistry["lpad"] = builtin.Lpad
-	for _, item := range ArgAndRets_Lpad {
-		overload.AppendFunctionRets(builtin.Lpad, item.args, item.ret)
+	secondArgs := []types.T{types.T_int64, types.T_int32, types.T_int16, types.T_int8, types.T_uint64, types.T_uint32,
+		types.T_uint16, types.T_uint8, types.T_float32, types.T_float64, types.T_varchar, types.T_char}
+	thirdArgs := []types.T{types.T_varchar, types.T_char, types.T_int64, types.T_int32, types.T_int16, types.T_int8,
+		types.T_uint64, types.T_uint32, types.T_uint16, types.T_uint8, types.T_float32, types.T_float64}
+	for _, a1 := range []types.T{types.T_varchar} {
+		for _, a2 := range secondArgs {
+			for _, a3 := range thirdArgs {
+				overload.AppendFunctionRets(builtin.Lpad, []types.T{a1, a2, a3}, a1)
+			}
+		}
 	}
 	extend.MultiReturnTypes[builtin.Lpad] = func(es []extend.Extend) types.T {
 		return getMultiReturnType(builtin.Lpad, es)
@@ -80,7 +88,6 @@ func init() {
 							} else {
 								offsets_temp = append(offsets_temp, offsets_temp[len(offsets_temp)-1]+4)
 							}
-
 						}
 						res := &types.Bytes{
 							Data:    []byte(temp),

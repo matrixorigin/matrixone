@@ -36,41 +36,52 @@ const (
 const (
 	DefaultRing = iota
 	AvgRing
+	AvgDecimalRing
 	CountRing
 	StarCountRing
 	ApproxCountDistinctRing
 	// Max
+	MaxBoolRing
 	MaxInt8Ring
 	MaxInt32Ring
 	MaxDateRing
 	MaxInt16Ring
 	MaxInt64Ring
 	MaxDatetimeRing
+	MaxTimestampRing
 	MaxUInt8Ring
 	MaxUInt16Ring
 	MaxUInt32Ring
 	MaxUInt64Ring
 	MaxFloat32Ring
 	MaxFloat64Ring
+	MaxDecimal64Ring
+	MaxDecimal128Ring
 	MaxStrRing
 	// Min
+	MinBoolRing
 	MinInt8Ring
 	MinInt32Ring
 	MinDateRing
 	MinInt16Ring
 	MinInt64Ring
 	MinDatetimeRing
+	MinTimestampRing
 	MinUInt8Ring
 	MinUInt16Ring
 	MinUInt32Ring
 	MinUInt64Ring
 	MinFloat32Ring
 	MinFloat64Ring
+	MinDecimal64Ring
+	MinDecimal128Ring
 	MinStrRing
 	// Sum
 	SumIntRing
 	SumUIntRing
 	SumFloatRing
+	SumDecimal64Ring
+	SumDecimal128Ring
 	// Variance
 	VarianceRing
 	// BitAnd
@@ -81,6 +92,23 @@ const (
 	BitXorRing
 	// StdDevPop
 	StdDevPopRing
+	// AnyValue
+	AnyValueBoolRing
+	AnyValueInt8Ring
+	AnyValueInt32Ring
+	AnyValueDateRing
+	AnyValueInt16Ring
+	AnyValueInt64Ring
+	AnyValueDatetimeRing
+	AnyValueUInt8Ring
+	AnyValueUInt16Ring
+	AnyValueUInt32Ring
+	AnyValueUInt64Ring
+	AnyValueFloat32Ring
+	AnyValueFloat64Ring
+	AnyValueDecimal64Ring
+	AnyValueDecimal128Ring
+	AnyValueStrRing
 )
 
 // colexec

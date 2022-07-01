@@ -58,9 +58,8 @@ func getSliceFromLeftWithLength(bytes []byte, offset int64, length int64) ([]byt
 	elemsize := int64(len(bytes))
 
 	if length < 0 {
-		length += elemsize - offset
+		length = 0
 	}
-
 	if offset >= elemsize || length < 0 {
 		return []byte{}, 0
 	}
@@ -71,7 +70,7 @@ func getSliceFromLeftWithLength(bytes []byte, offset int64, length int64) ([]byt
 func getSliceFromRight(bytes []byte, offset int64) ([]byte, int64) {
 	elemsize := int64(len(bytes))
 	if offset > elemsize {
-		return bytes[:], elemsize
+		return []byte{}, 0
 	}
 	return bytes[elemsize-offset:], offset
 }
@@ -80,18 +79,14 @@ func getSliceFromRight(bytes []byte, offset int64) ([]byte, int64) {
 func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]byte, int64) {
 	elemsize := int64(len(bytes))
 	if length < 0 {
-		length += elemsize - offset
+		length = 0
 	}
-	if length < 0 {
+	if length < 0 || offset < 0 {
 		return []byte{}, 0
 	}
 
 	if offset > elemsize {
-		if length+elemsize > offset {
-			return bytes[:min(elemsize, length+elemsize-offset)], min(elemsize, length+elemsize-offset)
-		} else {
-			return []byte{}, 0
-		}
+		return []byte{}, 0
 	}
 	return bytes[elemsize-offset : elemsize-offset+min(length, offset)], min(length, offset)
 }
@@ -287,11 +282,21 @@ func substringFromRightConstOffsetBounded(src *types.Bytes, res *types.Bytes, st
 func substringDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T,
 	lengthColumn interface{}, lengthColumnType types.T, cs []bool) *types.Bytes {
 	var retCursor uint32
-	for idx, offset := range src.Offsets {
-		cursor := offset
-		curLen := src.Lengths[idx]
-		//get substring str parameter value of bytes
-		bytes := src.Data[cursor : cursor+curLen]
+	for idx := range res.Offsets {
+		var cursor uint32
+		var curLen uint32
+		var bytes []byte
+		if cs[0] {
+			cursor = src.Offsets[0]
+			curLen = src.Lengths[0]
+			//get substring str parameter value of bytes
+			bytes = src.Data[cursor : cursor+curLen]
+		} else {
+			cursor = src.Offsets[0]
+			curLen = src.Lengths[idx]
+			//get substring str parameter value of bytes
+			bytes = src.Data[cursor : cursor+curLen]
+		}
 
 		//get substring pos parameter value
 		startValue := getColumnValue(startColumn, startColumnType, idx, cs[1])
@@ -342,6 +347,19 @@ func min(x, y int64) int64 {
 		return x
 	}
 	return y
+}
+
+// get src string value of column by index
+func getStrColumnValue(src *types.Bytes, cursor uint32, curLen uint32, isConstant bool) []byte {
+	var dstValue []byte
+	if isConstant {
+		cursor0 := src.Offsets[0]
+		curLen0 := src.Lengths[0]
+		dstValue = src.Data[cursor0 : cursor0+curLen0]
+	} else {
+		dstValue = src.Data[cursor : cursor+curLen]
+	}
+	return dstValue
 }
 
 // get value of column by index

@@ -16,6 +16,8 @@ package mergededup
 
 import (
 	"bytes"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"unsafe"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
@@ -69,7 +70,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 					continue
 				}
 				// do init work
-				if argument.ctr.initFlag == false {
+				if !argument.ctr.initFlag {
 					initHashTable(argument, bat)
 					argument.ctr.initFlag = true
 				}

@@ -24,6 +24,21 @@ type Constant interface {
 	Expr
 }
 
+type P_TYPE uint8
+
+const (
+	P_any P_TYPE = iota
+	P_hexnum
+	P_null
+	P_bool
+	P_int64
+	P_uint64
+	P_float64
+	P_char
+	P_decimal
+	P_bit
+)
+
 //the AST for the constant numeric value.
 type NumVal struct {
 	Constant
@@ -38,11 +53,12 @@ type NumVal struct {
 	//converted result
 	resInt   int64
 	resFloat float64
+	ValType  P_TYPE
 }
 
 func (node *NumVal) Format(ctx *FmtCtx) {
 	if node.origString != "" {
-		ctx.WriteString(node.origString)
+		ctx.WriteString(FormatString(node.origString))
 		return
 	}
 	switch node.Value.Kind() {
@@ -51,6 +67,37 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 	case constant.Unknown:
 		ctx.WriteString("null")
 	}
+}
+
+func FormatString(str string) string {
+	var buffer strings.Builder
+	for i, ch := range str {
+		if ch == '\n' {
+			buffer.WriteString("\\n")
+		} else if ch == '\x00' {
+			buffer.WriteString("\\0")
+		} else if ch == '\r' {
+			buffer.WriteString("\\r")
+		} else if ch == '\\' {
+			if (i + 1) < len(str) {
+				if str[i+1] == '_' || str[i+1] == '%' {
+					buffer.WriteByte('\\')
+					continue
+				}
+			}
+			buffer.WriteString("\\\\")
+		} else if ch == 8 {
+			buffer.WriteString("\\b")
+		} else if ch == 26 {
+			buffer.WriteString("\\Z")
+		} else if ch == '\t' {
+			buffer.WriteString("\\t")
+		} else {
+			buffer.WriteByte(byte(ch))
+		}
+	}
+	res := buffer.String()
+	return res
 }
 
 func (n *NumVal) String() string {
@@ -66,6 +113,15 @@ func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
 		Value:      value,
 		origString: origString,
 		negative:   negative,
+	}
+}
+
+func NewNumValWithType(value constant.Value, origString string, negative bool, typ P_TYPE) *NumVal {
+	return &NumVal{
+		Value:      value,
+		origString: origString,
+		negative:   negative,
+		ValType:    typ,
 	}
 }
 

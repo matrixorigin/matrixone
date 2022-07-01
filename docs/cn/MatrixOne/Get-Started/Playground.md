@@ -1,18 +1,19 @@
 # **Playground**
+
 [MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)提供了一个交互式工作台，可以让您直接通过浏览器来运行MatrixOne的SQL语句等功能，快速体验MatrixOne的最新能力。
  
-
 * 你可以参考[SQL参考指南](../Reference/SQL-Reference/Data-Definition-Statements/create-database.md)来熟悉相关SQL语句
 * 你可以查看[实践教程](Tutorial/SSB-test-with-matrixone.md)来学习如何使用MatrixOne来进行SSB、NYC测试等最佳实践。
 
 ## **限制**
+
 MatixOrigin Playground只能在**只读**模式下进行操作，因此相关DDL命令和部分改变数据的DML命令不可用，具体限制如下：
 
 * **DDL** 命令不可用:  
 ```create/drop table``` , ```truncate``` , ```update``` , ```set``` ,```use```  
   
 * 以下展示的**DML** 命令不可用：  
-```insert``` , ```replace``` , ```delete```,```select into ```  
+```insert``` , ```replace``` , ```delete```,```select into```  
 
 * ```commit``` 不可用
 
@@ -42,18 +43,18 @@ SHOW TABLES；
     <font size=3>查询结构显示于右下侧</font>  
     <font size=3>点击**Continue**按键来进行下一步</font>  
 
-
-
 ### **运行查询语句**
 
 现在，您可以使用我们提供的SQL命令来查询数据。 
 例如：
+
 * **运行 Q1.1**
 
 ```
 select sum(lo_revenue) as revenue
 from lineorder join dates on lo_orderdate = d_datekey；
 ```
+
 此外，你可以在查询中使用`join`连接：
 
 * **运行 Q1.2**
@@ -65,6 +66,7 @@ join dates on lo_orderdate = d_datekey；
 ```
 
 也可以使用```group by``` 与```order by``` 命令：
+
 * **运行 Q2.1**
 
 ```
@@ -79,8 +81,8 @@ order by d_year, p_brand;
 
 **Playground**提供了更多查询命令，您可以自行测试。
 
-
 ## **相关信息**
+
 本页面介绍了Playground的特性、限制和示例。有关使用MatrixOne时所需的其他更多信息，可参阅以下内容：
 
 * [安装单机版MatrixOne](install-standalone-matrixone.md)

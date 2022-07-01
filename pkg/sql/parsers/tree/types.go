@@ -129,7 +129,10 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 	ctx.WriteString(fs)
 
 	if node.Unsigned {
-		ctx.WriteString(" unsigned")
+		if fs != "" {
+			ctx.WriteByte(' ')
+		}
+		ctx.WriteString("unsigned")
 	}
 	if node.Zerofill {
 		ctx.WriteString(" zerofill")
@@ -138,6 +141,12 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 	switch fs {
 	case "set", "enum":
 	case "char":
+		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+	case "varchar":
 		if node.DisplayWith >= 0 {
 			ctx.WriteByte('(')
 			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))

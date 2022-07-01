@@ -1,0 +1,56 @@
+// Copyright 2022 MatrixOrigin.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+package metadata; 
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/metadata";
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+
+// DNShardRecord is DN shard metadata describing what is a DN shard. It
+// is internally used by HAKeeper to maintain how many DNs available in
+// the system. 
+message DNShardRecord {
+  // ShardID the id of the DN shard.
+  uint64 ShardID    = 1;
+  // LogShardID a DN corresponds to a unique Shard of LogService.
+  uint64 LogShardID = 2;
+  // Start A DN manages data within a range [Start, end)
+  bytes  Start      = 3;
+  // End A DN manages data within a range [Start, end)
+  bytes  End        = 4;
+};
+
+// DNShard 
+message DNShard {
+  // DNShard extends DNShardRecord
+  DNShardRecord DNShardRecord = 1 [(gogoproto.nullable) = false, (gogoproto.embed) = true];
+  // ReplicaID only one replica for one DN. The ReplicaID is specified at
+  // the time the DN is created. DN restart ReplicaID will not change, when
+  // a DN is migrated to another node, the ReplicaID will be reset.
+  uint64 ReplicaID  = 2;
+  // Address is DN's external service address.
+  string Address    = 3;
+};
+
+// LogShardRecord is Log Shard Metadata describing what is a Log shard. It is
+// internally used by the HAKeeper to maintain how many Log shards are available
+// in the system.
+message LogShardRecord {
+  // ShardID is the id of the Log Shard. 
+  uint64 ShardID = 1;
+  // NumberOfReplicas is the number of replicas in the shard.
+  uint64 NumberOfReplicas = 2;
+  // Name is the human readable name of the shard given by the DN.
+  string Name = 3;
+};

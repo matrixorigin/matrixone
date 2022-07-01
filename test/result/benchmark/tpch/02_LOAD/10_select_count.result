@@ -1,0 +1,22 @@
+use tpch;
+select count(*) from customer;
+count(*)
+150
+select count(*) from lineitem;
+count(*)
+6005
+select count(*) from nation;
+count(*)
+25
+select count(*) from orders;
+count(*)
+1500
+select count(*) from part;
+count(*)
+200
+select count(*) from partsupp;
+count(*)
+800
+select count(*) from supplier;
+count(*)
+10

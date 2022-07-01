@@ -16,8 +16,8 @@
 package mysql
     
 import (
+	"fmt"
     "strings"
-    "strconv"
     "go/constant"
 
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -168,18 +168,18 @@ import (
 %left <str> UNION
 %token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT SET LOCK KEYS
-%token <str> VALUES LAST_INSERT_ID
+%token <str> VALUES
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
 %left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE
 %left <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
 %left <str> '(' ',' ')'
-%token <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
-%token <item> INTEGRAL HEX HEXNUM BIT_LITERAL FLOAT
+%nonassoc LOWER_THAN_STRING
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
+%token <item> INTEGRAL HEX BIT_LITERAL FLOAT HEXNUM
 %token <str> NULL TRUE FALSE
-%left EMPTY_FROM_CLAUSE
-%nonassoc <str> LOWER_THAN_CHARSET
+%nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
 %right <str> UNIQUE KEY
 %left <str> OR
@@ -206,13 +206,16 @@ import (
 
 // Type
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
-%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC
+%token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
 %token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8
+
+// Select option
+%token <str> SQL_SMALL_RESULT SQL_BIG_RESULT SQL_BUFFER_RESULT
 
 // Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD
@@ -225,14 +228,14 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> TYPE
+%token <str> TYPE ANY SOME
 
 // MO table option
 %token <str> PROPERTIES
 
 // Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
-%token <str> ZONEMAP
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
 %token <str> EXPIRE ACCOUNT UNLOCK DAY NEVER
@@ -280,7 +283,7 @@ import (
 %token <str> SQL_TSI_SECOND SQL_TSI_MINUTE
 
 // With
-%token <str> RECURSIVE
+%token <str> RECURSIVE CONFIG
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION
@@ -303,8 +306,8 @@ import (
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt
 %type <statement> drop_role_stmt drop_user_stmt
 %type <statement> create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_user_stmt update_stmt use_stmt
@@ -366,7 +369,7 @@ import (
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
 %type <str> sql_id charset_keyword db_name
-%type <str> not_keyword
+%type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
 %type <str> as_name_opt as_opt_id table_id id_or_var name_string ident
@@ -379,16 +382,16 @@ import (
 %type <userMiscOption> pwd_or_lck
 %type <userMiscOptions> pwd_or_lck_opt pwd_or_lck_list
 
-%type <expr> literal
+%type <expr> literal true_or_false
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
 %type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
 %type <exprs> expression_list row_value
-%type <expr> datatime_precision_opt datatime_precision
+%type <expr> datetime_precision_opt datetime_precision
 %type <tuple> tuple_expression
-%type <comparisonOp> comparison_operator
+%type <comparisonOp> comparison_operator and_or_some
 %type <createOption> create_option
 %type <createOptions> create_option_list_opt create_option_list
 %type <ifNotExists> not_exists_opt
@@ -413,7 +416,7 @@ import (
 %type <updateExpr> update_expression
 %type <updateExprs> update_list
 %type <completionType> completion_type
-%type <str> id_prefix_at password_opt
+%type <str> password_opt
 %type <boolVal> grant_option_opt enforce enforce_opt
 
 %type <varAssignmentExpr> var_assignment
@@ -440,7 +443,6 @@ import (
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
-%type <numVal> int_num_val
 
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
@@ -451,7 +453,7 @@ import (
 %type <str> name_confict distinct_keyword
 %type <insert> insert_data
 %type <rowsExprs> values_list
-%type <str> name_datatime_precision braces_opt name_braces
+%type <str> name_datetime_precision braces_opt name_braces
 %type <str> std_dev_pop
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
@@ -487,8 +489,8 @@ import (
 %type <epxlainOptions> utility_option_list
 %type <epxlainOption> utility_option_elem
 %type <str> utility_option_name utility_option_arg
-%type <str> explain_option_key
-%type <str> explain_foramt_value
+%type <str> explain_option_key select_option_opt
+%type <str> explain_foramt_value view_recursive_opt trim_direction
 
 %start start_command
 
@@ -681,18 +683,18 @@ system_variable:
 user_variable:
     AT_ID
     {
-        vs := strings.Split($1, ".")
-        var r string
-        if len(vs) == 2 {
-           r = vs[1]
-        } else if len(vs) == 1 {
-           r = vs[0]
-        } else {
-        	yylex.Error("variable syntax error")
-            return 1
-        }
+//        vs := strings.Split($1, ".")
+//        var r string
+//        if len(vs) == 2 {
+//           r = vs[1]
+//        } else if len(vs) == 1 {
+//           r = vs[0]
+//        } else {
+//        	yylex.Error("variable syntax error")
+//            return 1
+//        }
         $$ = &tree.VarExpr{
-            Name: r,
+            Name: $1,
             System: false,
             Global: false,
         }
@@ -836,7 +838,7 @@ field_item:
 
 field_terminator:
     STRING
-// |   HEX
+// |   HEXNUM
 // |   BIT_LITERAL
 
 duplicate_opt:
@@ -1269,7 +1271,30 @@ var_assignment:
             Value: $4,
         }
     }
-|   id_prefix_at equal_or_assignment set_expr
+|   AT_ID equal_or_assignment set_expr
+    {
+    	vs := strings.Split($1, ".")
+        var isGlobal bool
+        if strings.ToLower(vs[0]) == "global" {
+            isGlobal = true
+        }
+        var r string
+        if len(vs) == 2 {
+        	r = vs[1]
+        } else if len(vs) == 1{
+        	r = vs[0]
+        } else {
+        	yylex.Error("variable syntax error")
+            return 1
+        }
+        $$ = &tree.VarAssignmentExpr{
+            System: false,
+            Global: isGlobal,
+            Name: r,
+            Value: $3,
+        }
+    }
+|   AT_AT_ID equal_or_assignment set_expr
     {
     	vs := strings.Split($1, ".")
         var isGlobal bool
@@ -1296,22 +1321,22 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             Name: $1,
-            Value: tree.NewNumVal(constant.MakeString($2), $2, false),
+            Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
         }
     }
 |   NAMES charset_name COLLATE DEFAULT
     {
         $$ = &tree.VarAssignmentExpr{
             Name: $1,
-            Value: tree.NewNumVal(constant.MakeString($2), $2, false),
+            Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
         }
     }
 |   NAMES charset_name COLLATE name_string
     {
         $$ = &tree.VarAssignmentExpr{
             Name: $1,
-            Value: tree.NewNumVal(constant.MakeString($2), $2, false),
-            Reserved: tree.NewNumVal(constant.MakeString($4), $4, false),
+            Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
+            Reserved: tree.NewNumValWithType(constant.MakeString($4), $4, false, tree.P_char),
         }
     }
 |   NAMES DEFAULT
@@ -1325,7 +1350,7 @@ var_assignment:
     {
         $$ = &tree.VarAssignmentExpr{
             Name: $1,
-            Value: tree.NewNumVal(constant.MakeString($2), $2, false),
+            Value: tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char),
         }
     }
 |   charset_keyword DEFAULT
@@ -1336,18 +1361,14 @@ var_assignment:
         }
     }
 
-id_prefix_at:
-    AT_ID
-|   AT_AT_ID
-
 set_expr:
     ON
     {
-        $$ = tree.NewNumVal(constant.MakeString($1), $1, false)
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_char)
     }
 |   BINARY
     {
-        $$ = tree.NewNumVal(constant.MakeString($1), $1, false)
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_char)
     }
 |   expr_or_default
     {
@@ -1522,29 +1543,28 @@ explain_stmt:
     }
 |   explain_sym VERBOSE explainable_stmt
     {
-	explainStmt := tree.NewExplainStmt($3, "text")
-	optionElem := tree.MakeOptionElem("verbose", "NULL")
+		explainStmt := tree.NewExplainStmt($3, "text")
+		optionElem := tree.MakeOptionElem("verbose", "NULL")
         options := tree.MakeOptions(optionElem)
-	explainStmt.Options = options
-	$$ = explainStmt
-
+		explainStmt.Options = options
+		$$ = explainStmt
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-	explainStmt := tree.NewExplainStmt($3, "text")
-	optionElem := tree.MakeOptionElem("analyze", "NULL")
+		explainStmt := tree.NewExplainStmt($3, "text")
+		optionElem := tree.MakeOptionElem("analyze", "NULL")
         options := tree.MakeOptions(optionElem)
         explainStmt.Options = options
-	$$ = explainStmt
+		$$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
         explainStmt := tree.NewExplainStmt($4, "text")
         optionElem1 := tree.MakeOptionElem("analyze", "NULL")
-	optionElem2 := tree.MakeOptionElem("verbose", "NULL")
-	options := tree.MakeOptions(optionElem1)
-	options = append(options, optionElem2)
-	explainStmt.Options = options
+		optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+		options := tree.MakeOptions(optionElem1)
+		options = append(options, optionElem2)
+		explainStmt.Options = options
         $$ = explainStmt
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
@@ -1554,6 +1574,16 @@ explain_stmt:
         $$ = explainStmt
     }
 
+explain_option_key:
+    ANALYZE
+|   VERBOSE
+|   FORMAT
+
+explain_foramt_value:
+    JSON
+|   TEXT
+
+
 explain_sym:
     EXPLAIN
 |   DESCRIBE
@@ -1562,9 +1592,9 @@ explain_sym:
 utility_option_list:
     utility_option_elem
     {
-        $$ =  tree.MakeOptions($1)
+        $$ = tree.MakeOptions($1)
     }
-| utility_option_list ',' utility_option_elem
+| 	utility_option_list ',' utility_option_elem
     {
         $$ = append($1, $3);
     }
@@ -1701,6 +1731,17 @@ show_stmt:
 |   show_variables_stmt
 |   show_status_stmt
 |   show_index_stmt
+|	show_target_filter_stmt
+
+show_target_filter_stmt:
+	SHOW CONFIG like_opt where_expression_opt
+    {
+        $$ = &tree.ShowTarget{Target: $2, Like: $3, Where: $4}
+    }
+|	SHOW charset_keyword like_opt where_expression_opt
+	{
+		$$ = &tree.ShowTarget{Target: "charset", Like: $3, Where: $4}
+	}
 
 show_index_stmt:
     SHOW index_kwd from_or_in table_name where_expression_opt
@@ -1984,7 +2025,7 @@ insert_data:
 |   select_stmt
     {
         $$ = &tree.Insert{
-            Rows: tree.NewSelect($1, nil, nil),
+            Rows: $1,
         }
     }
 |   '(' insert_column_list ')' VALUES values_list
@@ -2006,7 +2047,7 @@ insert_data:
     {
         $$ = &tree.Insert{
             Columns: $2,
-            Rows: tree.NewSelect($4, nil, nil),
+            Rows: $4,
         }
     }
 |	SET set_value_list
@@ -2509,6 +2550,23 @@ simple_select_clause:
             Having: $7,
         }
     }
+|	SELECT select_option_opt select_expression_list from_opt where_expression_opt group_by_opt having_opt
+    {
+        $$ = &tree.SelectClause{
+            Distinct: false,
+            Exprs: $3,
+            From: $4,
+            Where: $5,
+            GroupBy: $6,
+            Having: $7,
+            Option: $2,
+        }
+    }
+
+select_option_opt:
+	SQL_SMALL_RESULT
+|	SQL_BIG_RESULT
+|	SQL_BUFFER_RESULT
 
 distinct_opt:
     {
@@ -2583,10 +2641,9 @@ select_expression:
     }
 
 from_opt:
-    %prec EMPTY_FROM_CLAUSE
     {
-        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        tn := tree.NewTableName(tree.Identifier("dual"), prefix)
+    	prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        tn := tree.NewTableName(tree.Identifier(""), prefix)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
         }
@@ -2817,6 +2874,14 @@ as_name_opt:
     {
         $$ = $2
     }
+|	STRING
+	{
+		$$ = $1
+	}
+|   AS STRING
+	{
+		$$ = $2
+	}
 
 database_id:
     id_or_var
@@ -2840,6 +2905,33 @@ create_ddl_stmt:
     create_table_stmt
 |   create_database_stmt
 |   create_index_stmt
+|	create_view_stmt
+
+create_view_stmt:
+	CREATE temporary_opt view_recursive_opt VIEW table_name column_list_opt AS select_stmt
+	{
+		$$ = &tree.CreateView{
+			Name: $5,
+			ColNames: $6,
+			AsSource: $8,
+			Temporary: $2,
+			IfNotExists: false,
+		}
+	}
+|	CREATE temporary_opt view_recursive_opt VIEW IF NOT EXISTS table_name column_list_opt AS select_stmt
+    {
+		$$ = &tree.CreateView{
+        	Name: $8,
+        	ColNames: $9,
+        	AsSource: $11,
+        	Temporary: $2,
+        	IfNotExists: true,
+       }
+    }
+
+view_recursive_opt:
+	{}
+|	RECURSIVE
 
 create_user_stmt:
     CREATE USER not_exists_opt user_spec_list require_clause_opt conn_options
@@ -3700,13 +3792,11 @@ row_format_options:
     }
 
 charset_name:
-    id_or_var
-|   STRING
+	name_string
 |   BINARY
 
 collate_name:
-    id_or_var
-|   STRING
+	name_string
 |   BINARY
 
 table_name_list:
@@ -3978,7 +4068,7 @@ column_attribute_elem:
     }
 |   COMMENT_KEYWORD STRING
     {
-        $$ = tree.NewAttributeComment(tree.NewNumVal(constant.MakeString($2), $2, false))
+        $$ = tree.NewAttributeComment(tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char))
     }
 |   COLLATE collate_name
     {
@@ -4304,7 +4394,7 @@ simple_expr:
 |   CONVERT '(' expression USING charset_name ')' 
     {
         name := tree.SetUnresolvedName("convert")
-        es := tree.NewNumVal(constant.MakeString($5), $5, false)
+        es := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{$3, es},
@@ -4418,13 +4508,13 @@ cast_type:
 	        },
         }
     }
-|   DATETIME length_opt
+|   DATETIME timestamp_option_opt
     {
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family:             tree.TimestampFamily,
-		        Precision:          0,
+		        Precision:          $2,
                 FamilyString: $1,
                 DisplayWith: $2,
 		        TimePrecisionIsSet: false,
@@ -4450,11 +4540,15 @@ cast_type:
     }
 |   SIGNED integer_opt
     {
+    	name := $1
+    	if $2 != "" {
+    		name = $2
+    	}
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family: tree.IntFamily,
-                FamilyString: $1,
+                FamilyString: name,
 		        Width:  64,
 		        Locale: &locale,
 		        Oid:    uint32(defines.MYSQL_TYPE_LONGLONG),
@@ -4467,7 +4561,7 @@ cast_type:
         $$ = &tree.T{
             InternalType: tree.InternalType{
 		        Family: tree.IntFamily,
-                FamilyString: $1,
+                FamilyString: $2,
 		        Width:  64,
 		        Locale: &locale,
                 Unsigned: true,
@@ -4546,7 +4640,7 @@ function_call_aggregate:
 |   COUNT '(' '*' ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
-        es := tree.NewNumVal(constant.MakeString("*"), "*", false)
+        es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{es},
@@ -4657,12 +4751,77 @@ function_call_generic:
 |   EXTRACT '(' time_unit FROM expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
-        timeUinit := tree.SetUnresolvedName(strings.ToLower($3))
+        timeUinit := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
              Func: tree.FuncName2ResolvableFunctionReference(name),
              Exprs: tree.Exprs{timeUinit, $5},
        }
     }
+|	func_not_keyword '(' expression_list_opt ')'
+	{
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|	VARIANCE '(' func_type_opt expression ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+        }
+	}
+|	GROUP_CONCAT '(' func_type_opt expression ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+        }
+	}
+|	TRIM '(' expression ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{$3},
+        }
+	}
+|	TRIM '(' expression FROM expression ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{$3},
+        }
+	}
+|	TRIM '(' trim_direction FROM expression ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+		arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{arg1, $5},
+        }
+	}
+|	TRIM '(' trim_direction expression FROM expression ')'
+	{
+		name := tree.SetUnresolvedName(strings.ToLower($1))
+        arg1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{arg1, $4, $6},
+        }
+	}
+
+trim_direction:
+	BOTH
+|	LEADING
+|	TRAILING
 
 substr_option:
 	SUBSTRING
@@ -4705,7 +4864,7 @@ time_stamp_unit:
 |	SQL_TSI_YEAR
 
 function_call_nonkeyword:
-    CURTIME datatime_precision
+    CURTIME datetime_precision
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -4717,7 +4876,7 @@ function_call_nonkeyword:
             Exprs: es,
         }
     }
-|   SYSDATE datatime_precision
+|   SYSDATE datetime_precision
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -4746,7 +4905,14 @@ function_call_keyword:
             Func: tree.FuncName2ResolvableFunctionReference(name),
         }
     }
-|   name_datatime_precision datatime_precision_opt
+|	SCHEMA '('')'
+	{
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+        }
+    }
+|   name_datetime_precision datetime_precision_opt
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         var es tree.Exprs = nil
@@ -4768,7 +4934,7 @@ function_call_keyword:
     }
 |   CHAR '(' expression_list USING charset_name ')'
     {
-        cn := tree.NewNumVal(constant.MakeString($5), $5, false)
+        cn := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
         es := $3
         es = append(es, cn)
         name := tree.SetUnresolvedName("char")
@@ -4779,7 +4945,7 @@ function_call_keyword:
     }
 |   DATE STRING
     {
-        val := tree.NewNumVal(constant.MakeString($2), $2, false)
+        val := tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char)
         name := tree.SetUnresolvedName("date")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -4788,17 +4954,8 @@ function_call_keyword:
     }
 |   TIME STRING
     {
-        val := tree.NewNumVal(constant.MakeString($2), $2, false)
+        val := tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char)
         name := tree.SetUnresolvedName("time")
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{val},
-        }
-    }
-|   TIMESTAMP STRING
-    {
-        val := tree.NewNumVal(constant.MakeString($2), $2, false)
-        name := tree.SetUnresolvedName("timestamp")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{val},
@@ -4838,27 +4995,42 @@ function_call_keyword:
             Exprs: tree.Exprs{$2},
         }
     }
+|   TIMESTAMP STRING
+    {
+        val := tree.NewNumValWithType(constant.MakeString($2), $2, false, tree.P_char)
+        name := tree.SetUnresolvedName("timestamp")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{val},
+        }
+    }
 
-datatime_precision_opt:
+datetime_precision_opt:
     {
         $$ = nil
     }
-|   datatime_precision
+|   datetime_precision
     {
         $$ = $1
     }
 
-datatime_precision:
+datetime_precision:
    '(' ')'
     {
         $$ = nil
     }
-|   '(' int_num_val ')'
+|   '(' INTEGRAL ')'
     {
-        $$ = $2
+        ival, errStr := util.GetInt64($2)
+        if errStr != "" {
+            yylex.Error(errStr)
+            return 1
+        }
+        str := fmt.Sprintf("%v", $2)
+        $$ = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
     }
 
-name_datatime_precision:
+name_datetime_precision:
     CURRENT_TIME
 |   CURRENT_TIMESTAMP
 |   LOCALTIME
@@ -4908,25 +5080,13 @@ name_confict:
 |   YEAR
 
 interval_expr:
-    INTERVAL STRING
-	{
-		name := tree.SetUnresolvedName("interval")
-		es := tree.NewNumVal(constant.MakeString($2), $2, false)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{es},
-        }
-	}
-|   INTERVAL INTEGRAL time_unit
+    INTERVAL expression time_unit
     {
-        name := tree.SetUnresolvedName("interval")
-        ival := util.GetUint64($2)
-        ustr := strconv.FormatUint(ival, 10)
-        e1 := tree.NewNumVal(constant.MakeUint64(ival), ustr, false)
-        e2 := tree.NewNumVal(constant.MakeString($3), $3, false)
+ 		name := tree.SetUnresolvedName("interval")
+		arg2 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{e1, e2},
+            Exprs: tree.Exprs{$2, arg2},
         }
     }
 
@@ -4986,6 +5146,24 @@ expression:
     {
         $$ = tree.NewNotExpr($2)
     }
+|   boolean_primary IS true_or_false %prec IS
+	{
+        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, $3)
+    }
+|   boolean_primary IS NOT true_or_false %prec IS
+	{
+        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, $4)
+    }
+|   boolean_primary IS UNKNOWN %prec IS
+	{
+		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
+        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, arg)
+    }
+|   boolean_primary IS NOT UNKNOWN %prec IS
+	{
+		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
+        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, arg)
+    }
 |   boolean_primary
     {
         $$ = $1
@@ -5004,7 +5182,21 @@ boolean_primary:
     {
         $$ = tree.NewComparisonExpr($2, $1, $3)
     }
+|   boolean_primary comparison_operator and_or_some subquery %prec '='
+    {
+        $$ = tree.NewSubqueryComparisonExpr($2, $3, $1, $4)
+    }
 |   predicate
+
+true_or_false:
+	TRUE
+    {
+        $$ = tree.NewNumValWithType(constant.MakeBool(true), "", false, tree.P_bool)
+    }
+|   FALSE
+    {
+        $$ = tree.NewNumValWithType(constant.MakeBool(false), "", false, tree.P_bool)
+    }
 
 predicate:
     bit_expr IN col_tuple
@@ -5061,6 +5253,20 @@ col_tuple:
     }
 // |   LIST_ARG
 
+and_or_some:
+	ALL
+	{
+		$$ = tree.ALL
+	}
+|	ANY
+	{
+		$$ = tree.ANY
+	}
+|	SOME
+	{
+		$$ = tree.SOME
+	}
+
 comparison_operator:
     '='
     {
@@ -5086,7 +5292,10 @@ comparison_operator:
     {
         $$ = tree.NOT_EQUAL
     }
-// |    NULL_SAFE_EQUAL
+|   NULL_SAFE_EQUAL
+	{
+		$$ = tree.NULL_SAFE_EQUAL
+	}
 
 keys:
     PRIMARY KEY
@@ -5106,56 +5315,73 @@ keys:
         $$ = tree.NewAttributeKey()
     }
 
-int_num_val:
-    INTEGRAL
-    {
-        ival, errStr := util.GetInt64($1)
-        if errStr != "" {
-            yylex.Error(errStr)
-            return 1
-        }
-        if ival > 0 {
-            $$ = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, false, ival)
-        } else {
-            $$ = tree.NewNumValWithResInt(constant.MakeInt64(ival), yylex.(*Lexer).scanner.LastToken, true, ival)
-        }
-    }
-
 literal:
     STRING
     {
-        $$ = tree.NewNumVal(constant.MakeString($1), $1, false)
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_char)
     }
 |   INTEGRAL
     {
-        ival := util.GetUint64($1)
-        $$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
+    	str := fmt.Sprintf("%v", $1)
+    	switch v := $1.(type) {
+    	case uint64:
+    		$$ = tree.NewNumValWithType(constant.MakeUint64(v), str, false, tree.P_uint64)
+    	case int64:
+    		$$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
+    	default:
+    		yylex.Error("parse integral fail")
+            return 1
+    	}
     }
 |   FLOAT
     {
         fval := $1.(float64)
-        $$ = tree.NewNumValWithResFoalt(constant.MakeFloat64(fval), yylex.(*Lexer).scanner.LastToken, false, fval)
+        $$ = tree.NewNumValWithType(constant.MakeFloat64(fval), yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
     }
 |   TRUE
     {
-        $$ = tree.NewNumVal(constant.MakeBool(true), "", false)
+        $$ = tree.NewNumValWithType(constant.MakeBool(true), "true", false, tree.P_bool)
     }
 |   FALSE
     {
-        $$ = tree.NewNumVal(constant.MakeBool(false), "", false)
+        $$ = tree.NewNumValWithType(constant.MakeBool(false), "false", false, tree.P_bool)
     }
 |   NULL
     {
-        $$ = tree.NewNumVal(constant.MakeUnknown(), "", false)
+        $$ = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
     }
 |   HEXNUM
 	{
-		ival := util.GetUint64($1)
-		$$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
+        switch v := $1.(type) {
+        case uint64:
+            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
+        case int64:
+            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+        case string:
+        	$$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_hexnum)
+        default:
+            yylex.Error("parse integral fail")
+            return 1
+        }
 	}
-// |   HEX
-// |   BIT_LITERAL
-// |   VALUE_ARG
+|   DECIMAL_VALUE
+    {
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
+    }
+|   BIT_LITERAL
+	{
+        switch v := $1.(type) {
+        case uint64:
+            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
+        case int64:
+            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
+        case string:
+        	$$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
+        default:
+            yylex.Error("parse integral fail")
+            return 1
+        }
+	}
 
 column_type:
     numeric_type unsigned_opt zero_fill_opt
@@ -5525,7 +5751,7 @@ time_type:
 		        Family:             tree.TimestampFamily,
 		        Precision:          $2,
                 	FamilyString: $1,
-                	DisplayWith: $2,
+                	DisplayWith: 26,
 		        TimePrecisionIsSet: true,
 		        Locale:             &locale,
 		        Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
@@ -5533,19 +5759,24 @@ time_type:
 	    }
         }
     }
-|   DATETIME length_opt
+|   DATETIME timestamp_option_opt
     {
         locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
+        if $2 < 0 || $2 > 6 {
+        		yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
+        		return 1
+                } else {
+                $$ = &tree.T{
+            		InternalType: tree.InternalType{
 		        Family:             tree.TimestampFamily,
-		        Precision:          0,
-                FamilyString: $1,
-                DisplayWith: $2,
-		        TimePrecisionIsSet: false,
+		        Precision:          $2,
+                	FamilyString: $1,
+                	DisplayWith: 26,
+		        TimePrecisionIsSet: true,
 		        Locale:             &locale,
 		        Oid:                uint32(defines.MYSQL_TYPE_DATETIME),
 	        },
+	    }
         }
     }
 |   YEAR length_opt
@@ -5577,7 +5808,7 @@ char_type:
 	        },
         }
     }
-|   VARCHAR length
+|   VARCHAR length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -5931,7 +6162,6 @@ reserved_keyword:
 |   COALESCE
 |   CREATE
 |   CROSS
-|   CHARSET
 |   CURRENT_DATE
 |   CURRENT_ROLE
 |   CURRENT_USER
@@ -5951,7 +6181,6 @@ reserved_keyword:
 |   DISTINCTROW
 |   DIV
 |   DROP
-|   DATE
 |   ELSE
 |   END
 |   ESCAPE
@@ -5961,7 +6190,6 @@ reserved_keyword:
 |   FOR
 |   FORCE
 |   FROM
-|   FORMAT
 |   GROUP
 |   HAVING
 |   HOUR
@@ -6023,7 +6251,6 @@ reserved_keyword:
 |   TRUE
 |   TRUNCATE
 |   TIME
-|   TIMESTAMP
 |   UNION
 |   UNIQUE
 |   UPDATE
@@ -6056,6 +6283,11 @@ reserved_keyword:
 |   FOREIGN
 |	ROW
 |   OUTFILE
+|	SQL_SMALL_RESULT
+|	SQL_BIG_RESULT
+|	LEADING
+|	TRAILING
+|   CHARACTER
 
 non_reserved_keyword:
     AGAINST
@@ -6068,13 +6300,13 @@ non_reserved_keyword:
 |   BIT
 |   BLOB
 |   BOOL
-|   CHARACTER
 |   CHAIN
 |   CHECKSUM
 |   COMPRESSION
 |   COMMENT_KEYWORD
 |   COMMIT
 |   COMMITTED
+|   CHARSET
 |   COLUMNS
 |   CONNECTION
 |   CONSISTENT
@@ -6100,6 +6332,7 @@ non_reserved_keyword:
 |   EXCEPT
 |   ERRORS
 |   ENFORCED
+|   FORMAT
 |   FLOAT_TYPE
 |   FULL
 |   FIXED
@@ -6116,7 +6349,6 @@ non_reserved_keyword:
 |   KEY_BLOCK_SIZE
 |   KEYS
 |   LANGUAGE
-|   LAST_INSERT_ID
 |   LESS
 |   LEVEL
 |   LINESTRING
@@ -6215,6 +6447,23 @@ non_reserved_keyword:
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
 |   QUARTER
+|	UNKNOWN
+|	ANY
+|	SOME
+|   TIMESTAMP %prec LOWER_THAN_STRING
+|   DATE %prec LOWER_THAN_STRING
+
+func_not_keyword:
+	DATE_ADD
+|	DATE_SUB
+|   NOW
+|	ADDDATE
+|   CURDATE
+|   POSITION
+|   SESSION_USER
+|   SUBDATE
+|   SYSTEM_USER
+|   TRANSLATE
 
 not_keyword:
     ADDDATE
@@ -6253,16 +6502,6 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
-
-explain_option_key:
-    ANALYZE
-|   VERBOSE
-|   FORMAT
-
-explain_foramt_value:
-    JSON
-|   TEXT
-
 
 //mo_keywords:
 //	PROPERTIES

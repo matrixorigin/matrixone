@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
@@ -206,6 +208,10 @@ func (mc *MysqlColumn) IsSigned() bool {
 	return mc.flag&uint16(defines.UNSIGNED_FLAG) == 0
 }
 
+// Discussion: for some MatrixOne types, the Type.Precision and Type.Scale value are needed for stringification, I think we
+// need to add a field
+// MoTypes []types.Type
+// in this struct, what's your opinion on this matter?@Daviszhen
 type MysqlResultSet struct {
 	//column information
 	Columns []Column
@@ -236,7 +242,7 @@ func (mrs *MysqlResultSet) GetColumnCount() uint64 {
 }
 
 func (mrs *MysqlResultSet) GetColumn(index uint64) (Column, error) {
-	if index >= 0 && index < mrs.GetColumnCount() {
+	if index < mrs.GetColumnCount() {
 		return mrs.Columns[index], nil
 	} else {
 		return nil, fmt.Errorf("index valid column index %d ", index)
@@ -253,7 +259,7 @@ func (mrs *MysqlResultSet) GetRowCount() uint64 {
 }
 
 func (mrs *MysqlResultSet) GetRow(index uint64) ([]interface{}, error) {
-	if index >= 0 && index < mrs.GetRowCount() {
+	if index < mrs.GetRowCount() {
 		return mrs.Data[index], nil
 	} else {
 		return nil, fmt.Errorf("index valid row index %d ", index)
@@ -480,6 +486,8 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 		return strconv.FormatInt(int64(v), 10), nil
 	case uint:
 		return strconv.FormatUint(uint64(v), 10), nil
+	case types.Datetime:
+		return v.String(), nil
 	default:
 		return "", fmt.Errorf("unsupported type %d ", v)
 	}

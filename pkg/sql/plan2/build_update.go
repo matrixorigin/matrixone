@@ -15,124 +15,176 @@
 package plan2
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getLastTableDef(query *Query, node *plan.Node) *plan.TableDef {
-	if node.TableDef != nil {
-		return node.TableDef
+func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
+	// Check length of update list
+	updateColLen := len(stmt.Exprs)
+	if updateColLen == 0 {
+		return nil, errors.New(errno.CaseNotFound, "no column will be update")
 	}
-	for _, id := range node.Children {
-		val := getLastTableDef(query, query.Nodes[id])
-		if val != nil {
-			return val
+	// Check database's name and table's name
+	alsTbl, ok := stmt.Table.(*tree.AliasedTableExpr)
+	if !ok {
+		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
+	}
+	tbl, ok := alsTbl.Expr.(*tree.TableName)
+	if !ok {
+		return nil, errors.New(errno.FeatureNotSupported, "cannot update from multiple tables")
+	}
+	var dbName string
+	if tbl.SchemaName == "" {
+		dbName = ctx.DefaultDatabase()
+	}
+	objRef, tableDef := ctx.Resolve(dbName, string(tbl.ObjectName))
+	if tableDef == nil {
+		return nil, errors.New(errno.FeatureNotSupported, "cannot find update table")
+	}
+
+	// Function of getting def of col from col name
+	getColTyp := func(name string) *plan.Type {
+		for _, col := range tableDef.Cols {
+			if col.Name == name {
+				return col.Typ
+			}
+		}
+		return nil
+	}
+
+	// Check if update primary key
+	var updateAttrs []string = nil
+	for _, expr := range stmt.Exprs {
+		if len(expr.Names) != 1 {
+			return nil, errors.New(errno.CaseNotFound, "the set list of update must be one")
+		}
+		updateColName := expr.Names[0].Parts[0]
+		for _, name := range updateAttrs {
+			if updateColName == name {
+				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "update's column name is duplicate")
+			}
+		}
+		updateAttrs = append(updateAttrs, updateColName)
+	}
+
+	var useProjectExprs tree.SelectExprs
+	// Build projection of primary key
+	var priKey string
+	var priKeyIdx int32 = -1
+	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
+	for _, key := range priKeys {
+		for _, updateName := range updateAttrs {
+			if key.Name == updateName {
+				e, _ := tree.NewUnresolvedName(key.Name)
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+				priKey = key.Name
+				priKeyIdx = 0
+				break
+			}
 		}
 	}
-	return nil
-}
 
-func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
-	//build select
+	// Build projection of hide key
+	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name).GetName()
+	if priKeyIdx == -1 {
+		if hideKey == "" {
+			return nil, errors.New(errno.InternalError, "cannot find hide key now")
+		}
+		e, _ := tree.NewUnresolvedName(hideKey)
+		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+	}
+
+	// Build projection for select
+	for _, expr := range stmt.Exprs {
+		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: expr.Expr})
+	}
+
+	// build other column which doesn't update
+	var otherAttrs []string = nil
+	var attrOrders []string = nil
+	if priKeyIdx == 0 {
+		for _, col := range tableDef.Cols {
+			if col.Name == hideKey {
+				continue
+			}
+			attrOrders = append(attrOrders, col.Name)
+			find := false
+			for _, attr := range updateAttrs {
+				if attr == col.Name {
+					find = true
+				}
+			}
+			if !find {
+				otherAttrs = append(otherAttrs, col.Name)
+				e, _ := tree.NewUnresolvedName(col.Name)
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+			}
+		}
+	}
+
+	// build the stmt of select and append select node
+	if len(stmt.OrderBy) > 0 && (stmt.Where == nil && stmt.Limit == nil) {
+		stmt.OrderBy = nil
+	}
 	selectStmt := &tree.Select{
 		Select: &tree.SelectClause{
-			Exprs: tree.SelectExprs{
-				tree.SelectExpr{
-					Expr: tree.UnqualifiedStar{},
-				},
-			},
+			Exprs: useProjectExprs,
 			From:  &tree.From{Tables: tree.TableExprs{stmt.Table}},
 			Where: stmt.Where,
 		},
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	selectCtx := &SelectContext{
-		// tableAlias:  make(map[string]string),
-		columnAlias: make(map[string]*plan.Expr),
-	}
-	err := buildSelect(selectStmt, ctx, query, selectCtx)
+	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_UPDATE
+	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
-	//get table def
-	tableDef := getLastTableDef(query, query.Nodes[len(query.Nodes)-1])
-	if tableDef == nil {
-		return errors.New(errno.CaseNotFound, "can not find table in sql")
-	}
-
-	getColumnName := func(name string) *plan.Expr {
-		for idx, col := range tableDef.Cols {
-			if col.Name == name {
-				return &plan.Expr{
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							Name:   col.Name,
-							RelPos: 0,
-							ColPos: int32(idx),
-						},
-					},
-					Typ: col.Typ,
-				}
-			}
-		}
-		return nil
-	}
-
-	columnLength := len(stmt.Exprs)
-	if columnLength == 0 {
-		return errors.New(errno.CaseNotFound, "no column will be update")
-	}
-
-	columns := make([]*plan.Expr, 0, columnLength)
-	values := make([]*plan.Expr, 0, columnLength)
-	for _, expr := range stmt.Exprs {
-		if len(expr.Names) != 1 {
-			return errors.New(errno.CaseNotFound, "the set list of update must be one")
-		}
-		if expr.Names[0].NumParts != 1 {
-			return errors.New(errno.CaseNotFound, "the set list of update must be one")
-		}
-
-		column := getColumnName(expr.Names[0].Parts[0])
-		if column == nil {
-			return errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", expr.Names[0].Parts[0]))
-		}
-
-		value, err := buildExpr(expr.Expr, ctx, query, selectCtx)
+	// Build projection for update expr
+	lastNode := qry.Nodes[len(qry.Nodes)-1]
+	idx := 1
+	for _, colName := range updateAttrs {
+		origTyp := getColTyp(colName)
+		lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], origTyp)
 		if err != nil {
-			return err
+			return nil, err
 		}
-
-		//cast value type
-		if column.Typ.Id != value.Typ.Id {
-			tmp, err := appendCastExpr(value, column.Typ.Id)
-			if err != nil {
-				return err
-			}
-			value = tmp
-		}
-
-		columns = append(columns, column)
-		values = append(values, value)
+		idx++
 	}
 
-	node := &plan.Node{
+	// Build update node
+	node := &Node{
 		NodeType: plan.Node_UPDATE,
-		UpdateList: &plan.UpdateList{
-			Columns: columns,
-			Values:  values,
+		ObjRef:   objRef,
+		TableDef: tableDef,
+		Children: []int32{qry.Steps[len(qry.Steps)-1]},
+		NodeId:   int32(len(qry.Nodes)),
+		UpdateInfo: &plan.UpdateInfo{
+			PriKey:      priKey,
+			PriKeyIdx:   priKeyIdx,
+			HideKey:     hideKey,
+			UpdateAttrs: updateAttrs,
+			OtherAttrs:  otherAttrs,
+			AttrOrders:  attrOrders,
 		},
 	}
-	appendQueryNode(query, node, false)
+	qry.Nodes = append(qry.Nodes, node)
+	qry.Steps[len(qry.Steps)-1] = node.NodeId
 
-	preNode := query.Nodes[len(query.Nodes)-1]
-	query.Steps[0] = preNode.NodeId
+	return usePlan, nil
+}
 
-	return nil
+func isSameColumnType(t1 *Type, t2 *Type) bool {
+	if t1.Id != t2.Id {
+		return false
+	}
+	if t1.Width == t2.Width && t1.Precision == t2.Precision && t1.Size == t2.Size && t1.Scale == t2.Scale {
+		return true
+	}
+	return true
 }

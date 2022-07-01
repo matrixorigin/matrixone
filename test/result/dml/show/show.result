@@ -1,0 +1,19 @@
+drop database if exists test01;
+create database test01;
+use test01;
+create table t1 (id int not null, str char(10),name varchar(10));
+create table t2 (a int);
+show tables;
+tables_in_test01
+t1
+t2
+show tables from test01;
+tables_in_test01
+t1
+t2
+show columns from t1;
+Field	Type	Null	Key	Default	Comment
+id	INT	YES		NULL		
+str	CHAR	YES		NULL	
+name	VARCHAR	YES		NULL		
+drop database if exists test01;
