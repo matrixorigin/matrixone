@@ -13,7 +13,7 @@ SELECT ACOS(1.0001);
 SELECT ACOS(0);
 SELECT ATAN(2);
 SELECT ATAN(-2);
--- @bvt:issue#3403
+-- @bvt:issue#3613
 SELECT ATAN(-2,2);
 -- @bvt:issue
 #SELECT ATAN2(PI(),0);
@@ -28,7 +28,7 @@ SELECT SIN(0);
 SELECT SIN(0.001);
 SELECT SIN(-0.001);
 
--- @bvt:issue#3403
+-- @bvt:issue#3506
 SELECT SIN("ABC");
 -- @bvt:issue
 
@@ -39,7 +39,7 @@ SELECT COS(-1);
 SELECT COS(0);
 SELECT COS(0.001);
 SELECT COS(-0.001);
--- @bvt:issue#3403
+-- @bvt:issue#3506
 SELECT COS("ABC");
 -- @bvt:issue
 
@@ -50,7 +50,7 @@ SELECT TAN(-1);
 SELECT TAN(0);
 SELECT TAN(0.001);
 SELECT TAN(-0.001);
--- @bvt:issue#3403
+-- @bvt:issue#3506
 SELECT TAN("ABC");
 -- @bvt:issue
 
@@ -70,7 +70,7 @@ select cot(0);
 #SELECT ASIN(0);
 #SELECT ASIN(0.001);
 #SELECT ASIN(-0.001);
--- @bvt:issue#3403
+-- @bvt:issue#3506
 #SELECT ASIN("ABC");
 -- @bvt:issue
 
@@ -81,7 +81,7 @@ SELECT ATAN(-1);
 SELECT ATAN(0);
 SELECT ATAN(0.001);
 SELECT ATAN(-0.001);
--- @bvt:issue#3403
+-- @bvt:issue#3506
 SELECT ATAN("ABC");
 -- @bvt:issue
 
@@ -120,7 +120,7 @@ select sin(e), cos(e), tan(e),cot(e),acos(e),atan(e) from t1;
 select sin(f), cos(f), tan(f),cot(f),acos(f),atan(f) from t1;
 select sin(g), cos(g), tan(g),cot(g),acos(g),atan(g) from t1;
 
--- @bvt:issue#3403
+-- @bvt:issue#3588
 select sin(h), cos(h), tan(h),cot(h),acos(h),atan(h) from t1;
 select sin(i), cos(i), tan(i),cot(i),acos(i),atan(i) from t1;
 select sin(k), cos(k), tan(k),cot(k),acos(k),atan(k) from t1;

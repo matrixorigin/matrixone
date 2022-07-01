@@ -23,15 +23,20 @@ SELECT MONTH("2015-09") as MONTH;
 MONTH
 null
 SELECT MONTH(201509) as MONTH;
-[42883]unsupported parameter types [BIGINT] for function 'month'
+month
+null
 SELECT MONTH(1340124) as MONTH;
-[42883]unsupported parameter types [BIGINT] for function 'month'
+month
+null
 SELECT MONTH(0.45133) as MONTH;
-[42883]unsupported parameter types [DOUBLE] for function 'month'
+month
+null
 SELECT MONTH(10) as MONTH;
-[42883]unsupported parameter types [BIGINT] for function 'month'
+month
+null
 SELECT MONTH(1=1) as MONTH;
-[42883]unsupported parameter types [BOOL] for function 'month'
+month
+null
 SELECT MONTH('2015-09.30') as MONTH;
 MONTH
 9

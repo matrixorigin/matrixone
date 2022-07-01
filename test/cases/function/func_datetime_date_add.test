@@ -85,9 +85,9 @@ select date_add("1997-12-31",INTERVAL "1 1" YEAR_MONTH);
 SELECT DATE_ADD(to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 MINUTE);
 -- @bvt:issue
 
--- @bvt:issue#3379
+
 SELECT extract(week from DATE_ADD('2020-12-30 23:59:00', INTERVAL 1 year));
--- @bvt:issue
+
 
 #不同数据类型
 CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date);
@@ -122,14 +122,14 @@ drop table t1;
 #EXTREME VALUE
 select DATE_ADD('20071108181000', INTERVAL 1 DAY);
 
--- @bvt:issue#3379
+
 select DATE_ADD(20071108181000,   INTERVAL 1 DAY);
--- @bvt:issue
+
 select DATE_ADD('20071108',       INTERVAL 1 DAY);
 
--- @bvt:issue#3379
+
 select DATE_ADD(20071108,         INTERVAL 1 DAY);
--- @bvt:issue
+
 select date_add('1000-01-01 00:00:00', interval '1.03:02:01.05' day_microsecond);
 
 -- @bvt:issue#3319
@@ -186,13 +186,13 @@ select distinct a from t1;
 drop table t1;
 
 #WHERE & 逻辑运算
--- @bvt:issue#3379
+
 drop table if exists t1;
 create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 select * from t1 where date_add(b, INTERVAL 1 day)="2012-10-13";
 drop table t1;
--- @bvt:issue
+
 
 #WHERE & 逻辑运算
 drop table if exists t1;
@@ -217,20 +217,20 @@ select b from t1 group by b having (date_add(t1.b, INTERVAL 1 day)-date_add(t1.b
 drop table t1;
 -- @bvt:issue
 
-
+-- @bvt:issue#3588
 SELECT
 DATE_SUB('2007-08-03', INTERVAL 1 MINUTE) AS field_str1,
 DATE_SUB('2007-08-03 17:33:00', INTERVAL 1 MINUTE) AS field1_str2,
 DATE_SUB(DATE('2007-08-03'), INTERVAL 1 DAY) AS field_date,
 DATE_SUB(CAST('2007-08-03 17:33:00' AS DATETIME), INTERVAL 1 MINUTE) AS field_datetime;
 
--- @bvt:issue#3379
 SELECT
 OCT(DATE_SUB('2007-08-03', INTERVAL 1 MINUTE)) AS field_str1,
 OCT(DATE_SUB('2007-08-03 17:33:00', INTERVAL 1 MINUTE)) AS field1_str2,
 OCT(DATE_SUB(DATE('2007-08-03'), INTERVAL 1 DAY)) AS field_date,
 OCT(DATE_SUB(CAST('2007-08-03 17:33:00' AS DATETIME), INTERVAL 1 MINUTE)) AS field_datetime;
 -- @bvt:issue
+
 
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND);
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1:1:1.000002" HOUR_MICROSECOND);
@@ -267,7 +267,7 @@ select date_sub("0069-01-01 00:00:01",INTERVAL 2 SECOND);
 select date_sub("0169-01-01 00:00:01",INTERVAL 2 SECOND);
 
 
--- @bvt:issue#3149
+
 CREATE TABLE t1 (a DATETIME(6));
 INSERT INTO t1 VALUES ('1000-01-01 01:00:00.000000');
 INSERT INTO t1 VALUES ('1000-01-01 01:00:00.000001');
@@ -282,7 +282,7 @@ SELECT a, DATE_SUB(a, INTERVAL -0.1 SECOND) FROM t1 ORDER BY a;
 SELECT DATE_SUB(CAST(a AS DATETIME), INTERVAL 1 MINUTE) FROM t1 ORDER BY a;
 SELECT DATE_SUB(CAST(a AS DATETIME), INTERVAL 1 MICROSECOND) FROM t1 ORDER BY a;
 drop table t1;
--- @bvt:issue
+
 
 CREATE TABLE `t2` (
   `DATE_ADD(a, INTERVAL 1 SECOND)` datetime(6) DEFAULT NULL,

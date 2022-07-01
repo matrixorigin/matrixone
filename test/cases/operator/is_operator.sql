@@ -43,12 +43,12 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1 (dt datetime not null, t datetime not null);
 create table t2 (dt datetime not null);
--- @bvt:issue#3269
+
 insert into t1 values ('2001-01-01 1:1:1', '2001-01-01 1:1:1'),
 ('2001-01-01 1:1:1', '2001-01-01 1:1:1');
 insert into t2 values ('2001-01-01 1:1:1'), ('2001-01-01 1:1:1');
 SELECT outr.dt FROM t1 AS outr WHERE outr.dt IN (SELECT innr.dt FROM t2 AS innr WHERE outr.dt IS NULL );
--- @bvt:issue
+
 drop table if exists t1;
 drop table if exists t2;
 
@@ -175,13 +175,9 @@ INSERT INTO t2 VALUES ('1999-05-10 00:01:01',1), ('1999-05-10 00:00:00',2);
 SELECT * FROM t1 WHERE a IS NULL;
 SELECT * FROM t2 WHERE a IS NULL;
 SELECT * FROM t1 LEFT JOIN t1 AS t1_2 ON 1 WHERE t1_2.a IS NULL;
--- @bvt:issue#3306
 SELECT * FROM t2 LEFT JOIN t2 AS t2_2 ON 1 WHERE t2_2.a IS not NULL;
--- @bvt:issue
 SELECT * FROM t1 JOIN t1 AS t1_2 ON 1 WHERE t1_2.a IS NULL;
--- @bvt:issue#3306
 SELECT * FROM t2 JOIN t2 AS t2_2 ON 1 WHERE t2_2.a IS not NULL;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

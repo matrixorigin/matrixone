@@ -154,26 +154,28 @@ enum TxnMethod {
 message TxnRequest {
     // RequestID request id
     uint64                      RequestID                = 1;
+    // TimeoutAt timeout unix timestamp in nanoseconds.
+    int64                       TimeoutAt                = 2;
     // Txn transaction metadata
-    TxnMeta                     Txn                      = 2 [(gogoproto.nullable) = false];
+    TxnMeta                     Txn                      = 3 [(gogoproto.nullable) = false];
     // TxnMethod TxnRequest opCode, select the Request defined below according to TxnMethod.
-    TxnMethod                   Method                   = 3;
+    TxnMethod                   Method                   = 4;
     // Flag request flag
-    uint32                      Flag                     = 4;
+    uint32                      Flag                     = 5;
     // CNOpRequest corresponds to TxnMethod.Read, TxnMethod.Write
-    CNOpRequest                 CNRequest                = 5; 
+    CNOpRequest                 CNRequest                = 6; 
     // TxnCommitRequest corresponds to TxnMethod.Commit
-    TxnCommitRequest            CommitRequest            = 6;
+    TxnCommitRequest            CommitRequest            = 7;
     // TxnRollbackRequest corresponds to TxnMethod.Rollback
-    TxnRollbackRequest          RollbackRequest          = 7;
+    TxnRollbackRequest          RollbackRequest          = 8;
     // TxnPrepareRequest corresponds to TxnMethod.Prepare
-    TxnPrepareRequest           PrepareRequest           = 8;
+    TxnPrepareRequest           PrepareRequest           = 9;
     // TxnGetStatusRequest corresponds to TxnMethod.GetStatus
-    TxnGetStatusRequest         GetStatusRequest         = 9;
+    TxnGetStatusRequest         GetStatusRequest         = 10;
     // TxnCommitDNShardRequest corresponds to TxnMethod.CommitDNShard
-    TxnCommitDNShardRequest     CommitDNShardRequest     = 10;
+    TxnCommitDNShardRequest     CommitDNShardRequest     = 11;
     // TxnRollbackDNShardRequest corresponds to TxnMethod.RollbackDNShard
-    TxnRollbackDNShardRequest   RollbackDNShardRequest   = 11;
+    TxnRollbackDNShardRequest   RollbackDNShardRequest   = 12;
 }
 
 // TxnResponse response of TxnRequest.
