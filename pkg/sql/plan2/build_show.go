@@ -165,18 +165,21 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
 	}
 
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	binder := NewWhereBinder(builder, &BindContext{})
+
 	showVariables := &plan.ShowVariables{
 		Global: stmt.Global,
 	}
 	if stmt.Like != nil {
-		expr, _, err := buildComparisonExpr(stmt.Like, ctx, nil, nil, nil, false)
+		expr, err := binder.bindComparisonExpr(stmt.Like, 0, false)
 		if err != nil {
 			return nil, err
 		}
 		showVariables.Where = append(showVariables.Where, expr)
 	}
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, nil, nil, nil, false)
+		exprs, err := splitAndBindCondition(stmt.Where.Expr, &BindContext{})
 		if err != nil {
 			return nil, err
 		}
