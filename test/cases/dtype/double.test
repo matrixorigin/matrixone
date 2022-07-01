@@ -79,9 +79,7 @@ drop table if exists t2;
 create table t1 (a double);
 insert into t1 values (17.666);
 select * from t1 where a>=17.6660;
--- @bvt:issue#3279
 select * from t1 where a>='17.6660';
--- @bvt:issue
 drop table t1;
 CREATE TABLE t1 (id INT PRIMARY KEY,
 a double(20),

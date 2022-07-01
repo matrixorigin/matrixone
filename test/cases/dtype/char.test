@@ -99,10 +99,7 @@ select lastName,firstName from employees where lastName between firstName and Jo
 select * from employees where officeCode in ('2','3','4') order by 1 asc,3 desc limit 1,2;
 select * from employees where officeCode not in ('5','7','1');
 select officeCode,sum(cast(officeCode as unsigned)) from employees group by officeCode;
--- @bvt:issue#3251
 select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
--- @bvt:issue
-
 #Test cases of query with multi tables
 create table job(
 jobid int primary key,
@@ -198,7 +195,6 @@ i char(10) not null default '0',
 j char(10) not null default '0',
 primary key (a));
 insert into t1 (a) values ('2'),('4'),('6'),('8'),('10'),('12'),('14'),('16'),('18'),('20'),('22'),('24'),('26'),('23');
--- @bvt:issue#3251
 delete from t1 where a=2+2;
 select a,b from t1;
 delete from t1 where  a=24;
@@ -207,7 +203,6 @@ delete from t1 where  3 < 2;
 select a,b from t1;
 delete from t1 where  1 < 2;
 select a,b from t1;
--- @bvt:issue
 drop table t1;
 create table t1 (a char(10) primary key, b char(32));
 insert into t1 values ('abc','apple'), ('ab','apple');

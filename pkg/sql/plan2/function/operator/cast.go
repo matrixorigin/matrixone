@@ -54,7 +54,7 @@ func formatCastError(vec *vector.Vector, typ types.Type) error {
 			errStr = fmt.Sprintf("Can't cast '%s' as %v type.", valueStr, typ)
 		}
 	} else {
-		errStr = fmt.Sprintf("Can't cast %v type column as %v type.", vec.Typ, typ)
+		errStr = fmt.Sprintf("Can't cast %v type column as %v type because of one or more values in that column.", vec.Typ, typ)
 	}
 	return errors.New(errno.InternalError, errStr)
 }

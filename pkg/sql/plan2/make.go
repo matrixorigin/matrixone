@@ -213,13 +213,13 @@ func MakePlan2DefaultExpr(expr engine.DefaultExpr) *plan.DefaultExpr {
 func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 	if typ.Id == plan.Type_DECIMAL128 && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 10
-		typ.Width = 38
-		typ.Size = 16
+		typ.Width = 38 // precision
+		typ.Size = int32(types.T_decimal128.TypeLen())
 	}
 	if typ.Id == plan.Type_DECIMAL64 && typ.Scale == 0 && typ.Width == 0 {
 		typ.Scale = 2
-		typ.Width = 6
-		typ.Size = 16
+		typ.Width = 6 // precision
+		typ.Size = int32(types.T_decimal64.TypeLen())
 	}
 	return typ
 }
