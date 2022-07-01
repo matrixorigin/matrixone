@@ -133,7 +133,9 @@ func makePlan2CastExpr(expr *Expr, targetType *Type) (*Expr, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{Typ: copyType(targetType)}}}
+	t := &plan.Expr{Expr: &plan.Expr_T{T: &plan.TargetType{
+		Typ: rewriteDecimalTypeIfNecessary(copyType(targetType)),
+	}}}
 	return &plan.Expr{Expr: &plan.Expr_F{
 		F: &plan.Function{
 			Func: &ObjectRef{Obj: id},
@@ -204,4 +206,20 @@ func MakePlan2DefaultExpr(expr engine.DefaultExpr) *plan.DefaultExpr {
 		ret.Value.ConstantValue = &plan.ConstantValue_TimeStampV{TimeStampV: int64(t)}
 	}
 	return ret
+}
+
+// if typ is decimal128 and decimal64 without scalar and precision
+// set a default value for it.
+func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
+	if typ.Id == plan.Type_DECIMAL128 && typ.Scale == 0 && typ.Width == 0 {
+		typ.Scale = 10
+		typ.Width = 38 // precision
+		typ.Size = int32(types.T_decimal128.TypeLen())
+	}
+	if typ.Id == plan.Type_DECIMAL64 && typ.Scale == 0 && typ.Width == 0 {
+		typ.Scale = 2
+		typ.Width = 6 // precision
+		typ.Size = int32(types.T_decimal64.TypeLen())
+	}
+	return typ
 }

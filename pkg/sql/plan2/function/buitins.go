@@ -148,10 +148,21 @@ var builtins = map[int]Functions{
 		Id: CONCAT_WS,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			if len(inputs) > 1 {
-				for _, t := range inputs {
+				ret := make([]types.T, len(inputs))
+				convert := false
+				for i, t := range inputs {
 					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+						if castTable[t][types.T_varchar] {
+							ret[i] = types.T_varchar
+							convert = true
+							continue
+						}
 						return wrongFunctionParameters, nil
 					}
+					ret[i] = t
+				}
+				if convert {
+					return int32(0), ret
 				}
 				return int32(0), nil
 			}

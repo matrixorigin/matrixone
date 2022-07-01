@@ -206,11 +206,11 @@ officecode	sum(cast(officecode as unsigned))
 3	6
 7	14
 select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
-employeeNumber  officeCode      reportsTo
-1401    4       1102
-1611    6       1088
-1501    7       1102
-1504    7       1102
+employeenumber	officecode	reportsto
+1401	4	1102
+1611	6	1088
+1501	7	1102
+1504	7	1102
 create table job(
 jobid int primary key,
 jobTitle char(50)
