@@ -34,6 +34,7 @@ type NodeDescribe interface {
 	GetFilterConditionInfo(options *ExplainOptions) (string, error)
 	GetOrderByInfo(options *ExplainOptions) (string, error)
 	GetGroupByInfo(options *ExplainOptions) (string, error)
+	GetTableDefine(options *ExplainOptions) (string, error)
 }
 
 type NodeElemDescribe interface {
