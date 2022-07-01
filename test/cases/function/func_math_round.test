@@ -40,7 +40,7 @@ SELECT a, ROUND(a) FROM t1;
 DROP TABLE t1;
 
 #data type
--- @bvt:issue#3401
+-- @bvt:issue#2302
 CREATE TABLE t1(f1 DECIMAL(22,1));
 INSERT INTO t1 VALUES (0),(1);
 SELECT ROUND(f1, f1) FROM t1;
@@ -52,7 +52,7 @@ DROP TABLE t1;
 #LEAST函数0.5MO暂时不支持
 #SELECT ROUND(LEAST(15, -4939092, 0.2704), STDDEV('a'));
 
--- @bvt:issue#3401
+-- @bvt:issue#3611
 SELECT ROUND(sin(0.45), cos(0.8));
 -- @bvt:issue
 
@@ -136,7 +136,7 @@ SELECT ROUND(sin(100)*10) FROM t1 GROUP BY ROUND(sin(100)*10);
 DROP TABLE t1;
 
 #HAVING，比较操作
--- @bvt:issue#3401
+
 CREATE TABLE t1 (i INT, d1 DECIMAL(9,2), d2 DECIMAL(9,2));
 INSERT INTO t1 VALUES (1, 101.40, 21.40), (1, -80.00, 0.00),
 (2, 0.00, 0.00), (2, -13.20, 0.00), (2, 59.60, 46.40),
@@ -145,21 +145,23 @@ INSERT INTO t1 VALUES (1, 101.40, 21.40), (1, -80.00, 0.00),
 (5, 33.00, 0.00), (5, -25.80, 0.00), (5, 0.00, 7.20),
 (6, 0.00, 0.00), (6, -51.40, 0.00);
 SELECT i, SUM(d1), SUM(d2) FROM t1 GROUP BY i HAVING SUM(d1) <> SUM(d2);
+-- @bvt:issue#2302
 SELECT i, ROUND(SUM(d1), 2), ROUND(SUM(d2), 2) FROM t1 GROUP BY i
 HAVING ROUND(SUM(d1), 2) <> ROUND(SUM(d2), 2);
-drop table t1;
 -- @bvt:issue
+drop table t1;
+
 
 #DATA TYPE
 #0.5 MO的TRUNCATE函数暂不支持
--- @bvt:issue#3401
+-- @bvt:issue#2302
 CREATE TABLE t1 (qty decimal(16,6) default NULL, dps tinyint(3) unsigned default NULL);
 INSERT INTO t1 VALUES (1.1325,3);
 SELECT ROUND(qty,3), dps, ROUND(qty,dps) FROM t1;
 DROP TABLE t1;
 -- @bvt:issue
 
--- @bvt:issue#3401
+-- @bvt:issue#2302
 CREATE TABLE t1( a DECIMAL, b INT );
 INSERT INTO t1 VALUES (123456, 40), (123456, 40);
 #SELECT TRUNCATE( a, b ) AS c FROM t1 ORDER BY c;
@@ -191,7 +193,7 @@ drop table t4;
 
 -- @bvt:issue
 
--- @bvt:issue#3401
+-- @bvt:issue#2302
 CREATE TABLE t1( a DECIMAL(4, 3), b INT );
 INSERT INTO t1 VALUES ( 1, 5 ), ( 2, 4 ), ( 3, 3 ), ( 4, 2 ), ( 5, 1 );
 SELECT a, b, ROUND( a, b ) AS c FROM t1 ORDER BY c;
@@ -222,7 +224,7 @@ drop table t5;
 drop table t6;
 -- @bvt:issue
 
--- @bvt:issue#3401
+-- @bvt:issue#2302
 CREATE TABLE t5(c1 DECIMAL(16,6), c2 tinyint);
 INSERT INTO t5 VALUES(1.1325,3);
 SELECT ROUND(c1,c2) from t5;
