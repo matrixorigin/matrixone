@@ -175,13 +175,13 @@ func Test_sliceLikePure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sliceLikePure(tt.args.s, tt.args.expr, tt.args.rs)
+			got, err := sliceLikeScalar(tt.args.s, tt.args.expr, tt.args.rs)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("sliceLikePure() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("sliceLikeScalar() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("sliceLikePure() got = %v, want %v", got, tt.want)
+				t.Errorf("sliceLikeScalar() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -345,13 +345,13 @@ func Test_pureLikePure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := pureLikePure(tt.args.p, tt.args.expr, tt.args.rs)
+			got, err := scalarLikeScalar(tt.args.p, tt.args.expr, tt.args.rs)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("pureLikePure() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("scalarLikeScalar() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("pureLikePure() got = %v, want %v", got, tt.want)
+				t.Errorf("scalarLikeScalar() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -541,13 +541,13 @@ func Test_sliceNullLikePure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sliceNullLikePure(tt.args.s, tt.args.expr, tt.args.nulls, tt.args.rs)
+			got, err := sliceContainsNullLikeScalar(tt.args.s, tt.args.expr, tt.args.nulls, tt.args.rs)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("sliceNullLikePure() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("sliceContainsNullLikeScalar() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("sliceNullLikePure() got = %v, want %v", got, tt.want)
+				t.Errorf("sliceContainsNullLikeScalar() got = %v, want %v", got, tt.want)
 			}
 		})
 	}

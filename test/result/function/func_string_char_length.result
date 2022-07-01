@@ -21,7 +21,7 @@ char_length(a)	length(a)	a
 6	12	андрей
 drop table t1;
 select char_length('\n\t\r\b\0\_\%\\');
-char_length('\n\t\r\b\0\_\%\\')
+char_length(\n\t\r\b\0\_\%\\)
 10
 SELECT CHAR_LENGTH(concat_ws(" ",121,83,81,'76')) as my_column;
 my_column

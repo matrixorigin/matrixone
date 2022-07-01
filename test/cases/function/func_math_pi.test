@@ -23,14 +23,14 @@ VALUES
 (4.60 ),(6),(20),(25) ;
 
 #算式运算
--- @bvt:issue#3399
+
 SELECT * FROM Circle;
 SELECT Circle_id, Radius,
 PI() * Radius * Radius  AS Area,
 2 * PI() * Radius AS Perimeter
 FROM Circle;
 drop table Circle;
--- @bvt:issue
+
 
 #SELECT, distinct
 SELECT distinct PI();
