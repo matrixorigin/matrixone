@@ -9,7 +9,7 @@ select floor(cast(-2 as unsigned)), floor(18446744073709551614), floor(-2);
 SELECT floor(ceil(12345678901234567890));
 -- @bvt:issue
 
--- @bvt:issue#3396
+-- @bvt:issue#3588
 SELECT floor(18446744073709551616);
 SELECT floor(floor(18446744073709551616));
 SELECT floor(floor(floor(18446744073709551616)));
@@ -25,7 +25,7 @@ DROP TABLE t1;
 
 select floor(999999999999999999);
 
--- @bvt:issue#3396
+-- @bvt:issue#3588
 select floor(9999999999999999999999);
 -- @bvt:issue
 
@@ -100,7 +100,7 @@ drop table t1;
 drop table t2;
 
 #INSERT INTO
--- @bvt:issue#3396
+
 CREATE TABLE t1 (a VARCHAR(250), b INT, PRIMARY KEY (b));
 insert into t1 (a) select (FLOOR(0.13 * 100));
 insert into t1 (a) select FLOOR(1.32 * 100) from t1;
@@ -121,7 +121,7 @@ SELECT a,
 WHERE i1.b=t1.a ORDER BY 1 LIMIT 1) AS a
 FROM t1 ORDER BY a LIMIT 5;
 DROP TABLE t1;
--- @bvt:issue
+
 
 #0.5 MO不支持CREATE SELECT, 也不支持 WITH RECURSIVE AS
 #CREATE TABLE t1(a INT, b INT);
@@ -135,7 +135,7 @@ DROP TABLE t1;
 #DROP TABLE t1;
 
 #嵌套
--- @bvt:issue#3396
+-- @bvt:issue#3588
 SELECT DATE(FLOOR(20110512154559.616));
 -- @bvt:issue
 
