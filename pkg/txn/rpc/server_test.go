@@ -58,7 +58,7 @@ func TestHandleMessage(t *testing.T) {
 		defer close(c)
 		cs := newTestClientSession(c)
 
-		assert.NoError(t, s.onMessage(&txn.TxnRequest{RequestID: 1, TimeoutAt: time.Now().Add(time.Hour).UnixMicro()}, 0, cs))
+		assert.NoError(t, s.onMessage(&txn.TxnRequest{RequestID: 1, TimeoutAt: time.Now().Add(time.Hour).UnixNano()}, 0, cs))
 		v := <-c
 		assert.Equal(t, uint64(1), v.GetID())
 	})
@@ -75,7 +75,7 @@ func TestHandleMessageWithFilter(t *testing.T) {
 			return false
 		})
 
-		assert.NoError(t, s.onMessage(&txn.TxnRequest{RequestID: 1, TimeoutAt: time.Now().Add(time.Hour).UnixMicro()},
+		assert.NoError(t, s.onMessage(&txn.TxnRequest{RequestID: 1, TimeoutAt: time.Now().Add(time.Hour).UnixNano()},
 			0, nil))
 		assert.Equal(t, 0, n)
 	})
@@ -114,7 +114,7 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 				return nil
 			})
 
-		req := &txn.TxnRequest{Method: txn.TxnMethod_Read, TimeoutAt: time.Now().UnixMicro() - 1}
+		req := &txn.TxnRequest{Method: txn.TxnMethod_Read, TimeoutAt: time.Now().UnixNano() - 1}
 		assert.NoError(t, s.onMessage(req, 0, nil))
 		assert.Equal(t, 0, n)
 	})
