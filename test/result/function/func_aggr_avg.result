@@ -31,15 +31,20 @@ select avg(h) from t1;
 avg(h)
 14.31400000000000000000000
 select avg(i) from t1;
-Function 'avg' with parameters [DATE] will be implemented in future version.
+avg(i)
+20120312.0000
 select avg(k) from t1;
-Function 'avg' with parameters [DATETIME] will be implemented in future version.
+avg(k)
+20120312100312.0000
 select avg(l) from t1;
-Function 'avg' with parameters [TIMESTAMP] will be implemented in future version.
+avg(l)
+20120312130312.0000
 select avg(m) from t1;
-Function 'avg' with parameters [CHAR] will be implemented in future version.
+avg(m)
+0.0
 select avg(n) from t1;
-Function 'avg' with parameters [VARCHAR] will be implemented in future version.
+avg(n)
+0.0
 select avg(a) from t1 limit 1;
 avg(a)
 1.0000
@@ -65,15 +70,20 @@ select avg(h) from t1 limit 1;
 avg(h)
 14.31400000000000000000000
 select avg(i) from t1 limit 1;
-Function 'avg' with parameters [DATE] will be implemented in future version.
+avg(i)
+20120312.0000
 select avg(k) from t1 limit 1;
-Function 'avg' with parameters [DATETIME] will be implemented in future version.
+avg(k)
+20120312100312.0000
 select avg(l) from t1 limit 1;
-Function 'avg' with parameters [TIMESTAMP] will be implemented in future version.
+avg(l)
+20120312130312.0000
 select avg(m) from t1 limit 1;
-Function 'avg' with parameters [CHAR] will be implemented in future version.
+avg(m)
+0.0
 select avg(n) from t1 limit 1;
-Function 'avg' with parameters [VARCHAR] will be implemented in future version.
+avg(n)
+0.0
 drop table t1;
 create table t1(a bigint);
 select avg(a) from t1;
@@ -141,7 +151,7 @@ CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
 INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
 INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 SELECT DISTINCT SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
-Function 'sum' with parameters [VARCHAR] will be implemented in future version.
+SUM(  a )
 SELECT DISTINCT SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SUM(  b )
 1
