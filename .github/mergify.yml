@@ -8,3 +8,11 @@ pull_request_rules:
       label:
         add:
           - reviewed
+  - name: automatic update
+    conditions:
+      - base=main
+      - "#approved-reviews-by>=1"
+      - -conflict # skip PRs with conflicts
+      - -draft # filter-out GH draft PRs
+    actions:
+      update:
