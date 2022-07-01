@@ -1,18 +1,24 @@
 #SELECT 数据格式
--- @bvt:issue#3385
+
 select extract(YEAR FROM "1999-01-02 10:11:12");
 select extract(YEAR_MONTH FROM "1999-01-02");
 select extract(DAY FROM "1999-01-02");
 select extract(DAY_HOUR FROM "1999-01-02 10:11:12");
+-- @bvt:issue#3385
 select extract(DAY_MINUTE FROM "02 10:11:12");
 select extract(DAY_SECOND FROM "225 10:11:12");
+-- @bvt:issue
 select extract(HOUR FROM "1999-01-02 10:11:12");
+-- @bvt:issue#3385
 select extract(HOUR_MINUTE FROM "10:11:12");
 select extract(HOUR_SECOND FROM "10:11:12");
 select extract(MINUTE FROM "10:11:12");
 select extract(MINUTE_SECOND FROM "10:11:12");
+-- @bvt:issue
 select extract(SECOND FROM "1999-01-02 10:11:12");
+-- @bvt:issue#3385
 select extract(MONTH FROM "2001-02-00");
+-- @bvt:issue
 
 
 #SELECT 数据格式
@@ -40,6 +46,7 @@ drop table t1;
 
 
 #EXTREME VALUE
+-- @bvt:issue#3385
 create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
 select extract(MONTH FROM "0000-00-00"),extract(MONTH FROM d),extract(MONTH FROM dt),extract(MONTH FROM t),extract(MONTH FROM c) from t1;
@@ -47,6 +54,7 @@ drop table t1;
 
 #EXTREME VALUE
 SELECT EXTRACT(HOUR FROM '100000:02:03');
+-- @bvt:issue
 
 #嵌套
 CREATE TABLE t1 (i1 INT,d1 DATETIME);
@@ -59,6 +67,7 @@ DROP TABLE t1;
 
 
 #嵌套
+-- @bvt:issue#3385
 select reverse(concat_ws(",",extract(year from 20090702)));
 
 CREATE TABLE t1 (i1 INT,d1 DATETIME);

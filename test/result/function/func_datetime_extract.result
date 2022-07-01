@@ -9,7 +9,7 @@ extract(DAY FROM "1999-01-02")
 2
 select extract(DAY_HOUR FROM "1999-01-02 10:11:12");
 extract(DAY_HOUR FROM "1999-01-02 10:11:12")
-210
+02 10
 select extract(DAY_MINUTE FROM "02 10:11:12");
 extract(DAY_MINUTE FROM "02 10:11:12")
 5811
@@ -123,17 +123,17 @@ INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('20
 INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 0;
 SELECT * FROM t1;
 date	extracted_week	weekday	week	default_week_format
-2000-01-01	0	5	0	1
-2000-01-01	0	5	0	2
-2000-01-01	0	5	0	3
-2000-01-01	0	5	0	4
-2000-01-01	0	5	0	5
-2000-01-01	0	5	0	6
-2000-01-01	0	5	0	7
-2000-01-01	0	5	0	0
+2000-01-01	52	5	52	1
+2000-01-01	52	5	52	2
+2000-01-01	52	5	52	3
+2000-01-01	52	5	52	4
+2000-01-01	52	5	52	5
+2000-01-01	52	5	52	6
+2000-01-01	52	5	52	7
+2000-01-01	52	5	52	0
 SELECT distinct extracted_week from t1;
 extracted_week
-0
+52
 select date from t1 having extract(day FROM date)=1;
 column "t1.date" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
@@ -143,10 +143,10 @@ CREATE TABLE t1
 INSERT INTO t1 select '2000-01-01', EXTRACT(WEEK FROM '2000-01-01');
 SELECT * FROM t1;
 date	extracted_week
-2000-01-01	0
+2000-01-01	52
 SELECT distinct extracted_week from t1;
 extracted_week
-0
+52
 select date from t1 having extract(day FROM date)=1;
 column "date" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
