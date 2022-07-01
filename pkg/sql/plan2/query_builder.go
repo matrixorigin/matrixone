@@ -48,6 +48,9 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[int64][2]int32) er
 			return errors.New("", fmt.Sprintf("can't find column in context's map %v", colMap))
 		}
 
+	case *plan.Expr_Corr:
+		return errors.New("", "correlated subquery will support in future version.")
+
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
 			err := builder.remapExpr(arg, colMap)
