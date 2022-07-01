@@ -6,7 +6,7 @@ select oct(0b11111111);
 select oct(12);
 SELECT oct(1314);
 
--- @bvt:issue#3409
+-- @bvt:issue#3620
 select oct(2e5);
 -- @bvt:issue
 
@@ -21,11 +21,13 @@ SELECT concat_ws(",", oct(1000), oct(2000));
 select oct(0);
 select oct(-1);
 
--- @bvt:issue#3409
+-- @bvt:issue#3620
 select oct(10e50);
 select oct(-10e50);
+-- @bvt:issue
 select oct(0.00000000000000000000000001);
 select oct(-0.00000000000000000000000001);
+-- @bvt:issue#3506
 select oct("你好");
 -- @bvt:issue
 
@@ -36,26 +38,28 @@ drop table t1;
 
 
 #DATA TYPES
--- @bvt:issue#3409
+
 create table t1(a tinyint, b SMALLINT, c BIGINT, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
+-- @bvt:issue#3588
 select oct(a),oct(b),oct(c),oct(d),oct(e),oct(f),oct(g),oct(h),oct(i),oct(k),oct(l),oct(m),oct(n) from t1;
-drop table t1;
 -- @bvt:issue
-
+drop table t1;
 
 
 #INSERT,distinct
--- @bvt:issue#3409
+
 CREATE TABLE t1(a char(255), b varchar(255));
 INSERT INTO t1 select oct(56), oct(234);
 INSERT INTO t1 select oct(100), oct(234);
+-- @bvt:issue#3506
 SELECT distinct oct(a), oct(b) FROM t1 ORDER BY oct(a);
-drop table t1;
 -- @bvt:issue
+drop table t1;
+
 
 #HAVING, 比较运算
 CREATE TABLE t1 (a int);
@@ -65,7 +69,7 @@ HAVING oct(a) <>0;
 DROP TABLE t1;
 
 #WHERE, 算术运算
--- @bvt:issue#3409
+-- @bvt:issue#3500
 drop table if exists t1;
 create table t1(a INT,  b int);
 insert into t1 values(1, 2),(2, 3),(3, 4),(4, 5);

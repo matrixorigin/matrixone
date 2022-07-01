@@ -53,16 +53,17 @@ var _ = BtSliceNullAndSliceNull
 var _ = BtConstAndSliceNull
 
 func init() {
-	BtSliceAndConst = sliceLikePure
+	BtSliceAndConst = sliceLikeScalar
 	BtSliceAndSlice = sliceLikeSlice
-	BtConstAndSlice = pureLikeSlice
-	BtConstAndConst = pureLikePure
-	BtSliceNullAndConst = sliceNullLikePure
-	BtSliceNullAndSliceNull = sliceNullLikeSliceNull
-	BtConstAndSliceNull = pureLikeSliceNull
+	BtConstAndSlice = scalarLikeSlice
+	BtConstAndConst = scalarLikeScalar
+	BtSliceNullAndConst = sliceContainsNullLikeScalar
+	BtSliceNullAndSliceNull = likeBetweenSlicesContainNull
+	BtConstAndSliceNull = scalarLikeSliceContainsNull
 }
 
-func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
+// <source column> like 'rule'
+func sliceLikeScalar(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 	n := uint32(len(expr))
 	if n == 0 {
 		count := 0
@@ -203,6 +204,7 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 	return rs[:count], nil
 }
 
+// <source column> like <rule column>
 func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, error) {
 	count := 0
 	tempSlice := make([]int64, 1)
@@ -211,7 +213,7 @@ func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, er
 		return nil, errors.New("unexpected error when LIKE operator")
 	}
 	for i := range s.Offsets {
-		k, err := pureLikePure(s.Get(int64(i)), exprs.Get(int64(i)), tempSlice)
+		k, err := scalarLikeScalar(s.Get(int64(i)), exprs.Get(int64(i)), tempSlice)
 		if err != nil {
 			return nil, err
 		}
@@ -223,11 +225,12 @@ func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, er
 	return rs[:count], nil
 }
 
-func pureLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
+// 'source' like <rule column>
+func scalarLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
 	count := 0
 	tempSlice := make([]int64, 1)
 	for i := range exprs.Offsets {
-		k, err := pureLikePure(p, exprs.Get(int64(i)), tempSlice)
+		k, err := scalarLikeScalar(p, exprs.Get(int64(i)), tempSlice)
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +242,8 @@ func pureLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
 	return rs[:count], nil
 }
 
-func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
+// 'source' like 'rule'
+func scalarLikeScalar(p []byte, expr []byte, rs []int64) ([]int64, error) {
 	n := len(expr)
 	if n == 0 {
 		if len(p) == 0 {
@@ -331,7 +335,8 @@ func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 	return nil, nil
 }
 
-func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+// 'source' like <rule column may contains null>
+func sliceContainsNullLikeScalar(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
 	var cFlag int8 // case flag for like
 
 	reg, err := regexp.Compile(convert(expr))
@@ -459,7 +464,8 @@ func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []
 	return rs[:count], nil
 }
 
-func sliceNullLikeSliceNull(s *types.Bytes, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+// <source column may contains null> like
+func likeBetweenSlicesContainNull(s *types.Bytes, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
 	count := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -479,7 +485,7 @@ func sliceNullLikeSliceNull(s *types.Bytes, exprs *types.Bytes, nulls *roaring.B
 				nextNull = -1
 			}
 		} else {
-			k, err := pureLikePure(s.Get(int64(i)), exprs.Get(int64(i)), tempSlice)
+			k, err := scalarLikeScalar(s.Get(int64(i)), exprs.Get(int64(i)), tempSlice)
 			if err != nil {
 				return nil, err
 			}
@@ -492,7 +498,8 @@ func sliceNullLikeSliceNull(s *types.Bytes, exprs *types.Bytes, nulls *roaring.B
 	return rs[:count], nil
 }
 
-func pureLikeSliceNull(p []byte, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+// 'source' like <rule column may contains null>
+func scalarLikeSliceContainsNull(p []byte, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
 	count := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -512,7 +519,7 @@ func pureLikeSliceNull(p []byte, exprs *types.Bytes, nulls *roaring.Bitmap, rs [
 				nextNull = -1
 			}
 		} else {
-			k, err := pureLikePure(p, exprs.Get(int64(i)), tempSlice)
+			k, err := scalarLikeScalar(p, exprs.Get(int64(i)), tempSlice)
 			if err != nil {
 				return nil, err
 			}
@@ -530,20 +537,20 @@ func convert(expr []byte) string {
 }
 
 func replace(s string) string {
-	var oc rune
+	var oldCharactor rune
 
 	r := make([]byte, len(s)+strings.Count(s, `%`))
 	w := 0
 	start := 0
 	for len(s) > start {
-		c, wid := utf8.DecodeRuneInString(s[start:])
-		if oc == '\\' {
+		character, wid := utf8.DecodeRuneInString(s[start:])
+		if oldCharactor == '\\' {
 			w += copy(r[w:], s[start:start+wid])
 			start += wid
-			oc = 0
+			oldCharactor = 0
 			continue
 		}
-		switch c {
+		switch character {
 		case '_':
 			w += copy(r[w:], []byte{'.'})
 		case '%':
@@ -553,7 +560,7 @@ func replace(s string) string {
 			w += copy(r[w:], s[start:start+wid])
 		}
 		start += wid
-		oc = c
+		oldCharactor = character
 	}
-	return string(r)
+	return string(r[:w])
 }

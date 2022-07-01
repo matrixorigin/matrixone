@@ -81,7 +81,7 @@ func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]by
 	if length < 0 {
 		length = 0
 	}
-	if length < 0 {
+	if length < 0 || offset < 0 {
 		return []byte{}, 0
 	}
 

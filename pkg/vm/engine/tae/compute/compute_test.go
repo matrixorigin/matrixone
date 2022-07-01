@@ -42,7 +42,7 @@ func TestShuffleByDeletes(t *testing.T) {
 	deletes.Add(8)
 	deletes.Add(22)
 
-	destMask, destVals, destDelets := ShuffleByDeletes(origMask, origVals, deletes)
+	destMask, destVals, destDelets := ShuffleByDeletes(origMask, origVals, deletes, deletes)
 	t.Log(destMask.String())
 	t.Log(destVals)
 	t.Log(destDelets.String())
