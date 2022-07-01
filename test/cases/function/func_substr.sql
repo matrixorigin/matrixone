@@ -28,9 +28,7 @@ select SUBSTRING(c,-1),SUBSTR(vc,-1) from t1;
 select SUBSTRING(c,-2),SUBSTR(vc,-2) from t1;
 select SUBSTRING(c,-5),SUBSTR(vc,-9) from t1 where id = 1 ;
 
--- @bvt:issue#3166
 select substring(c,-11),substr(vc,-13) from t1 where id = 6 ;
--- @bvt:issue
 
 select SUBSTRING(c,1,1),SUBSTR(vc,1,1) from t1 where id = 1 ;
 select SUBSTRING(c,2,2),SUBSTR(vc,3,3) from t1 where id = 1 ;
@@ -39,19 +37,14 @@ select substring(c,2,9),substr(vc,3,17) from t1 where id = 4 ;
 select substring(c,2,10),substr(vc,3,18) from t1 where id = 4 ;
 select substring(c,5,4),substr(vc,5,4) from t1 where id = 4 ;
 select substring(c,10,10),substr(vc,18,18) from t1 where id = 4 ;
--- @bvt:issue#3166
 select substring(c,2,-1),substr(vc,3,-1) from t1 where id = 4 ;
--- @bvt:issue
 
 select SUBSTRING(c,-1,1),SUBSTR(vc,1,1) from t1 where id = 1 ;
 select SUBSTRING(c,-2,2),SUBSTR(vc,3,3) from t1 where id = 1 ;
 select SUBSTRING(c,-2,5),SUBSTR(vc,3,9) from t1 where id = 1 ;
 select substring(c,-2,9),substr(vc,3,17) from t1 where id = 4 ;
 select substring(c,-2,10),substr(vc,3,18) from t1 where id = 4 ;
-
--- @bvt:issue#3166
 select substring(c,1,-1),substr(vc,3,-2) from t1 where id = 4 ;
--- @bvt:issue
 
 select substring(c,1,a),substr(vc,3,1) from t1 where id = 4 ;
 select substring(c,1,2),substr(vc,a,1) from t1 where id = 4 ;
