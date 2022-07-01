@@ -48,6 +48,8 @@ func (s *sender) Close() error {
 }
 
 func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) ([]txn.TxnResponse, error) {
+	s.mustSetupTimeoutAt(ctx, requests)
+
 	if len(requests) == 1 {
 		resp, err := s.doSend(ctx, requests[0])
 		if err != nil {
@@ -109,6 +111,16 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 		return txn.TxnResponse{}, err
 	}
 	return *(v.(*txn.TxnResponse)), nil
+}
+
+func (s *sender) mustSetupTimeoutAt(ctx context.Context, requests []txn.TxnRequest) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		s.logger.Fatal("context deadline not set")
+	}
+	for idx := range requests {
+		requests[idx].TimeoutAt = deadline.UnixNano()
+	}
 }
 
 type executor struct {

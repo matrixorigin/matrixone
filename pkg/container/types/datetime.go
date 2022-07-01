@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	gotime "time"
 	"unsafe"
@@ -46,10 +47,15 @@ const (
 	minHourInDay, maxHourInDay           = 0, 23
 	minMinuteInHour, maxMinuteInHour     = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
+
+	secondMaxAddNum = int64(9223372036)
+	minuteMaxAddNum = int64(153722867)
+	hourMaxAddNum   = int64(2562047)
 )
 
 var (
-	errIncorrectDatetimeValue = errors.New(errno.DataException, "Incorrect datetime value")
+	errIncorrectDatetimeValue     = errors.New(errno.DataException, "Incorrect datetime value")
+	errInvalidDatetimeAddInterval = errors.New(errno.DataException, "Invalid datetime result")
 )
 
 func (dt Datetime) String() string {
@@ -75,6 +81,7 @@ func (dt Datetime) String2(precision int32) string {
 // Support Format:
 // 1. all the Date value
 // 2. yyyy-mm-dd hh:mm:ss(.msec)
+// now support mm/dd/hh/mm/ss can be single number
 // 3. yyyymmddhhmmss(.msec)
 // during parsing, the Datetime value will be rounded(away from zero) to the predefined precision, for example:
 // Datetime(3) input string   					parsing result
@@ -96,37 +103,70 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 	var carry uint32 = 0
 	var err error
 
-	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
-		// yyyy-mm-dd hh:mm:ss(.msec)
-		if len(s) < 19 || s[7] != '-' || s[10] != ' ' || s[13] != ':' || s[16] != ':' {
+		var num int64
+		var unum uint64
+		strArr := strings.Split(s, " ")
+		if len(strArr) != 2 {
 			return -1, errIncorrectDatetimeValue
 		}
-		month = (s[5]-'0')*10 + (s[6] - '0')
-		day = (s[8]-'0')*10 + (s[9] - '0')
+		// solve year/month/day
+		front := strings.Split(strArr[0], "-")
+		if len(front) != 3 {
+			return -1, errIncorrectDatetimeValue
+		}
+		num, err = strconv.ParseInt(front[0], 10, 32)
+		if err != nil {
+			return -1, errIncorrectDatetimeValue
+		}
+		year = int32(num)
+		unum, err = strconv.ParseUint(front[1], 10, 8)
+		if err != nil {
+			return -1, errIncorrectDatetimeValue
+		}
+		month = uint8(unum)
+		unum, err = strconv.ParseUint(front[2], 10, 8)
+		if err != nil {
+			return -1, errIncorrectDatetimeValue
+		}
+		day = uint8(unum)
+
 		if !validDate(year, month, day) {
 			return -1, errIncorrectDatetimeValue
 		}
 
-		hour = (s[11]-'0')*10 + (s[12] - '0')
-		minute = (s[14]-'0')*10 + (s[15] - '0')
-		second = (s[17]-'0')*10 + (s[18] - '0')
+		middleAndBack := strings.Split(strArr[1], ".")
+		// solve hour/minute/second
+		middle := strings.Split(middleAndBack[0], ":")
+		unum, err = strconv.ParseUint(middle[0], 10, 8)
+		if err != nil {
+			return -1, errIncorrectDatetimeValue
+		}
+		hour = uint8(unum)
+		unum, err = strconv.ParseUint(middle[1], 10, 8)
+		if err != nil {
+			return -1, errIncorrectDatetimeValue
+		}
+		minute = uint8(unum)
+		unum, err = strconv.ParseUint(middle[2], 10, 8)
+		if err != nil {
+			return -1, errIncorrectDatetimeValue
+		}
+		second = uint8(unum)
 		if !validTimeInDay(hour, minute, second) {
 			return -1, errIncorrectDatetimeValue
 		}
-
-		if len(s) > 19 {
-			if len(s) > 20 && s[19] == '.' {
-				msecStr := s[20:]
-				msec, carry, err = getMsec(msecStr, precision)
-				if err != nil {
-					return -1, errIncorrectDatetimeValue
-				}
-			} else {
+		// solve microsecond
+		if len(middleAndBack) == 2 {
+			msec, carry, err = getMsec(middleAndBack[1], precision)
+			if err != nil {
 				return -1, errIncorrectDatetimeValue
 			}
+		} else if len(middleAndBack) > 2 {
+			return -1, errIncorrectDatetimeValue
 		}
 	} else {
+		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 		month = (s[4]-'0')*10 + (s[5] - '0')
 		day = (s[6]-'0')*10 + (s[7] - '0')
 		hour = (s[8]-'0')*10 + (s[9] - '0')
@@ -242,9 +282,9 @@ func DatetimeToTimestamp(xs []Datetime, rs []Timestamp) ([]Timestamp, error) {
 
 func (dt Datetime) AddDateTime(date gotime.Time, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64, timeType TimeType) (Datetime, bool) {
 	date = date.Add(gotime.Duration(addMsec) * gotime.Microsecond)
-	date = date.Add(gotime.Duration(addSec) * gotime.Second)
-	date = date.Add(gotime.Duration(addMin) * gotime.Minute)
-	date = date.Add(gotime.Duration(addHour) * gotime.Hour)
+	date = addTimeForLoop(date, addSec, 0)
+	date = addTimeForLoop(date, addMin, 1)
+	date = addTimeForLoop(date, addHour, 2)
 	// corner case: mysql: date_add('2022-01-31',interval 1 month) -> 2022-02-28
 	// only in the month year year-month
 	if addMonth != 0 || addYear != 0 {
@@ -284,23 +324,23 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 	var addMsec, addSec, addMin, addHour, addDay, addMonth, addYear int64
 	switch its {
 	case MicroSecond:
-		addMsec += nums
+		addMsec = nums
 	case Second:
-		addSec += nums
+		addSec = nums
 	case Minute:
-		addMin += nums
+		addMin = nums
 	case Hour:
-		addHour += nums
+		addHour = nums
 	case Day:
-		addDay += nums
+		addDay = nums
 	case Week:
-		addDay += 7 * nums
+		addDay = 7 * nums
 	case Month:
-		addMonth += nums
+		addMonth = nums
 	case Quarter:
-		addMonth += 3 * nums
+		addMonth = 3 * nums
 	case Year:
-		addYear += nums
+		addYear = nums
 	}
 	return dt.AddDateTime(goTime, addMsec, addSec, addMin, addHour, addDay, addMonth, addYear, timeType)
 }
@@ -398,4 +438,27 @@ func validDatetime(year int32, month, day uint8) bool {
 		}
 	}
 	return false
+}
+
+func addTimeForLoop(date gotime.Time, all int64, t int) gotime.Time {
+	var addMaxNum int64
+	var dur gotime.Duration
+	switch t {
+	case 0:
+		addMaxNum = secondMaxAddNum
+		dur = gotime.Second
+	case 1:
+		addMaxNum = minuteMaxAddNum
+		dur = gotime.Minute
+	case 2:
+		addMaxNum = hourMaxAddNum
+		dur = gotime.Hour
+	}
+	count := all / addMaxNum
+	left := all % addMaxNum
+	for i := int64(0); i < count; i++ {
+		date = date.Add(gotime.Duration(addMaxNum) * dur)
+	}
+	date = date.Add(gotime.Duration(left) * dur)
+	return date
 }

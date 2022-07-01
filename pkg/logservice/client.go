@@ -164,11 +164,13 @@ func (c *client) request(ctx context.Context,
 	}
 	req := pb.Request{
 		Method:  mt,
-		ShardID: c.cfg.ShardID,
-		DNID:    c.cfg.ReplicaID,
 		Timeout: int64(timeout),
-		Index:   index,
-		MaxSize: maxSize,
+		LogRequest: pb.LogRequest{
+			ShardID: c.cfg.ShardID,
+			DNID:    c.cfg.ReplicaID,
+			Index:   index,
+			MaxSize: maxSize,
+		},
 	}
 	c.req.Request = req
 	c.req.payload = payload
@@ -209,7 +211,7 @@ func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if err != nil {
 		return 0, err
 	}
-	return resp.Index, nil
+	return resp.LogResponse.Index, nil
 }
 
 func (c *client) read(ctx context.Context,
@@ -218,7 +220,7 @@ func (c *client) read(ctx context.Context,
 	if err != nil {
 		return nil, 0, err
 	}
-	return recs, resp.LastIndex, nil
+	return recs, resp.LogResponse.LastIndex, nil
 }
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
@@ -231,7 +233,7 @@ func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
 	if err != nil {
 		return 0, err
 	}
-	return resp.Index, nil
+	return resp.LogResponse.Index, nil
 }
 
 func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RPCClient, error) {
