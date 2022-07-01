@@ -119,6 +119,22 @@ func NotScalarBoolGtScalar(sv, nsv *vector.Vector, value bool, col []bool, proc 
 	return vec, nil
 }
 
+func ScalarDecimal64GtNotScalar(sv, nsv *vector.Vector, str types.Decimal64, col []types.Decimal64, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = types.CompareDecimal64Decimal64(str, col[i], sv.Typ.Scale, nsv.Typ.Scale) > 0
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
 func ScalarDecimal128GtNotScalar(sv, nsv *vector.Vector, str types.Decimal128, col []types.Decimal128, proc *process.Process) (*vector.Vector, error) {
 	var i int64
 	length := int64(vector.Length(nsv))
@@ -129,6 +145,22 @@ func ScalarDecimal128GtNotScalar(sv, nsv *vector.Vector, str types.Decimal128, c
 	vcols := vec.Col.([]bool)
 	for i = 0; i < length; i++ {
 		vcols[i] = types.CompareDecimal128Decimal128(str, col[i], sv.Typ.Scale, nsv.Typ.Scale) > 0
+	}
+	nulls.Or(nsv.Nsp, nil, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func NotScalarDecimal64GtScalar(sv, nsv *vector.Vector, str types.Decimal64, col []types.Decimal64, proc *process.Process) (*vector.Vector, error) {
+	var i int64
+	length := int64(vector.Length(nsv))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i = 0; i < length; i++ {
+		vcols[i] = types.CompareDecimal64Decimal64(col[i], str, nsv.Typ.Scale, sv.Typ.Scale) > 0
 	}
 	nulls.Or(nsv.Nsp, nil, vec.Nsp)
 	FillNullPos(vec)
@@ -218,6 +250,42 @@ func GtBool(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 	for i := range vcols {
 		j := int64(i)
 		vcols[i] = col1[j] && !col2[j]
+	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	FillNullPos(vec)
+	return vec, nil
+}
+
+func GtDecimal64(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	col1, col2 := vector.MustTCols[types.Decimal64](v1), vector.MustTCols[types.Decimal64](v2)
+
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return HandleWithNullCol(vs, proc)
+	}
+
+	c1, c2 := v1.IsScalar(), v2.IsScalar()
+	switch {
+	case c1 && c2:
+		vec := proc.AllocScalarVector(retType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = types.CompareDecimal64Decimal64(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale) > 0
+		return vec, nil
+	case c1 && !c2:
+		return ScalarDecimal64GtNotScalar(v1, v2, col1[0], col2, proc)
+	case !c1 && c2:
+		return NotScalarDecimal64GtScalar(v2, v1, col2[0], col1, proc)
+	}
+	// case !c1 && !c2
+	length := int64(vector.Length(v1))
+	vec, err := allocateBoolVector(length, proc)
+	if err != nil {
+		return nil, err
+	}
+	vcols := vec.Col.([]bool)
+	for i := range vcols {
+		j := int64(i)
+		vcols[i] = types.CompareDecimal64Decimal64(col1[j], col2[j], v1.Typ.Scale, v2.Typ.Scale) > 0
 	}
 	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
 	FillNullPos(vec)

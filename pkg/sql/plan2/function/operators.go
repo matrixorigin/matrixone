@@ -547,7 +547,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.EqGeneral[types.Decimal64],
+				Fn:        operator.EqDecimal64,
 			},
 			{
 				Index:  11,
@@ -752,7 +752,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GtGeneral[types.Decimal64],
+				Fn:        operator.GtDecimal64,
 			},
 			{
 				Index:  11,
@@ -957,7 +957,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.GeGeneral[types.Decimal64],
+				Fn:        operator.GeDecimal64,
 			},
 			{
 				Index:  11,
@@ -1162,7 +1162,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LtGeneral[types.Decimal64],
+				Fn:        operator.LtDecimal64,
 			},
 			{
 				Index:  11,
@@ -1367,7 +1367,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.LeGeneral[types.Decimal64],
+				Fn:        operator.LeDecimal64,
 			},
 			{
 				Index:  11,
@@ -1572,7 +1572,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneral[types.Decimal64],
+				Fn:        operator.NeDecimal64,
 			},
 			{
 				Index:  11,
@@ -1583,7 +1583,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.NeGeneral[types.Decimal128],
+				Fn:        operator.NeDecimal128,
 			},
 			{
 				Index:  12,
