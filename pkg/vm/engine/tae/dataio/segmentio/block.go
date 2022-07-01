@@ -168,19 +168,9 @@ func (bf *blockFile) Destroy() error {
 		cb.Unref()
 	}
 	bf.columns = nil
-	for _, del := range bf.deletes.file {
-		if del == nil {
-			continue
-		}
-		del.Unref()
-	}
+	bf.deletes.Destroy()
 	bf.deletes = nil
-	for _, idx := range bf.indexMeta.file {
-		if idx == nil {
-			continue
-		}
-		idx.Unref()
-	}
+	bf.indexMeta.Destroy()
 	bf.indexMeta = nil
 	if bf.seg != nil {
 		bf.seg.RemoveBlock(bf.id)
