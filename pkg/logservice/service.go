@@ -248,8 +248,9 @@ func getResponse(req pb.Request) pb.Response {
 func (s *Service) handleConnect(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.GetOrExtendDNLease(ctx, req.ShardID, req.DNID); err != nil {
+	if err := s.store.GetOrExtendDNLease(ctx, r.ShardID, r.DNID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -258,9 +259,10 @@ func (s *Service) handleConnect(req pb.Request) pb.Response {
 func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
 	// we only check whether the specified shard is available
-	if _, err := s.store.GetTruncatedIndex(ctx, req.ShardID); err != nil {
+	if _, err := s.store.GetTruncatedIndex(ctx, r.ShardID); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -269,12 +271,13 @@ func (s *Service) handleConnectRO(req pb.Request) pb.Response {
 func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	lsn, err := s.store.Append(ctx, req.ShardID, payload)
+	lsn, err := s.store.Append(ctx, r.ShardID, payload)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.Index = lsn
+		resp.LogResponse.Index = lsn
 	}
 	return resp
 }
@@ -282,12 +285,13 @@ func (s *Service) handleAppend(req pb.Request, payload []byte) pb.Response {
 func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	records, lsn, err := s.store.QueryLog(ctx, req.ShardID, req.Index, req.MaxSize)
+	records, lsn, err := s.store.QueryLog(ctx, r.ShardID, r.Index, r.MaxSize)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.LastIndex = lsn
+		resp.LogResponse.LastIndex = lsn
 	}
 	return resp, pb.LogRecordResponse{Records: records}
 }
@@ -295,8 +299,9 @@ func (s *Service) handleRead(req pb.Request) (pb.Response, pb.LogRecordResponse)
 func (s *Service) handleTruncate(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	if err := s.store.TruncateLog(ctx, req.ShardID, req.Index); err != nil {
+	if err := s.store.TruncateLog(ctx, r.ShardID, r.Index); err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	}
 	return resp
@@ -305,12 +310,13 @@ func (s *Service) handleTruncate(req pb.Request) pb.Response {
 func (s *Service) handleGetTruncatedIndex(req pb.Request) pb.Response {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(req.Timeout))
 	defer cancel()
+	r := req.LogRequest
 	resp := getResponse(req)
-	index, err := s.store.GetTruncatedIndex(ctx, req.ShardID)
+	index, err := s.store.GetTruncatedIndex(ctx, r.ShardID)
 	if err != nil {
 		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
 	} else {
-		resp.Index = index
+		resp.LogResponse.Index = index
 	}
 	return resp
 }

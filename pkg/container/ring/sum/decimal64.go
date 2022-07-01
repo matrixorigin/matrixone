@@ -194,6 +194,9 @@ func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []u
 // r[x] += a[y] * z
 func (r *Decimal64Ring) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	r.Ns[x] += ar.Ns[y] * z
 	r.Vs[x] += types.Decimal64Int64Mul(r.Vs[y], z)
 }

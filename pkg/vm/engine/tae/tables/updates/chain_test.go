@@ -521,7 +521,7 @@ func TestDeleteChain2(t *testing.T) {
 	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS())
 	assert.NoError(t, err)
 	t.Log(mask.String())
-	assert.Equal(t, uint64(4), mask.GetCardinality())
+	assert.Equal(t, uint64(8), mask.GetCardinality())
 
 	mask, _, err = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1)
 	assert.NoError(t, err)

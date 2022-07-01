@@ -845,8 +845,8 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (view *model.
 		}
 		if updateMask != nil {
 			view.SetUpdates(i, updateMask, updateVals)
+			view.SetLogIndexes(i, indexes)
 		}
-		view.SetLogIndexes(i, indexes)
 	}
 	deleteChain := blk.mvcc.GetDeleteChain()
 	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs)

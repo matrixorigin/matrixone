@@ -127,9 +127,9 @@ func (lunits *LeveledUnits) Scan() {
 				logutil.Warnf("%s: %v", unit.MutationInfo(), err)
 				continue
 			}
-			// logutil.Infof("%s", unit.MutationInfo())
+			// logutil.Debugf("%s", unit.MutationInfo())
 			_, err = lunits.scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
-			logutil.Infof("[Compaction] | Scheduled | Err=%v | Scopes=%s", err, common.IDArraryString(scopes))
+			logutil.Debugf("[Compaction] | Scheduled | Err=%v | Scopes=%s", err, common.IDArraryString(scopes))
 		}
 	}
 }

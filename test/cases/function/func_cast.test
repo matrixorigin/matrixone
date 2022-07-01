@@ -617,7 +617,7 @@ DROP TABLE `CC`;
 create table t1(f1 date, f2 timestamp, f3 datetime);
 insert into t1 values ("2006-01-01", "2006-01-01 12:01:01", "2006-01-01 12:01:01");
 insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02");
--- @bvt:issue#3361
+
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
 select f1 from t1 where date(f1) between cast("2006-1-1" as date) and cast("2006.1.1" as date);
@@ -626,7 +626,7 @@ select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
 select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
--- @bvt:issue
+
 drop table t1;
 
 

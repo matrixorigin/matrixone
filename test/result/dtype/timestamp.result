@@ -28,7 +28,7 @@ a
 2022-01-09 00:00:02
 drop table t1;
 create table t1 ( a int not null default 1, big timestamp(4) primary key);
-insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00.00.000050');
+insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
 select * from t1;
 a	big
 1	2022-01-01 00:00:00.0000

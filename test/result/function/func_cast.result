@@ -199,8 +199,7 @@ create table t1(f1 date, f2 timestamp, f3 datetime);
 insert into t1 values ("2006-01-01", "2006-01-01 12:01:01", "2006-01-01 12:01:01");
 insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02");
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
-f1
-2006-01-01
+Operator 'cast' with parameters [BIGINT DATE] will be implemented in future version.
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
 f1
 2006-01-01
@@ -211,8 +210,7 @@ select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast(
 f3
 2006-01-01 12:01:01
 select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-f3
-2006-01-01 12:01:01
+Operator '>=' with parameters [TIMESTAMP DATETIME] will be implemented in future version.
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
 f1
 2006-01-01
@@ -220,7 +218,7 @@ select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
 f1
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
-[22000]Incorrect date value
+Incorrect date value
 drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');

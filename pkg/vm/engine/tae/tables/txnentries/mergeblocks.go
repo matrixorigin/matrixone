@@ -17,6 +17,7 @@ package txnentries
 import (
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -33,6 +34,7 @@ type mergeBlocksEntry struct {
 	txn         txnif.AsyncTxn
 	relation    handle.Relation
 	droppedSegs []*catalog.SegmentEntry
+	deletes     []*roaring.Bitmap
 	createdSegs []*catalog.SegmentEntry
 	droppedBlks []*catalog.BlockEntry
 	createdBlks []*catalog.BlockEntry
@@ -42,7 +44,7 @@ type mergeBlocksEntry struct {
 	scheduler   tasks.TaskScheduler
 }
 
-func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSegs, createdSegs []*catalog.SegmentEntry, droppedBlks, createdBlks []*catalog.BlockEntry, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler) *mergeBlocksEntry {
+func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSegs, createdSegs []*catalog.SegmentEntry, droppedBlks, createdBlks []*catalog.BlockEntry, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler, deletes []*roaring.Bitmap) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
 		txn:         txn,
 		relation:    relation,
@@ -54,6 +56,7 @@ func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSe
 		fromAddr:    fromAddr,
 		toAddr:      toAddr,
 		scheduler:   scheduler,
+		deletes:     deletes,
 	}
 }
 
@@ -167,7 +170,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			column.UpdateMask, column.UpdateVals, view.DeleteMask = compute.ShuffleByDeletes(
 				column.UpdateMask,
 				column.UpdateVals,
-				deletes)
+				deletes, entry.deletes[fromPos])
 			for row, v := range column.UpdateVals {
 				toPos, toRow := entry.resolveAddr(fromPos, row)
 				if err = blks[toPos].Update(toRow, uint16(colIdx), v); err != nil {
@@ -175,9 +178,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 				}
 			}
 		}
-		if len(view.Columns) == 0 {
-			_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask)
-		}
+		_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask, entry.deletes[fromPos])
 		if view.DeleteMask != nil {
 			it := view.DeleteMask.Iterator()
 			for it.HasNext() {
