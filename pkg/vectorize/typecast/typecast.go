@@ -404,7 +404,7 @@ func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error)
 
 func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]types.Timestamp, error) {
 	for i, x := range xs {
-		rs[i] = types.Timestamp(x)
+		rs[i] = types.UnixToTimestamp(int64(x))
 	}
 	return rs, nil
 }

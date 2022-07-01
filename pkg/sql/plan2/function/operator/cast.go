@@ -16,6 +16,7 @@ package operator
 
 import (
 	"fmt"
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -492,21 +493,21 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if isInteger(lv.Typ.Oid) && rv.Typ.Oid == types.T_timestamp {
 		switch lv.Typ.Oid {
 		case types.T_int8:
-			return CastIntegerAsTimestamp[int8](lv, rv, proc)
+			return CastIntAsTimestamp[int8](lv, rv, proc)
 		case types.T_int16:
-			return CastIntegerAsTimestamp[int16](lv, rv, proc)
+			return CastIntAsTimestamp[int16](lv, rv, proc)
 		case types.T_int32:
-			return CastIntegerAsTimestamp[int32](lv, rv, proc)
+			return CastIntAsTimestamp[int32](lv, rv, proc)
 		case types.T_int64:
-			return CastIntegerAsTimestamp[int64](lv, rv, proc)
+			return CastIntAsTimestamp[int64](lv, rv, proc)
 		case types.T_uint8:
-			return CastIntegerAsTimestamp[uint8](lv, rv, proc)
+			return CastUIntAsTimestamp[uint8](lv, rv, proc)
 		case types.T_uint16:
-			return CastIntegerAsTimestamp[uint16](lv, rv, proc)
+			return CastUIntAsTimestamp[uint16](lv, rv, proc)
 		case types.T_uint32:
-			return CastIntegerAsTimestamp[uint32](lv, rv, proc)
+			return CastUIntAsTimestamp[uint32](lv, rv, proc)
 		case types.T_uint64:
-			return CastIntegerAsTimestamp[uint64](lv, rv, proc)
+			return CastUIntAsTimestamp[uint64](lv, rv, proc)
 		}
 	}
 
@@ -1739,12 +1740,18 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	return vec, nil
 }
 
-func CastIntegerAsTimestamp[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func CastIntAsTimestamp[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	rtl := 8
 	lvs := vector.MustTCols[T](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Timestamp, 1)
+		if lvs[0] < 0 || int64(lvs[0]) > 32536771199 {
+			if lv.Nsp.Np == nil {
+				lv.Nsp.Np = &roaring64.Bitmap{}
+			}
+			lv.Nsp.Np.AddInt(0)
+		}
 		if _, err := typecast.NumericToTimestamp(lvs, rs); err != nil {
 			return nil, err
 		}
@@ -1758,6 +1765,55 @@ func CastIntegerAsTimestamp[T constraints.Integer](lv, rv *vector.Vector, proc *
 	}
 	rs := encoding.DecodeTimestampSlice(vec.Data)
 	rs = rs[:len(lvs)]
+	for i := 0; i < len(lvs); i++ {
+		if lv.Nsp.Np == nil {
+			lv.Nsp.Np = &roaring64.Bitmap{}
+		}
+		if lvs[i] < 0 || int64(lvs[i]) > 32536771199 {
+			lv.Nsp.Np.AddInt(i)
+		}
+	}
+	if _, err := typecast.NumericToTimestamp(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastUIntAsTimestamp[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := vector.MustTCols[T](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]types.Timestamp, 1)
+		if lvs[0] < 0 || uint64(lvs[0]) > 32536771199 {
+			if lv.Nsp.Np == nil {
+				lv.Nsp.Np = &roaring64.Bitmap{}
+			}
+			lv.Nsp.Np.AddInt(0)
+		}
+		if _, err := typecast.NumericToTimestamp(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeTimestampSlice(vec.Data)
+	rs = rs[:len(lvs)]
+	for i := 0; i < len(lvs); i++ {
+		if lv.Nsp.Np == nil {
+			lv.Nsp.Np = &roaring64.Bitmap{}
+		}
+		if lvs[i] < 0 || uint64(lvs[i]) > 32536771199 {
+			lv.Nsp.Np.AddInt(i)
+		}
+	}
 	if _, err := typecast.NumericToTimestamp(lvs, rs); err != nil {
 		return nil, err
 	}

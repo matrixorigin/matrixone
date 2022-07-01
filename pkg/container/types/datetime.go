@@ -215,6 +215,13 @@ func FromUnix(time int64) Datetime {
 	return Datetime((time + unixEpoch) << 20)
 }
 
+func UnixToTimestamp(time int64) Timestamp {
+	localTZAligned := localTZ << 20
+	dt := FromUnix(time)
+	dtint64 := *(*int64)(unsafe.Pointer(&dt))
+	return Timestamp(dtint64 - localTZAligned)
+}
+
 func Now() Datetime {
 	t := gotime.Now()
 	wall := *(*uint64)(unsafe.Pointer(&t))
