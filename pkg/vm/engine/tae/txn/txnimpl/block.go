@@ -263,14 +263,24 @@ func (it *relBlockIt) Valid() bool {
 	if it.err != nil {
 		return false
 	}
-	it.segmentIt.Next()
-	if !it.segmentIt.Valid() {
-		if err = it.segmentIt.GetError(); err != nil {
-			it.err = err
+	var seg handle.Segment
+	for {
+		it.segmentIt.Next()
+		if !it.segmentIt.Valid() {
+			if err = it.segmentIt.GetError(); err != nil {
+				it.err = err
+			}
+			return false
 		}
-		return false
+		seg = it.segmentIt.GetSegment()
+		meta := seg.GetMeta().(*catalog.SegmentEntry)
+		meta.RLock()
+		cnt := meta.BlockCnt()
+		meta.RUnlock()
+		if cnt != 0 {
+			break
+		}
 	}
-	seg := it.segmentIt.GetSegment()
 	it.blockIt = seg.MakeBlockIt()
 	if err = it.blockIt.GetError(); err != nil {
 		it.err = err

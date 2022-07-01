@@ -2057,8 +2057,3 @@ func isDecimal(t types.T) bool {
 	}
 	return false
 }
-
-// isBool: return true if the types.T is decimal64 or decimal128
-func isBool(t types.T) bool {
-	return t == types.T_bool
-}
