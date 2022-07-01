@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/syshealth"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 // NB: Coordinator is assumed to be used in synchronous, single-threaded context.
@@ -37,8 +37,8 @@ func NewCoordinator() *Coordinator {
 	return &Coordinator{OperatorController: operator.NewController()}
 }
 
-func (c *Coordinator) Check(alloc util.IDAllocator, cluster hapb.ClusterInfo,
-	dnState hapb.DNState, logState hapb.LogState, currentTick uint64) []hapb.ScheduleCommand {
+func (c *Coordinator) Check(alloc util.IDAllocator, cluster pb.ClusterInfo,
+	dnState pb.DNState, logState pb.LogState, currentTick uint64) []pb.ScheduleCommand {
 
 	c.OperatorController.RemoveFinishedOperator(dnState, logState)
 

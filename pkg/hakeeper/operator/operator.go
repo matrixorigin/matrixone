@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 const (
@@ -109,7 +109,7 @@ func (o *Operator) CheckExpired() bool {
 	return o.status.CheckExpired(ExpireTime)
 }
 
-func (o *Operator) Check(state hakeeper.LogState, dnState hakeeper.DNState) OpStep {
+func (o *Operator) Check(state pb.LogState, dnState pb.DNState) OpStep {
 	if o.IsEnd() {
 		return nil
 	}

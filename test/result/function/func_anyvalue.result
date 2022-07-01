@@ -64,81 +64,42 @@ insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019
 select any_value(a) from t1;
 any_value(a)
 1
-71
-1
-1
 select any_value(b) from t1;
 any_value(b)
 1
-1
-1
-71
 select any_value(c) from t1;
 any_value(c)
-2
-2
-21
 2
 select any_value(d) from t1;
 any_value(d)
 43
-34
-4
-34
 select any_value(e) from t1;
 any_value(e)
-5
-5
-54
 5
 select any_value(f) from t1;
 any_value(f)
 35.5
-5.5
-53.5
-5.5
 select any_value(g) from t1;
 any_value(g)
 31.133
-341.13
-431.13
-31.313
 select any_value(h) from t1;
 any_value(h)
 14.3140000000000000000
-15.3140000000000000000
-14.3940000000000000000
-124.3140000000000000000
 select any_value(i) from t1;
 any_value(i)
 2012-03-10
-2012-03-22
-2011-03-12
-2012-01-12
 select any_value(k) from t1;
 any_value(k)
 2012-03-12 10:03:12
-2013-03-12 10:03:12
-2015-03-12 10:03:12
-2019-03-12 10:03:12
 select any_value(l) from t1;
 any_value(l)
 2022-03-12 13:03:12
-2032-03-12 13:04:12
-2002-03-12 13:03:12
-2013-03-12 13:03:12
 select any_value(m) from t1;
 any_value(m)
 ab23c
-abr23c
-afbc
-3abd1c
 select any_value(n) from t1;
 any_value(n)
 d5cf
-3dcf
-dct5f
-dcvf
 drop table t1;
 select any_value(9999999999999999999999999999.9999999999);
 any_value(9999999999999999999999999999.9999999999)

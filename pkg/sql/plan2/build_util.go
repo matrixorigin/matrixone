@@ -31,418 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-//splitExprToAND split a expression to a list of AND conditions.
-func splitExprToAND(expr tree.Expr) []*tree.Expr {
-	var exprs []*tree.Expr
-	switch typ := expr.(type) {
-	case nil:
-	case *tree.AndExpr:
-		exprs = append(exprs, splitExprToAND(typ.Left)...)
-		exprs = append(exprs, splitExprToAND(typ.Right)...)
-	case *tree.ParenExpr:
-		exprs = append(exprs, splitExprToAND(typ.Expr)...)
-	default:
-		exprs = append(exprs, &expr)
-	}
-	return exprs
-}
-
-func getColumnIndexAndType(projectList []*Expr, colName string) (int32, *Type) {
-	for idx, expr := range projectList {
-		if expr.ColName == colName {
-			return int32(idx), expr.Typ
-		}
-	}
-	return -1, nil
-}
-
-func getColumnsWithSameName(leftProjList []*Expr, rightProjList []*Expr) ([]*Expr, map[string]int, error) {
-	var commonList []*Expr
-	usingCols := make(map[string]int)
-	leftMap := make(map[string]int)
-
-	for idx, col := range leftProjList {
-		leftMap[col.ColName] = idx
-	}
-	for idx, col := range rightProjList {
-		if leftIdx, ok := leftMap[col.ColName]; ok {
-			leftColExpr := &plan.Expr{
-				TableName: leftProjList[leftIdx].TableName,
-				ColName:   col.ColName,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: 0,
-						ColPos: int32(leftIdx),
-					},
-				},
-				Typ: col.Typ,
-			}
-			rightColExpr := &plan.Expr{
-				TableName: col.TableName,
-				ColName:   col.ColName,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: 1,
-						ColPos: int32(idx),
-					},
-				},
-				Typ: leftProjList[leftIdx].Typ,
-			}
-
-			equalFunctionExpr, _, err := getFunctionExprByNameAndPlanExprs("=", false, []*Expr{leftColExpr, rightColExpr})
-			if err != nil {
-				return nil, nil, err
-			}
-			usingCols[col.ColName] = len(commonList)
-			commonList = append(commonList, equalFunctionExpr)
-		}
-	}
-
-	return commonList, usingCols, nil
-}
-
 func appendQueryNode(query *Query, node *Node) int32 {
 	nodeId := int32(len(query.Nodes))
 	node.NodeId = nodeId
 	query.Nodes = append(query.Nodes, node)
 
 	return nodeId
-}
-
-func fillTableProjectList(query *Query, nodeId int32, alias tree.AliasClause) (int32, error) {
-	node := query.Nodes[nodeId]
-	if node.ProjectList == nil {
-		if node.TableDef == nil {
-			return nodeId, nil
-		}
-
-		if len(alias.Cols) > len(node.TableDef.Cols) {
-			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
-		}
-
-		// Table scan
-		if alias.Alias != "" {
-			node.TableDef.Alias = string(alias.Alias)
-		} else {
-			node.TableDef.Alias = node.TableDef.Name
-		}
-
-		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
-		for idx, col := range node.TableDef.Cols {
-			if idx < len(alias.Cols) {
-				col.Alias = string(alias.Cols[idx])
-			} else {
-				col.Alias = col.Name
-			}
-
-			node.ProjectList[idx] = &Expr{
-				Typ:       col.Typ,
-				TableName: node.TableDef.Alias,
-				ColName:   col.Alias,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: 0,
-						ColPos: int32(idx),
-					},
-				},
-			}
-		}
-	} else {
-		// Subquery
-		if len(alias.Cols) > len(node.ProjectList) {
-			return 0, errors.New(errno.InvalidColumnReference, fmt.Sprintf("table %v has %v columns available but %v columns specified", alias.Alias, len(node.ProjectList), len(alias.Cols)))
-		}
-
-		projNode := &Node{
-			NodeType: plan.Node_PROJECT,
-			Children: []int32{nodeId},
-		}
-		projNode.ProjectList = make([]*Expr, len(node.ProjectList))
-		tableName := string(alias.Alias)
-		var colName string
-		for idx, col := range node.ProjectList {
-			if idx < len(alias.Cols) {
-				colName = string(alias.Cols[idx])
-			} else {
-				colName = col.ColName
-			}
-
-			col.TableName = tableName
-			col.ColName = colName
-
-			projNode.ProjectList[idx] = &Expr{
-				Typ:       col.Typ,
-				TableName: tableName,
-				ColName:   colName,
-				Expr: &plan.Expr_Col{
-					Col: &ColRef{
-						RelPos: 0,
-						ColPos: int32(idx),
-					},
-				},
-			}
-		}
-		nodeId = appendQueryNode(query, projNode)
-	}
-
-	return nodeId, nil
-}
-
-func fillJoinProjectList(binderCtx *BinderContext, usingCols map[string]int, node *Node, leftChild *Node, rightChild *Node, projectNodeWhere []*Expr) *Node {
-	joinResultLen := len(leftChild.ProjectList) + len(rightChild.ProjectList)
-	usingColsLen := len(usingCols)
-	projectResultLen := joinResultLen - usingColsLen
-
-	isSemiOrAntiJoin := leftChild.JoinType&(plan.Node_SEMI|plan.Node_ANTI) != 0
-	if isSemiOrAntiJoin {
-		projectResultLen = len(leftChild.ProjectList)
-	}
-
-	// add new projectionNode after joinNode
-	projectNode := &Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{node.NodeId},
-		ProjectList: make([]*plan.Expr, projectResultLen),
-		FilterList:  projectNodeWhere,
-	}
-
-	node.ProjectList = make([]*Expr, projectResultLen)
-	joinNodeIdx := 0
-	projNodeIdx := usingColsLen
-	for i, expr := range leftChild.ProjectList {
-		colExpr := &Expr{
-			Typ:       expr.Typ,
-			TableName: expr.TableName,
-			ColName:   expr.ColName,
-			Expr: &plan.Expr_Col{
-				Col: &ColRef{
-					RelPos: 0,
-					ColPos: int32(i),
-				},
-			},
-		}
-
-		colIdx, ok := usingCols[expr.ColName]
-		// we pop using columns to top.
-		// R(r1, r2, b, r3, a),   S(s1, a, b, s2)
-		// select * from R join S using(a, b)
-		// we get projectList as :  [a, b, r1, r2, r3, s1, s2]
-		if ok {
-			node.ProjectList[colIdx] = DeepCopyExpr(colExpr)
-			projectNode.ProjectList[colIdx] = DeepCopyExpr(colExpr)
-		} else {
-			node.ProjectList[projNodeIdx] = DeepCopyExpr(colExpr)
-			projectNode.ProjectList[projNodeIdx] = DeepCopyExpr(colExpr)
-			projNodeIdx++
-		}
-		joinNodeIdx++
-	}
-
-	for i, expr := range rightChild.ProjectList {
-		// semi join or anti join, rightChild.ProjectList will abandon in the ProjectNode(after JoinNode)
-		if !isSemiOrAntiJoin {
-			// other join, we coalesced the using cols in the ProjectNode(after JoinNode)
-			_, ok := usingCols[expr.ColName]
-			if ok {
-				binderCtx.usingCols[expr.ColName] = expr.TableName
-			} else {
-				node.ProjectList[projNodeIdx] = &Expr{
-					Typ:       expr.Typ,
-					TableName: expr.TableName,
-					ColName:   expr.ColName,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							RelPos: 1,
-							ColPos: int32(i),
-						},
-					},
-				}
-
-				projectNode.ProjectList[projNodeIdx] = &Expr{
-					Typ:       expr.Typ,
-					TableName: expr.TableName,
-					ColName:   expr.ColName,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							RelPos: 0,
-							ColPos: int32(projNodeIdx),
-						},
-					},
-				}
-				projNodeIdx++
-			}
-		}
-
-		joinNodeIdx++
-	}
-	return projectNode
-}
-
-func buildUnresolvedName(query *Query, node *Node, colName string, tableName string, binderCtx *BinderContext) (*Expr, error) {
-	colRef := &ColRef{
-		RelPos: -1,
-		ColPos: -1,
-	}
-	colExpr := &Expr{
-		Expr: &plan.Expr_Col{
-			Col: colRef,
-		},
-	}
-
-	if colTblName, ok := binderCtx.usingCols[colName]; ok {
-		if colTblName == tableName {
-			tableName = ""
-		}
-	}
-
-	matchName := func(expr *Expr) bool {
-		return colName == expr.ColName && (len(tableName) == 0 || tableName == expr.TableName)
-	}
-
-	if node.NodeType == plan.Node_TABLE_SCAN {
-		// search name from TableDef
-		if len(tableName) == 0 || tableName == node.TableDef.Alias {
-			for j, col := range node.TableDef.Cols {
-				if colName == col.Alias {
-					if colRef.RelPos != -1 {
-						return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference '%v' is ambiguous", colName))
-					}
-					colRef.RelPos = 0
-					colRef.ColPos = int32(j)
-
-					colExpr.Typ = col.Typ
-					colExpr.ColName = colName
-					colExpr.TableName = tableName
-				}
-			}
-		}
-	} else {
-		// Search name from children
-		for i, child := range node.Children {
-			for j, col := range query.Nodes[child].ProjectList {
-				if matchName(col) {
-					if colRef.RelPos != -1 {
-						return nil, errors.New(errno.AmbiguousColumn, fmt.Sprintf("column reference '%v' is ambiguous", colName))
-					}
-					colRef.RelPos = int32(i)
-					colRef.ColPos = int32(j)
-
-					colExpr.Typ = col.Typ
-					colExpr.ColName = col.ColName
-					colExpr.TableName = col.TableName
-				}
-			}
-		}
-	}
-
-	if colRef.RelPos != -1 {
-		return colExpr, nil
-	}
-
-	if len(binderCtx.subqueryParentIds) == 0 {
-		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", colName))
-	}
-
-	// Search from parent queries
-	corrRef := &plan.CorrColRef{
-		RelPos: -1,
-		ColPos: -1,
-	}
-	corrExpr := &Expr{
-		Expr: &plan.Expr_Corr{
-			Corr: corrRef,
-		},
-	}
-
-	for _, parentId := range binderCtx.subqueryParentIds {
-		for i, col := range query.Nodes[parentId].ProjectList {
-			if matchName(col) {
-				if corrRef.RelPos != -1 {
-					return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' in the field list is ambiguous", colName))
-				}
-				corrRef.RelPos = parentId
-				corrRef.ColPos = int32(i)
-
-				corrExpr.Typ = col.Typ
-				corrExpr.ColName = col.ColName
-				corrExpr.TableName = col.TableName
-			}
-		}
-		if corrRef.ColPos != -1 {
-			return corrExpr, nil
-		}
-	}
-
-	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' does not exist", colName))
-}
-
-//if table == ""  => select * from tbl
-//if table is not empty => select a.* from a,b on a.id = b.id
-func unfoldStar(query *Query, node *Node, list *plan.ExprList, table string) error {
-	// if node is TABLE_SCAN, we unfold star from tableDef (because this node have no children)
-	if node.NodeType == plan.Node_TABLE_SCAN {
-		if len(table) == 0 || table == node.TableDef.Name {
-			for i, col := range node.TableDef.Cols {
-				list.List = append(list.List, &Expr{
-					Typ:       col.Typ,
-					ColName:   col.Name,
-					TableName: node.TableDef.Name,
-					Expr: &plan.Expr_Col{
-						Col: &ColRef{
-							RelPos: 0,
-							ColPos: int32(i),
-						},
-					},
-				})
-			}
-		}
-	} else {
-		// other case, we unfold star from Children's projectionList. like unresolvename
-		for idx, child := range node.Children {
-			for _, col := range query.Nodes[child].ProjectList {
-				if len(table) == 0 || table == col.TableName {
-					if idx > 0 {
-						// like `select * from a join b`.  we unfoldStar in joinNode,
-						// we will reset col.ColPos to child's index
-						resetColPos(col, int32(idx))
-					}
-					list.List = append(list.List, col)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func resetColPos(col *plan.Expr, newPos int32) {
-	switch expr := col.Expr.(type) {
-	case *plan.Expr_Col:
-		expr.Col.ColPos = newPos
-	case *plan.Expr_F:
-		for _, e := range expr.F.Args {
-			resetColPos(e, newPos)
-		}
-	}
-}
-
-func getResolveTable(dbName string, tableName string, ctx CompilerContext, binderCtx *BinderContext) (*ObjectRef, *TableDef, bool) {
-	// get table from context
-	objRef, tableDef := ctx.Resolve(dbName, tableName)
-	if tableDef != nil {
-		return objRef, tableDef, false
-	}
-
-	// get table from CTE
-	tableDef, ok := binderCtx.cteTables[tableName]
-	if ok {
-		objRef = &ObjectRef{
-			SchemaName: dbName,
-			ObjName:    tableName,
-		}
-		return objRef, tableDef, true
-	}
-	return nil, nil, false
 }
 
 func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
@@ -1064,4 +658,37 @@ func buildConstantValue(typ *plan.Type, num *tree.NumVal) (interface{}, error) {
 		}
 	}
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
+}
+
+func getFunctionObjRef(funcId int64, name string) *ObjectRef {
+	return &ObjectRef{
+		Obj:     funcId,
+		ObjName: name,
+	}
+}
+
+func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
+	if !isLogic && (len(args) != 2 || (args[0].Typ.Id != plan.Type_BOOL && args[1].Typ.Id != plan.Type_BOOL)) {
+		return nil
+	}
+	for _, arg := range args {
+		if arg.Typ.Id == plan.Type_BOOL {
+			continue
+		}
+		switch ex := arg.Expr.(type) {
+		case *plan.Expr_C:
+			arg.Typ.Id = plan.Type_BOOL
+			switch value := ex.C.Value.(type) {
+			case *plan.Const_Ival:
+				if value.Ival == 0 {
+					ex.C.Value = &plan.Const_Bval{Bval: false}
+				} else if value.Ival == 1 {
+					ex.C.Value = &plan.Const_Bval{Bval: true}
+				} else {
+					return errors.New("", fmt.Sprintf("Can't cast '%v' as boolean type.", value.Ival))
+				}
+			}
+		}
+	}
+	return nil
 }

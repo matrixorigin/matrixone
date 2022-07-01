@@ -2,7 +2,6 @@ package operator
 
 import (
 	"fmt"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -12,7 +11,7 @@ func TestAddLogService(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  AddLogService
-		state    hapb.LogState
+		state    pb.LogState
 		expected bool
 	}{
 		{
@@ -22,7 +21,7 @@ func TestAddLogService(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.LogState{
+			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {ShardID: 1, Replicas: map[uint64]string{1: "a"}},
 				},
@@ -36,7 +35,7 @@ func TestAddLogService(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.LogState{
+			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {ShardID: 1, Replicas: map[uint64]string{}},
 				},
@@ -47,7 +46,7 @@ func TestAddLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, hapb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
 	}
 }
 
@@ -55,7 +54,7 @@ func TestRemoveLogService(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  RemoveLogService
-		state    hapb.LogState
+		state    pb.LogState
 		expected bool
 	}{
 		{
@@ -65,7 +64,7 @@ func TestRemoveLogService(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.LogState{
+			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {ShardID: 1, Replicas: map[uint64]string{1: "a"}},
 				},
@@ -79,7 +78,7 @@ func TestRemoveLogService(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.LogState{
+			state: pb.LogState{
 				Shards: map[uint64]pb.LogShardInfo{
 					1: {ShardID: 1, Replicas: map[uint64]string{}},
 				},
@@ -90,7 +89,7 @@ func TestRemoveLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, hapb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
 	}
 }
 
@@ -98,7 +97,7 @@ func TestStartLogService(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  StartLogService
-		state    hapb.LogState
+		state    pb.LogState
 		expected bool
 	}{
 		{
@@ -108,8 +107,8 @@ func TestStartLogService(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.LogState{
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Replicas: []pb.LogReplicaInfo{{}},
 				}},
 			},
@@ -122,8 +121,8 @@ func TestStartLogService(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.LogState{
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Replicas: []pb.LogReplicaInfo{{
 						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
@@ -139,7 +138,7 @@ func TestStartLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, hapb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
 	}
 }
 
@@ -147,7 +146,7 @@ func TestStopLogService(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  StopLogService
-		state    hapb.LogState
+		state    pb.LogState
 		expected bool
 	}{
 		{
@@ -156,8 +155,8 @@ func TestStopLogService(t *testing.T) {
 				StoreID: "a",
 				ShardID: 1,
 			},
-			state: hapb.LogState{
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Replicas: []pb.LogReplicaInfo{{}},
 				}},
 			},
@@ -169,8 +168,8 @@ func TestStopLogService(t *testing.T) {
 				StoreID: "a",
 				ShardID: 1,
 			},
-			state: hapb.LogState{
-				Stores: map[string]hapb.LogStoreInfo{"a": {
+			state: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{"a": {
 					Replicas: []pb.LogReplicaInfo{{
 						LogShardInfo: pb.LogShardInfo{
 							ShardID:  1,
@@ -186,7 +185,7 @@ func TestStopLogService(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(c.state, hapb.DNState{}))
+		assert.Equal(t, c.expected, c.command.IsFinish(c.state, pb.DNState{}))
 	}
 }
 
@@ -194,7 +193,7 @@ func TestAddDnReplica(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  AddDnReplica
-		state    hapb.DNState
+		state    pb.DNState
 		expected bool
 	}{
 		{
@@ -204,8 +203,8 @@ func TestAddDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.DNState{
-				Stores: map[string]hapb.DNStoreInfo{"a": {
+			state: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick: 0,
 					Shards: []pb.DNShardInfo{{
 						ShardID:   1,
@@ -222,8 +221,8 @@ func TestAddDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.DNState{
-				Stores: map[string]hapb.DNStoreInfo{"a": {
+			state: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick:   0,
 					Shards: []pb.DNShardInfo{},
 				}},
@@ -234,7 +233,7 @@ func TestAddDnReplica(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(hapb.LogState{}, c.state))
+		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state))
 	}
 }
 
@@ -242,7 +241,7 @@ func TestRemoveDnReplica(t *testing.T) {
 	cases := []struct {
 		desc     string
 		command  RemoveDnReplica
-		state    hapb.DNState
+		state    pb.DNState
 		expected bool
 	}{
 		{
@@ -252,8 +251,8 @@ func TestRemoveDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.DNState{
-				Stores: map[string]hapb.DNStoreInfo{"a": {
+			state: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick: 0,
 					Shards: []pb.DNShardInfo{{
 						ShardID:   1,
@@ -270,8 +269,8 @@ func TestRemoveDnReplica(t *testing.T) {
 				ShardID:   1,
 				ReplicaID: 1,
 			},
-			state: hapb.DNState{
-				Stores: map[string]hapb.DNStoreInfo{"a": {
+			state: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{"a": {
 					Tick:   0,
 					Shards: []pb.DNShardInfo{},
 				}},
@@ -282,6 +281,6 @@ func TestRemoveDnReplica(t *testing.T) {
 
 	for i, c := range cases {
 		fmt.Printf("case %v: %s\n", i, c.desc)
-		assert.Equal(t, c.expected, c.command.IsFinish(hapb.LogState{}, c.state))
+		assert.Equal(t, c.expected, c.command.IsFinish(pb.LogState{}, c.state))
 	}
 }
