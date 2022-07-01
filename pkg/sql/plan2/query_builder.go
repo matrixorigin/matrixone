@@ -62,14 +62,29 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[int64][2]int32) er
 	return nil
 }
 
-func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, error) {
+func (builder *QueryBuilder) remapAllColRefs(nodeId int32, preNeedCol *ColumnCollect) (map[int64][2]int32, error) {
 	node := builder.qry.Nodes[nodeId]
 	returnMap := make(map[int64][2]int32)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+		// collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.FilterList, curNeedCol)
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
 		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
 		tag := node.BindingTags[0]
+
+		// Mark the column to be cropped in tabledef and set it to true
+		for idx, col := range node.TableDef.Cols {
+			key := [2]int32{tag, int32(idx)}
+			if sumNeedCol.posMap[key] != 1 {
+				col.IsPrune = true
+			}
+		}
+		// Handle cases where all columns are cropped
+		checkFullPrune(node.TableDef)
 
 		for idx, col := range node.TableDef.Cols {
 			node.ProjectList[idx] = &plan.Expr{
@@ -92,10 +107,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_JOIN:
+		// collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.OnList, curNeedCol)
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
 		joinCondMap := make(map[int64][2]int32)
 
 		childId := node.Children[0]
-		childMap, err := builder.remapAllColRefs(childId)
+		childMap, err := builder.remapAllColRefs(childId, sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +158,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			})
 		}
 
-		childMap, err = builder.remapAllColRefs(childId)
+		childMap, err = builder.remapAllColRefs(childId, sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +190,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_AGG:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		if len(node.ProjectList) > 0 {
+			collectDepColumns(node.GroupBy, curNeedCol)
+		} else {
+			collectDepColumns(node.GroupBy, curNeedCol)
+			collectDepColumns(node.AggList, curNeedCol)
+		}
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
+		childMap, err := builder.remapAllColRefs(node.Children[0], sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -221,7 +251,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_SORT:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// collect current node need column info
+		curNeedCol := newColumnCollect()
+		for _, expr := range node.OrderBy {
+			collectExpr(expr.Expr, curNeedCol)
+		}
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
+		childMap, err := builder.remapAllColRefs(node.Children[0], sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -250,7 +287,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		returnMap = childMap
 
 	case plan.Node_FILTER:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// Collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.FilterList, curNeedCol)
+
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
+		childMap, err := builder.remapAllColRefs(node.Children[0], sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -279,7 +322,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		returnMap = childMap
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// collect current node need column info
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.ProjectList, curNeedCol)
+
+		// project node does not need to pass down the columns required by the parent node
+		childMap, err := builder.remapAllColRefs(node.Children[0], curNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -296,7 +344,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_DISTINCT:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		childMap, err := builder.remapAllColRefs(node.Children[0], preNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +400,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		builder.qry.Steps[i] = rootId
 
-		_, err := builder.remapAllColRefs(rootId)
+		_, err := builder.remapAllColRefs(rootId, nil)
 		if err != nil {
 			return nil, err
 		}
