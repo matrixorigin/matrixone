@@ -17,10 +17,13 @@ package txnentries
 import (
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -33,14 +36,22 @@ type compactBlockEntry struct {
 	from      handle.Block
 	to        handle.Block
 	scheduler tasks.TaskScheduler
+	mapping   []uint32
+	deletes   *roaring.Bitmap
 }
 
-func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block, scheduler tasks.TaskScheduler) *compactBlockEntry {
+func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block, scheduler tasks.TaskScheduler, sortIdx []uint32, deletes *roaring.Bitmap) *compactBlockEntry {
+	mapping := make([]uint32, len(sortIdx))
+	for i, idx := range sortIdx {
+		mapping[idx] = uint32(i)
+	}
 	return &compactBlockEntry{
 		txn:       txn,
 		from:      from,
 		to:        to,
 		scheduler: scheduler,
+		mapping:   mapping,
+		deletes:   deletes,
 	}
 }
 
@@ -81,25 +92,29 @@ func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	if view == nil || err != nil {
 		return
 	}
-	deletes := view.DeleteMask
+	deletes := entry.deletes
 	for colIdx, column := range view.Columns {
 		column.UpdateMask, column.UpdateVals, column.DeleteMask = compute.ShuffleByDeletes(
 			column.UpdateMask,
 			column.UpdateVals,
-			deletes)
+			column.DeleteMask, deletes)
 		for row, v := range column.UpdateVals {
+			if entry.mapping != nil && len(entry.mapping) > int(row) {
+				row = entry.mapping[row]
+			}
 			if err = entry.to.Update(row, uint16(colIdx), v); err != nil {
 				return
 			}
 		}
 	}
-	if len(view.Columns) == 0 {
-		_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask)
-	}
+	_, _, view.DeleteMask = compute.ShuffleByDeletes(nil, nil, view.DeleteMask, deletes)
 	if view.DeleteMask != nil {
 		it := view.DeleteMask.Iterator()
 		for it.HasNext() {
 			row := it.Next()
+			if entry.mapping != nil && len(entry.mapping) > int(row) {
+				row = entry.mapping[row]
+			}
 			if err = entry.to.RangeDelete(row, row); err != nil {
 				return
 			}
