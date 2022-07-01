@@ -16,7 +16,6 @@ package compute
 
 import (
 	"bytes"
-	"math"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -48,37 +47,63 @@ func findDeleteRange(pos uint32, ranges []*deleteRange) *deleteRange {
 	return ranges[mid]
 }
 
-func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deletes *roaring.Bitmap) (*roaring.Bitmap, map[uint32]any, *roaring.Bitmap) {
-	if deletes == nil {
-		return origMask, origVals, deletes
+func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]any, deleteMask, deletes *roaring.Bitmap) (destMask *roaring.Bitmap, destVals map[uint32]any, destDelets *roaring.Bitmap) {
+	if deletes == nil || deletes.IsEmpty() {
+		return origMask, origVals, deleteMask
 	}
-	destDelets := roaring.New()
-	ranges := make([]*deleteRange, 0, 10)
-	deletesIt := deletes.Iterator()
-	deletedCnt := uint32(0)
-	for deletesIt.HasNext() {
-		pos := deletesIt.Next()
-		destDelets.Add(pos - deletedCnt)
-		ranges = append(ranges, &deleteRange{pos: pos, deleted: deletedCnt})
-		deletedCnt++
+	if origMask != nil && !origMask.IsEmpty() {
+		valIt := origMask.Iterator()
+		destMask = roaring.New()
+		destVals = make(map[uint32]any)
+		deleteIt := deletes.Iterator()
+		deleteCnt := uint32(0)
+		for deleteIt.HasNext() {
+			del := deleteIt.Next()
+			for valIt.HasNext() {
+				row := valIt.PeekNext()
+				if row < del {
+					destMask.Add(row - deleteCnt)
+					destVals[row-deleteCnt] = origVals[row]
+					valIt.Next()
+				} else if row == del {
+					valIt.Next()
+				} else {
+					break
+				}
+			}
+			deleteCnt++
+		}
+		for valIt.HasNext() {
+			row := valIt.Next()
+			destMask.Add(row - deleteCnt)
+			destVals[row-deleteCnt] = origVals[row]
+		}
 	}
-	if origMask == nil || origMask.IsEmpty() {
-		return origMask, origVals, destDelets
+	if deleteMask != nil && !deleteMask.IsEmpty() {
+		delIt := deleteMask.Iterator()
+		destDelets = roaring.New()
+		deleteIt := deletes.Iterator()
+		deleteCnt := uint32(0)
+		for deleteIt.HasNext() {
+			del := deleteIt.Next()
+			for delIt.HasNext() {
+				row := delIt.PeekNext()
+				if row < del {
+					destDelets.Add(row - deleteCnt)
+					delIt.Next()
+				} else if row == del {
+					delIt.Next()
+				} else {
+					break
+				}
+			}
+			deleteCnt++
+		}
+		for delIt.HasNext() {
+			row := delIt.Next()
+			destDelets.Add(row - deleteCnt)
+		}
 	}
-
-	ranges = append(ranges, &deleteRange{pos: math.MaxUint32, deleted: deletedCnt})
-	destMask := roaring.New()
-	destVals := make(map[uint32]any)
-	origIt := origMask.Iterator()
-	for origIt.HasNext() {
-		pos := origIt.Next()
-		drange := findDeleteRange(pos, ranges)
-		destMask.Add(pos - drange.deleted)
-		destVals[pos-drange.deleted] = origVals[pos]
-	}
-	// for i, r := range ranges {
-	// 	logutil.Infof("%d range.pos=%d,range.deleted=%d", i, r.pos, r.deleted)
-	// }
 	return destMask, destVals, destDelets
 }
 

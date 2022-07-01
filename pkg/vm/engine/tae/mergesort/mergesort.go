@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
-func SortBlockColumns(cols []containers.Vector, pk int) error {
+func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 	sortedIdx := make([]uint32, cols[pk].Length())
 
 	switch cols[pk].GetType().Oid {
@@ -73,7 +73,7 @@ func SortBlockColumns(cols []containers.Vector, pk int) error {
 		}
 		cols[i] = Shuffle(cols[i], sortedIdx)
 	}
-	return nil
+	return sortedIdx, nil
 }
 
 func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayout, toLayout []uint32) (ret []containers.Vector, mapping []uint32) {
