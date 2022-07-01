@@ -931,7 +931,10 @@ CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1),(2),(3);
 CREATE TABLE t2 (a INT);
 INSERT INTO t1 VALUES (1),(2),(3);
-SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE 0);
+SELECT 1 FROM t1 WHERE t1.a NOT IN (SELECT 1 FROM t1, t2 WHERE false);
+1
+1
+1
 1
 1
 1
@@ -1324,8 +1327,6 @@ FROM   child
 WHERE  parent_id = 3
 );
 id	parent_id
-1	1
-2	null
 SELECT    p.id, c.parent_id
 FROM      parent p
 LEFT JOIN child  c
@@ -1336,8 +1337,6 @@ FROM   child
 WHERE  parent_id = 3
 );
 id	parent_id
-1	1
-2	null
 DROP TABLE IF EXISTS parent;
 DROP TABLE IF EXISTS child;
 DROP TABLE IF EXISTS cc;

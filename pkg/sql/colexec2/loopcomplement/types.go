@@ -25,6 +25,10 @@ const (
 	End
 )
 
+const (
+	UnitLimit = 256
+)
+
 type Container struct {
 	state int
 	bat   *batch.Batch

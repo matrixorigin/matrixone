@@ -474,3 +474,10 @@ func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]fl
 	}
 	return rs, nil
 }
+
+func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool) ([]bool, error) {
+	for i, x := range xs {
+		rs[i] = (x != 0)
+	}
+	return rs, nil
+}

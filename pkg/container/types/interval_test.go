@@ -137,7 +137,7 @@ func TestConv(t *testing.T) {
 
 	val, vt, err = NormalizeInterval("-1 +13", Year_Month)
 	// -1,
-	require.Equal(t, val, int64(25), "YM error")
+	require.Equal(t, val, int64(-25), "YM error")
 	require.Equal(t, vt, Month, "YM error")
 	require.Equal(t, err, nil, "YM error")
 

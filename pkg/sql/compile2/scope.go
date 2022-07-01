@@ -17,10 +17,11 @@ package compile2
 import (
 	"context"
 	"fmt"
+	"runtime"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec2/update"
-	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 
