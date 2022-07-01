@@ -126,6 +126,8 @@ jobs:
       - name: Check MO-Server Status
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
+          sleep 10s
+          ps -ef
 
       - uses: actions/checkout@v2
         with:
@@ -145,7 +147,7 @@ jobs:
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
-          if  [ -d  "./head/"  ]; then mv ./head/mo-server.log ./head-mo-server.log; rm -rf ./head/; fi
+          if  [ -d  "./head/mo-server"  ]; then rm -rf ./head/mo-server; fi
           if  [ -d  "./base/"  ]; then rm -rf ./base/; fi
           rm -rf ./mo-tester/.git
           rm -rf ./mo-tester/lib
