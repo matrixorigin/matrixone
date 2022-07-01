@@ -18,8 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"testing"
@@ -27,17 +26,17 @@ import (
 
 func TestNewBootstrapManager(t *testing.T) {
 	cases := []struct {
-		cluster  hapb.ClusterInfo
+		cluster  pb.ClusterInfo
 		expected *Manager
 	}{
 		{
-			cluster: hapb.ClusterInfo{DNShards: nil, LogShards: nil},
+			cluster: pb.ClusterInfo{DNShards: nil, LogShards: nil},
 			expected: &Manager{
-				cluster: hapb.ClusterInfo{DNShards: nil, LogShards: nil},
+				cluster: pb.ClusterInfo{DNShards: nil, LogShards: nil},
 			},
 		},
 		{
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: []metadata.DNShardRecord{{
 					ShardID:    1,
 					LogShardID: 1,
@@ -45,7 +44,7 @@ func TestNewBootstrapManager(t *testing.T) {
 				LogShards: []metadata.LogShardRecord{{ShardID: 2}},
 			},
 			expected: &Manager{
-				cluster: hapb.ClusterInfo{
+				cluster: pb.ClusterInfo{
 					DNShards: []metadata.DNShardRecord{{
 						ShardID:    1,
 						LogShardID: 1,
@@ -66,9 +65,9 @@ func TestBootstrap(t *testing.T) {
 	cases := []struct {
 		desc string
 
-		cluster hapb.ClusterInfo
-		dn      hapb.DNState
-		log     hapb.LogState
+		cluster pb.ClusterInfo
+		dn      pb.DNState
+		log     pb.LogState
 
 		expectedNum            int
 		expectedInitialMembers map[uint64]string
@@ -77,18 +76,18 @@ func TestBootstrap(t *testing.T) {
 		{
 			desc: "1 log shard with 3 replicas and 1 dn shard",
 
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: hapb.DNState{
-				Stores: map[string]hapb.DNStoreInfo{"dn-a": {}},
+			dn: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
 			},
-			log: hapb.LogState{
-				Stores: map[string]hapb.LogStoreInfo{
+			log: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{
 					"log-a": {Tick: 100},
 					"log-b": {Tick: 110},
 					"log-c": {Tick: 120},
@@ -106,18 +105,18 @@ func TestBootstrap(t *testing.T) {
 		{
 			desc: "err: not enough log stores",
 
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				DNShards: []metadata.DNShardRecord{{ShardID: 1, LogShardID: 1}},
 				LogShards: []metadata.LogShardRecord{{
 					ShardID:          1,
 					NumberOfReplicas: 3,
 				}},
 			},
-			dn: hapb.DNState{
-				Stores: map[string]hapb.DNStoreInfo{"dn-a": {}},
+			dn: pb.DNState{
+				Stores: map[string]pb.DNStoreInfo{"dn-a": {}},
 			},
-			log: hapb.LogState{
-				Stores: map[string]hapb.LogStoreInfo{
+			log: pb.LogState{
+				Stores: map[string]pb.LogStoreInfo{
 					"log-a": {Tick: 100},
 					"log-b": {Tick: 110}},
 			},
@@ -147,22 +146,22 @@ func TestCheckBootstrap(t *testing.T) {
 	cases := []struct {
 		desc string
 
-		cluster hapb.ClusterInfo
-		log     hapb.LogState
+		cluster pb.ClusterInfo
+		log     pb.LogState
 
 		expected bool
 	}{
 		{
 			desc: "successfully started",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{
 					{ShardID: 1, NumberOfReplicas: 3},
 					{ShardID: 2, NumberOfReplicas: 3},
 					{ShardID: 3, NumberOfReplicas: 3},
 				},
 			},
-			log: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
 					1: {
 						ShardID:  1,
 						Replicas: map[uint64]string{1: "a", 2: "b"},
@@ -181,15 +180,15 @@ func TestCheckBootstrap(t *testing.T) {
 		},
 		{
 			desc: "shard 1 not started",
-			cluster: hapb.ClusterInfo{
+			cluster: pb.ClusterInfo{
 				LogShards: []metadata.LogShardRecord{
 					{ShardID: 1, NumberOfReplicas: 3},
 					{ShardID: 2, NumberOfReplicas: 3},
 					{ShardID: 3, NumberOfReplicas: 3},
 				},
 			},
-			log: hapb.LogState{
-				Shards: map[uint64]logservice.LogShardInfo{
+			log: pb.LogState{
+				Shards: map[uint64]pb.LogShardInfo{
 					1: {
 						ShardID:  1,
 						Replicas: map[uint64]string{1: "a"},
@@ -218,10 +217,10 @@ func TestCheckBootstrap(t *testing.T) {
 
 func TestSortLogStores(t *testing.T) {
 	cases := []struct {
-		logStores map[string]hapb.LogStoreInfo
+		logStores map[string]pb.LogStoreInfo
 		expected  []string
 	}{{
-		logStores: map[string]hapb.LogStoreInfo{
+		logStores: map[string]pb.LogStoreInfo{
 			"a": {Tick: 100},
 			"b": {Tick: 120},
 			"c": {Tick: 90},
@@ -238,10 +237,10 @@ func TestSortLogStores(t *testing.T) {
 
 func TestSortDNStores(t *testing.T) {
 	cases := []struct {
-		dnStores map[string]hapb.DNStoreInfo
+		dnStores map[string]pb.DNStoreInfo
 		expected []string
 	}{{
-		dnStores: map[string]hapb.DNStoreInfo{
+		dnStores: map[string]pb.DNStoreInfo{
 			"a": {Tick: 100},
 			"b": {Tick: 120},
 			"c": {Tick: 90},

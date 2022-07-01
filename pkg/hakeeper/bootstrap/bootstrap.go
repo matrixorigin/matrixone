@@ -17,16 +17,16 @@ package bootstrap
 import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"sort"
 )
 
 type Manager struct {
-	cluster hapb.ClusterInfo
+	cluster pb.ClusterInfo
 }
 
-func NewBootstrapManager(cluster hapb.ClusterInfo) *Manager {
+func NewBootstrapManager(cluster pb.ClusterInfo) *Manager {
 	var dnShard []metadata.DNShardRecord
 	var logShard []metadata.LogShardRecord
 
@@ -41,7 +41,7 @@ func NewBootstrapManager(cluster hapb.ClusterInfo) *Manager {
 	}
 
 	manager := &Manager{
-		cluster: hapb.ClusterInfo{
+		cluster: pb.ClusterInfo{
 			DNShards:  dnShard,
 			LogShards: logShard,
 		},
@@ -51,7 +51,7 @@ func NewBootstrapManager(cluster hapb.ClusterInfo) *Manager {
 }
 
 func (bm *Manager) Bootstrap(alloc util.IDAllocator,
-	dn hapb.DNState, log hapb.LogState) (commands []hapb.ScheduleCommand, err error) {
+	dn pb.DNState, log pb.LogState) (commands []pb.ScheduleCommand, err error) {
 
 	logStores := sortLogStoresByTick(log.Stores)
 	dnStores := sortDNStoresByTick(dn.Stores)
@@ -78,18 +78,18 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 
 		for replicaID, uuid := range initialMembers {
 			commands = append(commands,
-				hapb.ScheduleCommand{
+				pb.ScheduleCommand{
 					UUID: uuid,
-					ConfigChange: &hapb.ConfigChange{
-						Replica: hapb.Replica{
+					ConfigChange: &pb.ConfigChange{
+						Replica: pb.Replica{
 							UUID:      uuid,
 							ShardID:   shardRecord.ShardID,
 							ReplicaID: replicaID,
 						},
-						ChangeType:     hapb.AddReplica,
+						ChangeType:     pb.AddReplica,
 						InitialMembers: initialMembers,
 					},
-					ServiceType: hapb.LogService,
+					ServiceType: pb.LogService,
 				})
 		}
 	}
@@ -101,17 +101,17 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 				return nil, errors.New("id allocator error")
 			}
 
-			commands = append(commands, hapb.ScheduleCommand{
+			commands = append(commands, pb.ScheduleCommand{
 				UUID: uuid,
-				ConfigChange: &hapb.ConfigChange{
-					Replica: hapb.Replica{
+				ConfigChange: &pb.ConfigChange{
+					Replica: pb.Replica{
 						UUID:      uuid,
 						ShardID:   dnRecord.ShardID,
 						ReplicaID: replicaID,
 					},
-					ChangeType: hapb.AddReplica,
+					ChangeType: pb.AddReplica,
 				},
-				ServiceType: hapb.DnService,
+				ServiceType: pb.DnService,
 			})
 			break
 		}
@@ -120,7 +120,7 @@ func (bm *Manager) Bootstrap(alloc util.IDAllocator,
 	return
 }
 
-func (bm *Manager) CheckBootstrap(log hapb.LogState) bool {
+func (bm *Manager) CheckBootstrap(log pb.LogState) bool {
 	for _, shardInfo := range log.Shards {
 		var shardRecord metadata.LogShardRecord
 		for _, record := range bm.cluster.LogShards {
@@ -141,17 +141,17 @@ func (bm *Manager) CheckBootstrap(log hapb.LogState) bool {
 	return true
 }
 
-func sortLogStoresByTick(logStores map[string]hapb.LogStoreInfo) []string {
+func sortLogStoresByTick(logStores map[string]pb.LogStoreInfo) []string {
 	storeSlice := make([]struct {
 		uuid string
-		hapb.LogStoreInfo
+		pb.LogStoreInfo
 	}, 0, len(logStores))
 	uuidSlice := make([]string, 0, len(logStores))
 
 	for uuid, storeInfo := range logStores {
 		storeSlice = append(storeSlice, struct {
 			uuid string
-			hapb.LogStoreInfo
+			pb.LogStoreInfo
 		}{uuid, storeInfo})
 	}
 
@@ -166,17 +166,17 @@ func sortLogStoresByTick(logStores map[string]hapb.LogStoreInfo) []string {
 	return uuidSlice
 }
 
-func sortDNStoresByTick(dnStores map[string]hapb.DNStoreInfo) []string {
+func sortDNStoresByTick(dnStores map[string]pb.DNStoreInfo) []string {
 	storeSlice := make([]struct {
 		uuid string
-		hapb.DNStoreInfo
+		pb.DNStoreInfo
 	}, 0, len(dnStores))
 	uuidSlice := make([]string, 0, len(dnStores))
 
 	for uuid, storeInfo := range dnStores {
 		storeSlice = append(storeSlice, struct {
 			uuid string
-			hapb.DNStoreInfo
+			pb.DNStoreInfo
 		}{uuid, storeInfo})
 	}
 
