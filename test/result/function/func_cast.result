@@ -3,11 +3,10 @@ overflow from bigint to bigint unsigned
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
 overflow from bigint to bigint unsigned
 select CAST('10 ' as unsigned integer);
-CAST('10 ' as unsigned integer)
+cast(10  as integer unsigned)
 10
 select CAST('10x' as unsigned integer);
-CAST('10x' as unsigned integer)
-10
+Can't cast '10x' as type of unsigned integer
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 cast(-5 as unsigned) | 1	cast(-5 as unsigned) & -1
 18446744073709551611	18446744073709551611
@@ -45,11 +44,9 @@ CAST(0xffffffffffffffff as unsigned)
 select CAST(0xfffffffffffffffe as signed);
 overflow from bigint unsigned to bigint
 select cast('-10a' as signed integer);
-cast('-10a' as signed integer)
--10
+Can't cast '-10a' as type of integer
 select cast('a10' as unsigned integer);
-cast('a10' as unsigned integer)
-0
+Can't cast 'a10' as type of unsigned integer
 select 10+'a';
 10+'a'
 10.0
@@ -60,26 +57,19 @@ select 10E+0+'a';
 10E+0+'a'
 10.0
 select cast('18446744073709551616' as unsigned);
-cast('18446744073709551616' as unsigned)
-18446744073709551615
+Overflow when cast '18446744073709551616' as type of unsigned integer
 select cast('18446744073709551616' as signed);
-cast('18446744073709551616' as signed)
--1
+Overflow when cast '18446744073709551616' as type of integer
 select cast('9223372036854775809' as signed);
-cast('9223372036854775809' as signed)
--9223372036854775807
+Overflow when cast '9223372036854775809' as type of integer
 select cast('-1' as unsigned);
-cast('-1' as unsigned)
-18446744073709551615
+Can't cast '-1' as type of unsigned integer
 select cast('abc' as signed);
-cast('abc' as signed)
-0
+Can't cast 'abc' as type of integer
 select cast('1a' as signed);
-cast('1a' as signed)
-1
+Can't cast '1a' as type of integer
 select cast('' as signed);
-cast('' as signed)
-0
+Can't cast '' as type of integer
 select cast("2001-1-1" as date) = "2001-01-01";
 cast("2001-1-1" as date) = "2001-01-01"
 1
@@ -101,8 +91,7 @@ select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
 select cast('18446744073709551615' as signed);
-cast('18446744073709551615' as signed)
--1
+Overflow when cast '18446744073709551615' as type of integer
 select cast('9223372036854775807' as signed);
 cast('9223372036854775807' as signed)
 9223372036854775807
@@ -210,8 +199,7 @@ create table t1(f1 date, f2 timestamp, f3 datetime);
 insert into t1 values ("2006-01-01", "2006-01-01 12:01:01", "2006-01-01 12:01:01");
 insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02");
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
-f1
-2006-01-01
+Operator 'cast' with parameters [BIGINT DATE] will be implemented in future version.
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
 f1
 2006-01-01
@@ -222,8 +210,7 @@ select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast(
 f3
 2006-01-01 12:01:01
 select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-f3
-2006-01-01 12:01:01
+Operator '>=' with parameters [TIMESTAMP DATETIME] will be implemented in future version.
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
 f1
 2006-01-01
@@ -231,7 +218,7 @@ select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
 f1
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
-[22000]Incorrect date value
+Incorrect date value
 drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');

@@ -166,7 +166,7 @@ drop table t1;
 drop table t2;
 
 #EXTREME VALUE
--- @bvt:issue#3411
+-- @bvt:issue#3500
 SELECT RTRIM(space(100000000)+"123");
 SELECT LTRIM("123"+space(100000000));
 -- @bvt:issue
@@ -175,14 +175,9 @@ SELECT RTRIM("1241241^&@%#^*^!@#&*(!&    ");
 
 #DATETYPE
 SELECT RTRIM(" 123 ");
-
--- @bvt:issue#3411
 SELECT RTRIM(123124);
 SELECT RTRIM(123.41231);
--- @bvt:issue
 SELECT LTRIM(" 123");
--- @bvt:issue#3411
 SELECT LTRIM(123124);
 SELECT LTRIM(123.41231);
--- @bvt:issue
 

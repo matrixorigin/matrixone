@@ -117,6 +117,9 @@ func (n *MVCCHandle) StringLocked() string {
 		}
 		chain.RUnlock()
 	}
+	for _, insert := range n.appends {
+		s = fmt.Sprintf("%s\n%s", s, insert.GeneralString())
+	}
 	return s
 }
 

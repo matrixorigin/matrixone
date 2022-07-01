@@ -197,6 +197,9 @@ func (r *Decimal128Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []
 // r[x] += a[y] * z
 func (r *Decimal128Ring) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*Decimal128Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	r.Ns[x] += ar.Ns[y] * z
 	tmp := types.Decimal128Int64Mul(r.Vs[y], z)
 	r.Vs[x] = types.Decimal128AddAligned(r.Vs[x], tmp)

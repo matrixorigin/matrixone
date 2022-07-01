@@ -381,7 +381,7 @@ func getTestStores() (*store, *store, error) {
 		return nil, nil, err
 	}
 
-	for {
+	for i := 0; i <= 30000; i++ {
 		_, _, ok, err := store1.nh.GetLeaderID(1)
 		if err != nil {
 			return nil, nil, err
@@ -390,6 +390,9 @@ func getTestStores() (*store, *store, error) {
 			break
 		}
 		time.Sleep(time.Millisecond)
+		if i == 30000 {
+			panic("failed to have leader elected in 30 seconds")
+		}
 	}
 	return store1, store2, nil
 }
