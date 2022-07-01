@@ -18,8 +18,7 @@ ts
 2003-03-30 02:30:00
 drop table t1;
 select utc_timestamp()-utc_timestamp(),weekday(utc_timestamp())-weekday(utc_timestamp()),unix_timestamp()-unix_timestamp(utc_timestamp());
-utc_timestamp()-utc_timestamp()	weekday(utc_timestamp())-weekday(utc_timestamp())	unix_timestamp()-unix_timestamp(utc_timestamp())
-0	0	28800
+Operator '-' with parameters [DATETIME DATETIME] will be implemented in future version.
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
