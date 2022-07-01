@@ -20,12 +20,12 @@ select cast('0000-00-00' as date);
 -- @bvt:issue#3293
 select cast(cast(0x13488c5 as signed) as date);
 -- @bvt:issue
--- @bvt:issue#3359
+
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 DAY);
 SELECT DATE_ADD('2017-06-15', INTERVAL 10 MONTH);
 SELECT DATE_ADD('2017-06-15', INTERVAL 1 YEAR);
 SELECT DATE_ADD('20200215', INTERVAL 14 DAY);
--- @bvt:issue
+
 
 #Test cases of query with single table
 drop table if exists t1;

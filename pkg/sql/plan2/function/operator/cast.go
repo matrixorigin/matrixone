@@ -1317,7 +1317,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
 		varcharValue := vs.Get(0)
-		data, err2 := types.ParseDatetime(string(varcharValue), 6)
+		data, err2 := types.ParseDatetime(string(varcharValue), rv.Typ.Precision)
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1338,7 +1338,7 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 			continue
 		}
 		varcharValue := vs.Get(int64(i))
-		data, err2 := types.ParseDatetime(string(varcharValue), 6)
+		data, err2 := types.ParseDatetime(string(varcharValue), rv.Typ.Precision)
 		if err2 != nil {
 			return nil, err2
 		}

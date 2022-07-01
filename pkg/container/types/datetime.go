@@ -54,8 +54,8 @@ const (
 )
 
 var (
-	errIncorrectDatetimeValue     = errors.New(errno.DataException, "Incorrect datetime value")
-	errInvalidDatetimeAddInterval = errors.New(errno.DataException, "Invalid datetime result")
+	ErrIncorrectDatetimeValue     = errors.New(errno.DataException, "Incorrect datetime format")
+	ErrInvalidDatetimeAddInterval = errors.New(errno.DataException, "Beyond the range of datetime")
 )
 
 func (dt Datetime) String() string {
@@ -95,7 +95,7 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		if d, err := ParseDate(s); err == nil {
 			return d.ToTime(), nil
 		}
-		return -1, errIncorrectDatetimeValue
+		return -1, ErrIncorrectDatetimeValue
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
@@ -108,31 +108,31 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		var unum uint64
 		strArr := strings.Split(s, " ")
 		if len(strArr) != 2 {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		// solve year/month/day
 		front := strings.Split(strArr[0], "-")
 		if len(front) != 3 {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		num, err = strconv.ParseInt(front[0], 10, 32)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		year = int32(num)
 		unum, err = strconv.ParseUint(front[1], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		month = uint8(unum)
 		unum, err = strconv.ParseUint(front[2], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		day = uint8(unum)
 
 		if !validDate(year, month, day) {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 
 		middleAndBack := strings.Split(strArr[1], ".")
@@ -140,30 +140,30 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 		middle := strings.Split(middleAndBack[0], ":")
 		unum, err = strconv.ParseUint(middle[0], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		hour = uint8(unum)
 		unum, err = strconv.ParseUint(middle[1], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		minute = uint8(unum)
 		unum, err = strconv.ParseUint(middle[2], 10, 8)
 		if err != nil {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		second = uint8(unum)
 		if !validTimeInDay(hour, minute, second) {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 		// solve microsecond
 		if len(middleAndBack) == 2 {
 			msec, carry, err = getMsec(middleAndBack[1], precision)
 			if err != nil {
-				return -1, errIncorrectDatetimeValue
+				return -1, ErrIncorrectDatetimeValue
 			}
 		} else if len(middleAndBack) > 2 {
-			return -1, errIncorrectDatetimeValue
+			return -1, ErrIncorrectDatetimeValue
 		}
 	} else {
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
@@ -177,10 +177,10 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 				msecStr := s[15:]
 				msec, carry, err = getMsec(msecStr, precision)
 				if err != nil {
-					return -1, errIncorrectDatetimeValue
+					return -1, ErrIncorrectDatetimeValue
 				}
 			} else {
-				return -1, errIncorrectDatetimeValue
+				return -1, ErrIncorrectDatetimeValue
 			}
 		}
 	}
