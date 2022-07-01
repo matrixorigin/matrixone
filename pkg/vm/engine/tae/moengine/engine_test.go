@@ -2,12 +2,11 @@ package moengine
 
 import (
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"testing"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -169,6 +168,7 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
 	assert.Nil(t, err)
+	rows := rel.Rows()
 	refs := make([]uint64, len(schema.Attrs()))
 	readers := rel.NewReader(10, nil, nil, nil)
 	for _, reader := range readers {
@@ -180,6 +180,18 @@ func TestEngineAllType(t *testing.T) {
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
+	delRows, err := rel.Truncate(nil)
+	assert.Nil(t, err)
+	assert.Equal(t, rows, int64(delRows))
+	assert.Nil(t, txn.Commit())
+	txn, err = e.StartTxn(nil)
+	assert.Nil(t, err)
+	dbase, err = e.Database("db", txn.GetCtx())
+	assert.Nil(t, err)
+	rel, err = dbase.Relation(schema.Name, txn.GetCtx())
+	assert.Nil(t, err)
+	assert.Zero(t, rel.Rows())
+	assert.Nil(t, txn.Commit())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 

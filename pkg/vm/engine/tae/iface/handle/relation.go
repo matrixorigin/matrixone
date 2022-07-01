@@ -56,6 +56,8 @@ type Relation interface {
 	GetSegment(id uint64) (Segment, error)
 
 	SoftDeleteSegment(id uint64) (err error)
+
+	GetDB(name string) (Database, error)
 }
 
 type RelationIt interface {

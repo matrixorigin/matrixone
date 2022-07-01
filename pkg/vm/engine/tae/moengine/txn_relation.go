@@ -114,3 +114,17 @@ func (rel *txnRelation) Delete(_ uint64, data *vector.Vector, col string, _ engi
 	}
 	panic(any("Key not found"))
 }
+
+func (rel *txnRelation) Truncate(_ engine.Snapshot) (uint64, error) {
+	rows := uint64(rel.Rows())
+	name := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
+	db, err := rel.handle.GetDB(rel.handle.GetMeta().(*catalog.TableEntry).GetDB().GetName())
+	if err != nil {
+		return 0, err
+	}
+	_, err = db.TruncateByName(name)
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
+}

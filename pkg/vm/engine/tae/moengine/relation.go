@@ -92,8 +92,8 @@ func (rel *baseRelation) GetPrimaryKeys(_ engine.Snapshot) (attrs []*engine.Attr
 	return
 }
 
-func (rel *baseRelation) Truncate(_ engine.Snapshot) error {
-	panic(any("implement me"))
+func (rel *baseRelation) Truncate(_ engine.Snapshot) (uint64, error) {
+	return 0, nil
 }
 
 func (rel *baseRelation) GetHideKey(_ engine.Snapshot) *engine.Attribute {
