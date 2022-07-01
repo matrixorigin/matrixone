@@ -205,6 +205,22 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_date, Fn: unary.DatetimeToDate,
 			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_date,
+				Fn:        unary.DateStringToDate,
+			},
+			{
+				Index:     3,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_date,
+				Fn:        unary.DateStringToDate,
+			},
 		},
 	},
 	DAY: {
