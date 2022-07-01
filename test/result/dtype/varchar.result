@@ -9,19 +9,21 @@ insert into t1 values('abcd_f');
 insert into t1 values('abcde_');
 select * from t1 where a like 'ab\_def';
 a
-abcdef
 ab_def
 select * from t1 where a not like 'a%';
 a
 _bcdef
 select * from t1 where a like "\__cdef";
 a
+_bcdef
+select * from t1 where a not like "%d_\_";
+a
 abcdef
 _bcdef
 a_cdef
-select * from t1 where a not like "%d_\_";
-a
+ab_def
 abc_ef
+abcd_f
 CREATE TABLE Demovarchar
 (
 LastName varchar(10) primary key,

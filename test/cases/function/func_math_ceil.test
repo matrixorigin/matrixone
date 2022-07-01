@@ -1,10 +1,8 @@
 #SELECT,科学计数
 select ceiling(5.5),ceiling(-5.5);
-
--- @bvt:issue#3316
+-- @bvt:issue#3550
 select ceiling(cast(-2 as unsigned)), ceiling(18446744073709551614), ceiling(-2);
 -- @bvt:issue
-
 select ceiling(1.1e5);
 
 
@@ -24,7 +22,7 @@ drop table t;
 
 
 #SELECT, 嵌套，DATATYPE， EXTREME VALUE
--- @bvt:issue#3394
+-- @bvt:issue#3588
 create table t(a decimal(19,0));
 insert into t select (CEILING(CAST(1844674407370955161 AS DECIMAL(19, 0))));
 insert into t select (FLOOR(CAST(1844674407370955161 AS DECIMAL(19, 0))));
