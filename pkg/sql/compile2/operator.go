@@ -550,10 +550,8 @@ func isEquiJoin(exprs []*plan.Expr) bool {
 			if !supportedJoinCondition(e.F.Func.GetObj()) {
 				return false
 			}
-			if !hasColExpr(e.F.Args[0]) {
-				return false
-			}
-			if !hasColExpr(e.F.Args[1]) {
+			lpos, rpos := hasColExpr(e.F.Args[0], -1), hasColExpr(e.F.Args[1], -1)
+			if lpos == -1 || rpos == -1 || (lpos != rpos) {
 				return false
 			}
 		}
@@ -566,19 +564,30 @@ func supportedJoinCondition(id int64) bool {
 	return fid == function.EQUAL
 }
 
-func hasColExpr(expr *plan.Expr) bool {
+func hasColExpr(expr *plan.Expr, pos int32) int32 {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		return true
+		if pos == -1 {
+			return e.Col.ColPos
+		}
+		if pos != e.Col.ColPos {
+			return -1
+		}
+		return pos
 	case *plan.Expr_F:
 		for i := range e.F.Args {
-			if hasColExpr(e.F.Args[i]) {
-				return true
+			pos0 := hasColExpr(e.F.Args[i], pos)
+			switch {
+			case pos0 == -1:
+			case pos == -1:
+				pos = pos0
+			case pos != pos0:
+				return -1
 			}
 		}
-		return false
+		return pos
 	default:
-		return false
+		return pos
 	}
 }
 
