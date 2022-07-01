@@ -660,6 +660,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			if err != nil {
 				return 0, err
 			}
+
+			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
+				if c, ok := cExpr.C.Value.(*plan.Const_Ival); ok {
+					ctx.hasSingleRow = c.Ival == 1
+				}
+			}
 		}
 	}
 
