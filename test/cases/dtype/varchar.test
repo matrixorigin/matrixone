@@ -13,10 +13,14 @@ insert into t1 values('ab_def');
 insert into t1 values('abc_ef');
 insert into t1 values('abcd_f');
 insert into t1 values('abcde_');
+-- @bvt:issue#3247
 select * from t1 where a like 'ab\_def';
+-- @bvt:issue
 select * from t1 where a not like 'a%';
+-- @bvt:issue#3247
 select * from t1 where a like "\__cdef";
 select * from t1 where a not like "%d_\_";
+-- @bvt:issue
 CREATE TABLE Demovarchar
 (
 LastName varchar(10) primary key,

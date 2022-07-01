@@ -14,9 +14,7 @@ select char_length(a), length(a), a from t1 order by a;
 drop table t1;
 
 #EXTRME VALUE
--- @bvt:issue#3313
 select char_length('\n\t\r\b\0\_\%\\');
--- @bvt:issue
 
 #嵌套
 -- @bvt:issue#3404
