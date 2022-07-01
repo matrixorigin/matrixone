@@ -2496,9 +2496,7 @@ func TestDelete3(t *testing.T) {
 
 	tae.createRelAndAppend(bat, true)
 	tae.checkRowsByScan(rows, false)
-	tae.deleteAll(true)
-	tae.checkRowsByScan(0, true)
-	deleted := true
+	deleted := false
 	for i := 0; i < 10; i++ {
 		if deleted {
 			tae.checkRowsByScan(0, true)
