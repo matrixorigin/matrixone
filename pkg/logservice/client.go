@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -64,18 +65,26 @@ type client struct {
 	cfg    LogServiceClientConfig
 	client morpc.RPCClient
 	addr   string
+	req    *RPCRequest
+	pool   *sync.Pool
 }
 
 var _ Client = (*client)(nil)
 
 func CreateClient(ctx context.Context,
 	name string, cfg LogServiceClientConfig) (Client, error) {
+	pool := &sync.Pool{}
+	pool.New = func() interface{} {
+		return &RPCResponse{pool: pool}
+	}
 	c := &client{
-		cfg: cfg,
+		cfg:  cfg,
+		req:  &RPCRequest{},
+		pool: pool,
 	}
 	var e error
 	for _, addr := range cfg.ServiceAddresses {
-		cc, err := getRPCClient(ctx, addr)
+		cc, err := getRPCClient(ctx, addr, c.pool)
 		if err != nil {
 			e = err
 			continue
@@ -155,23 +164,22 @@ func (c *client) request(ctx context.Context,
 	}
 	req := pb.Request{
 		Method:  mt,
-		ShardID: c.cfg.ShardID,
-		DNID:    c.cfg.ReplicaID,
 		Timeout: int64(timeout),
-		Index:   index,
-		MaxSize: maxSize,
+		LogRequest: pb.LogRequest{
+			ShardID: c.cfg.ShardID,
+			DNID:    c.cfg.ReplicaID,
+			Index:   index,
+			MaxSize: maxSize,
+		},
 	}
-	rr := &RPCRequest{
-		Request: req,
-		payload: payload,
-	}
-	// FIXME: fix SendOption
-	// FIXME: how to avoid allocation here?
+	c.req.Request = req
+	c.req.payload = payload
 	future, err := c.client.Send(ctx,
-		c.addr, rr, morpc.SendOptions{Timeout: time.Duration(timeout)})
+		c.addr, c.req, morpc.SendOptions{Timeout: time.Duration(timeout)})
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
+	defer future.Close()
 	msg, err := future.Get()
 	if err != nil {
 		return pb.Response{}, nil, err
@@ -180,6 +188,8 @@ func (c *client) request(ctx context.Context,
 	if !ok {
 		panic("unexpected response type")
 	}
+	resp := response.Response
+	defer response.Release()
 	var recs pb.LogRecordResponse
 	if len(response.payload) > 0 {
 		MustUnmarshal(&recs, response.payload)
@@ -188,7 +198,7 @@ func (c *client) request(ctx context.Context,
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
-	return response.Response, recs.Records, nil
+	return resp, recs.Records, nil
 }
 
 func (c *client) connect(ctx context.Context, mt pb.MethodType) error {
@@ -201,7 +211,7 @@ func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if err != nil {
 		return 0, err
 	}
-	return resp.Index, nil
+	return resp.LogResponse.Index, nil
 }
 
 func (c *client) read(ctx context.Context,
@@ -210,7 +220,7 @@ func (c *client) read(ctx context.Context,
 	if err != nil {
 		return nil, 0, err
 	}
-	return recs, resp.LastIndex, nil
+	return recs, resp.LogResponse.LastIndex, nil
 }
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
@@ -223,15 +233,14 @@ func (c *client) getTruncatedIndex(ctx context.Context) (Lsn, error) {
 	if err != nil {
 		return 0, err
 	}
-	return resp.Index, nil
+	return resp.LogResponse.Index, nil
 }
 
-func getRPCClient(ctx context.Context, target string) (morpc.RPCClient, error) {
+func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RPCClient, error) {
 	mf := func() morpc.Message {
-		return &RPCResponse{}
+		return pool.Get().(*RPCResponse)
 	}
 	codec := morpc.NewMessageCodec(mf, defaultWriteSocketSize)
-	// FIXME: set options
 	bf := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendConnectTimeout(connectionTimeout))

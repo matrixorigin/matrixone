@@ -21,8 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -193,17 +192,17 @@ func TestCheck(t *testing.T) {
 
 	// 1. no working dn stores
 	{
-		dnState := hapb.DNState{
-			Stores: map[string]hapb.DNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(10, 12),
 					},
 				},
 				"expired2": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(11, 13),
 					},
 				},
@@ -216,31 +215,31 @@ func TestCheck(t *testing.T) {
 
 	// 2. running cluster
 	{
-		dnState := hapb.DNState{
-			Stores: map[string]hapb.DNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(10, 11),
 						mockDnShardMeta(14, 17),
 					},
 				},
 				"working1": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(12, 13),
 					},
 				},
 				"working2": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(14, 15),
 						mockDnShardMeta(12, 16),
 					},
 				},
 				"working3": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(12, 18),
 					},
 				},
