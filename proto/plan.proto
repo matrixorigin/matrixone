@@ -250,6 +250,7 @@ message ColDef {
 	bool primary        = 5;
 	int32 pkidx 		= 6;
 	string alias		= 7;
+	bool is_prune		= 8;
 }
 
 message IndexDef {
