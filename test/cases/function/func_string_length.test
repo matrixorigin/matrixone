@@ -42,9 +42,7 @@ drop table t2;
 drop table t3;
 
 #EXTREME VALUE，中文
--- @bvt:issue#3256
 select length('\n\t\r\b\0\_\%\\');
--- @bvt:issue
 
 select length(12314124);
 select length(0.14123124124);

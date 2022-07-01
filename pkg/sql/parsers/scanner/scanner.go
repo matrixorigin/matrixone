@@ -290,18 +290,33 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 		s.skip(1)
 
 		if ch == '\\' {
-			if s.cur() == eofChar {
+			ch = s.cur()
+			switch ch {
+			case eofChar:
 				return LEX_ERROR, buffer.String()
-			}
-			if to, ok := encodeRef[byte(s.cur())]; ok {
-				ch = uint16(to)
-			} else {
-				ch = s.cur()
+			case 'n':
+				ch = '\n'
+			case '0':
+				ch = '\x00'
+			case 'b':
+				ch = 8
+			case 'Z':
+				ch = 26
+			case 'r':
+				ch = '\r'
+			case 't':
+				ch = '\t'
+			case '%', '_':
+				buffer.WriteByte(byte('\\'))
+				continue
+			case '\\':
+				ch = '\\'
+			default:
+				continue
 			}
 		} else if ch == delim && s.cur() != delim {
 			break
 		}
-
 		buffer.WriteByte(byte(ch))
 		s.skip(1)
 	}
