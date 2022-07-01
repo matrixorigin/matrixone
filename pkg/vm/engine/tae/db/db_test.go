@@ -2487,11 +2487,11 @@ func TestDelete3(t *testing.T) {
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(1, -1)
-	schema.BlockMaxRows = 2
-	schema.SegmentMaxBlocks = 2000
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
 	tae.bindSchema(schema)
 	// rows := int(schema.BlockMaxRows * 1)
-	rows := int(schema.BlockMaxRows*1) + 1
+	rows := int(schema.BlockMaxRows*3) + 1
 	bat := catalog.MockBatch(schema, rows)
 
 	tae.createRelAndAppend(bat, true)
@@ -2499,7 +2499,7 @@ func TestDelete3(t *testing.T) {
 	tae.deleteAll(true)
 	tae.checkRowsByScan(0, true)
 	deleted := true
-	for i := 0; i < 70; i++ {
+	for i := 0; i < 10; i++ {
 		if deleted {
 			tae.checkRowsByScan(0, true)
 			tae.doAppend(bat)
@@ -2518,4 +2518,5 @@ func TestDelete3(t *testing.T) {
 			}
 		}
 	}
+	t.Logf(tae.Catalog.SimplePPString(common.PPL1))
 }
