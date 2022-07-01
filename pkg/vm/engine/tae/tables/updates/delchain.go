@@ -200,7 +200,8 @@ func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *ro
 		return
 	}
 	startNode := n.(*DeleteNode)
-	n, err = chain.CollectDeletesLocked(endTs-1, true)
+	// n, err = chain.CollectDeletesLocked(endTs-1, true)
+	n, err = chain.CollectDeletesLocked(endTs, true)
 	if err != nil {
 		return
 	}

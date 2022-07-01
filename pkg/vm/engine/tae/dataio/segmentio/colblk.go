@@ -160,22 +160,12 @@ func (cb *columnBlock) close() {
 
 func (cb *columnBlock) Destroy() {
 	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
-	cb.data.mutex.Lock()
-	files := cb.data.file
-	cb.data.file = nil
-	cb.data.mutex.Unlock()
-	if files != nil {
-		for _, file := range files {
-			file.Unref()
-		}
-	}
-
+	cb.data.Destroy()
+	cb.data = nil
 	for _, index := range cb.indexes {
-		for _, file := range index.dataFile.file {
-			file.Unref()
-		}
+		index.Destroy()
 	}
-	for _, update := range cb.updates.file {
-		update.Unref()
-	}
+	cb.indexes = nil
+	cb.updates.Destroy()
+	cb.updates = nil
 }
