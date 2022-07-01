@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select CAST('10 ' as unsigned);",
-		output: "select cast(10  as unsigned)",
+		input:  "select 'a\\'b'",
+		output: "select a'b",
 	}
 )
 
@@ -52,6 +52,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select 'a\\'b'",
+		output: "select a'b",
+	}, {
+		input:  "select char_length('\\n\\t\\r\\b\\0\\_\\%\\\\');",
+		output: "select char_length(\\n\\t\\r\\b\\0\\_\\%\\\\)",
+	}, {
 		input:  "select CAST('10 ' as unsigned);",
 		output: "select cast(10  as unsigned)",
 	}, {
