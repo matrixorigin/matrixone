@@ -173,12 +173,18 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				}
 			}
 		case whenv.IsScalar() && !thenv.IsScalar():
+			rs.Typ.Precision = thenv.Typ.Precision
+			rs.Typ.Width = thenv.Typ.Width
+			rs.Typ.Scale = thenv.Typ.Scale
 			if !whenv.IsScalarNull() && whencols[0] {
 				copy(rscols, thencols)
 				rs.Nsp.Or(thenv.Nsp)
 				return rs, nil
 			}
 		case !whenv.IsScalar() && thenv.IsScalar():
+			rs.Typ.Precision = thenv.Typ.Precision
+			rs.Typ.Width = thenv.Typ.Width
+			rs.Typ.Scale = thenv.Typ.Scale
 			if thenv.IsScalarNull() {
 				var j uint64
 				temp := make([]uint64, 0, l)
@@ -204,6 +210,9 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 				}
 			}
 		case !whenv.IsScalar() && !thenv.IsScalar():
+			rs.Typ.Precision = thenv.Typ.Precision
+			rs.Typ.Width = thenv.Typ.Width
+			rs.Typ.Scale = thenv.Typ.Scale
 			if nulls.Any(thenv.Nsp) {
 				var j uint64
 				temp := make([]uint64, 0, l)
