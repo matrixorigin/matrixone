@@ -54,8 +54,8 @@ const (
 )
 
 var (
-	errIncorrectDatetimeValue     = errors.New(errno.DataException, "Incorrect datetime value")
-	errInvalidDatetimeAddInterval = errors.New(errno.DataException, "Invalid datetime result")
+	errIncorrectDatetimeValue = errors.New(errno.DataException, "Incorrect datetime value")
+	// errInvalidDatetimeAddInterval = errors.New(errno.DataException, "Invalid datetime result")
 )
 
 func (dt Datetime) String() string {
@@ -221,19 +221,13 @@ func UnixToTimestamp(time int64) Timestamp {
 	return Timestamp(dt.ToInt64() - localTZAligned)
 }
 
+func FromUnixMicro(us int64) Datetime {
+	return Datetime(us + (unixEpoch << 20))
+}
+
 func Now() Datetime {
 	t := gotime.Now()
-	wall := *(*uint64)(unsafe.Pointer(&t))
-	ext := *(*int64)(unsafe.Pointer(uintptr(unsafe.Pointer(&t)) + unsafe.Sizeof(wall)))
-	var sec, nsec int64
-	if wall&hasMonotonic != 0 {
-		sec = int64(wall<<1>>31) + wallToInternal
-		nsec = int64(wall << 34 >> 34)
-	} else {
-		sec = ext
-		nsec = int64(wall)
-	}
-	return Datetime((sec << 20) + nsec/1000)
+	return FromUnixMicro(t.UnixMicro())
 }
 
 func (dt Datetime) ToDate() Date {
