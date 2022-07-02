@@ -1868,7 +1868,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var selfHandle = false
 	var fromLoadData = false
 	var txnErr error
-	var rspLen uint64
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
@@ -2007,7 +2006,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			_, ok := st.Rows.Select.(*tree.ValuesClause)
 			if ok && usePlan2 {
 				selfHandle = true
-				rspLen, err = mce.handleInsertValues(st, epoch)
+				err = mce.handleInsertValues(st, epoch)
 				if err != nil {
 					goto handleFailed
 				}
@@ -2252,8 +2251,18 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			/*
 				Step 2: Echo client
 			*/
-			rspLen = cw.GetAffectedRows()
+			resp := NewOkResponse(
+				cw.GetAffectedRows(),
+				0,
+				0,
+				0,
+				int(COM_QUERY),
+				nil,
+			)
 			echoTime := time.Now()
+			if err = proto.SendResponse(resp); err != nil {
+				goto handleFailed
+			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
@@ -2268,23 +2277,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			txnErr = txnHandler.CommitAfterAutocommitOnly()
 			if txnErr != nil {
 				return txnErr
-			}
-			switch stmt.(type) {
-			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-				*tree.CreateIndex, *tree.DropIndex,
-				*tree.Insert, *tree.Update,
-				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
-				*tree.SetVar,
-				*tree.Load,
-				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
-				*tree.CreateRole, *tree.DropRole,
-				*tree.Revoke, *tree.Grant,
-				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-				*tree.Delete:
-				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-					return fmt.Errorf("routine send response failed. error:%v ", err)
-				}
 			}
 		}
 		goto handleNext
