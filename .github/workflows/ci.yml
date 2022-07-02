@@ -128,11 +128,15 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
+          timedatectl status
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          timedatectl status
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check MO-Server Status
+        if: ${{ always() }}
         run: |
           if [ "$(ps -ef | grep 'mo-server' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-server; else echo 'current mo-server has already crashed'; exit 1; fi
           ps -ef

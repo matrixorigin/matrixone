@@ -68,7 +68,7 @@ DROP TABLE t1;
 -- @bvt:issue
 
 #SET time_zone='+00:00';
--- @bvt:issue#3387
+-- @bvt:issue#3655
 SELECT
 FROM_UNIXTIME(2147483647) AS c1,
 FROM_UNIXTIME(2147483648) AS c2,
