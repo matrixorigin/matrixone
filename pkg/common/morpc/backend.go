@@ -99,7 +99,6 @@ type remoteBackend struct {
 	logger     *zap.Logger
 	codec      Codec
 	conn       goetty.IOSession
-	resetReadC chan struct{}
 	writeC     chan *Future
 	resetConnC chan struct{}
 	stopper    *stopper.Stopper
@@ -118,7 +117,8 @@ type remoteBackend struct {
 
 	stateMu struct {
 		sync.RWMutex
-		state int32
+		state          int32
+		readLoopActive bool
 	}
 
 	mu struct {
@@ -143,7 +143,6 @@ func NewRemoteBackend(
 		stopper:    stopper.NewStopper(fmt.Sprintf("backend-%s", remote)),
 		remote:     remote,
 		codec:      codec,
-		resetReadC: make(chan struct{}, 1),
 		resetConnC: make(chan struct{}),
 	}
 
@@ -168,18 +167,15 @@ func NewRemoteBackend(
 			return nil, err
 		}
 	}
+	rb.activeReadLoop()
 
 	if err := rb.stopper.RunTask(rb.writeLoop); err != nil {
-		return nil, err
-	}
-	if err := rb.stopper.RunTask(rb.readLoop); err != nil {
 		return nil, err
 	}
 	if err := rb.stopper.RunTask(rb.cleanStreams); err != nil {
 		return nil, err
 	}
 
-	rb.activeReadLoop()
 	return rb, nil
 }
 
@@ -431,21 +427,19 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		case <-ctx.Done():
 			rb.clean()
 			return
-		case _, ok := <-rb.resetReadC:
-			if ok {
-				rb.logger.Info("read loop actived, ready to read from backend")
-				for {
-					msg, err := rb.conn.Read(goetty.ReadOptions{})
-					if err != nil {
-						rb.logger.Error("read from backend failed, wait for reactive read loop",
-							zap.Error(err))
-						rb.closeStreams()
-						rb.scheduleResetConn()
-						break
-					}
-
-					rb.requestDone(msg.(Message))
+		default:
+			for {
+				msg, err := rb.conn.Read(goetty.ReadOptions{})
+				if err != nil {
+					rb.logger.Error("read from backend failed",
+						zap.Error(err))
+					rb.inactiveReadLoop()
+					rb.closeStreams()
+					rb.scheduleResetConn()
+					return
 				}
+
+				rb.requestDone(msg.(Message))
 			}
 		}
 	}
@@ -464,7 +458,6 @@ func (rb *remoteBackend) cleanClosedStreams() {
 
 func (rb *remoteBackend) doClose() {
 	rb.closeOnce.Do(func() {
-		close(rb.resetReadC)
 		close(rb.resetConnC)
 		rb.closeConn()
 	})
@@ -551,10 +544,26 @@ func (rb *remoteBackend) resetConn() error {
 }
 
 func (rb *remoteBackend) activeReadLoop() {
-	select {
-	case rb.resetReadC <- struct{}{}:
-	default:
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+
+	if rb.stateMu.readLoopActive {
+		return
 	}
+
+	if err := rb.stopper.RunTask(rb.readLoop); err != nil {
+		rb.logger.Error("active read loop failed",
+			zap.Error(err))
+		return
+	}
+	rb.stateMu.readLoopActive = true
+}
+
+func (rb *remoteBackend) inactiveReadLoop() {
+	rb.stateMu.Lock()
+	defer rb.stateMu.Unlock()
+
+	rb.stateMu.readLoopActive = false
 }
 
 func (rb *remoteBackend) running() bool {
