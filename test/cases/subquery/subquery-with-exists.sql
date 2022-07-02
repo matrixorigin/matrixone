@@ -84,10 +84,8 @@ INSERT INTO t1 VALUES ('joce','1',null,'joce'),('test','2',null,'test');
 INSERT INTO t2 VALUES ('joce','1',null,'joce'),('test','2',null,'test');
 INSERT INTO t3 VALUES (1,1);
 SELECT DISTINCT topic FROM t2 WHERE NOT EXISTS(SELECT * FROM t3 WHERE numeropost=topic);
--- @bvt:issue#3311
 DELETE FROM t1 WHERE topic IN (SELECT DISTINCT topic FROM t2 WHERE NOT EXISTS(SELECT * FROM t3 WHERE numeropost=topic));
 select * from t1;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -116,14 +114,12 @@ CREATE TABLE t1 (f1 varchar(1));
 INSERT INTO t1 VALUES ('v'),('s');
 CREATE TABLE t2 (f1_key varchar(1));
 INSERT INTO t2 VALUES ('j'),('v'),('c'),('m'),('d'),('d'),('y'),('t'),('d'),('s');
--- @bvt:issue#3311
 SELECT table1.f1, table2.f1_key FROM t1 AS table1, t2 AS table2
 WHERE EXISTS
 (
 SELECT DISTINCT f1_key
 FROM t2
 WHERE f1_key != table2.f1_key AND f1_key >= table1.f1 );
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
