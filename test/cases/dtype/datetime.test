@@ -56,8 +56,9 @@ select * from t1 order by big limit 3 offset 1;
 -- @bvt:issue#3258
 select min(big),max(big),max(big)-1 from t1 group by a;
 select big,count(big) from t1 group by big having count(big)>1 order by 2;
-drop table t1;
 -- @bvt:issue
+drop table t1;
+
 create table t1 (id datetime(6) not null default "2022-01-31 00:00:00.0000006", a int, primary key (a));
 insert into t1(a) values(1);
 -- @bvt:issue#3359
