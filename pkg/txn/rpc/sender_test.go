@@ -241,6 +241,16 @@ func TestWaitCompletedWithStreamClosed(t *testing.T) {
 	assert.Error(t, exec.waitCompleted())
 }
 
+func TestNewSenderWithOptions(t *testing.T) {
+	s, err := NewSender(nil, WithSenderPayloadBufferSize(100),
+		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)),
+		WithSenderClientOptions(morpc.WithClientDisableCreateTask()))
+	assert.NoError(t, err)
+	assert.Equal(t, 100, s.(*sender).options.payloadCopyBufferSize)
+	assert.True(t, len(s.(*sender).options.backendCreateOptions) >= 3)
+	assert.True(t, len(s.(*sender).options.clientOptions) >= 1)
+}
+
 type testStream struct {
 	id     uint64
 	c      chan morpc.Message
