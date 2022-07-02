@@ -283,5 +283,5 @@ message TxnRollbackDNShardResponse {
 
 // TxnError all explicit errors in transaction operations.
 message TxnError {
-
+    
 }
