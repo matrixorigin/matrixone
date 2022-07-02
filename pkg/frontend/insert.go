@@ -38,12 +38,12 @@ type InsertValues struct {
 	relation  engine.Relation
 }
 
-func (cmdExec *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) error {
-	snapshot := cmdExec.GetSession().GetTxnHandler().GetTxn().GetCtx()
+func (mce *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64) error {
+	snapshot := mce.GetSession().GetTxnHandler().GetTxn().GetCtx()
 
-	plan := &InsertValues{currentDb: cmdExec.GetSession().GetDatabaseName()}
+	plan := &InsertValues{currentDb: mce.GetSession().GetDatabaseName()}
 
-	if err := buildInsertValues(stmt, plan, cmdExec.GetSession().GetStorage(), snapshot); err != nil {
+	if err := buildInsertValues(stmt, plan, mce.GetSession().GetStorage(), snapshot); err != nil {
 		return err
 	}
 
@@ -53,7 +53,7 @@ func (cmdExec *MysqlCmdExecutor) handleInsertValues(stmt *tree.Insert, ts uint64
 	}
 
 	resp := NewOkResponse(uint64(vector.Length(plan.dataBatch.Vecs[0])), 0, 0, 0, int(COM_QUERY), "")
-	if err := cmdExec.GetSession().protocol.SendResponse(resp); err != nil {
+	if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
 	}
 	return nil

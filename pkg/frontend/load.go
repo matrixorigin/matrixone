@@ -1928,8 +1928,8 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (cmdExec *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
-	ses := cmdExec.GetSession()
+func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
+	ses := mce.GetSession()
 
 	var m sync.Mutex
 	//begin:=  time.Now()
@@ -2013,7 +2013,7 @@ func (cmdExec *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Data
 	handler.closeRef = NewCloseLoadData()
 
 	//put closeRef into the executor
-	cmdExec.loadDataClose = handler.closeRef
+	mce.loadDataClose = handler.closeRef
 
 	handler.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
 		rune(load.Fields.Terminated[0]),
