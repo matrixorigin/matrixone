@@ -4262,7 +4262,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int8, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4270,7 +4270,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int16, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4278,7 +4278,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int32, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4286,7 +4286,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_int64, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4294,7 +4294,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint8, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4302,7 +4302,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint16, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4310,7 +4310,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint32, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4318,7 +4318,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_uint64, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4326,7 +4326,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_float32, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4334,7 +4334,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_float64, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4342,7 +4342,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_char, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 			{
@@ -4350,7 +4350,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_varchar, types.T_bool},
-				ReturnTyp: types.T_bool,
+				ReturnTyp: types.T_decimal64,
 				Fn:        operator.Cast,
 			},
 		},
