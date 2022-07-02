@@ -8,10 +8,8 @@ DROP TABLE IF EXISTS t1;
 create table t1 (a boolean,b bool);
 insert into t1 values (0,1),(true,false),(true,1),(0,false),(NULL,NULL);
 select * from t1;
--- @bvt:issue#3356
 SELECT * FROM t1 WHERE IF(a AND 1, 0, 1);
 SELECT * FROM t1 WHERE IF(1 AND a, 0, 1);
--- @bvt:issue
 SELECT * FROM t1 where NOT(a AND 1);
 SELECT * FROM t1 where NOT(1 AND a);
 SELECT * FROM t1 where (a AND 1)=0;
