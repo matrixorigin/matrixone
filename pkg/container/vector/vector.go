@@ -657,9 +657,17 @@ func setLengthFixed[T any](v *Vector, n int) {
 
 func SetLength(v *Vector, n int) {
 	if v.IsScalar() || v.Typ.Oid == types.T_any {
-		v.Length = n
+		SetScalarLength(v, n)
 		return
 	}
+	SetVectorLength(v, n)
+}
+
+func SetScalarLength(v *Vector, n int) {
+	v.Length = n
+}
+
+func SetVectorLength(v *Vector, n int) {
 	switch v.Typ.Oid {
 	case types.T_bool:
 		setLengthFixed[bool](v, n)

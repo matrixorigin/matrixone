@@ -82,12 +82,12 @@ type MysqlCmdExecutor struct {
 	routineMgr *RoutineManager
 }
 
-func (cei *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
-	cei.ses = ses
+func (mce *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
+	mce.ses = ses
 }
 
-func (cei *MysqlCmdExecutor) GetSession() *Session {
-	return cei.ses
+func (mce *MysqlCmdExecutor) GetSession() *Session {
+	return mce.ses
 }
 
 //get new process id

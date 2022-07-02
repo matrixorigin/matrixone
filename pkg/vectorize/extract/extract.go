@@ -17,6 +17,7 @@ package extract
 import (
 	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -102,6 +103,8 @@ func ExtractFromOneDate(unit string, date types.Date) uint32 {
 	switch unit {
 	case "day":
 		return uint32(date.Day())
+	case "week":
+		return uint32(date.WeekOfYear2())
 	case "month":
 		return uint32(date.Month())
 	case "quarter":
@@ -124,21 +127,25 @@ func ExtractFromDate(unit string, dates []types.Date, results []uint32) ([]uint3
 		for i, d := range dates {
 			results[i] = uint32(d.Day())
 		}
+	case "week":
+		for i, d := range dates {
+			results[i] = uint32(d.WeekOfYear2())
+		}
 	case "month":
 		for i, d := range dates {
 			results[i] = uint32(d.Month())
 		}
-	case "year":
+	case "quarter":
 		for i, d := range dates {
-			results[i] = uint32(d.Year())
+			results[i] = d.Quarter()
 		}
 	case "year_month":
 		for i, d := range dates {
 			results[i] = d.YearMonth()
 		}
-	case "quarter":
+	case "year":
 		for i, d := range dates {
-			results[i] = d.Quarter()
+			results[i] = uint32(d.Year())
 		}
 	}
 	return results, nil
