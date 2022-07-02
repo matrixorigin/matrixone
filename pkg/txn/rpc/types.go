@@ -45,3 +45,6 @@ type TxnServer interface {
 
 // TxnRequestHandleFunc txn request handle func
 type TxnRequestHandleFunc func(context.Context, *txn.TxnRequest, *txn.TxnResponse) error
+
+// SenderOption option for create Sender
+type SenderOption func(*sender)
