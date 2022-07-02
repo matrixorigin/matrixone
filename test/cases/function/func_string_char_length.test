@@ -17,9 +17,9 @@ drop table t1;
 select char_length('\n\t\r\b\0\_\%\\');
 
 #嵌套
--- @bvt:issue#3404
+
 SELECT CHAR_LENGTH(concat_ws(" ",121,83,81,'76')) as my_column;
--- @bvt:issue
+
 
 
 create table t (c varchar(20));
