@@ -185,7 +185,7 @@ func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
 		overflowFlag |= x >> 63
 	}
 	if overflowFlag != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint unsigned to bigint"))
+		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint unsigned to bigint")
 	}
 	return rs, nil
 }
@@ -197,7 +197,7 @@ func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
 		overflowFlag |= x >> 63
 	}
 	if overflowFlag != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint to bigint unsigned"))
+		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint to bigint unsigned")
 	}
 	return rs, nil
 }
@@ -404,7 +404,7 @@ func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error)
 
 func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]types.Timestamp, error) {
 	for i, x := range xs {
-		rs[i] = types.Timestamp(x)
+		rs[i] = types.UnixToTimestamp(int64(x))
 	}
 	return rs, nil
 }

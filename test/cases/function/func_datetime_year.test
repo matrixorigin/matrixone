@@ -15,12 +15,14 @@ SELECT YEAR("2049-14-34") as year;
 # 多种类型
 SELECT YEAR("2015-09") as year;
 
--- @bvt:issue#3390
+
 SELECT YEAR(2015) as year;
+-- @bvt:issue#3598
 SELECT YEAR(1340124) as year;
 SELECT YEAR(0.45133) as year;
-SELECT YEAR(1=1) as year;
 -- @bvt:issue
+SELECT YEAR(1=1) as year;
+
 
 SELECT YEAR('2015-09.30') as year;
 
@@ -71,13 +73,13 @@ select * from t1;
 drop table t1;
 
 #WHERE
--- @bvt:issue#3390
+
 drop table if exists t1;
 create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 select * from t1 where year(b)="2012";
 drop table t1;
--- @bvt:issue
+
 
 #ON CONDITION
 drop table if exists t1;
@@ -92,13 +94,13 @@ drop table t2;
 
 
 #HAVING
--- @bvt:issue#3390
+
 drop table if exists t1;
 create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(1, "2012-07-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 select b from t1 group by b having year(b)="2012";
 drop table t1;
--- @bvt:issue
+
 
 #distinct
 drop table if exists t1;
@@ -125,7 +127,7 @@ INSERT INTO t3 VALUES('2008-02-29');
 SELECT YEAR(c1) FROM t3;
 DROP TABLE t3;
 
--- @bvt:issue#3390
+
 CREATE TABLE t3(c1 TIMESTAMP NOT NULL);
 INSERT INTO t3 VALUES('2000-01-01');
 INSERT INTO t3 VALUES('1999-12-31');
@@ -134,4 +136,3 @@ INSERT INTO t3 VALUES('2006-12-25');
 INSERT INTO t3 VALUES('2008-02-29');
 SELECT YEAR(c1) FROM t3;
 DROP TABLE t3;
--- @bvt:issue

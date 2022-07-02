@@ -54,27 +54,26 @@ func TestSend(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
-func TestSendWithAlradyContextDone(t *testing.T) {
+func TestSendWithAlreadyContextDone(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
 			return conn.Write(msg, goetty.WriteOptions{Flush: true})
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*10)
-			defer cancel()
 
 			req := newTestMessage(1)
 			f, err := b.Send(ctx, req, SendOptions{})
 			assert.NoError(t, err)
 			defer f.Close()
-
 			resp, err := f.Get()
 			assert.Error(t, err)
 			assert.Nil(t, resp)
 		},
 		WithBackendConnectWhenCreate(),
 		WithBackendFilter(func(f []*Future) []*Future {
-			time.Sleep(time.Millisecond * 10)
+			cancel()
 			return f
 		}))
 }

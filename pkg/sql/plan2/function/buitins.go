@@ -148,10 +148,21 @@ var builtins = map[int]Functions{
 		Id: CONCAT_WS,
 		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
 			if len(inputs) > 1 {
-				for _, t := range inputs {
+				ret := make([]types.T, len(inputs))
+				convert := false
+				for i, t := range inputs {
 					if t != types.T_char && t != types.T_varchar && t != types.T_any {
+						if castTable[t][types.T_varchar] {
+							ret[i] = types.T_varchar
+							convert = true
+							continue
+						}
 						return wrongFunctionParameters, nil
 					}
+					ret[i] = t
+				}
+				if convert {
+					return int32(0), ret
 				}
 				return int32(0), nil
 			}
@@ -204,6 +215,22 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime},
 				ReturnTyp: types.T_date, Fn: unary.DatetimeToDate,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_date,
+				Fn:        unary.DateStringToDate,
+			},
+			{
+				Index:     3,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_date,
+				Fn:        unary.DateStringToDate,
 			},
 		},
 	},
@@ -332,15 +359,15 @@ var builtins = map[int]Functions{
 				Index:     0,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
-				Args:      []types.T{types.T_varchar, types.T_date},
-				ReturnTyp: types.T_uint32, Fn: binary.ExtractFromDate,
+				Args:      []types.T{types.T_varchar, types.T_datetime},
+				ReturnTyp: types.T_varchar, Fn: binary.ExtractFromDatetime,
 			},
 			{
 				Index:     1,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
-				Args:      []types.T{types.T_varchar, types.T_datetime},
-				ReturnTyp: types.T_varchar, Fn: binary.ExtractFromDatetime,
+				Args:      []types.T{types.T_varchar, types.T_date},
+				ReturnTyp: types.T_uint32, Fn: binary.ExtractFromDate,
 			},
 		},
 	},
@@ -1623,11 +1650,20 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringAdd,
 			},
 			{
 				Index:     3,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_datetime,
+				Fn:        multi.DateStringAdd,
+			},
+			{
+				Index:     4,
 				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
@@ -1664,11 +1700,20 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_int64, types.T_int64},
-				ReturnTyp: types.T_varchar,
+				ReturnTyp: types.T_datetime,
 				Fn:        multi.DateStringSub,
 			},
 			{
 				Index:     3,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_datetime,
+				Fn:        multi.DateStringSub,
+			},
+			{
+				Index:     4,
 				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,

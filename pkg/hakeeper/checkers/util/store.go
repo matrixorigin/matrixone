@@ -28,7 +28,7 @@ func NewTestIDAllocator(startFrom uint64) *TestIDAllocator {
 	return &TestIDAllocator{id: startFrom}
 }
 
-func (a TestIDAllocator) Next() (uint64, bool) {
+func (a *TestIDAllocator) Next() (uint64, bool) {
 	a.id += 1
 	return a.id, true
 }

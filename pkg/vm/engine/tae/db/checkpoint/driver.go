@@ -62,7 +62,7 @@ func (f *ckpDriver) onCheckpoint(items ...any) {
 		}
 		ckpEntry.Free()
 	}
-	logutil.Infof("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
+	logutil.Debugf("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
 func (f *ckpDriver) onRequests(items ...any) {

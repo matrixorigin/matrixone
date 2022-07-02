@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -48,6 +49,9 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[int64][2]int32) er
 			return errors.New("", fmt.Sprintf("can't find column in context's map %v", colMap))
 		}
 
+	case *plan.Expr_Corr:
+		return errors.New("", "correlated subquery will support in future version.")
+
 	case *plan.Expr_F:
 		for _, arg := range ne.F.GetArgs() {
 			err := builder.remapExpr(arg, colMap)
@@ -59,14 +63,29 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[int64][2]int32) er
 	return nil
 }
 
-func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, error) {
+func (builder *QueryBuilder) remapAllColRefs(nodeId int32, preNeedCol *ColumnCollect) (map[int64][2]int32, error) {
 	node := builder.qry.Nodes[nodeId]
 	returnMap := make(map[int64][2]int32)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+		// collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.FilterList, curNeedCol)
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
 		node.ProjectList = make([]*Expr, len(node.TableDef.Cols))
 		tag := node.BindingTags[0]
+
+		// Mark the column to be cropped in tabledef and set it to true
+		for idx, col := range node.TableDef.Cols {
+			key := [2]int32{tag, int32(idx)}
+			if sumNeedCol.posMap[key] != 1 {
+				col.IsPrune = true
+			}
+		}
+		// Handle cases where all columns are cropped
+		checkFullPrune(node.TableDef)
 
 		for idx, col := range node.TableDef.Cols {
 			node.ProjectList[idx] = &plan.Expr{
@@ -89,10 +108,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_JOIN:
+		// collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.OnList, curNeedCol)
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
 		joinCondMap := make(map[int64][2]int32)
 
 		childId := node.Children[0]
-		childMap, err := builder.remapAllColRefs(childId)
+		childMap, err := builder.remapAllColRefs(childId, sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +159,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 			})
 		}
 
-		childMap, err = builder.remapAllColRefs(childId)
+		childMap, err = builder.remapAllColRefs(childId, sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +191,17 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_AGG:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		if len(node.ProjectList) > 0 {
+			collectDepColumns(node.GroupBy, curNeedCol)
+		} else {
+			collectDepColumns(node.GroupBy, curNeedCol)
+			collectDepColumns(node.AggList, curNeedCol)
+		}
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
+		childMap, err := builder.remapAllColRefs(node.Children[0], sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -218,7 +252,14 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_SORT:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// collect current node need column info
+		curNeedCol := newColumnCollect()
+		for _, expr := range node.OrderBy {
+			collectExpr(expr.Expr, curNeedCol)
+		}
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
+		childMap, err := builder.remapAllColRefs(node.Children[0], sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +288,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		returnMap = childMap
 
 	case plan.Node_FILTER:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// Collect the columns required by the current node
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.FilterList, curNeedCol)
+
+		sumNeedCol := mergeColumnCollect(curNeedCol, preNeedCol)
+
+		childMap, err := builder.remapAllColRefs(node.Children[0], sumNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -276,7 +323,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		returnMap = childMap
 
 	case plan.Node_PROJECT, plan.Node_MATERIAL:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		// collect current node need column info
+		curNeedCol := newColumnCollect()
+		collectDepColumns(node.ProjectList, curNeedCol)
+
+		// project node does not need to pass down the columns required by the parent node
+		childMap, err := builder.remapAllColRefs(node.Children[0], curNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -293,7 +345,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeId int32) (map[int64][2]int32, 
 		}
 
 	case plan.Node_DISTINCT:
-		childMap, err := builder.remapAllColRefs(node.Children[0])
+		childMap, err := builder.remapAllColRefs(node.Children[0], preNeedCol)
 		if err != nil {
 			return nil, err
 		}
@@ -347,9 +399,10 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		rootId, _ = builder.pushdownFilters(rootId, nil)
+		rootId = builder.resolveJoinOrder(rootId)
 		builder.qry.Steps[i] = rootId
 
-		_, err := builder.remapAllColRefs(rootId)
+		_, err := builder.remapAllColRefs(rootId, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -611,6 +664,12 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			limitExpr, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
 			if err != nil {
 				return 0, err
+			}
+
+			if cExpr, ok := limitExpr.Expr.(*plan.Expr_C); ok {
+				if c, ok := cExpr.C.Value.(*plan.Const_Ival); ok {
+					ctx.hasSingleRow = c.Ival == 1
+				}
 			}
 		}
 	}
@@ -1439,6 +1498,139 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeId int32) int32 {
 	}
 
 	return nodeId
+}
+
+func (builder *QueryBuilder) resolveJoinOrder(nodeId int32) int32 {
+	node := builder.qry.Nodes[nodeId]
+
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+		for i, child := range node.Children {
+			node.Children[i] = builder.resolveJoinOrder(child)
+		}
+
+		return nodeId
+	}
+
+	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
+
+	sort.Slice(leaves, func(i, j int) bool {
+		if leaves[j].Cost == nil {
+			return false
+		}
+
+		if leaves[i].Cost == nil {
+			return true
+		}
+
+		return leaves[i].Cost.Card < leaves[j].Cost.Card
+	})
+
+	leafByTag := make(map[int32]int32)
+
+	for i, leaf := range leaves {
+		tags := builder.enumerateTags(leaf.NodeId)
+
+		for _, tag := range tags {
+			leafByTag[tag] = int32(i)
+		}
+	}
+
+	nLeaf := int32(len(leaves))
+
+	adjMat := make([]bool, nLeaf*nLeaf)
+	firstConnected := nLeaf
+	visited := make([]bool, nLeaf)
+
+	for _, cond := range conds {
+		hyperEdge := make(map[int32]any)
+		getHyperEdgeFromExpr(cond, leafByTag, hyperEdge)
+
+		for i := range hyperEdge {
+			if i < firstConnected {
+				firstConnected = i
+			}
+			for j := range hyperEdge {
+				adjMat[int32(nLeaf)*i+j] = true
+			}
+		}
+	}
+
+	if firstConnected < nLeaf {
+		nodeId = leaves[firstConnected].NodeId
+		visited[firstConnected] = true
+
+		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
+
+		for {
+			nextSibling := nLeaf
+			for i := range eligible {
+				if !visited[i] && eligible[i] {
+					nextSibling = int32(i)
+					break
+				}
+			}
+
+			if nextSibling == nLeaf {
+				break
+			}
+
+			visited[nextSibling] = true
+
+			nodeId = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{nodeId, leaves[nextSibling].NodeId},
+				JoinType: plan.Node_INNER,
+			}, nil)
+
+			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
+				eligible[i] = eligible[i] || adj
+			}
+		}
+
+		for i := range visited {
+			if !visited[i] {
+				nodeId = builder.appendNode(&plan.Node{
+					NodeType: plan.Node_JOIN,
+					Children: []int32{nodeId, leaves[i].NodeId},
+					JoinType: plan.Node_INNER,
+				}, nil)
+			}
+		}
+	} else {
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{leaves[0].NodeId, leaves[1].NodeId},
+			JoinType: plan.Node_INNER,
+		}, nil)
+
+		for i := 2; i < len(leaves); i++ {
+			nodeId = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{nodeId, leaves[i].NodeId},
+				JoinType: plan.Node_INNER,
+			}, nil)
+		}
+	}
+
+	nodeId, _ = builder.pushdownFilters(nodeId, conds)
+
+	return nodeId
+}
+
+func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
+	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER {
+		nodeId := builder.resolveJoinOrder(joinNode.NodeId)
+		leaves = append(leaves, builder.qry.Nodes[nodeId])
+		return leaves, conds
+	}
+
+	for _, childId := range joinNode.Children {
+		leaves, conds = builder.gatherJoinLeavesAndConds(builder.qry.Nodes[childId], leaves, conds)
+	}
+
+	conds = append(conds, joinNode.OnList...)
+
+	return leaves, conds
 }
 
 func (builder *QueryBuilder) enumerateTags(nodeId int32) []int32 {

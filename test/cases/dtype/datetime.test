@@ -19,7 +19,7 @@ select cast('2022-01-01 25:00:00' as datetime(0));
 select cast('2000-01-01' as datetime(0))+1;
 select cast('2000-01-01' as datetime(0))*1;
 -- @bvt:issue
--- @bvt:issue#330
+-- @bvt:issue#3300
 select cast('2000-01-01' as datetime(0))*1.1;
 -- @bvt:issue
 SELECT DATE_ADD('2022-02-28 23:59:59.9999', INTERVAL 1 SECOND) '1 second later';
@@ -48,7 +48,7 @@ drop table t1;
 
 -- @bvt:issue#3362
 create table t1 ( a int not null default 1, big datetime(4) primary key);
-insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00.00.000050');
+insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
 select * from t1;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;
@@ -82,10 +82,12 @@ insert into t1 values('2022-01-01 00:00:00.000500', 2);
 insert into t1 values('2022-01-01 00:00:00.005000', 3);
 insert into t2 values('2022-01-01 00:00:00.005', 4);
 insert into t2 values('2022-01-01 00:00:00.001', 5);
+-- @bvt:issue#3290
 select * from t1;
 select * from t2;
 select * from t1 join t2 on t1.dt=t2.dt order by 1 desc, t2.dt asc;
 select * from t1 join t2 on t1.dt=t2.dt where t1.value32<>t2.value32;
+-- @bvt:issue#
 
 #Test cases of query with operators
 drop table if exists t1;

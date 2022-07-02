@@ -55,12 +55,13 @@ func init() {
 }
 
 var (
-	errIncorrectDateValue = errors.New(errno.DataException, "Incorrect date value")
+	ErrIncorrectDateValue = errors.New(errno.DataException, "Incorrect date value")
 
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 	//regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
+	errInvalidDateAddInterval = errors.New(errno.DataException, "Invalid date result")
 )
 
 const (
@@ -81,25 +82,49 @@ const (
 // ParseDate will parse a string to be a Date
 // Support Format:
 // `yyyy-mm-dd`
+// `yyyy-mm-d`
+// `yyyy-m-dd`
+// `yyyy-m-d`
 // `yyyymmdd`
 func ParseDate(s string) (Date, error) {
 	var y int32
 	var m, d uint8
 
 	if len(s) < 8 {
-		return -1, errIncorrectDateValue
+		return -1, ErrIncorrectDateValue
 	}
 
 	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
-		if len(s) != 10 || s[7] != '-' {
-			return -1, errIncorrectDateValue
+		if len(s) < 8 || len(s) > 10 {
+			return -1, ErrIncorrectDateValue
 		}
-		m = (s[5]-'0')*10 + (s[6] - '0')
-		d = (s[8]-'0')*10 + (s[9] - '0')
+		if len(s) == 8 {
+			if s[6] != '-' {
+				return -1, ErrIncorrectDateValue
+			}
+			m = s[5] - '0'
+			d = s[7] - '0'
+		} else if len(s) == 9 {
+			if s[6] == '-' {
+				m = s[5] - '0'
+				d = (s[7]-'0')*10 + (s[8] - '0')
+			} else if s[7] == '-' {
+				m = (s[5]-'0')*10 + (s[6] - '0')
+				d = s[8] - '0'
+			} else {
+				return -1, ErrIncorrectDateValue
+			}
+		} else {
+			if s[7] != '-' {
+				return -1, ErrIncorrectDateValue
+			}
+			m = (s[5]-'0')*10 + (s[6] - '0')
+			d = (s[8]-'0')*10 + (s[9] - '0')
+		}
 	} else {
 		if len(s) != 8 {
-			return -1, errIncorrectDateValue
+			return -1, ErrIncorrectDateValue
 		}
 		m = (s[4]-'0')*10 + (s[5] - '0')
 		d = (s[6]-'0')*10 + (s[7] - '0')
@@ -108,7 +133,7 @@ func ParseDate(s string) (Date, error) {
 	if validDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
-	return -1, errIncorrectDateValue
+	return -1, ErrIncorrectDateValue
 }
 
 // ParseDate will parse a string to be a Date (this is used for cast string to date,it's different from above)
@@ -125,14 +150,14 @@ func ParseDateCast(s string) (Date, error) {
 	//special case
 	flag_spcial, _ := regexp.MatchString("^[0-9]{4}[.|-]{1}[0-9]{2}$", s)
 	if flag_spcial {
-		return -1, errIncorrectDateValue
+		return -1, ErrIncorrectDateValue
 	}
 	//if it's pure number series like yyyymmdd,it must be 8 or 6 digits, otherwise there will be obfuscate
 	flag1, _ := regexp.MatchString("^[0-9]{4}[0-9]{1,2}[0-9]{1,2}$", s)
 	//the reg rule test: here refers to https://regex101.com/r/NlaiAo/1
 	flag2, _ := regexp.MatchString("^[0-9]{4}[.|-]{0,1}[0-9]{1,2}[.|-]{0,1}[0-9]{1,2}([ ](([0-9]{1,2})|([0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]*){0,1}))){0,1}$", s)
 	if !flag2 {
-		return -1, errIncorrectDateValue
+		return -1, ErrIncorrectDateValue
 	}
 	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if flag1 {
@@ -143,7 +168,7 @@ func ParseDateCast(s string) (Date, error) {
 			m = (s[4] - '0')
 			d = (s[5] - '0')
 		} else {
-			return -1, errIncorrectDateValue
+			return -1, ErrIncorrectDateValue
 		}
 	} else {
 		// if len(s) < 8 {
@@ -175,7 +200,7 @@ func ParseDateCast(s string) (Date, error) {
 	if validDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
-	return -1, errIncorrectDateValue
+	return -1, ErrIncorrectDateValue
 }
 
 // date[0001-01-01 to 9999-12-31]
@@ -294,7 +319,7 @@ func (d Date) YearMonthStr() string {
 	year, month, _, _ := d.Calendar(true)
 	yearStr := fmt.Sprintf("%04d", year)
 	monthStr := fmt.Sprintf("%02d", month)
-	return yearStr + "-" + monthStr
+	return yearStr + monthStr
 }
 
 var monthToQuarter = map[uint8]uint32{

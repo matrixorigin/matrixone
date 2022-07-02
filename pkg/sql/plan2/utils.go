@@ -443,3 +443,74 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 
 	return expr
 }
+
+// Collect expression dependent columns
+func collectDepColumns(exprList []*Expr, collect *ColumnCollect) {
+	if exprList != nil {
+		for _, expr := range exprList {
+			collectExpr(expr, collect)
+		}
+	}
+}
+
+func collectExpr(expr *Expr, collect *ColumnCollect) {
+	switch ne := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
+		collect.posMap[pos] = 1
+	case *plan.Expr_F:
+		for _, arg := range ne.F.GetArgs() {
+			collectExpr(arg, collect)
+		}
+	}
+}
+
+func mergeColumnCollect(left *ColumnCollect, right *ColumnCollect) *ColumnCollect {
+	resCollect := newColumnCollect()
+	if left != nil {
+		for k, v := range left.posMap {
+			resCollect.posMap[k] = v
+		}
+	}
+
+	if right != nil {
+		for k, v := range right.posMap {
+			resCollect.posMap[k] = v
+		}
+	}
+	return resCollect
+}
+
+func newColumnCollect() *ColumnCollect {
+	return &ColumnCollect{
+		posMap: make(map[[2]int32]int),
+	}
+}
+
+//You cannot prune all the columns in a table. Otherwise, you do not know how many rows there are in the table
+func checkFullPrune(tableDef *TableDef) {
+	var pruneAll bool = true
+	for _, colDef := range tableDef.Cols {
+		if !colDef.IsPrune {
+			pruneAll = false
+			break
+		}
+	}
+	if pruneAll {
+		tableDef.Cols[0].IsPrune = false
+	} else {
+		return
+	}
+}
+
+func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]any) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = nil
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	}
+}

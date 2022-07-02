@@ -117,9 +117,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal64,
 						Size:      0,
-						Width:     0,
+						Width:     10,
 						Scale:     2,
-						Precision: 10,
+						Precision: 0,
 					},
 					Name: "o"}},
 			&engine.AttributeDef{
@@ -127,9 +127,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal128,
 						Size:      0,
-						Width:     0,
+						Width:     20,
 						Scale:     2,
-						Precision: 20,
+						Precision: 0,
 					},
 					Name: "p"}},
 			&engine.AttributeDef{
@@ -293,9 +293,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal64,
 						Size:      0,
-						Width:     0,
+						Width:     10,
 						Scale:     2,
-						Precision: 10,
+						Precision: 0,
 					},
 					Name: "o"}},
 			&engine.AttributeDef{
@@ -303,9 +303,9 @@ func Test_load(t *testing.T) {
 					Type: types.Type{
 						Oid:       types.T_decimal128,
 						Size:      0,
-						Width:     0,
+						Width:     20,
 						Scale:     2,
-						Precision: 20,
+						Precision: 0,
 					},
 					Name: "p"}},
 			&engine.AttributeDef{

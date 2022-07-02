@@ -51,19 +51,21 @@ insert into t1 values('abcd_f');
 insert into t1 values('abcde_');
 select * from t1 where a like 'ab\_def';
 a
-abcdef
 ab_def
 select * from t1 where a not like 'a%';
 a
 _bcdef
 select * from t1 where a like "\__cdef";
 a
+_bcdef
+select * from t1 where a not like "%d_\_";
+a
 abcdef
 _bcdef
 a_cdef
-select * from t1 where a not like "%d_\_";
-a
+ab_def
 abc_ef
+abcd_f
 CREATE TABLE Demochar
 (
 LastName char(10) primary key,
@@ -204,11 +206,11 @@ officecode	sum(cast(officecode as unsigned))
 3	6
 7	14
 select employeeNumber,officeCode,reportsTo from employees where employeeNumber>1400 and reportsTo is not null order by officeCode+1,employeeNumber;
-employeeNumber  officeCode      reportsTo
-1401    4       1102
-1611    6       1088
-1501    7       1102
-1504    7       1102
+employeenumber	officecode	reportsto
+1401	4	1102
+1611	6	1088
+1501	7	1102
+1504	7	1102
 create table job(
 jobid int primary key,
 jobTitle char(50)
