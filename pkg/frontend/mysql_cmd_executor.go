@@ -1989,10 +1989,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		switch st := stmt.(type) {
 		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			selfHandle = true
-			err = proto.sendOKPacket(0, 0, 0, 0, "")
-			if err != nil {
-				goto handleFailed
-			}
+			rspLen = 0
 		case *tree.Use:
 			selfHandle = true
 			err = mce.handleChangeDB(st.Name)
@@ -2268,16 +2265,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 			switch stmt.(type) {
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-				*tree.CreateIndex, *tree.DropIndex,
-				*tree.Insert, *tree.Update,
+				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
-				*tree.SetVar,
-				*tree.Load,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
-				*tree.CreateRole, *tree.DropRole,
-				*tree.Revoke, *tree.Grant,
-				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
-				*tree.Delete:
+				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
+				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 					return fmt.Errorf("routine send response failed. error:%v ", err)
