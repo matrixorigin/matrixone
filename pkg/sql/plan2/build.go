@@ -114,7 +114,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 //GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
-		lastNode := query.Nodes[len(query.Nodes)-1]
+		lastNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 		columns := make([]*ColDef, len(lastNode.ProjectList))
 		if len(query.Headings) > 0 { // use refactor plan2
 			for idx, expr := range lastNode.ProjectList {
