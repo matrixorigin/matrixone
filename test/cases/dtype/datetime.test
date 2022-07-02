@@ -149,13 +149,12 @@ drop table if exists t21;
 drop table if exists t12;
 CREATE TABLE t1 (a datetime(0), b int primary key);
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',1),('2022-01-01 00:00:00',2);
--- @bvt:issue#3254
 update t1 set a='2022-01-02' where a='2022-01-01 00:00:00' limit 1;
 select * from t1;
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',3);
 update t1 set a='2022-01-02' where a='2022-01-01 00:00:00';
 select * from t1;
--- @bvt:issue
+
 drop table t1;
 create table t1 (
 a datetime(0) primary key,
@@ -189,13 +188,12 @@ drop table if exists t11;
 drop table if exists t12;
 CREATE TABLE t1 (a datetime(0), b int primary key);
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',1),('2022-01-01 00:00:00',2);
--- @bvt:issue#3254
 delete from t1 where a='2022-01-01 00:00:00' limit 1;
 select * from t1;
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',3);
 delete from t1 where a='2022-01-01';
 select * from t1;
--- @bvt:issue
+
 drop table t1;
 create table t1 (
 a datetime(0) primary key,

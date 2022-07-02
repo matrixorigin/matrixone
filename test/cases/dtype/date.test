@@ -32,17 +32,13 @@ drop table if exists t1;
 create table t1 (a date not null, primary key(a));
 insert into t1 values ('2022-01-01'), ('20220102'),('2022-01-03'),('20220104');
 select * from t1;
--- @bvt:issue#3253
 select * from t1 where a='2022-01-01';
--- @bvt:issue#
 -- @bvt:issue#3257
 delete from t1 where a=20220102;
 select * from t1 where a<>'20220104' order by 1 asc;
 -- @bvt:issue#
--- @bvt:issue#3253
 update t1 set a='2022-02-02' where a='2022-01-03';
 select * from t1;
--- @bvt:issue
 drop table t1;
 create table t1 ( a int not null default 1, big date primary key);
 insert into t1 (big) values ('2000-01-01'),('2001-01-01'),('2002-01-01');
