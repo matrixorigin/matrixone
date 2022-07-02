@@ -200,8 +200,10 @@ SELECT * from t_float WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_float WHERE id IN ('1.1', '2.2');
 id
+1.1
 SELECT * from t_float WHERE id IN ('1.1e0', '2.2e0');
 id
+1.1
 SELECT * from t_float WHERE id BETWEEN 1.1 AND 1.9;
 id
 1.1

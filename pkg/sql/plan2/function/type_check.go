@@ -228,10 +228,14 @@ func initTypeCheckRelated() {
 	}
 	{ //  float
 		for _, t := range floats {
+			castTable[t][types.T_bool] = true
 			for _, typ := range floats {
 				castTable[t][typ] = true
 			}
 			for _, typ := range numbers {
+				castTable[t][typ] = true
+			}
+			for _, typ := range decimals {
 				castTable[t][typ] = true
 			}
 			for _, typ := range strings {
@@ -242,6 +246,7 @@ func initTypeCheckRelated() {
 	{ //  number
 		for _, t := range numbers {
 			castTable[t][t] = true
+			castTable[t][types.T_bool] = true
 			for _, typ := range floats {
 				castTable[t][typ] = true
 			}
@@ -255,17 +260,21 @@ func initTypeCheckRelated() {
 				castTable[t][typ] = true
 			}
 		}
-		castTable[types.T_decimal64] = make([]bool, maxTypes)
-		castTable[types.T_decimal64][types.T_decimal64] = true
-		castTable[types.T_decimal64][types.T_timestamp] = true
-		for _, typ := range strings {
-			castTable[types.T_decimal64][typ] = true
-		}
-		castTable[types.T_decimal128] = make([]bool, maxTypes)
-		castTable[types.T_decimal128][types.T_decimal128] = true
-		castTable[types.T_decimal128][types.T_timestamp] = true
-		for _, typ := range strings {
-			castTable[types.T_decimal128][typ] = true
+		for _, t := range decimals {
+			castTable[t][t] = true
+			castTable[t][types.T_bool] = true
+			for _, typ := range floats {
+				castTable[t][typ] = true
+			}
+			for _, typ := range numbers {
+				castTable[t][typ] = true
+			}
+			castTable[t][types.T_timestamp] = true
+			castTable[t][types.T_decimal64] = true
+			castTable[t][types.T_decimal128] = true
+			for _, typ := range strings {
+				castTable[t][typ] = true
+			}
 		}
 	}
 	{ // timestamp
@@ -286,17 +295,19 @@ func initTypeCheckRelated() {
 
 	// init preferredTypeConvert
 	preferredConversion := map[types.T][]types.T{
-		types.T_int8:    {types.T_int64, types.T_int32, types.T_int16, types.T_float64},
-		types.T_int16:   {types.T_int64, types.T_int32, types.T_float64},
-		types.T_int32:   {types.T_int64, types.T_float64},
-		types.T_int64:   {types.T_float64},
-		types.T_uint8:   {types.T_uint64, types.T_uint32, types.T_uint16, types.T_float64},
-		types.T_uint16:  {types.T_uint64, types.T_uint32, types.T_float64},
-		types.T_uint32:  {types.T_uint64, types.T_float64},
-		types.T_uint64:  {types.T_float64},
-		types.T_float32: {types.T_float64},
-		types.T_char:    {types.T_varchar},
-		types.T_varchar: {types.T_char},
+		types.T_int8:       {types.T_int64, types.T_int32, types.T_int16, types.T_float64},
+		types.T_int16:      {types.T_int64, types.T_int32, types.T_float64},
+		types.T_int32:      {types.T_int64, types.T_float64},
+		types.T_int64:      {types.T_float64},
+		types.T_uint8:      {types.T_uint64, types.T_uint32, types.T_uint16, types.T_float64},
+		types.T_uint16:     {types.T_uint64, types.T_uint32, types.T_float64},
+		types.T_uint32:     {types.T_uint64, types.T_float64},
+		types.T_uint64:     {types.T_float64},
+		types.T_float32:    {types.T_float64},
+		types.T_char:       {types.T_varchar},
+		types.T_varchar:    {types.T_char},
+		types.T_decimal64:  {types.T_decimal128, types.T_float64},
+		types.T_decimal128: {types.T_float64},
 	}
 	preferredTypeConvert = make([][]bool, maxTypes)
 	for i := range preferredTypeConvert {
@@ -322,10 +333,11 @@ var (
 )
 
 func generalBinaryOperatorTypeCheckFn(overloads []Function, inputs []types.T, convertRule func(types.T, types.T) (types.T, types.T, bool)) (overloadIndex int32, ts []types.T) {
+	targets := make([]types.T, 2)
 	if len(inputs) == 2 {
 		matched := make([]int32, 0, 4)
 		t1, t2, convert := convertRule(inputs[0], inputs[1])
-		targets := []types.T{t1, t2}
+		targets[0], targets[1] = t1, t2
 		for _, o := range overloads {
 			if ok, _ := tryToMatch(targets, o.Args); ok == matchedDirectly {
 				matched = append(matched, o.Index)
@@ -362,6 +374,22 @@ func generalDivParamsConvert(l, r types.T) (types.T, types.T, bool) {
 		return ts.left, ts.right, true
 	}
 	return l, r, false
+}
+
+// a general type check function for unary aggregate functions.
+// it will do strict type check for parameters, and return the first overload if all parameters are scalar null.
+func generalTypeCheckForUnaryAggregate(overloads []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+	if len(inputs) == 1 {
+		if inputs[0] == types.T_any {
+			return 0, nil
+		}
+		for i, o := range overloads {
+			if o.Args[0] == inputs[0] {
+				return int32(i), nil
+			}
+		}
+	}
+	return wrongFunctionParameters, nil
 }
 
 // tryToMatch checks whether the types of the two input parameters match directly
