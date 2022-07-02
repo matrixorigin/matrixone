@@ -2602,88 +2602,277 @@ func TestCastDateAsTimeStamp(t *testing.T) {
 }
 
 func TestCastIntegerAsTimestamp(t *testing.T) {
-	makeTempVectors := func(src interface{}, destType types.T, srcIsConst bool) []*vector.Vector {
-		vectors := make([]*vector.Vector, 2)
-		vectors[0] = makeVector(src, srcIsConst)
-		vectors[1] = makeTypeVector(destType)
-		return vectors
-	}
+	//Cast converts int8 to timeStamp
+	convey.Convey("Cast int8 to timeStamp", t, func() {
+		type kase struct {
+			intval int8
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 23,
+				want:   "1970-01-01 00:00:23",
+			},
+			{
+				intval: 26,
+				want:   "1970-01-01 00:00:26",
+			},
+		}
 
-	procs := testutil.NewProc()
-	cases := []struct {
-		name       string
-		vecs       []*vector.Vector
-		proc       *process.Process
-		wantValues []types.Timestamp
-		wantScalar bool
-	}{
-		{
-			name:       "Test01",
-			vecs:       makeTempVectors(int8(120), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{120}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-		{
-			name:       "Test02",
-			vecs:       makeTempVectors(int16(12000), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{12000}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-		{
-			name:       "Test03",
-			vecs:       makeTempVectors(int32(89000000), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{89000000}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-		{
-			name:       "Test04",
-			vecs:       makeTempVectors(int64(66823357574906480), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{66823357574906480}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-		{
-			name:       "Test05",
-			vecs:       makeTempVectors(uint8(120), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{120}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-		{
-			name:       "Test06",
-			vecs:       makeTempVectors(uint16(120), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{120}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-		{
-			name:       "Test07",
-			vecs:       makeTempVectors(uint32(2000120), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{2000120}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-		{
-			name:       "Test08",
-			vecs:       makeTempVectors(uint64(66823357574906480), types.T_timestamp, true),
-			proc:       procs,
-			wantValues: []types.Timestamp{66823357574906480}, //"2020-06-14 16:24:15.230000"
-			wantScalar: true,
-		},
-	}
+		var intVals []int8
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			castRes, err := Cast(c.vecs, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			require.Equal(t, c.wantValues, castRes.Col)
-		})
-	}
+		srcVector := testutil.MakeInt8Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts int16 to timeStamp
+	convey.Convey("Cast int16 to timeStamp", t, func() {
+		type kase struct {
+			intval int16
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 12000,
+				want:   "1970-01-01 03:20:00",
+			},
+			{
+				intval: 26200,
+				want:   "1970-01-01 07:16:40",
+			},
+		}
+
+		var intVals []int16
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeInt16Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts int32 to timeStamp
+	convey.Convey("Cast int32 to timeStamp", t, func() {
+		type kase struct {
+			intval int32
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 2300000,
+				want:   "1970-01-27 14:53:20",
+			},
+			{
+				intval: 2710000,
+				want:   "1970-02-01 08:46:40",
+			},
+		}
+
+		var intVals []int32
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeInt32Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts int64 to timeStamp
+	convey.Convey("Cast int64 to timeStamp", t, func() {
+		type kase struct {
+			intval int64
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 833453453,
+				want:   "1996-05-30 10:50:53",
+			},
+			{
+				intval: 933453453,
+				want:   "1999-07-31 20:37:33",
+			},
+		}
+
+		var intVals []int64
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeInt64Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts uint8 to timeStamp
+	convey.Convey("Cast uint8 to timeStamp", t, func() {
+		type kase struct {
+			intval uint8
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 233,
+				want:   "1970-01-01 00:03:53",
+			},
+			{
+				intval: 254,
+				want:   "1970-01-01 00:04:14",
+			},
+		}
+
+		var intVals []uint8
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeUint8Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts uint16 to timeStamp
+	convey.Convey("Cast uint16 to timeStamp", t, func() {
+		type kase struct {
+			intval uint16
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 33345,
+				want:   "1970-01-01 09:15:45",
+			},
+			{
+				intval: 43345,
+				want:   "1970-01-01 12:02:25",
+			},
+		}
+
+		var intVals []uint16
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeUint16Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts uint32 to timeStamp
+	convey.Convey("Cast uint32 to timeStamp", t, func() {
+		type kase struct {
+			intval uint32
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 83345789,
+				want:   "1972-08-22 15:36:29",
+			},
+			{
+				intval: 89345789,
+				want:   "1972-10-31 02:16:29",
+			},
+		}
+
+		var intVals []uint32
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeUint32Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
+
+	//Cast converts uint64 to timeStamp
+	convey.Convey("Cast uint64 to timeStamp", t, func() {
+		type kase struct {
+			intval uint64
+			want   string
+		}
+		kases := []kase{
+			{
+				intval: 1998933575,
+				want:   "2033-05-05 19:19:35",
+			},
+			{
+				intval: 1298933575,
+				want:   "2011-02-28 22:52:55",
+			},
+		}
+
+		var intVals []uint64
+		var wantStrs []string
+		for _, k := range kases {
+			intVals = append(intVals, k.intval)
+			wantStrs = append(wantStrs, k.want)
+		}
+
+		srcVector := testutil.MakeUint64Vector(intVals, nil)
+		destVector := testutil.MakeTimeStampVector(nil, nil)
+		wantVec := testutil.MakeTimeStampVector(wantStrs, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.So(compare, convey.ShouldBeTrue)
+	})
 }
 
 func TestCastDecimal64AsTimestamp(t *testing.T) {
