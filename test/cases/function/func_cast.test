@@ -15,11 +15,9 @@ select cast("2001-1-1" as DATE), cast("2001-1-1" as DATETIME);
 -- @bvt:issue
 #select cast("1:2:3" as TIME);
 #select CONVERT("2004-01-22 21:45:33",DATE);
--- @bvt:issue#3279
 select 10+'10';
 select 10.0+'10';
 select 10E+0+'10';
--- @bvt:issue
 # The following cast creates warnings
 
 #SELECT CONVERT(TIMESTAMP "2004-01-22 21:45:33");
