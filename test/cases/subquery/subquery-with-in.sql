@@ -6,7 +6,7 @@
 -- @bvt:issue#3304
 SELECT 1 IN (SELECT 1);
 -- @bvt:issue
--- @bvt:issue#3323
+-- @bvt:issue#3307
 SELECT 1 FROM (SELECT 1 as a) b WHERE 1 IN (SELECT (SELECT a));
 -- @bvt:issue
 -- @bvt:issue#3556
@@ -117,7 +117,7 @@ CREATE TABLE `c` (
 INSERT INTO `c` VALUES (9,9), (0,0), (8,6), (3,6), (7,6), (0,4),
 (1,7), (9,4), (0,8), (9,4), (0,7), (5,5), (0,0), (8,5), (8,7),
 (5,2), (1,8), (7,0), (0,9), (9,5);
--- @bvt:issue#3323
+-- @bvt:issue#3307
 SELECT * FROM c WHERE `int_key` IN (SELECT `int_nokey`);
 -- @bvt:issue
 DROP TABLE IF EXISTS c;
