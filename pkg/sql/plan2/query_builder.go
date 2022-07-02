@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -398,6 +399,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
 		rootId = builder.pushdownSemiAntiJoins(rootId)
 		rootId, _ = builder.pushdownFilters(rootId, nil)
+		rootId = builder.resolveJoinOrder(rootId)
 		builder.qry.Steps[i] = rootId
 
 		_, err := builder.remapAllColRefs(rootId, nil)
@@ -1496,6 +1498,139 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeId int32) int32 {
 	}
 
 	return nodeId
+}
+
+func (builder *QueryBuilder) resolveJoinOrder(nodeId int32) int32 {
+	node := builder.qry.Nodes[nodeId]
+
+	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
+		for i, child := range node.Children {
+			node.Children[i] = builder.resolveJoinOrder(child)
+		}
+
+		return nodeId
+	}
+
+	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
+
+	sort.Slice(leaves, func(i, j int) bool {
+		if leaves[j].Cost == nil {
+			return false
+		}
+
+		if leaves[i].Cost == nil {
+			return true
+		}
+
+		return leaves[i].Cost.Card < leaves[j].Cost.Card
+	})
+
+	leafByTag := make(map[int32]int32)
+
+	for i, leaf := range leaves {
+		tags := builder.enumerateTags(leaf.NodeId)
+
+		for _, tag := range tags {
+			leafByTag[tag] = int32(i)
+		}
+	}
+
+	nLeaf := int32(len(leaves))
+
+	adjMat := make([]bool, nLeaf*nLeaf)
+	firstConnected := nLeaf
+	visited := make([]bool, nLeaf)
+
+	for _, cond := range conds {
+		hyperEdge := make(map[int32]any)
+		getHyperEdgeFromExpr(cond, leafByTag, hyperEdge)
+
+		for i := range hyperEdge {
+			if i < firstConnected {
+				firstConnected = i
+			}
+			for j := range hyperEdge {
+				adjMat[int32(nLeaf)*i+j] = true
+			}
+		}
+	}
+
+	if firstConnected < nLeaf {
+		nodeId = leaves[firstConnected].NodeId
+		visited[firstConnected] = true
+
+		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
+
+		for {
+			nextSibling := nLeaf
+			for i := range eligible {
+				if !visited[i] && eligible[i] {
+					nextSibling = int32(i)
+					break
+				}
+			}
+
+			if nextSibling == nLeaf {
+				break
+			}
+
+			visited[nextSibling] = true
+
+			nodeId = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{nodeId, leaves[nextSibling].NodeId},
+				JoinType: plan.Node_INNER,
+			}, nil)
+
+			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
+				eligible[i] = eligible[i] || adj
+			}
+		}
+
+		for i := range visited {
+			if !visited[i] {
+				nodeId = builder.appendNode(&plan.Node{
+					NodeType: plan.Node_JOIN,
+					Children: []int32{nodeId, leaves[i].NodeId},
+					JoinType: plan.Node_INNER,
+				}, nil)
+			}
+		}
+	} else {
+		nodeId = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{leaves[0].NodeId, leaves[1].NodeId},
+			JoinType: plan.Node_INNER,
+		}, nil)
+
+		for i := 2; i < len(leaves); i++ {
+			nodeId = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_JOIN,
+				Children: []int32{nodeId, leaves[i].NodeId},
+				JoinType: plan.Node_INNER,
+			}, nil)
+		}
+	}
+
+	nodeId, _ = builder.pushdownFilters(nodeId, conds)
+
+	return nodeId
+}
+
+func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
+	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER {
+		nodeId := builder.resolveJoinOrder(joinNode.NodeId)
+		leaves = append(leaves, builder.qry.Nodes[nodeId])
+		return leaves, conds
+	}
+
+	for _, childId := range joinNode.Children {
+		leaves, conds = builder.gatherJoinLeavesAndConds(builder.qry.Nodes[childId], leaves, conds)
+	}
+
+	conds = append(conds, joinNode.OnList...)
+
+	return leaves, conds
 }
 
 func (builder *QueryBuilder) enumerateTags(nodeId int32) []int32 {
