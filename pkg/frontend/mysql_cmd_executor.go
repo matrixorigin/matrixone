@@ -82,34 +82,34 @@ type MysqlCmdExecutor struct {
 	routineMgr *RoutineManager
 }
 
-func (cei *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
-	cei.ses = ses
+func (cmdExec *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
+	cmdExec.ses = ses
 }
 
-func (cei *MysqlCmdExecutor) GetSession() *Session {
-	return cei.ses
+func (cmdExec *MysqlCmdExecutor) GetSession() *Session {
+	return cmdExec.ses
 }
 
 //get new process id
-func (mce *MysqlCmdExecutor) getNextProcessId() string {
+func (cmdExec *MysqlCmdExecutor) getNextProcessId() string {
 	/*
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := mce.GetSession().protocol.ConnectionID()
-	return fmt.Sprintf("%d%d", routineId, mce.sqlCount)
+	routineId := cmdExec.GetSession().protocol.ConnectionID()
+	return fmt.Sprintf("%d%d", routineId, cmdExec.sqlCount)
 }
 
-func (mce *MysqlCmdExecutor) addSqlCount(a uint64) {
-	mce.sqlCount += a
+func (cmdExec *MysqlCmdExecutor) addSqlCount(a uint64) {
+	cmdExec.sqlCount += a
 }
 
-func (mce *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
-	mce.routineMgr = mgr
+func (cmdExec *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
+	cmdExec.routineMgr = mgr
 }
 
-func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
-	return mce.routineMgr
+func (cmdExec *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
+	return cmdExec.routineMgr
 }
 
 type outputQueue struct {
@@ -700,8 +700,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
-	ses := mce.GetSession()
+func (cmdExec *MysqlCmdExecutor) handleChangeDB(db string) error {
+	ses := cmdExec.GetSession()
 	txnHandler := ses.GetTxnHandler()
 	txnCtx := txnHandler.GetTxn().GetCtx()
 	//TODO: check meta data
@@ -718,9 +718,9 @@ func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
 }
 
 //handle SELECT DATABASE()
-func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
+func (cmdExec *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	var err error = nil
-	ses := mce.GetSession()
+	ses := cmdExec.GetSession()
 	proto := ses.protocol
 
 	col := new(MysqlColumn)
@@ -745,9 +745,9 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 /*
 handle "SELECT @@xxx.yyyy"
 */
-func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
+func (cmdExec *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	var err error = nil
-	ses := mce.GetSession()
+	ses := cmdExec.GetSession()
 	proto := ses.protocol
 
 	col := new(MysqlColumn)
@@ -793,9 +793,9 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
+func (cmdExec *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	var err error = nil
-	ses := mce.GetSession()
+	ses := cmdExec.GetSession()
 	proto := ses.protocol
 
 	logutil.Infof("+++++load data")
@@ -869,7 +869,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDb)
+	result, err := cmdExec.LoadLoop(load, dbHandler, tableHandler, loadDb)
 	if err != nil {
 		return err
 	}
@@ -888,9 +888,9 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 /*
 handle cmd CMD_FIELD_LIST
 */
-func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
+func (cmdExec *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	var err error = nil
-	ses := mce.GetSession()
+	ses := cmdExec.GetSession()
 	proto := ses.GetMysqlProtocol()
 
 	//TODO:fix it on tae
@@ -903,7 +903,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	//Get table infos for the database from the cube
 	//case 1: there are no table infos for the db
 	//case 2: db changed
-	if mce.tableInfos == nil || mce.db != db {
+	if cmdExec.tableInfos == nil || cmdExec.db != db {
 		if ses.Pu.ClusterCatalog == nil {
 			return fmt.Errorf("need cluster catalog")
 		}
@@ -912,17 +912,17 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 			return err
 		}
 
-		mce.db = ses.GetDatabaseName()
-		mce.tableInfos = make(map[string]aoe.TableInfo)
+		cmdExec.db = ses.GetDatabaseName()
+		cmdExec.tableInfos = make(map[string]aoe.TableInfo)
 
 		//cache these info in the executor
 		for _, table := range tableInfos {
-			mce.tableInfos[table.Name] = table
+			cmdExec.tableInfos[table.Name] = table
 		}
 	}
 
 	var attrs []aoe.ColumnInfo
-	table, ok := mce.tableInfos[tableName]
+	table, ok := cmdExec.tableInfos[tableName]
 	if !ok {
 		//just give the empty info when there is no such table.
 		attrs = make([]aoe.ColumnInfo, 0)
@@ -962,9 +962,9 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 /*
 handle setvar
 */
-func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
+func (cmdExec *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	var err error = nil
-	proto := mce.GetSession().protocol
+	proto := cmdExec.GetSession().protocol
 
 	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
 	if err = proto.SendResponse(resp); err != nil {
@@ -976,10 +976,10 @@ func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 /*
 handle show variables
 */
-func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
+func (cmdExec *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	var err error = nil
-	ses := mce.GetSession()
-	proto := mce.GetSession().protocol
+	ses := cmdExec.GetSession()
+	proto := cmdExec.GetSession().protocol
 
 	col1 := new(MysqlColumn)
 	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1042,7 +1042,7 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	return err
 }
 
-func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
+func (cmdExec *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
 	// IMO, this approach is simple and future-proof
 	// Although this rewriting processing could have been handled in rewrite module,
@@ -1060,7 +1060,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	ctx.WriteString(" from ")
 	stmt.Table.Format(ctx)
 	sql := ctx.String()
-	return mce.doComQuery(sql)
+	return cmdExec.doComQuery(sql)
 }
 
 // this function is temporary, it should be removed when mo support sql like selct const_expr
@@ -1085,7 +1085,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 // 	return nil
 // }
 
-func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
+func (cmdExec *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
 
 	for _, v := range stmt.Options {
@@ -1121,7 +1121,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	buildPlan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	buildPlan, err := buildPlan(cmdExec.ses.txnCompileCtx, stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1141,7 +1141,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("explain Query statement error:%v", err))
 	}
 
-	session := mce.GetSession()
+	session := cmdExec.GetSession()
 	protocol := session.GetMysqlProtocol()
 
 	attrs := plan.BuildExplainResultColumns()
@@ -1243,10 +1243,10 @@ func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuf
 /*
 handle show databases
 */
-func (mce *MysqlCmdExecutor) handleShowDatabases(_ *tree.ShowDatabases) error {
+func (cmdExec *MysqlCmdExecutor) handleShowDatabases(_ *tree.ShowDatabases) error {
 	var err error = nil
-	ses := mce.GetSession()
-	proto := mce.GetSession().protocol
+	ses := cmdExec.GetSession()
+	proto := cmdExec.GetSession().protocol
 
 	col := new(MysqlColumn)
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1276,11 +1276,11 @@ func (mce *MysqlCmdExecutor) handleShowDatabases(_ *tree.ShowDatabases) error {
 /*
 handle show tables
 */
-func (mce *MysqlCmdExecutor) handleShowTables(_ *tree.ShowTables) error {
+func (cmdExec *MysqlCmdExecutor) handleShowTables(_ *tree.ShowTables) error {
 	var err error = nil
 	var db engine.Database
-	ses := mce.GetSession()
-	proto := mce.GetSession().protocol
+	ses := cmdExec.GetSession()
+	proto := cmdExec.GetSession().protocol
 
 	dbName := ses.GetDatabaseName()
 
@@ -1318,12 +1318,12 @@ func (mce *MysqlCmdExecutor) handleShowTables(_ *tree.ShowTables) error {
 /*
 handle show columns from table
 */
-func (mce *MysqlCmdExecutor) handleShowColumns(sc *tree.ShowColumns) error {
+func (cmdExec *MysqlCmdExecutor) handleShowColumns(sc *tree.ShowColumns) error {
 	var err error = nil
 	var db engine.Database
 	var table engine.Relation
-	ses := mce.GetSession()
-	proto := mce.GetSession().protocol
+	ses := cmdExec.GetSession()
+	proto := cmdExec.GetSession().protocol
 
 	tableAst := sc.Table.ToTableName()
 	dbName := string(tableAst.Schema())
@@ -1432,10 +1432,10 @@ func (mce *MysqlCmdExecutor) handleShowColumns(sc *tree.ShowColumns) error {
 /*
 handle show create database
 */
-func (mce *MysqlCmdExecutor) handleShowCreateDatabase(scd *tree.ShowCreateDatabase) error {
+func (cmdExec *MysqlCmdExecutor) handleShowCreateDatabase(scd *tree.ShowCreateDatabase) error {
 	var err error = nil
-	ses := mce.GetSession()
-	proto := mce.GetSession().protocol
+	ses := cmdExec.GetSession()
+	proto := cmdExec.GetSession().protocol
 
 	dbName := scd.Name
 
@@ -1476,12 +1476,12 @@ func (mce *MysqlCmdExecutor) handleShowCreateDatabase(scd *tree.ShowCreateDataba
 /*
 handle show create table
 */
-func (mce *MysqlCmdExecutor) handleShowCreateTable(sct *tree.ShowCreateTable) error {
+func (cmdExec *MysqlCmdExecutor) handleShowCreateTable(sct *tree.ShowCreateTable) error {
 	var err error = nil
 	var db engine.Database
 	var table engine.Relation
-	ses := mce.GetSession()
-	proto := mce.GetSession().protocol
+	ses := cmdExec.GetSession()
+	proto := cmdExec.GetSession().protocol
 
 	tableAst := sct.Name.ToTableName()
 	dbName := string(tableAst.Schema())
@@ -1805,23 +1805,23 @@ func remindrecordSQLLentencyObserver(stmt tree.Statement, isInternal bool, value
 	}
 }
 
-func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
-	sess := mce.GetSession()
+func (cmdExec *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
+	sess := cmdExec.GetSession()
 	incStatementCounter(stmt, sess.IsInternal)
 }
 
-func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Time) {
+func (cmdExec *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Time) {
 	// TODO: this latency doesn't consider complile and build stage, fix it!
 	latency := time.Since(beginInstant).Seconds()
-	sess := mce.GetSession()
+	sess := cmdExec.GetSession()
 	remindrecordSQLLentencyObserver(stmt, sess.IsInternal, latency)
 
 }
 
 //execute query
-func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
+func (cmdExec *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	beginInstant := time.Now()
-	ses := mce.GetSession()
+	ses := cmdExec.GetSession()
 	ses.showStmtType = NotShowStatement
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
@@ -1843,7 +1843,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	}()
 
 	proc := process.New(mheap.New(ses.GuestMmu))
-	proc.Id = mce.getNextProcessId()
+	proc.Id = cmdExec.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
@@ -1870,8 +1870,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	var txnErr error
 
 	stmt := cws[0].GetAst()
-	mce.beforeRun(stmt)
-	defer mce.afterRun(stmt, beginInstant)
+	cmdExec.beforeRun(stmt)
+	defer cmdExec.afterRun(stmt, beginInstant)
 	// it is weired to do for loop here, why don't we ensure that run only one sql once
 	// it seems that mysql protocol has done that for us when reading packet from tcp
 	type TxnCommand int
@@ -1920,16 +1920,16 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		switch st := stmt.(type) {
 		case *tree.Select:
 			if st.Ep != nil {
-				mce.exportDataClose = NewCloseExportData()
+				cmdExec.exportDataClose = NewCloseExportData()
 				ses.ep = st.Ep
-				ses.closeRef = mce.exportDataClose
+				ses.closeRef = cmdExec.exportDataClose
 			}
 			if sc, ok := st.Select.(*tree.SelectClause); ok {
 				if len(sc.Exprs) == 1 {
 					if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
 						if un, ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
 							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
-								err = mce.handleSelectDatabase(st)
+								err = cmdExec.handleSelectDatabase(st)
 								if err != nil {
 									goto handleFailed
 								}
@@ -1940,7 +1940,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 						}
 					} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
 						//TODO: fix multiple variables in single statement like `select @@a,@@b,@@c`
-						err = mce.handleSelectVariables(ve)
+						err = cmdExec.handleSelectVariables(ve)
 						if err != nil {
 							goto handleFailed
 						}
@@ -1949,7 +1949,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 						goto handleSucceeded
 					}
 					// else if nv, ok := sc.Exprs[0].Expr.(*tree.NumVal); ok && nv.Value.String() == "1" {
-					// 	err = mce.handleSelect1(nv)
+					// 	err = cmdExec.handleSelect1(nv)
 					// 	if err != nil {
 					// 		goto handleFailed
 					// 	}
@@ -1994,7 +1994,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			}
 		case *tree.Use:
 			selfHandle = true
-			err = mce.handleChangeDB(st.Name)
+			err = cmdExec.handleChangeDB(st.Name)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2006,7 +2006,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			_, ok := st.Rows.Select.(*tree.ValuesClause)
 			if ok && usePlan2 {
 				selfHandle = true
-				err = mce.handleInsertValues(st, epoch)
+				err = cmdExec.handleInsertValues(st, epoch)
 				if err != nil {
 					goto handleFailed
 				}
@@ -2019,30 +2019,30 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		case *tree.Load:
 			fromLoadData = true
 			selfHandle = true
-			err = mce.handleLoadData(st)
+			err = cmdExec.handleLoadData(st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.SetVar:
 			selfHandle = true
-			err = mce.handleSetVar(st)
+			err = cmdExec.handleSetVar(st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.ShowVariables:
 			selfHandle = true
-			err = mce.handleShowVariables(st)
+			err = cmdExec.handleShowVariables(st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.AnalyzeStmt:
 			selfHandle = true
-			if err = mce.handleAnalyzeStmt(st); err != nil {
+			if err = cmdExec.handleAnalyzeStmt(st); err != nil {
 				goto handleFailed
 			}
 		case *tree.ExplainStmt:
 			selfHandle = true
-			if err = mce.handleExplainStmt(st); err != nil {
+			if err = cmdExec.handleExplainStmt(st); err != nil {
 				goto handleFailed
 			}
 		case *tree.ExplainAnalyze:
@@ -2052,14 +2052,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 		case *tree.ShowDatabases:
 			if usePlan2 && isAoe {
 				selfHandle = true
-				if err = mce.handleShowDatabases(st); err != nil {
+				if err = cmdExec.handleShowDatabases(st); err != nil {
 					goto handleFailed
 				}
 			}
 		case *tree.ShowTables:
 			if usePlan2 && isAoe {
 				selfHandle = true
-				if err = mce.handleShowTables(st); err != nil {
+				if err = cmdExec.handleShowTables(st); err != nil {
 					goto handleFailed
 				}
 			}
@@ -2068,7 +2068,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			ses.Data = nil
 			if usePlan2 && isAoe {
 				selfHandle = true
-				if err = mce.handleShowColumns(st); err != nil {
+				if err = cmdExec.handleShowColumns(st); err != nil {
 					goto handleFailed
 				}
 			}
@@ -2077,7 +2077,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			ses.Data = nil
 			if usePlan2 && isAoe {
 				selfHandle = true
-				if err = mce.handleShowCreateDatabase(st); err != nil {
+				if err = cmdExec.handleShowCreateDatabase(st); err != nil {
 					goto handleFailed
 				}
 			}
@@ -2086,7 +2086,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 			ses.Data = nil
 			if usePlan2 && isAoe {
 				selfHandle = true
-				if err = mce.handleShowCreateTable(st); err != nil {
+				if err = cmdExec.handleShowCreateTable(st); err != nil {
 					goto handleFailed
 				}
 			}
@@ -2297,7 +2297,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) (retErr error) {
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch uint64) error {
+func (cmdExec *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch uint64) error {
 	txnHandler := ses.GetTxnHandler()
 	switch ddl := stmt.(type) {
 	case *tree.CreateDatabase:
@@ -2345,7 +2345,7 @@ func (mce *MysqlCmdExecutor) handleDDl(ses *Session, stmt tree.Statement, epoch 
 }
 
 // ExecRequest the server execute the commands from the client following the mysql's routine
-func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err error) {
+func (cmdExec *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = moerr.NewPanicError(e)
@@ -2355,7 +2355,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 
 	logutil.Infof("cmd %v", req.GetCmd())
 
-	ses := mce.GetSession()
+	ses := cmdExec.GetSession()
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
 		pdHook := ses.GetEpochgc()
 		if !pdHook.CanAcceptSomething() {
@@ -2375,7 +2375,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 		return resp, nil
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
-		mce.addSqlCount(1)
+		cmdExec.addSqlCount(1)
 		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
@@ -2391,7 +2391,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
 				return resp, nil
 			}
-			err = mce.GetRoutineManager().killStatement(procID)
+			err = cmdExec.GetRoutineManager().killStatement(procID)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
 				return resp, err
@@ -2400,16 +2400,16 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 			return resp, nil
 		}
 
-		err := mce.doComQuery(query)
+		err := cmdExec.doComQuery(query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
 		return resp, nil
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
-		mce.addSqlCount(1)
+		cmdExec.addSqlCount(1)
 		query := "use " + dbname
-		err := mce.doComQuery(query)
+		err := cmdExec.doComQuery(query)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		}
@@ -2425,7 +2425,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 			tableName = payload[:nullIdx]
 			//wildcard := payload[nullIdx+1:]
 			//logutil.Infof("table name %s wildcard [%s] ",tableName,wildcard)
-			err := mce.handleCmdFieldList(tableName)
+			err := cmdExec.handleCmdFieldList(tableName)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 			}
@@ -2445,14 +2445,14 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (resp *Response, err erro
 	return resp, nil
 }
 
-func (mce *MysqlCmdExecutor) Close() {
+func (cmdExec *MysqlCmdExecutor) Close() {
 	//logutil.Infof("close executor")
-	if mce.loadDataClose != nil {
+	if cmdExec.loadDataClose != nil {
 		//logutil.Infof("close process load data")
-		mce.loadDataClose.Close()
+		cmdExec.loadDataClose.Close()
 	}
-	if mce.exportDataClose != nil {
-		mce.exportDataClose.Close()
+	if cmdExec.exportDataClose != nil {
+		cmdExec.exportDataClose.Close()
 	}
 }
 
