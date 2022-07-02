@@ -319,7 +319,7 @@ func (d Date) YearMonthStr() string {
 	year, month, _, _ := d.Calendar(true)
 	yearStr := fmt.Sprintf("%04d", year)
 	monthStr := fmt.Sprintf("%02d", month)
-	return yearStr + "-" + monthStr
+	return yearStr + monthStr
 }
 
 var monthToQuarter = map[uint8]uint32{
