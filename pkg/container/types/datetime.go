@@ -218,8 +218,7 @@ func FromUnix(time int64) Datetime {
 func UnixToTimestamp(time int64) Timestamp {
 	localTZAligned := localTZ << 20
 	dt := FromUnix(time)
-	dtint64 := *(*int64)(unsafe.Pointer(&dt))
-	return Timestamp(dtint64 - localTZAligned)
+	return Timestamp(dt.ToInt64() - localTZAligned)
 }
 
 func Now() Datetime {
@@ -239,6 +238,10 @@ func Now() Datetime {
 
 func (dt Datetime) ToDate() Date {
 	return Date((dt.sec()) / secsPerDay)
+}
+
+func (dt Datetime) ToInt64() int64 {
+	return int64(dt)
 }
 
 func (dt Datetime) Clock() (hour, min, sec int8) {
