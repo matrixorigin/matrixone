@@ -169,6 +169,10 @@ func (l *store) stopReplica(shardID uint64, replicaID uint64) error {
 	return l.nh.StopReplica(shardID, replicaID)
 }
 
+func (l *store) requestLeaderTransfer(shardID uint64, targetReplicaID uint64) error {
+	return l.nh.RequestLeaderTransfer(shardID, targetReplicaID)
+}
+
 func (l *store) addReplica(shardID uint64, replicaID uint64,
 	target dragonboat.Target, cci uint64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

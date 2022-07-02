@@ -54,14 +54,14 @@ DROP TABLE t1;
 
 
 #比较运算,数据类型
--- @bvt:issue#3590
+
 CREATE TABLE t1 (a TIMESTAMP);
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
 INSERT INTO t1 select (utc_timestamp());
 SELECT year(a) FROM t1 WHERE a > '2008-01-01';
 DROP TABLE t1;
--- @bvt:issue
+
 
 #算术运算，CREATE SELECT
 #0.5 not supported
