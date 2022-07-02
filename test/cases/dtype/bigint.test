@@ -71,10 +71,7 @@ drop table t1;
 create table t1 (bigint_col bigint unsigned);
 insert into t1 values (17666000000000000000);
 select * from t1 where bigint_col=17666000000000000000;
--- @bvt:issue#3274
 select * from t1 where bigint_col='17666000000000000000';
--- @bvt:issue
-
 #Test cases of cast
 drop table t1;
 select cast(10000002383263201056 as unsigned) mod 50 as result;

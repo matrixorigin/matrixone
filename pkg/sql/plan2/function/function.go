@@ -215,10 +215,16 @@ func GetFunctionByName(name string, args []types.T) (Function, int64, []types.T,
 
 	index, targetTypes := fs.TypeCheck(args)
 	if index == wrongFunctionParameters {
-		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
-			return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, args))
+		errArgPrint := make([]types.T, len(args))
+		if targetTypes != nil {
+			copy(errArgPrint, targetTypes)
+		} else {
+			copy(errArgPrint, args)
 		}
-		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, args))
+		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
+			return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, errArgPrint))
+		}
+		return emptyFunction, -1, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, errArgPrint))
 	} else if index == tooManyFunctionsMatched {
 		return emptyFunction, -1, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
 	}
