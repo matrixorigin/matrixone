@@ -17,9 +17,6 @@ package db
 import (
 	"errors"
 	"fmt"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -32,79 +29,9 @@ var (
 	ErrTaskNotFound   = errors.New("tae task: task not found")
 )
 
-type taskTable struct {
-	sync.RWMutex
-	sharded map[tasks.TaskType]map[uint64]tasks.Task
-	count   int64
-}
-
-func NewTaskTable() *taskTable {
-	table := &taskTable{
-		sharded: make(map[tasks.TaskType]map[uint64]tasks.Task),
-	}
-	table.sharded[tasks.DataCompactionTask] = make(map[uint64]tasks.Task)
-	table.sharded[tasks.DataCompactionTask] = make(map[uint64]tasks.Task)
-	table.sharded[tasks.CheckpointTask] = make(map[uint64]tasks.Task)
-	return table
-}
-
-func (table *taskTable) TotalTaskCount() int {
-	return int(atomic.LoadInt64(&table.count))
-}
-
-func (table *taskTable) TaskCount(taskType tasks.TaskType) int {
-	table.RLock()
-	defer table.RUnlock()
-	shard := table.sharded[taskType]
-	return len(shard)
-}
-
-func (table *taskTable) ChangeTaskCount(delta int64) {
-	v := atomic.AddInt64(&table.count, delta)
-	if v < 0 {
-		panic("logic error")
-	}
-}
-
-func (table *taskTable) RegisterTask(task tasks.Task) error {
-	table.Lock()
-	defer table.Unlock()
-	shard := table.sharded[task.Type()]
-	existed := shard[task.ID()]
-	if existed != nil {
-		return ErrTaskDuplicated
-	}
-	shard[task.ID()] = task
-	task.AddObserver(table)
-	return nil
-}
-
-func (table *taskTable) UnregisterTask(task tasks.Task) error {
-	table.Lock()
-	defer table.Unlock()
-	shard := table.sharded[task.Type()]
-	existed := shard[task.ID()]
-	if existed == nil {
-		return ErrTaskDuplicated
-	}
-	delete(shard, task.ID())
-	return nil
-}
-
-func (table *taskTable) OnExecDone(v any) {
-	task := v.(tasks.Task)
-	err := table.UnregisterTask(task)
-	if err != nil {
-		logutil.Warnf("UnregisterTask %d:%d: %v", task.Type(), task.ID(), err)
-	} else {
-		logutil.Warnf("Task %d:%d Done [%s]", task.Type(), task.ID(), time.Duration(task.GetExecutTime()))
-	}
-}
-
 type taskScheduler struct {
 	*tasks.BaseScheduler
-	db        *DB
-	taskTable *taskTable
+	db *DB
 }
 
 func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
