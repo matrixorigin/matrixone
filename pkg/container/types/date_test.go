@@ -78,13 +78,29 @@ func TestParseDate(t *testing.T) {
 			},
 			wantErr: true,
 		},
-		// 4. wrong format
+		// 4. yyyy-m-dd
 		{
-			name: "wrong length",
+			name: "yyyy-m-dd",
 			args: args{
-				s: "2021-1-15",
+				s: "2005-2-23",
 			},
-			wantErr: true,
+			want: "2005-02-23",
+		},
+		// 5. yyyy-mm-d
+		{
+			name: "yyyy-mm-d",
+			args: args{
+				s: "2005-02-2",
+			},
+			want: "2005-02-02",
+		},
+		// 6. yyyy-m-d
+		{
+			name: "yyyy-m-d",
+			args: args{
+				s: "2005-2-3",
+			},
+			want: "2005-02-03",
 		},
 	}
 	for _, tt := range tests {

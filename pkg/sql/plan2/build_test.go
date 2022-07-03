@@ -32,6 +32,7 @@ func TestSingleSql(t *testing.T) {
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
 	sql := "select @str_var, @int_var, @bool_var, @@global.float_var, @@session.null_var"
+	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
 	// if err != nil {
 	// 	t.Fatalf("%+v", err)
@@ -397,11 +398,15 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT DISTINCT N_NAME FROM NATION", //test distinct
 		"select sum(n_nationkey) as s from nation order by s",
 		"select date_add(date '2001-01-01', interval 1 day) as a",
-		"select date_sub(date '2001-01-01', interval '1 day') as a",
-		"select date_add('2001-01-01', interval '1 day') as a",
+		"select date_sub(date '2001-01-01', interval '1' day) as a",
+		"select date_add('2001-01-01', interval '1' day) as a",
 		"select n_name, count(*) from nation group by n_name order by 2 asc",
 		"select count(distinct 12)",
 		"select nullif(n_name, n_comment), ifnull(n_comment, n_name) from nation",
+
+		"select 18446744073709551500",
+		"select 0xffffffffffffffff",
+		"select 0xffff",
 
 		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
@@ -409,6 +414,7 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		// "SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY IN (1, 2)",  //test more expr
 		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY NOT IN (1)", //test more expr
+		"select N_REGIONKEY from nation group by N_REGIONKEY having abs(nation.N_REGIONKEY - 1) >10",
 
 		"SELECT -1",
 		"select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)",
@@ -418,6 +424,9 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"select n_name from nation where n_name != @str_var and n_regionkey > @int_var",
 		"select n_name from nation where n_name != @@global.str_var and n_regionkey > @@session.int_var",
 		"select distinct(n_name), ((abs(n_regionkey))) from nation",
+		"SET @var = abs(-1), @@session.string_var = 'aaa'",
+		"SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
+		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_NAME", //test distinct with order by
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -431,8 +440,13 @@ func TestSingleTableSqlBuilder(t *testing.T) {
 		"SELECT NATION.N_NAME FROM NATION a",                                // mysql should error, but i don't think it is necesssary
 		"select n_nationkey, sum(n_nationkey) from nation",
 		"select n_name from nation where n_name != @not_exist_var",
+		"SET @var = abs(a)", // can't use column
+		"SET @var = avg(2)", // can't use agg function
 
 		"SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
+		"SELECT DISTINCT N_NAME FROM NATION ORDER BY N_REGIONKEY", //test distinct with order by
+		//"select 18446744073709551500",                             //over int64
+		//"select 0xffffffffffffffff",                               //over int64
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -504,6 +518,11 @@ func TestCTESqlBuilder(t *testing.T) {
 		"WITH qn AS (SELECT * FROM nation) SELECT * FROM qn;",
 		"WITH qn(a, b) AS (SELECT * FROM nation) SELECT * FROM qn;",
 		"with qn0 as (select 1), qn1 as (select * from qn0), qn2 as (select 1), qn3 as (select 1 from qn1, qn2) select 1 from qn3",
+
+		`WITH qn AS (select "outer" as a)
+		SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
+		qn.a
+		FROM qn`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -590,6 +609,7 @@ func TestSubQuery(t *testing.T) {
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
 		`select
 		sum(l_extendedprice) / 7.0 as avg_yearly
@@ -615,7 +635,6 @@ func TestSubQuery(t *testing.T) {
 	sqls = []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
-		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)",    // related
 	}
 	runTestShouldError(mock, t, sqls)
 }

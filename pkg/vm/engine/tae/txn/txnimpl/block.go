@@ -19,9 +19,9 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -158,7 +158,7 @@ func (blk *txnBlock) GetTotalChanges() int {
 func (blk *txnBlock) IsAppendableBlock() bool { return blk.entry.IsAppendable() }
 func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
-func (blk *txnBlock) BatchDedup(pks *gvec.Vector, invisibility *roaring.Bitmap) (err error) {
+func (blk *txnBlock) BatchDedup(pks containers.Vector, invisibility *roaring.Bitmap) (err error) {
 	blkData := blk.entry.GetBlockData()
 	blk.Txn.GetStore().LogBlockID(blk.getDBID(), blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
 	return blkData.BatchDedup(blk.Txn, pks, invisibility)
@@ -184,18 +184,18 @@ func (blk *txnBlock) Rows() int {
 	return blk.entry.GetBlockData().Rows(blk.Txn, true)
 }
 
-func (blk *txnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error) {
 	if blk.isUncommitted {
-		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx, compressed, decompressed)
+		return blk.table.localSegment.GetColumnDataById(blk.entry, colIdx, buffer)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx, compressed, decompressed)
+	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx, buffer)
 }
-func (blk *txnBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error) {
+func (blk *txnBlock) GetColumnDataByName(attr string, buffer *bytes.Buffer) (*model.ColumnView, error) {
 	if blk.isUncommitted {
 		attrId := blk.table.entry.GetSchema().GetColIdx(attr)
-		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId, compressed, decompressed)
+		return blk.table.localSegment.GetColumnDataById(blk.entry, attrId, buffer)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr, compressed, decompressed)
+	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr, buffer)
 }
 
 func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
@@ -263,14 +263,24 @@ func (it *relBlockIt) Valid() bool {
 	if it.err != nil {
 		return false
 	}
-	it.segmentIt.Next()
-	if !it.segmentIt.Valid() {
-		if err = it.segmentIt.GetError(); err != nil {
-			it.err = err
+	var seg handle.Segment
+	for {
+		it.segmentIt.Next()
+		if !it.segmentIt.Valid() {
+			if err = it.segmentIt.GetError(); err != nil {
+				it.err = err
+			}
+			return false
 		}
-		return false
+		seg = it.segmentIt.GetSegment()
+		meta := seg.GetMeta().(*catalog.SegmentEntry)
+		meta.RLock()
+		cnt := meta.BlockCnt()
+		meta.RUnlock()
+		if cnt != 0 {
+			break
+		}
 	}
-	seg := it.segmentIt.GetSegment()
 	it.blockIt = seg.MakeBlockIt()
 	if err = it.blockIt.GetError(); err != nil {
 		it.err = err

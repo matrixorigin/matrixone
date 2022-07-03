@@ -17,13 +17,14 @@ package min
 import (
 	"fmt"
 
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"math"
 )
 
 var Decimal64Size = encoding.Decimal64Size
@@ -145,52 +146,50 @@ func (r *Decimal64Ring) Grows(size int, m *mheap.Mheap) error {
 }
 
 func (r *Decimal64Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
+	if nulls.Contains(vec.Nsp, uint64(sel)) {
+		r.Ns[i] += z
+		return
+	}
 	if v := vec.Col.([]types.Decimal64)[sel]; r.Es[i] || v < r.Vs[i] {
 		r.Vs[i] = v
 		r.Es[i] = false
-	}
-	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i] += z
 	}
 }
 
 func (r *Decimal64Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]types.Decimal64)
 	for i := range os {
+		if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+			r.Ns[vps[i]-1] += zs[int64(i)+start]
+			continue
+		}
 		j := vps[i] - 1
 		if r.Es[j] || vs[int64(i)+start] < r.Vs[j] {
 			r.Vs[j] = vs[int64(i)+start]
 			r.Es[j] = false
 		}
 	}
-	if nulls.Any(vec.Nsp) {
-		for i := range os {
-			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[vps[i]-1] += zs[int64(i)+start]
-			}
-		}
-	}
 }
 
 func (r *Decimal64Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]types.Decimal64)
-	for _, v := range vs {
+	for j, v := range vs {
+		if nulls.Contains(vec.Nsp, uint64(j)) {
+			r.Ns[i] += zs[j]
+			continue
+		}
 		if r.Es[i] || v < r.Vs[i] {
 			r.Vs[i] = v
 			r.Es[i] = false
-		}
-	}
-	if nulls.Any(vec.Nsp) {
-		for j := range vs {
-			if nulls.Contains(vec.Nsp, uint64(j)) {
-				r.Ns[i] += zs[j]
-			}
 		}
 	}
 }
 
 func (r *Decimal64Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if r.Es[x] || ar.Vs[y] < r.Vs[x] {
 		r.Es[x] = false
 		r.Vs[x] = ar.Vs[y]
@@ -200,6 +199,9 @@ func (r *Decimal64Ring) Add(a interface{}, x, y int64) {
 
 func (r *Decimal64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*Decimal64Ring)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if r.Es[j] || ar.Vs[int64(i)+start] < r.Vs[j] {

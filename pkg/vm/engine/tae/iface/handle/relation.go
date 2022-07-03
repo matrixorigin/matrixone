@@ -17,9 +17,8 @@ package handle
 import (
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type Relation interface {
@@ -38,7 +37,7 @@ type Relation interface {
 	UpdateByHiddenKey(key any, col int, v any) error
 	GetValueByHiddenKey(key any, col int) (any, error)
 
-	DeleteByHiddenKeys(keys *vector.Vector) error
+	DeleteByHiddenKeys(keys containers.Vector) error
 
 	RangeDelete(id *common.ID, start, end uint32) error
 	Update(id *common.ID, row uint32, col uint16, v any) error
@@ -48,8 +47,8 @@ type Relation interface {
 	UpdateByFilter(filter *Filter, col uint16, v any) error
 	DeleteByFilter(filter *Filter) error
 
-	BatchDedup(cols ...*vector.Vector) error
-	Append(data *batch.Batch) error
+	BatchDedup(cols ...containers.Vector) error
+	Append(data *containers.Batch) error
 
 	GetMeta() any
 	CreateSegment() (Segment, error)

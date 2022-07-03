@@ -16,23 +16,18 @@ package model
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type ColumnView struct {
-	ColIdx      int
-	Ts          uint64
-	RawVec      *movec.Vector
-	RawIVec     vector.IVector
-	UpdateMask  *roaring.Bitmap
-	UpdateVals  map[uint32]any
-	DeleteMask  *roaring.Bitmap
-	AppliedVec  *movec.Vector
-	AppliedIVec vector.IVector
-	MemNode     *common.MemNode
+	ColIdx     int
+	Ts         uint64
+	data       containers.Vector
+	UpdateMask *roaring.Bitmap
+	UpdateVals map[uint32]any
+	DeleteMask *roaring.Bitmap
+	LogIndexes []*wal.Index
 }
 
 func NewColumnView(ts uint64, colIdx int) *ColumnView {
@@ -42,57 +37,66 @@ func NewColumnView(ts uint64, colIdx int) *ColumnView {
 	}
 }
 
-func (view *ColumnView) ApplyDeletes() *movec.Vector {
-	view.AppliedVec = compute.ApplyDeleteToVector(view.AppliedVec, view.DeleteMask)
-	return view.AppliedVec
+func (view *ColumnView) Orphan() containers.Vector {
+	data := view.data
+	view.data = nil
+	return data
 }
 
-func (view *ColumnView) Eval(clear bool) error {
-	if view.RawIVec != nil {
-		view.AppliedIVec = compute.ApplyUpdateToIVector(view.RawIVec, view.UpdateMask, view.UpdateVals)
-		if clear {
-			view.RawIVec = nil
-			view.UpdateMask = nil
-			view.UpdateVals = nil
-		}
-		return nil
-	}
+func (view *ColumnView) SetData(data containers.Vector) {
+	view.data = data
+}
 
-	view.AppliedVec = compute.ApplyUpdateToVector(view.RawVec, view.UpdateMask, view.UpdateVals)
+func (view *ColumnView) ApplyDeletes() containers.Vector {
+	if view.DeleteMask == nil {
+		return view.data
+	}
+	view.data.Compact(view.DeleteMask)
+	view.DeleteMask = nil
+	return view.data
+}
+
+func (view *ColumnView) Eval(clear bool) (err error) {
+	if view.UpdateMask == nil {
+		return
+	}
+	it := view.UpdateMask.Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		view.data.Update(int(row), view.UpdateVals[row])
+	}
 	if clear {
-		view.RawVec = nil
 		view.UpdateMask = nil
 		view.UpdateVals = nil
 	}
-	return nil
+	return
 }
 
-func (view *ColumnView) GetColumnData() *movec.Vector {
-	return view.AppliedVec
+func (view *ColumnView) GetData() containers.Vector {
+	return view.data
 }
 
 func (view *ColumnView) Length() int {
-	return movec.Length(view.AppliedVec)
+	return view.data.Length()
 }
 
 func (view *ColumnView) String() string {
-	return view.AppliedVec.String()
-}
-
-func (view *ColumnView) GetValue(row uint32) any {
-	return compute.GetValue(view.AppliedVec, row)
-}
-
-func (view *ColumnView) Free() {
-	if view.MemNode != nil {
-		common.GPool.Free(view.MemNode)
-		view.MemNode = nil
+	if view.data != nil {
+		return view.data.String()
 	}
-	view.RawVec = nil
-	view.RawIVec = nil
+	return "empty"
+}
+
+func (view *ColumnView) GetValue(row int) any {
+	return view.data.Get(row)
+}
+
+func (view *ColumnView) Close() {
+	if view.data != nil {
+		view.data.Close()
+	}
+	view.data = nil
 	view.UpdateMask = nil
 	view.UpdateVals = nil
 	view.DeleteMask = nil
-	view.AppliedVec = nil
-	view.AppliedIVec = nil
 }

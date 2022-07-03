@@ -14,7 +14,10 @@
 
 package mod
 
-import "golang.org/x/exp/constraints"
+import (
+	"golang.org/x/exp/constraints"
+	"math"
+)
 
 var (
 	Int8Mod                = IntMod[int8]
@@ -123,42 +126,42 @@ func IntModByScalarSels[T constraints.Integer](x T, ys, rs []T, sels []int64) []
 
 func FloatMod[T constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {
-		rs[i] = x - x/ys[i]*ys[i]
+		rs[i] = T(math.Mod(float64(x), float64(ys[i])))
 	}
 	return rs
 }
 
 func FloatModSels[T constraints.Float](xs, ys, rs []T, sels []int64) []T {
 	for _, sel := range sels {
-		rs[sel] = xs[sel] - xs[sel]/ys[sel]*ys[sel]
+		rs[sel] = T(math.Mod(float64(xs[sel]), float64(ys[sel])))
 	}
 	return rs
 }
 
 func FloatModScalar[T constraints.Float](x T, ys, rs []T) []T {
 	for i, y := range ys {
-		rs[i] = x - x/y*y
+		rs[i] = T(math.Mod(float64(x), float64(y)))
 	}
 	return rs
 }
 
 func FloatModScalarSels[T constraints.Float](x T, ys, rs []T, sels []int64) []T {
 	for _, sel := range sels {
-		rs[sel] = x - x/ys[sel]*ys[sel]
+		rs[sel] = T(math.Mod(float64(x), float64(ys[sel])))
 	}
 	return rs
 }
 
 func FloatModByScalar[T constraints.Float](x T, ys, rs []T) []T {
 	for i, y := range ys {
-		rs[i] = y - y/x*x
+		rs[i] = T(math.Mod(float64(y), float64(x)))
 	}
 	return rs
 }
 
 func FloatModByScalarSels[T constraints.Float](x T, ys, rs []T, sels []int64) []T {
 	for _, sel := range sels {
-		rs[sel] = ys[sel] - ys[sel]/x*x
+		rs[sel] = T(math.Mod(float64(ys[sel]), float64(x)))
 	}
 	return rs
 }

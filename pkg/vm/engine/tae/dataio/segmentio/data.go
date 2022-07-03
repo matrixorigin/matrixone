@@ -15,8 +15,9 @@
 package segmentio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const UPGRADE_FILE_NUM = 2
@@ -87,6 +88,7 @@ func (df *dataFile) Write(buf []byte) (n int, err error) {
 	df.stat.originSize = meta.GetOriginSize()
 	df.stat.size = meta.GetFileSize()
 	df.upgradeFile()
+	n = len(buf)
 	return
 }
 
@@ -101,21 +103,25 @@ func (df *dataFile) Read(buf []byte) (n int, err error) {
 }
 
 func (df *dataFile) upgradeFile() {
-	if len(df.file) < UPGRADE_FILE_NUM {
-		return
-	}
 	go func() {
 		df.mutex.Lock()
-		defer df.mutex.Unlock()
 		if len(df.file) < UPGRADE_FILE_NUM {
+			df.mutex.Unlock()
 			return
 		}
 		releaseFile := df.file[:len(df.file)-1]
 		df.file = df.file[len(df.file)-1 : len(df.file)]
+		df.mutex.Unlock()
 		for _, file := range releaseFile {
 			file.driver.ReleaseFile(file)
 		}
 	}()
+}
+
+func (df *dataFile) GetFileCnt() int {
+	df.mutex.Lock()
+	defer df.mutex.Unlock()
+	return len(df.file)
 }
 
 func (df *dataFile) GetFileType() common.FileType {
@@ -139,6 +145,17 @@ func (df *dataFile) SetFile(file *DriverFile, col, idx uint32) {
 func (df *dataFile) Ref()            { df.colBlk.Ref() }
 func (df *dataFile) Unref()          { df.colBlk.Unref() }
 func (df *dataFile) RefCount() int64 { return df.colBlk.RefCount() }
+func (df *dataFile) Destroy() {
+	df.mutex.Lock()
+	defer df.mutex.Unlock()
+	for _, file := range df.file {
+		if file == nil {
+			continue
+		}
+		file.Unref()
+	}
+	df.file = nil
+}
 
 func (df *dataFile) Stat() common.FileInfo { return df.stat }
 

@@ -21,14 +21,13 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -197,25 +196,24 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = node.mask.UnmarshalBinary(buf); err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	buf = make([]byte, types.TypeSize)
+	if _, err = r.Read(buf); err != nil {
 		return
 	}
-	n += 4
-	buf = make([]byte, length)
-	if sn, err = r.Read(buf); err != nil {
+	n += int64(len(buf))
+	typ := types.DecodeType(buf)
+	var tmpn int64
+	vec := containers.MakeVector(typ, true)
+	defer vec.Close()
+	if tmpn, err = vec.ReadFrom(r); err != nil {
 		return
 	}
-	n += int64(sn)
-	typ := encoding.DecodeType(buf[:encoding.TypeSize])
-	vals := gvec.New(typ)
-	if err = vals.Read(buf); err != nil {
-		return
-	}
+	n += tmpn
 	it := node.mask.Iterator()
 	row := uint32(0)
 	for it.HasNext() {
 		key := it.Next()
-		v := compute.GetValue(vals, row)
+		v := vec.Get(int(row))
 		node.vals[key] = v
 		row++
 	}
@@ -226,7 +224,6 @@ func (node *ColumnUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-// TODO: rewrite later
 func (node *ColumnUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	cn, err := w.Write(txnbase.MarshalID(node.chain.id))
 	if err != nil {
@@ -247,25 +244,24 @@ func (node *ColumnUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += int64(len(buf))
 
-	col := gvec.New(node.chain.GetMeta().GetSchema().ColDefs[node.chain.id.Idx].Type)
-	it := node.mask.Iterator()
-	for it.HasNext() {
-		row := it.Next()
-		compute.AppendValue(col, node.vals[row])
-	}
-	buf, err = col.Show()
-	if err != nil {
-		return
-	}
-	if err = binary.Write(w, binary.BigEndian, uint32(len(buf))); err != nil {
-		return
-	}
-	n += 4
-	cn, err = w.Write(buf)
-	if err != nil {
+	def := node.chain.GetMeta().GetSchema().ColDefs[node.chain.id.Idx]
+	if cn, err = w.Write(types.EncodeType(def.Type)); err != nil {
 		return
 	}
 	n += int64(cn)
+
+	col := containers.MakeVector(def.Type, def.Nullable())
+	defer col.Close()
+	it := node.mask.Iterator()
+	for it.HasNext() {
+		row := it.Next()
+		col.Append(node.vals[row])
+	}
+	var tmpn int64
+	if tmpn, err = col.WriteTo(w); err != nil {
+		return
+	}
+	n += tmpn
 	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
 		return
 	}
@@ -275,7 +271,13 @@ func (node *ColumnUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 
 func (node *ColumnUpdateNode) UpdateLocked(row uint32, v any) error {
 	node.mask.Add(row)
-	node.vals[row] = v
+	if src, ok := v.([]byte); ok {
+		dst := make([]byte, len(src))
+		copy(dst, src)
+		node.vals[row] = dst
+	} else {
+		node.vals[row] = v
+	}
 	return nil
 }
 
@@ -291,9 +293,9 @@ func (node *ColumnUpdateNode) MergeLocked(o *ColumnUpdateNode) {
 func (node *ColumnUpdateNode) GetStartTS() uint64        { return node.startTs }
 func (node *ColumnUpdateNode) GetCommitTSLocked() uint64 { return node.commitTs }
 
-func (node *ColumnUpdateNode) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector {
-	vec = compute.ApplyUpdateToVector(vec, node.mask, node.vals)
-	vec = compute.ApplyDeleteToVector(vec, deletes)
+func (node *ColumnUpdateNode) ApplyToColumn(vec containers.Vector, deletes *roaring.Bitmap) containers.Vector {
+	containers.ApplyUpdates(vec, node.mask, node.vals)
+	vec.Compact(deletes)
 	return vec
 }
 

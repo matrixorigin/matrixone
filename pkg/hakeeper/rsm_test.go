@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -232,42 +231,42 @@ func TestGetIDCmd(t *testing.T) {
 
 func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	tsm1 := NewStateMachine(0, 1).(*stateMachine)
-	sc1 := hapb.ScheduleCommand{
+	sc1 := pb.ScheduleCommand{
 		UUID: "uuid1",
-		ConfigChange: hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 1,
 			},
 		},
 	}
-	sc2 := hapb.ScheduleCommand{
+	sc2 := pb.ScheduleCommand{
 		UUID: "uuid2",
-		ConfigChange: hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 2,
 			},
 		},
 	}
-	sc3 := hapb.ScheduleCommand{
+	sc3 := pb.ScheduleCommand{
 		UUID: "uuid1",
-		ConfigChange: hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 3,
 			},
 		},
 	}
-	sc4 := hapb.ScheduleCommand{
+	sc4 := pb.ScheduleCommand{
 		UUID: "uuid3",
-		ConfigChange: hapb.ConfigChange{
-			Replica: hapb.Replica{
+		ConfigChange: &pb.ConfigChange{
+			Replica: pb.Replica{
 				ShardID: 4,
 			},
 		},
 	}
 
-	b := hapb.CommandBatch{
+	b := pb.CommandBatch{
 		Term:     101,
-		Commands: []hapb.ScheduleCommand{sc1, sc2, sc3},
+		Commands: []pb.ScheduleCommand{sc1, sc2, sc3},
 	}
 	cmd := GetUpdateCommandsCmd(b.Term, b.Commands)
 	result, err := tsm1.Update(sm.Entry{Cmd: cmd})
@@ -277,13 +276,13 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	require.Equal(t, 2, len(tsm1.state.ScheduleCommands))
 	l1, ok := tsm1.state.ScheduleCommands["uuid1"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc1, sc3}}, l1)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc1, sc3}}, l1)
 	l2, ok := tsm1.state.ScheduleCommands["uuid2"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc2}}, l2)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc2}}, l2)
 
 	cmd2 := GetUpdateCommandsCmd(b.Term-1,
-		[]hapb.ScheduleCommand{sc1, sc2, sc3, sc4})
+		[]pb.ScheduleCommand{sc1, sc2, sc3, sc4})
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd2})
 	require.NoError(t, err)
 	assert.Equal(t, sm.Result{}, result)
@@ -291,8 +290,8 @@ func TestUpdateScheduleCommandsCmd(t *testing.T) {
 	require.Equal(t, 2, len(tsm1.state.ScheduleCommands))
 	l1, ok = tsm1.state.ScheduleCommands["uuid1"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc1, sc3}}, l1)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc1, sc3}}, l1)
 	l2, ok = tsm1.state.ScheduleCommands["uuid2"]
 	assert.True(t, ok)
-	assert.Equal(t, hapb.CommandBatch{Commands: []hapb.ScheduleCommand{sc2}}, l2)
+	assert.Equal(t, pb.CommandBatch{Commands: []pb.ScheduleCommand{sc2}}, l2)
 }

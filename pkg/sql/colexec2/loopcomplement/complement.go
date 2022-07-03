@@ -16,8 +16,10 @@ package loopcomplement
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	colexec "github.com/matrixorigin/matrixone/pkg/sql/colexec2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,14 +59,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			if ctr.bat == nil {
-				bat.Clean(proc.Mp)
-				continue
-			}
-			if err := ctr.probe(bat, ap, proc); err != nil {
-				ctr.state = End
-				bat.Clean(proc.Mp)
-				proc.Reg.InputBatch = nil
-				return true, err
+				if err := ctr.emptyProbe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
+			} else {
+				if err := ctr.probe(bat, ap, proc); err != nil {
+					ctr.state = End
+					proc.Reg.InputBatch = nil
+					return true, err
+				}
 			}
 			return false, nil
 		default:
@@ -101,26 +106,67 @@ func (ctr *Container) build(ap *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+func (ctr *Container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
 	defer bat.Clean(proc.Mp)
 	rbat := batch.NewWithSize(len(ap.Result))
 	for i, pos := range ap.Result {
 		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
 	}
 	count := len(bat.Zs)
+	for i := 0; i < count; i += UnitLimit {
+		n := count - i
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		for k := 0; k < n; k++ {
+			for j, pos := range ap.Result {
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.Mp); err != nil {
+					rbat.Clean(proc.Mp)
+					return err
+				}
+			}
+			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
+		}
+	}
+	proc.Reg.InputBatch = rbat
+	return nil
+}
+
+func (ctr *Container) probe(bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	defer bat.Clean(proc.Mp)
+	rbat := batch.NewWithSize(len(ap.Result))
+	for i, pos := range ap.Result {
+		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+	}
+	{
+		fmt.Printf("build:\n")
+		for i, vec := range ctr.bat.Vecs {
+			fmt.Printf("\t[%v] = %v\n", i, vec)
+		}
+		fmt.Printf("probe:\n")
+		for i, vec := range bat.Vecs {
+			fmt.Printf("\t[%v] = %v\n", i, vec)
+		}
+
+	}
+	count := len(bat.Zs)
 	for i := 0; i < count; i++ {
 		flg := true
-		for j := 0; j < len(ctr.bat.Zs); j++ {
-			vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, j, proc, ap.Cond)
-			if err != nil {
-				return err
-			}
-			if vec.Col.([]bool)[0] {
+		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
+		if err != nil {
+			return err
+		}
+		bs := vec.Col.([]bool)
+		{
+			fmt.Printf("\t[%v] = %v, %v\n", i, ap.Cond, bs)
+		}
+		for _, b := range bs {
+			if b {
 				flg = false
 			}
-			vector.Free(vec, proc.Mp)
 		}
-		if flg {
+		vector.Clean(vec, proc.Mp)
+		if flg && !nulls.Any(vec.Nsp) {
 			for k, pos := range ap.Result {
 				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.Mp); err != nil {
 					rbat.Clean(proc.Mp)

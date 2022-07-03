@@ -17,7 +17,6 @@ package plan2
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
@@ -47,6 +46,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 	subId := subquery.NodeId
 	subCtx := builder.ctxByNode[subId]
 
+	if subquery.Typ == plan.SubqueryRef_SCALAR && !subCtx.hasSingleRow {
+		return 0, nil, errors.New("", "runtime check of scalar subquery will be supported in future version")
+	}
+
 	subId, preds, err := builder.pullupCorrelatedPredicates(subId, subCtx)
 	if err != nil {
 		return 0, nil, err
@@ -55,7 +58,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("correlated columns in %s subquery in non-equi condition or deeper than 1 level not yet supported", subquery.Typ.String()))
+		return 0, nil, errors.New("", fmt.Sprintf("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String()))
 	}
 
 	alwaysTrue := &plan.Expr{
@@ -76,15 +79,6 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
-		for _, pred := range filterPreds {
-			if f, ok := pred.Expr.(*plan.Expr_F); ok {
-				if f.F.Func.ObjName == "=" {
-					continue
-				}
-			}
-			return 0, nil, errors.New(errno.InternalError, "correlated columns in non-equi condition not yet supported in SCALAR subquery")
-		}
-
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
 			joinPreds = append(joinPreds, alwaysTrue)
@@ -202,7 +196,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_ANY:
-		expr, err := bindFuncExprImplByPlanExpr("=" /*subquery.Op*/, []*plan.Expr{
+		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
 			subquery.Child,
 			{
 				Typ: subCtx.projects[0].Typ,
@@ -230,7 +224,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	case plan.SubqueryRef_ALL:
-		expr, err := bindFuncExprImplByPlanExpr("=" /*subquery.Op*/, []*plan.Expr{
+		expr, err := bindFuncExprImplByPlanExpr(subquery.Op, []*plan.Expr{
 			subquery.Child,
 			{
 				Typ: subCtx.projects[0].Typ,
@@ -246,10 +240,10 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 			return 0, nil, err
 		}
 
-		//expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
-		//if err != nil {
-		//	return 0, nil, err
-		//}
+		expr, err = bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
+		if err != nil {
+			return 0, nil, err
+		}
 
 		joinPreds = append(joinPreds, expr)
 
@@ -263,7 +257,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeId int32, subquery *plan.Subque
 		return nodeId, nil, nil
 
 	default:
-		return 0, nil, errors.New(errno.InternalError, fmt.Sprintf("%s subquery not supported", subquery.Typ.String()))
+		return 0, nil, errors.New("", fmt.Sprintf("%s subquery not supported", subquery.Typ.String()))
 	}
 }
 
@@ -285,13 +279,13 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeId int32, ctx *BindC
 
 	switch node.NodeType {
 	case plan.Node_AGG:
-		groupTag := builder.tagsByNode[node.NodeId][0]
+		groupTag := node.BindingTags[0]
 		for _, pred := range preds {
 			builder.pullupThroughAgg(ctx, node, groupTag, pred)
 		}
 
 	case plan.Node_PROJECT:
-		projectTag := builder.tagsByNode[node.NodeId][0]
+		projectTag := node.BindingTags[0]
 		for _, pred := range preds {
 			builder.pullupThroughProj(ctx, node, projectTag, pred)
 		}

@@ -15,10 +15,13 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,6 +35,7 @@ var (
 	ErrVFileGroupNotExist = errors.New("vfile: group not existed")
 	ErrVFileLsnNotExist   = errors.New("vfile: lsn not existed")
 	ErrVFileOffsetTimeOut = errors.New("get vfile offset timeout")
+	ErrReadMetaFailed     = errors.New("read meta failed")
 )
 
 type vInfo struct {
@@ -47,10 +51,11 @@ type vInfo struct {
 	// TidCidMap map[uint32]map[uint64]uint64 // 5% uncommit txn
 
 	Addrs    map[uint32]map[uint64]int //group-groupLSN-offset 5%
-	addrmu   sync.RWMutex
+	addrmu   *sync.RWMutex
 	addrCond sync.Cond
 
 	unloaded    bool
+	inited      bool
 	loadmu      sync.Mutex
 	logQueue    chan *entry.Info
 	flushWg     sync.WaitGroup
@@ -80,7 +85,7 @@ func newVInfo(vf *vFile) *vInfo {
 		groups:   make(map[uint32]VGroup),
 		groupmu:  sync.RWMutex{},
 		Addrs:    make(map[uint32]map[uint64]int),
-		addrmu:   sync.RWMutex{},
+		addrmu:   &sync.RWMutex{},
 		addrCond: *sync.NewCond(new(sync.Mutex)),
 		vf:       vf,
 
@@ -91,20 +96,239 @@ func newVInfo(vf *vFile) *vInfo {
 	return info
 }
 
+func (info *vInfo) MetaWriteTo(w io.Writer) (n int64, err error) {
+	sn, err := info.AddrsWriteTo(w)
+	n += sn
+	if err != nil {
+		return
+	}
+	sn, err = info.UncommitWriteTo(w)
+	n += sn
+	if err != nil {
+		return
+	}
+	return
+}
+
+func (info *vInfo) MetaReadFrom(r io.Reader) (n int64, err error) {
+	sn, err := info.AddrsReadFrom(r)
+	n += sn
+	if err != nil {
+		return
+	}
+	sn, err = info.UncommitReadFrom(r)
+	n += sn
+	if err != nil {
+		return
+	}
+	return
+}
+func (info *vInfo) GetUncommitGidTid(lsn uint64) *entry.Tid {
+	g := info.groups[entry.GTUncommit]
+	if g == nil {
+		return nil
+	}
+	uncommit := g.(*uncommitGroup)
+	return uncommit.UncommitTxn[lsn]
+}
+func (info *vInfo) UncommitWriteTo(w io.Writer) (n int64, err error) {
+	info.groupmu.RLock()
+	defer info.groupmu.RUnlock()
+	g := info.groups[entry.GTUncommit]
+	if g == nil {
+		length := uint64(0)
+		if err = binary.Write(w, binary.BigEndian, length); err != nil {
+			return
+		}
+		n += 8
+		return
+	}
+	uncommit := g.(*uncommitGroup)
+	length := uint64(len(uncommit.UncommitTxn))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 8
+	for lsn, gidtid := range uncommit.UncommitTxn {
+		if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+			return
+		}
+		n += 8
+		if err = binary.Write(w, binary.BigEndian, gidtid.Group); err != nil {
+			return
+		}
+		n += 4
+		if err = binary.Write(w, binary.BigEndian, gidtid.Tid); err != nil {
+			return
+		}
+		n += 8
+	}
+	return
+}
+func (info *vInfo) UncommitReadFrom(r io.Reader) (n int64, err error) {
+	length := uint64(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 8
+	if length == 0 {
+		return
+	}
+	g := newuncommitGroup(info, entry.GTUncommit)
+	for i := 0; i < int(length); i++ {
+		lsn := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+			return
+		}
+		n += 4
+		gid := uint32(0)
+		if err = binary.Read(r, binary.BigEndian, &gid); err != nil {
+			return
+		}
+		n += 4
+		tid := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &tid); err != nil {
+			return
+		}
+		n += 4
+		g.UncommitTxn[lsn] = &entry.Tid{Group: gid, Tid: tid}
+	}
+	info.groups[entry.GTUncommit] = g
+	return
+}
+func (info *vInfo) AddrsWriteTo(w io.Writer) (n int64, err error) {
+	info.addrmu.RLock()
+	defer info.addrmu.RUnlock()
+	length := uint64(len(info.Addrs))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	n += 8
+	for gid, addrs := range info.Addrs {
+		if err = binary.Write(w, binary.BigEndian, gid); err != nil {
+			return
+		}
+		n += 4
+		length := uint64(len(addrs))
+		if err = binary.Write(w, binary.BigEndian, length); err != nil {
+			return
+		}
+		n += 8
+		for lsn, offset := range addrs {
+			if err = binary.Write(w, binary.BigEndian, lsn); err != nil {
+				return
+			}
+			n += 8
+			if err = binary.Write(w, binary.BigEndian, uint64(offset)); err != nil {
+				return
+			}
+			n += 8
+		}
+	}
+	return
+}
+
+func (info *vInfo) AddrsReadFrom(r io.Reader) (n int64, err error) {
+	length := uint64(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	n += 8
+	info.Addrs = make(map[uint32]map[uint64]int)
+	for i := 0; i < int(length); i++ {
+		gid := uint32(0)
+		if err = binary.Read(r, binary.BigEndian, &gid); err != nil {
+			return
+		}
+		n += 4
+		length2 := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &length2); err != nil {
+			return
+		}
+		n += 8
+		info.Addrs[gid] = make(map[uint64]int)
+		for j := 0; j < int(length2); j++ {
+			lsn := uint64(0)
+			if err = binary.Read(r, binary.BigEndian, &lsn); err != nil {
+				return
+			}
+			n += 8
+			offset := uint64(0)
+			if err = binary.Read(r, binary.BigEndian, &offset); err != nil {
+				return
+			}
+			n += 8
+			info.Addrs[gid][lsn] = int(offset)
+		}
+	}
+	return
+}
+
+//not safe
+func (info *vInfo) GetAddrs() (map[uint32]map[uint64]int, *sync.RWMutex) {
+	return info.Addrs, info.addrmu
+}
+
+func (info *vInfo) MarshalMeta() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = info.MetaWriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+
+func (info *vInfo) UnmarshalMeta(buf []byte) error {
+	bbuf := bytes.NewBuffer(buf)
+	e := entry.GetBase()
+	defer e.Free()
+
+	metaBuf := e.GetMetaBuf()
+	_, err := bbuf.Read(metaBuf)
+	if err != nil {
+		return err
+	}
+	if e.GetType() != entry.ETMeta {
+		return ErrReadMetaFailed
+	}
+	if e.TotalSize() != len(buf) {
+		return ErrReadMetaFailed
+	}
+	if e.GetInfoSize() != 0 {
+		return ErrReadMetaFailed
+	}
+	_, err = e.ReadFrom(bbuf)
+	if err != nil {
+		return err
+	}
+	bbuf2 := bytes.NewBuffer(e.GetPayload())
+	_, err = info.MetaReadFrom(bbuf2)
+	return err
+}
+
 func (info *vInfo) OnReplay(r *replayer) {
+	if info.unloaded && info.vf.committed == int32(1) {
+		info.vf.WriteMeta()
+		err := info.vf.Sync()
+		if err != nil {
+			panic(err)
+		}
+	}
+	info.inited = true
 	info.flushWg.Wait()
 }
 
 func (info *vInfo) LoadMeta() error {
 	info.loadmu.Lock()
 	defer info.loadmu.Unlock()
-	if !info.unloaded {
+	if info.inited && !info.unloaded {
 		return nil
 	}
 	err := info.vf.readMeta()
 	if err != nil {
 		return err
 	}
+	info.inited = true
 	info.unloaded = false
 	return nil
 }
@@ -153,7 +377,7 @@ func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 	// }
 	for _, g := range info.groups {
 		if !g.IsCovered(c) {
-			// logutil.Infof("not covered %d\ntcmap:%v\nckp%v\nckpver %d\ng:%v\n",info.vf.Id(),c.tidCidMap,c.checkpointed,c.ckpInfoVersion,g)
+			// logutil.Infof("%p not covered %d\ntcmap:%v\nckp%v\nckpver %d\ng:%v\n",info, info.vf.Id(), c.tidCidMap, c.checkpointed, c.ckpInfoVersion, g)
 			toDelete = false
 		}
 	}
@@ -202,15 +426,30 @@ func (info *vInfo) onLog(infos []*entry.Info) {
 		switch vi.Group {
 		case entry.GTCKp:
 			err = info.LogCheckpoint(vi)
+			if err != nil {
+				panic(err)
+			}
 		case entry.GTUncommit:
 			err = info.LogUncommitInfo(vi)
+			if err != nil {
+				panic(err)
+			}
 		case entry.GTInternal:
 			err = info.LogInternalInfo(vi)
+			if err != nil {
+				panic(err)
+			}
 		default:
 			err = info.LogCommit(vi)
+			if err != nil {
+				panic(err)
+			}
 		}
 		if err != nil {
 			panic(err)
+		}
+		if vi.Info == nil {
+			continue
 		}
 		info.addrmu.Lock()
 		addr := vi.Info.(*VFileAddress)
@@ -218,6 +457,7 @@ func (info *vInfo) onLog(infos []*entry.Info) {
 		if !ok {
 			addrsMap = make(map[uint64]int)
 		}
+		// logutil.Infof("log addr %d-%d at %d-%d", vi.Group, vi.GroupLSN, info.vf.Id(), addr.Offset)
 		addrsMap[addr.LSN] = addr.Offset
 		info.Addrs[addr.Group] = addrsMap
 		info.addrmu.Unlock()

@@ -136,49 +136,47 @@ func (r *DatetimeRing) Grows(size int, m *mheap.Mheap) error {
 }
 
 func (r *DatetimeRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
-	if v := vec.Col.([]types.Datetime)[sel]; v < r.Vs[i] {
-		r.Vs[i] = v
-	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
 		r.Ns[i] += z
+		return
+	}
+	if v := vec.Col.([]types.Datetime)[sel]; v < r.Vs[i] {
+		r.Vs[i] = v
 	}
 }
 
 func (r *DatetimeRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]types.Datetime)
 	for i := range os {
+		if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+			r.Ns[vps[i]-1] += zs[int64(i)+start]
+			continue
+		}
 		j := vps[i] - 1
 		if vs[int64(i)+start] < r.Vs[j] {
 			r.Vs[j] = vs[int64(i)+start]
-		}
-	}
-	if nulls.Any(vec.Nsp) {
-		for i := range os {
-			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[vps[i]-1] += zs[int64(i)+start]
-			}
 		}
 	}
 }
 
 func (r *DatetimeRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]types.Datetime)
-	for _, v := range vs {
+	for j, v := range vs {
+		if nulls.Contains(vec.Nsp, uint64(j)) {
+			r.Ns[i] += zs[j]
+			continue
+		}
 		if v < r.Vs[i] {
 			r.Vs[i] = v
-		}
-	}
-	if nulls.Any(vec.Nsp) {
-		for j := range vs {
-			if nulls.Contains(vec.Nsp, uint64(j)) {
-				r.Ns[i] += zs[j]
-			}
 		}
 	}
 }
 
 func (r *DatetimeRing) Add(a interface{}, x, y int64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Vs[y] < r.Vs[x] {
 		r.Vs[x] = ar.Vs[y]
 	}
@@ -187,6 +185,9 @@ func (r *DatetimeRing) Add(a interface{}, x, y int64) {
 
 func (r *DatetimeRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if ar.Vs[int64(i)+start] < r.Vs[j] {
@@ -198,6 +199,9 @@ func (r *DatetimeRing) BatchAdd(a interface{}, start int64, os []uint8, vps []ui
 
 func (r *DatetimeRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Vs[y] < r.Vs[x] {
 		r.Vs[x] = ar.Vs[y]
 	}

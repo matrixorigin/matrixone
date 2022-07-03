@@ -1,0 +1,25 @@
+
+-- @suite
+
+-- @setup
+drop database if exists test01;
+create database test01;
+use test01;
+create table t1 (id int not null, str char(10),name varchar(10));
+create table t2 (a int);
+
+-- @case
+-- @desc:test for show tables
+-- @label:bvt
+show tables;
+
+-- @case
+-- @desc:test for show tables from
+-- @label:bvt
+show tables from test01;
+
+-- @case
+-- @desc:test for show columns from
+-- @label:bvt
+show columns from t1;
+drop database if exists test01;

@@ -24,12 +24,19 @@ var (
 	DateToYear       func([]types.Date, []uint16) []uint16
 	DatetimeToYear   func([]types.Datetime, []uint16) []uint16
 	DateStringToYear func(*types.Bytes, *nulls.Nulls, []uint16) []uint16
+
+	DateToYearPlan2       func([]types.Date, []int64) []int64
+	DatetimeToYearPlan2   func([]types.Datetime, []int64) []int64
+	DateStringToYearPlan2 func(*types.Bytes, *nulls.Nulls, []int64) []int64
 )
 
 func init() {
 	DateToYear = dateToYear
 	DatetimeToYear = datetimeToYear
 	DateStringToYear = dateStringToYear
+	DateToYearPlan2 = dateToYearPlan2
+	DatetimeToYearPlan2 = datetimeToYearPlan2
+	DateStringToYearPlan2 = dateStringToYearPlan2
 }
 
 func dateToYear(xs []types.Date, rs []uint16) []uint16 {
@@ -49,7 +56,7 @@ func datetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
 func dateStringToYear(xs *types.Bytes, ns *nulls.Nulls, rs []uint16) []uint16 {
 	for i := range xs.Lengths {
 		str := string(xs.Get(int64(i)))
-		d, e := types.ParseDatetime(str, 0)
+		d, e := types.ParseDateCast(str)
 		if e != nil {
 			// set null
 			nulls.Add(ns, uint64(i))
@@ -57,6 +64,35 @@ func dateStringToYear(xs *types.Bytes, ns *nulls.Nulls, rs []uint16) []uint16 {
 			continue
 		}
 		rs[i] = d.Year()
+	}
+	return rs
+}
+
+func dateToYearPlan2(xs []types.Date, rs []int64) []int64 {
+	for i, x := range xs {
+		rs[i] = int64(x.Year())
+	}
+	return rs
+}
+
+func datetimeToYearPlan2(xs []types.Datetime, rs []int64) []int64 {
+	for i, x := range xs {
+		rs[i] = int64(x.Year())
+	}
+	return rs
+}
+
+func dateStringToYearPlan2(xs *types.Bytes, ns *nulls.Nulls, rs []int64) []int64 {
+	for i := range xs.Lengths {
+		str := string(xs.Get(int64(i)))
+		d, e := types.ParseDateCast(str)
+		if e != nil {
+			// set null
+			nulls.Add(ns, uint64(i))
+			rs[i] = 0
+			continue
+		}
+		rs[i] = int64(d.Year())
 	}
 	return rs
 }

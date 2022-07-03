@@ -32,12 +32,25 @@ type TxnClient interface {
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
 	New(options ...TxnOption) TxnOperator
+	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
+	// be from a CN coordinator txn operator.
+	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
 }
 
 // TxnOperator operator for transaction clients, handling read and write
 // requests for transactions, and handling distributed transactions across DN
 // nodes.
 type TxnOperator interface {
+	// Snapshot a snapshot of the transaction handle that can be passed around the
+	// network. In some scenarios, operations of a transaction are executed on multiple
+	// CN nodes for performance acceleration. But with only one CN coordinator, Snapshot
+	// can be used to recover the transaction operation handle at a non-CN coordinator
+	// node, or it can be used to pass information back to the transaction coordinator
+	// after the non-CN coordinator completes the transaction operation.
+	Snapshot() ([]byte, error)
+	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
+	// operation information.
+	ApplySnapshot(data []byte) error
 	// Read transaction read operation, the operator routes the message based
 	// on the given DN node information and waits for the read data synchronously.
 	// The transaction has been aborted if ErrTxnAborted returned.
@@ -54,14 +67,6 @@ type TxnOperator interface {
 	Commit(ctx context.Context) error
 	// Rollback the transaction.
 	Rollback(ctx context.Context) error
-}
-
-// TxnSender is used to send transaction requests to the DN nodes.
-type TxnSender interface {
-	// Send send request to the specified DN node, and wait for response synchronously.
-	// For any reason, if no response is received, the internal will keep retrying until
-	// the Context times out.
-	Send(context.Context, []txn.TxnRequest) ([]txn.TxnResponse, error)
 }
 
 // TxnIDGenerator txn id generator

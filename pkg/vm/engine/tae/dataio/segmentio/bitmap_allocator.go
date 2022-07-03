@@ -262,13 +262,21 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 					startPos = l0freePos
 					setStart = true
 				}
-				if setStart &&
-					l0freePos > 0 && allocatedPage > 0 {
-					// Fragmented pages exist during allocation,
-					// we only need contiguous pages
-					allocatedPage = 0
-					startIdx = idx
-					startPos = l0freePos
+				if setStart {
+					if (l0freePos > 0 && allocatedPage > 0) ||
+						(l0freePos == 0 && allocatedPage == 1) {
+						// (l0freePos > 0 && allocatedPage > 0)
+						// Fragmented pages exist during allocation,
+						// we only need contiguous pages
+
+						// (l0freePos == 0 && allocatedPage == 1)
+						//Represents a page that has not previously met the conditions.
+						//Even if the 0th bit of the current idx is an assignable page,
+						//"start" needs to be reset.
+						allocatedPage = 0
+						startIdx = idx
+						startPos = l0freePos
+					}
 				}
 
 				for {
@@ -278,6 +286,7 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 					}
 					if (*val & (1 << nextPos)) == 0 {
 						l0freePos = b.getBitPos(*val, nextPos+1)
+						startPos = l0freePos
 						nextPos = l0freePos + 1
 						allocatedPage = 0
 					} else {

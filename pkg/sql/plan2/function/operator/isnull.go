@@ -15,15 +15,42 @@
 package operator
 
 import (
-	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func IsNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func IsNull[T NormalType](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	input := vectors[0]
+	retType := types.T_bool.ToType()
+	if input.IsScalar() {
+		vec := proc.AllocScalarVector(retType)
+		vector.SetCol(vec, []bool{input.IsScalarNull()})
+		return vec, nil
+	} else {
+		cols := vector.MustTCols[T](input)
+		l := int64(len(cols))
+		vec, err := proc.AllocVector(retType, l)
+		if err != nil {
+			return nil, err
+		}
+		col := encoding.DecodeFixedSlice[bool](vec.Data, 1)
+		col = col[:l]
+		for i := range cols {
+			if nulls.Contains(input.Nsp, uint64(i)) {
+				col[i] = true
+			} else {
+				col[i] = false
+			}
+		}
+		vector.SetCol(vec, col)
+		return vec, nil
+	}
+}
+
+func IsStringNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
 	if input.IsScalar() {
@@ -35,17 +62,15 @@ func IsNull[T DataValue](vectors []*vector.Vector, proc *process.Process) (*vect
 		}
 		return vec, nil
 	} else {
-		cols, ok := input.Col.([]T)
-		if !ok {
-			return nil, errors.New("IsNull: the input vec col is un-declare type")
-		}
-		l := int64(len(cols))
-		vec, err := proc.AllocVector(retType, l*1)
+		cols := vector.MustBytesCols(input)
+		l := int64(len(cols.Lengths))
+		vec, err := proc.AllocVector(retType, l)
 		if err != nil {
 			return nil, err
 		}
-		col := make([]bool, l)
-		for i := range cols {
+		col := encoding.DecodeFixedSlice[bool](vec.Data, 1)
+		col = col[:l]
+		for i := range cols.Lengths {
 			if nulls.Contains(input.Nsp, uint64(i)) {
 				col[i] = true
 			} else {

@@ -23,27 +23,30 @@ package operator
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 type OpStep interface {
 	fmt.Stringer
 
-	IsFinish(state hakeeper.LogState, dnState hakeeper.DNState) bool
+	IsFinish(state pb.LogState, dnState pb.DNState) bool
 }
 
 type AddLogService struct {
-	UUID                      string
-	ShardID, ReplicaID, Epoch uint64
+	Target string
 
-	tick uint64
+	StoreID                   string
+	ShardID, ReplicaID, Epoch uint64
 }
 
 func (a AddLogService) String() string {
-	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.UUID)
+	return fmt.Sprintf("adding %v:%v(at epoch %v) to %s", a.ShardID, a.ReplicaID, a.Epoch, a.StoreID)
 }
 
-func (a AddLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
+func (a AddLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+	if _, ok := state.Shards[a.ShardID]; !ok {
+		return true
+	}
 	if _, ok := state.Shards[a.ShardID].Replicas[a.ReplicaID]; ok {
 		return true
 	}
@@ -52,35 +55,40 @@ func (a AddLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) boo
 }
 
 type RemoveLogService struct {
-	UUID               string
+	Target string
+
+	StoreID            string
 	ShardID, ReplicaID uint64
 }
 
 func (a RemoveLogService) String() string {
-	return fmt.Sprintf("removing %v:%v to %s", a.ShardID, a.ReplicaID, a.UUID)
+	return fmt.Sprintf("removing %v:%v on log store %s", a.ShardID, a.ReplicaID, a.StoreID)
 }
 
-func (a RemoveLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	if _, ok := state.Shards[a.ShardID].Replicas[a.ReplicaID]; !ok {
-		return true
+func (a RemoveLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+	if shard, ok := state.Shards[a.ShardID]; ok {
+		if _, ok := shard.Replicas[a.ReplicaID]; ok {
+			return false
+		}
 	}
 
-	return false
+	return true
 }
 
 type StartLogService struct {
-	UUID               string
+	StoreID            string
 	ShardID, ReplicaID uint64
 }
 
 func (a StartLogService) String() string {
-	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.UUID)
+	return fmt.Sprintf("starting %v:%v on %s", a.ShardID, a.ReplicaID, a.StoreID)
 }
 
-func (a StartLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	// FIXME: state.Stores[a.UUID] is going to return nil when a.UUID is not a
-	// key in state.Stores
-	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
+func (a StartLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+	if _, ok := state.Stores[a.StoreID]; !ok {
+		return true
+	}
+	for _, replicaInfo := range state.Stores[a.StoreID].Replicas {
 		if replicaInfo.ShardID == a.ShardID {
 			return true
 		}
@@ -90,22 +98,90 @@ func (a StartLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) b
 }
 
 type StopLogService struct {
-	UUID    string
+	StoreID string
 	ShardID uint64
 }
 
 func (a StopLogService) String() string {
-	return fmt.Sprintf("starting %v on %s", a.ShardID, a.UUID)
+	return fmt.Sprintf("stoping %v on %s", a.ShardID, a.StoreID)
 }
 
-func (a StopLogService) IsFinish(state hakeeper.LogState, _ hakeeper.DNState) bool {
-	// FIXME: state.Stores[a.UUID] is going to return nil when a.UUID is not a
-	// key in state.Stores
-	for _, replicaInfo := range state.Stores[a.UUID].Replicas {
-		if replicaInfo.ShardID == a.ShardID {
-			return false
+func (a StopLogService) IsFinish(state pb.LogState, _ pb.DNState) bool {
+	if store, ok := state.Stores[a.StoreID]; ok {
+		for _, replicaInfo := range store.Replicas {
+			if replicaInfo.ShardID == a.ShardID {
+				return false
+			}
 		}
 	}
 
+	return true
+}
+
+type AddDnReplica struct {
+	StoreID            string
+	ShardID, ReplicaID uint64
+}
+
+func (a AddDnReplica) String() string {
+	return fmt.Sprintf("adding %v:%v to dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+}
+
+func (a AddDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
+	for _, info := range state.Stores[a.StoreID].Shards {
+		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
+			return true
+		}
+	}
+	return false
+}
+
+type RemoveDnReplica struct {
+	StoreID            string
+	ShardID, ReplicaID uint64
+}
+
+func (a RemoveDnReplica) String() string {
+	return fmt.Sprintf("removing %v:%v on dn store %s", a.ShardID, a.ReplicaID, a.StoreID)
+}
+
+func (a RemoveDnReplica) IsFinish(_ pb.LogState, state pb.DNState) bool {
+	for _, info := range state.Stores[a.StoreID].Shards {
+		if a.ShardID == info.GetShardID() && a.ReplicaID == info.GetReplicaID() {
+			return false
+		}
+	}
+	return true
+}
+
+// StopDnStore corresponds to dn store shutdown command.
+type StopDnStore struct {
+	StoreID string
+}
+
+func (a StopDnStore) String() string {
+	return fmt.Sprintf("stopping dn store %s", a.StoreID)
+}
+
+func (a StopDnStore) IsFinish(_ pb.LogState, state pb.DNState) bool {
+	if _, ok := state.Stores[a.StoreID]; ok {
+		return false
+	}
+	return true
+}
+
+// StopLogStore corresponds to log store shutdown command.
+type StopLogStore struct {
+	StoreID string
+}
+
+func (a StopLogStore) String() string {
+	return fmt.Sprintf("stopping log store %s", a.StoreID)
+}
+
+func (a StopLogStore) IsFinish(state pb.LogState, _ pb.DNState) bool {
+	if _, ok := state.Stores[a.StoreID]; ok {
+		return false
+	}
 	return true
 }

@@ -40,8 +40,8 @@ func TestAtan(t *testing.T) {
 	atanIntAndFloat[float32](t, types.T_float32, 7.5, 1.4382447944982226)
 	atanIntAndFloat[float32](t, types.T_float32, -123425, -1.5707882247086096)
 
-	atanIntAndFloat[float64](t, types.T_float64, 0.141241241241313, 0.140313114016083)
-	atanIntAndFloat[float64](t, types.T_float64, -124314124124.12412341, -1.5707963267868523)
+	atanIntAndFloat(t, types.T_float64, 0.141241241241313, 0.140313114016083)
+	atanIntAndFloat(t, types.T_float64, -124314124124.12412341, -1.5707963267868523)
 }
 
 func atanIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, res float64) {
@@ -55,7 +55,7 @@ func atanIntAndFloat[T constraints.Integer | constraints.Float](t *testing.T, ty
 	}{
 		{
 			name:       "TEST01",
-			vecs:       makeatanVectors[T](src, true, typ),
+			vecs:       makeatanVectors(src, true, typ),
 			proc:       procs,
 			wantBytes:  []float64{res},
 			wantScalar: true,

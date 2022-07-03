@@ -16,6 +16,7 @@ package operator
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/neg"
@@ -25,8 +26,8 @@ import (
 
 func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
-	srcValues := srcVector.Col.([]T)
-	resultElementSize := srcVector.Typ.Oid.FixedLength()
+	srcValues := vector.MustTCols[T](srcVector)
+	resultElementSize := srcVector.Typ.Oid.TypeLen()
 
 	if srcVector.IsScalar() {
 		if srcVector.IsScalarNull() {
@@ -45,6 +46,57 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 		resValues := encoding.DecodeFixedSlice[T](resVector.Data, resultElementSize)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
 		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
+		return resVector, nil
+	}
+}
+
+func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := vectors[0]
+	srcValues := vector.MustTCols[types.Decimal64](srcVector)
+	resultElementSize := srcVector.Typ.Oid.TypeLen()
+
+	if srcVector.IsScalar() {
+		if srcVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(srcVector.Typ), nil
+		}
+		resVector := proc.AllocScalarVector(srcVector.Typ)
+		resValues := make([]types.Decimal64, 1)
+		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
+		return resVector, nil
+	} else {
+		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
+		if err != nil {
+			return nil, err
+		}
+		resValues := encoding.DecodeDecimal64Slice(resVector.Data)
+		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
+		return resVector, nil
+	}
+}
+
+func UnaryMinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := vectors[0]
+	srcValues := vector.MustTCols[types.Decimal128](srcVector)
+	resultElementSize := srcVector.Typ.Oid.TypeLen()
+
+	if srcVector.IsScalar() {
+		if srcVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(srcVector.Typ), nil
+		}
+		resVector := proc.AllocScalarVector(srcVector.Typ)
+		resValues := make([]types.Decimal128, 1)
+		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
+		return resVector, nil
+	} else {
+		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
+		if err != nil {
+			return nil, err
+		}
+		resValues := encoding.DecodeDecimal128Slice(resVector.Data)
+		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
 		return resVector, nil
 	}
 }

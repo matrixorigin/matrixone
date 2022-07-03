@@ -15,9 +15,8 @@
 package txnbase
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -26,16 +25,16 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
-func (store *NoopTxnStore) GetLSN() uint64                                  { return 0 }
-func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                      {}
-func (store *NoopTxnStore) Close() error                                    { return nil }
-func (store *NoopTxnStore) Append(dbId, id uint64, data *batch.Batch) error { return nil }
-func (store *NoopTxnStore) PrepareRollback() error                          { return nil }
-func (store *NoopTxnStore) PreCommit() error                                { return nil }
-func (store *NoopTxnStore) PrepareCommit() error                            { return nil }
-func (store *NoopTxnStore) ApplyRollback() error                            { return nil }
-func (store *NoopTxnStore) PreApplyCommit() error                           { return nil }
-func (store *NoopTxnStore) ApplyCommit() error                              { return nil }
+func (store *NoopTxnStore) GetLSN() uint64                                       { return 0 }
+func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                           {}
+func (store *NoopTxnStore) Close() error                                         { return nil }
+func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
+func (store *NoopTxnStore) PrepareRollback() error                               { return nil }
+func (store *NoopTxnStore) PreCommit() error                                     { return nil }
+func (store *NoopTxnStore) PrepareCommit() error                                 { return nil }
+func (store *NoopTxnStore) ApplyRollback() error                                 { return nil }
+func (store *NoopTxnStore) PreApplyCommit() error                                { return nil }
+func (store *NoopTxnStore) ApplyCommit() error                                   { return nil }
 
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
 
@@ -65,9 +64,9 @@ func (store *NoopTxnStore) CreateBlock(uint64, uint64, uint64) (blk handle.Block
 func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
 	return
 }
-func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)   { return }
-func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...*vector.Vector) (err error) { return }
+func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)      { return }
+func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)    { return }
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...containers.Vector) (err error) { return }
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }

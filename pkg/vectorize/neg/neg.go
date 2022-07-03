@@ -14,7 +14,10 @@
 
 package neg
 
-import "golang.org/x/exp/constraints"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"golang.org/x/exp/constraints"
+)
 
 var (
 	Int8Neg    = NumericNeg[int8]
@@ -28,6 +31,20 @@ var (
 func NumericNeg[T constraints.Signed | constraints.Float](xs, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = -x
+	}
+	return rs
+}
+
+func Decimal64Neg(xs, rs []types.Decimal64) []types.Decimal64 {
+	for i, x := range xs {
+		rs[i] = -x
+	}
+	return rs
+}
+
+func Decimal128Neg(xs, rs []types.Decimal128) []types.Decimal128 {
+	for i, x := range xs {
+		rs[i] = types.NegDecimal128(x)
 	}
 	return rs
 }

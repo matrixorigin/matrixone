@@ -44,12 +44,16 @@ var (
 
 func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var vec *vector.Vector
+
+	if len(bat.Zs) == 0 {
+		return vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())}), nil
+	}
+
 	e := expr.Expr
 	switch t := e.(type) {
 	case *plan.Expr_C:
 		if t.C.GetIsnull() {
-			vec = vector.NewConst(types.Type{Oid: types.T(expr.Typ.GetId())})
-			nulls.Add(vec.Nsp, 0)
+			vec = vector.NewConstNull(types.Type{Oid: types.T(expr.Typ.GetId())})
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
@@ -121,15 +125,40 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		for i := range vs {
 			v, err := EvalExpr(bat, proc, t.F.Args[i])
 			if err != nil {
+				if proc != nil {
+					mp := make(map[*vector.Vector]uint8)
+					for i := range bat.Vecs {
+						mp[bat.Vecs[i]] = 0
+					}
+					for j := 0; j < i; j++ {
+						if _, ok := mp[vs[j]]; !ok {
+							vector.Clean(vs[j], proc.Mp)
+						}
+					}
+				}
 				return nil, err
 			}
 			vs[i] = v
 		}
+		defer func() {
+			if proc != nil {
+				mp := make(map[*vector.Vector]uint8)
+				for i := range bat.Vecs {
+					mp[bat.Vecs[i]] = 0
+				}
+				for i := range vs {
+					if _, ok := mp[vs[i]]; !ok {
+						vector.Clean(vs[i], proc.Mp)
+					}
+				}
+			}
+		}()
 		vec, err = f.VecFn(vs, proc)
 		if err != nil {
 			return nil, err
 		}
 		vec.Length = len(bat.Zs)
+		vec.FillDefaultValue()
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
@@ -137,7 +166,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 	}
 }
 
-func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
+func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr *plan.Expr) (*vector.Vector, error) {
 	var vec *vector.Vector
 	e := expr.Expr
 	switch t := e.(type) {
@@ -182,7 +211,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process
 		if t.Col.RelPos == 0 {
 			return r.Vecs[t.Col.ColPos].ToConst(rRow), nil
 		}
-		return s.Vecs[t.Col.ColPos].ToConst(sRow), nil
+		return s.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(overloadId)
@@ -191,17 +220,38 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow, sRow int, proc *process.Process
 		}
 		vs := make([]*vector.Vector, len(t.F.Args))
 		for i := range vs {
-			v, err := JoinFilterEvalExpr(r, s, rRow, sRow, proc, t.F.Args[i])
+			v, err := JoinFilterEvalExpr(r, s, rRow, proc, t.F.Args[i])
 			if err != nil {
+				mp := make(map[*vector.Vector]uint8)
+				for i := range s.Vecs {
+					mp[s.Vecs[i]] = 0
+				}
+				for j := 0; j < i; j++ {
+					if _, ok := mp[vs[j]]; !ok {
+						vector.Clean(vs[j], proc.Mp)
+					}
+				}
 				return nil, err
 			}
 			vs[i] = v
 		}
+		defer func() {
+			mp := make(map[*vector.Vector]uint8)
+			for i := range s.Vecs {
+				mp[s.Vecs[i]] = 0
+			}
+			for i := range vs {
+				if _, ok := mp[vs[i]]; !ok {
+					vector.Clean(vs[i], proc.Mp)
+				}
+			}
+		}()
 		vec, err = f.VecFn(vs, proc)
 		if err != nil {
 			return nil, err
 		}
-		vec.Length = 1
+		vec.Length = len(s.Zs)
+		vec.FillDefaultValue()
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub

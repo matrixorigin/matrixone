@@ -99,6 +99,10 @@ var (
 	CaseWhenDecimal128 = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return cwGeneral[types.Decimal128](vs, proc, types.Type{Oid: types.T_decimal128})
 	}
+
+	CaseWhenTimestamp = func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+		return cwGeneral[types.Timestamp](vs, proc, types.Type{Oid: types.T_timestamp})
+	}
 )
 
 // CwTypeCheckFn is type check function for case-when operator
@@ -127,21 +131,25 @@ func CwTypeCheckFn(inputTypes []types.T, _ []types.T, ret types.T) bool {
 	return false
 }
 
-type CwRet interface {
+type OrderedValue interface {
+	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Decimal64 | types.Timestamp
+}
+
+type NormalType interface {
 	constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-		types.Decimal64 | types.Decimal128
+		types.Decimal64 | types.Decimal128 | types.Timestamp
 }
 
 // cwGeneral is a general evaluate function for case-when operator
 // whose return type is uint / int / float / bool / date / datetime
-func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
+func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types.Type) (*vector.Vector, error) {
 	l := vector.Length(vs[0])
 
 	rs, err := proc.AllocVector(t, int64(l*t.Oid.TypeLen()))
 	if err != nil {
 		return nil, err
 	}
-	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.FixedLength())
+	rs.Col = vector.DecodeFixedCol[T](rs, t.Oid.TypeLen())
 	rs.Col = rs.Col.([]T)[:l]
 	rscols := rs.Col.([]T)
 
@@ -165,12 +173,18 @@ func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type
 				}
 			}
 		case whenv.IsScalar() && !thenv.IsScalar():
+			rs.Typ.Precision = thenv.Typ.Precision
+			rs.Typ.Width = thenv.Typ.Width
+			rs.Typ.Scale = thenv.Typ.Scale
 			if !whenv.IsScalarNull() && whencols[0] {
 				copy(rscols, thencols)
 				rs.Nsp.Or(thenv.Nsp)
 				return rs, nil
 			}
 		case !whenv.IsScalar() && thenv.IsScalar():
+			rs.Typ.Precision = thenv.Typ.Precision
+			rs.Typ.Width = thenv.Typ.Width
+			rs.Typ.Scale = thenv.Typ.Scale
 			if thenv.IsScalarNull() {
 				var j uint64
 				temp := make([]uint64, 0, l)
@@ -196,6 +210,9 @@ func cwGeneral[T CwRet](vs []*vector.Vector, proc *process.Process, t types.Type
 				}
 			}
 		case !whenv.IsScalar() && !thenv.IsScalar():
+			rs.Typ.Precision = thenv.Typ.Precision
+			rs.Typ.Width = thenv.Typ.Width
+			rs.Typ.Scale = thenv.Typ.Scale
 			if nulls.Any(thenv.Nsp) {
 				var j uint64
 				temp := make([]uint64, 0, l)

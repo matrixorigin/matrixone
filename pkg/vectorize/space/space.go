@@ -20,10 +20,12 @@ package space
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"golang.org/x/exp/constraints"
+	"fmt"
 	"math"
 	"unicode"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"golang.org/x/exp/constraints"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sum"
@@ -33,6 +35,11 @@ var MaxAllowedValue = int64(8000)
 
 //maximum 512mb
 var TotalMaximumSpaceCount = int64(512 * 1024 * 1024)
+
+var (
+	errorSpaceCountExceedsThreshold = fmt.Errorf("total space count exceeds %d MB", TotalMaximumSpaceCount/1024/1024)
+	errorSpaceCountExceedsMaxAllow  = fmt.Errorf("the space count exceeds maxallowedCount %d", MaxAllowedValue)
+)
 
 func CountSpacesForUnsignedInt(originalVecCol interface{}) int64 {
 	switch col := originalVecCol.(type) {
@@ -75,59 +82,63 @@ type Result struct {
 	Nsp    *nulls.Nulls
 }
 
-func CountSpacesSigned[T constraints.Signed](columnValues []T) int64 {
+func CountSpacesSigned[T constraints.Signed](columnValues []T) (int64, error) {
 	result := int64(0)
 	for _, columnValue := range columnValues {
-		if columnValue <= 0 || int64(columnValue) > MaxAllowedValue {
+		if columnValue <= 0 {
 			continue
+		} else if int64(columnValue) > MaxAllowedValue {
+			return 0, errorSpaceCountExceedsMaxAllow
 		} else {
 			result += int64(columnValue)
 			//t will not exceed TotalMaximumSpaceCount
 			if result > TotalMaximumSpaceCount {
-				return -1
+				return -1, errorSpaceCountExceedsThreshold
 			}
 		}
 	}
 	if result < 0 {
-		return 0
+		return 0, errorSpaceCountExceedsThreshold
 	} else {
-		return result
+		return result, nil
 	}
 }
 
-func CountSpacesUnsigned[T constraints.Unsigned](columnValues []T) int64 {
-	result := int64(0)
+func CountSpacesUnsigned[T constraints.Unsigned](columnValues []T) (int64, error) {
+	result := uint64(0)
 	for _, columnValue := range columnValues {
-		if int64(columnValue) > MaxAllowedValue {
-			continue
+		if uint64(columnValue) > uint64(MaxAllowedValue) {
+			return 0, errorSpaceCountExceedsMaxAllow
 		} else {
-			result += int64(columnValue)
+			result += uint64(columnValue)
 			//t will not exceed TotalMaximumSpaceCount
-			if result > TotalMaximumSpaceCount {
-				return -1
+			if result > uint64(TotalMaximumSpaceCount) {
+				return -1, errorSpaceCountExceedsThreshold
 			}
 		}
 	}
-	return result
+	return int64(result), nil
 }
 
-func CountSpacesFloat[T constraints.Float](columnValues []T) int64 {
+func CountSpacesFloat[T constraints.Float](columnValues []T) (int64, error) {
 	var result int64
 
 	for _, columnValue := range columnValues {
-		if columnValue < 0 || int64(columnValue) > MaxAllowedValue {
+		if columnValue < 0 {
 			continue
+		} else if int64(columnValue) > MaxAllowedValue {
+			return 0, errorSpaceCountExceedsMaxAllow
 		}
 		result += int64(math.Round(float64(columnValue)))
 		//t will not exceed TotalMaximumSpaceCount
 		if result > TotalMaximumSpaceCount {
-			return -1
+			return -1, errorSpaceCountExceedsThreshold
 		}
 	}
 	if result < 0 {
-		return 0
+		return 0, errorSpaceCountExceedsThreshold
 	} else {
-		return result
+		return result, nil
 	}
 }
 

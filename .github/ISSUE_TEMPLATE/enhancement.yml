@@ -1,9 +1,10 @@
 name: Enhancement
 description: As a developer, I want to make an enhancement for MatrixOne.
 title: "[Enhancement]: "
-labels: [kind/enhancement, needs-triage]
-assignees:
-  - m-schen
+# labels: [kind/enhancement, needs-triage]
+labels: [kind/enhancement]
+# assignees:
+#   - m-schen
 body:
   - type: checkboxes
     attributes:
@@ -14,10 +15,10 @@ body:
           required: true
   - type: textarea
     attributes:
-      label: What would you like to be added ? 
+      label: What would you like to be added ?
       description: |
         A concise description of what you're expecting/suggesting.
-      render: markdown
+      render: Markdown
     validations:
       required: true
   - type: textarea

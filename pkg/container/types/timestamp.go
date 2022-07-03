@@ -247,3 +247,7 @@ func NowUTC() Timestamp {
 	}
 	return Timestamp((sec << 20) + nsec/1000)
 }
+
+func ValidTimestamp(timestamp Timestamp) bool {
+	return timestamp > TimestampMinValue && timestamp < TimestampMaxValue
+}

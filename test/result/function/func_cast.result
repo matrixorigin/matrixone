@@ -1,0 +1,262 @@
+select CAST(1-2 AS UNSIGNED);
+can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
+select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
+can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
+select CAST('10 ' as unsigned integer);
+cast(10  as integer unsigned)
+10
+select CAST('10x' as unsigned integer);
+can't cast '10x' from VARCHAR type to BIGINT UNSIGNED type.
+select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
+cast(-5 as unsigned) | 1	cast(-5 as unsigned) & -1
+18446744073709551611	18446744073709551611
+select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
+can't cast '-5' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
+select cast(5 as unsigned) -6.0;
+cast(5 as unsigned) -6.0
+-1.0
+select cast(NULL as signed);
+cast(NULL as signed)
+null
+select cast(1/2 as signed);
+cast(1 / 2 as signed)
+0
+select cast("2001-1-1" as DATE), cast("2001-1-1" as DATETIME);
+cast("2001-1-1" as DATE)	cast("2001-1-1" as DATETIME)
+2001-01-01	2001-01-01 00:00:00
+select 10+'10';
+10+'10'
+20.0
+select 10.0+'10';
+10.0+'10'
+20.0
+select 10E+0+'10';
+10E+0+'10'
+20.0
+select CAST(0xb3 as signed);
+CAST(0xb3 as signed)
+179
+select CAST(0x8fffffffffffffff as signed);
+can't cast '10376293541461622783' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
+select CAST(0xffffffffffffffff as unsigned);
+CAST(0xffffffffffffffff as unsigned)
+18446744073709551615
+select CAST(0xfffffffffffffffe as signed);
+can't cast '18446744073709551614' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
+select cast('-10a' as signed integer);
+can't cast '-10a' from VARCHAR type to BIGINT type.
+select cast('a10' as unsigned integer);
+can't cast 'a10' from VARCHAR type to BIGINT UNSIGNED type.
+select 10+'a';
+10+'a'
+10.0
+select 10.0+cast('a' as decimal);
+10.0+cast('a' as decimal)
+10.0
+select 10E+0+'a';
+10E+0+'a'
+10.0
+select cast('18446744073709551616' as unsigned);
+can't cast '18446744073709551616' from VARCHAR type to BIGINT UNSIGNED type.
+select cast('18446744073709551616' as signed);
+can't cast '18446744073709551616' from VARCHAR type to BIGINT type.
+select cast('9223372036854775809' as signed);
+can't cast '9223372036854775809' from VARCHAR type to BIGINT type.
+select cast('-1' as unsigned);
+can't cast '-1' from VARCHAR type to BIGINT UNSIGNED type.
+select cast('abc' as signed);
+can't cast 'abc' from VARCHAR type to BIGINT type.
+select cast('1a' as signed);
+can't cast '1a' from VARCHAR type to BIGINT type.
+select cast('' as signed);
+can't cast '' from VARCHAR type to BIGINT type.
+select cast("2001-1-1" as date) = "2001-01-01";
+cast("2001-1-1" as date) = "2001-01-01"
+1
+select cast("2001-1-1" as datetime) = "2001-01-01 00:00:00";
+cast("2001-1-1" as datetime) = "2001-01-01 00:00:00"
+1
+select cast(NULL as DATE);
+cast(NULL as DATE)
+null
+select date_add(cast('2004-12-30 12:00:00' as date), interval 0 hour);
+date_add(cast('2004-12-30 12:00:00' as date), interval 0 hour)
+2004-12-30 00:00:00
+select cast(18446744073709551615 as unsigned);
+cast(18446744073709551615 as unsigned)
+18446744073709551615
+select cast(18446744073709551615 as signed);
+can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
+select cast('18446744073709551615' as unsigned);
+cast('18446744073709551615' as unsigned)
+18446744073709551615
+select cast('18446744073709551615' as signed);
+can't cast '18446744073709551615' from VARCHAR type to BIGINT type.
+select cast('9223372036854775807' as signed);
+cast('9223372036854775807' as signed)
+9223372036854775807
+select cast(concat_ws('184467440','73709551615') as unsigned);
+cast(concat_ws('184467440','73709551615') as unsigned)
+73709551615
+select cast(concat_ws('184467440','73709551615') as signed);
+cast(concat_ws('184467440','73709551615') as signed)
+73709551615
+select cast(1.0e+300 as signed int);
+cast(1.0e+300 as signed int)
+9223372036854775807
+CREATE TABLE t1 (f1 double);
+INSERT INTO t1 SET f1 = -1.0e+30 ;
+INSERT INTO t1 SET f1 = +1.0e+30 ;
+SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
+double_val	cast_val
+-1.0E30	-9223372036854775808
+1.0E30	9223372036854775807
+DROP TABLE t1;
+SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
+[42883]unsupported parameter types [DATE BIGINT UNSIGNED] for operator 'cast'
+SELECT CAST(cast('01-01-01' as date) AS SIGNED);
+[42883]unsupported parameter types [DATE BIGINT] for operator 'cast'
+select cast('1.2' as decimal(3,2));
+cast('1.2' as decimal(3,2))
+1.20
+select 1e18 * cast('1.2' as decimal(3,2));
+1e18 * cast('1.2' as decimal(3,2))
+1.2E18
+select cast(cast('1.2' as decimal(3,2)) as signed);
+cast(cast('1.2' as decimal(3,2)) as signed)
+1
+select cast(-1e18 as decimal(22,2));
+cast(-1e18 as decimal(22,2))
+-1000000000000000000.00
+create table t1(s1 timestamp);
+insert into t1 values ('2020-12-03 11:11:11');
+select cast(s1 as decimal(7,2)) from t1;
+cast(s1 as decimal(7,2))
+99999.99
+drop table t1;
+CREATE TABLE t1 (v varchar(10), tt char(255), t char(255),mt char(255), lt char(255));
+INSERT INTO t1 VALUES ('1.01', '2.02', '3.03', '4.04', '5.05');
+SELECT CAST(v AS DECIMAL), CAST(tt AS DECIMAL), CAST(t AS DECIMAL), CAST(mt AS DECIMAL), CAST(lt AS DECIMAL) from t1;
+CAST(v AS DECIMAL)	CAST(tt AS DECIMAL)	CAST(t AS DECIMAL)	CAST(mt AS DECIMAL)	CAST(lt AS DECIMAL)
+1	2	3	4	5
+DROP TABLE t1;
+select cast(NULL as decimal(6)) as t1;
+t1
+null
+CREATE TABLE t1 (d1 datetime);
+INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL), ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
+SELECT cast(date(d1) as signed) FROM t1;
+cast(date(d1) as signed)
+20070719
+null
+20070719
+null
+20070719
+drop table t1;
+SELECT CAST(1/3 AS FLOAT) as float_col,CAST(1/3 AS DOUBLE) as double_col, CAST(1/3 AS REAL) as real_col;
+float_col	double_col	real_col
+0.333333	0.333333333	0.333333333
+SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
+CAST(DATE'2000-01-01' AS FLOAT)	CAST(DATE'2000-01-01' AS DOUBLE)
+2.00001E7	2.0000101E7
+SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
+Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
+SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
+Operator 'cast' with parameters [TIMESTAMP FLOAT] will be implemented in future version.
+SELECT CAST(NULL AS REAL), CAST(NULL AS FLOAT), CAST(NULL AS DOUBLE);
+CAST(NULL AS REAL)	CAST(NULL AS FLOAT)	CAST(NULL AS DOUBLE)
+null	null	null
+CREATE TABLE t (col_datetime datetime, col_date date, col_char char);
+insert into t values ('2013-03-15 18:35:20', '2013-03-15','L'),('2003-01-10 00:00:23', '2003-01-10', NULL);
+SELECT CAST(col_char AS DATETIME) FROM t;
+CAST(col_char AS DATETIME)
+null
+null
+SELECT col_char <> col_datetime FROM t;
+col_char <> col_datetime
+1
+null
+SELECT CAST(col_char AS DATE) FROM t;
+CAST(col_char AS DATE)
+null
+null
+SELECT col_char <> col_date FROM t;
+col_char <> col_date
+1
+null
+DROP TABLE t;
+CREATE TABLE `BB` (`col_char_key` char(1));
+CREATE TABLE `CC` ( `pk` int, `col_datetime_key` datetime);
+INSERT INTO `BB` VALUES ('X');
+INSERT INTO `CC` VALUES (1,'2027-03-17 00:10:00'), (2,'2004-11-14 12:46:43');
+SELECT COUNT(table1.pk) FROM `CC` table1 JOIN `BB` table3 JOIN `CC` table2
+WHERE (table3.col_char_key < table2.col_datetime_key);
+COUNT(table1.pk)
+4
+DROP TABLE `BB`;
+DROP TABLE `CC`;
+create table t1(f1 date, f2 timestamp, f3 datetime);
+insert into t1 values ("2006-01-01", "2006-01-01 12:01:01", "2006-01-01 12:01:01");
+insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02");
+select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
+Operator 'cast' with parameters [BIGINT DATE] will be implemented in future version.
+select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
+f1
+2006-01-01
+select f1 from t1 where date(f1) between cast("2006-1-1" as date) and cast("2006.1.1" as date);
+f1
+2006-01-01
+select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
+f3
+2006-01-01 12:01:01
+select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
+Operator '>=' with parameters [TIMESTAMP DATETIME] will be implemented in future version.
+select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
+f1
+2006-01-01
+select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
+f1
+2006-01-01
+select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
+can't cast 'zzz' from VARCHAR type to DATE type.
+drop table t1;
+create table t1 (field DATE);
+insert into t1 values ('2006-11-06');
+select * from t1 where field < '2006-11-06 04:08:36.0';
+field
+2006-11-06
+select * from t1 where field = '2006-11-06 04:08:36.0';
+field
+select * from t1 where field = '2006-11-06';
+field
+2006-11-06
+select * from t1 where CAST(field as DATETIME) < '2006-11-06 04:08:36.0';
+field
+2006-11-06
+select * from t1 where CAST(field as DATE) < '2006-11-06 04:08:36.0';
+field
+2006-11-06
+drop table t1;
+create table t1 (a int(11) unsigned, b int(11) unsigned);
+insert into t1 values (1,0), (1,1), (4294967295,1);
+select a-b  from t1 order by 1;
+a-b
+0
+1
+4294967294
+select a-b , (a-b < 0)  from t1 order by 1;
+a - b	a - b < 0
+0	false
+1	false
+4294967294	false
+select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d >= 0;
+column "d" must appear in the GROUP BY clause or be used in an aggregate function
+select cast((a - b) as unsigned) from t1 order by 1;
+cast((a - b) as unsigned)
+0
+1
+4294967294
+drop table t1;
+select if(1, cast(1111111111111111111 as unsigned), 1) i, case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
+i	c	co
+1111111111111111111	1111111111111111111	1111111111111111111

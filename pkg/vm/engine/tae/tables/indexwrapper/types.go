@@ -4,7 +4,7 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
-	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
@@ -35,12 +35,12 @@ type Index interface {
 	// If key is not found, return nil
 	Dedup(key any) error
 
-	BatchDedup(keys *movec.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error)
+	BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error)
 
 	// BatchUpsert batch insert the specific keys
 	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
 	// If any other unknown error hanppens, return error
-	BatchUpsert(keysCtx *index.KeysCtx, offset uint32, ts uint64) error
+	BatchUpsert(keysCtx *index.KeysCtx, offset int, ts uint64) error
 
 	// Delete delete the specific key
 	// If the specified key not found in active map, return ErrNotFound

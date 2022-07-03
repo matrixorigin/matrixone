@@ -15,8 +15,6 @@
 package plan2
 
 import (
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -48,7 +46,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	}
 
 	// Function of getting def of col from col name
-	getColDef := func(name string) *plan.Type {
+	getColTyp := func(name string) *plan.Type {
 		for _, col := range tableDef.Cols {
 			if col.Name == name {
 				return col.Typ
@@ -77,21 +75,19 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	var priKey string
 	var priKeyIdx int32 = -1
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
-	if priKeys != nil {
-		for _, key := range priKeys {
-			for _, updateName := range updateAttrs {
-				if key.Name == updateName {
-					e, _ := tree.NewUnresolvedName(key.Name)
-					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
-					priKey = key.Name
-					priKeyIdx = 0
-					break
-				}
+	for _, key := range priKeys {
+		for _, updateName := range updateAttrs {
+			if key.Name == updateName {
+				e, _ := tree.NewUnresolvedName(key.Name)
+				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+				priKey = key.Name
+				priKeyIdx = 0
+				break
 			}
 		}
 	}
 
-	// Build projection of primary key
+	// Build projection of hide key
 	hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name).GetName()
 	if priKeyIdx == -1 {
 		if hideKey == "" {
@@ -101,20 +97,9 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
 	}
 
-	// Build projection of update expr
-	for i, expr := range stmt.Exprs {
-		updateColName := updateAttrs[i]
-
-		// wrap up func of cast for update expr
-		colTyp := getColDef(updateColName)
-		if colTyp == nil {
-			return nil, errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", updateColName))
-		}
-		wrapExpr, err := wrapCastForExpr(expr.Expr, colTyp)
-		if err != nil {
-			return nil, err
-		}
-		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: wrapExpr})
+	// Build projection for select
+	for _, expr := range stmt.Exprs {
+		useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: expr.Expr})
 	}
 
 	// build other column which doesn't update
@@ -153,8 +138,6 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	//query, binderCtx := newQueryAndSelectCtx(plan.Query_UPDATE)
-	//nodeId, err := buildSelect(selectStmt, ctx, query, binderCtx)
 	usePlan, err := runBuildSelectByBinder(plan.Query_SELECT, ctx, selectStmt)
 	if err != nil {
 		return nil, err
@@ -162,7 +145,19 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	usePlan.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_UPDATE
 	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
-	// build update node
+	// Build projection for update expr
+	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
+	idx := 1
+	for _, colName := range updateAttrs {
+		origTyp := getColTyp(colName)
+		lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], origTyp)
+		if err != nil {
+			return nil, err
+		}
+		idx++
+	}
+
+	// Build update node
 	node := &Node{
 		NodeType: plan.Node_UPDATE,
 		ObjRef:   objRef,
@@ -184,146 +179,12 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	return usePlan, nil
 }
 
-func wrapCastForExpr(expr tree.Expr, typ *plan.Type) (tree.Expr, error) {
-	var castTyp *tree.T
-	switch typ.Id {
-	case plan.Type_INT8:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:   uint32(defines.MYSQL_TYPE_TINY),
-				Width: typ.Width,
-			},
-		}
-	case plan.Type_INT16:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:   uint32(defines.MYSQL_TYPE_SHORT),
-				Width: typ.Width,
-			},
-		}
-	case plan.Type_INT32:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:   uint32(defines.MYSQL_TYPE_LONG),
-				Width: typ.Width,
-			},
-		}
-	case plan.Type_INT64:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:   uint32(defines.MYSQL_TYPE_LONGLONG),
-				Width: typ.Width,
-			},
-		}
-	case plan.Type_UINT8:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:      uint32(defines.MYSQL_TYPE_TINY),
-				Width:    typ.Width,
-				Unsigned: true,
-			},
-		}
-	case plan.Type_UINT16:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:      uint32(defines.MYSQL_TYPE_SHORT),
-				Width:    typ.Width,
-				Unsigned: true,
-			},
-		}
-	case plan.Type_UINT32:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:      uint32(defines.MYSQL_TYPE_LONG),
-				Width:    typ.Width,
-				Unsigned: true,
-			},
-		}
-	case plan.Type_UINT64:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:      uint32(defines.MYSQL_TYPE_LONGLONG),
-				Width:    typ.Width,
-				Unsigned: true,
-			},
-		}
-	case plan.Type_FLOAT32:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:       uint32(defines.MYSQL_TYPE_FLOAT),
-				Width:     typ.Width,
-				Precision: typ.Precision,
-			},
-		}
-	case plan.Type_FLOAT64:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:       uint32(defines.MYSQL_TYPE_DOUBLE),
-				Width:     typ.Width,
-				Precision: typ.Precision,
-			},
-		}
-	case plan.Type_CHAR:
-		if typ.Width == 0 {
-			castTyp = &tree.T{
-				InternalType: tree.InternalType{
-					Oid:         uint32(defines.MYSQL_TYPE_STRING),
-					Width:       typ.Width,
-					DisplayWith: -1,
-				},
-			}
-		} else {
-			castTyp = &tree.T{
-				InternalType: tree.InternalType{
-					Oid:         uint32(defines.MYSQL_TYPE_STRING),
-					Width:       typ.Width,
-					DisplayWith: typ.Width,
-				},
-			}
-		}
-	case plan.Type_VARCHAR:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:         uint32(defines.MYSQL_TYPE_STRING),
-				Width:       typ.Width,
-				DisplayWith: typ.Width,
-			},
-		}
-	case plan.Type_DATE:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid: uint32(defines.MYSQL_TYPE_DATE),
-			},
-		}
-	case plan.Type_DATETIME:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid: uint32(defines.MYSQL_TYPE_DATETIME),
-			},
-		}
-	case plan.Type_TIMESTAMP:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:       uint32(defines.MYSQL_TYPE_TIMESTAMP),
-				Precision: typ.Precision,
-			},
-		}
-	case plan.Type_DECIMAL64, plan.Type_DECIMAL128:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid:         uint32(defines.MYSQL_TYPE_DECIMAL),
-				DisplayWith: typ.Width,
-				Precision:   typ.Scale,
-			},
-		}
-	case plan.Type_BOOL:
-		castTyp = &tree.T{
-			InternalType: tree.InternalType{
-				Oid: uint32(defines.MYSQL_TYPE_BOOL),
-			},
-		}
-	default:
-		return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport type: '%v'", typ.GetId().String()))
+func isSameColumnType(t1 *Type, t2 *Type) bool {
+	if t1.Id != t2.Id {
+		return false
 	}
-	return tree.NewCastExpr(expr, castTyp), nil
+	if t1.Width == t2.Width && t1.Precision == t2.Precision && t1.Size == t2.Size && t1.Scale == t2.Scale {
+		return true
+	}
+	return true
 }

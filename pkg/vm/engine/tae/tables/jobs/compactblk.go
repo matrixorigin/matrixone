@@ -18,12 +18,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -46,6 +45,8 @@ type compactBlockTask struct {
 	meta      *catalog.BlockEntry
 	scheduler tasks.TaskScheduler
 	scopes    []common.ID
+	mapping   []uint32
+	deletes   *roaring.Bitmap
 }
 
 func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
@@ -80,9 +81,8 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
 func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.PreparedCompactedBlockData, err error) {
-	attrs := make([]string, 0, 4)
 	preparer = model.NewPreparedCompactedBlockData()
-	preparer.Columns = batch.New(true, attrs)
+	preparer.Columns = containers.NewBatch()
 
 	schema := task.meta.GetSchema()
 	var view *model.ColumnView
@@ -90,44 +90,48 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 		if def.IsHidden() {
 			continue
 		}
-		view, err = task.compacted.GetColumnDataById(def.Idx, nil, nil)
+		view, err = task.compacted.GetColumnDataById(def.Idx, nil)
 		if err != nil {
 			return
 		}
-		vec := view.ApplyDeletes()
-		preparer.Columns.Vecs = append(preparer.Columns.Vecs, vec)
-		preparer.Columns.Attrs = append(preparer.Columns.Attrs, def.Name)
+		task.deletes = view.DeleteMask
+		view.ApplyDeletes()
+		vec := view.Orphan()
+		preparer.Columns.AddVector(def.Name, vec)
 	}
 	// Sort only if sort key is defined
 	if schema.HasSortKey() {
-		var vecs []*vector.Vector
 		var idx int
+		var vecs []containers.Vector
 		if schema.IsSingleSortKey() {
-			vecs = preparer.Columns.Vecs
 			idx = schema.SortKey.Defs[0].Idx
 			preparer.SortKey = preparer.Columns.Vecs[idx]
+			vecs = preparer.Columns.Vecs
 		} else {
-			vecs = append(vecs, preparer.Columns.Vecs...)
-			cols := make([]*vector.Vector, schema.SortKey.Size())
+			vecs = preparer.Columns.Vecs
+			cols := make([]containers.Vector, schema.SortKey.Size())
 			for i := range cols {
 				cols[i] = preparer.Columns.Vecs[schema.SortKey.Defs[i].Idx]
 			}
 			preparer.SortKey = model.EncodeCompoundColumn(cols...)
-			idx = len(vecs)
+			idx = len(preparer.Columns.Vecs)
 			vecs = append(vecs, preparer.SortKey)
+			// preparer.Columns.AddVector(catalog.SortKeyNamePrefx, preparer.SortKey)
 		}
-		if err = mergesort.SortBlockColumns(vecs, idx); err != nil {
-			return
+		if task.mapping, err = mergesort.SortBlockColumns(vecs, idx); err != nil {
+			return preparer, err
 		}
 	}
 	// Prepare hidden column data
-	hidden, closer, err := model.PrepareHiddenData(catalog.HiddenColumnType, blkKey, 0, uint32(compute.LengthOfBatch(preparer.Columns)))
+	hidden, err := model.PrepareHiddenData(
+		catalog.HiddenColumnType,
+		blkKey,
+		0,
+		uint32(preparer.Columns.Length()))
 	if err != nil {
 		return
 	}
-	preparer.AddCloser(closer)
-	preparer.Columns.Vecs = append(preparer.Columns.Vecs, hidden)
-	preparer.Columns.Attrs = append(preparer.Columns.Attrs, catalog.HiddenColumnName)
+	preparer.Columns.AddVector(catalog.HiddenColumnName, hidden)
 	return
 }
 
@@ -159,7 +163,13 @@ func (task *compactBlockTask) Execute() (err error) {
 	newBlkData := newMeta.GetBlockData()
 	blockFile := newBlkData.GetBlockFile()
 
-	ioTask := NewFlushBlkTask(tasks.WaitableCtx, blockFile, task.txn.GetStartTS(), newMeta, preparer.Columns, preparer.SortKey)
+	ioTask := NewFlushBlkTask(
+		tasks.WaitableCtx,
+		blockFile,
+		task.txn.GetStartTS(),
+		newMeta,
+		preparer.Columns,
+		preparer.SortKey)
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}
@@ -172,7 +182,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	}
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
-	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler)
+	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}

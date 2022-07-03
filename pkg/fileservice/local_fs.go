@@ -37,9 +37,6 @@ type LocalFS struct {
 
 var _ FileService = new(LocalFS)
 
-//TODO
-//var _ MutableFileService = new(LocalFS)
-
 func NewLocalFS(rootPath string) (*LocalFS, error) {
 
 	const sentinelFileName = "thisisalocalfileservicedir"
@@ -237,9 +234,14 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
 		ret = append(ret, DirEntry{
 			Name:  name,
 			IsDir: entry.IsDir(),
+			Size:  int(info.Size()),
 		})
 	}
 
@@ -349,4 +351,45 @@ func (l *LocalFS) syncDir(nativePath string) error {
 
 func (l *LocalFS) toNativeFilePath(filePath string) string {
 	return filepath.Join(l.rootPath, l.toOSPath(filePath))
+}
+
+var _ MutableFileService = new(LocalFS)
+
+func (l *LocalFS) Mutate(ctx context.Context, vector IOVector) error {
+
+	// sort
+	sort.Slice(vector.Entries, func(i, j int) bool {
+		return vector.Entries[i].Offset < vector.Entries[j].Offset
+	})
+
+	// open
+	nativePath := l.toNativeFilePath(vector.FilePath)
+	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
+	if os.IsNotExist(err) {
+		return ErrFileNotFound
+	}
+	defer f.Close()
+
+	// write
+	for _, entry := range vector.Entries {
+		_, err := f.Seek(int64(entry.Offset), 0)
+		if err != nil {
+			return err
+		}
+		var src io.Reader
+		if entry.ReaderForWrite != nil {
+			src = entry.ReaderForWrite
+		} else {
+			src = bytes.NewReader(entry.Data)
+		}
+		n, err := io.Copy(f, src)
+		if err != nil {
+			return err
+		}
+		if int(n) != entry.Size {
+			return ErrSizeNotMatch
+		}
+	}
+
+	return nil
 }

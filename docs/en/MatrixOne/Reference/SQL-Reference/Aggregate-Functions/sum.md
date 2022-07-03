@@ -6,7 +6,8 @@ Aggregate function.
 
 The SUM() function calculates the sum of a set of values.
 
-Note: NULL values are not counted.
+!!! note  "<font size=4>note</font>"
+    <font size=3>NULL values are not counted.</font>  
 
 ## **Syntax**
 
@@ -59,4 +60,5 @@ If there are no matching rows, SUM() returns NULL.
 
 ## Constraints
 
-Currently, MatrixOne doesn't support select function() without from tables.
+1. Currently, MatrixOne doesn't support select function() without from tables.
+2. SUM(DISTINCT) is not supported for the 0.5.0 version.

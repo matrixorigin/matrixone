@@ -20,7 +20,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	err = writer.Init(file, cType, colIdx, interIdx)
 	require.NoError(t, err)
 
-	keys := compute.MockVec(typ, 1000, 0)
+	keys := containers.MockVector2(typ, 1000, 0)
 	err = writer.AddValues(keys)
 	require.NoError(t, err)
 
@@ -58,7 +58,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res)
 
-	query := compute.MockVec(typ, 1000, 1500)
+	query := containers.MockVector2(typ, 1000, 1500)
 	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.True(t, ans.GetCardinality() < uint64(10))

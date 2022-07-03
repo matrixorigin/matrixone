@@ -20,7 +20,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +40,7 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	err = writer.Init(file, cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
-	keys := compute.MockVec(typ, 1000, 0)
+	keys := containers.MockVector2(typ, 1000, 0)
 	err = writer.AddValues(keys)
 	require.NoError(t, err)
 
@@ -56,12 +56,12 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	res = reader.Contains(int32(1000))
 	require.False(t, res)
 
-	keys = compute.MockVec(typ, 100, 1000)
+	keys = containers.MockVector2(typ, 100, 1000)
 	visibility, res = reader.ContainsAny(keys)
 	require.False(t, res)
 	require.Equal(t, uint64(0), visibility.GetCardinality())
 
-	keys = compute.MockVec(typ, 100, 0)
+	keys = containers.MockVector2(typ, 100, 0)
 	visibility, res = reader.ContainsAny(keys)
 	require.True(t, res)
 	require.Equal(t, uint64(100), visibility.GetCardinality())

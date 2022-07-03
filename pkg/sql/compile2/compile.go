@@ -295,12 +295,18 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		src := &Source{
-			RelationName: n.TableDef.Name,
-			SchemaName:   n.ObjRef.SchemaName,
-			Attributes:   make([]string, len(n.TableDef.Cols)),
+			RelationName:   n.TableDef.Name,
+			SchemaName:     n.ObjRef.SchemaName,
+			Attributes:     make([]string, len(n.TableDef.Cols)),
+			AttributeTypes: make([]plan.ColDef, len(n.TableDef.Cols)),
 		}
 		for i, col := range n.TableDef.Cols {
-			src.Attributes[i] = col.Name
+			src.AttributeTypes[i] = *col
+			if col.IsPrune {
+				continue
+			} else {
+				src.Attributes[i] = col.Name
+			}
 		}
 		nodes := rel.Nodes(snap)
 		if len(nodes) == 0 {
@@ -448,6 +454,7 @@ func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, join
 			},
 		})
 	}
+	isEq := isEquiJoin(n.OnList)
 	switch joinTyp {
 	case plan.Node_INNER:
 		if len(n.OnList) == 0 {
@@ -459,32 +466,60 @@ func (c *Compile) compileJoin(n *plan.Node, ss []*Scope, children []*Scope, join
 			}
 		} else {
 			for i := range rs {
-				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-					Op:  overload.Join,
-					Arg: constructJoin(n, c.proc),
-				})
+				if isEq {
+					rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+						Op:  overload.Join,
+						Arg: constructJoin(n, c.proc),
+					})
+				} else {
+					rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+						Op:  overload.LoopJoin,
+						Arg: constructLoopJoin(n, c.proc),
+					})
+				}
 			}
 		}
 	case plan.Node_SEMI:
 		for i := range rs {
-			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-				Op:  overload.Semi,
-				Arg: constructSemi(n, c.proc),
-			})
+			if isEq {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.Semi,
+					Arg: constructSemi(n, c.proc),
+				})
+			} else {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.LoopSemi,
+					Arg: constructLoopSemi(n, c.proc),
+				})
+			}
 		}
 	case plan.Node_LEFT:
 		for i := range rs {
-			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-				Op:  overload.Left,
-				Arg: constructLeft(n, c.proc),
-			})
+			if isEq {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.Left,
+					Arg: constructLeft(n, c.proc),
+				})
+			} else {
+				rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+					Op:  overload.LoopLeft,
+					Arg: constructLoopLeft(n, c.proc),
+				})
+			}
 		}
 	case plan.Node_ANTI:
 		for i := range rs {
+			// if isEq {
+			// 	rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			// 		Op:  overload.Complement,
+			// 		Arg: constructComplement(n, c.proc),
+			// 	})
+			// } else {
 			rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
-				Op:  overload.Complement,
-				Arg: constructComplement(n, c.proc),
+				Op:  overload.LoopComplement,
+				Arg: constructLoopComplement(n, c.proc),
 			})
+			// }
 		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))

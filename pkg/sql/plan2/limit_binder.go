@@ -32,7 +32,14 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "unsupported expr in limit clause")
 	}
 
-	return b.baseBindExpr(astExpr, depth, isRoot)
+	expr, err := b.baseBindExpr(astExpr, depth, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	if expr.Typ.Id == plan.Type_DECIMAL128 || expr.Typ.Id == plan.Type_DECIMAL64 {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "only int64 support in limit/offset clause")
+	}
+	return expr, nil
 }
 
 func (b *LimitBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {

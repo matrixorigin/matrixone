@@ -80,7 +80,7 @@ func appendAnotherEntry(t *testing.T, s *baseStore, buf []byte) {
 	copy(n.GetBuf(), buf)
 	err := e.UnmarshalFromNode(n, true)
 	assert.Nil(t, err)
-	_, err = s.AppendEntry(11, e)
+	_, err = s.AppendEntry(12, e)
 	assert.Nil(t, err)
 	assert.Nil(t, e.WaitDone())
 	e.Free()
@@ -234,6 +234,51 @@ func logSyncbase(t *testing.T, s *baseStore) {
 	t.Log(s.addrs)
 }
 
+// append C and lots of CKP
+// restart
+// check CKPed
+// append AnotherEntry
+// check Compact
+func TestReplay3(t *testing.T) {
+	s, buf := initEnv(t)
+	ckpSize := 105
+
+	e1 := appendCommitEntry(t, s, buf, 1)
+	entries := make([]entry.Entry, ckpSize)
+	for i := 0; i < ckpSize; i++ {
+		entries[i] = appendPartialCkpEntry(t, s, 1, []uint32{uint32(i)}, uint32(ckpSize))
+	}
+	assert.Nil(t, entries[len(entries)-1].WaitDone())
+	e1.Free()
+	for i := 0; i < ckpSize; i++ {
+		entries[i].Free()
+	}
+
+	s = restartStore(t, s)
+	t.Log(s.file.(*rotateFile).uncommitted[0].String())
+	assert.Equal(t, uint64(1), s.GetCheckpointed(11))
+
+	appendAnotherEntry(t, s, buf)
+	appendAnotherEntry(t, s, buf)
+	testutils.WaitExpect(400, func() bool {
+		version := atomic.LoadUint64(&s.syncedVersion)
+		ids := s.file.GetHistory().EntryIds()
+		committedversion := uint64(ids[len(ids)-1])
+		return version == committedversion
+	})
+	version := atomic.LoadUint64(&s.syncedVersion)
+	ids := s.file.GetHistory().EntryIds()
+	committedversion := uint64(ids[len(ids)-1])
+	assert.Equal(t, version, committedversion)
+
+	t.Log(s.file.GetHistory().String())
+	assert.Nil(t, s.TryCompact())
+	t.Log(s.file.GetHistory().String())
+	t.Log(s.file.(*rotateFile).uncommitted[0].String())
+
+	assert.Equal(t, 0, len(s.file.GetHistory().EntryIds()))
+
+}
 func TestMergePartialCKP(t *testing.T) {
 	s, buf := initEnv(t)
 
@@ -437,6 +482,12 @@ func TestTruncate3(t *testing.T) {
 
 	s.Close()
 }
+
+// append {C,UC,CKP}s
+// wait until Internal Group Flushed
+// restart
+// append {C,UC}
+// check synced
 func TestReplay2(t *testing.T) {
 	s, buf := initEnv(t)
 	tidAlloc := &common.IdAllocator{}
@@ -472,7 +523,8 @@ func TestReplay2(t *testing.T) {
 	})
 	testutils.WaitExpect(400, func() bool {
 		version := atomic.LoadUint64(&s.syncedVersion)
-		committedversion := uint64(s.file.GetHistory().EntryIds()[len(s.file.GetHistory().EntryIds())-1])
+		ids := s.file.GetHistory().EntryIds()
+		committedversion := uint64(ids[len(ids)-1])
 		return version == committedversion
 	})
 	assert.Equal(t, s.GetSynced(entry.GTCKp), s.GetCurrSeqNum(entry.GTCKp))
@@ -496,7 +548,8 @@ func TestReplay2(t *testing.T) {
 	assert.Equal(t, s.GetSynced(11), s.GetCurrSeqNum(11))
 	testutils.WaitExpect(400, func() bool {
 		version := atomic.LoadUint64(&s.syncedVersion)
-		committedversion := uint64(s.file.GetHistory().EntryIds()[len(s.file.GetHistory().EntryIds())-1])
+		ids := s.file.GetHistory().EntryIds()
+		committedversion := uint64(ids[len(ids)-1])
 		return version == committedversion
 	})
 	testutils.WaitExpect(400, func() bool {
@@ -832,7 +885,7 @@ func TestPartialCkp(t *testing.T) {
 	s.Close()
 }
 
-func TestReplay(t *testing.T) {
+func TestReplay1(t *testing.T) {
 	dir := "/tmp/logstore/teststore"
 	name := "mock"
 	os.RemoveAll(dir)
@@ -917,14 +970,7 @@ func TestReplay(t *testing.T) {
 					}
 					pre = end
 					e.SetInfo(checkpointInfo)
-					str := checkpointInfo.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					_, err = s.AppendEntry(entry.GTCKp, e)
+					_, err := s.AppendEntry(entry.GTCKp, e)
 					assert.Nil(t, err)
 				case 20, 21, 22, 23: //txn entry
 					e.SetType(entry.ETTxn)
@@ -1003,7 +1049,7 @@ func TestReplay(t *testing.T) {
 
 type entryWithLSN struct {
 	entry entry.Entry
-	lsn   uint64
+	info  *entry.Info
 }
 
 func TestLoad(t *testing.T) {
@@ -1036,7 +1082,8 @@ func TestLoad(t *testing.T) {
 				e.entry.Free()
 				if infoin != nil {
 					info := infoin.(*entry.Info)
-					_, err = s.Load(info.Group, e.lsn)
+					e.info = info
+					_, err = s.Load(info.Group, e.info.GroupLSN)
 					assert.Nil(t, err)
 					t.Logf("synced %d", s.GetSynced(info.Group))
 					t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
@@ -1082,14 +1129,13 @@ func TestLoad(t *testing.T) {
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
-						lsn:   lsn,
 					}
 					t.Logf("alloc %d-%d", entry.GTUncommit, lsn)
 				case 49: //ckp entry
 					e.SetType(entry.ETCheckpoint)
 					checkpointInfo := &entry.Info{
 						Checkpoints: []entry.CkpRanges{{
-							Group: 1,
+							Group: groupNo,
 							Ranges: common.NewClosedIntervalsByInterval(
 								&common.ClosedInterval{
 									Start: pre + 1,
@@ -1099,18 +1145,10 @@ func TestLoad(t *testing.T) {
 					}
 					pre = ckp
 					e.SetInfo(checkpointInfo)
-					str := checkpointInfo.ToString()
-					buf := []byte(str)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					err := e.UnmarshalFromNode(n, true)
-					assert.Nil(t, err)
-					lsn, err = s.AppendEntry(entry.GTCKp, e)
+					lsn, err := s.AppendEntry(entry.GTCKp, e)
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
-						lsn:   lsn,
 					}
 					t.Logf("alloc %d-%d", entry.GTCKp, lsn)
 				case 20, 21, 22, 23: //txn entry
@@ -1130,7 +1168,6 @@ func TestLoad(t *testing.T) {
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
-						lsn:   lsn,
 					}
 					ckp = lsn
 					t.Logf("alloc %d-%d", groupNo, lsn)
@@ -1143,7 +1180,6 @@ func TestLoad(t *testing.T) {
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
-						lsn:   lsn,
 					}
 					t.Logf("alloc %d-%d", entry.GTNoop, lsn)
 				default: //commit entry
@@ -1161,7 +1197,6 @@ func TestLoad(t *testing.T) {
 					assert.Nil(t, err)
 					entrywithlsn = &entryWithLSN{
 						entry: e,
-						lsn:   lsn,
 					}
 					ckp = lsn
 					t.Logf("alloc %d-%d", groupNo, lsn)
@@ -1192,18 +1227,20 @@ func TestLoad(t *testing.T) {
 	}
 	err = s.Replay(a)
 	assert.Nil(t, err)
+	t.Log(s.checkpointing)
+	t.Log(s.syncing)
+	t.Log(s.addrs)
 
 	for _, e := range ch2 {
-		infoin := e.entry.GetInfo()
 		t.Logf("entry is %s", e.entry.GetPayload())
-		if infoin != nil {
-			info := infoin.(*entry.Info)
-			if info.Group != entry.GTNoop {
-				_, err = s.Load(info.Group, e.lsn)
+		if e.info != nil {
+			if e.info.Group != entry.GTNoop {
+				t.Logf("load %d-%d", e.info.Group, e.info.GroupLSN)
+				_, err = s.Load(e.info.Group, e.info.GroupLSN)
 				assert.Nil(t, err)
-				t.Logf("synced %d", s.GetSynced(info.Group))
-				t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-				t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
+				t.Logf("synced %d", s.GetSynced(e.info.Group))
+				t.Logf("checkpointed %d", s.GetCheckpointed(e.info.Group))
+				t.Logf("penddings %d", s.GetPenddingCnt(e.info.Group))
 			}
 		}
 	}

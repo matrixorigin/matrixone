@@ -73,6 +73,10 @@ type ColDef struct {
 	Default       Default
 }
 
+func (def *ColDef) GetName() string     { return def.Name }
+func (def *ColDef) GetType() types.Type { return def.Type }
+
+func (def *ColDef) Nullable() bool  { return def.NullAbility == int8(1) }
 func (def *ColDef) IsHidden() bool  { return def.Hidden == int8(1) }
 func (def *ColDef) IsPrimary() bool { return def.Primary == int8(1) }
 func (def *ColDef) IsSortKey() bool { return def.SortKey == int8(1) }
@@ -131,6 +135,18 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
+func (s *Schema) Clone() *Schema {
+	buf, err := s.Marshal()
+	if err != nil {
+		panic(err)
+	}
+	ns := NewEmptySchema(s.Name)
+	r := bytes.NewBuffer(buf)
+	if _, err = ns.ReadFrom(r); err != nil {
+		panic(err)
+	}
+	return ns
+}
 func (s *Schema) GetSortKeyType() types.Type {
 	if s.IsSinglePK() {
 		return s.GetSingleSortKey().Type
@@ -422,12 +438,39 @@ func (s *Schema) Types() []types.Type {
 	return ts
 }
 
+func (s *Schema) Nullables() []bool {
+	nulls := make([]bool, 0, len(s.ColDefs)-1)
+	for _, def := range s.ColDefs {
+		if def.IsHidden() {
+			continue
+		}
+		nulls = append(nulls, def.Nullable())
+	}
+	return nulls
+}
+
+func (s *Schema) AllNullables() []bool {
+	nulls := make([]bool, 0, len(s.ColDefs))
+	for _, def := range s.ColDefs {
+		nulls = append(nulls, def.Nullable())
+	}
+	return nulls
+}
+
 func (s *Schema) AllTypes() []types.Type {
 	ts := make([]types.Type, 0, len(s.ColDefs))
 	for _, def := range s.ColDefs {
 		ts = append(ts, def.Type)
 	}
 	return ts
+}
+
+func (s *Schema) AllNames() []string {
+	names := make([]string, 0, len(s.ColDefs))
+	for _, def := range s.ColDefs {
+		names = append(names, def.Name)
+	}
+	return names
 }
 
 func (s *Schema) Finalize(rebuild bool) (err error) {
@@ -475,6 +518,11 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 				return
 			}
 			s.HiddenKey = def
+		}
+		if def.IsSortKey() || def.IsHidden() {
+			def.NullAbility = 0
+		} else {
+			def.NullAbility = 1
 		}
 	}
 
@@ -566,10 +614,17 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
 // pkIdx == -1 means no pk defined
-func MockSchemaAll(colCnt int, pkIdx int) *Schema {
+func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	schema := NewEmptySchema(time.Now().String())
 	prefix := "mock_"
+	start := 0
+	if len(from) > 0 {
+		start = from[0]
+	}
 	for i := 0; i < colCnt; i++ {
+		if i < start {
+			continue
+		}
 		name := fmt.Sprintf("%s%d", prefix, i)
 		var typ types.Type
 		switch i % 18 {
@@ -633,6 +688,7 @@ func MockSchemaAll(colCnt int, pkIdx int) *Schema {
 			_ = schema.AppendPKCol(name, typ, 0)
 		} else {
 			_ = schema.AppendCol(name, typ)
+			schema.ColDefs[len(schema.ColDefs)-1].NullAbility = int8(1)
 		}
 	}
 	schema.BlockMaxRows = 1000

@@ -52,7 +52,7 @@ func (s *Service) GetShardInfo(shardID uint64) (ShardInfo, bool) {
 		if !ok {
 			return ShardInfo{}, false
 		}
-		var md logStoreMeta
+		var md storeMeta
 		md.unmarshal(data)
 		result.Replicas[nodeID] = ReplicaInfo{
 			UUID:           uuid,

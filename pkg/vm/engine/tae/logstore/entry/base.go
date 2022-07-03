@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -297,6 +298,10 @@ type CommandInfo struct {
 
 func GetBase() *Base {
 	b := _basePool.Get().(*Base)
+	if b.GetPayloadSize() != 0 {
+		logutil.Infof("payload size is %d", b.GetPayloadSize())
+		panic("wrong payload size")
+	}
 	b.wg.Add(1)
 	return b
 }
@@ -320,7 +325,10 @@ func (b *Base) reset() {
 	}
 	b.payload = nil
 	b.info = nil
+	b.infobuf = nil
 	b.wg = sync.WaitGroup{}
+	b.t0 = time.Time{}
+	b.printTime = false
 	b.err = nil
 }
 func (b *Base) GetInfoBuf() []byte {
@@ -345,6 +353,10 @@ func (b *Base) DoneWithErr(err error) {
 
 func (b *Base) Free() {
 	b.reset()
+	if b.GetPayloadSize() != 0 {
+		logutil.Infof("payload size is %d", b.GetPayloadSize())
+		panic("wrong payload size")
+	}
 	_basePool.Put(b)
 }
 
@@ -393,12 +405,24 @@ func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 		b.node = common.GPool.Alloc(uint64(b.GetPayloadSize()))
 		b.payload = b.node.Buf[:b.GetPayloadSize()]
 	}
-	infoBuf := make([]byte, b.GetInfoSize())
-	n1, err := r.Read(infoBuf)
-	if err != nil {
-		return int64(n1), err
+	if b.GetType() == ETCheckpoint && b.GetPayloadSize() != 0 {
+		logutil.Infof("payload %d", b.GetPayloadSize())
+		panic("wrong payload size")
 	}
-	b.SetInfoBuf(infoBuf)
+	n1 := 0
+	if b.GetInfoSize() != 0 {
+		infoBuf := make([]byte, b.GetInfoSize())
+		n, err := r.Read(infoBuf)
+		n1 = n
+		if err != nil {
+			return int64(n1), err
+		}
+		b.SetInfoBuf(infoBuf)
+		if len(infoBuf) != 0 {
+			info := Unmarshal(infoBuf)
+			b.SetInfo(info)
+		}
+	}
 	n2, err := r.Read(b.payload)
 	if err != nil {
 		return int64(n2), err
@@ -419,6 +443,8 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	}
 	offset += n1
 	b.SetInfoBuf(infoBuf)
+	info := Unmarshal(infoBuf)
+	b.SetInfo(info)
 	n2, err := r.ReadAt(b.payload, int64(offset))
 	if err != nil {
 		return n2, err

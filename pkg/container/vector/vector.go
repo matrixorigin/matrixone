@@ -62,6 +62,53 @@ func GetFixedVectorValues[T any](v *Vector, sz int) []T {
 	return DecodeFixedCol[T](v, sz)
 }
 
+func (v *Vector) FillDefaultValue() {
+	if !nulls.Any(v.Nsp) || len(v.Data) == 0 {
+		return
+	}
+	switch v.Typ.Oid {
+	case types.T_bool:
+		fillDefaultValue[bool](v)
+	case types.T_int8:
+		fillDefaultValue[int8](v)
+	case types.T_int16:
+		fillDefaultValue[int16](v)
+	case types.T_int32:
+		fillDefaultValue[int32](v)
+	case types.T_int64:
+		fillDefaultValue[int64](v)
+	case types.T_uint8:
+		fillDefaultValue[uint8](v)
+	case types.T_uint16:
+		fillDefaultValue[uint16](v)
+	case types.T_uint32:
+		fillDefaultValue[uint32](v)
+	case types.T_uint64:
+		fillDefaultValue[uint64](v)
+	case types.T_float32:
+		fillDefaultValue[uint64](v)
+	case types.T_float64:
+		fillDefaultValue[float64](v)
+	case types.T_date:
+		fillDefaultValue[types.Date](v)
+	case types.T_datetime:
+		fillDefaultValue[types.Datetime](v)
+	case types.T_timestamp:
+		fillDefaultValue[types.Timestamp](v)
+	case types.T_decimal64:
+		fillDefaultValue[types.Decimal64](v)
+	case types.T_decimal128:
+		fillDefaultValue[types.Decimal128](v)
+	case types.T_char, types.T_varchar, types.T_json:
+		col := v.Col.(*types.Bytes)
+		rows := v.Nsp.Np.ToArray()
+		for _, row := range rows {
+			col.Offsets[row] = 0
+			col.Lengths[row] = 0
+		}
+	}
+}
+
 func (v *Vector) ToConst(row int) *Vector {
 	if v.IsConst {
 		return v
@@ -198,8 +245,24 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	return v
 }
 
+func fillDefaultValue[T any](v *Vector) {
+	var dv T
+
+	col := v.Col.([]T)
+	rows := v.Nsp.Np.ToArray()
+	for _, row := range rows {
+		col[row] = dv
+	}
+	v.Col = col
+}
+
 func toConstVector[T any](v *Vector, row int) *Vector {
+	nsp := new(nulls.Nulls)
+	if nulls.Contains(v.Nsp, uint64(row)) {
+		nulls.Add(nsp, 0)
+	}
 	return &Vector{
+		Nsp:     nsp,
 		IsConst: true,
 		Typ:     v.Typ,
 		Col:     []T{v.Col.([]T)[row]},
@@ -217,8 +280,7 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 			nulls.Add(v.Nsp, uint64(i))
 		}
 	} else {
-		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
-		val := unsafe.Slice((*T)(addr), sz)[0]
+		val := v.Col.([]T)[0]
 		for i := 0; i < v.Length; i++ {
 			vs[i] = val
 		}
@@ -362,6 +424,53 @@ func New(typ types.Type) *Vector {
 func NewConst(typ types.Type) *Vector {
 	v := New(typ)
 	v.IsConst = true
+	return v
+}
+
+func NewConstNull(typ types.Type) *Vector {
+	v := New(typ)
+	v.IsConst = true
+	switch typ.Oid {
+	case types.T_bool:
+		v.Col = []bool{false}
+	case types.T_int8:
+		v.Col = []int8{0}
+	case types.T_int16:
+		v.Col = []int16{0}
+	case types.T_int32:
+		v.Col = []int32{0}
+	case types.T_int64:
+		v.Col = []int64{0}
+	case types.T_uint8:
+		v.Col = []uint8{0}
+	case types.T_uint16:
+		v.Col = []uint16{0}
+	case types.T_uint32:
+		v.Col = []uint32{0}
+	case types.T_uint64:
+		v.Col = []uint64{0}
+	case types.T_float32:
+		v.Col = []float32{0}
+	case types.T_float64:
+		v.Col = []float64{0}
+	case types.T_date:
+		v.Col = make([]types.Date, 1)
+	case types.T_datetime:
+		v.Col = make([]types.Datetime, 1)
+	case types.T_timestamp:
+		v.Col = make([]types.Timestamp, 1)
+	case types.T_decimal64:
+		v.Col = make([]types.Decimal64, 1)
+	case types.T_decimal128:
+		v.Col = make([]types.Decimal128, 1)
+	case types.T_char, types.T_varchar, types.T_json:
+		v.Col = &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{0},
+			Data:    []byte{},
+		}
+	}
+	nulls.Add(v.Nsp, 0)
 	return v
 }
 
@@ -548,9 +657,17 @@ func setLengthFixed[T any](v *Vector, n int) {
 
 func SetLength(v *Vector, n int) {
 	if v.IsScalar() || v.Typ.Oid == types.T_any {
-		v.Length = n
+		SetScalarLength(v, n)
 		return
 	}
+	SetVectorLength(v, n)
+}
+
+func SetScalarLength(v *Vector, n int) {
+	v.Length = n
+}
+
+func SetVectorLength(v *Vector, n int) {
 	switch v.Typ.Oid {
 	case types.T_bool:
 		setLengthFixed[bool](v, n)
@@ -1974,7 +2091,7 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 	return nil
 }
 
-func UnionNull(v, w *Vector, m *mheap.Mheap) error {
+func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 	if v.Or {
 		return errors.New("UnionNull operation cannot be performed for origin vector")
 	}
@@ -1991,7 +2108,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeBoolSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2017,7 +2133,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt8Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2044,7 +2159,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt16Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2071,7 +2185,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt32Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2098,7 +2211,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeInt64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2125,7 +2237,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint8Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2152,7 +2263,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint16Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2179,7 +2289,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint32Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2206,7 +2315,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeUint64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2233,7 +2341,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeFloat32Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2260,7 +2367,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeFloat64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2292,7 +2398,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDateSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2319,7 +2424,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDatetimeSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2346,7 +2450,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeTimestampSlice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2373,7 +2476,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDecimal64Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -2400,7 +2502,6 @@ func UnionNull(v, w *Vector, m *mheap.Mheap) error {
 			if err != nil {
 				return err
 			}
-			v.Ref = w.Ref
 			vs := encoding.DecodeDecimal128Slice(data)
 			v.Col = vs[:1]
 			v.Data = data
@@ -4691,151 +4792,6 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 		}
 	default:
 		return fmt.Errorf("unexpect type %v for function vector.GetColumnData", typ)
-	}
-	return nil
-}
-
-func ConstantPadding(vec *Vector, count uint64) error {
-	if nulls.Contains(vec.Nsp, 0) {
-		for i := uint64(0); i < count-1; i++ {
-			nulls.Add(vec.Nsp, i+1)
-		}
-		return nil
-	}
-	switch vec.Typ.Oid {
-	case types.T_int8:
-		value := vec.Col.([]int8)[0]
-		values := vec.Col.([]int8)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_int16:
-		value := vec.Col.([]int16)[0]
-		values := vec.Col.([]int16)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_int32:
-		value := vec.Col.([]int32)[0]
-		values := vec.Col.([]int32)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_int64:
-		value := vec.Col.([]int64)[0]
-		values := vec.Col.([]int64)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_uint8:
-		value := vec.Col.([]uint8)[0]
-		values := vec.Col.([]uint8)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_uint16:
-		value := vec.Col.([]uint16)[0]
-		values := vec.Col.([]uint16)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_uint32:
-		value := vec.Col.([]uint32)[0]
-		values := vec.Col.([]uint32)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_uint64:
-		value := vec.Col.([]uint64)[0]
-		values := vec.Col.([]uint64)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_float32:
-		value := vec.Col.([]float32)[0]
-		values := vec.Col.([]float32)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_float64:
-		value := vec.Col.([]float64)[0]
-		values := vec.Col.([]float64)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_sel:
-		value := vec.Col.([]int64)[0]
-		values := vec.Col.([]int64)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_tuple:
-		value := vec.Col.([][]interface{})[0]
-		values := vec.Col.([][]interface{})
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_char, types.T_varchar, types.T_json:
-		value := vec.Col.(*types.Bytes).Data
-		offset := vec.Col.(*types.Bytes).Offsets[0]
-		cnt := vec.Col.(*types.Bytes).Lengths[0]
-		values := vec.Col.(*types.Bytes)
-		for i := uint64(0); i < count-1; i++ {
-			values.Data = append(values.Data, value...)
-			values.Lengths = append(values.Lengths, cnt)
-			offset += cnt
-			values.Offsets = append(values.Offsets, offset)
-		}
-		SetCol(vec, values)
-	case types.T_date:
-		value := vec.Col.([]types.Date)[0]
-		values := vec.Col.([]types.Date)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_datetime:
-		value := vec.Col.([]types.Datetime)[0]
-		values := vec.Col.([]types.Datetime)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_timestamp:
-		value := vec.Col.([]types.Timestamp)[0]
-		values := vec.Col.([]types.Timestamp)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_decimal64:
-		value := vec.Col.([]types.Decimal64)[0]
-		values := vec.Col.([]types.Decimal64)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	case types.T_decimal128:
-		value := vec.Col.([]types.Decimal128)[0]
-		values := vec.Col.([]types.Decimal128)
-		for i := uint64(0); i < count-1; i++ {
-			values = append(values, value)
-		}
-		SetCol(vec, values)
-	default:
-		return fmt.Errorf("unexpect type %s for function constantPadding", vec.Typ)
 	}
 	return nil
 }

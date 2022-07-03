@@ -42,6 +42,18 @@ const (
 	// Group 4: unexpected state
 	INVALID_STATE = 4000 + iota
 
+	// group 5: rpc timeout
+	// ErrRPCTimeout rpc timeout
+	ErrRPCTimeout = 5000 + iota
+	// ErrClientClosed rpc client closed
+	ErrClientClosed
+	// ErrBackendClosed backend closed
+	ErrBackendClosed
+	// ErrStreamClosed rpc stream closed
+	ErrStreamClosed
+	// ErrNoAvailableBackend no available backend
+	ErrNoAvailableBackend
+
 	// Group 10: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
 	ErrTxnAborted = 10000 + iota

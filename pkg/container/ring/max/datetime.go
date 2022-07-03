@@ -179,6 +179,9 @@ func (r *DatetimeRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *DatetimeRing) Add(a interface{}, x, y int64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if r.Vs[x] < ar.Vs[y] {
 		r.Vs[x] = ar.Vs[y]
 	}
@@ -187,6 +190,9 @@ func (r *DatetimeRing) Add(a interface{}, x, y int64) {
 
 func (r *DatetimeRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	for i := range os {
 		j := vps[i] - 1
 		if ar.Vs[int64(i)+start] > r.Vs[j] {
@@ -198,6 +204,9 @@ func (r *DatetimeRing) BatchAdd(a interface{}, start int64, os []uint8, vps []ui
 
 func (r *DatetimeRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*DatetimeRing)
+	if r.Typ.Width == 0 && ar.Typ.Width != 0 {
+		r.Typ = ar.Typ
+	}
 	if ar.Vs[y] > r.Vs[x] {
 		r.Vs[x] = ar.Vs[y]
 	}

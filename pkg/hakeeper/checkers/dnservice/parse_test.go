@@ -18,8 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	hapb "github.com/matrixorigin/matrixone/pkg/pb/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/stretchr/testify/require"
 )
@@ -27,21 +26,21 @@ import (
 func TestParseDNState(t *testing.T) {
 	expiredTick := uint64(10)
 	// construct current tick in order to make hearbeat tick expired
-	currTick := hakeeper.ExpiredTick(expiredTick, dnStoreTimeout) + 1
+	currTick := hakeeper.ExpiredTick(expiredTick, hakeeper.DnStoreTimeout) + 1
 
 	// 1. no working dn stores
 	{
-		dnState := hapb.DNState{
-			Stores: map[string]hapb.DNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(10, 12),
 					},
 				},
 				"expired2": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(11, 13),
 					},
 				},
@@ -51,8 +50,8 @@ func TestParseDNState(t *testing.T) {
 		stores, shards := parseDnState(dnState, currTick)
 
 		// check stores
-		require.Equal(t, len(stores.workingStores()), 0)
-		require.Equal(t, len(stores.expiredStores()), 2)
+		require.Equal(t, len(stores.WorkingStores()), 0)
+		require.Equal(t, len(stores.ExpiredStores()), 2)
 
 		// check shards
 		shardIDs := shards.listShards()
@@ -70,24 +69,24 @@ func TestParseDNState(t *testing.T) {
 
 	// 2. verbose running shard replica
 	{
-		dnState := hapb.DNState{
-			Stores: map[string]hapb.DNStoreInfo{
+		dnState := pb.DNState{
+			Stores: map[string]pb.DNStoreInfo{
 				"expired1": {
 					Tick: expiredTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(10, 11),
 						mockDnShardMeta(14, 17),
 					},
 				},
 				"working1": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(12, 13),
 					},
 				},
 				"working2": {
 					Tick: currTick,
-					Shards: []logservice.DNShardInfo{
+					Shards: []pb.DNShardInfo{
 						mockDnShardMeta(14, 15),
 						mockDnShardMeta(12, 16),
 					},
@@ -98,8 +97,8 @@ func TestParseDNState(t *testing.T) {
 		stores, shards := parseDnState(dnState, currTick)
 
 		// check stores
-		require.Equal(t, len(stores.workingStores()), 2)
-		require.Equal(t, len(stores.expiredStores()), 1)
+		require.Equal(t, len(stores.WorkingStores()), 2)
+		require.Equal(t, len(stores.ExpiredStores()), 1)
 
 		// check shards
 		shardIDs := shards.listShards()
@@ -125,8 +124,8 @@ func TestParseDNState(t *testing.T) {
 	}
 }
 
-func mockDnShardMeta(shardID, replicaID uint64) logservice.DNShardInfo {
-	return logservice.DNShardInfo{
+func mockDnShardMeta(shardID, replicaID uint64) pb.DNShardInfo {
+	return pb.DNShardInfo{
 		ShardID:   shardID,
 		ReplicaID: replicaID,
 	}
