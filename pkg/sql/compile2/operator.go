@@ -174,7 +174,8 @@ func constructDeletion(n *plan.Node, eg engine.Engine, snapshot engine.Snapshot)
 	}
 	return &deletion.Argument{
 		TableSource:  relation,
-		UseDeleteKey: n.UseDeleteKey,
+		UseDeleteKey: n.DeleteInfo.UseDeleteKey,
+		CanTruncate:  n.DeleteInfo.CanTruncate,
 	}, nil
 }
 

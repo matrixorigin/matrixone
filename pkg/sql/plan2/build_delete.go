@@ -43,10 +43,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 		return nil, errors.New(errno.FeatureNotSupported, "cannot find delete table")
 	}
 
-	// find out use key to delete
-	if len(stmt.OrderBy) > 0 && (stmt.Where == nil && stmt.Limit == nil) {
-		stmt.OrderBy = nil
+	if stmt.Where == nil && stmt.Limit == nil {
+		return buildDelete2Truncate(objRef, tableDef)
 	}
+	// find out use key to delete
 	var useKey *ColDef = nil
 	var useProjectExprs tree.SelectExprs = nil
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
@@ -87,17 +87,40 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
 
 	// build delete node
 	node := &Node{
-		NodeType:     plan.Node_DELETE,
-		ObjRef:       objRef,
-		TableDef:     tableDef,
-		UseDeleteKey: useKey.Name,
-		Children:     []int32{qry.Steps[len(qry.Steps)-1]},
-		NodeId:       int32(len(qry.Nodes)),
+		NodeType: plan.Node_DELETE,
+		ObjRef:   objRef,
+		TableDef: tableDef,
+		Children: []int32{qry.Steps[len(qry.Steps)-1]},
+		NodeId:   int32(len(qry.Nodes)),
+		DeleteInfo: &plan.DeleteInfo{
+			UseDeleteKey: useKey.Name,
+			CanTruncate:  false,
+		},
 	}
 	qry.Nodes = append(qry.Nodes, node)
 	qry.Steps[len(qry.Steps)-1] = node.NodeId
 
 	return usePlan, nil
+}
+
+func buildDelete2Truncate(objRef *ObjectRef, tblDef *TableDef) (*Plan, error) {
+	node := &Node{
+		NodeType: plan.Node_DELETE,
+		ObjRef:   objRef,
+		TableDef: tblDef,
+		DeleteInfo: &plan.DeleteInfo{
+			CanTruncate: true,
+		},
+	}
+	return &Plan{
+		Plan: &plan.Plan_Query{
+			Query: &Query{
+				StmtType: plan.Query_DELETE,
+				Steps:    []int32{0},
+				Nodes:    []*Node{node},
+			},
+		},
+	}, nil
 }
 
 func isContainNameInWhere(expr *tree.Where, name string) bool {
