@@ -55,13 +55,13 @@ func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error
 	var errStr string
 	if vec.IsScalar() {
 		if vec.ConstVectorIsNull() {
-			errStr = fmt.Sprintf("can't cast 'NULL' as %v type.", typ)
+			errStr = fmt.Sprintf("Can't cast 'NULL' as %v type.", typ)
 		} else {
 			valueStr := strings.TrimRight(strings.TrimLeft(fmt.Sprintf("%v", vec.Col), "["), "]")
-			errStr = fmt.Sprintf("can't cast '%s' from %v type to %v type.", valueStr, vec.Typ, typ)
+			errStr = fmt.Sprintf("Can't cast '%s' from %v type to %v type.", valueStr, vec.Typ, typ)
 		}
 	} else {
-		errStr = fmt.Sprintf("can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
+		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
 	}
 	return errors.New(errno.InternalError, errStr+extraInfo)
 }
@@ -312,7 +312,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 			case types.T_int32:
 				return CastLeftToRight[float64, int32](lv, rv, proc)
 			case types.T_int64:
-				return CastLeftToRight[float64, int64](lv, rv, proc)
+				return CastFloat64ToInt64(lv, rv, proc)
 			case types.T_uint8:
 				return CastLeftToRight[float64, uint8](lv, rv, proc)
 			case types.T_uint16:
@@ -825,6 +825,35 @@ func CastLeftToRight[T1, T2 constraints.Integer | constraints.Float](lv, rv *vec
 	}
 	rs := encoding.DecodeFixedSlice[T2](vec.Data, rtl)
 	if _, err := typecast.NumericToNumeric(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+// CastFloat64ToInt64 : cast float64 to int64
+func CastFloat64ToInt64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := rv.Typ.Oid.TypeLen()
+	lvs := vector.MustTCols[float64](lv)
+
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]int64, 1)
+		if _, err := typecast.Float64ToInt64(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rtl)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := encoding.DecodeInt64Slice(vec.Data)
+	if _, err := typecast.Float64ToInt64(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)

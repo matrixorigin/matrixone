@@ -307,3 +307,7 @@ func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (any, erro
 func (h *txnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return h.Txn.GetStore().LogTxnEntry(h.table.entry.GetDB().ID, h.table.entry.GetID(), entry, readed)
 }
+
+func (h *txnRelation) GetDB() (handle.Database, error) {
+	return h.Txn.GetStore().GetDatabase(h.GetMeta().(*catalog.TableEntry).GetDB().GetName())
+}
