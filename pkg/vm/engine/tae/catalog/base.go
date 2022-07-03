@@ -33,18 +33,6 @@ func CompareUint64(left, right uint64) int {
 	return 0
 }
 
-type Waitable interface {
-	Wait() error
-}
-
-type waitable struct {
-	fn func() error
-}
-
-func (w *waitable) Wait() error {
-	return w.fn()
-}
-
 type CommitInfo struct {
 	CurrOp   OpT
 	Txn      txnif.TxnReader

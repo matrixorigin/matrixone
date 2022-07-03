@@ -199,7 +199,7 @@ func (blk *dataBlock) ForceCompact() (err error) {
 	}
 	defer bat.Close()
 	needCkp := true
-	if err = blk.node.flushData(ts, bat); err != nil {
+	if err = blk.node.flushData(ts, bat, new(forceCompactOp)); err != nil {
 		if err == data.ErrStaleRequest {
 			err = nil
 			needCkp = false

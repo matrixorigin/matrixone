@@ -312,7 +312,9 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 	currOp := entry.CurrOp
 	entry.RUnlock()
 	if currOp == OpCreate {
-		err = entry.GetDB().RemoveEntry(entry)
+		if err = entry.GetDB().RemoveEntry(entry); err != nil {
+			return
+		}
 	}
 	if err = entry.BaseEntry.PrepareRollback(); err != nil {
 		return
