@@ -382,12 +382,17 @@ func getTestStores() (*store, *store, error) {
 	}
 
 	for i := 0; i <= 30000; i++ {
-		_, _, ok, err := store1.nh.GetLeaderID(1)
+		leaderID, _, ok, err := store1.nh.GetLeaderID(1)
 		if err != nil {
 			return nil, nil, err
 		}
-		if ok {
+		if ok && leaderID == 1 {
 			break
+		}
+		if ok && leaderID != 1 {
+			if err := store1.requestLeaderTransfer(1, 1); err != nil {
+				plog.Errorf("failed to transfer leader")
+			}
 		}
 		time.Sleep(time.Millisecond)
 		if i == 30000 {

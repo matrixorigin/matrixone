@@ -293,21 +293,22 @@ func (bf *blockFile) WriteSnapshot(
 	masks map[uint16]*roaring.Bitmap,
 	vals map[uint16]map[uint32]any,
 	deletes *roaring.Bitmap) (err error) {
-	var w bytes.Buffer
-	if deletes != nil {
-		if _, err = deletes.WriteTo(&w); err != nil {
-			return
-		}
-	}
 	if err = bf.WriteTS(ts); err != nil {
 		return err
 	}
 	if err = bf.WriteRows(uint32(bat.Length())); err != nil {
 		return err
 	}
-	// buffer := adaptors.NewBuffer(nil)
-	// defer buffer.Close()
+
 	buffer := new(bytes.Buffer)
+	if deletes != nil {
+		if _, err = deletes.WriteTo(buffer); err != nil {
+			return
+		}
+		if err = bf.WriteDeletes(buffer.Bytes()); err != nil {
+			return
+		}
+	}
 	tool := containers.NewCodecTool()
 	defer tool.Close()
 	for colIdx := range bat.Attrs {

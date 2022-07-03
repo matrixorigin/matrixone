@@ -502,3 +502,15 @@ func checkFullPrune(tableDef *TableDef) {
 		return
 	}
 }
+
+func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]any) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = nil
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			getHyperEdgeFromExpr(arg, leafByTag, hyperEdge)
+		}
+	}
+}

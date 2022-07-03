@@ -310,6 +310,7 @@ func (c *APP1Client) BuyGood(goodId uint64, count uint64) error {
 	if count > left {
 		logutil.Warnf("NotEnough Good %d: Repe %d, Requested %d", goodId, left, count)
 		err = errNotEnoughRepertory
+		return err
 	}
 	newLeft := left - count
 	rel, _ := c.DB.GetRelationByName(repertory.Name)

@@ -84,10 +84,8 @@ INSERT INTO t1 VALUES ('joce','1',null,'joce'),('test','2',null,'test');
 INSERT INTO t2 VALUES ('joce','1',null,'joce'),('test','2',null,'test');
 INSERT INTO t3 VALUES (1,1);
 SELECT DISTINCT topic FROM t2 WHERE NOT EXISTS(SELECT * FROM t3 WHERE numeropost=topic);
--- @bvt:issue#3311
 DELETE FROM t1 WHERE topic IN (SELECT DISTINCT topic FROM t2 WHERE NOT EXISTS(SELECT * FROM t3 WHERE numeropost=topic));
 select * from t1;
--- @bvt:issue
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -116,14 +114,12 @@ CREATE TABLE t1 (f1 varchar(1));
 INSERT INTO t1 VALUES ('v'),('s');
 CREATE TABLE t2 (f1_key varchar(1));
 INSERT INTO t2 VALUES ('j'),('v'),('c'),('m'),('d'),('d'),('y'),('t'),('d'),('s');
--- @bvt:issue#3311
 SELECT table1.f1, table2.f1_key FROM t1 AS table1, t2 AS table2
 WHERE EXISTS
 (
 SELECT DISTINCT f1_key
 FROM t2
 WHERE f1_key != table2.f1_key AND f1_key >= table1.f1 );
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;
@@ -196,7 +192,7 @@ CREATE TABLE t3 (e int);
 INSERT INTO t1 VALUES(1,10), (2,10), (1,20), (2,20), (3,20), (2,30), (4,40);
 INSERT INTO t2 VALUES(2,10), (2,20), (4,10), (5,10), (3,20), (2,40);
 INSERT INTO t3 VALUES (10), (30), (10), (20) ;
--- @bvt:issue#3310
+-- @bvt:issue#3307
 SELECT a FROM t1 GROUP BY a
   HAVING a IN (SELECT c FROM t2
                  WHERE  EXISTS(SELECT e FROM t3 WHERE MAX(b)=e AND e <= d));
@@ -222,7 +218,7 @@ SELECT a FROM t1
    WHERE a < 3 AND
          EXISTS(SELECT c FROM t2 GROUP BY c HAVING SUM(a) != c);
 -- @bvt:issue
--- @bvt:issue#3310
+-- @bvt:issue#3307
 SELECT t1.a FROM t1 GROUP BY t1.a
   HAVING t1.a < ALL(SELECT t2.c FROM t2 GROUP BY t2.c
                        HAVING EXISTS(SELECT t3.e FROM t3 GROUP BY t3.e
@@ -247,13 +243,9 @@ INSERT INTO t1 VALUES (3,'FL'), (2,'GA'), (4,'FL'), (1,'GA'), (5,'NY'), (7,'FL')
 CREATE TABLE t2 (id int NOT NULL);
 INSERT INTO t2 VALUES (7), (5), (1), (3);
 SELECT id, st FROM t1  WHERE st IN ('GA','FL') AND EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id);
--- @bvt:issue#3310
 SELECT id, st FROM t1  WHERE st IN ('GA','FL') AND EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id) GROUP BY id;
--- @bvt:issue
 SELECT id, st FROM t1 WHERE st IN ('GA','FL') AND NOT EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id);
--- @bvt:issue#3310
 SELECT id, st FROM t1 WHERE st IN ('GA','FL') AND NOT EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id) GROUP BY id;
--- @bvt:issue
 
 drop table if exists t1;
 drop table if exists t2;

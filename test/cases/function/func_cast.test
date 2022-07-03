@@ -31,9 +31,7 @@ select CAST(0xffffffffffffffff as unsigned);
 select CAST(0xfffffffffffffffe as signed);
 select cast('-10a' as signed integer);
 select cast('a10' as unsigned integer);
--- @bvt:issue#3247
 select 10+'a';
--- @bvt:issue
 -- @bvt:issue#3280
 select 10.0+cast('a' as decimal);
 -- @bvt:issue
@@ -202,7 +200,7 @@ select cast(concat_ws('184467440','73709551615') as signed);
 #
 # Bug #13344: cast of large decimal to signed int not handled correctly
 #
--- @bvt:issue#3414
+-- @bvt:issue#3506
 select cast(1.0e+300 as signed int);
 -- @bvt:issue
 #
@@ -211,7 +209,7 @@ select cast(1.0e+300 as signed int);
 CREATE TABLE t1 (f1 double);
 INSERT INTO t1 SET f1 = -1.0e+30 ;
 INSERT INTO t1 SET f1 = +1.0e+30 ;
--- @bvt:issue#3414
+-- @bvt:issue#3506
 SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
 -- @bvt:issue
 DROP TABLE t1;					   

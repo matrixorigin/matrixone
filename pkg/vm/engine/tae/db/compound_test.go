@@ -42,8 +42,8 @@ func TestCompoundPK1(t *testing.T) {
 	for it.Valid() {
 		blk := it.GetBlock()
 		view, err := blk.GetColumnDataById(2, nil)
-		defer view.Close()
 		assert.NoError(t, err)
+		defer view.Close()
 		rows += view.Length()
 		it.Next()
 	}

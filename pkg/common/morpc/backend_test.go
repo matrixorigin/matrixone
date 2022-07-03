@@ -124,6 +124,31 @@ func TestSendWithTimeout(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestSendWithReconnect(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			for i := 0; i < 10; i++ {
+				req := newTestMessage(1)
+				f, err := b.Send(ctx, req, SendOptions{})
+				assert.NoError(t, err)
+				defer f.Close()
+
+				resp, err := f.Get()
+				assert.NoError(t, err)
+				assert.Equal(t, req, resp)
+
+				b.closeConn()
+			}
+		},
+		WithBackendConnectWhenCreate())
+}
+
 func TestStream(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {

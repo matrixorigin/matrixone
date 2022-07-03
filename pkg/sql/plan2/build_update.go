@@ -146,7 +146,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 	qry := usePlan.Plan.(*plan.Plan_Query).Query
 
 	// Build projection for update expr
-	lastNode := qry.Nodes[len(qry.Nodes)-1]
+	lastNode := qry.Nodes[qry.Steps[len(qry.Steps)-1]]
 	idx := 1
 	for _, colName := range updateAttrs {
 		origTyp := getColTyp(colName)

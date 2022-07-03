@@ -66,7 +66,7 @@ var (
 	Uint32ToInt64  = NumericToNumeric[uint32, int64]
 	Uint64ToInt64  = uint64ToInt64 // we handle overflow error in this function
 	Float32ToInt64 = NumericToNumeric[float32, int64]
-	Float64ToInt64 = NumericToNumeric[float64, int64]
+	Float64ToInt64 = float64ToInt64
 
 	Int8ToUint8    = NumericToNumeric[int8, uint8]
 	Int16ToUint8   = NumericToNumeric[int16, uint8]
@@ -174,6 +174,16 @@ var (
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
 	for i, x := range xs {
 		rs[i] = T2(x)
+	}
+	return rs, nil
+}
+
+func float64ToInt64(xs []float64, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		if x > math.MaxInt64 || x < math.MinInt64 {
+			return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from double to bigint")
+		}
+		rs[i] = int64(x)
 	}
 	return rs, nil
 }
@@ -404,7 +414,7 @@ func datetimeToBytes(xs []types.Datetime, rs *types.Bytes) (*types.Bytes, error)
 
 func NumericToTimestamp[T constraints.Integer](xs []T, rs []types.Timestamp) ([]types.Timestamp, error) {
 	for i, x := range xs {
-		rs[i] = types.Timestamp(x)
+		rs[i] = types.UnixToTimestamp(int64(x))
 	}
 	return rs, nil
 }

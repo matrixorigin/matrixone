@@ -24,7 +24,7 @@ DROP TABLE t;
 -- @bvt:issue
 -- @bvt:issue
 
--- @bvt:issue#3392
+-- @bvt:issue#3588
 CREATE TABLE source(bt INTEGER, bf INTEGER, i8u BIGINT UNSIGNED, i8s BIGINT);
 INSERT INTO source VALUES
 (1,0,0,-9223372036854775808), (1,0,18446744073709551615,9223372036854775807);
@@ -112,12 +112,12 @@ insert into t1 values (144.54);
 select sum(if(num is null,0.00,num)) from t1;
 drop table t1;
 
--- @bvt:issue#3336
+
 create table t1 (x int, y int);
 insert into t1 values (0,6),(10,16),(20,26),(30,10),(40,46),(50,56);
 select min(if(y -x > 5,y,NULL)), max(if(y - x > 5,y,NULL)) from t1;
 drop table t1;
--- @bvt:issue
+
 
 
 create table t1 (a int);

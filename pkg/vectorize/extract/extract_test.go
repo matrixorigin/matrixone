@@ -15,9 +15,10 @@
 package extract
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestExtractFromDate(t *testing.T) {
@@ -282,7 +283,7 @@ func TestExtractFromDateTime(t *testing.T) {
 	}
 	output, err = ExtractFromDatetime("year_month", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "2020-011234-01", string(output.Data))
+	require.Equal(t, "202001123401", string(output.Data))
 	require.Equal(t, []uint32{0, 7}, output.Offsets)
 	require.Equal(t, []uint32{7, 7}, output.Lengths)
 }

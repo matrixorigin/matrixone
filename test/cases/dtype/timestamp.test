@@ -17,8 +17,9 @@ update t1 set a=DATE_ADD(a ,INTERVAL 1 WEEK) where a>'20220102';
 -- @bvt:issue
 drop table t1;
 create table t1 ( a int not null default 1, big timestamp(4) primary key);
--- @bvt:issue#3362
+
 insert into t1 (big) values ('20220103'),('2022-01-01'),('2022-01-01 00:00:01'),('2022-01-02 00:00:00.000050');
+-- @bvt:issue#3668
 select * from t1;
 select * from t1 order by big limit 1,3;
 select * from t1 order by big limit 3 offset 1;
@@ -118,13 +119,12 @@ drop table if exists t21;
 drop table if exists t12;
 CREATE TABLE t1 (a timestamp, b int primary key);
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',1),('2022-01-01 00:00:00',2);
--- @bvt:issue#3170
 update t1 set a='2022-01-02' where a='2022-01-01 00:00:00' limit 1;
 select * from t1;
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',3);
 update t1 set a='2022-01-02' where a='2022-01-01 00:00:00';
 select * from t1;
--- @bvt:issue
+
 drop table t1;
 create table t1 (
 a timestamp primary key,
@@ -135,10 +135,9 @@ insert into t1 (a) values ('2022-01-02'),('2022-01-04'),('2022-01-06'),('2022-01
 update t1 set a=a+101;
 select a,b from t1;
 -- @bvt:issue--
--- @bvt:issue#3170
 update t1 set a='2022-01-27 12:12:12.0001' where a='2022-01-08 00:01:01';
 select a,b from t1;
--- @bvt:issue
+
 -- @bvt:issue#3168
 update t1 set a=a-1 where 1 > 2;
 select a,b from t1;
@@ -158,15 +157,12 @@ drop table if exists t11;
 drop table if exists t12;
 CREATE TABLE t1 (a timestamp, b int primary key);
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',1),('2022-01-01 00:00:00',2);
--- @bvt:issue#3168
 delete from t1 where a='2022-01-01 00:00:00' limit 1;
 select * from t1;
--- @bvt:issue
 INSERT INTO t1 VALUES ('2022-01-01 00:00:00',3);
--- @bvt:issue#3168
 delete from t1 where a='2022-01-01';
 select * from t1;
--- @bvt:issue
+
 drop table t1;
 create table t1 (
 a timestamp primary key,
