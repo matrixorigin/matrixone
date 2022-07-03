@@ -84,7 +84,7 @@ Before asking a question, make sure you have:
 
 ## **Issue Labels**
 
-Once your issue is submitted, it will automatically be labeled with `needs-triage`, a MatrixOne maintainer will look at the issue, tag it with more suitable labels, and assign it to a suitable developer.
+Once your issue is submitted, it will automatically be labeled with `needs-triage`, a MatrixOne maintainer will look at the issue, tag it with more suitable labels, and assign it to a suitable developer. 
 If you'd like to work on the issue by yourself, you can comment `/assign` on the issue you would like to work on, and you will be automatically assigned to the issue. You can then find yourself listed under Assignees section.
 
 ## **Good First Issues**
