@@ -305,6 +305,21 @@ func (mr *MockRelationMockRecorder) TableDefs(arg0 interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableDefs", reflect.TypeOf((*MockRelation)(nil).TableDefs), arg0)
 }
 
+// Truncate mocks base method.
+func (m *MockRelation) Truncate(arg0 engine.Snapshot) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Truncate", arg0)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Truncate indicates an expected call of Truncate.
+func (mr *MockRelationMockRecorder) Truncate(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Truncate", reflect.TypeOf((*MockRelation)(nil).Truncate), arg0)
+}
+
 // Update mocks base method.
 func (m *MockRelation) Update(arg0 uint64, arg1 *batch.Batch, arg2 engine.Snapshot) error {
 	m.ctrl.T.Helper()

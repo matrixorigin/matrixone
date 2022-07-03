@@ -24,5 +24,6 @@ type Argument struct {
 	TableSource  engine.Relation
 	M            sync.Mutex
 	UseDeleteKey string
+	CanTruncate  bool
 	AffectedRows uint64
 }
